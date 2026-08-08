@@ -18,6 +18,21 @@ export interface SubmitWorkflowMutationOptions {
   deferDrain?: boolean;
 }
 
+export interface WorkflowMutationEnqueuer {
+  enqueue<T>(
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+  ): Promise<T>;
+}
+
+export interface EnqueueWorkflowMutationOptions {
+  workflowExists: (workflowId: string) => boolean;
+  coordinator: WorkflowMutationEnqueuer;
+  logger?: Pick<Logger, 'info'>;
+}
+
 const MISSING_WORKFLOW_IDEMPOTENT_WORKFLOW_COMMANDS = new Set([
   'delete',
   'delete-workflow',
@@ -110,6 +125,41 @@ export function submitWorkflowMutationOrAcknowledgeDeleted(
       && !options.workflowExists(workflowId)
     ) {
       return acceptedMissingWorkflow(workflowId, channel, options.logger);
+    }
+    throw error;
+  }
+}
+
+/**
+ * enqueue()-flavored counterpart to submitWorkflowMutationOrAcknowledgeDeleted.
+ * A racing owner can enqueue a tracked (non-no-track) mutation — e.g. a
+ * duplicate `delete <workflowId>` re-delegated after the first owner already
+ * completed the delete — after the target workflow is gone. Without this
+ * guard, PersistedWorkflowMutationCoordinator.enqueue() lets the resulting
+ * FOREIGN KEY constraint failed error from inserting the intent row
+ * propagate straight to the caller instead of being treated as an
+ * already-satisfied no-op.
+ */
+export async function enqueueWorkflowMutationOrAcknowledgeDeleted<T>(
+  workflowId: string,
+  priority: WorkflowMutationPriority,
+  channel: string,
+  args: unknown[],
+  options: EnqueueWorkflowMutationOptions,
+): Promise<T> {
+  if (isMissingWorkflowIdempotentMutation(channel, workflowId, args) && !options.workflowExists(workflowId)) {
+    return acceptedMissingWorkflow(workflowId, channel, options.logger) as unknown as T;
+  }
+
+  try {
+    return await options.coordinator.enqueue<T>(workflowId, priority, channel, args);
+  } catch (error) {
+    if (
+      isMissingWorkflowIdempotentMutation(channel, workflowId, args)
+      && isForeignKeyConstraintError(error)
+      && !options.workflowExists(workflowId)
+    ) {
+      return acceptedMissingWorkflow(workflowId, channel, options.logger) as unknown as T;
     }
     throw error;
   }

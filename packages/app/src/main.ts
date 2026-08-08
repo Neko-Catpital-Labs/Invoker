@@ -202,7 +202,10 @@ import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalida
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import type { WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
-import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
+import {
+  enqueueWorkflowMutationOrAcknowledgeDeleted,
+  submitWorkflowMutationOrAcknowledgeDeleted,
+} from './workflow-mutation-submit.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import {
   isTaskInFlightForForcedStop,
@@ -1614,7 +1617,11 @@ function startHeadlessMode(): void {
           if (!workflowMutationCoordinator || !workflowMutationDispatcher.has(channel)) {
             return op();
           }
-          return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
+          return enqueueWorkflowMutationOrAcknowledgeDeleted<T>(workflowId, priority, channel, args, {
+            coordinator: workflowMutationCoordinator,
+            workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+            logger,
+          });
         };
 
         if (!workflowMutationDispatcher.has('headless.exec')) {

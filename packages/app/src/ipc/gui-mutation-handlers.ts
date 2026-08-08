@@ -75,7 +75,10 @@ import {
 } from '../global-topup.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from '../workflow-preemption.js';
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
-import { submitWorkflowMutationOrAcknowledgeDeleted } from '../workflow-mutation-submit.js';
+import {
+  enqueueWorkflowMutationOrAcknowledgeDeleted,
+  submitWorkflowMutationOrAcknowledgeDeleted,
+} from '../workflow-mutation-submit.js';
 import type { WorkflowMutationContext } from '../persisted-workflow-mutation-coordinator.js';
 import {
   buildHeadlessFixArgs,
@@ -905,7 +908,11 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     if (!workflowMutationDispatcher.has(channel)) {
       throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
     }
-    return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
+    return enqueueWorkflowMutationOrAcknowledgeDeleted<T>(workflowId, priority, channel, args, {
+      coordinator: workflowMutationCoordinator,
+      workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+      logger,
+    });
   }
 
   function submitWorkflowMutation(
