@@ -168,7 +168,6 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     getMainWindow: () => null,
     isUiInteractive: () => false,
     stampDelta: (delta) => streamSeq.stamp(delta),
-    getStreamSequence: () => streamSeq.current(),
     onEvent: (event) => bridge?.broadcast('invoker:task-graph-event', event),
   });
 

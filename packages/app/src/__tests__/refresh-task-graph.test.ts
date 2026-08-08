@@ -53,27 +53,6 @@ describe('publishForcedRefreshTaskGraphSnapshot', () => {
       true,
     );
   });
-
-  it('passes through an omitted streamSequence so the publisher falls back to its own counter', () => {
-    const publisher = {
-      publishSnapshot: vi.fn(),
-    };
-    const task = makeTask('wf-1/task-1');
-    const workflow = { id: 'wf-1', name: 'Workflow 1', status: 'running' };
-
-    publishForcedRefreshTaskGraphSnapshot(publisher, 'refresh-task-graph', {
-      tasks: [task],
-      workflows: [workflow],
-    });
-
-    expect(publisher.publishSnapshot).toHaveBeenCalledWith(
-      'refresh-task-graph',
-      [task],
-      [workflow],
-      undefined,
-      true,
-    );
-  });
 });
 
 describe('resolveRefreshTaskGraphSnapshot fallback', () => {
@@ -107,9 +86,10 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
           return [localWorkflow];
         },
       } as never,
+      getStreamSequence: () => 9,
     });
 
-    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow] });
+    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow], streamSequence: 9 });
     expect(calls).toEqual({ sync: 1, tasks: 1, workflows: 1 });
     expect(warnings).toEqual([
       {
@@ -132,6 +112,7 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
           return {
             tasks: [makeTask('wf-remote/task-1')],
             workflows: [{ id: 'wf-remote', name: 'Remote', status: 'running' }],
+            streamSequence: 1,
             invokerHomeRoot: '/tmp/invoker-remote',
           };
         },
@@ -151,9 +132,10 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
           return [localWorkflow];
         },
       } as never,
+      getStreamSequence: () => 9,
     });
 
-    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow] });
+    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow], streamSequence: 9 });
     expect(calls.sync).toBe(1);
     expect(warnings[0]).toEqual({
       message: expect.stringContaining('owner home mismatch: owner=/tmp/invoker-remote local=/tmp/invoker-local'),
