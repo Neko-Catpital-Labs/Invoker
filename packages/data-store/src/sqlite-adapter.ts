@@ -3509,6 +3509,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
    * Globally delete expired execution-resource leases. Claim-time reclaim only
    * clears the same `resource_key`; after owner restart, orphaned keys would
    * otherwise sit until something tries that key again.
+   *
+   * Safety invariant: this sweep must stay unscoped (no `resource_key`
+   * filter) and must be invoked from both owner boot (main.ts) and every
+   * dispatcher poll (launch-dispatcher.ts) — narrowing either would leave
+   * orphaned leases on keys nothing else touches.
    */
   releaseExpiredExecutionResourceLeases(nowIso?: string): number {
     const cutoff = nowIso ?? new Date().toISOString();
