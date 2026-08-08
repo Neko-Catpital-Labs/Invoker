@@ -47,6 +47,7 @@ export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
     externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
     detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) as DetachedExternalDependency[] : undefined,
     generation: row.generation ?? 0,
+    deletedAt: row.deleted_at === null || row.deleted_at === undefined ? undefined : Number(row.deleted_at),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
