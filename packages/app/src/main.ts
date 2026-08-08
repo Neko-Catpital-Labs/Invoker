@@ -2891,6 +2891,9 @@ startMainProcessBootstrap({
         logger,
         topUpReadyLaunchesEnabled: () => !invokerConfig.disableAutoRunOnStartup,
       });
+      // Safety invariant: this global sweep must run on boot in addition to
+      // every dispatcher poll (launch-dispatcher.ts) so leases orphaned by a
+      // hard restart are reclaimed before anything else tries their key.
       const sweptLeases = persistence.releaseExpiredExecutionResourceLeases?.() ?? 0;
       if (sweptLeases > 0) {
         logger.info('[init] swept expired execution resource leases on boot', {
