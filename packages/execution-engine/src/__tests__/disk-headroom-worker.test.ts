@@ -119,11 +119,15 @@ describe('disk-headroom worker', () => {
       targetKey: localLabel,
       ok: true,
       reason: 'critical-cleanup',
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
     }));
     const cleanupRemote = vi.fn(async () => ({
       targetKey: remoteLabel,
       ok: true,
       reason: 'critical-cleanup',
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
     }));
     const upsertWorkerAction = vi.fn((row: unknown) => row);
 
@@ -177,6 +181,8 @@ describe('disk-headroom worker', () => {
       targetKey,
       ok: true,
       reason: mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup',
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
     }));
     const upsertWorkerAction = vi.fn((row: unknown) => row);
     const logger = makeLogger();
@@ -221,7 +227,11 @@ describe('disk-headroom worker', () => {
     expect(cleanupLocal.mock.calls[1]?.[0]).not.toHaveProperty('mode');
     expect(upsertWorkerAction).toHaveBeenCalledWith(expect.objectContaining({
       externalKey: `cleanup:${localLabel}:warn-paced`,
-      payload: { reason: 'warn-paced' },
+      payload: expect.objectContaining({
+        reason: 'warn-paced',
+        protectedSkipCount: 0,
+        protectedSkipBytes: 0,
+      }),
       status: 'completed',
     }));
     expect(logger.info).toHaveBeenCalledWith(
@@ -244,6 +254,8 @@ describe('disk-headroom worker', () => {
       targetKey: localLabel,
       ok: true,
       reason: 'critical-cleanup',
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
     }));
 
     const definition = registry.get(DISK_HEADROOM_WORKER_KIND)!;
