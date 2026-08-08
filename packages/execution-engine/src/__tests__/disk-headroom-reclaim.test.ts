@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,9 +7,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 
 import { computeRepoCacheHash } from '../git-utils.js';
+import type { RemoteDiskTarget } from '../workers/disk-headroom-monitor.js';
 import {
   buildInvokerHomeCleanupScript,
   cleanupLocalInvokerHome,
+  cleanupRemoteInvokerHome,
   computeProtectedLocalPaths,
   DISK_RECLAIMABLE_DIRS,
   DiskCleanupCooldownTracker,
@@ -93,6 +96,56 @@ describe('disk-headroom cleanup guards', () => {
     expect(script).not.toContain('$HOME/.cache/electron');
     expect(script).not.toContain('$HOME/.local/share/pnpm');
     expect(script).not.toContain('$HOME/.pnpm-store');
+  });
+
+  it('passes over a preserved path and no longer clears $INVOKER_HOME/repos as one whole unit', () => {
+    const preservedScript = buildInvokerHomeCleanupScript('~/.invoker', ['repos/abc123']);
+    expect(preservedScript).not.toContain('remove_path "$INVOKER_HOME/repos"');
+    expect(preservedScript).toContain("PRESERVE=('repos/abc123')");
+    expect(preservedScript).toContain('sweep_children_preserving "$INVOKER_HOME/repos" "repos"');
+    expect(preservedScript).toContain('sweep_children_preserving "$INVOKER_HOME/worktrees" "worktrees"');
+    expect(preservedScript).toContain('sweep_children_preserving "$INVOKER_HOME/merge-clones" "merge-clones"');
+    expect(preservedScript).toContain('sweep_children_preserving "$INVOKER_HOME/merge-launches" "merge-launches"');
+    // runtime and pr-cron-work stay whole-unit removals.
+    expect(preservedScript).toContain('remove_path "$INVOKER_HOME/runtime"');
+    expect(preservedScript).toContain('remove_path "$INVOKER_HOME/pr-cron-work"');
+    expect(preservedScript).toContain('#6632');
+  });
+
+  it('builds an empty PRESERVE array when no paths are given', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    expect(script).toContain('PRESERVE=()');
+  });
+
+  it('actually preserves a listed child and clears its unrelated sibling when run for real', () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-remote-cleanup-real-'));
+    tempDirs.push(root);
+    const invokerHome = join(root, 'home');
+    const isolatedTmp = join(root, 'scratch-tmp');
+    mkdirSync(isolatedTmp, { recursive: true });
+
+    const preservedHash = 'preserved-hash';
+    const otherHash = 'other-hash';
+    const preservedDir = join(invokerHome, 'repos', preservedHash);
+    const otherDir = join(invokerHome, 'repos', otherHash);
+    mkdirSync(preservedDir, { recursive: true });
+    writeFileSync(join(preservedDir, 'file.txt'), 'keep-me');
+    mkdirSync(otherDir, { recursive: true });
+    writeFileSync(join(otherDir, 'file.txt'), 'clear-me');
+
+    const script = buildInvokerHomeCleanupScript(invokerHome, [`repos/${preservedHash}`]);
+    const scriptPath = join(root, 'cleanup.sh');
+    writeFileSync(scriptPath, script);
+
+    const result = spawnSync('bash', [scriptPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TMPDIR: isolatedTmp },
+    });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(preservedDir, 'file.txt'))).toBe(true);
+    expect(existsSync(otherDir)).toBe(false);
+    expect(existsSync(join(invokerHome, 'repos'))).toBe(true);
   });
 
   it('reclaims the pr-cron-work scratch dir', () => {
@@ -475,5 +528,98 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
     expect(existsSync(protectedWorktreeDir)).toBe(true);
     expect(existsSync(join(protectedWorktreeDir, 'file.txt'))).toBe(true);
     expect(existsSync(unrelatedRepoDir)).toBe(false);
+  });
+});
+
+describe('cleanupRemoteInvokerHome', () => {
+  function makeTarget(overrides: Partial<RemoteDiskTarget> = {}): RemoteDiskTarget {
+    return {
+      name: 'remote-1',
+      connection: { host: 'h', user: 'u', sshKeyPath: '/k' },
+      remotePath: '~/.invoker',
+      ...overrides,
+    };
+  }
+
+  it('never calls its execution callback when the accessor it is given throws', async () => {
+    const target = makeTarget();
+    const throwingStore: DiskHeadroomWorkerStore = {
+      listWorkflows: () => {
+        throw new Error('db unavailable');
+      },
+      loadTasks: () => [],
+    };
+    const runRemoteScript = vi.fn(async () => 'ok');
+
+    const result = await cleanupRemoteInvokerHome({
+      target,
+      store: throwingStore,
+      runRemoteScript,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(runRemoteScript).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('cleanup-error');
+  });
+
+  it('narrows preservation to this target\'s own poolMemberId and embeds it in the generated script', async () => {
+    const target = makeTarget({ name: 'remote-1', remotePath: '/home/remote/.invoker' });
+    const otherTarget = makeTarget({ name: 'remote-2', remotePath: '/home/remote/.invoker' });
+
+    const store: DiskHeadroomWorkerStore = {
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: (workflowId: string) =>
+        workflowId === 'wf-1'
+          ? [
+              makeTask({
+                id: 'wf-1/on-target',
+                status: 'running',
+                config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'remote-1' },
+                execution: { workspacePath: '/home/remote/.invoker/worktrees/hash1/branch' },
+              }),
+              makeTask({
+                id: 'wf-1/on-other-target',
+                status: 'running',
+                config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'remote-2' },
+                execution: { workspacePath: '/home/remote/.invoker/worktrees/hash2/branch' },
+              }),
+            ]
+          : [],
+    };
+
+    const capturedScripts: string[] = [];
+    const runRemoteScript = vi.fn(async (_t: RemoteDiskTarget, script: string) => {
+      capturedScripts.push(script);
+      return 'ok';
+    });
+
+    const result = await cleanupRemoteInvokerHome({ target, store, runRemoteScript });
+    expect(result.ok).toBe(true);
+    expect(capturedScripts[0]).toContain('worktrees/hash1/branch');
+    expect(capturedScripts[0]).not.toContain('worktrees/hash2/branch');
+
+    const otherResult = await cleanupRemoteInvokerHome({
+      target: otherTarget,
+      store,
+      runRemoteScript,
+    });
+    expect(otherResult.ok).toBe(true);
+    expect(capturedScripts[1]).toContain('worktrees/hash2/branch');
+    expect(capturedScripts[1]).not.toContain('worktrees/hash1/branch');
+  });
+
+  it('clears everything (empty PRESERVE) when no store is provided', async () => {
+    const target = makeTarget();
+    let capturedScript = '';
+    const runRemoteScript = vi.fn(async (_t: RemoteDiskTarget, script: string) => {
+      capturedScript = script;
+      return 'ok';
+    });
+
+    const result = await cleanupRemoteInvokerHome({ target, runRemoteScript });
+
+    expect(result.ok).toBe(true);
+    expect(capturedScript).toContain('PRESERVE=()');
   });
 });
