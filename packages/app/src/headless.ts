@@ -414,7 +414,7 @@ export function resolveHeadlessDiskHeadroomConfig(
         sshKeyPath: target.sshKeyPath,
         port: target.port,
       },
-      remotePath: '~/.invoker',
+      remotePath: target.remoteInvokerHome ?? '~/.invoker',
     })),
   };
 }
