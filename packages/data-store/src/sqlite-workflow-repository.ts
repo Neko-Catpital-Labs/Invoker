@@ -27,11 +27,13 @@ import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type {
   ReviewGateLookup,
   Workflow,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
 } from './adapter.js';
 import { mapRowToWorkflow, mapRowToTask } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 export type WorkflowMetadataChanges = Partial<
   Pick<
@@ -88,27 +90,44 @@ export class SqliteWorkflowRepository {
     private readonly reconcileTaskFromSelectedAttempt: (task: TaskState) => TaskState,
   ) {}
 
+  private loadWorkflowJournalPayload(workflowId: string): Record<string, unknown> | undefined {
+    return this.exec.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+  }
+
   // ── Workflows ─────────────────────────────────────────
 
   saveWorkflow(workflow: WorkflowSaveInput): void {
     assertWorkflowConsistent(workflow);
-    this.exec.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      workflow.id, workflow.name,
-      workflow.description ?? null,
-      workflow.visualProof ? 1 : 0,
-      workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.intermediateRepoUrl ?? null, workflow.branch ?? null,
-      workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
-      workflow.mergeMode ?? null,
-      workflow.reviewProvider ?? null,
-      workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
-      workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
-      workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
-      workflow.generation ?? 0,
-      workflow.createdAt, workflow.updatedAt,
-    ]);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`
+        INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, deleted_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        workflow.id, workflow.name,
+        workflow.description ?? null,
+        workflow.visualProof ? 1 : 0,
+        workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.intermediateRepoUrl ?? null, workflow.branch ?? null,
+        workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
+        workflow.mergeMode ?? null,
+        workflow.reviewProvider ?? null,
+        workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
+        workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
+        workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
+        workflow.generation ?? 0,
+        workflow.deletedAt ?? null,
+        workflow.createdAt, workflow.updatedAt,
+      ]);
+      const payload = this.loadWorkflowJournalPayload(workflow.id);
+      if (!payload) {
+        throw new Error(`Failed to load workflow ${workflow.id} after insert for sync journal`);
+      }
+      appendJournalEntry(this.exec, {
+        entityType: 'workflow',
+        entityId: workflow.id,
+        op: 'upsert',
+        payload,
+      });
+    });
   }
 
   updateWorkflow(workflowId: string, changes: WorkflowMetadataChanges): void {
@@ -175,19 +194,36 @@ export class SqliteWorkflowRepository {
     assertWorkflowPatchConsistent(before, after, changes);
 
     values.push(workflowId);
-    this.exec.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      const payload = this.loadWorkflowJournalPayload(workflowId);
+      if (!payload) {
+        throw new Error(`Failed to load workflow ${workflowId} after update for sync journal`);
+      }
+      appendJournalEntry(this.exec, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'upsert',
+        payload,
+      });
+    });
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    const row = this.exec.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+  loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined {
+    const row = this.exec.queryOne(
+      `SELECT * FROM workflows WHERE id = ?${options?.includeDeleted ? '' : ' AND deleted_at IS NULL'}`,
+      [workflowId],
+    );
     if (!row) return undefined;
     const rollup = this.loadWorkflowRollups([workflowId]).get(workflowId);
     return this.rowToWorkflow(row, rollup);
   }
 
-  listWorkflows(): Workflow[] {
+  listWorkflows(options?: WorkflowReadOptions): Workflow[] {
     const rows = this.exec.queryAll(
-      'SELECT * FROM workflows ORDER BY created_at DESC',
+      `SELECT * FROM workflows
+        ${options?.includeDeleted ? '' : 'WHERE deleted_at IS NULL'}
+        ORDER BY created_at DESC`,
     );
     const workflowIds = rows.map((row) => String(row.id));
     const rollups = this.loadWorkflowRollups(workflowIds);
@@ -209,7 +245,9 @@ export class SqliteWorkflowRepository {
               w.base_branch AS baseBranch
          FROM tasks t
          JOIN workflows w ON w.id = t.workflow_id
-        WHERE t.is_merge_node = 1 AND (t.review_id = ? OR t.review_url LIKE ?)`,
+        WHERE w.deleted_at IS NULL
+          AND t.is_merge_node = 1
+          AND (t.review_id = ? OR t.review_url LIKE ?)`,
       [pr, `%/pull/${pr}`],
     );
     if (rows.length === 0) return undefined;
@@ -261,7 +299,8 @@ export class SqliteWorkflowRepository {
     if (type === 'workflows' || type === 'all') {
       const workflows = this.exec.queryAll(
         `SELECT id, name, description, plan_file, repo_url, branch, created_at FROM workflows 
-         WHERE name LIKE ? OR description LIKE ? OR plan_file LIKE ? OR repo_url LIKE ? OR branch LIKE ? 
+         WHERE deleted_at IS NULL
+           AND (name LIKE ? OR description LIKE ? OR plan_file LIKE ? OR repo_url LIKE ? OR branch LIKE ?)
          LIMIT ? OFFSET ?`,
         [safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, limit, offset]
       ) as Array<{ id: string; name?: string | null; created_at: string }>;
@@ -285,8 +324,11 @@ export class SqliteWorkflowRepository {
     
     if (type === 'tasks' || type === 'all') {
       const tasks = this.exec.queryAll(
-        `SELECT id, workflow_id, description, command, prompt, summary, problem, approach, test_plan, repro_command, status, created_at FROM tasks 
-         WHERE description LIKE ? OR command LIKE ? OR prompt LIKE ? OR summary LIKE ? OR problem LIKE ? OR approach LIKE ? OR test_plan LIKE ? OR repro_command LIKE ? 
+        `SELECT t.id, t.workflow_id, t.description, t.command, t.prompt, t.summary, t.problem, t.approach, t.test_plan, t.repro_command, t.status, t.created_at
+         FROM tasks t
+         JOIN workflows w ON w.id = t.workflow_id
+         WHERE w.deleted_at IS NULL
+           AND (t.description LIKE ? OR t.command LIKE ? OR t.prompt LIKE ? OR t.summary LIKE ? OR t.problem LIKE ? OR t.approach LIKE ? OR t.test_plan LIKE ? OR t.repro_command LIKE ?)
          LIMIT ? OFFSET ?`,
         [safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, limit, offset]
       ) as Array<{
@@ -302,7 +344,7 @@ export class SqliteWorkflowRepository {
       if (workflowIds.length > 0) {
         const placeholders = workflowIds.map(() => '?').join(',');
         const workflowRows = this.exec.queryAll(
-          `SELECT id, name FROM workflows WHERE id IN (${placeholders})`,
+          `SELECT id, name FROM workflows WHERE deleted_at IS NULL AND id IN (${placeholders})`,
           workflowIds
         ) as Array<{ id: string; name?: string | null }>;
         for (const wf of workflowRows) {
@@ -327,16 +369,27 @@ export class SqliteWorkflowRepository {
     return results;
   }
 
-  loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
+  loadWorkflowTaskSnapshot(options?: WorkflowReadOptions): WorkflowTaskSnapshot {
     const totalStartedAt = Date.now();
     const workflowQueryStartedAt = Date.now();
-    const workflowRows = this.exec.queryAll('SELECT * FROM workflows ORDER BY created_at DESC');
+    const workflowRows = this.exec.queryAll(
+      `SELECT * FROM workflows
+        ${options?.includeDeleted ? '' : 'WHERE deleted_at IS NULL'}
+        ORDER BY created_at DESC`,
+    );
     const workflowMetadataQueryMs = Date.now() - workflowQueryStartedAt;
     const taskQueryStartedAt = Date.now();
-    const taskRows = this.exec.queryAll('SELECT * FROM tasks ORDER BY workflow_id ASC, id ASC');
-    const taskQueryMs = Date.now() - taskQueryStartedAt;
     const tasksByWorkflowId = new Map<string, TaskState[]>();
     const workflowIds = workflowRows.map((row) => String(row.id));
+    const taskRows = workflowIds.length === 0
+      ? []
+      : this.exec.queryAll(
+          `SELECT * FROM tasks
+            WHERE workflow_id IN (${workflowIds.map(() => '?').join(', ')})
+            ORDER BY workflow_id ASC, id ASC`,
+          workflowIds,
+        );
+    const taskQueryMs = Date.now() - taskQueryStartedAt;
     const rollupStartedAt = Date.now();
     const rollups = this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
     const rollupComputationMs = Date.now() - rollupStartedAt;
