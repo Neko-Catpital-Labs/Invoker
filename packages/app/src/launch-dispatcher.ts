@@ -238,7 +238,14 @@ export class LaunchDispatcher {
     }
   }
 
-  /** Fallback when the liveness-aware sweep isn't wired: old, blunt behavior. */
+  /**
+   * Fallback when the liveness-aware sweep isn't wired: old, blunt behavior.
+   *
+   * Safety invariant: this delegates to the global (unscoped) sweep and must
+   * run on every dispatcher poll, matching the boot-time sweep in main.ts —
+   * narrowing this to the current resource key would leave orphaned leases
+   * on keys nothing else touches.
+   */
   private sweepExpiredResourceLeasesUnconditionally(): void {
     const sweep = this.persistence.releaseExpiredExecutionResourceLeases;
     if (typeof sweep !== 'function') return;
