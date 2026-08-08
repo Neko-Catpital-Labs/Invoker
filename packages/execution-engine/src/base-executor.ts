@@ -29,12 +29,24 @@ const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
  * the same config entry.
  */
 export function normalizeRepoUrlForProvisionLookup(repoUrl: string): string {
-  const trimmed = repoUrl.trim().toLowerCase();
-  const sshMatch = /^git@([^:]+):(.+)$/.exec(trimmed);
-  const withoutScheme = sshMatch
-    ? `${sshMatch[1]}/${sshMatch[2]}`
-    : trimmed.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
-  return withoutScheme.replace(/\.git$/, '').replace(/\/+$/, '');
+  let normalized = repoUrl.trim().toLowerCase();
+  const schemeSeparatorIndex = normalized.indexOf('://');
+  if (schemeSeparatorIndex >= 0) {
+    normalized = normalized.slice(schemeSeparatorIndex + '://'.length);
+  }
+  if (normalized.startsWith('git@')) {
+    const withoutGitUser = normalized.slice('git@'.length);
+    const scpPathSeparatorIndex = withoutGitUser.indexOf(':');
+    normalized = scpPathSeparatorIndex >= 0
+      ? `${withoutGitUser.slice(0, scpPathSeparatorIndex)}/${withoutGitUser.slice(scpPathSeparatorIndex + 1)}`
+      : withoutGitUser;
+  }
+  let endIndex = normalized.length;
+  while (endIndex > 0 && normalized[endIndex - 1] === '/') {
+    endIndex -= 1;
+  }
+  normalized = normalized.slice(0, endIndex);
+  return normalized.endsWith('.git') ? normalized.slice(0, -4) : normalized;
 }
 
 export interface BaseEntry {
