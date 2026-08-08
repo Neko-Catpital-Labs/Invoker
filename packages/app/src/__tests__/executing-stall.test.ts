@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from '../executing-stall.js';
 import { isCrashPreservedExecution, type TaskState } from '@invoker/workflow-core';
 
@@ -81,6 +81,26 @@ describe('evaluateExecutingStall', () => {
 
     expect(result.executingStalled).toBe(true);
     expect(result.staleReason).toBe('attempt lease expired');
+  });
+
+  it('never writes: reads a frozen input and never touches a persistence layer', () => {
+    const updateTask = vi.fn();
+    const persistence = { updateTask };
+
+    const input = Object.freeze({
+      now,
+      phase: 'executing' as const,
+      runnerKind: 'ssh' as const,
+      executingStartedAt: startedAt,
+      leaseExpiresAt: new Date(now.getTime() - 1_000),
+      executorHeartbeatAt: new Date(now.getTime() - 10_000),
+      remoteHeartbeatAt: new Date(now.getTime() - 4 * 60_000),
+      executingStallTimeoutMs: timeoutMs,
+    });
+
+    expect(() => evaluateExecutingStall(input)).not.toThrow();
+
+    expect(persistence.updateTask).not.toHaveBeenCalled();
   });
 });
 
