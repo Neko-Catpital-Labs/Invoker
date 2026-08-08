@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner, collectManagedWorkflowBranchesFromDb } from '../task-runner.js';
+import { assertCompletedDependencyHasBranch } from '../task-runner-prepare.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import { WorktreeExecutor } from '../worktree-executor.js';
@@ -1916,6 +1917,42 @@ describe('TaskRunner', () => {
           }),
         }),
       );
+    });
+
+    it('assertCompletedDependencyHasBranch throws when a completed dep has no branch', () => {
+      const dep = makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        config: { runnerKind: 'worktree' },
+      });
+
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep),
+      ).toThrow('completed without branch metadata');
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when the dep has a branch', () => {
+      const dep = makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        config: { runnerKind: 'worktree' },
+        execution: { branch: 'experiment/dep-a' },
+      });
+
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep),
+      ).not.toThrow();
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when the dep is undefined or not completed', () => {
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', undefined),
+      ).not.toThrow();
+
+      const pendingDep = makeTask({ id: 'dep-a', status: 'pending', config: { runnerKind: 'worktree' } });
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', pendingDep),
+      ).not.toThrow();
     });
 
     it('fails task when a completed external dependency has no branch metadata', async () => {
