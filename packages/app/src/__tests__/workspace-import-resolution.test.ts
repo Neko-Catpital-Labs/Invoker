@@ -32,6 +32,12 @@ function collectInvokerImports(sourceCode: string): string[] {
   return [...imports].sort();
 }
 
+/** package.json declares the package (`@invoker/cli`), never a subpath export (`@invoker/cli/bundled-skills`). */
+function packageNameOf(specifier: string): string {
+  const parts = specifier.split('/');
+  return parts.slice(0, 2).join('/');
+}
+
 describe('workspace import resolution', () => {
   const invokerImports = collectInvokerImports(mainSource);
   const declaredDependencies = new Set([
@@ -45,7 +51,8 @@ describe('workspace import resolution', () => {
 
   it('declares every @invoker/* import in package.json', () => {
     for (const specifier of invokerImports) {
-      expect(declaredDependencies.has(specifier), `Missing dependency declaration for ${specifier}`).toBe(true);
+      const packageName = packageNameOf(specifier);
+      expect(declaredDependencies.has(packageName), `Missing dependency declaration for ${packageName} (imported as ${specifier})`).toBe(true);
     }
   });
 

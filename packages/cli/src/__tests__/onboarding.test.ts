@@ -6,6 +6,13 @@ import { join } from 'node:path';
 import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from '@invoker/contracts';
 
 import {
+  assertNoConfigWriteOnAllDeclined,
+  assertNoSecretPrinted,
+  assertOptionalToolPromptedBeforeInstall,
+  assertRemoteTargetOnlyPersistedAfterAllChecksPass,
+} from '../onboarding-invariants.js';
+
+import {
   checkGithubAuth,
   defaultExperimentalPlannerMcpPath,
   ensureExperimentalPlannerMcp,
@@ -40,11 +47,25 @@ function errorCheck(id: string, name: string, detail: string, remediation?: stri
 }
 
 /** Keep setup oneshot tests offline and independent of the host PATH / gh login. */
+const NOOP_BUNDLED_SKILLS_STATUS = {
+  available: false,
+  promptRecommended: false,
+  managedPrefix: 'invoker-',
+  bundledSkillNames: [],
+  targets: [],
+  commandTargets: [],
+  mcpTargets: [],
+};
+
 function readySetupDeps(overrides: SetupDeps = {}): SetupDeps {
   return {
     isInstalled: () => true,
     githubAuthCheck: async () => okCheck('github-auth', 'GitHub auth', 'gh is authenticated'),
     smokePlanValidation: async () => okCheck('smoke-plan', 'smoke: plan validation', 'Parsed 1 task(s)'),
+    // Real skill install does real commandExists probing + filesystem work —
+    // stub it by default so unrelated tests stay fast and deterministic.
+    resolveSkillsRepoRoot: () => '/fake-repo-root',
+    bundledSkillsInstall: () => NOOP_BUNDLED_SKILLS_STATUS,
     ...overrides,
   };
 }
@@ -154,7 +175,7 @@ describe('buildDoctorChecks', () => {
   });
 });
 describe('runSetup', () => {
-  it('installs the public planner MCP by default without enabling planner behavior', async () => {
+  it('does not install the Drafter planner MCP by default', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-home-'));
     const saved = {
       HOME: process.env.HOME,
@@ -174,19 +195,101 @@ describe('runSetup', () => {
       const invokerConfigPath = join(home, '.invoker', 'config.json');
       const output = lines.join('\n');
       expect(output).toContain('Invoker setup');
-      expect(output).toContain(`Experimental planner MCP installed into ${mcpPath}`);
-      expect(output).toContain('experimentalPlanner flag: off');
+      expect(output).not.toContain('planner');
       expect(output).toContain("You're ready.");
-      expect(JSON.parse(readFileSync(mcpPath, 'utf8')).mcpServers['experimental-planner']).toEqual({
-        type: 'stdio',
-        command: 'uvx',
-        args: ['--from', DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES.drafterMcp.commandName],
-      });
+      expect(existsSync(mcpPath)).toBe(false);
       expect(existsSync(invokerConfigPath)).toBe(false);
       expect(code).toBe(0);
+
+      expect(() => assertOptionalToolPromptedBeforeInstall(lines, 'Drafter')).not.toThrow();
+      const writtenPaths = [mcpPath, invokerConfigPath].filter((path) => existsSync(path));
+      expect(() => assertNoConfigWriteOnAllDeclined(writtenPaths, true)).not.toThrow();
     } finally {
       restoreEnv('HOME', saved.HOME);
       restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.target);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('installs bundled skills as part of setup and reports the result', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-'));
+    const saved = { HOME: process.env.HOME };
+    const lines: string[] = [];
+    const fakeStatus = {
+      available: true,
+      promptRecommended: false,
+      managedPrefix: 'invoker-',
+      bundledSkillNames: ['plan-to-invoker', 'make-pr'],
+      targets: [{ id: 'claude', name: 'Claude', path: '/x', available: true, installed: true, upToDate: true, installedSkillNames: [] }],
+      commandTargets: [],
+      mcpTargets: [{ id: 'claude', name: 'Claude', path: '/x/.claude.json', available: true, installed: true, upToDate: true, serverName: 'invoker' }],
+    };
+    try {
+      process.env.HOME = home;
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        resolveSkillsRepoRoot: () => '/fake/repo',
+        bundledSkillsInstall: () => fakeStatus,
+      }));
+
+      expect(code).toBe(0);
+      const output = lines.join('\n');
+      expect(output).toContain('Skills: installed 2 bundled skill(s) for Claude.');
+      expect(output).toContain('Skills MCP: registered invoker-cli mcp for Claude.');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('skips skill installation gracefully when not running from an Invoker checkout', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-none-'));
+    const saved = { HOME: process.env.HOME };
+    const lines: string[] = [];
+    try {
+      process.env.HOME = home;
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        resolveSkillsRepoRoot: () => { throw new Error('Could not resolve repo root'); },
+      }));
+
+      expect(code).toBe(0);
+      expect(lines.join('\n')).toContain('Skills: skipped (not running from an Invoker checkout).');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('writes only the worker toggle the user says yes to, leaving the rest unset', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-toggles-'));
+    const saved = { HOME: process.env.HOME };
+    const lines: string[] = [];
+    try {
+      process.env.HOME = home;
+
+      // Prompt order: Slack, machines, then the 4 worker toggles in
+      // ONBOARDING_WORKER_TOGGLES order (PR maintenance, e2e auto-fix,
+      // auto-approve, disk-headroom cleanup).
+      const answers = ['n', 'n', 'n', 'y', 'n', 'n'];
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => answers.shift() ?? 'n',
+      }, readySetupDeps());
+
+      expect(code).toBe(0);
+      const configPath = join(home, '.invoker', 'config.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      expect(config).toEqual({ e2eAutoFixEnabled: true });
+      expect(lines.join('\n')).toContain('Worker toggles');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -212,9 +315,10 @@ describe('runSetup', () => {
       process.env.SLACK_SIGNING_SECRET = 'secret-env';
       process.env.SLACK_CHANNEL_ID = 'C123';
       const prompts: string[] = [];
+      const lines: string[] = [];
 
       const code = await runSetup(['slack', '--from-env'], {
-        print: () => {},
+        print: (line) => lines.push(line),
         prompt: async (question) => {
           prompts.push(question);
           return '';
@@ -223,6 +327,7 @@ describe('runSetup', () => {
 
       expect(code).toBe(0);
       expect(prompts).toEqual([]);
+      expect(() => assertNoSecretPrinted(lines, ['xoxb-env', 'xapp-env', 'secret-env'])).not.toThrow();
     } finally {
       fetchSpy.mockRestore();
       restoreEnv('HOME', saved.HOME);
@@ -253,12 +358,23 @@ describe('runSetup', () => {
     };
   }
 
+  function passingDoctorChecks(): PrerequisiteCheck[] {
+    return [
+      { id: 'git', name: 'Git (remote)', status: 'ok', detail: 'git found on remote box' },
+      { id: 'node', name: 'Node (remote)', status: 'ok', detail: 'node found on remote box' },
+      { id: 'pnpm', name: 'pnpm (remote)', status: 'ok', detail: 'pnpm found on remote box' },
+      { id: 'disk-space', name: 'Disk space (remote)', status: 'ok', detail: '10240 MiB free on the remote box' },
+      { id: 'push-auth', name: 'GitHub push credentials (remote)', status: 'ok', detail: 'reachable' },
+    ];
+  }
+
   function machineSetupDeps(overrides: SetupDeps = {}): SetupDeps {
     return readySetupDeps({
       remoteTargetConnectivity: async (target) => ({
         reachable: true,
         message: `ssh probe to ${target.user}@${target.host} succeeded`,
       }),
+      remoteDoctorChecks: async () => passingDoctorChecks(),
       ...overrides,
     });
   }
@@ -271,6 +387,7 @@ describe('runSetup', () => {
       'build-a.example.test',
       'deploy',
       '/home/deploy/.ssh/id_ed25519',
+      'https://github.com/example/build-a.git',
       '2222',
       '3',
       'pnpm install --frozen-lockfile',
@@ -298,6 +415,8 @@ describe('runSetup', () => {
           provisionCommand: 'pnpm install --frozen-lockfile',
         },
       });
+
+      expect(() => assertRemoteTargetOnlyPersistedAfterAllChecksPass(passingDoctorChecks(), true)).not.toThrow();
     } finally {
       env.restore();
     }
@@ -312,6 +431,7 @@ describe('runSetup', () => {
       'build-a.example.test',
       'deploy',
       '/home/deploy/.ssh/id_ed25519',
+      'https://github.com/example/build-a.git',
       '22',
       '1',
       '',
@@ -339,6 +459,7 @@ describe('runSetup', () => {
       'build-a.example.test',
       'deploy',
       '/home/deploy/.ssh/id_a',
+      'https://github.com/example/build-a.git',
       '22',
       '2',
       '',
@@ -348,6 +469,7 @@ describe('runSetup', () => {
       'build-b.example.test',
       'deploy',
       '/home/deploy/.ssh/id_b',
+      'https://github.com/example/build-b.git',
       '2223',
       '4',
       'bash scripts/provision.sh',
@@ -392,6 +514,7 @@ describe('runSetup', () => {
         host: 'build-a.example.test',
         user: 'deploy',
         sshKeyPath: '/home/deploy/.ssh/id_a',
+        repoUrl: 'https://github.com/example/build-a.git',
         port: 22,
         maxConcurrentTasks: 2,
       },
@@ -400,6 +523,7 @@ describe('runSetup', () => {
         host: 'build-b.example.test',
         user: 'ci',
         sshKeyPath: '/home/ci/.ssh/id_b',
+        repoUrl: 'https://github.com/example/build-b.git',
         port: 2222,
         maxConcurrentTasks: 1,
         provisionCommand: 'pnpm install --frozen-lockfile',
@@ -422,6 +546,89 @@ describe('runSetup', () => {
         ['build-b', true],
       ]);
       expect(Object.keys(JSON.parse(readFileSync(env.configPath, 'utf8')).remoteTargets)).toEqual(['build-a', 'build-b']);
+    } finally {
+      env.restore();
+    }
+  });
+
+  it('never writes a machine whose remote doctor checks fail, even though connectivity passed', async () => {
+    const env = setupMachineTestEnv();
+    const originalConfig = { maxConcurrency: 4 };
+    writeFileSync(env.configPath, JSON.stringify(originalConfig));
+    const answers = [
+      'build-a',
+      'build-a.example.test',
+      'deploy',
+      '/home/deploy/.ssh/id_ed25519',
+      'https://github.com/example/build-a.git',
+      '22',
+      '1',
+      '',
+      'n', // "Try this machine again?" — no
+    ];
+    const lines: string[] = [];
+    const doctorChecks = [
+      { id: 'git', name: 'Git (remote)', status: 'ok' as const, detail: 'git found on remote box' },
+      {
+        id: 'push-auth',
+        name: 'GitHub push credentials (remote)',
+        status: 'error' as const,
+        detail: 'Remote box could not reach https://github.com/example/build-a.git with its own git credentials',
+      },
+    ];
+    try {
+      const code = await runSetup(['machines'], {
+        print: (line) => lines.push(line),
+        prompt: async () => answers.shift() ?? '',
+      }, machineSetupDeps({
+        remoteDoctorChecks: async () => doctorChecks,
+      }));
+
+      const finalConfig = JSON.parse(readFileSync(env.configPath, 'utf8'));
+      expect(code).toBe(0);
+      expect(finalConfig).toEqual(originalConfig);
+      expect(lines.join('\n')).toContain('Remote readiness check failed');
+      expect(lines.join('\n')).not.toContain('Keep this machine?');
+
+      const wasWritten = Boolean(finalConfig.remoteTargets?.['build-a']);
+      expect(() => assertRemoteTargetOnlyPersistedAfterAllChecksPass(doctorChecks, wasWritten)).not.toThrow();
+    } finally {
+      env.restore();
+    }
+  });
+
+  it('surfaces a doctor-check failure as an error result under --json without writing the machine', async () => {
+    const env = setupMachineTestEnv();
+    const input = [{
+      name: 'build-a',
+      host: 'build-a.example.test',
+      user: 'deploy',
+      sshKeyPath: '/home/deploy/.ssh/id_a',
+      repoUrl: 'https://github.com/example/build-a.git',
+    }];
+    const lines: string[] = [];
+    try {
+      const code = await runSetup(['machines', '--json'], {
+        print: (line) => lines.push(line),
+        prompt: async () => { throw new Error('should not prompt in json mode'); },
+        readStdin: async () => JSON.stringify(input),
+        interactive: false,
+      }, machineSetupDeps({
+        remoteDoctorChecks: async () => [
+          {
+            id: 'disk-space',
+            name: 'Disk space (remote)',
+            status: 'error',
+            detail: 'out of disk space',
+          },
+        ],
+      }));
+
+      expect(code).toBe(1);
+      const results = JSON.parse(lines[0]);
+      expect(results[0].written).toBe(false);
+      expect(results[0].error.code).toBe('doctor-check-failed');
+      expect(existsSync(env.configPath)).toBe(false);
     } finally {
       env.restore();
     }
@@ -673,7 +880,7 @@ describe('runSetup in a non-interactive shell', () => {
 
   it('fails loudly instead of silently answering no to every prompt', async () => {
     const { lines, io } = collectingIO();
-    const code = await runSetup([], io);
+    const code = await runSetup([], io, readySetupDeps());
 
     expect(code).toBe(1);
     expect(lines.join('\n')).toContain('stdin is not a TTY');
@@ -681,14 +888,14 @@ describe('runSetup in a non-interactive shell', () => {
 
   it('names the non-interactive escape hatches in the failure message', async () => {
     const { lines, io } = collectingIO();
-    await runSetup([], io);
+    await runSetup([], io, readySetupDeps());
 
     const output = lines.join('\n');
     expect(output).toContain('--yes');
     expect(output).toContain('--from-env');
   });
 
-  it('accepts the planner prompt under --yes without reading stdin', async () => {
+  it('does not prompt about the planner under --yes', async () => {
     const { lines, io } = collectingIO({
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
@@ -696,8 +903,20 @@ describe('runSetup in a non-interactive shell', () => {
     const code = await runSetup(['--yes'], io, readySetupDeps());
 
     expect(code).toBe(0);
-    expect(lines.join('\n')).toContain('Enable the experimental planner now?');
+    expect(lines.join('\n')).not.toContain('planner');
     expect(lines.join('\n')).toContain("You're ready.");
+  });
+
+  it('leaves every worker toggle unset under --yes without prompting', async () => {
+    const { lines, io } = collectingIO({
+      prompt: async () => { throw new Error('should not prompt under --yes'); },
+    });
+
+    const code = await runSetup(['--yes'], io, readySetupDeps());
+
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('Worker toggles');
+    expect(lines.join('\n')).toContain('PR maintenance: off');
   });
 
   it('skips Slack under --yes rather than starting a flow it cannot finish', async () => {
@@ -712,14 +931,14 @@ describe('runSetup in a non-interactive shell', () => {
     expect(output).toContain("You're ready.");
   });
 
-  it('writes only inside the configured Invoker home', async () => {
+  it('writes nothing under --yes since planner, Slack, and machines all stay opt-in', async () => {
     const { io } = collectingIO({
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
 
     await runSetup(['--yes'], io, readySetupDeps());
 
-    expect(existsSync(join(home, 'mcp.json'))).toBe(true);
+    expect(existsSync(join(home, 'mcp.json'))).toBe(false);
   });
 });
 

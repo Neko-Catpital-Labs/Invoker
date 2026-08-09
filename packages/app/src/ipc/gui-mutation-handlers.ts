@@ -114,7 +114,7 @@ import type { WorkerRuntimeController } from '../worker-control.js';
 import { buildTaskGraphSnapshot } from '../web/task-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveConfigFileState } from '../config.js';
-import { installBundledSkills, resolveBundledSkillsStatus } from '../bundled-skills.js';
+import { installBundledSkills, resolveBundledSkillsStatus } from '@invoker/cli/bundled-skills';
 import { resolveCliInstallerStatus, updateInvokerCli, type CliInstallerContext } from '../cli-installer.js';
 import { runInvokerCliSetup } from '../invoker-cli-setup.js';
 import { resolveBundledCliPath } from '../cli-helper.js';
