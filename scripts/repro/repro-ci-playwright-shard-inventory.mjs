@@ -15,6 +15,11 @@
 // requires a real local `claude` binary and auth state. Keep it explicit here
 // so future unassigned deterministic specs still fail the guard.
 //
+// The onboarding CLI visual proof is captured through scripts/ui-visual-proof.sh
+// with CAPTURE_MODE enabled. The plain Playwright shard would run the scenario
+// without its screenshot contract, so keep it opt-in with the other manual-only
+// Playwright specs.
+//
 // Usage:
 //   node scripts/repro/repro-ci-playwright-shard-inventory.mjs [workflow.yml] [e2eDir]
 // Exit 0 when the inventory is consistent, 1 when drift is detected.
@@ -31,6 +36,7 @@ const MANUAL_ONLY_SPECS = new Set([
   // This spec intentionally drives the real `claude` binary and depends on
   // live auth/UI state, so it stays opt-in instead of becoming a CI shard.
   'planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+  'onboarding-cli-visual-proof.spec.ts',
 ]);
 
 function shardFiles(job) {
