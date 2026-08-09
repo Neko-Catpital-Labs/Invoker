@@ -13,6 +13,7 @@ import {
   EXTERNAL_DEPENDENCIES,
   formatReport,
   readInvokerConfigFile,
+  resolveRepoRoot,
   type RemoteTargetConnectivityImpl,
   type RemoteTargetInput,
   type IsInstalled,
@@ -23,6 +24,9 @@ import {
 } from '@invoker/contracts';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
+import { installBundledSkills } from './bundled-skills.js';
+import { runRemoteDoctorChecks } from './remote-doctor.js';
+import { applyWorkerToggle, ONBOARDING_WORKER_TOGGLES, readWorkerToggleValue } from './worker-toggles.js';
 
 // ── Paths ────────────────────────────────────────────────────
 
@@ -418,6 +422,9 @@ export interface SetupDeps {
   githubAuthCheck?: (runner: CommandRunner) => PrerequisiteCheck | Promise<PrerequisiteCheck>;
   smokePlanValidation?: () => Promise<PrerequisiteCheck>;
   remoteTargetConnectivity?: RemoteTargetConnectivityImpl;
+  remoteDoctorChecks?: typeof runRemoteDoctorChecks;
+  bundledSkillsInstall?: typeof installBundledSkills;
+  resolveSkillsRepoRoot?: typeof resolveRepoRoot;
 }
 
 // ── Slack manifest ───────────────────────────────────────────
@@ -791,6 +798,7 @@ interface MachineSetupSuccessResult {
   reachable: boolean;
   written: boolean;
   message: string;
+  doctorChecks?: PrerequisiteCheck[];
 }
 
 interface MachineSetupErrorResult {
@@ -803,6 +811,7 @@ interface MachineSetupErrorResult {
     message: string;
     conflictingTargetId?: string;
   };
+  doctorChecks?: PrerequisiteCheck[];
 }
 
 type MachineSetupResult = MachineSetupSuccessResult | MachineSetupErrorResult;
@@ -816,6 +825,18 @@ function parseOptionalPositiveInteger(value: string, fieldName: string, max?: nu
     throw new Error(`${fieldName} must be ${max === undefined ? 'a positive integer' : `between 1 and ${max}`}`);
   }
   return parsed;
+}
+
+/**
+ * Repo URL used only to run the remote doctor's push-credential check
+ * (`git ls-remote` on the box) — deliberately not part of `RemoteTargetInput`,
+ * so it never gets written into `remoteTargets` config.
+ */
+function extractRepoUrl(value: unknown): string {
+  if (!isJsonRecord(value)) throw new Error('machine must be an object');
+  const raw = value.repoUrl;
+  if (typeof raw !== 'string' || raw.trim() === '') throw new Error('repoUrl is required');
+  return raw.trim();
 }
 
 function normalizeRemoteTargetInput(value: unknown): RemoteTargetInput {
@@ -855,11 +876,17 @@ function normalizeRemoteTargetInput(value: unknown): RemoteTargetInput {
   return input;
 }
 
-async function askRemoteTargetInput(io: SetupIO): Promise<RemoteTargetInput> {
+interface RemoteTargetDraft {
+  input: RemoteTargetInput;
+  repoUrl: string;
+}
+
+async function askRemoteTargetInput(io: SetupIO): Promise<RemoteTargetDraft> {
   const name = await askLine(io, 'Machine name: ');
   const host = await askLine(io, 'Host: ');
   const user = await askLine(io, 'User: ');
   const sshKeyPath = await askLine(io, 'SSH key path: ');
+  const repoUrl = await askLine(io, 'Repo URL (used to verify this box can push code back): ');
   const port = parseOptionalPositiveInteger(await askLine(io, 'SSH port [22]: '), 'port', 65535);
   const maxConcurrentTasks = parseOptionalPositiveInteger(
     await askLine(io, 'Max concurrent tasks [1]: '),
@@ -867,7 +894,7 @@ async function askRemoteTargetInput(io: SetupIO): Promise<RemoteTargetInput> {
   );
   const provisionCommand = (await askLine(io, 'Provision command (optional): ')).trim();
 
-  return normalizeRemoteTargetInput({
+  const input = normalizeRemoteTargetInput({
     name,
     host,
     user,
@@ -876,22 +903,24 @@ async function askRemoteTargetInput(io: SetupIO): Promise<RemoteTargetInput> {
     ...(maxConcurrentTasks !== undefined ? { maxConcurrentTasks } : {}),
     ...(provisionCommand !== '' ? { provisionCommand } : {}),
   });
+
+  return { input, repoUrl: extractRepoUrl({ repoUrl }) };
 }
 
 async function checkAndMaybeWriteRemoteTarget(
   input: RemoteTargetInput,
+  repoUrl: string,
   write: boolean,
   options: SetupDeps,
 ): Promise<MachineSetupResult> {
-  const connectivity = await checkRemoteTargetConnectivity(
-    {
-      host: input.host,
-      user: input.user,
-      sshKeyPath: input.sshKeyPath,
-      port: input.port,
-    },
-    { impl: options.remoteTargetConnectivity },
-  );
+  const target = {
+    host: input.host,
+    user: input.user,
+    sshKeyPath: input.sshKeyPath,
+    port: input.port,
+  };
+
+  const connectivity = await checkRemoteTargetConnectivity(target, { impl: options.remoteTargetConnectivity });
 
   if (!connectivity.reachable) {
     return {
@@ -903,16 +932,33 @@ async function checkAndMaybeWriteRemoteTarget(
     };
   }
 
+  const runDoctorChecks = options.remoteDoctorChecks ?? runRemoteDoctorChecks;
+  const doctorChecks = await runDoctorChecks({ target, repoUrl });
+  const failedCheck = doctorChecks.find((check) => check.status === 'error');
+
+  if (failedCheck) {
+    const message = `Remote readiness check failed: ${failedCheck.name} — ${failedCheck.detail}`;
+    return {
+      name: input.name,
+      reachable: true,
+      written: false,
+      message,
+      error: { code: 'doctor-check-failed', message },
+      doctorChecks,
+    };
+  }
+
   if (!write) {
     return {
       name: input.name,
       reachable: true,
       written: false,
       message: connectivity.message,
+      doctorChecks,
     };
   }
 
-  return writeRemoteTarget(input);
+  return { ...writeRemoteTarget(input), doctorChecks };
 }
 
 function writeRemoteTarget(input: RemoteTargetInput): MachineSetupResult {
@@ -947,19 +993,29 @@ async function runMachinesSetupInteractive(io: SetupIO, options: SetupDeps): Pro
   while (addAnother) {
     let repeatThisMachine = true;
     while (repeatThisMachine) {
-      let input: RemoteTargetInput;
+      let draft: RemoteTargetDraft;
       try {
-        input = await askRemoteTargetInput(io);
+        draft = await askRemoteTargetInput(io);
       } catch (error) {
         io.print(`Invalid machine input: ${formatCaughtException(error)}`);
         repeatThisMachine = await promptYes(io, 'Try this machine again? [y/N] ');
         continue;
       }
 
-      const checked = await checkAndMaybeWriteRemoteTarget(input, false, options);
+      const checked = await checkAndMaybeWriteRemoteTarget(draft.input, draft.repoUrl, false, options);
       io.print(formatMachineConnectivity(checked));
 
       if (!checked.reachable) {
+        repeatThisMachine = await promptYes(io, 'Try this machine again? [y/N] ');
+        continue;
+      }
+
+      if (checked.doctorChecks) {
+        io.print('');
+        io.print(formatReport(buildReport(checked.doctorChecks)));
+      }
+
+      if ('error' in checked && checked.error.code === 'doctor-check-failed') {
         repeatThisMachine = await promptYes(io, 'Try this machine again? [y/N] ');
         continue;
       }
@@ -971,7 +1027,7 @@ async function runMachinesSetupInteractive(io: SetupIO, options: SetupDeps): Pro
         continue;
       }
 
-      const written = writeRemoteTarget(input);
+      const written = writeRemoteTarget(draft.input);
       if (written.written) {
         io.print(written.message);
       } else {
@@ -1009,8 +1065,10 @@ async function runMachinesSetupJson(io: SetupIO, options: SetupDeps): Promise<nu
   const results: MachineSetupResult[] = [];
   for (const item of parsed) {
     let input: RemoteTargetInput;
+    let repoUrl: string;
     try {
       input = normalizeRemoteTargetInput(item);
+      repoUrl = extractRepoUrl(item);
     } catch (error) {
       results.push({
         written: false,
@@ -1019,23 +1077,69 @@ async function runMachinesSetupJson(io: SetupIO, options: SetupDeps): Promise<nu
       });
       continue;
     }
-    results.push(await checkAndMaybeWriteRemoteTarget(input, true, options));
+    results.push(await checkAndMaybeWriteRemoteTarget(input, repoUrl, true, options));
   }
 
   io.print(JSON.stringify(results));
   return results.every((result) => result.written) ? 0 : 1;
 }
 
-function plannerMcpCheck(state: ExperimentalPlannerSetupState): PrerequisiteCheck {
-  return {
-    id: 'planner-mcp',
-    name: 'Experimental planner MCP',
-    status: state.installed ? 'ok' : 'error',
-    detail: state.installed
-      ? `Installed into ${state.targetPath} (experimentalPlanner ${state.experimentalPlanner ? 'on' : 'off'})`
-      : `Missing at ${state.targetPath}`,
-    remediation: state.installed ? undefined : 'Re-run `invoker-cli setup` or `invoker-cli setup planner`',
-  };
+/**
+ * Every toggle defaults to "leave unset" (matches ONBOARDING_WORKER_TOGGLES' own
+ * documented off-by-default worker behavior) so mashing Enter through this step,
+ * or running it under --yes, reproduces today's default config exactly.
+ */
+async function runWorkerTogglesInteractive(io: SetupIO, assumeYes: boolean): Promise<void> {
+  const configPath = defaultConfigPath();
+  let config = readInvokerConfigFile(configPath);
+  let changed = false;
+  const summary: string[] = [];
+
+  for (const spec of ONBOARDING_WORKER_TOGGLES) {
+    io.print(`\n${spec.label}: ${spec.description}`);
+    const enable = assumeYes ? false : await promptYes(io, `Enable ${spec.label}? [y/N] `);
+    const current = readWorkerToggleValue(config, spec) ?? false;
+    if (enable !== current) {
+      config = applyWorkerToggle(config, spec, enable);
+      changed = true;
+    }
+    summary.push(`${spec.label}: ${enable ? 'on' : 'off'}`);
+  }
+
+  if (changed) {
+    writeInvokerConfigFile(configPath, config);
+  }
+
+  io.print('');
+  io.print(`Worker toggles — ${summary.join(', ')}`);
+}
+
+/**
+ * Only works when `setup` runs from inside an Invoker checkout (dev, or a repo
+ * clone) — the standalone distribution has nowhere to source `skills/` from.
+ * Fails soft: a truly standalone install (or a build without a source checkout)
+ * just skips this with a note instead of breaking the rest of `setup`.
+ */
+function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
+  const resolveSkillsRepoRoot = options.resolveSkillsRepoRoot ?? resolveRepoRoot;
+  const install = options.bundledSkillsInstall ?? installBundledSkills;
+  let repoRoot: string;
+  try {
+    repoRoot = resolveSkillsRepoRoot(process.cwd());
+  } catch {
+    io.print('Skills: skipped (not running from an Invoker checkout).');
+    return;
+  }
+
+  try {
+    const status = install({ isPackaged: false, repoRoot });
+    const installedTargets = status.targets.filter((target) => target.installed).map((target) => target.name);
+    const installedMcp = status.mcpTargets.filter((target) => target.installed).map((target) => target.name);
+    io.print(`Skills: installed ${status.bundledSkillNames.length} bundled skill(s) for ${installedTargets.join(', ') || 'no targets'}.`);
+    io.print(`Skills MCP: registered invoker-cli mcp for ${installedMcp.join(', ') || 'no detected harnesses'}.`);
+  } catch (error) {
+    io.print(`Skills: install skipped — ${formatCaughtException(error)}`);
+  }
 }
 
 async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<PrerequisiteCheck[]> {
@@ -1095,20 +1199,8 @@ export async function runSetup(
     io.print(formatReport(buildReport(doctorChecks)));
     io.print('');
 
-    const plannerState = ensureExperimentalPlannerMcp({
-      targetPath: parsed.targetPath,
-      plannerPackage: parsed.plannerPackage ?? process.env.INVOKER_PLANNER_PACKAGE,
-    });
-    io.print(`Experimental planner MCP installed into ${plannerState.targetPath}.`);
-    io.print(`experimentalPlanner flag: ${plannerState.experimentalPlanner ? 'on' : 'off'}`);
+    installSetupBundledSkills(io, options);
     io.print('');
-    checks.push(plannerMcpCheck(plannerState));
-
-    if (!wantSlack && !wantMachines && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ', parsed.assumeYes)) {
-      await maybeInstallPlanner(parsed, io);
-      io.print('');
-      checks.push(plannerMcpCheck(readExperimentalPlannerSetup({ targetPath: parsed.targetPath })));
-    }
 
     let doSlack = wantSlack || fromEnv;
     if (!wantSlack && !wantMachines && !fromEnv) {
@@ -1169,6 +1261,10 @@ export async function runSetup(
     }
     if (doMachines) {
       await runMachinesSetupInteractive(io, options);
+    }
+
+    if (!wantSlack && !wantMachines && !fromEnv) {
+      await runWorkerTogglesInteractive(io, parsed.assumeYes);
     }
 
     const extras = await collectGithubAndSmokeChecks(options);
