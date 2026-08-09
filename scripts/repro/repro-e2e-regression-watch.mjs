@@ -146,6 +146,24 @@ function testWorkflowCommandMapping() {
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
 
+function testRetiredPlaywrightJobMapsToInventoryGuard() {
+  const failure = {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9e',
+    firstBadRunId: 30983254556,
+    firstJobDatabaseId: 92238737773,
+    firstJobUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30983254556/job/92238737773',
+    lastBadSha: 'a700d6ae7476e3611226d86d17e2138daa99eb33',
+  };
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git');
+  assertEqual(
+    vars.verify_command,
+    'node scripts/repro/repro-ci-playwright-shard-inventory.mjs',
+    'retired launch-dispatch-stuck-lease job must verify the failing inventory guard',
+  );
+  console.log('[repro-e2e-regression-watch] retired Playwright job mapping: PASS');
+}
+
 function testPlanVarsAndDryRunRendering() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(400, 'abc123def456abc123def456abc123def456ab1', [
@@ -228,6 +246,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testRetiredPlaywrightJobMapsToInventoryGuard();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();

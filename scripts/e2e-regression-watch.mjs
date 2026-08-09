@@ -54,6 +54,12 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_JOB_VERIFY_COMMANDS = new Map([
+  // Historical duplicate matrix row removed by PR #7640. The job failed in
+  // CI before Playwright ran, at the shard-inventory guard, so use that guard
+  // as the local proof for still-active watcher records keyed by this old job.
+  ['playwright / launch-dispatch-stuck-lease', 'node scripts/repro/repro-ci-playwright-shard-inventory.mjs'],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -351,7 +357,9 @@ export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefin
   const definition = jobDefinitions.get(failure.jobName);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
-  const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
+  const verifyCommand = definition?.verifyCommand?.trim()
+    || LEGACY_JOB_VERIFY_COMMANDS.get(failure.jobName)
+    || fallbackVerifyCommand(failure.jobName);
   return {
     repo_url: repoUrl,
     base_branch: 'master',
