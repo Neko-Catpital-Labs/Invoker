@@ -127,6 +127,7 @@ function testWorkflowCommandMapping() {
   const defs = buildCiJobDefinitions();
   const expected = [
     'playwright / 1-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'playwright / 9-of-9',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
@@ -139,6 +140,9 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  if (!defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand.includes('launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('historical stuck-lease job must map to its dedicated Playwright specs');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
