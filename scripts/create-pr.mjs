@@ -692,7 +692,9 @@ function assertOpenHelperBasePr(nwo, baseBranch, dryRun) {
   }
 
   const [pr] = prs;
-  if (pr.state === 'OPEN') return;
+  // gh api (REST) reports state as lowercase "open"/"closed", unlike gh pr
+  // view's GraphQL-backed "OPEN"/"CLOSED" — normalize before comparing.
+  if (String(pr.state || '').toUpperCase() === 'OPEN') return;
 
   const helperState = pr.merged_at ? 'merged helper PR' : 'closed helper PR';
   throw new Error(
