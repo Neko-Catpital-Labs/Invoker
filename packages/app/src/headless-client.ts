@@ -555,6 +555,13 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
         );
         return;
       }
+      if (bus instanceof IpcBus) {
+        const fatal = bus.getFatalConnectError();
+        if (fatal) {
+          delegationClientLog(`bootstrap fatal connect error attempts=${attempts} elapsedMs=${Date.now() - startedAt}: ${fatal.message}`);
+          throw fatal;
+        }
+      }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
     delegationClientLog(`bootstrap timeout elapsedMs=${Date.now() - startedAt}`);

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join, dirname } from 'node:path';
-import { chmodSync, existsSync, mkdtempSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -585,6 +585,38 @@ describe('IpcBus', () => {
     expect(blocked.isServing()).toBe(false);
     const result = await blocked.request<string, string>('echo', 'ok');
     expect(result).toBe('owner:ok');
+  });
+
+  function tooLongSocketPath(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ipc-bus-test-'));
+    const nested = join(dir, 'x'.repeat(60), 'y'.repeat(60));
+    mkdirSync(nested, { recursive: true });
+    return join(nested, 'test.sock');
+  }
+
+  it('surfaces a non-retryable getFatalConnectError() instead of retrying forever when a server cannot bind a too-long socket path', async () => {
+    const sock = tooLongSocketPath();
+    const server = createBus(sock);
+
+    await waitFor(() => server.getFatalConnectError() !== null, 2000);
+
+    const fatal = server.getFatalConnectError();
+    expect(fatal).toBeInstanceOf(TransportError);
+    expect(fatal?.code).toBe(TransportErrorCode.SOCKET_PATH_INVALID);
+    expect(fatal?.message).toContain(String(sock.length));
+    expect(fatal?.message).toContain('INVOKER_IPC_SOCKET');
+  });
+
+  it('surfaces a non-retryable getFatalConnectError() for a pure client (headless CLI) on a too-long socket path', async () => {
+    const sock = tooLongSocketPath();
+    const client = new IpcBus(sock, { allowServe: false });
+    buses.push(client);
+
+    await waitFor(() => client.getFatalConnectError() !== null, 2000);
+
+    const fatal = client.getFatalConnectError();
+    expect(fatal).toBeInstanceOf(TransportError);
+    expect(fatal?.code).toBe(TransportErrorCode.SOCKET_PATH_INVALID);
   });
 
   it('still reclaims a stale socket file left behind by a crashed server', async () => {
