@@ -365,6 +365,7 @@ function buildRegisteredOwnerWorkerDeps(
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
+      cleanupEnabled: invokerConfig.diskHeadroom?.cleanupEnabled,
     },
     infraRepair: {
       ownerRepoRoot: repoRoot,

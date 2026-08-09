@@ -385,6 +385,14 @@ export interface InvokerConfig {
    * PR-maintenance workers from this block.
    */
   prMaintenance?: PrMaintenanceConfig;
+  /**
+   * Owner-side disk-headroom worker config. `cleanupEnabled` takes precedence
+   * over the legacy `INVOKER_DISK_CLEANUP_ENABLED` env var when set; the worker
+   * falls back to the env var only when this is left unset. Default: enabled.
+   */
+  diskHeadroom?: {
+    cleanupEnabled?: boolean;
+  };
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
