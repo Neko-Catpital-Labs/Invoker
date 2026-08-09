@@ -14,38 +14,72 @@ cd "$ROOT"
 node - <<'EOF'
 const fs = require('fs');
 const path = require('path');
+const ts = require('typescript');
 
 const filePath = path.join('packages', 'ui', 'src', 'App.tsx');
 const src = fs.readFileSync(filePath, 'utf8');
+const sourceFile = ts.createSourceFile(filePath, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
-const startMarker = 'const handleDagSurfaceClick = useCallback(';
-const startIdx = src.indexOf(startMarker);
-if (startIdx === -1) {
-  console.error(`FAIL: could not find "${startMarker}" in ${filePath}`);
+function findHandleDagSurfaceClick(node) {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'handleDagSurfaceClick') {
+    return node.initializer;
+  }
+
+  return ts.forEachChild(node, findHandleDagSurfaceClick);
+}
+
+function unwrapExpression(node) {
+  let current = node;
+  while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function expressionMatches(node, expectedKind) {
+  return unwrapExpression(node).kind === expectedKind;
+}
+
+function calleeName(node) {
+  const expression = unwrapExpression(node.expression);
+  return ts.isIdentifier(expression) ? expression.text : null;
+}
+
+const handleDagSurfaceClick = findHandleDagSurfaceClick(sourceFile);
+if (!handleDagSurfaceClick) {
+  console.error(`FAIL: could not find "handleDagSurfaceClick" in ${filePath}`);
   process.exit(1);
 }
 
-let depth = 0;
-let end = -1;
-for (let i = startIdx + startMarker.length - 1; i < src.length; i += 1) {
-  const ch = src[i];
-  if (ch === '(') depth += 1;
-  else if (ch === ')') {
-    depth -= 1;
-    if (depth === 0) {
-      end = i;
-      break;
+if (!ts.isCallExpression(handleDagSurfaceClick) || calleeName(handleDagSurfaceClick) !== 'useCallback') {
+  console.error('FAIL: handleDagSurfaceClick is not initialized with useCallback(...)');
+  process.exit(1);
+}
+
+const forbidden = new Map([
+  ['setSelectedTaskId', ts.SyntaxKind.NullKeyword],
+  ['setSelectedWorkflowId', ts.SyntaxKind.NullKeyword],
+  ['setWorkflowSelectionDismissed', ts.SyntaxKind.TrueKeyword],
+]);
+const found = [];
+
+function inspect(node) {
+  if (ts.isCallExpression(node)) {
+    const name = calleeName(node);
+    const expectedArgumentKind = forbidden.get(name);
+    if (
+      expectedArgumentKind !== undefined &&
+      node.arguments.length > 0 &&
+      expressionMatches(node.arguments[0], expectedArgumentKind)
+    ) {
+      found.push(node.getText(sourceFile));
     }
   }
-}
-if (end === -1) {
-  console.error('FAIL: could not find the end of the handleDagSurfaceClick useCallback(...) call');
-  process.exit(1);
+
+  ts.forEachChild(node, inspect);
 }
 
-const body = src.slice(startIdx, end + 1);
-const forbidden = ['setSelectedTaskId(null)', 'setSelectedWorkflowId(null)', 'setWorkflowSelectionDismissed(true)'];
-const found = forbidden.filter((call) => body.includes(call));
+inspect(handleDagSurfaceClick.arguments[0] ?? handleDagSurfaceClick);
 
 if (found.length > 0) {
   console.error('FAIL: handleDagSurfaceClick must be a no-op on background click (closing an open context menu excluded).');
