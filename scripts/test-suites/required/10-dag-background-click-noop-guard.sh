@@ -30,7 +30,12 @@ function findHandleDagSurfaceClick(node) {
 
 function unwrapExpression(node) {
   let current = node;
-  while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current)
+  ) {
     current = current.expression;
   }
   return current;
