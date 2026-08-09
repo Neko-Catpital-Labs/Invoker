@@ -89,8 +89,6 @@ import {
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
-  INFRA_REPAIR_RECREATE_TASK_CHANNEL,
-  INFRA_REPAIR_RETRY_TASK_CHANNEL,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
@@ -100,10 +98,6 @@ import {
   registerBuiltinAgents,
   registerBuiltinWorkers,
   parseSpawnRepairWorkflowMutationArgs,
-  parseInfraRepairRecreateTaskMutationArgs,
-  parseInfraRepairRetryTaskMutationArgs,
-  parseRequeueMutationArgs,
-  parseRequeueEscalateMutationArgs,
   parseReviewGateCiRepairWorkflowMutationArgs,
   parseReviewGateStackCiRepairWorkflowMutationArgs,
   fetchOpenStackPrs,
@@ -153,6 +147,7 @@ import { backupPlan } from './plan-backup.js';
 import { loadPlanSubmissionBundle } from './plan-submission-loader.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
+import { assertAllWorkerMutationChannelsRegistered, buildWorkerMutationHandlers } from './workflow-mutation-handlers.js';
 import {
   runHeadless,
   isDelegated,
@@ -167,7 +162,7 @@ import {
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
-import { writeStdoutAndFlush } from './headless-stdout-flush.js';
+import { writeStdoutFlushAndExit } from './headless-stdout-flush.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
@@ -216,10 +211,6 @@ import type { WebBridgeTerminalEvents } from './web/web-bridge-server.js';
 import { preserveCrashedInFlightTasks } from './crash-preserved-tasks.js';
 
 
-import {
-  buildHeadlessFixArgs,
-  parseFixWithAgentMutationArgs,
-} from './auto-fix-intents.js';
 import { spawnReviewGateCiRepairWorkflow } from './review-gate-ci-repair-workflow.js';
 import { spawnReviewGateStackCiRepairWorkflow } from './review-gate-stack-repair-workflow.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
@@ -345,7 +336,7 @@ function buildRegisteredOwnerWorkerDeps(
       sshKeyPath: target.sshKeyPath,
       port: target.port,
     },
-    remotePath: '~/.invoker',
+    remotePath: target.remoteInvokerHome ?? '~/.invoker',
   }));
 
   return {
@@ -1004,9 +995,9 @@ function startHeadlessMode(): void {
         const delegated = await tryDelegateQuery(delegationBus, { kind: 'cli-query', args: cliArgs }, 5_000);
         delegationBus.disconnect();
         if (delegated && typeof delegated.output === 'string') {
-          await writeStdoutAndFlush(delegated.output);
           process.exitCode = 0;
-          return;
+          await writeStdoutFlushAndExit(delegated.output);
+          return; // Guard: process.exit() may not halt in Electron async context
         }
       } catch (err) {
         delegationBus.disconnect();
@@ -1644,20 +1635,6 @@ function startHeadlessMode(): void {
             }),
           );
         }
-        if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-          workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
-            const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
-            const args = buildHeadlessFixArgs(taskId, agentName, context);
-            await runHeadless(args, {
-              ...headlessDeps,
-              waitForApproval: false,
-              noTrack: true,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-            return { ok: true };
-          });
-        }
         if (!workflowMutationDispatcher.has('invoker:spawn-review-gate-ci-repair')) {
           workflowMutationDispatcher.set('invoker:spawn-review-gate-ci-repair', async (...repairArgs: unknown[]) => {
             const args = parseReviewGateCiRepairWorkflowMutationArgs(repairArgs);
@@ -1715,10 +1692,9 @@ function startHeadlessMode(): void {
             return result;
           });
         }
-        if (!workflowMutationDispatcher.has(INFRA_REPAIR_RETRY_TASK_CHANNEL)) {
-          workflowMutationDispatcher.set(INFRA_REPAIR_RETRY_TASK_CHANNEL, async (...retryArgs: unknown[]) => {
-            const { taskId } = parseInfraRepairRetryTaskMutationArgs(retryArgs);
-            await runHeadless(['retry-task', taskId], {
+        {
+          const standaloneRunHeadlessCommand = async (args: string[]): Promise<unknown> => {
+            await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: false,
               noTrack: true,
@@ -1726,33 +1702,22 @@ function startHeadlessMode(): void {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
             return { ok: true };
+          };
+          const standaloneWorkerHandlers = buildWorkerMutationHandlers({
+            orchestrator,
+            commandService,
+            logger,
+            runHeadlessCommand: standaloneRunHeadlessCommand,
+            getTaskExecutor: createStandaloneTaskExecutor,
+            getMutationTiming: () => activeMutationContext?.mutationTiming,
+            contextLabel: 'standalone',
           });
-        }
-        if (!workflowMutationDispatcher.has(INFRA_REPAIR_RECREATE_TASK_CHANNEL)) {
-          workflowMutationDispatcher.set(INFRA_REPAIR_RECREATE_TASK_CHANNEL, async (...recreateArgs: unknown[]) => {
-            const { taskId } = parseInfraRepairRecreateTaskMutationArgs(recreateArgs);
-            await runHeadless(['recreate-task', taskId], {
-              ...headlessDeps,
-              waitForApproval: false,
-              noTrack: true,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-            return { ok: true };
-          });
-        }
-        if (!workflowMutationDispatcher.has('invoker:requeue')) {
-          workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
-            const { taskId } = parseRequeueMutationArgs(requeueArgs);
-            await runHeadless(['retry-task', taskId], {
-              ...headlessDeps,
-              waitForApproval: false,
-              noTrack: true,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-            return { ok: true };
-          });
+          for (const [channel, handler] of standaloneWorkerHandlers) {
+            if (!workflowMutationDispatcher.has(channel)) {
+              workflowMutationDispatcher.set(channel, handler);
+            }
+          }
+          assertAllWorkerMutationChannelsRegistered(workflowMutationDispatcher, 'standalone');
         }
         if (!workflowMutationCoordinator) {
           workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
@@ -2273,7 +2238,6 @@ startMainProcessBootstrap({
     getMainWindow: () => mainWindow,
     isUiInteractive: () => uiInteractive,
     stampDelta: (delta) => taskDeltaStream.stamp(delta),
-    getStreamSequence: getTaskDeltaStreamSequence,
     onLargeBatch: ({ batchSize, remaining }) => {
       uiPerfStats.largeTaskDeltaBatches += 1;
       uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batchSize);
@@ -2607,8 +2571,14 @@ startMainProcessBootstrap({
               orchestrator,
               persistence,
               logger,
+              getStreamSequence: getTaskDeltaStreamSequence,
             });
-            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+            taskGraphEventPublisher.publishSnapshot(
+              'refresh-task-graph',
+              snapshot.tasks,
+              snapshot.workflows,
+              snapshot.streamSequence,
+            );
           },
           deleteWorkflow: (workflowId) => requireGuiMutationTaskActions().performDeleteWorkflow(workflowId),
           detachWorkflow: (workflowId, upstreamWorkflowId) =>
@@ -2912,6 +2882,21 @@ startMainProcessBootstrap({
       workflowMutationDispatcher.set('surface:approve-task', async (taskIdArg: unknown) => {
         await mutationActions.performSharedApproveTask(String(taskIdArg), 'surface');
       });
+      {
+        const ownerWorkerHandlers = buildWorkerMutationHandlers({
+          orchestrator,
+          commandService,
+          logger,
+          runHeadlessCommand: (args) => mutationActions.executeHeadlessExec({ args, waitForApproval: false, noTrack: true }),
+          getTaskExecutor: requireTaskExecutor,
+          getMutationTiming: () => activeMutationContext?.mutationTiming,
+          contextLabel: 'owner',
+        });
+        for (const [channel, handler] of ownerWorkerHandlers) {
+          workflowMutationDispatcher.set(channel, handler);
+        }
+        assertAllWorkerMutationChannelsRegistered(workflowMutationDispatcher, 'owner');
+      }
       messageBus.onRequest('headless.owner-ping', async () => ({
         ok: true,
         ownerId: workflowMutationOwnerId,

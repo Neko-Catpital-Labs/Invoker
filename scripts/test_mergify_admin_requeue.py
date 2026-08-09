@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import subprocess
 import sys
@@ -133,6 +134,17 @@ class MergifyAdminRequeueTests(unittest.TestCase):
         executor = AdminBypassGhExecutor(gh, ledger, logger, repo)
         return AdminBypassRepairer(gh, executor, logger, ledger, repo)
 
+    def log_rows(self, text):
+        rows = []
+        for line in text.splitlines():
+            if " " not in line:
+                continue
+            level, payload = line.split(" ", 1)
+            row = json.loads(payload)
+            row["_level"] = level
+            rows.append(row)
+        return rows
+
     def test_loads_admin_bypass_rule_from_mergify_yml(self):
         trunk, labels, required = load_mergify_rules(Path(".mergify.yml"))
         self.assertEqual(trunk, "master")
@@ -143,6 +155,10 @@ class MergifyAdminRequeueTests(unittest.TestCase):
             "PR Body",
             "quality / TypeScript Types",
             "required-fast / Guardrails",
+            "required-fast / Merge Gate Concurrency Repro",
+            "required-fast / Launch Dispatch Queue Repro",
+            "required-fast / Start Running MECE Repros",
+            "required-fast / Branch Carry Forward",
             "required-fast / Submit Workflow Chain",
             "UI Vitest",
         }))
@@ -394,7 +410,12 @@ Failing checks
         self.assertEqual(result.end_head, HEAD)
         self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
 
-    def test_repair_conflict_does_not_record_ledger_when_submission_fails(self):
+    def test_repair_conflict_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
+        # The ledger row is written before submission (not after) so a broken
+        # ledger write can never leave a real, running repair uncounted. The
+        # cost is the mirror case here: if submission itself fails, the
+        # attempt is still counted -- an acceptable trade since submission
+        # failures are rare and non-silent, unlike a lost ledger write.
         item = pr(2661, merge_state="DIRTY", latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
@@ -404,9 +425,9 @@ Failing checks
         ):
             with self.assertRaises(RuntimeError):
                 repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
-        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 0)
+        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
 
-    def test_repair_check_ledger_row_not_written_when_submission_fails(self):
+    def test_repair_check_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
         item = pr(2662, latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
@@ -417,7 +438,7 @@ Failing checks
             ):
                 with self.assertRaises(RuntimeError):
                     repairer.repair_check(item, "PR Body", 1)
-        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 0)
+        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 1)
 
     def test_candidate_stack_includes_unlabeled_upper_prs(self):
         def raw(number, base, head, labels):
@@ -578,6 +599,73 @@ Failing checks
         self.assertIn('"kind": "repair_check"', log)
         self.assertIn('"failed_check"', log)
         self.assertIn('"pr_number": 2606', log)
+
+    def test_run_cycle_logs_degraded_once_when_all_repair_dispatches_fail(self):
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stacks = (
+            StackGroup("s1", (pr(7101, checks=checks, latest=mergify()),)),
+            StackGroup("s2", (pr(7102, checks=checks, latest=mergify()),)),
+        )
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=stacks, open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                        with mock.patch.object(AdminBypassRepairer, "repair_check", side_effect=[TimeoutError("timed out after 30s"), RuntimeError("second failure")]):
+                            with redirect_stdout(stdout), redirect_stderr(stderr):
+                                should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        log = stderr.getvalue()
+        self.assertEqual(log.count('"event": "admin-bypass-repair-attempt-failed"'), 2)
+        degraded = [row for row in self.log_rows(log) if row.get("event") == "admin-bypass-dispatch-degraded"]
+        self.assertEqual(len(degraded), 1)
+        self.assertEqual(degraded[0]["_level"], "ERROR")
+        self.assertEqual(degraded[0]["repo"], "owner/repo")
+        self.assertEqual(degraded[0]["attempted"], 2)
+        self.assertEqual(degraded[0]["failed"], 2)
+        self.assertEqual(degraded[0]["last_error"], "second failure")
+
+    def test_run_cycle_does_not_log_degraded_when_any_repair_dispatch_succeeds(self):
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stacks = (
+            StackGroup("s1", (pr(7201, checks=checks, latest=mergify()),)),
+            StackGroup("s2", (pr(7202, checks=checks, latest=mergify()),)),
+        )
+        outcome = RepairOutcome(status="submitted", check_name="PR Body", start_head=HEAD, end_head=HEAD)
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=stacks, open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                        with mock.patch.object(AdminBypassRepairer, "repair_check", side_effect=[RuntimeError("first failure"), outcome]):
+                            with redirect_stdout(stdout), redirect_stderr(stderr):
+                                should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        log = stderr.getvalue()
+        self.assertEqual(log.count('"event": "admin-bypass-repair-attempt-failed"'), 1)
+        self.assertNotIn('"event": "admin-bypass-dispatch-degraded"', log)
+
+    def test_run_cycle_does_not_log_degraded_when_no_repair_actions_are_planned(self):
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        checks = {"PR Body": check("PR Body", "pending"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stack = StackGroup("s", (pr(7301, checks=checks, latest=mergify()),))
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr") as resolve:
+                        with mock.patch.object(AdminBypassRepairer, "repair_check") as repair_check:
+                            with redirect_stdout(stdout), redirect_stderr(stderr):
+                                should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        resolve.assert_not_called()
+        repair_check.assert_not_called()
+        self.assertNotIn('"event": "admin-bypass-dispatch-degraded"', stderr.getvalue())
 
     def test_run_cycle_blocks_once_for_unaccepted_upper_stack(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
@@ -1047,6 +1135,20 @@ class WorkflowFastpathTests(unittest.TestCase):
         with mock.patch.object(headless_shell.subprocess, "run", return_value=completed):
             result = fastpath.resolve_workflow_for_pr(6579)
         self.assertIsNone(result)
+
+    def test_resolve_workflow_for_pr_honors_review_gate_test_seam(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}\n", stderr="")
+        with mock.patch.dict(os.environ, {"INVOKER_PR_CRON_REVIEW_GATE_CMD": "/tmp/review-gate"}):
+            with mock.patch.object(headless_shell.subprocess, "run", return_value=completed) as run:
+                result = fastpath.resolve_workflow_for_pr(6579)
+        self.assertIsNone(result)
+        args = run.call_args.args[0]
+        self.assertEqual(args[0], "bash")
+        self.assertEqual(args[1], "-c")
+        self.assertIn('"$2" "$3"', args[2])
+        self.assertIn("headless-lib.sh", " ".join(str(part) for part in args))
+        self.assertIn("/tmp/review-gate", args)
+        self.assertIn("6579", args)
 
     def test_resolve_workflow_for_pr_raises_on_lookup_failure(self):
         completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")

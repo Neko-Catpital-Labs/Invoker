@@ -27,6 +27,7 @@ export const SCHEMA_DDL = `
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
         detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
+        deleted_at INTEGER,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -512,6 +513,26 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
         ON terminal_sessions(status, updated_at);
 
+      CREATE TABLE IF NOT EXISTS sync_journal (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('workflow', 'task', 'attempt', 'event', 'output')),
+        entity_id TEXT NOT NULL,
+        op TEXT NOT NULL CHECK (op IN ('upsert', 'tombstone')),
+        payload TEXT NOT NULL CHECK (json_valid(payload)),
+        origin TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_sync_journal_entity
+        ON sync_journal(entity_type, entity_id, seq);
+
+      CREATE TABLE IF NOT EXISTS sync_cursors (
+        peer_id TEXT PRIMARY KEY,
+        last_sent_seq INTEGER NOT NULL DEFAULT 0 CHECK (typeof(last_sent_seq) = 'integer' AND last_sent_seq >= 0),
+        last_received_seq INTEGER NOT NULL DEFAULT 0 CHECK (typeof(last_received_seq) = 'integer' AND last_received_seq >= 0),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
@@ -607,6 +628,7 @@ export const COLUMN_MIGRATIONS = [
   // 'stuck-lease', 'lifecycle-reset', 'stale-claim'). Written now, read by
   // a later slice's scoped retry count -- unused for now.
   'ALTER TABLE task_launch_dispatch ADD COLUMN abandon_reason TEXT',
+  'ALTER TABLE workflows ADD COLUMN deleted_at INTEGER',
 ];
 
 /**
@@ -638,6 +660,22 @@ export const POST_MIGRATION_STATEMENTS = [
   `UPDATE worker_actions SET status = 'cancelled' WHERE status = 'canceled'`,
   'CREATE TABLE IF NOT EXISTS task_crash_preservation (task_id TEXT PRIMARY KEY, preserved_at TEXT NOT NULL, owner_pid INTEGER, diagnostic_report_path TEXT, diagnostic_summary TEXT, FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_task_crash_preservation_preserved_at ON task_crash_preservation(preserved_at)',
+  `CREATE TABLE IF NOT EXISTS sync_journal (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('workflow', 'task', 'attempt', 'event', 'output')),
+    entity_id TEXT NOT NULL,
+    op TEXT NOT NULL CHECK (op IN ('upsert', 'tombstone')),
+    payload TEXT NOT NULL CHECK (json_valid(payload)),
+    origin TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_sync_journal_entity ON sync_journal(entity_type, entity_id, seq)',
+  `CREATE TABLE IF NOT EXISTS sync_cursors (
+    peer_id TEXT PRIMARY KEY,
+    last_sent_seq INTEGER NOT NULL DEFAULT 0 CHECK (typeof(last_sent_seq) = 'integer' AND last_sent_seq >= 0),
+    last_received_seq INTEGER NOT NULL DEFAULT 0 CHECK (typeof(last_received_seq) = 'integer' AND last_received_seq >= 0),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */
@@ -661,6 +699,7 @@ export const WORKFLOWS_REBUILD_TABLE_DDL = `
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
         detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
+        deleted_at INTEGER,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       )
@@ -672,12 +711,12 @@ export const WORKFLOWS_REBUILD_INSERT_DDL = `
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
         review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
-        generation, created_at, updated_at
+        generation, deleted_at, created_at, updated_at
       )
       SELECT
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
         review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
-        generation, created_at, updated_at
+        generation, deleted_at, created_at, updated_at
       FROM workflows
     `;

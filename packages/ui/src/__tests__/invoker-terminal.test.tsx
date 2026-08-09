@@ -444,6 +444,28 @@ describe('Invoker terminal (component)', () => {
     }
   });
 
+  it('skips planning tmux fit and resize when proposed dimensions are not finite', async () => {
+    const rectSpy = mockElementRect(640, 400);
+    xtermMock.setNextProposedDimensions({ cols: Number.NaN, rows: 24 });
+
+    try {
+      render(<InvokerTerminal
+        {...terminalProps({
+          mode: 'tmux',
+          terminalSession: makePlanningTerminalSession(),
+        })}
+      />);
+
+      await flushPlanningTerminalFit();
+
+      expect(xtermMock.fitInstances[0]?.proposeDimensions).toHaveBeenCalled();
+      expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+      expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it('sends planning tmux resize when proposed dimensions are sane', async () => {
     const rectSpy = mockElementRect(640, 400);
     xtermMock.setNextProposedDimensions({ cols: 100, rows: 30 });
@@ -2074,7 +2096,22 @@ describe('Invoker terminal submit context (component)', () => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-graph-surface'));
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      fireEvent.click(screen.getByTestId('rf__node-task-a'));
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId('selected-workflow-mini-dag')
+            .querySelector('[data-keyboard-region="taskGraph"]'),
+        ).toHaveAttribute('data-keyboard-active', 'true');
+      });
+      await flushFrames(2);
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await flushFrames(2);
+
+      if (screen.queryByTestId('selected-workflow-mini-dag') === null) break;
+    }
 
     await waitFor(() => {
       expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();

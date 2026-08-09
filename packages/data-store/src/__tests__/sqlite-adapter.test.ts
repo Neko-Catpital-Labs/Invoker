@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { SQLiteAdapter, isLaunchDispatchCandidateStale } from '../sqlite-adapter.js';
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
-import { createAttempt } from '@invoker/workflow-core';
+import { createAttempt, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
@@ -1184,6 +1184,36 @@ describe('SQLiteAdapter', () => {
       expect(leases[0]?.resourceKey).toBe('ssh:live-b');
     });
 
+    it('globally sweeps expired leases across keys the way a dispatcher poll invokes it', () => {
+      // LaunchDispatcher.poll() (launch-dispatcher.ts) falls back to calling
+      // releaseExpiredExecutionResourceLeases() with no arguments on every
+      // tick when the liveness-aware sweep isn't wired; mirror that call
+      // signature here.
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:poll-expired-a',
+        resourceType: 'ssh',
+        holderId: 'holder-a',
+        leaseMs: -1,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'worktree:poll-expired-b',
+        resourceType: 'worktree',
+        holderId: 'holder-b',
+        leaseMs: -1,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:poll-live-c',
+        resourceType: 'ssh',
+        holderId: 'holder-c',
+        leaseMs: 60_000,
+      })).toBe(true);
+
+      expect(adapter.releaseExpiredExecutionResourceLeases()).toBe(2);
+      const leases = adapter.listExecutionResourceLeases();
+      expect(leases).toHaveLength(1);
+      expect(leases[0]?.resourceKey).toBe('ssh:poll-live-c');
+    });
+
     it('allows up to maxHolders live holders on one resource key', () => {
       expect(adapter.claimExecutionResourceLease({
         resourceKey: 'ssh:invoker@counted.example.com:22',
@@ -1693,6 +1723,57 @@ describe('SQLiteAdapter', () => {
         const staleAfter = adapter.loadLaunchDispatchById(stale.id);
         expect(staleAfter?.state).toBe('abandoned');
         expect(staleAfter?.lastError).toMatch(/not the selected attempt/);
+      });
+
+      describe('isLaunchDispatchCandidateStale', () => {
+        const baseCandidate = {
+          id: 1,
+          task_id: 'wf-launch/t1',
+          attempt_id: 'attempt-current',
+          generation: 0,
+          current_task_id: 'wf-launch/t1',
+          current_task_status: 'pending',
+          current_selected_attempt_id: 'attempt-current',
+          current_execution_generation: 0,
+        };
+
+        it('flags a missing task', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            current_task_id: null,
+          });
+          expect(reason).toMatch(/no longer exists/);
+        });
+
+        it('flags a non-claimable task status', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            current_task_status: 'failed',
+          });
+          expect(reason).toMatch(/status is failed/);
+        });
+
+        it('flags a mismatched selected attempt', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            current_selected_attempt_id: 'attempt-other',
+          });
+          expect(reason).toMatch(/not the selected attempt/);
+        });
+
+        it('flags a mismatched execution generation', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            generation: 1,
+            current_execution_generation: 2,
+          });
+          expect(reason).toMatch(/does not match task generation/);
+        });
+
+        it('returns undefined for a fully-matching candidate', () => {
+          const reason = isLaunchDispatchCandidateStale(baseCandidate);
+          expect(reason).toBeUndefined();
+        });
       });
 
       it('abandons stale generation candidates', () => {
@@ -3037,7 +3118,27 @@ describe('SQLiteAdapter', () => {
         generation: 1,
       });
 
+      const runSpy = vi.spyOn((adapter as any).db, 'run');
+
       expect(() => adapter.deleteAllTasks('wf-1')).not.toThrow();
+
+      const deletedTables = runSpy.mock.calls
+        .map(([sql]) => /DELETE FROM (\w+)/.exec(sql as string)?.[1])
+        .filter((table): table is string => table !== undefined);
+
+      expect(deletedTables).toEqual([
+        'workflow_mutation_leases',
+        'workflow_mutation_intents',
+        'task_launch_dispatch',
+        'worker_actions',
+        'execution_resource_leases',
+        'events',
+        'task_output',
+        'attempts',
+        'output_spool',
+        'terminal_sessions',
+        'tasks',
+      ]);
 
       expect(adapter.loadWorkflow('wf-1')).toBeDefined();
       expect(adapter.loadTasks('wf-1')).toEqual([]);
@@ -4382,6 +4483,13 @@ describe('SQLiteAdapter', () => {
 
       expect(() => adapter.updateWorkflow('wf-1', { generation: -1 })).toThrow(/generation/);
       expect(adapter.loadWorkflow('wf-1')!.generation).toBe(0);
+    });
+
+    it('assertWorkflowConsistent and assertWorkflowPatchConsistent reject the same invalid generation value', () => {
+      expect(() => assertWorkflowConsistent({ ...testWorkflow, generation: -1 })).toThrow(/generation/);
+      expect(() =>
+        assertWorkflowPatchConsistent(testWorkflow, { ...testWorkflow, generation: -1 }),
+      ).toThrow(/generation/);
     });
 
     it('rejects invalid saved external dependency shapes before writing', () => {

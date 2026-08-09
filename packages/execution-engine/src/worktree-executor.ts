@@ -40,6 +40,13 @@ export interface WorktreeExecutorConfig {
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
   /** Optional dependency/bootstrap command run before the task command in local worktrees. */
   provisionCommand?: string;
+  /**
+   * Per-repo override for `provisionCommand`, keyed by `repoUrl` (normalized —
+   * see `normalizeRepoUrlForProvisionLookup`). A workflow whose `repoUrl` has
+   * an entry here uses that command (including `''` to run no install step)
+   * instead of the pool's default `provisionCommand`.
+   */
+  repoProvisionCommands?: Record<string, string>;
   /** Heartbeat interval in milliseconds. Default: 30000. */
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
@@ -82,6 +89,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
     this.setProvisionCommand(config.provisionCommand, DEFAULT_WORKTREE_PROVISION_COMMAND);
+    this.setRepoProvisionCommands(config.repoProvisionCommands);
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
     this.pool = new RepoPool({
@@ -407,6 +415,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const provisioning = this.provisionWorktree(
       acquired.worktreePath,
       executionId,
+      this.resolveProvisionCommand(repoUrl),
     );
     entry.process = provisioning.child;
     try {
@@ -575,14 +584,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
+    const displayBridge = getDisplayOnlyBridgeSpec(handle);
     if (entry.agentSessionId) {
       const agentName = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
-      return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir };
+      return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir, ...displayBridge };
     }
-    return { cwd: entry.worktreeDir };
+    return { cwd: entry.worktreeDir, ...displayBridge };
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
@@ -603,6 +613,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     if (meta.workspacePath) {
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
     }
+    const displayBridge = getDisplayOnlyBridgeSpec(meta);
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(meta.executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(meta.agentSessionId)
@@ -611,6 +622,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         command: resume.cmd,
         args: resume.args,
         cwd: meta.workspacePath,
+        ...displayBridge,
       };
       traceExecution(
         `[agent-session-trace] WorktreeExecutor.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
@@ -625,12 +637,13 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         command: sh,
         args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec ${sh}`],
         cwd: meta.workspacePath,
+        ...displayBridge,
       };
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
       return spec;
     }
     traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
-    return { cwd: meta.workspacePath };
+    return { cwd: meta.workspacePath, ...displayBridge };
   }
 
   /**
@@ -706,10 +719,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
   private provisionWorktree(
     dir: string,
-    executionId?: string,
+    executionId: string | undefined,
+    command: string,
   ): { child: ChildProcess | null; completion: Promise<void> } {
     return this.spawnLocalProvisioningProcess({
-      command: this.provisionCommand,
+      command,
       cwd: dir,
       executionId,
       traceLabel: 'WorktreeExecutor.provisionWorktree',
@@ -717,4 +731,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       failurePrefix: 'Worktree provisioning failed:',
     });
   }
+}
+
+function getDisplayOnlyBridgeSpec(
+  source: { displayOnlyBridgeText?: string },
+): Pick<TerminalSpec, 'displayOnlyBridgeText'> {
+  return source.displayOnlyBridgeText === undefined
+    ? {}
+    : { displayOnlyBridgeText: source.displayOnlyBridgeText };
 }

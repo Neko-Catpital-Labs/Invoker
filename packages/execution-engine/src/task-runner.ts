@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { scopePlanTaskId } from '@invoker/workflow-core';
-import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState, ExperimentVariant, Attempt } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
@@ -199,6 +199,7 @@ export interface TaskRunnerConfig {
     provisionCommand?: string;
     maxConcurrentTasks?: number;
   }>;
+  repoProvisionCommandsProvider?: () => Record<string, string>;
   executionPoolsProvider?: () => Record<string, {
     members: Array<
       | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
@@ -221,6 +222,33 @@ export interface TaskRunnerConfig {
   logger?: Logger;
 }
 
+/**
+ * Gathers the set of invoker-managed branches referenced by the given tasks'
+ * current execution and their historical attempts, deduplicated and trimmed.
+ */
+export function collectManagedWorkflowBranchesFromDb(
+  tasks: readonly TaskState[],
+  loadAttempts: ((taskId: string) => Attempt[] | undefined) | undefined,
+): string[] {
+  const branches: string[] = [];
+  const seen = new Set<string>();
+  const addBranch = (branch: string | undefined): void => {
+    const trimmed = branch?.trim();
+    if (!trimmed || !isInvokerManagedPoolBranch(trimmed) || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    branches.push(trimmed);
+  };
+
+  for (const task of tasks) {
+    addBranch(task.execution.branch);
+    for (const attempt of loadAttempts?.(task.id) ?? []) {
+      addBranch(attempt.branch);
+    }
+  }
+
+  return branches;
+}
+
 // ── TaskRunner ──────────────────────────────────────────
 
 export class TaskRunner {
@@ -241,6 +269,7 @@ export class TaskRunner {
 
   /** @internal */ getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   /** @internal */ getWorktreeTargets: () => Record<string, WorktreeTargetDisplay>;
+  /** @internal */ getRepoProvisionCommands: () => Record<string, string>;
   /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
   /** @internal */ dockerConfig: { imageName?: string; secretsFile?: string };
@@ -326,24 +355,10 @@ export class TaskRunner {
   }
 
   private collectManagedWorkflowBranches(workflowId: string): string[] {
-    const branches: string[] = [];
-    const seen = new Set<string>();
-    const addBranch = (branch: string | undefined): void => {
-      const trimmed = branch?.trim();
-      if (!trimmed || !isInvokerManagedPoolBranch(trimmed) || seen.has(trimmed)) return;
-      seen.add(trimmed);
-      branches.push(trimmed);
-    };
-
-    for (const task of this.orchestrator.getAllTasks()) {
-      if (task.config.workflowId !== workflowId || task.config.isMergeNode) continue;
-      addBranch(task.execution.branch);
-      for (const attempt of this.persistence.loadAttempts?.(task.id) ?? []) {
-        addBranch(attempt.branch);
-      }
-    }
-
-    return branches;
+    const tasks = this.orchestrator
+      .getAllTasks()
+      .filter((task) => task.config.workflowId === workflowId && !task.config.isMergeNode);
+    return collectManagedWorkflowBranchesFromDb(tasks, this.persistence.loadAttempts?.bind(this.persistence));
   }
 
   constructor(config: TaskRunnerConfig) {
@@ -360,6 +375,7 @@ export class TaskRunner {
     this.reviewGateMergeConflictPublisher = config.reviewGateMergeConflictPublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getWorktreeTargets = config.worktreeTargetsProvider ?? (() => ({}));
+    this.getRepoProvisionCommands = config.repoProvisionCommandsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};

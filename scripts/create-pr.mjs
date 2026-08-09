@@ -692,7 +692,9 @@ function assertOpenHelperBasePr(nwo, baseBranch, dryRun) {
   }
 
   const [pr] = prs;
-  if (pr.state === 'OPEN') return;
+  // gh api (REST) reports state as lowercase "open"/"closed", unlike gh pr
+  // view's GraphQL-backed "OPEN"/"CLOSED" — normalize before comparing.
+  if (String(pr.state || '').toUpperCase() === 'OPEN') return;
 
   const helperState = pr.merged_at ? 'merged helper PR' : 'closed helper PR';
   throw new Error(
@@ -744,6 +746,61 @@ function branchHasChangeId(baseRef) {
   }
 }
 
+function getHeadChangeId() {
+  const message = gitTextOrEmpty(['log', '-1', '--format=%B', 'HEAD']);
+  const match = message.match(/^Change-Id:\s*(\S+)/m);
+  return match ? match[1] : '';
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stackAuthorSegment(branch) {
+  const [root, author] = branch.split('/');
+  return root === 'stack' && author ? author : '';
+}
+
+function fetchStackHeadsPrefix(prefix) {
+  gitTextOrEmpty(['fetch', '--quiet', '--prune', 'origin', `+refs/heads/${prefix}/*:refs/remotes/origin/${prefix}/*`]);
+}
+
+function listRemoteTrackingRefTips(prefix) {
+  const out = gitTextOrEmpty(['for-each-ref', '--format=%(refname) %(objectname)', `refs/remotes/origin/${prefix}`]);
+  if (!out) return [];
+  return out.split('\n').filter(Boolean).map((line) => {
+    const [refname, sha] = line.split(' ');
+    return { refname: refname.replace(/^refs\/remotes\//, ''), sha };
+  });
+}
+
+function refCommitHasChangeId(sha, changeId) {
+  const message = gitTextOrEmpty(['log', '-1', '--format=%B', sha]);
+  return new RegExp(`^Change-Id:\\s*${escapeRegExp(changeId)}\\s*$`, 'm').test(message);
+}
+
+function findMergifyPublishedRef(branch, headSha, headChangeId) {
+  const prefixes = [];
+  const author = stackAuthorSegment(branch);
+  if (author) prefixes.push(`stack/${author}`);
+  prefixes.push('stack');
+
+  for (const prefix of prefixes) {
+    fetchStackHeadsPrefix(prefix);
+    const tips = listRemoteTrackingRefTips(prefix);
+
+    const shaMatch = tips.find((tip) => tip.sha === headSha);
+    if (shaMatch) return shaMatch.refname;
+
+    if (headChangeId) {
+      const changeIdMatch = tips.find((tip) => refCommitHasChangeId(tip.sha, headChangeId));
+      if (changeIdMatch) return changeIdMatch.refname;
+    }
+  }
+
+  return '';
+}
+
 
 function getMergifyBranchState(branch = getCurrentBranch()) {
   if (!branch || ['main', 'master', 'develop'].includes(branch)) {
@@ -776,6 +833,15 @@ function assertPublishedMergifyBranch(branch, trackedBaseRef) {
   const originBranchRef = `origin/${branch}`;
   if ((!publishedRef || publishedRef === trackedBaseRef) && gitTextOrEmpty(['rev-parse', '--verify', originBranchRef])) {
     publishedRef = originBranchRef;
+  }
+
+  if (!publishedRef || publishedRef === trackedBaseRef) {
+    const headSha = resolveRev('HEAD');
+    const headChangeId = getHeadChangeId();
+    const matchedRef = findMergifyPublishedRef(branch, headSha, headChangeId);
+    if (matchedRef) {
+      publishedRef = matchedRef;
+    }
   }
 
   if (!publishedRef) {

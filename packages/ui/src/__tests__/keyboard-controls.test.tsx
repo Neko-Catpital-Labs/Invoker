@@ -582,8 +582,8 @@ describe('Sidebar keyboard navigation (component)', () => {
 
 /**
  * Graph camera keyboard/mouse contract at the App level. These prove the App
- * owns camera intent: selection never moves the viewport, and React Flow only
- * moves when the App issues a typed command for an explicit camera action.
+ * owns camera intent: user-initiated selection moves through a typed command,
+ * while menu traversal and no-op navigation leave the viewport alone.
  */
 describe('Graph camera controls (component)', () => {
   let mock: MockInvoker;
@@ -732,7 +732,7 @@ describe('Graph camera controls (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('clicking a workflow node selects it without centering the camera', async () => {
+  it('clicking a workflow node selects it and centers the camera', async () => {
     await renderAndSettle();
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
@@ -740,11 +740,10 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
     });
-    await flushFrame();
-    expect(setCenterMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
   });
 
-  it('clicking a task node selects it without centering the camera', async () => {
+  it('clicking a task node selects it and centers the camera', async () => {
     await renderAndSettle();
 
     fireEvent.click(screen.getByTestId('rf__node-wf-a/task-b'));
@@ -752,11 +751,10 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');
     });
-    await flushFrame();
-    expect(setCenterMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
   });
 
-  it('arrow navigation selects the newly targeted node without centering the camera', async () => {
+  it('arrow navigation selects the newly targeted node and centers the camera', async () => {
     await renderAndSettle();
 
     key('ArrowRight');
@@ -764,8 +762,7 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
     });
-    await flushFrame();
-    expect(setCenterMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
   });
 
   it('keyboard-opened workflow menu handles arrows and restores workflow graph control', async () => {
@@ -800,8 +797,7 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
     });
-    await flushFrame();
-    expect(setCenterMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
   });
 
   it('keyboard-opened task menu handles arrows and restores task graph control', async () => {
@@ -812,8 +808,7 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');
     });
-    await flushFrame();
-    expect(setCenterMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
     fitViewMock.mockClear();
     setCenterMock.mockClear();
 
@@ -847,8 +842,7 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Task');
     });
-    await flushFrame();
-    expect(setCenterMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
   });
 
   it('arrow navigation selects the geometrically nearest node, not the alphabetical neighbor', async () => {
@@ -875,21 +869,20 @@ describe('Graph camera controls (component)', () => {
 
     // Lay nodes left→right as wf-a, wf-b, wf-c so wf-c is both the rightmost
     // node and the alphabetically-last one — the boundary where ArrowRight has
-    // nowhere to go and must not move the selection.
+    // nowhere to go and must not move the selection or camera.
     stubNodeRects({
       'workflow-node-wf-a': 0,
       'workflow-node-wf-b': 200,
       'workflow-node-wf-c': 400,
     });
 
-    // Select the rightmost node first, and drain frames so any accidental
-    // selection-driven camera move would be caught before the boundary check.
+    // Select the rightmost node first, and drain its user-initiated center
+    // before checking that the boundary ArrowRight is a no-op.
     fireEvent.click(screen.getByTestId('workflow-node-wf-c'));
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Gamma Workflow task DAG');
     });
-    await flushFrame();
-    expect(setCenterMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
     setCenterMock.mockClear();
 
     key('ArrowRight');

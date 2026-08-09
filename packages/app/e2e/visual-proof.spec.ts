@@ -1443,6 +1443,115 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
   });
 
+  test('dag-bg-click-noop — clicking empty background on the workflow graph keeps the mini-DAG visible', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    const inspectorTitle = page.getByTestId('workflow-inspector-title');
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(inspectorTitle).toHaveText('Menu Proof Workflow');
+
+    await captureScreenshot(page, 'dag-bg-click-noop-before');
+
+    const graphSurface = page.getByTestId('workflow-graph-surface');
+    const pane = page.getByTestId('workflow-graph-content').locator('.react-flow__pane').first();
+    await expect(pane).toBeVisible();
+    const paneBox = await pane.boundingBox();
+    const workflowNodeBox = await graphSurface.locator('[data-testid^="workflow-node-"]').first().boundingBox();
+    const miniDagBox = await miniDag.boundingBox();
+    if (!paneBox) throw new Error('workflow graph pane has no bounding box');
+
+    const isInsideBox = (x: number, y: number, box: { x: number; y: number; width: number; height: number } | null) =>
+      !!box && x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
+
+    const candidates = [
+      { x: paneBox.x + 24, y: paneBox.y + paneBox.height - 24 },
+      { x: paneBox.x + paneBox.width - 24, y: paneBox.y + paneBox.height - 24 },
+      { x: paneBox.x + 24, y: paneBox.y + 24 },
+    ];
+    const clickPoint = candidates.find(
+      (point) => !isInsideBox(point.x, point.y, workflowNodeBox) && !isInsideBox(point.x, point.y, miniDagBox),
+    );
+    if (!clickPoint) throw new Error('could not find an empty background point to click');
+
+    // A real mouse click, not a locator .click() — the regression only reproduces
+    // with real click coordinates hitting the pane background.
+    await page.mouse.click(clickPoint.x, clickPoint.y);
+    await page.waitForTimeout(200);
+
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(inspectorTitle).toHaveText('Menu Proof Workflow');
+
+    await captureScreenshot(page, 'dag-bg-click-noop-after');
+  });
+
+  test('dag-full-graph-bg-click-noop — clicking empty background on the 15-workflow Full graph view does not re-fit the camera', async ({ page }) => {
+    await page.evaluate(async (options) => {
+      if (!window.invoker.seedStressFixture) throw new Error('seedStressFixture is not exposed (NODE_ENV=test required)');
+      await window.invoker.seedStressFixture(options);
+    }, { workflowCount: 15, tasksPerWorkflow: 3, eventsPerTask: 0, taskStatusMode: 'completed' });
+    await page.waitForFunction(
+      (expected) => window.invoker.listWorkflows().then((workflows) => workflows.length >= expected),
+      15,
+      { timeout: 30_000 },
+    );
+
+    await page.getByTestId('sidebar-planning').dispatchEvent('click', { bubbles: true, cancelable: true });
+    await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByRole('button', { name: 'Refresh' }).dispatchEvent('click', { bubbles: true, cancelable: true });
+    await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 30_000 });
+
+    const surface = page.getByTestId('workflow-graph-surface');
+    const mainViewport = surface.getByTestId('workflow-graph-content').locator('.react-flow__viewport').first();
+    const beforeSelect = await waitForStableViewportTransform(page, mainViewport);
+
+    // Select one specific workflow in the DOCKED panel (not the Full graph
+    // overlay, which has no click handler on its background at all in either
+    // commit -- confirmed by source read, and by the overlay-based version of
+    // this test passing identically on both buggy and fixed code).
+    await page.locator('[data-testid^="workflow-node-"]:visible').first().dispatchEvent('click', { bubbles: true, cancelable: true });
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible({ timeout: 10_000 });
+    const afterSelect = await waitForStableViewportTransform(page, mainViewport);
+
+    await captureScreenshot(page, 'docked-15-workflows-mini-dag-visible');
+
+    const pane = surface.locator('.react-flow__pane').first();
+    const paneBox = await pane.boundingBox();
+    if (!paneBox) throw new Error('docked graph pane has no bounding box');
+    const miniDagBox = await miniDag.boundingBox();
+    const nodeBoxes = await surface.locator('.react-flow__node').evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const rect = node.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      }),
+    );
+    const isInsideAnyBox = (x: number, y: number, boxes: { x: number; y: number; width: number; height: number }[]) =>
+      boxes.some((box) => x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height);
+    const candidates = [
+      { x: paneBox.x + 16, y: paneBox.y + paneBox.height - 16 },
+      { x: paneBox.x + paneBox.width - 16, y: paneBox.y + 16 },
+      { x: paneBox.x + 16, y: paneBox.y + 16 },
+      { x: paneBox.x + paneBox.width / 2, y: paneBox.y + paneBox.height - 16 },
+    ];
+    const allBoxes = miniDagBox ? [...nodeBoxes, miniDagBox] : nodeBoxes;
+    const clickPoint = candidates.find((point) => !isInsideAnyBox(point.x, point.y, allBoxes));
+    if (!clickPoint) throw new Error('could not find an empty background point among the graph nodes and mini-DAG panel');
+
+    await page.mouse.click(clickPoint.x, clickPoint.y);
+    await page.waitForTimeout(800);
+
+    const miniDagStillVisible = await miniDag.isVisible().catch(() => false);
+
+    await captureScreenshot(page, 'docked-15-workflows-after-bg-click');
+
+    console.log(`[dag-full-graph-bg-click-noop] mini-DAG visible after select=true, after background click=${miniDagStillVisible}`);
+    console.log(`[dag-full-graph-bg-click-noop] main graph viewport: initial="${beforeSelect}" after-select="${afterSelect}"`);
+    expect(miniDagStillVisible, 'mini-DAG panel should still be visible after clicking empty background').toBe(true);
+  });
+
   test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
     await minimizeInspectorIfVisible(page);

@@ -3,7 +3,8 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { TaskRunner } from '../task-runner.js';
+import { TaskRunner, collectManagedWorkflowBranchesFromDb } from '../task-runner.js';
+import { assertCompletedDependencyHasBranch } from '../task-runner-prepare.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import { WorktreeExecutor } from '../worktree-executor.js';
@@ -866,6 +867,19 @@ describe('TaskRunner', () => {
       });
       const ids = collectDirectNonMergeTaskIds(rootMerge, (id) => tasks.get(id));
       expect([...ids].sort()).toEqual(['b']);
+    });
+
+    it('excludes a two-hop-removed ancestor reached through an intermediate direct dependency', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('leaf', makeTask({ id: 'leaf', dependencies: [] }));
+      tasks.set('mid', makeTask({ id: 'mid', dependencies: ['leaf'] }));
+      const merge = makeTask({
+        id: '__merge__wf-2',
+        dependencies: ['mid'],
+        config: { isMergeNode: true },
+      });
+      const ids = collectDirectNonMergeTaskIds(merge, (id) => tasks.get(id));
+      expect([...ids].sort()).toEqual(['mid']);
     });
   });
 
@@ -1903,6 +1917,42 @@ describe('TaskRunner', () => {
           }),
         }),
       );
+    });
+
+    it('assertCompletedDependencyHasBranch throws when a completed dep has no branch', () => {
+      const dep = makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        config: { runnerKind: 'worktree' },
+      });
+
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep),
+      ).toThrow('completed without branch metadata');
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when the dep has a branch', () => {
+      const dep = makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        config: { runnerKind: 'worktree' },
+        execution: { branch: 'experiment/dep-a' },
+      });
+
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep),
+      ).not.toThrow();
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when the dep is undefined or not completed', () => {
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', undefined),
+      ).not.toThrow();
+
+      const pendingDep = makeTask({ id: 'dep-a', status: 'pending', config: { runnerKind: 'worktree' } });
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', pendingDep),
+      ).not.toThrow();
     });
 
     it('fails task when a completed external dependency has no branch metadata', async () => {
@@ -3430,6 +3480,34 @@ describe('TaskRunner', () => {
       expect(loadAttempts).toHaveBeenCalledTimes(2);
       expect(loadAttempts).toHaveBeenCalledWith('t1');
       expect(loadAttempts).toHaveBeenCalledWith('t2');
+    });
+
+    it('collectManagedWorkflowBranchesFromDb dedupes managed branches from tasks and their attempts', () => {
+      const tasks = [
+        makeTask({ id: 't1', execution: { branch: 'experiment/t1-current' } }),
+        makeTask({ id: 't2', execution: { branch: 'feature/t2' } }),
+      ];
+      const loadAttempts = vi.fn((taskId: string) => {
+        if (taskId === 't1') {
+          return [
+            { id: 't1-old', nodeId: 't1', branch: 'experiment/t1-old' },
+            { id: 't1-dup', nodeId: 't1', branch: 'experiment/t1-current' },
+          ];
+        }
+        return [{ id: 't2-old', nodeId: 't2', branch: 'invoker/t2-old' }];
+      });
+
+      const branches = collectManagedWorkflowBranchesFromDb(tasks as any, loadAttempts as any);
+
+      expect(branches).toEqual(['experiment/t1-current', 'experiment/t1-old', 'invoker/t2-old']);
+    });
+
+    it('collectManagedWorkflowBranchesFromDb tolerates a missing loadAttempts callback', () => {
+      const tasks = [makeTask({ id: 't1', execution: { branch: 'experiment/t1' } })];
+
+      const branches = collectManagedWorkflowBranchesFromDb(tasks as any, undefined);
+
+      expect(branches).toEqual(['experiment/t1']);
     });
   });
 

@@ -38,6 +38,7 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -647,6 +649,36 @@ function parseInAppPlanningPlanSummary(value: unknown): InAppPlanningPlanSummary
   };
 }
 
+export function isLaunchDispatchCandidateStale(
+  candidate: Record<string, unknown>,
+): string | undefined {
+  const candidateId = Number(candidate.id);
+  const taskStatus = String(candidate.current_task_status ?? '');
+  const launchClaimable = taskStatus === 'pending' || taskStatus === 'queued';
+  if (!candidate.current_task_id) {
+    return `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
+  }
+  if (!launchClaimable) {
+    return (
+      `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
+      `status is ${taskStatus}`
+    );
+  }
+  if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
+    return (
+      `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
+      `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`
+    );
+  }
+  if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
+    return (
+      `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
+      `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`
+    );
+  }
+  return undefined;
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: NativeDatabaseCompat;
   private nativeDb: DatabaseSync;
@@ -1076,12 +1108,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, options);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(options?: WorkflowReadOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(options);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1092,8 +1124,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.searchWorkflowsAndTasks(query, opts);
   }
 
-  loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
-    return this.workflowRepo.loadWorkflowTaskSnapshot();
+  loadWorkflowTaskSnapshot(options?: WorkflowReadOptions): WorkflowTaskSnapshot {
+    return this.workflowRepo.loadWorkflowTaskSnapshot(options);
   }
 
   getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {
@@ -1548,47 +1580,52 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.removeOutputFiles([taskId]);
   }
 
+  // FK-safety invariant: must run before DELETE FROM tasks, in this order.
+  private deleteDurableTaskCoordinatorRowsBeforeTasks(workflowId: string): void {
+    this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
+    this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
+    this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+    this.db.run(`
+      DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId, workflowId]);
+    this.db.run(`
+      DELETE FROM execution_resource_leases WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM events WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM task_output WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM attempts WHERE node_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM output_spool WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM terminal_sessions WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+  }
+
   deleteAllTasks(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
-      this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
-      this.db.run(`
-        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId, workflowId]);
-      this.db.run(`
-        DELETE FROM execution_resource_leases WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM events WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM task_output WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM attempts WHERE node_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM output_spool WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM terminal_sessions WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
+      this.deleteDurableTaskCoordinatorRowsBeforeTasks(workflowId);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
     });
     this.removeOutputFiles(taskIds);
@@ -1613,6 +1650,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM terminal_sessions');
       this.db.run('DELETE FROM tasks');
       this.db.run('DELETE FROM workflows');
+      this.db.run('DELETE FROM sync_journal');
+      this.db.run('DELETE FROM sync_cursors');
     });
     this.removeOutputFiles(taskIds);
     this.outputTailCache.clear();
@@ -1620,6 +1659,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteWorkflow(workflowId: string): void {
+    const existingWorkflow = this.queryOne(
+      'SELECT * FROM workflows WHERE id = ? AND deleted_at IS NULL',
+      [workflowId],
+    );
+    if (!existingWorkflow) return;
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
@@ -1661,7 +1705,23 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      const deletedAt = Date.now();
+      const updatedAt = new Date(deletedAt).toISOString();
+      this.db.run('UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL', [
+        deletedAt,
+        updatedAt,
+        workflowId,
+      ]);
+      const tombstonePayload = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+      if (!tombstonePayload) {
+        throw new Error(`Failed to load workflow ${workflowId} after soft delete for sync journal`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'tombstone',
+        payload: tombstonePayload,
+      });
     });
     this.removeOutputFiles(taskIds);
   }
@@ -3449,6 +3509,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
    * Globally delete expired execution-resource leases. Claim-time reclaim only
    * clears the same `resource_key`; after owner restart, orphaned keys would
    * otherwise sit until something tries that key again.
+   *
+   * Safety invariant: this sweep must stay unscoped (no `resource_key`
+   * filter) and must be invoked from both owner boot (main.ts) and every
+   * dispatcher poll (launch-dispatcher.ts) — narrowing either would leave
+   * orphaned leases on keys nothing else touches.
    */
   releaseExpiredExecutionResourceLeases(nowIso?: string): number {
     const cutoff = nowIso ?? new Date().toISOString();
@@ -3705,24 +3770,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         if (!candidate || candidate.id == null) return undefined;
         const candidateId = Number(candidate.id);
 
-        let staleReason: string | undefined;
-        const taskStatus = String(candidate.current_task_status ?? '');
-        const launchClaimable = taskStatus === 'pending' || taskStatus === 'queued';
-        if (!candidate.current_task_id) {
-          staleReason = `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
-        } else if (!launchClaimable) {
-          staleReason =
-            `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
-            `status is ${taskStatus}`;
-        } else if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
-          staleReason =
-            `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
-            `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`;
-        } else if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
-          staleReason =
-            `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
-            `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`;
-        }
+        const staleReason = isLaunchDispatchCandidateStale(candidate);
 
         if (staleReason) {
           this.execRun(

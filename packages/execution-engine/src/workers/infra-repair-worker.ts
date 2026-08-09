@@ -10,7 +10,8 @@ import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport'
 import { FailureClassifier } from '@invoker/workflow-core';
 import type { SshInfraFailureClass, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
-import { isLivenessFailureTask } from '../auto-fix-gating.js';
+import { isLivenessFailureTask, normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
+import { checkAutoFixRetryCap, recordAutoFixRetryConsumed } from '../auto-fix-retry-cap.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import {
   resolveRemoteBranchOwnerPath,
@@ -122,6 +123,7 @@ export interface InfraRepairWorkerPolicyOptions {
   ownerInvokerHome: string;
   remoteTargets: Record<string, InfraRepairRemoteTargetConfig>;
   repairCooldownMs?: number;
+  defaultAutoFixRetries?: number;
   now?: () => number;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
   resolveRemoteBranchOwnerPathFn?: typeof resolveRemoteBranchOwnerPath;
@@ -523,6 +525,10 @@ async function runTargetRepairWithCooldown(
   }
 }
 
+function infraRepairRetryBudget(options: Pick<InfraRepairWorkerPolicyOptions, 'defaultAutoFixRetries'>): number {
+  return normalizeAutoFixRetryBudget(options.defaultAutoFixRetries ?? 0);
+}
+
 async function submitFollowUpMutation(
   options: InfraRepairWorkerPolicyOptions,
   candidate: Pick<InfraRepairScanCandidate, 'taskId' | 'workflowId' | 'generation' | 'taskStateVersion'>,
@@ -532,11 +538,21 @@ async function submitFollowUpMutation(
   payload: Record<string, unknown>,
   summary: string,
 ): Promise<void> {
+  const retryCap = checkAutoFixRetryCap(options.store, candidate.taskId, infraRepairRetryBudget(options));
+  if (!retryCap.allowed) {
+    recordTaskDecision(options, candidate, reason, 'skipped',
+      `Skipped infra repair: task ${candidate.taskId} already used its shared auto-fix retry budget (${retryCap.consumed}/${retryCap.budget === Number.POSITIVE_INFINITY ? 'unlimited' : retryCap.budget}) across recreates -- an operator needs to look at this task directly`,
+      { ...payload, consumedRetries: retryCap.consumed },
+      'worker-retry-budget-exhausted');
+    return;
+  }
+
   const intentId = options.submitter.submit(candidate.workflowId, 'normal', channel, args);
   recordTaskDecision(options, candidate, reason, 'completed', summary, {
     channel,
     ...payload,
   }, channel, intentId);
+  recordAutoFixRetryConsumed(options.store, candidate.taskId, { workflowId: candidate.workflowId });
 }
 
 async function handleRemoteProvisionRecovery(
@@ -901,6 +917,7 @@ export function registerInfraRepairWorker(
             ownerInvokerHome: deps.infraRepair.ownerInvokerHome,
             remoteTargets: deps.infraRepair.remoteTargets,
             repairCooldownMs: deps.infraRepair.repairCooldownMs,
+            defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
           }
           : undefined,
       }),

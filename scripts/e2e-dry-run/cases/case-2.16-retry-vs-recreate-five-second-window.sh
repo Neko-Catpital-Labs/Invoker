@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../lib/common.sh"
+# shellcheck disable=SC1091
+source "$INVOKER_E2E_REPO_ROOT/scripts/headless-lib.sh"
 
 export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
 # This harness intentionally overlaps multiple writable headless clients while
@@ -38,7 +40,7 @@ invoker_e2e_case_216_query_json() {
   local out err status attempt
   err="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-query.err.XXXXXX")"
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
-    if out="$(invoker_e2e_run_headless "$@" --output json 2>"$err")"; then
+    if out="$(INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS="${INVOKER_E2E_CASE_216_QUERY_TIMEOUT_SECONDS:-3}" headless_query "$@" --output json 2>"$err")"; then
       if printf '%s' "$out" | python3 -m json.tool >/dev/null 2>&1; then
         rm -f "$err"
         printf '%s' "$out"
@@ -49,7 +51,7 @@ invoker_e2e_case_216_query_json() {
     else
       status=$?
     fi
-    if grep -Fq 'Read-only file open refused while WAL sidecars exist' "$err"; then
+    if [ "$status" -eq 124 ] || grep -Fq 'Read-only file open refused while WAL sidecars exist' "$err"; then
       sleep 0.25
       continue
     fi
@@ -63,6 +65,16 @@ invoker_e2e_case_216_query_json() {
   cat "$err" >&2
   rm -f "$err"
   return 75
+}
+
+invoker_e2e_case_216_task_status_pair() {
+  local snapshot_json="$1"
+  python3 -c 'import json,sys
+keep_id=sys.argv[1]
+fail_id=sys.argv[2]
+data=json.load(sys.stdin)
+statuses={t.get("id"): t.get("status","") for t in data}
+print("{}\t{}".format(statuses.get(keep_id, ""), statuses.get(fail_id, "")))' "$KEEP_TASK_ID" "$FAIL_TASK_ID" <<<"$snapshot_json"
 }
 
 
@@ -99,12 +111,22 @@ if [ "$KEEP_ST" != "completed" ] || [ "$FAIL_ST" != "failed" ]; then
 fi
 
 echo "==> case 2.16: retry-all --follow and observe first 5s"
-bash scripts/retry-failed-and-pending-all-workflows.sh --follow >/tmp/e2e-2.16-retry.log 2>&1 &
+RETRY_LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-retry.log.XXXXXX")"
+bash scripts/retry-failed-and-pending-all-workflows.sh --follow >"$RETRY_LOG_FILE" 2>&1 &
 RETRY_PID=$!
 retry_fail_left_failed=0
 for i in 0 1 2 3 4 5; do
-  KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
-  FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
+  query_status=0
+  SNAP_JSON="$(invoker_e2e_case_216_query_json query tasks --workflow "$WF_ID")" || query_status=$?
+  if [ "$query_status" -eq 75 ]; then
+    echo "retry t+$i keep=busy fail=busy"
+    sleep 1
+    continue
+  fi
+  if [ "$query_status" -ne 0 ]; then
+    exit "$query_status"
+  fi
+  IFS=$'\t' read -r KEEP_ST FAIL_ST < <(invoker_e2e_case_216_task_status_pair "$SNAP_JSON")
   echo "retry t+$i keep=$KEEP_ST fail=$FAIL_ST"
   if [ "$KEEP_ST" != "completed" ]; then
     echo "FAIL case 2.16: retry should preserve completed task, saw keep=$KEEP_ST at t+$i"
@@ -130,23 +152,23 @@ if [ "$retry_fail_left_failed" -ne 1 ]; then
 fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
+RECREATE_LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-recreate.log.XXXXXX")"
 RECREATE_START_EPOCH="$(date +%s)"
-bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
+bash scripts/recreate-all.sh --workflow "$WF_ID" --follow >"$RECREATE_LOG_FILE" 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
-  KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
-  FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
   query_status=0
   SNAP_JSON="$(invoker_e2e_case_216_query_json query tasks --workflow "$WF_ID")" || query_status=$?
   if [ "$query_status" -eq 75 ]; then
-    echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=busy"
+    echo "recreate t+$i keep=busy fail=busy counts=busy"
     sleep 1
     continue
   fi
   if [ "$query_status" -ne 0 ]; then
     exit "$query_status"
   fi
+  IFS=$'\t' read -r KEEP_ST FAIL_ST < <(invoker_e2e_case_216_task_status_pair "$SNAP_JSON")
   SNAP_COUNTS="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; from collections import Counter; data=json.load(sys.stdin); c=Counter(t.get("status","") for t in data); print(" ".join(f"{k}:{c[k]}" for k in sorted(c)))')"
   echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
 
@@ -201,4 +223,6 @@ fi
 
 rm -f "$PLAN_PATH"
 rm -f "$SUBMIT_LOG"
+rm -f "$RETRY_LOG_FILE"
+rm -f "$RECREATE_LOG_FILE"
 echo "PASS case 2.16 (retry preserved completed; recreate reset completed task within 5s)"

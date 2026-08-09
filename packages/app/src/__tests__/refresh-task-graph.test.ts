@@ -42,12 +42,14 @@ describe('publishForcedRefreshTaskGraphSnapshot', () => {
     publishForcedRefreshTaskGraphSnapshot(publisher, 'refresh-task-graph', {
       tasks: [task],
       workflows: [workflow],
+      streamSequence: 5,
     });
 
     expect(publisher.publishSnapshot).toHaveBeenCalledWith(
       'refresh-task-graph',
       [task],
       [workflow],
+      5,
       true,
     );
   });
@@ -84,9 +86,10 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
           return [localWorkflow];
         },
       } as never,
+      getStreamSequence: () => 9,
     });
 
-    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow] });
+    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow], streamSequence: 9 });
     expect(calls).toEqual({ sync: 1, tasks: 1, workflows: 1 });
     expect(warnings).toEqual([
       {
@@ -109,6 +112,7 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
           return {
             tasks: [makeTask('wf-remote/task-1')],
             workflows: [{ id: 'wf-remote', name: 'Remote', status: 'running' }],
+            streamSequence: 1,
             invokerHomeRoot: '/tmp/invoker-remote',
           };
         },
@@ -128,13 +132,41 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
           return [localWorkflow];
         },
       } as never,
+      getStreamSequence: () => 9,
     });
 
-    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow] });
+    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow], streamSequence: 9 });
     expect(calls.sync).toBe(1);
     expect(warnings[0]).toEqual({
       message: expect.stringContaining('owner home mismatch: owner=/tmp/invoker-remote local=/tmp/invoker-local'),
       meta: { module: 'ipc' },
     });
+  });
+
+  it('captures streamSequence via getStreamSequence at the same synchronous read as tasks/workflows', async () => {
+    const localTask = makeTask('wf-4/task-1');
+    const localWorkflow = { id: 'wf-4', name: 'Local', status: 'running' };
+    const { logger } = makeLogger();
+
+    const result = await resolveRefreshTaskGraphSnapshot({
+      ownerMode: true,
+      messageBus: { async request() { throw new Error('unused in owner mode'); } } as never,
+      resolveInvokerHomeRoot: () => '/tmp/invoker-owner',
+      logger: logger as never,
+      orchestrator: {
+        syncAllFromDb() {},
+        getAllTasks() {
+          return [localTask];
+        },
+      } as never,
+      persistence: {
+        listWorkflows() {
+          return [localWorkflow];
+        },
+      } as never,
+      getStreamSequence: () => 42,
+    });
+
+    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow], streamSequence: 42 });
   });
 });

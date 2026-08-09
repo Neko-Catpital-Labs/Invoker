@@ -173,6 +173,7 @@ export function createHeadlessExecutor(
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     worktreeTargetsProvider: () => loadConfig().worktreeTargets ?? {},
+    repoProvisionCommandsProvider: () => loadConfig().repoProvisionCommands ?? {},
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
@@ -426,6 +427,17 @@ const preemptSkipCodes: ReadonlySet<string> = new Set([
   OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
 ]);
 
+/**
+ * A racing owner can delete the workflow's tasks between cancelWorkflowImpl's
+ * DB read and its per-task `task.cancelled` event write, tripping the
+ * `events.task_id -> tasks(id)` foreign key. That raw error isn't an
+ * OrchestratorError, so it can't carry a `WORKFLOW_NOT_FOUND` code through
+ * CommandService — check the message text and confirm against persistence.
+ */
+function isRaceLostForeignKeyConstraintFailure(message: string, workflowId: string, deps: HeadlessDeps): boolean {
+  return message.includes('FOREIGN KEY constraint failed') && !deps.persistence.loadWorkflow?.(workflowId);
+}
+
 export async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (deps.preemptTaskSubgraph) {
     await deps.preemptTaskSubgraph(taskId);
@@ -451,6 +463,9 @@ export async function preemptWorkflowExecution(workflowId: string, deps: Headles
   const result = await deps.commandService.cancelWorkflow(envelope);
   if (!result.ok) {
     if (preemptSkipCodes.has(result.error.code)) return { cancelled: [], runningCancelled: [] };
+    if (isRaceLostForeignKeyConstraintFailure(result.error.message, workflowId, deps)) {
+      return { cancelled: [], runningCancelled: [] };
+    }
     throw new Error(result.error.message);
   }
   return result.data;

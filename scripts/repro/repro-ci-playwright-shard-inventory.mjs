@@ -6,11 +6,10 @@
 // no spec assigned to more than one shard, and every manual-only allowlist
 // entry still exists.
 //
-// The playwright / 8-of-9 shard first went red at
-// d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
-// (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
-// were listed in a second shard while already owned by 6-of-9 and 3-of-9.
-// Duplicate assignment makes a shard run the same spec twice and fail.
+// The playwright shards first went red at
+// d19a0f4af741226c3edb9509e2768529bf97fef9 because specs were listed in
+// more than one matrix entry. Duplicate assignment fails this guard before
+// Playwright runs, so every CI-owned spec must have one shard owner.
 //
 // The manual real-Claude repro intentionally stays out of CI because it
 // requires a real local `claude` binary and auth state. Keep it explicit here
@@ -29,6 +28,9 @@ const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.
 const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
 
 const MANUAL_ONLY_SPECS = new Set([
+  // Capture-only visual proof driven by scripts/ui-visual-proof.sh with
+  // CAPTURE_MODE; normal CI shards should not run the full onboarding capture.
+  'onboarding-cli-visual-proof.spec.ts',
   // This spec intentionally drives the real `claude` binary and depends on
   // live auth/UI state, so it stays opt-in instead of becoming a CI shard.
   'planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
@@ -58,16 +60,21 @@ function main() {
 
   const listedSet = new Set(listed);
   const discoveredSet = new Set(discovered);
+  const manualListed = [...MANUAL_ONLY_SPECS]
+    .map((file) => `e2e/${file}`)
+    .filter((file) => listedSet.has(file));
+  const manualListedSet = new Set(manualListed);
   const manualMissing = [...MANUAL_ONLY_SPECS]
     .filter((file) => !allDiscoveredSet.has(file))
     .map((file) => `e2e/${file}`);
   const missing = discovered.filter((file) => !listedSet.has(file));
-  const extra = listed.filter((file) => !discoveredSet.has(file));
+  const extra = listed.filter((file) => !discoveredSet.has(file) && !manualListedSet.has(file));
   const duplicates = [...new Set(listed.filter((file, index) => listed.indexOf(file) !== index))];
 
-  if (manualMissing.length || missing.length || extra.length || duplicates.length) {
+  if (manualMissing.length || manualListed.length || missing.length || extra.length || duplicates.length) {
     console.error('[repro-ci-playwright-shard-inventory] Playwright shard inventory drift detected.');
     if (manualMissing.length) console.error(`  Manual spec allowlist entries do not exist: ${manualMissing.join(', ')}`);
+    if (manualListed.length) console.error(`  Manual-only specs assigned to shards: ${manualListed.join(', ')}`);
     if (missing.length) console.error(`  Missing from shards: ${missing.join(', ')}`);
     if (extra.length) console.error(`  Extra in shards: ${extra.join(', ')}`);
     if (duplicates.length) console.error(`  Duplicate shard entries: ${duplicates.join(', ')}`);

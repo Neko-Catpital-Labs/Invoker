@@ -17,7 +17,7 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 
 export const AUTO_APPROVE_WORKER_KIND = 'autoapprove';
 export const DEFAULT_AUTO_APPROVE_WORKER_INTERVAL_MS = 60_000;
-const AUTO_APPROVE_COMMAND_CHANNEL = 'invoker:approve';
+export const AUTO_APPROVE_COMMAND_CHANNEL = 'invoker:approve';
 const AUTO_APPROVE_ACTION_TYPE = 'approve-ai-fix';
 
 type AutoApproveActionStatus = WorkerActionStatus;
@@ -198,7 +198,7 @@ function loadLatestTask(
   return options.store.loadTasks(candidate.workflowId).find((task) => task.id === candidate.taskId);
 }
 
-function compareCandidateSnapshot(
+export function compareCandidateSnapshot(
   candidate: AutoApproveCandidate,
   latest: TaskState,
 ): AutoApproveSnapshotComparison {

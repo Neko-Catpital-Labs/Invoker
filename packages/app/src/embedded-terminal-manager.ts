@@ -26,6 +26,7 @@ export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 export type EmbeddedTerminalSessionKind = 'task' | 'planning';
 
 export const MAX_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+const MAX_DISPLAY_BRIDGE_CHARS = 8 * 1024;
 
 export interface PtyForkOptionsLike {
   name: string;
@@ -331,7 +332,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: opts.outputSnapshot ?? '',
+      outputSnapshot: opts.outputSnapshot ?? buildDisplayBridgeSnapshot(opts.spec),
     };
 
     if (opts.attach) {
@@ -404,7 +405,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt: seed.createdAt,
       updatedAt: new Date().toISOString(),
       status: 'running' as const,
-      outputSnapshot: trimOutputSnapshot(seed.outputSnapshot),
+      outputSnapshot: buildRestoredOutputSnapshot(seed.spec, seed.outputSnapshot),
     });
   }
 
@@ -735,6 +736,23 @@ export function trimPreservingEscapeSequences(text: string, maxChars: number): s
 
 function trimOutputSnapshot(snapshot: string): string {
   return trimPreservingEscapeSequences(snapshot, MAX_OUTPUT_SNAPSHOT_CHARS);
+}
+
+function buildDisplayBridgeSnapshot(spec: TerminalSpec): string {
+  const bridge = formatDisplayBridgeText(spec.displayOnlyBridgeText);
+  return bridge ?? '';
+}
+
+function buildRestoredOutputSnapshot(spec: TerminalSpec, outputSnapshot: string): string {
+  const bridge = formatDisplayBridgeText(spec.displayOnlyBridgeText);
+  if (!bridge || outputSnapshot.startsWith(bridge)) return trimOutputSnapshot(outputSnapshot);
+  return trimOutputSnapshot(bridge + outputSnapshot);
+}
+
+function formatDisplayBridgeText(bridgeText: string | undefined): string | undefined {
+  if (!bridgeText) return undefined;
+  const bounded = bridgeText.slice(0, MAX_DISPLAY_BRIDGE_CHARS);
+  return bounded.endsWith('\n') ? bounded : `${bounded}\n`;
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {

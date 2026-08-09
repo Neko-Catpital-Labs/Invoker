@@ -112,6 +112,15 @@ export interface LaunchDispatcherOptions {
   maxLaunchAgeMs?: number;
 }
 
+/**
+ * The single gate between a poll iteration and a launch: a dispatch
+ * only proceeds if the durable outbox actually leased a row.
+ */
+export function dispatchThroughOutboxOnly(
+  leased: TaskLaunchDispatch | null | undefined,
+): leased is TaskLaunchDispatch {
+  return leased != null;
+}
 
 export class LaunchDispatcher {
   private readonly persistence: LaunchDispatcherPersistence;
@@ -229,7 +238,14 @@ export class LaunchDispatcher {
     }
   }
 
-  /** Fallback when the liveness-aware sweep isn't wired: old, blunt behavior. */
+  /**
+   * Fallback when the liveness-aware sweep isn't wired: old, blunt behavior.
+   *
+   * Safety invariant: this delegates to the global (unscoped) sweep and must
+   * run on every dispatcher poll, matching the boot-time sweep in main.ts —
+   * narrowing this to the current resource key would leave orphaned leases
+   * on keys nothing else touches.
+   */
   private sweepExpiredResourceLeasesUnconditionally(): void {
     const sweep = this.persistence.releaseExpiredExecutionResourceLeases;
     if (typeof sweep !== 'function') return;
@@ -329,7 +345,7 @@ export class LaunchDispatcher {
         ownerId: this.ownerId,
         ...(this.leaseMs !== undefined ? { leaseMs: this.leaseMs } : {}),
       });
-      if (!leased) break;
+      if (!dispatchThroughOutboxOnly(leased)) break;
       dispatched += 1;
       let task = this.resolveTaskForDispatch(leased);
       if (!task) {

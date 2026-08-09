@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
@@ -11,7 +11,7 @@ import {
   type HeadlessOwnerLaunchSpec,
   type Logger,
 } from '@invoker/contracts';
-import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
+import { SQLiteAdapter, SqliteTaskRepository, type Workflow } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
   ExecutorRegistry,
@@ -126,6 +126,28 @@ type CliRuntimeConfig = {
   externalWorkers?: ExternalWorkerConfig[];
 };
 
+type QueryResource = 'workflows' | 'tasks';
+type QueryOutput = 'text' | 'json';
+
+type QueryOptions = {
+  resource: QueryResource;
+  workflowId?: string;
+  status?: string;
+  output: QueryOutput;
+  forwardedFlags: string[];
+};
+
+type RetryTasksOptions = {
+  status: string;
+  parallel: number;
+  dryRun: boolean;
+};
+
+type RetryTaskRow = {
+  id: string;
+  status?: string;
+};
+
 const silentLogger: Logger = {
   debug() {},
   info() {},
@@ -142,6 +164,13 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli query workflows [--status <status>] [--output text|json]',
+    '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
+    '  invoker-cli retry-task <taskId>',
+    '  invoker-cli retry <workflowId>',
+    '  invoker-cli resume <workflowId>',
+    '  invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]',
+    '  invoker-cli delete-all',
     '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
@@ -152,6 +181,12 @@ function usage(): string {
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
+    '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
+    '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
+    '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
+    '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
+    '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
+    '  delete-all      Ask a live Invoker owner to delete all workflows, after the production DB guard passes.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
@@ -169,6 +204,11 @@ function usage(): string {
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
     '  --json           Emit only a machine-readable result summary on stdout.',
+    '  --workflow <id>  Restrict `query tasks` to one workflow.',
+    '  --status <status>  Restrict `query workflows` or `query tasks` to one status.',
+    '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
+    '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
+    '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
     '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
     '  --fix            Best-effort install of missing doctor tools.',
     '  --help           Show this help text.',
@@ -214,6 +254,452 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
     planPath: positional[1],
     options,
   };
+}
+
+function parseQueryArgs(argv: string[]): QueryOptions {
+  const resource = argv[0];
+  if (resource !== 'workflows' && resource !== 'tasks') {
+    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks>');
+  }
+
+  const options: QueryOptions = {
+    resource,
+    output: 'text',
+    forwardedFlags: [],
+  };
+
+  for (let i = 1; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--workflow') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --workflow');
+      if (resource !== 'tasks') throw new Error('--workflow is only supported for `query tasks`');
+      options.workflowId = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--status') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --status');
+      options.status = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--output') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --output');
+      if (value !== 'text' && value !== 'json') {
+        throw new Error('Invalid --output value. Supported values: text, json');
+      }
+      options.output = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli query <workflows|tasks> [--workflow <id>] [--status <status>] [--output text|json]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown query option: ${arg}`);
+    } else {
+      throw new Error(`Unexpected query argument: ${arg}`);
+    }
+  }
+
+  return options;
+}
+
+function parseRetryTasksArgs(argv: string[]): RetryTasksOptions {
+  const options: Partial<RetryTasksOptions> = {
+    parallel: 8,
+    dryRun: false,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--status') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --status');
+      options.status = value;
+    } else if (arg === '--parallel') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --parallel');
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== value) {
+        throw new Error('Invalid --parallel value. Expected a positive integer.');
+      }
+      options.parallel = parsed;
+    } else if (arg === '--dry-run') {
+      options.dryRun = true;
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown retry-tasks option: ${arg}`);
+    } else {
+      throw new Error(`Unexpected retry-tasks argument: ${arg}`);
+    }
+  }
+
+  if (!options.status) {
+    throw new Error('Missing --status. Usage: invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]');
+  }
+
+  return options as RetryTasksOptions;
+}
+
+function validateLiveQueryResponse(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Live owner returned invalid headless.query response: expected object, got ${raw === null ? 'null' : typeof raw}`);
+  }
+  const output = (raw as Record<string, unknown>).output;
+  if (typeof output !== 'string') {
+    throw new Error('Live owner returned invalid headless.query response: missing output string');
+  }
+  return output;
+}
+
+async function queryLiveOwner(
+  options: QueryOptions,
+  bus: MessageBus,
+): Promise<string> {
+  const raw = await withTimeout(
+    bus.request('headless.query', {
+      kind: 'cli-query',
+      args: ['query', options.resource, ...options.forwardedFlags],
+    }),
+    15_000,
+  );
+  return validateLiveQueryResponse(raw);
+}
+
+function resolveQueryDbDir(): string {
+  return resolve(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
+}
+
+function expandHomePath(raw: string): string {
+  if (raw === '~') return homedir();
+  if (raw.startsWith('~/')) return join(homedir(), raw.slice(2));
+  return raw;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDeleteAllGuardPath(raw: string): string {
+  let expanded = expandHomePath(raw);
+  expanded = expanded.endsWith('/') ? expanded.slice(0, -1) : expanded;
+  if (expanded.length === 0) expanded = '/';
+
+  if (isDirectory(expanded)) {
+    return realpathSync(expanded);
+  }
+
+  const parent = dirname(expanded);
+  if (isDirectory(parent)) {
+    return join(realpathSync(parent), basename(expanded));
+  }
+
+  return expanded;
+}
+
+function checkDeleteAllProductionGuard(): number | undefined {
+  const dbRoot = normalizeDeleteAllGuardPath(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
+  const prodRoot = normalizeDeleteAllGuardPath(join(homedir(), '.invoker'));
+  if (process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL !== '1' && dbRoot === prodRoot) {
+    process.stderr.write(`ERROR: Refusing to run 'delete-all' against production DB root: ${dbRoot}\n`);
+    process.stderr.write('Set INVOKER_DB_DIR to an isolated temp directory for tests.\n');
+    process.stderr.write('Override only if intentional: INVOKER_ALLOW_PRODUCTION_DELETE_ALL=1\n');
+    return 64;
+  }
+  return undefined;
+}
+
+function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    status: workflow.status,
+    createdAt: workflow.createdAt,
+    updatedAt: workflow.updatedAt,
+    ...(workflow.description != null ? { description: workflow.description } : {}),
+    ...(workflow.visualProof != null ? { visualProof: workflow.visualProof } : {}),
+    ...(workflow.planFile != null ? { planFile: workflow.planFile } : {}),
+    ...(workflow.repoUrl != null ? { repoUrl: workflow.repoUrl } : {}),
+    ...(workflow.intermediateRepoUrl != null ? { intermediateRepoUrl: workflow.intermediateRepoUrl } : {}),
+    ...(workflow.branch != null ? { branch: workflow.branch } : {}),
+    ...(workflow.onFinish != null ? { onFinish: workflow.onFinish } : {}),
+    ...(workflow.baseBranch != null ? { baseBranch: workflow.baseBranch } : {}),
+    ...(workflow.featureBranch != null ? { featureBranch: workflow.featureBranch } : {}),
+    ...(workflow.mergeMode != null ? { mergeMode: workflow.mergeMode } : {}),
+    ...(workflow.reviewProvider != null ? { reviewProvider: workflow.reviewProvider } : {}),
+    ...(workflow.externalDependencies != null ? { externalDependencies: workflow.externalDependencies } : {}),
+    ...(workflow.externalDependencyChanges != null ? { externalDependencyChanges: workflow.externalDependencyChanges } : {}),
+    ...(workflow.detachedExternalDependencies != null ? { detachedExternalDependencies: workflow.detachedExternalDependencies } : {}),
+    ...(workflow.generation != null ? { generation: workflow.generation } : {}),
+  };
+}
+
+function serializeTaskForQuery(task: TaskState): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
+  if (task.config.command != null) config.command = task.config.command;
+  if (task.config.prompt != null) config.prompt = task.config.prompt;
+  if (task.config.runnerKind != null) config.runnerKind = task.config.runnerKind;
+  if (task.config.poolId != null) config.poolId = task.config.poolId;
+  if (task.config.poolMemberId != null) config.poolMemberId = task.config.poolMemberId;
+  if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
+  if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
+  if (task.config.executionModel != null) config.executionModel = task.config.executionModel;
+  if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
+
+  const execution: Record<string, unknown> = {};
+  if (task.execution.branch != null) execution.branch = task.execution.branch;
+  if (task.execution.commit != null) execution.commit = task.execution.commit;
+  if (task.execution.error != null) execution.error = task.execution.error;
+  if (task.execution.exitCode != null) execution.exitCode = task.execution.exitCode;
+  if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
+  if (task.execution.reviewId != null) execution.reviewId = task.execution.reviewId;
+  if (task.execution.reviewStatus != null) execution.reviewStatus = task.execution.reviewStatus;
+  if (task.execution.reviewProviderId != null) execution.reviewProviderId = task.execution.reviewProviderId;
+  if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
+  if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;
+  if (task.execution.agentName != null) execution.agentName = task.execution.agentName;
+  if (task.execution.lastAgentName != null) execution.lastAgentName = task.execution.lastAgentName;
+  if (task.execution.phase != null) execution.phase = task.execution.phase;
+  if (task.execution.startedAt != null) execution.startedAt = task.execution.startedAt.toISOString();
+  if (task.execution.completedAt != null) execution.completedAt = task.execution.completedAt.toISOString();
+  if (task.execution.launchStartedAt != null) execution.launchStartedAt = task.execution.launchStartedAt.toISOString();
+  if (task.execution.launchCompletedAt != null) execution.launchCompletedAt = task.execution.launchCompletedAt.toISOString();
+  if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt.toISOString();
+  if (task.execution.pendingFixError != null) execution.pendingFixError = task.execution.pendingFixError;
+
+  return {
+    id: task.id,
+    description: task.description,
+    status: task.status,
+    dependencies: [...task.dependencies],
+    createdAt: task.createdAt.toISOString(),
+    config,
+    execution,
+  };
+}
+
+function renderWorkflowText(workflows: Workflow[]): string {
+  if (workflows.length === 0) return 'No workflows found.\n';
+  return `${workflows.map((workflow) => (
+    `${workflow.id}\t${workflow.status}\t${workflow.name}\t${workflow.createdAt}`
+  )).join('\n')}\n`;
+}
+
+function renderTaskText(tasks: TaskState[]): string {
+  if (tasks.length === 0) return 'No tasks found.\n';
+  return `${tasks.map((task) => (
+    `${task.id}\t${task.config.workflowId ?? ''}\t${task.status}\t${task.description}`
+  )).join('\n')}\n`;
+}
+
+async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
+  const dbDir = resolveQueryDbDir();
+  const dbPath = join(dbDir, 'invoker.db');
+  if (!existsSync(dbPath)) {
+    return `${options.output === 'json' ? '[]' : (options.resource === 'workflows' ? 'No workflows found.' : 'No tasks found.')}\n`;
+  }
+
+  const persistence = await SQLiteAdapter.create(dbPath, {
+    readOnly: true,
+    outputDir: join(dbDir, 'outputs'),
+    slowQueryThresholdMs: 0,
+  });
+  try {
+    const snapshot = persistence.loadWorkflowTaskSnapshot();
+    const workflows = snapshot.workflows.filter((workflow) => (
+      !options.status || workflow.status === options.status
+    ));
+    if (options.resource === 'workflows') {
+      return options.output === 'json'
+        ? `${JSON.stringify(workflows.map(serializeWorkflowForQuery))}\n`
+        : renderWorkflowText(workflows);
+    }
+
+    let tasks = snapshot.tasks;
+    if (options.workflowId) {
+      tasks = tasks.filter((task) => task.config.workflowId === options.workflowId);
+    }
+    if (options.status) {
+      tasks = tasks.filter((task) => task.status === options.status);
+    }
+    return options.output === 'json'
+      ? `${JSON.stringify(tasks.map(serializeTaskForQuery))}\n`
+      : renderTaskText(tasks);
+  } finally {
+    persistence.close();
+  }
+}
+
+async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (owner) {
+      process.stdout.write(await queryLiveOwner(options, bus));
+      return 0;
+    }
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+
+  process.stdout.write(await queryStandaloneDatabase(options));
+  return 0;
+}
+
+const REQUIRED_OWNER_MESSAGE = 'No running Invoker owner is reachable; start the Invoker app or run `invoker-cli owner serve`.';
+
+function mutationQueryOptions(status: string): QueryOptions {
+  return {
+    resource: 'tasks',
+    status,
+    output: 'json',
+    forwardedFlags: ['--status', status, '--output', 'json'],
+  };
+}
+
+function parseRetryTaskRows(output: string, status: string): RetryTaskRow[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch (err) {
+    throw new Error(`Could not parse task query JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error('Task query returned invalid JSON: expected an array');
+  }
+  return parsed
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .filter((item) => item.status === status)
+    .filter((item): item is RetryTaskRow => typeof item.id === 'string' && item.id.length > 0);
+}
+
+async function queryRetryTasks(status: string, bus?: MessageBus, owner?: LiveOwnerInfo | null): Promise<RetryTaskRow[]> {
+  const options = mutationQueryOptions(status);
+  const output = owner && bus
+    ? await queryLiveOwner(options, bus)
+    : await queryStandaloneDatabase(options);
+  return parseRetryTaskRows(output, status);
+}
+
+async function requireLiveOwnerForMutation(bus: MessageBus): Promise<LiveOwnerInfo> {
+  const owner = await discoverLiveOwner(bus);
+  if (!owner) {
+    throw new Error(REQUIRED_OWNER_MESSAGE);
+  }
+  return owner;
+}
+
+async function sendHeadlessExec(bus: MessageBus, args: string[]): Promise<void> {
+  await withTimeout(
+    bus.request('headless.exec', { args, noTrack: true }),
+    30_000,
+  );
+}
+
+async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume', targetId: string | undefined, deps: CliDeps): Promise<number> {
+  if (!targetId) {
+    const target = command === 'retry-task' ? 'taskId' : 'workflowId';
+    throw new Error(`Missing ${target}. Usage: invoker-cli ${command} <${target}>`);
+  }
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    await sendHeadlessExec(bus, [command, targetId]);
+    process.stdout.write(`${command} accepted by live owner.\n`);
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
+  const guardExitCode = checkDeleteAllProductionGuard();
+  if (guardExitCode !== undefined) return guardExitCode;
+
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    await sendHeadlessExec(bus, ['delete-all']);
+    process.stdout.write('delete-all accepted by live owner.\n');
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+async function runBounded<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<{ accepted: number; failed: Array<{ item: T; error: unknown }> }> {
+  let nextIndex = 0;
+  let accepted = 0;
+  const failed: Array<{ item: T; error: unknown }> = [];
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++];
+      if (item === undefined) continue;
+      try {
+        await worker(item);
+        accepted += 1;
+      } catch (error) {
+        failed.push({ item, error });
+      }
+    }
+  });
+  await Promise.all(workers);
+  return { accepted, failed };
+}
+
+async function runRetryTasks(options: RetryTasksOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (!owner && !options.dryRun) {
+      throw new Error(REQUIRED_OWNER_MESSAGE);
+    }
+
+    const tasks = await queryRetryTasks(options.status, bus, owner);
+    if (options.dryRun) {
+      if (tasks.length === 0) {
+        process.stdout.write(`No tasks matched status "${options.status}".\n`);
+      } else {
+        process.stdout.write(`${tasks.map((task) => task.id).join('\n')}\n`);
+      }
+      return 0;
+    }
+
+    const result = await runBounded(tasks, options.parallel, async (task) => {
+      if (!bus) throw new Error('Message bus is unavailable');
+      await sendHeadlessExec(bus, ['retry-task', task.id]);
+    });
+    process.stdout.write(`Accepted ${result.accepted} task(s); failed ${result.failed.length} task(s).\n`);
+    for (const failure of result.failed) {
+      process.stderr.write(`Failed to retry ${failure.item.id}: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}\n`);
+    }
+    return result.failed.length === 0 ? 0 : 1;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
 }
 
 function validateLiveSubmissionResponse(raw: unknown): LiveSubmissionResult {
@@ -599,6 +1085,24 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
       return await runWorker(definition, bus);
+    }
+    if (argv[0] === 'query') {
+      return await runQuery(parseQueryArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume') {
+      if (argv.length > 2) {
+        throw new Error(`Unexpected argument: ${argv[2]}`);
+      }
+      return await runSimpleMutation(argv[0], argv[1], deps);
+    }
+    if (argv[0] === 'retry-tasks') {
+      return await runRetryTasks(parseRetryTasksArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'delete-all') {
+      if (argv.length > 1) {
+        throw new Error(`Unexpected argument: ${argv[1]}`);
+      }
+      return await runDeleteAllMutation(deps);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {

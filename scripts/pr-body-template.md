@@ -64,6 +64,8 @@ graph TD
 
 Required when the diff changes UI-impacting files. Include before/after screenshots or a video link.
 
+Manually inspected: state exactly what you saw when you opened the image or video yourself, not just that it was captured.
+
 ## Revert Plan
 
 <details>

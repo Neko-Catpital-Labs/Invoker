@@ -6,18 +6,24 @@ import {
 } from '../../orchestrator.js';
 import { computeWorkflowRollup, type TaskState, type TaskStateChanges, type Attempt } from '../../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
+import type { ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-graph';
+
+interface InMemoryWorkflowRecord {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  repoUrl?: string;
+  baseBranch?: string;
+  featureBranch?: string;
+  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  externalDependencies?: ExternalDependency[];
+  externalDependencyChanges?: ExternalDependencyChange[];
+  detachedExternalDependencies?: DetachedExternalDependency[];
+}
 
 export class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, {
-    id: string;
-    name: string;
-    createdAt: string;
-    updatedAt: string;
-    repoUrl?: string;
-    baseBranch?: string;
-    featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'external_review';
-  }>();
+  workflows = new Map<string, InMemoryWorkflowRecord>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
@@ -29,6 +35,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -39,12 +46,15 @@ export class InMemoryPersistence implements OrchestratorPersistence {
       updatedAt: (workflow as { updatedAt?: string }).updatedAt ?? now,
     });
   }
-  updateWorkflow(): void {}
-  loadWorkflow(workflowId: string): { repoUrl?: string; baseBranch?: string; featureBranch?: string } | undefined {
-    const wf = this.workflows.get(workflowId);
-    return wf
-      ? { repoUrl: wf.repoUrl, baseBranch: wf.baseBranch, featureBranch: wf.featureBranch }
-      : undefined;
+  // Mirrors the real SQLite adapter's updateWorkflow: merges only the
+  // provided keys, same shape as OrchestratorPersistence['updateWorkflow'].
+  updateWorkflow(workflowId: string, changes: Partial<InMemoryWorkflowRecord>): void {
+    const existing = this.workflows.get(workflowId);
+    if (!existing) return;
+    this.workflows.set(workflowId, { ...existing, ...changes });
+  }
+  loadWorkflow(workflowId: string): InMemoryWorkflowRecord | undefined {
+    return this.workflows.get(workflowId);
   }
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
@@ -121,6 +131,7 @@ export function makeOrchestrator(persistence: OrchestratorPersistence): Orchestr
     persistence,
     messageBus: new InMemoryBus(),
     maxConcurrency: 8,
+    resolveRepoDefaultBranch: () => 'master',
   });
 }
 

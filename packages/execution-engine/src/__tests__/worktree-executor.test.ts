@@ -22,7 +22,7 @@ vi.mock('node:fs', async (importOriginal) => {
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
-import { BaseExecutor } from '../base-executor.js';
+import { BaseExecutor, isHeartbeatAliveDuringFinalize, normalizeRepoUrlForProvisionLookup } from '../base-executor.js';
 import { registerBuiltinAgents } from '../agents/index.js';
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 
@@ -199,6 +199,17 @@ describe('computeContentHash (re-exported by worktree-executor)', () => {
     const a = computeContentHash('t1', 'cmd', undefined, [], 'HEAD1');
     const b = computeContentHash('t1', 'cmd', undefined, [], 'HEAD1');
     expect(a).toBe(b);
+  });
+});
+
+describe('normalizeRepoUrlForProvisionLookup', () => {
+  it.each([
+    'git@github.com:test/repo.git',
+    'https://github.com/test/repo.git',
+    'https://github.com/test/repo.git/',
+    'ssh://git@github.com/test/repo.git',
+  ])('canonicalizes %s', (repoUrl) => {
+    expect(normalizeRepoUrlForProvisionLookup(repoUrl)).toBe('github.com/test/repo');
   });
 });
 
@@ -379,6 +390,152 @@ describe('WorktreeExecutor', () => {
     const taskCall = mockedSpawn.mock.calls.find(
       ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo hello',
     );
+    expect(taskCall).toBeDefined();
+
+    taskProcess.emit('close', 0, null);
+  });
+  it('BUG: fails the whole task when the provision command fails only because the repo has no package.json', async () => {
+    // Repro for a production incident: a pool's provisionCommand (e.g. this
+    // repo's own local-mac/local-fallback `pnpm install --frozen-lockfile`)
+    // is configured per pool, not per repoUrl. When a workflow targets a
+    // repoUrl that isn't a Node/pnpm project, pnpm reports
+    // ERR_PNPM_NO_PKG_MANIFEST and today that hard-fails the task even
+    // though there was never anything for this command to install here.
+    // This test currently documents that buggy behavior (task.start()
+    // rejects); a follow-up slice flips this assertion once the executor
+    // treats a missing package.json as "this command doesn't apply" instead
+    // of a fatal provisioning error.
+    setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+    });
+    mockPool(provisionedExecutor);
+
+    const startPromise = provisionedExecutor.start(makeRequest());
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.find(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+      )).toBeDefined();
+    });
+
+    (provisionProcess.stdout as EventEmitter).emit(
+      'data',
+      'ERR_PNPM_NO_PKG_MANIFEST  No package.json found in /fake/worktrees/checkout\n',
+    );
+    provisionProcess.emit('close', 1, null);
+
+    await expect(startPromise).rejects.toThrow('ERR_PNPM_NO_PKG_MANIFEST');
+  });
+  it('uses the repo-specific provision command instead of the pool default when repoUrl has an override', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo repo-specific-install') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      repoProvisionCommands: {
+        // Deliberately not byte-identical to the request's repoUrl
+        // (https:// form vs. the request's git@ form, trailing .git) to
+        // prove lookup normalization, not just an exact string match.
+        'https://github.com/test/repo.git': 'echo repo-specific-install',
+      },
+    });
+    mockPool(provisionedExecutor);
+
+    const startPromise = provisionedExecutor.start(makeRequest());
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.find(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo repo-specific-install',
+      )).toBeDefined();
+    });
+
+    expect(mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+    )).toBeUndefined();
+
+    provisionProcess.emit('close', 0, null);
+    await startPromise;
+
+    taskProcess.emit('close', 0, null);
+  });
+  it.each([
+    ['https repoUrl with trailing slash after .git', 'https://github.com/test/repo.git/'],
+    ['ssh URI repoUrl with git user', 'ssh://git@github.com/test/repo.git'],
+  ])('uses the repo-specific provision command for %s', async (_name, repoUrl) => {
+    const { taskProcess } = setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo repo-specific-install') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      repoProvisionCommands: {
+        'git@github.com:test/repo.git': 'echo repo-specific-install',
+      },
+    });
+    mockPool(provisionedExecutor);
+
+    const startPromise = provisionedExecutor.start(makeRequest({ inputs: { repoUrl } }));
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.find(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo repo-specific-install',
+      )).toBeDefined();
+    });
+
+    expect(mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+    )).toBeUndefined();
+
+    provisionProcess.emit('close', 0, null);
+    await startPromise;
+
+    taskProcess.emit('close', 0, null);
+  });
+  it('skips provisioning when repoProvisionCommands maps the repo to an empty command', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      repoProvisionCommands: {
+        'git@github.com:test/repo.git': '',
+      },
+    });
+    mockPool(provisionedExecutor);
+
+    await provisionedExecutor.start(makeRequest());
+
+    expect(mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+    )).toBeUndefined();
+    const taskCall = mockedSpawn.mock.calls.find(([cmd]) => cmd !== 'git');
     expect(taskCall).toBeDefined();
 
     taskProcess.emit('close', 0, null);
@@ -1187,6 +1344,21 @@ describe('WorktreeExecutor', () => {
       taskProcess.emit('close', 0, null);
     });
 
+    it('getTerminalSpec preserves caller-supplied display bridge text', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await executor.start(request);
+      handle.displayOnlyBridgeText = 'Context: live task handoff';
+
+      expect(executor.getTerminalSpec(handle)).toEqual(expect.objectContaining({
+        cwd: expect.stringMatching(/^\/fake\/worktrees\//),
+        displayOnlyBridgeText: 'Context: live task handoff',
+      }));
+
+      taskProcess.emit('close', 0, null);
+    });
+
     it('does not set agentSessionId for command tasks', async () => {
       const { taskProcess } = setupSpawnMock();
 
@@ -1418,6 +1590,23 @@ describe('WorktreeExecutor', () => {
     it('returns spec with undefined cwd when no workspace path', () => {
       const spec = executor.getRestoredTerminalSpec(baseMeta);
       expect(spec).toEqual({ cwd: undefined });
+    });
+
+    it('preserves caller-supplied display bridge text on restored specs', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        agentSessionId: 'session-wt-1',
+        displayOnlyBridgeText: 'Context: restored task handoff',
+      });
+
+      expect(spec).toEqual({
+        command: 'claude',
+        args: ['--resume', 'session-wt-1', '--dangerously-skip-permissions'],
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayOnlyBridgeText: 'Context: restored task handoff',
+      });
     });
   });
 
@@ -1767,6 +1956,18 @@ describe('WorktreeExecutor', () => {
 
       finalizeDeferred.resolve('abc123');
       await waitForCondition(() => completed);
+    });
+
+    it('isHeartbeatAliveDuringFinalize reflects finalizingAfterClose regardless of process exit state', () => {
+      const exitedChild = createMockProcess();
+      (exitedChild as any).exitCode = 0;
+      const runningChild = createMockProcess();
+
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: true }, exitedChild)).toBe(true);
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: true }, runningChild)).toBe(true);
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: false }, exitedChild)).toBe(false);
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: false }, runningChild)).toBe(false);
+      expect(isHeartbeatAliveDuringFinalize({}, exitedChild)).toBe(false);
     });
 
     it('heartbeat stops after completion to prevent duplicate events', async () => {

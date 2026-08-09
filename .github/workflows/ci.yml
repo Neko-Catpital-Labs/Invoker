@@ -380,7 +380,7 @@ jobs:
         run: ${{ matrix.command }}
 
   required-fast-extra:
-    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on:
       labels: ${{ matrix.runner_label }}
@@ -403,6 +403,12 @@ jobs:
             runner_label: Runner_2_4_core
           - name: PR Babysit Harness
             command: bash scripts/test-suites/required/28-pr-babysit-harness.sh
+            runner_label: Runner_2_4_core
+          - name: PR Authoring Guardrails
+            command: bash scripts/test-suites/required/11-pr-authoring-guardrails.sh
+            runner_label: Runner_2_4_core
+          - name: Mergify Admin Requeue
+            command: bash scripts/test-suites/required/12-mergify-admin-requeue.sh
             runner_label: Runner_2_4_core
 
     name: required-fast / ${{ matrix.name }}
@@ -657,6 +663,8 @@ jobs:
               e2e/start-ready-production-click.spec.ts
           - name: 9-of-9
             files: >-
+              e2e/launch-dispatch-stuck-lease-cap.spec.ts
+              e2e/launch-dispatch-stuck-lease-storm.spec.ts
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
               e2e/ui-delta-timeline.spec.ts

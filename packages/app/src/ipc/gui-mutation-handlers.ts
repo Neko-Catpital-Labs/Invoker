@@ -209,7 +209,7 @@ export function acknowledgeNoTrackHeadlessExec(
   const command = Array.isArray(payload.args) ? payload.args[0] : undefined;
   // Global commands are not workflow-scoped. Fall through to inline execution
   // instead of requiring a mutation-intent workflow id.
-  if (command === 'start-ready') {
+  if (command === 'start-ready' || command === 'check-pr-status') {
     context.logger.info(
       `headless.exec start-ready noTrack fallthrough ${headlessExecLogFields(payload, mode, Boolean(workflowMutationCoordinator), { workflow: '"<global>"', priority })}`,
       { module: 'ipc-delegate' },
@@ -774,6 +774,9 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return;
       },
       executionAgentRegistry: registerBuiltinAgents(),
+      ownerTaskRunnerProvider: headlessCommand === 'check-pr-status'
+        ? () => requireTaskExecutor()
+        : undefined,
     });
     const { workflowId } = classifyHeadlessExecMutation(payload);
     logger.info(`executeHeadlessExec end args="${payload.args.join(' ')}" workflow="${workflowId ?? 'unknown'}"`, {
@@ -880,6 +883,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'fix':
       case 'resolve-conflict':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'normal' };
+      case 'check-pr-status':
+        return { workflowId: arg0 === undefined ? undefined : workflowIdForTaskArg(arg0), priority: 'normal' };
       default:
         return { priority: 'normal' };
     }
@@ -1547,6 +1552,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       orchestrator,
       persistence,
       logger,
+      getStreamSequence: getTaskDeltaStreamSequence,
     });
 
     publishForcedRefreshTaskGraphSnapshot(
@@ -1557,7 +1563,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     recordStartupDuration('refresh-task-graph.return', startedAtMs, {
       taskCount: snapshot.tasks.length,
       workflowCount: snapshot.workflows.length,
-      streamSequence: getTaskDeltaStreamSequence(),
+      streamSequence: snapshot.streamSequence,
     });
   });
   registerReadOnlyIpcHandlers({

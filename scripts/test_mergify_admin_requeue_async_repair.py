@@ -6,6 +6,7 @@ Run:  python3 scripts/test_mergify_admin_requeue_async_repair.py
 from __future__ import annotations
 
 import subprocess
+import os
 import sys
 import tempfile
 import unittest
@@ -95,6 +96,14 @@ class AsyncRepairPlanTests(unittest.TestCase):
         # PR titles with quotes/colons must not corrupt the YAML document.
         self.assertIn('Fix \\"quoted\\" title: with colons', plan.yaml_text)
 
+    def test_repair_check_plan_runs_normalize_with_bytecode_disabled(self):
+        plan = async_repair.build_repair_check_plan(
+            pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
+            log_path="/does/not/exist/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+            start_head=HEAD, state_file=Path("ledger.jsonl"),
+        )
+        self.assertIn("python3 -B scripts/mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
+
     def test_repair_check_plan_inlines_job_log_content_not_local_path(self):
         # log_path is a tempfile on the orchestrator's own machine; the plan
         # is dispatched to a separate headless worker that does not share
@@ -169,6 +178,26 @@ class AsyncRepairPlanTests(unittest.TestCase):
 
         with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", side_effect=fake_run_headless) as run:
             async_repair.submit_async_repair_plan(plan)
+        run.assert_called_once()
+        self.assertFalse(written_paths[0].exists())
+
+    def test_submit_async_repair_plan_honors_submit_test_seam(self):
+        plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        written_paths = []
+
+        def fake_run_headless(command, *extra_args):
+            self.assertEqual(command, '"$2" "$3" "$4"')
+            self.assertEqual(extra_args[0], "/tmp/submit-async")
+            written_paths.append(Path(extra_args[1]))
+            self.assertEqual(extra_args[2], plan.plan_name)
+            self.assertTrue(written_paths[-1].exists())
+            self.assertEqual(written_paths[-1].read_text(encoding="utf-8"), "name: x\n")
+            return completed
+
+        with mock.patch.dict(os.environ, {"INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD": "/tmp/submit-async"}):
+            with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", side_effect=fake_run_headless) as run:
+                async_repair.submit_async_repair_plan(plan)
         run.assert_called_once()
         self.assertFalse(written_paths[0].exists())
 

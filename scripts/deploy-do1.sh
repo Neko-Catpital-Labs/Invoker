@@ -73,8 +73,28 @@ fi
 grep -qF "[MENTION_ROUTE]" packages/surfaces/dist/index.js
 
 systemctl --user unmask slack-manager.service 2>/dev/null || true
-systemctl --user stop slack-manager.service 2>/dev/null || true
-python3 - "$REPO_ROOT" <<'PY'
+
+# From here on we stop slack-manager, kill the owner, and restart
+# slack-manager -- and if this deploy is itself running as an Invoker task
+# on this same host (a self-targeted redeploy triggered from Slack), the
+# owner kill below tears down the very process tree running this script:
+# the owner's graceful-shutdown path (packages/app/src/main.ts
+# handleHeadlessTerminationSignal -> runHeadlessShutdownCleanup) calls
+# executorRegistry.destroyAll(), which SIGTERMs every still-running task's
+# process group (packages/execution-engine/src/worktree-executor.ts
+# destroyAll -> killProcessGroup), including this one. Without protection,
+# that abandons the sequence mid-flight -- possibly right after
+# `stop slack-manager.service` and before `restart` -- leaving Slack dark
+# until someone SSHes in by hand. Run the tail in its own process group via
+# setsid, detached from this shell, so killing *this* task's group cannot
+# take the restart sequence down with it.
+LOG_FILE="$(mktemp)"
+setsid bash -c '
+  set -euo pipefail
+  cd "'"$REPO_ROOT"'"
+
+  systemctl --user stop slack-manager.service 2>/dev/null || true
+  python3 - "'"$REPO_ROOT"'" <<PY
 import os
 import signal
 import sys
@@ -101,25 +121,47 @@ for process_group in process_groups:
     except ProcessLookupError:
         pass
 PY
-# Install/refresh the user unit when missing (e.g. after local cutover removed it).
-if ! systemctl --user cat slack-manager.service >/dev/null 2>&1; then
-  bash "$REPO_ROOT/packages/slack-manager/deploy/install.sh"
-else
-  systemctl --user daemon-reload
-  systemctl --user enable --now slack-manager.service
-  systemctl --user restart slack-manager.service
-fi
-systemctl --user is-active --quiet slack-manager.service
 
-for _ in $(seq 1 45); do
-  if pgrep -f "packages/app/dist/main.js --headless owner-serve" >/dev/null; then
-    break
+  # Install/refresh the user unit when missing (e.g. after local cutover removed it).
+  if ! systemctl --user cat slack-manager.service >/dev/null 2>&1; then
+    bash "'"$REPO_ROOT"'/packages/slack-manager/deploy/install.sh"
+  else
+    systemctl --user daemon-reload
+    systemctl --user enable --now slack-manager.service
+    systemctl --user restart slack-manager.service
   fi
+  systemctl --user is-active --quiet slack-manager.service
+
+  for _ in $(seq 1 45); do
+    if pgrep -f "packages/app/dist/main.js --headless owner-serve" >/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  pgrep -f "packages/app/dist/main.js --headless owner-serve" >/dev/null
+' </dev/null >"$LOG_FILE" 2>&1 &
+RESTART_PID=$!
+
+# Poll for the detached restart sequence to finish. If this SSH session
+# gets torn down here (e.g. because the step above just killed the very
+# process running this deploy), the detached job above is unaffected and
+# keeps running to completion on this host regardless.
+for _ in $(seq 1 60); do
+  kill -0 "$RESTART_PID" 2>/dev/null || break
   sleep 1
 done
 
-pgrep -f "packages/app/dist/main.js --headless owner-serve" >/dev/null || {
-  echo "Invoker owner did not relaunch" >&2
+if kill -0 "$RESTART_PID" 2>/dev/null; then
+  echo "restart sequence did not finish within 60s" >&2
+  cat "$LOG_FILE" >&2 || true
+  exit 1
+fi
+
+wait "$RESTART_PID" && RESTART_STATUS=0 || RESTART_STATUS=$?
+cat "$LOG_FILE"
+rm -f "$LOG_FILE"
+[ "$RESTART_STATUS" -eq 0 ] || {
+  echo "Invoker owner did not relaunch (see log above)" >&2
   exit 1
 }
 

@@ -39,6 +39,7 @@ const stillToolingPolicy = [
   'skills/plan-to-invoker/SKILL.md',
   'skills/land-stack/SKILL.md',
   'skills/visual-proof/SKILL.md',
+  'skills/prove-it/SKILL.md',
 ];
 for (const path of stillToolingPolicy) {
   assert.deepEqual(
