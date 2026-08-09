@@ -326,6 +326,36 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+const LEGACY_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
+
+function fileListFromMatrix(matrix) {
+  return String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+function addLegacyPlaywrightJobAliases(definitions) {
+  for (const alias of LEGACY_PLAYWRIGHT_JOB_ALIASES) {
+    if (definitions.has(alias.jobName)) continue;
+    const target = [...definitions.values()].find((definition) => {
+      if (definition.jobId !== 'playwright') return false;
+      const files = new Set(fileListFromMatrix(definition.matrix));
+      return alias.files.every((file) => files.has(file));
+    });
+    if (!target) continue;
+    definitions.set(alias.jobName, {
+      ...target,
+      jobName: alias.jobName,
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +370,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addLegacyPlaywrightJobAliases(definitions);
   return definitions;
 }
 
