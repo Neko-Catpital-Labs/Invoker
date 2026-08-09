@@ -92,7 +92,7 @@ documented. The standalone manager reads that config first, then falls back to
 `INVOKER_SLACK_DEFAULT_PRESET` only when the config leaves the preset unset.
 To configure by hand, put these credential values in `~/.invoker/.env`
 (canonical, loaded on startup before the Slack check) or `<repoRoot>/.env`
-(fallback), then run `invoker-slack` (or `./run.sh` for the desktop app only):
+(fallback), then run `invoker-slack` (or `invoker-ui` for the desktop app only):
 
 ```
 SLACK_BOT_TOKEN=xoxb-...
