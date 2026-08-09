@@ -175,6 +175,28 @@ function testPlanVarsAndDryRunRendering() {
   console.log('[repro-e2e-regression-watch] plan vars + dry-run rendering: PASS');
 }
 
+function testLegacyPlaywrightStuckLeaseMapping() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(425, 'a5d6b3e626ace9e963e924c0de9410dc0302de9e', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 42),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git');
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('legacy playwright stuck-lease job must not use fallback verify command');
+  }
+  if (!vars.verify_command.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-launch-dispatch-stuck-lease'")) {
+    fail('legacy playwright stuck-lease command must keep the historical run label');
+  }
+  if (!vars.verify_command.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('legacy playwright stuck-lease command must include storm spec');
+  }
+  if (!vars.verify_command.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('legacy playwright stuck-lease command must include cap spec');
+  }
+  console.log('[repro-e2e-regression-watch] legacy playwright stuck-lease mapping: PASS');
+}
+
 function testLiveSubmissionUsesNoTrack() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(450, 'abc456def456abc123def456abc123def456ab2', [
@@ -229,6 +251,7 @@ function main() {
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
   testPlanVarsAndDryRunRendering();
+  testLegacyPlaywrightStuckLeaseMapping();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');

@@ -347,11 +347,26 @@ export function fallbackVerifyCommand(jobName) {
   return `bash -lc ${shellSingleQuote(`echo "No local verify command is mapped for CI job: ${jobName}" >&2; exit 1`)}`;
 }
 
+export function legacyVerifyCommand(jobName) {
+  if (jobName !== 'playwright / launch-dispatch-stuck-lease') return '';
+  const command = [
+    'env',
+    "INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-launch-dispatch-stuck-lease'",
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    "INVOKER_PLAYWRIGHT_FILES='e2e/launch-dispatch-stuck-lease-storm.spec.ts e2e/launch-dispatch-stuck-lease-cap.spec.ts'",
+    "INVOKER_PLAYWRIGHT_ARGS='--reporter=line'",
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+  return withBuildPrefix(command, true);
+}
+
 export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefinitions()) {
   const definition = jobDefinitions.get(failure.jobName);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
-  const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
+  const verifyCommand = definition?.verifyCommand?.trim()
+    || legacyVerifyCommand(failure.jobName)
+    || fallbackVerifyCommand(failure.jobName);
   return {
     repo_url: repoUrl,
     base_branch: 'master',
