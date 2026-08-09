@@ -131,7 +131,7 @@ fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
 RECREATE_START_EPOCH="$(date +%s)"
-bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
+bash scripts/recreate-all.sh --workflow "$WF_ID" --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
