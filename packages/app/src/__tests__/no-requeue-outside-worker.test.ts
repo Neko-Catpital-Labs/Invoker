@@ -16,7 +16,14 @@ const TRIGGER_SIGNALS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
 
 const ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/execution-engine/src/workers/requeue-worker.ts',
-  'packages/app/src/main.ts',
+  // The channel constants are re-listed here as the single source of truth
+  // every mode's dispatcher registration is checked against — see
+  // `WORKER_SUBMITTED_MUTATION_CHANNELS` in `worker-mutation-channels.ts`.
+  'packages/execution-engine/src/worker-mutation-channels.ts',
+  // `main.ts` no longer references these channels directly: both the
+  // standalone and owner-mode registration blocks now call the shared
+  // `buildWorkerMutationHandlers()`, which owns the actual `.set(...)` calls.
+  'packages/app/src/workflow-mutation-handlers.ts',
 ]);
 
 function findRepoRoot(): string {
