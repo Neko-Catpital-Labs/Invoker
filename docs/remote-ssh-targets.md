@@ -16,17 +16,25 @@ The easiest way to add a remote target is the setup wizard, rather than hand-edi
 invoker-cli setup machines
 ```
 
-It asks for, in order: machine name, host, user, SSH key path, SSH port (default `22`), max
-concurrent tasks (default `1`), and an optional provision command. Before saving anything, it
+It asks for, in order: machine name, host, user, SSH key path, repo URL, SSH port (default `22`),
+max concurrent tasks (default `1`), and an optional provision command. Before saving anything, it
 runs a real SSH connectivity probe (`ssh ... 'exit 0'` with `BatchMode=yes` and a 10s connect
-timeout) against the machine and reports "Connectivity check passed" or "Connectivity check
-failed" — a machine is only written to `~/.invoker/config.json` if that probe succeeds. It also
-rejects a name or host that duplicates an existing target. After each machine, it asks whether
-to add another, so you can add several in one run.
+timeout), then a bundle of remote readiness checks over that same connection: git/node/pnpm
+present on the box, free disk space, and — using the repo URL — whether the box can reach that
+repo with its own git credentials (`git ls-remote <repoUrl>`, read-only). A machine is only
+written to `~/.invoker/config.json` if the connectivity probe and every required readiness check
+succeed; the disk-space check is a warning, not a blocker. This is deliberately stricter than a
+bare SSH ping: it catches a common failure mode where a box is reachable but can't actually
+finish a task, because a `git push` at the end of a task authenticates independently on the
+remote box, not through the SSH key you gave the wizard (that key only opens the connection
+*to* the box). The repo URL itself is used only to run this check — it is not written to config.
+It also rejects a name or host that duplicates an existing target. After each machine, it asks
+whether to add another, so you can add several in one run.
 
 For scripting, `invoker-cli setup machines --json` reads a JSON array of machine objects from
-stdin and writes a JSON array of per-machine results (including the connectivity outcome) to
-stdout, instead of prompting interactively.
+stdin (each object needs a `repoUrl` field alongside `name`/`host`/`user`/`sshKeyPath`, used the
+same way as above) and writes a JSON array of per-machine results (including the connectivity
+outcome and doctor-check results) to stdout, instead of prompting interactively.
 
 The desktop app has a matching step: the System Setup panel's "Add remote machines" section asks
 for the same fields and performs the same reachability check (via the same CLI) before adding
