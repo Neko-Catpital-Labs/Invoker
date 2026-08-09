@@ -19,8 +19,10 @@ import {
   E2E_AUTOFIX_WORKER_KIND,
   INFRA_REPAIR_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRegistry,
@@ -32,34 +34,100 @@ import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js'
 /** Worker kinds auto-started on every owner boot, regardless of config. */
 export const ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS = [
   PR_STATUS_WORKER_KIND,
-  INFRA_REPAIR_WORKER_KIND,
-  DISK_HEADROOM_WORKER_KIND,
-  REQUEUE_WORKER_KIND,
-  AUTO_APPROVE_WORKER_KIND,
 ] as const;
 
 /** PR-maintenance worker kind auto-started only when `prMaintenance.enabled` is true. */
 export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
+  PR_DUPLICATE_CLOSE_WORKER_KIND,
 ] as const;
+
+type AutoStartedOwnerWorkerKindOptions = {
+  prMaintenanceEnabled?: boolean;
+  diskHeadroomCleanupEnabled?: boolean;
+  autoApproveAIFixes?: boolean;
+  infraRepairEnabled?: boolean;
+  autofixEnabled?: boolean;
+  reaperEnabled?: boolean;
+  workflowResumeEnabled?: boolean;
+  requeueEnabled?: boolean;
+};
+
+type AutoStartedOwnerWorkerKindConfig = {
+  prMaintenance?: { enabled?: boolean };
+  diskHeadroom?: { cleanupEnabled?: boolean };
+  autoApproveAIFixes?: boolean;
+  infraRepair?: { enabled?: boolean };
+  autofix?: { enabled?: boolean };
+  reaper?: { enabled?: boolean };
+  workflowResume?: { enabled?: boolean };
+  requeueEnabled?: boolean;
+};
 
 /**
  * Compute the owner worker kinds that auto-start on boot. The PR-maintenance
- * worker is gated on `prMaintenance.enabled` (matching the config docstring);
- * everything else always auto-starts. Saved per-worker desired state still
- * overrides in both directions.
+ * workers are gated on `prMaintenance.enabled` (matching the config docstring).
+ * Saved per-worker desired state still overrides in both directions.
  */
-export function autoStartedOwnerWorkerKinds(options: { prMaintenanceEnabled: boolean }): readonly string[] {
-  return options.prMaintenanceEnabled
-    ? [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS]
-    : ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS;
+export function autoStartedOwnerWorkerKinds(
+  options: AutoStartedOwnerWorkerKindOptions = {},
+): readonly string[] {
+  const workerKinds: string[] = [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS];
+  const hasWorkerGateOverrides = [
+    options.diskHeadroomCleanupEnabled,
+    options.autoApproveAIFixes,
+    options.infraRepairEnabled,
+    options.autofixEnabled,
+    options.reaperEnabled,
+    options.workflowResumeEnabled,
+    options.requeueEnabled,
+  ].some((value) => value !== undefined);
+  if (options.prMaintenanceEnabled && !hasWorkerGateOverrides) {
+    workerKinds.push(PR_ADMIN_BYPASS_LAND_WORKER_KIND, INFRA_REPAIR_WORKER_KIND);
+    return workerKinds;
+  }
+  if (options.prMaintenanceEnabled) {
+    workerKinds.push(...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS);
+  }
+  if (options.diskHeadroomCleanupEnabled) {
+    workerKinds.push(DISK_HEADROOM_WORKER_KIND);
+  }
+  if (options.autoApproveAIFixes) {
+    workerKinds.push(AUTO_APPROVE_WORKER_KIND);
+  }
+  if (options.infraRepairEnabled) {
+    workerKinds.push(INFRA_REPAIR_WORKER_KIND);
+  }
+  if (options.autofixEnabled) {
+    workerKinds.push(AUTO_FIX_WORKER_KIND);
+  }
+  if (options.reaperEnabled) {
+    workerKinds.push(REAPER_WORKER_KIND);
+  }
+  if (options.workflowResumeEnabled) {
+    workerKinds.push(WORKFLOW_RESUME_WORKER_KIND);
+  }
+  if (options.requeueEnabled) {
+    workerKinds.push(REQUEUE_WORKER_KIND);
+  }
+  return workerKinds;
 }
 
 /** Convenience wrapper: derive the auto-start list straight from Invoker config. */
 export function autoStartedOwnerWorkerKindsForConfig(
-  config?: { prMaintenance?: { enabled?: boolean } },
+  config?: AutoStartedOwnerWorkerKindConfig,
 ): readonly string[] {
-  return autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled) });
+  return autoStartedOwnerWorkerKinds({
+    prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled),
+    diskHeadroomCleanupEnabled: Boolean(config?.diskHeadroom?.cleanupEnabled),
+    autoApproveAIFixes: Boolean(config?.autoApproveAIFixes),
+    infraRepairEnabled: Boolean(config?.infraRepair?.enabled),
+    autofixEnabled: Boolean(config?.autofix?.enabled),
+    reaperEnabled: Boolean(config?.reaper?.enabled),
+    workflowResumeEnabled: Boolean(config?.workflowResume?.enabled),
+    requeueEnabled: Boolean(config?.requeueEnabled),
+  });
 }
 
 export interface WorkerRuntimeController {
@@ -195,6 +263,8 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   AUTO_APPROVE_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
+  PR_DUPLICATE_CLOSE_WORKER_KIND,
+  REAPER_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
 ]);
 
