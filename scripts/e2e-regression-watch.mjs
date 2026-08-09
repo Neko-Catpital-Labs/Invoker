@@ -54,6 +54,21 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
+const SUCCESS_JOB_ALIASES = new Map([
+  ['playwright / 9-of-9', ['playwright / launch-dispatch-stuck-lease']],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -153,6 +168,9 @@ export function reconcileCiRun(state, run) {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
       delete normalized.activeFailures[jobName];
+      for (const alias of SUCCESS_JOB_ALIASES.get(jobName) ?? []) {
+        delete normalized.activeFailures[alias];
+      }
       continue;
     }
 
@@ -337,6 +355,18 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const alias of LEGACY_PLAYWRIGHT_JOB_ALIASES) {
+      if (definitions.has(alias.jobName)) continue;
+      definitions.set(alias.jobName, {
+        jobId: 'playwright',
+        jobName: alias.jobName,
+        matrix: alias.matrix,
+        verifyCommand: commandForJob('playwright', playwrightJob, alias.matrix),
       });
     }
   }
