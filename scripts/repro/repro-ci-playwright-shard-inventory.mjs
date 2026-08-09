@@ -28,6 +28,9 @@ const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.
 const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
 
 const MANUAL_ONLY_SPECS = new Set([
+  // This visual-proof spec is captured through scripts/ui-visual-proof.sh
+  // with CAPTURE_MODE set; it is not stable as a normal CI shard test.
+  'onboarding-cli-visual-proof.spec.ts',
   // This spec intentionally drives the real `claude` binary and depends on
   // live auth/UI state, so it stays opt-in instead of becoming a CI shard.
   'planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
