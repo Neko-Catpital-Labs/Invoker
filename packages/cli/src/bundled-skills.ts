@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
+import { resolveInvokerHomeRoot, type IsInstalled } from '@invoker/contracts';
 import type {
   HarnessConfigState,
   HarnessMcpConfigState,
@@ -11,12 +12,13 @@ import type {
   BundledSkillTargetStatus,
 } from '@invoker/contracts';
 
-import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
+import { commandExists } from './onboarding.js';
 
 const MANAGED_PREFIX = 'invoker-';
 const MANIFEST_FILE = 'bundled-skills.json';
 const OMP_MCP_SCHEMA_URL = 'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json';
 const INVOKER_MCP_SERVER = { type: 'stdio', command: 'invoker-cli', args: ['mcp'] } as const;
+const INVOKER_MCP_SERVER_NAME = 'invoker';
 
 interface BundledSkillsManifest {
   bundledHash: string;
@@ -33,14 +35,23 @@ interface BundledSkillsContext {
   repoRoot: string;
   resourcesPath?: string;
   invokerHomeRoot?: string;
+  /** Injectable for tests; defaults to real `command -v` probing. */
+  isInstalled?: IsInstalled;
 }
 
 type JsonRecord = Record<string, unknown>;
 type BundledSkillStaleReason = NonNullable<BundledSkillTargetStatus['staleReason']>;
+type McpConfigFormat = 'json' | 'toml';
+
+/** Only set inside a packaged Electron app (packages/app); undefined for the standalone CLI. */
+function electronResourcesPath(): string | undefined {
+  return (process as unknown as { resourcesPath?: string }).resourcesPath;
+}
 
 function resolveBundledSkillsSourceRoot(context: BundledSkillsContext): string | null {
   if (context.isPackaged) {
-    const resourceRoot = context.resourcesPath ?? process.resourcesPath;
+    const resourceRoot = context.resourcesPath ?? electronResourcesPath();
+    if (!resourceRoot) return null;
     const packagedSkills = path.join(resourceRoot, 'skills');
     return existsSync(packagedSkills) ? packagedSkills : null;
   }
@@ -195,18 +206,63 @@ function resolveManagedCommandTargets(): HarnessConfigState[] {
   ];
 }
 
-function resolveManagedMcpTargets(): HarnessMcpConfigState[] {
-  return [
+interface McpTargetCandidate extends HarnessMcpConfigState {
+  format: McpConfigFormat;
+  /** Command probed via `isInstalled` to decide `available`. */
+  probeCommand: string;
+}
+
+/**
+ * MCP registration is per-harness config, not a shared file like skills/commands
+ * are, so — unlike resolveManagedTargets above — this only registers a harness
+ * that's actually installed, checked via `isInstalled` (defaults to real
+ * `command -v` probing). Each harness stores MCP servers differently:
+ * Claude Code and Cursor use their own JSON config, Codex uses TOML.
+ */
+function resolveManagedMcpTargets(isInstalled: IsInstalled = commandExists): McpTargetCandidate[] {
+  const candidates: Array<Omit<McpTargetCandidate, 'available'>> = [
+    {
+      id: 'claude',
+      name: 'Claude',
+      path: path.join(homedir(), '.claude.json'),
+      installed: false,
+      upToDate: false,
+      serverName: INVOKER_MCP_SERVER_NAME,
+      format: 'json',
+      probeCommand: 'claude',
+    },
+    {
+      id: 'codex',
+      name: 'Codex',
+      path: path.join(homedir(), '.codex', 'config.toml'),
+      installed: false,
+      upToDate: false,
+      serverName: INVOKER_MCP_SERVER_NAME,
+      format: 'toml',
+      probeCommand: 'codex',
+    },
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      path: path.join(homedir(), '.cursor', 'mcp.json'),
+      installed: false,
+      upToDate: false,
+      serverName: INVOKER_MCP_SERVER_NAME,
+      format: 'json',
+      probeCommand: 'cursor',
+    },
     {
       id: 'omp',
       name: 'OMP',
       path: path.join(homedir(), '.omp', 'agent', 'mcp.json'),
-      available: true,
       installed: false,
       upToDate: false,
-      serverName: 'invoker',
+      serverName: INVOKER_MCP_SERVER_NAME,
+      format: 'json',
+      probeCommand: 'omp',
     },
   ];
+  return candidates.map((candidate) => ({ ...candidate, available: isInstalled(candidate.probeCommand) }));
 }
 
 function resolveManifestPath(invokerHomeRoot: string): string {
@@ -382,44 +438,64 @@ function isInvokerMcpServer(value: unknown): boolean {
     && value.args[0] === 'mcp';
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Crude but safe: a text scan for the TOML table header, never a full parse. */
+function isTomlInvokerServerRegistered(content: string, serverName: string): boolean {
+  const headerRe = new RegExp(`^\\[mcp_servers\\.${escapeRegExp(serverName)}\\]\\s*$`, 'm');
+  return headerRe.test(content);
+}
+
+function isMcpTargetInstalled(target: McpTargetCandidate): boolean {
+  if (!existsSync(target.path)) return false;
+  if (target.format === 'toml') {
+    return isTomlInvokerServerRegistered(readFileSync(target.path, 'utf-8'), target.serverName);
+  }
+  const config = readJsonRecordIfPresent(target.path);
+  const servers = isJsonRecord(config?.mcpServers) ? config.mcpServers : undefined;
+  return isInvokerMcpServer(servers?.[target.serverName]);
+}
+
 function buildMcpConfigState(
-  target: HarnessMcpConfigState,
+  target: McpTargetCandidate,
   bundledHash: string,
   manifest: BundledSkillsManifest | null,
 ): HarnessMcpConfigState {
-  const config = readJsonRecordIfPresent(target.path);
-  const servers = isJsonRecord(config?.mcpServers) ? config.mcpServers : undefined;
-  const installed = isInvokerMcpServer(servers?.[target.serverName]);
+  const installed = target.available && isMcpTargetInstalled(target);
   const manifestTarget = manifest?.mcpTargets?.[target.id];
   const upToDate = installed
     && manifest?.bundledHash === bundledHash
     && manifestTarget?.path === target.path
     && manifestTarget.serverName === target.serverName;
 
-  return {
-    ...target,
-    installed,
-    upToDate,
-  };
+  const { format: _format, probeCommand: _probeCommand, ...state } = target;
+  return { ...state, installed, upToDate };
 }
 
-function readMutableMcpConfig(filePath: string): { config: JsonRecord; created: boolean } {
-  if (!existsSync(filePath)) {
-    return { config: { $schema: OMP_MCP_SCHEMA_URL }, created: true };
-  }
+function readMutableJsonMcpConfig(filePath: string, defaultConfig: JsonRecord): JsonRecord {
+  if (!existsSync(filePath)) return { ...defaultConfig };
 
   try {
     const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as unknown;
-    if (isJsonRecord(parsed)) return { config: parsed, created: false };
+    if (isJsonRecord(parsed)) return parsed;
   } catch {
     // Throw the same public error for invalid JSON and non-object JSON.
   }
 
-  throw new Error(`Invalid OMP MCP config at ${filePath}: expected a JSON object`);
+  throw new Error(`Invalid MCP config at ${filePath}: expected a JSON object`);
 }
 
-function installOmpMcpTarget(target: HarnessMcpConfigState): void {
-  const { config } = readMutableMcpConfig(target.path);
+/**
+ * Generic JSON writer for harnesses whose MCP config is `{ mcpServers: { ... } }`
+ * (OMP, Cursor, Claude Code). `defaultConfig` seeds a fresh file (OMP wants a
+ * `$schema` pointer; others don't) — every other key in an existing file is
+ * preserved untouched, since Claude Code's `~/.claude.json` in particular
+ * carries many unrelated top-level keys this must never disturb.
+ */
+function installJsonMcpTarget(target: McpTargetCandidate, defaultConfig: JsonRecord): void {
+  const config = readMutableJsonMcpConfig(target.path, defaultConfig);
   const existingServers = isJsonRecord(config.mcpServers) ? config.mcpServers : {};
   config.mcpServers = {
     ...existingServers,
@@ -429,8 +505,41 @@ function installOmpMcpTarget(target: HarnessMcpConfigState): void {
   writeFileSync(target.path, `${JSON.stringify(config, null, 2)}\n`);
 }
 
+/**
+ * Codex stores MCP servers in `~/.codex/config.toml`, a single hand-maintained
+ * file that can grow very large (project trust entries, other MCP servers).
+ * Rather than parse+rewrite the whole TOML document (real corruption risk on
+ * a file this sensitive), this only ever text-scans for an existing
+ * `[mcp_servers.invoker]` table and, if absent, appends a new one — a pure
+ * additive text operation that can't touch anything else in the file.
+ */
+function installTomlMcpTarget(target: McpTargetCandidate): void {
+  mkdirSync(path.dirname(target.path), { recursive: true });
+  const existing = existsSync(target.path) ? readFileSync(target.path, 'utf-8') : '';
+  if (isTomlInvokerServerRegistered(existing, target.serverName)) return;
+
+  const block = [
+    `[mcp_servers.${target.serverName}]`,
+    'command = "invoker-cli"',
+    'args = ["mcp"]',
+    '',
+  ].join('\n');
+  const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n\n' : existing.length > 0 ? '\n' : '';
+  writeFileSync(target.path, existing + separator + block);
+}
+
+function installMcpTarget(target: McpTargetCandidate): void {
+  if (target.format === 'toml') {
+    installTomlMcpTarget(target);
+    return;
+  }
+  const defaultConfig: JsonRecord = target.id === 'omp' ? { $schema: OMP_MCP_SCHEMA_URL } : {};
+  installJsonMcpTarget(target, defaultConfig);
+}
+
 export function resolveBundledSkillsStatus(context: BundledSkillsContext): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
+  const isInstalled = context.isInstalled ?? commandExists;
   const sourceRoot = resolveBundledSkillsSourceRoot(context);
   if (!sourceRoot) {
     return {
@@ -440,7 +549,7 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
       bundledSkillNames: [],
       targets: resolveManagedTargets(),
       commandTargets: resolveManagedCommandTargets(),
-      mcpTargets: resolveManagedMcpTargets(),
+      mcpTargets: resolveManagedMcpTargets(isInstalled),
     };
   }
 
@@ -455,7 +564,7 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
   const commandTargets = resolveManagedCommandTargets().map((target) =>
     buildCommandConfigState(target, commandFiles, bundledHash, manifest),
   );
-  const mcpTargets = resolveManagedMcpTargets().map((target) =>
+  const mcpTargets = resolveManagedMcpTargets(isInstalled).map((target) =>
     buildMcpConfigState(target, bundledHash, manifest),
   );
 
@@ -482,6 +591,7 @@ export function installBundledSkills(
   mode: BundledSkillsInstallMode = 'install',
 ): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
+  const isInstalled = context.isInstalled ?? commandExists;
   const sourceRoot = resolveBundledSkillsSourceRoot(context);
   if (!sourceRoot) {
     throw new Error('Bundled skills are not available in this app build.');
@@ -495,7 +605,7 @@ export function installBundledSkills(
   const installedNames = prefixedSkillNames(bundledSkillNames);
   const targets = resolveManagedTargets();
   const commandTargets = resolveManagedCommandTargets();
-  const mcpTargets = resolveManagedMcpTargets();
+  const mcpTargets = resolveManagedMcpTargets(isInstalled);
   const manifestTargets: BundledSkillsManifest['targets'] = {};
   const manifestCommandTargets: NonNullable<BundledSkillsManifest['commandTargets']> = {};
   const manifestMcpTargets: NonNullable<BundledSkillsManifest['mcpTargets']> = {};
@@ -528,7 +638,8 @@ export function installBundledSkills(
   }
 
   for (const target of mcpTargets) {
-    installOmpMcpTarget(target);
+    if (!target.available) continue;
+    installMcpTarget(target);
     manifestMcpTargets[target.id] = {
       path: target.path,
       serverName: target.serverName,
