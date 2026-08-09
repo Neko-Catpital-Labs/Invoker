@@ -54,6 +54,12 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_CI_JOB_ALIASES = new Map([
+  // The temporary dedicated shard was removed after the stuck-lease specs were
+  // assigned to their durable owner. Keep historical watcher failures
+  // actionable by replaying the current shard that owns those specs.
+  ['playwright / launch-dispatch-stuck-lease', 'playwright / 9-of-9'],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -337,6 +343,15 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  for (const [legacyJobName, currentJobName] of LEGACY_CI_JOB_ALIASES) {
+    if (!definitions.has(legacyJobName) && definitions.has(currentJobName)) {
+      definitions.set(legacyJobName, {
+        ...definitions.get(currentJobName),
+        jobName: legacyJobName,
+        aliasesToJobName: currentJobName,
       });
     }
   }
