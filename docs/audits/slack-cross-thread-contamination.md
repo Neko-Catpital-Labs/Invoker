@@ -71,3 +71,55 @@ A residual contamination mechanism therefore remains unless production evidence 
 - persisted planning launch context and harness session IDs keyed by each `threadTs`, checking for a reused or overwritten `harnessSessionId` that could attach one Slack thread to another model/agent conversation despite stable per-thread working directories.
 
 If those checks show correct Slack `thread_ts` routing and clean victim conversation rows before the contaminated turns, the next likely area is the harness/session-resume layer rather than `SessionManager`'s channel predicate.
+
+## Follow-up Investigation: 2026-08-09
+
+Scope: `packages/surfaces/src/slack/`, `SlackSessionRepository`, `ConversationRepository`, and the harness session driver/resume path used by the standalone Slack manager.
+
+### What was ruled out
+
+The Slack mention and passive-thread handlers both derive the session thread key as `event.thread_ts ?? event.ts` and pass the actual event channel into `new SessionIdentifier(channelId, threadTs)`. In the session-manager path, the in-memory key is the composite `channelId:threadTs`; the persistence lookup is still an exact `conversationRepo.loadConversation(id.threadTs)`; and both `getOrCreateSession()` and `getSession()` reject a persisted row unless `persisted.channelId === id.channelId`.
+
+That means two same-channel threads with distinct Slack timestamps do not have a repository selector that can choose each other. A same-channel interleaving race would need to corrupt the `threadTs` before this point, write foreign messages under the victim `thread_ts`, or restore a foreign harness session id under the victim `thread_ts`.
+
+The existing #7639 regression test covers the sequential interleaving shape with two same-channel threads and a legacy empty-`channelId` conversation row. Its important blind spot is that the recording harness declares `supportsSessionContinuity: false`, so later turns replay full local history instead of appending only the latest message to a provider-side session. It does not model a wrong persisted `harness_session_id`.
+
+Execution-agent session id generation does not explain a simple cross-thread collision. Codex, Claude, Cursor, and OMP `buildCommand()` paths generate UUID-backed session ids. Codex also promotes the real provider `thread.started.thread_id` before persistence and refuses to persist the provisional id when that provider id is missing.
+
+### Legacy row shapes narrowed
+
+`conversations.channel_id = ''` remains a legacy shape. During eager recovery, `SlackSurface.recoverActiveConversations()` still constructs `new SessionIdentifier(entry.channelId || this.channelId, entry.threadTs)`. With the current #7514 predicate, the session manager refuses to load that blank-channel row and creates a fresh in-memory session instead, so it does not directly import the old transcript.
+
+However, `ConversationRepository.saveConversation()` does not update `channel_id` for an existing row. If the existing row has `channel_id = ''`, a fresh rejected session cannot repair that metadata on save. The old row can therefore keep reappearing on every restart. This is persistence hygiene debt, but by itself it still does not select a distinct same-channel source thread.
+
+`slack_launch_contexts` is a separate legacy-relevant table. It is keyed only by `thread_ts` and stores `repo_url`, `harness_preset`, `working_dir`, `requested_by`, `lobby_channel_id`, `confirmation_mode`, and `harness_session_id`; it stores no Slack channel id. For same-channel incidents, the missing channel column is not enough to collide two distinct `thread_ts` values, but it means a wrong launch-context row under the victim `thread_ts` would not be rejected by a channel check.
+
+### Current most likely residual mechanism
+
+The strongest remaining hypothesis is wrong harness resume state already stored under the victim `thread_ts`. With a continuity-capable harness driver, `PlanConversation.buildTurnPrompt()` sends only the latest user message when `_harnessSessionId` is set. If `slack_launch_contexts.harness_session_id` for victim thread A points at provider session B, thread A can answer from thread B's provider-side context while `conversation_messages` for A still looks clean before the turn.
+
+No code path found in this investigation writes a different same-channel thread's harness session id under the victim `threadTs` unless the wrong `threadTs` was already supplied to `persistHarnessSessionId()` or the launch-context row was already corrupted. That is why a local repro from synthetic Slack events was not justified with the evidence available.
+
+### Evidence needed next
+
+Pull the standalone Slack manager database rows for each affected victim and suspected source timestamp:
+
+- `SELECT thread_ts, channel_id, user_id, mode, plan_submitted, created_at, updated_at FROM conversations WHERE thread_ts IN (...);`
+- `SELECT thread_ts, seq, role, content, created_at FROM conversation_messages WHERE thread_ts IN (...) ORDER BY thread_ts, seq;`
+- `SELECT thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, confirmation_mode, harness_session_id FROM slack_launch_contexts WHERE thread_ts IN (...);`
+
+Correlate those rows with logs for the same timestamps:
+
+- `[MENTION_RECEIVED]` lines: `event_ts`, derived `thread_ts`, `channel`, `user`.
+- `[TRACE] getSession` and `[TRACE] getOrCreateSession` lines: `channelId`, `threadTs`, `create`.
+- `[TRACE] loadConversation result` and channel-mismatch warnings for each victim turn.
+- `planner_session_id_promoted` lines: provisional and resolved harness session ids.
+- `RESPONSE_PROVENANCE` lines: `thread_ts`, `source_event_ts`, mode, and reply timing.
+
+The decisive checks are:
+
+- Whether the victim `conversation_messages` already contained foreign content before the contaminated turn.
+- Whether victim `slack_launch_contexts.harness_session_id` matched a suspected source thread's provider session id.
+- Whether any contaminated turn logged a `source_event_ts` or `persistHarnessSessionId` path whose `thread_ts` differed from the Slack event's actual thread.
+
+Without those production rows and log correlations, the same-channel non-empty-`channelId` mechanism remains narrowed to either upstream `thread_ts` corruption, preexisting victim-row contamination, or preexisting wrong harness resume state, but not reproduced.
