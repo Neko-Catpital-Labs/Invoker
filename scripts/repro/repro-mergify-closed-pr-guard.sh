@@ -12,16 +12,17 @@ cat > "$TMP/bin/gh" <<'PY'
 #!/usr/bin/env python3
 import json
 import sys
+from pathlib import Path
+
+sys.path.insert(0, "scripts")
+from mergify_admin_requeue_model import load_mergify_rules
 
 HEAD = "1111111111111111111111111111111111111111"
-REQUIRED = [
-    "build-artifacts",
-    "quality / Dependency Cruise",
-    "PR Body",
-    "quality / TypeScript Types",
-    "required-fast / Guardrails",
+# Loaded from .mergify.yml, not hardcoded: a hardcoded copy silently drifts
+# out of sync whenever the real required-check set changes.
+_, _, _REQUIRED_FROM_MERGIFY_YML = load_mergify_rules(Path(".mergify.yml"))
+REQUIRED = sorted(_REQUIRED_FROM_MERGIFY_YML | {
     "required-fast / Vitest Workspace",
-    "required-fast / Submit Workflow Chain",
     "e2e-proof / aggregate",
     "playwright / 1-of-6",
     "playwright / 2-of-6",
@@ -33,7 +34,7 @@ REQUIRED = [
     "ssh / shard-31",
     "optional / Worktree Provisioning",
     "optional / Visual Proof Validate",
-]
+})
 
 
 def pr():
