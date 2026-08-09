@@ -173,6 +173,7 @@ export function createHeadlessExecutor(
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     worktreeTargetsProvider: () => loadConfig().worktreeTargets ?? {},
+    repoProvisionCommandsProvider: () => loadConfig().repoProvisionCommands ?? {},
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
