@@ -12,7 +12,7 @@ try:
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from .mergify_admin_requeue_plan import plan_stack_execution
+    from .mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
     from .mergify_admin_requeue_workflow_fastpath import (
@@ -26,7 +26,7 @@ except ImportError:
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from mergify_admin_requeue_plan import plan_stack_execution
+    from mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
     from mergify_admin_requeue_workflow_fastpath import (
@@ -59,12 +59,40 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
     elif action.kind == "retarget_base":
         from_base = pr.base_ref_name if pr else ""
         print(f"{prefix}retarget-base PR #{action.pr_number} from={from_base} to={action.key}")
+    elif action.kind == "rebase_onto_base":
+        print(f"{prefix}rebase-onto-base PR #{action.pr_number} onto={action.key}")
     elif action.kind == "remove_merge_hold":
         print(f"{prefix}remove-merge-hold PR #{action.pr_number}")
     elif action.kind == "resolve_bot_threads":
         print(f"{prefix}resolve-bot-threads PR #{action.pr_number} thread={action.key}")
     elif action.kind == "repair_conflict":
         print(f"{prefix}repair-conflict PR #{action.pr_number} {action.detail}")
+
+
+def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClient, logger: AdminBypassLogger) -> dict[int, bool]:
+    # Only checked for each stack's current bottom PR (base already == trunk,
+    # otherwise there is nothing to rebase onto yet) -- this bounds the cost
+    # to one `gh api compare` call per ready-to-land stack per tick, not one
+    # per candidate PR scanned. Uses GitHub's compare API instead of a local
+    # git checkout so a normal scan never touches the filesystem or shells
+    # out to real git -- `rebase_onto_base` (the executor action, dispatched
+    # only when this signal is true) is the one place that actually clones.
+    stale_base_by_pr: dict[int, bool] = {}
+    for stack in stacks:
+        bottom = current_bottom_pr(stack, trunk)
+        if bottom is None or "admin-bypass" not in bottom.labels:
+            continue
+        try:
+            status = gh.compare_status(repo, trunk, bottom.head_ref_oid)
+            stale_base_by_pr[bottom.number] = status not in {"ahead", "identical"}
+        except Exception as exc:
+            logger.trace(
+                "admin-bypass-stale-base-check-failed",
+                repo=repo,
+                pr_number=bottom.number,
+                error=str(exc),
+            )
+    return stale_base_by_pr
 
 
 def run_cycle(args: argparse.Namespace) -> bool:
@@ -112,6 +140,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
     repair_dispatch_succeeded = 0
     repair_dispatch_last_error: str | None = None
     open_pr_numbers = set(pr_by_number)
+    stale_base_by_pr = compute_stale_base_by_pr(stacks, trunk, args.repo, gh, logger)
     for stack in stacks:
         plan = plan_stack_execution(
             stack,
@@ -123,6 +152,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
             args.max_requeue_attempts,
             args.max_repair_attempts,
             trunk,
+            stale_base_by_pr,
         )
         queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
@@ -215,6 +245,30 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     continue
                 if progressed:
                     repair_dispatch_attempted += 1
+                    repair_dispatch_succeeded += 1
+                    any_progress = True
+                else:
+                    should_poll = True
+                continue
+            elif action.kind == "rebase_onto_base":
+                try:
+                    progressed = executor.rebase_onto_base(pr, action.key, now)
+                except Exception as exc:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_failed += 1
+                    repair_dispatch_last_error = str(exc)
+                    logger.trace(
+                        "admin-bypass-repair-attempt-failed",
+                        repo=args.repo,
+                        pr_number=action.pr_number,
+                        action_kind=action.kind,
+                        key=action.key,
+                        error=str(exc),
+                    )
+                    should_poll = True
+                    continue
+                repair_dispatch_attempted += 1
+                if progressed:
                     repair_dispatch_succeeded += 1
                     any_progress = True
                 else:

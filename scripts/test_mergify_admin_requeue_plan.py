@@ -75,9 +75,9 @@ class PlannerTestCase(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
         return m.Ledger(Path(d) / "ledger.jsonl")
 
-    def _facts(self, stack, required_checks=REQUIRED, ledger=None, open_pr_numbers=(), open_pr_numbers_by_head=None, trunk="master"):
+    def _facts(self, stack, required_checks=REQUIRED, ledger=None, open_pr_numbers=(), open_pr_numbers_by_head=None, trunk="master", stale_base_by_pr=None):
         ledger = ledger or self._ledger()
-        return p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, trunk), ledger
+        return p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, trunk, stale_base_by_pr=stale_base_by_pr or {}), ledger
 
 
 class ClassifyPr(unittest.TestCase):
@@ -329,10 +329,10 @@ class BuildStackFacts(PlannerTestCase):
 class PlanStackActions(PlannerTestCase):
     """Named planning passes over prebuilt facts still honor the same ladder."""
 
-    def _plan(self, stack_or_snapshot, ledger=None, required_checks=REQUIRED, open_pr_numbers=(), open_pr_numbers_by_head=None):
+    def _plan(self, stack_or_snapshot, ledger=None, required_checks=REQUIRED, open_pr_numbers=(), open_pr_numbers_by_head=None, stale_base_by_pr=None):
         ledger = ledger or self._ledger()
         stack = stack_or_snapshot if isinstance(stack_or_snapshot, m.StackGroup) else m.StackGroup("s", (stack_or_snapshot,))
-        facts = p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, "master")
+        facts = p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, "master", stale_base_by_pr=stale_base_by_pr or {})
         return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW)
 
     def test_pending_check_means_wait_do_nothing(self):
@@ -462,6 +462,7 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
         self.assertEqual(actions[0].kind, "repair_check")
 
+
     def test_clean_bottom_missing_label_nudges_human(self):
         actions = self._plan(pr())  # green, no admin-bypass label
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_admin_bypass_nudge", "admin-bypass"))
@@ -508,6 +509,29 @@ class PlanStackActions(PlannerTestCase):
     def test_clean_bottom_queues_without_prior_dequeue(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot)
+        self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
+
+    def test_stale_base_content_rebases_before_requeue(self):
+        # PR #7727 incident: retarget_base already moved the base pointer to
+        # `master`, but the branch content was never rebased. Once the loader
+        # reports the base as `master` again (bottom_topology is now
+        # "current_bottom", not "stale_unowned_base"), the planner must not
+        # requeue a PR whose content still isn't an ancestor of master.
+        snapshot = pr(number=5885, labels=frozenset({"admin-bypass"}))
+        actions = self._plan(snapshot, stale_base_by_pr={5885: True})
+        self.assertEqual(
+            (actions[0].kind, actions[0].pr_number, actions[0].key),
+            ("rebase_onto_base", 5885, "master"),
+        )
+
+    def test_clean_ancestry_bottom_still_requeues_normally(self):
+        snapshot = pr(number=5885, labels=frozenset({"admin-bypass"}))
+        actions = self._plan(snapshot, stale_base_by_pr={5885: False})
+        self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
+
+    def test_stale_base_signal_for_other_pr_does_not_affect_this_bottom(self):
+        snapshot = pr(number=5885, labels=frozenset({"admin-bypass"}))
+        actions = self._plan(snapshot, stale_base_by_pr={9999: True})
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
 
     def test_upper_human_decision_does_not_block_clean_bottom_requeue(self):
