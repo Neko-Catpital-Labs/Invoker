@@ -176,7 +176,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
     Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
 10a. `step-submit-stacked` (single plan with upstream dependency)
      Use when the plan HAS `externalDependencies` with a concrete workflow ID (not `__UPSTREAM_WORKFLOW_ID__`).
-     1. Query upstream workflow: `./run.sh --headless query workflows --output json | jq '.[] | select(.id == "<workflowId>")'`
+     1. Query upstream workflow: `invoker-ui --headless query workflows --output json | jq '.[] | select(.id == "<workflowId>")'`
      2. Extract the upstream workflow's `featureBranch`
      3. Rewrite baseBranch: `sed -E -i "s|^baseBranch:.*$|baseBranch: <featureBranch>|" <plan-file>`
      4. Submit: `./submit-plan.sh <plan-file>`
