@@ -385,6 +385,24 @@ export interface InvokerConfig {
    * PR-maintenance workers from this block.
    */
   prMaintenance?: PrMaintenanceConfig;
+  /** Owner-side infra-repair worker config. Default: false. */
+  infraRepair?: {
+    enabled?: boolean;
+  };
+  /** Owner-side autofix worker config. Default: false. */
+  autofix?: {
+    enabled?: boolean;
+  };
+  /** Owner-side reaper worker config. Default: false. */
+  reaper?: {
+    enabled?: boolean;
+  };
+  /** Owner-side workflow-resume worker config. Default: false. */
+  workflowResume?: {
+    enabled?: boolean;
+  };
+  /** When true, enable owner-side requeue behavior. Default: false. */
+  requeueEnabled?: boolean;
   /**
    * Owner-side disk-headroom worker config. `cleanupEnabled` takes precedence
    * over the legacy `INVOKER_DISK_CLEANUP_ENABLED` env var when set; the worker
