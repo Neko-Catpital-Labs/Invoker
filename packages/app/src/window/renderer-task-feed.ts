@@ -26,6 +26,7 @@ export interface RendererTaskFeedAttempt {
 export interface RendererTaskFeedPersistence extends ShutdownDiagnosticDb {
   listWorkflows(): Workflow[];
   loadTasks(workflowId: string): TaskState[];
+  loadTasksForWorkflows?(workflowIds: string[]): TaskState[];
   loadTask(taskId: string): TaskState | undefined;
   loadAttempt?(attemptId: string): RendererTaskFeedAttempt | undefined;
   writeActivityLog(source: string, level: string, message: string): void;
@@ -218,9 +219,29 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
           deps.logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
         }
 
-        for (const workflow of workflows) {
-          if (workflow.status === 'completed' || workflow.status === 'failed') continue;
-          const tasks = deps.persistence.loadTasks(workflow.id);
+        const activeWorkflows = workflows.filter(
+          (workflow) => workflow.status !== 'completed' && workflow.status !== 'failed',
+        );
+        const tasksByWorkflow = new Map<string, TaskState[]>();
+        let usedBatchedTaskLoad = false;
+        if (activeWorkflows.length > 0 && typeof deps.persistence.loadTasksForWorkflows === 'function') {
+          usedBatchedTaskLoad = true;
+          for (const task of deps.persistence.loadTasksForWorkflows(activeWorkflows.map((workflow) => workflow.id))) {
+            const workflowId = task.config.workflowId;
+            if (!workflowId) continue;
+            const tasks = tasksByWorkflow.get(workflowId);
+            if (tasks) {
+              tasks.push(task);
+            } else {
+              tasksByWorkflow.set(workflowId, [task]);
+            }
+          }
+        }
+
+        for (const workflow of activeWorkflows) {
+          const tasks = usedBatchedTaskLoad
+            ? tasksByWorkflow.get(workflow.id) ?? []
+            : deps.persistence.loadTasks(workflow.id);
           for (const loadedTask of tasks) {
             const task = loadedTask;
             const now = new Date();
