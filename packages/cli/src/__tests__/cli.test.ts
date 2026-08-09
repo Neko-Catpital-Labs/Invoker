@@ -138,6 +138,55 @@ describe('invoker-cli', () => {
     output.restore();
   });
 
+  it('lists every worker toggle at its default state when config is empty', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-worker-toggles-'));
+    const saved = process.env.INVOKER_REPO_CONFIG_PATH;
+    process.env.INVOKER_REPO_CONFIG_PATH = join(dir, 'config.json');
+    const output = captureProcessOutput();
+    try {
+      const code = await main(['worker', 'toggles']);
+
+      expect(code).toBe(0);
+      expect(output.stdout).toContain('PR maintenance: off (default)');
+      expect(output.stdout).toContain('Disk-headroom cleanup: on (default)');
+    } finally {
+      output.restore();
+      if (saved === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
+      else process.env.INVOKER_REPO_CONFIG_PATH = saved;
+    }
+  });
+
+  it('enables one worker toggle without touching the others', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-worker-toggles-'));
+    const configPath = join(dir, 'config.json');
+    const saved = process.env.INVOKER_REPO_CONFIG_PATH;
+    process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+    const output = captureProcessOutput();
+    try {
+      const code = await main(['worker', 'toggles', '--enable', 'e2e-autofix']);
+
+      expect(code).toBe(0);
+      expect(output.stdout).toContain('E2E auto-fix: on');
+      expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({ e2eAutoFixEnabled: true });
+    } finally {
+      output.restore();
+      if (saved === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
+      else process.env.INVOKER_REPO_CONFIG_PATH = saved;
+    }
+  });
+
+  it('rejects an unknown worker toggle id', async () => {
+    const output = captureProcessOutput();
+    try {
+      const code = await main(['worker', 'toggles', '--enable', 'not-a-real-toggle']);
+
+      expect(code).toBe(1);
+      expect(output.stderr).toContain('Unknown worker toggle id');
+    } finally {
+      output.restore();
+    }
+  });
+
   it('mcp command starts the MCP server runner', async () => {
     const runMcpServer = vi.fn(async () => {});
 
