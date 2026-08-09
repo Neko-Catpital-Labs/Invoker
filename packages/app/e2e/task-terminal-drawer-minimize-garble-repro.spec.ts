@@ -64,6 +64,9 @@ const DRAW_FULL_SCREEN_FRAME =
   "; printf '\\033[3;5HTOP LEFT FRAME'" +
   "; printf '\\033[10;20HBOTTOM RIGHT FRAME'" +
   `; printf '\\033[24;1H${FRAME_MARKER}'` +
+  // Keep the shell prompt from repainting/reflowing during the legitimate
+  // drawer PTY resize; this repro is about preserving the frame.
+  '; sleep 3600' +
   '\n';
 
 test.describe('Task terminal drawer minimize garble repro', () => {
