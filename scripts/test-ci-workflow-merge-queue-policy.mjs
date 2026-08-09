@@ -8,6 +8,7 @@ const ORDINARY_PR_GATE = "${{ github.event_name != 'pull_request' || !startsWith
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
+const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const jobs = workflow.jobs ?? {};
 
@@ -65,5 +66,10 @@ for (const checkName of requiredChecks) {
     `Mergify-required job ${jobName} must run on merge queue refs`,
   );
 }
+
+assert(
+  prBodyWorkflow.concurrency?.['cancel-in-progress'] === "${{ !startsWith(github.head_ref, 'mergify/merge-queue/') }}",
+  'PR Body merge-queue runs must not cancel each other when Mergify edits the synthetic queue PR body',
+);
 
 console.log('CI merge-queue policy is valid.');
