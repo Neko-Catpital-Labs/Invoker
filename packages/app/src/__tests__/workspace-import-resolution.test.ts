@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -14,6 +15,7 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(currentDir, '..', '..');
 const mainSourcePath = join(packageRoot, 'src', 'main.ts');
 const packageJsonPath = join(packageRoot, 'package.json');
+const verifierPath = join(packageRoot, 'scripts', 'verify-workspace-imports.cjs');
 
 const mainSource = readFileSync(mainSourcePath, 'utf-8');
 const appPackageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as AppPackageJson;
@@ -63,5 +65,9 @@ describe('workspace import resolution', () => {
         `Unresolvable workspace dependency: ${specifier}. Run pnpm install to refresh workspace links.`,
       ).not.toThrow();
     }
+  });
+
+  it('passes the build-time workspace import verifier', () => {
+    expect(() => execFileSync(process.execPath, [verifierPath], { cwd: packageRoot, stdio: 'pipe' })).not.toThrow();
   });
 });
