@@ -94,3 +94,7 @@ After submitting, verify with query commands, not database reads.
 Do not invent SQL as the fallback.
 
 Report the missing command surface and add/fix the command if the user asked for a durable production-safe path.
+
+## State claims must be fresh
+
+Never report a workflow/task count, CI status, merge status, or "it's running"/"it's fixed"/"autofix kicked in" from memory of an earlier check in this conversation. Run the query command again in the same turn and report what it actually returns now. State drifts between when you last checked and when you answer — a count from five minutes ago is not current state. See `skills/prove-it/SKILL.md`.

@@ -66,6 +66,12 @@ require user confirmation.
   decomposition) deletes the old path in the SAME slice as the move — see
   Rehome / Relocation Refactors.
 
+## Proof Must Match the Claim
+
+A `proof` slice (repro, regression test, benchmark) exists to demonstrate one specific claim. Before writing it, name the exact property the bug report or Review Claim describes, then check the assertion tests that literal property — not a nearby signal that is easier to check but proves a different thing. "The panel stayed visible" is not evidence for "the camera did not move"; "the request returned 200" is not evidence for "the record was written correctly." A proxy assertion can pass while the real behavior described in the claim is still broken, which lets a broken fix ship as proven.
+
+When authoring or reviewing a `proof` slice, ask: if I only read this assertion's name and expect, would I know it tests the same thing the Review Claim states? If not, rewrite the assertion against the literal property, even if that property is harder to check. See `skills/prove-it/SKILL.md` for the same rule applied to PR bodies and live system claims, not just tests.
+
 ## Boundary Rules
 
 Split across architectural boundaries unless the downstream edit is required to
