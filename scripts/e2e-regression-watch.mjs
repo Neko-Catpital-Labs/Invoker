@@ -54,6 +54,15 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    name: 'launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -326,6 +335,33 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function addLegacyPlaywrightJobAliases(definitions, workflow) {
+  for (const jobId of ['playwright', 'playwright-nightly-perf']) {
+    const job = workflow.jobs?.[jobId];
+    if (!job) continue;
+    const prefix = jobId === 'playwright' ? 'playwright' : 'playwright-nightly-perf';
+    const currentFiles = new Set(expandMatrix(job.strategy?.matrix).flatMap((matrix) =>
+      String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean),
+    ));
+    for (const alias of LEGACY_PLAYWRIGHT_JOB_ALIASES) {
+      const jobName = `${prefix} / ${alias.name}`;
+      if (definitions.has(jobName)) continue;
+      if (!alias.files.every((file) => currentFiles.has(file))) continue;
+      const matrix = {
+        name: alias.name,
+        files: alias.files.join(' '),
+      };
+      definitions.set(jobName, {
+        jobId,
+        jobName,
+        matrix,
+        verifyCommand: commandForJob(jobId, job, matrix),
+        legacyAlias: true,
+      });
+    }
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +376,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addLegacyPlaywrightJobAliases(definitions, workflow);
   return definitions;
 }
 
