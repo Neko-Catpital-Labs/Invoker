@@ -6,6 +6,7 @@ Run:  python3 scripts/test_mergify_admin_requeue_async_repair.py
 from __future__ import annotations
 
 import subprocess
+import os
 import sys
 import tempfile
 import unittest
@@ -177,6 +178,26 @@ class AsyncRepairPlanTests(unittest.TestCase):
 
         with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", side_effect=fake_run_headless) as run:
             async_repair.submit_async_repair_plan(plan)
+        run.assert_called_once()
+        self.assertFalse(written_paths[0].exists())
+
+    def test_submit_async_repair_plan_honors_submit_test_seam(self):
+        plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        written_paths = []
+
+        def fake_run_headless(command, *extra_args):
+            self.assertEqual(command, '"$2" "$3" "$4"')
+            self.assertEqual(extra_args[0], "/tmp/submit-async")
+            written_paths.append(Path(extra_args[1]))
+            self.assertEqual(extra_args[2], plan.plan_name)
+            self.assertTrue(written_paths[-1].exists())
+            self.assertEqual(written_paths[-1].read_text(encoding="utf-8"), "name: x\n")
+            return completed
+
+        with mock.patch.dict(os.environ, {"INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD": "/tmp/submit-async"}):
+            with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", side_effect=fake_run_headless) as run:
+                async_repair.submit_async_repair_plan(plan)
         run.assert_called_once()
         self.assertFalse(written_paths[0].exists())
 

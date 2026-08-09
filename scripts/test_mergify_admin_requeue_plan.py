@@ -682,6 +682,28 @@ class PlanStackActions(PlannerTestCase):
         actions = p.plan_stack_actions(stack, REQUIRED, self._ledger(), now_epoch=0, open_pr_numbers_by_head={})
         self.assertEqual([(action.kind, action.key) for action in actions], [("repair_check", "build")])
 
+    def test_stale_root_waits_on_in_flight_failed_check_repair_before_retarget(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    labels=frozenset({"admin-bypass"}),
+                    checks={"build": check("failure")},
+                ),
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
+        )
+        ledger = self._ledger()
+        ledger.record("repair-check", 5885, HEAD, "build", epoch=NOW - 100)
+        actions = p.plan_stack_actions(stack, REQUIRED, ledger, now_epoch=NOW, open_pr_numbers_by_head={})
+        self.assertEqual(actions, ())
+
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
         # Two prior requeue attempts on this head+key -> the third is capped.
@@ -705,6 +727,20 @@ class PlanStackActions(PlannerTestCase):
             [(action.kind, action.key) for action in actions],
             [("repair_check", QUEUE_ONLY_CHECK)],
         )
+
+    def test_current_bottom_waits_on_active_queue_only_mergify_repair(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, QUEUE_ONLY_CHECK, epoch=NOW - 100)
+        snapshot = pr(
+            checks={},
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            latest_mergify=event(
+                failing=(QUEUE_ONLY_CHECK,),
+                conditions=((QUEUE_ONLY_CHECK, "failure"),),
+            ),
+        )
+        actions = self._plan(snapshot, ledger, required_checks={QUEUE_ONLY_CHECK})
+        self.assertEqual(actions, ())
 
     def test_admin_bypass_stack_members_progress_as_they_become_bottom(self):
         before_land = m.StackGroup(
