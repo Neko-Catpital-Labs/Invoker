@@ -2,7 +2,29 @@ import { describe, it, expect } from 'vitest';
 
 import { LINUX_HEADLESS_ELECTRON_FLAGS } from '@invoker/contracts';
 
-import { resolveOwnerLaunch } from '../invoker-launcher.js';
+import { resolveOwnerLaunch, withoutMissingPathEntries } from '../invoker-launcher.js';
+
+describe('withoutMissingPathEntries', () => {
+  const exists = (path: string) => path !== '/snap/bin' && path !== '/gone';
+
+  it('drops directories that do not exist so the owner does not segfault at startup', () => {
+    expect(withoutMissingPathEntries('/usr/bin:/snap/bin', exists)).toBe('/usr/bin');
+  });
+
+  it('keeps a PATH whose entries all exist unchanged', () => {
+    expect(withoutMissingPathEntries('/usr/local/bin:/usr/bin:/bin', exists)).toBe(
+      '/usr/local/bin:/usr/bin:/bin',
+    );
+  });
+
+  it('drops empty entries rather than leaving an implicit current directory', () => {
+    expect(withoutMissingPathEntries('/usr/bin::/bin', exists)).toBe('/usr/bin:/bin');
+  });
+
+  it('passes an unset PATH through untouched', () => {
+    expect(withoutMissingPathEntries(undefined, exists)).toBeUndefined();
+  });
+});
 
 describe('resolveOwnerLaunch', () => {
   it('prefers INVOKER_GUI_COMMAND when set', () => {
@@ -30,6 +52,20 @@ describe('resolveOwnerLaunch', () => {
     expect(spec).toEqual({
       command: '/usr/local/bin/invoker-ui',
       args: ['--headless', 'owner-serve'],
+    });
+  });
+
+  it('launches invoker-ui with the Linux stability flags so a host without a configured Chromium sandbox still starts', () => {
+    const spec = resolveOwnerLaunch({
+      repoRoot: '/repo',
+      platform: 'linux',
+      env: {},
+      which: (command) => (command === 'invoker-ui' ? '/usr/local/bin/invoker-ui' : undefined),
+      existsSync: () => false,
+    });
+    expect(spec).toEqual({
+      command: '/usr/local/bin/invoker-ui',
+      args: [...LINUX_HEADLESS_ELECTRON_FLAGS, '--headless', 'owner-serve'],
     });
   });
 
