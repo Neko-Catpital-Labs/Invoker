@@ -173,6 +173,13 @@ function hasAnimatedVisualProofMedia(body) {
     || /\bhttps?:\/\/\S+\.(?:gif|webm|mp4)\b/i.test(visualProof);
 }
 
+function hasManualInspectionNote(body) {
+  const visualProof = getVisualProofBody(body);
+  if (!visualProof) return false;
+
+  return /\bmanually inspected\s*:/i.test(visualProof);
+}
+
 export function visualProofNeedsAnimation(body) {
   const visualProof = getVisualProofBody(body);
   if (!visualProof) return false;
@@ -470,6 +477,10 @@ export async function validatePrBody(body, options = {}) {
   } else if (options.requiresVisualProof && visualProofNeedsAnimation(trimmed) && !hasAnimatedVisualProofMedia(trimmed)) {
     errors.push(
       'Restart or multi-state visual proof must include animated media such as a gif, webm, mp4, or walkthrough/video link.',
+    );
+  } else if (options.requiresVisualProof && !hasManualInspectionNote(trimmed)) {
+    errors.push(
+      'UI-impacting changes require a "Manually inspected:" line in ## Visual Proof stating exactly what you personally saw when you opened the screenshot or video yourself — a captured file is not proof that anyone looked at it. See skills/prove-it/SKILL.md.',
     );
   }
 

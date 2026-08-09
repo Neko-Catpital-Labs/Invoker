@@ -38,4 +38,8 @@ must_contain "$README" "invoker-ops" "README must mention the operator skill"
 
 bash "$RETRY_SCRIPT" --self-test
 
+must_contain "$SKILL_MD" "Never report a workflow/task count, CI status, merge status" "skill must forbid reporting stale status from memory"
+must_contain "$SKILL_MD" "Run the query command again in the same turn" "skill must require a fresh query before reporting state"
+must_contain "$SKILL_MD" "skills/prove-it/SKILL.md" "skill must reference the shared prove-it evidence rule"
+
 echo "OK: invoker-ops skill contract checks passed"

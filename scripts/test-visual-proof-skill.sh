@@ -31,4 +31,14 @@ must_contain "Capture whatever partial signal actually IS visible" \
 must_contain "substitute an image that doesn't actually demonstrate the claim" \
   "visual-proof skill must forbid substituting an unrelated image for an uncapturable claim"
 
+# A captured file is not proof anyone looked at it. Locks the prove-it hard gate wiring.
+must_contain "A captured screenshot or video file is not proof that anyone looked at it" \
+  "visual-proof skill must state that capture alone is not proof"
+must_contain "open the exact file yourself" \
+  "visual-proof skill must require opening the exact captured media before claiming it"
+must_contain "rejects a Visual Proof section that has media but no \`Manually inspected:\` line" \
+  "visual-proof skill must document the Manually inspected validator gate"
+must_contain "skills/prove-it/SKILL.md" \
+  "visual-proof skill must reference the shared prove-it evidence rule"
+
 echo "OK: visual-proof skill contract checks passed"
