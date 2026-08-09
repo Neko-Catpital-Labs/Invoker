@@ -220,6 +220,12 @@ def main() -> None:
         if comments_match and flag_value("--method") in (None, "GET"):
             print(json.dumps(state.get("issue_comments", {}).get(comments_match.group(1), [])))
             return
+        compare_match = re.fullmatch(r"repos/[^/]+/[^/]+/compare/(.+)\.\.\.(.+)", path)
+        if compare_match and flag_value("--method") in (None, "GET"):
+            base_ref, head_sha = compare_match.group(1), compare_match.group(2)
+            status = state.get("compare_status", {}).get(f"{base_ref}...{head_sha}", "identical")
+            print(json.dumps({"status": status}))
+            return
         pulls_match = re.fullmatch(r"repos/[^/]+/[^/]+/pulls", path)
         if pulls_match and flag_value("--method") == "POST":
             payload = json.loads(STDIN or "{}")
