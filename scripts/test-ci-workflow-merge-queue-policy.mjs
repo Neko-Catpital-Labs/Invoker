@@ -5,9 +5,11 @@ import YAML from 'yaml';
 const FULL_CI_GATE = "${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const NON_PR_GATE = "${{ github.event_name != 'pull_request' }}";
 const ORDINARY_PR_GATE = "${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}";
+const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
+const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const jobs = workflow.jobs ?? {};
 
@@ -44,6 +46,16 @@ assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
+
+assert(prBodyWorkflow.concurrency, 'PR Body workflow must declare concurrency');
+assert(
+  String(prBodyWorkflow.concurrency.group ?? '').includes("startsWith(github.head_ref, 'mergify/merge-queue/')"),
+  'PR Body workflow must isolate merge-queue heads in its concurrency group',
+);
+assert(
+  prBodyWorkflow.concurrency['cancel-in-progress'] === PR_BODY_MERGE_QUEUE_CANCEL_GATE,
+  'PR Body workflow must not cancel in-progress merge-queue runs',
+);
 
 const mergeConditions = (mergify.queue_rules ?? []).flatMap((rule) => rule.merge_conditions ?? []);
 const requiredChecks = new Set(
