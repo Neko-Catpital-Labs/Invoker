@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -8,11 +9,13 @@ from pathlib import Path
 try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
-    from .mergify_admin_requeue_snapshot import GhClient
+    from .mergify_admin_requeue_repair_body import rebase_onto_base as run_rebase_onto_base
+    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
 except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
-    from mergify_admin_requeue_snapshot import GhClient
+    from mergify_admin_requeue_repair_body import rebase_onto_base as run_rebase_onto_base
+    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
 
 
 ADMIN_BYPASS_NUDGE_LEDGER_KIND = "comment-admin-bypass-nudge"
@@ -81,6 +84,17 @@ class AdminBypassGhExecutor:
     def retarget_base(self, pr: PrSnapshot, new_base: str, now: int) -> None:
         self.gh.retarget_base(self.repo, pr.number, new_base)
         self.ledger.record("retarget-base", pr.number, pr.head_ref_oid, f"{pr.base_ref_name}->{new_base}", now)
+
+    def rebase_onto_base(self, pr: PrSnapshot, new_base: str, now: int) -> bool:
+        work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
+        work_root.parent.mkdir(parents=True, exist_ok=True)
+        checkout_pr_head(self.repo, pr, work_root)
+        new_head = run_rebase_onto_base(work_root, new_base, pr.head_ref_name, pr.head_ref_oid)
+        if new_head is None:
+            self.ledger.record("rebase-onto-base-conflict", pr.number, pr.head_ref_oid, new_base, now)
+            return False
+        self.ledger.record("rebase-onto-base", pr.number, pr.head_ref_oid, new_base, now, meta={"newHead": new_head})
+        return True
 
     def comment_admin_bypass_nudge(self, pr: PrSnapshot, key: str, now: int) -> None:
         if self.ledger.count(ADMIN_BYPASS_NUDGE_LEDGER_KIND, pr.number, pr.head_ref_oid, key) == 0:
