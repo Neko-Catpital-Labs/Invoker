@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +12,7 @@ type AppPackageJson = {
 const require = createRequire(import.meta.url);
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(currentDir, '..', '..');
+const sourceRoot = join(packageRoot, 'src');
 const mainSourcePath = join(packageRoot, 'src', 'main.ts');
 const packageJsonPath = join(packageRoot, 'package.json');
 
@@ -36,6 +37,22 @@ function collectInvokerImports(sourceCode: string): string[] {
 function packageNameOf(specifier: string): string {
   const parts = specifier.split('/');
   return parts.slice(0, 2).join('/');
+}
+
+function collectSourceFiles(root: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.name === '__tests__') continue;
+    const entryPath = join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectSourceFiles(entryPath));
+      continue;
+    }
+    if (entry.isFile() && /\.(?:ts|tsx)$/.test(entry.name)) {
+      files.push(entryPath);
+    }
+  }
+  return files;
 }
 
 describe('workspace import resolution', () => {
@@ -63,5 +80,16 @@ describe('workspace import resolution', () => {
         `Unresolvable workspace dependency: ${specifier}. Run pnpm install to refresh workspace links.`,
       ).not.toThrow();
     }
+  });
+
+  it('does not import the CLI package from app source', () => {
+    const cliImports = collectSourceFiles(sourceRoot)
+      .flatMap((sourcePath) => (
+        collectInvokerImports(readFileSync(sourcePath, 'utf-8'))
+          .filter((specifier) => packageNameOf(specifier) === '@invoker/cli')
+          .map((specifier) => `${sourcePath}: ${specifier}`)
+      ));
+
+    expect(cliImports).toEqual([]);
   });
 });
