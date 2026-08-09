@@ -306,6 +306,24 @@ describe('loadConfig', () => {
     expect(config.prMaintenance).toEqual(prMaintenance);
   });
 
+  it('defaults diskHeadroom to undefined when absent', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultBranch: 'main' }),
+    );
+    const config = loadConfig();
+    expect(config.diskHeadroom).toBeUndefined();
+  });
+
+  it('reads diskHeadroom.cleanupEnabled from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ diskHeadroom: { cleanupEnabled: false } }),
+    );
+    const config = loadConfig();
+    expect(config.diskHeadroom).toEqual({ cleanupEnabled: false });
+  });
+
   it('reads imageStorage from user config', () => {
     const imageStorage = {
       provider: 'r2',
