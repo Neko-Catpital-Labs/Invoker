@@ -385,6 +385,27 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(blockers[0]["kind"], "human_decision")
         self.assertIn("stale duplicate stack", blockers[0]["detail"])
 
+    def test_repair_delegated_failed_check_waits_without_retrying(self):
+        ledger = self._ledger()
+        ledger.record("repair-delegated", 5803, HEAD, "PR Body", 1)
+        snapshot = pr(
+            number=5803,
+            labels=frozenset({"admin-bypass"}),
+            checks={"PR Body": check("failure", "PR Body")},
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"PR Body"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={5803},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "repair-delegated")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "repair_delegated")
+
     def test_clean_unaccepted_upper_stack_posts_exact_human_blocker_once(self):
         ledger = self._ledger()
         bottom = pr(

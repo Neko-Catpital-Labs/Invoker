@@ -61,6 +61,7 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
 ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
+DELEGATED_BLOCKER_KINDS = frozenset({"repair_delegated"})
 TERMINAL_BLOCKER_KINDS = frozenset({"merged"})
 REPAIR_INVALID_BLOCKER_KINDS = frozenset({"failed_check", "bot_review_thread", "conflict"})
 REPAIR_STOP_PREFIX = "Mergify repair stopped: "
@@ -484,6 +485,15 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
 
 
+def latest_repair_delegated_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
+    if blocker.kind != "failed_check":
+        return None
+    row = ledger.latest("repair-delegated", pr.number, pr.head_ref_oid, blocker.key)
+    if row is None:
+        return None
+    return Blocker(blocker.key, "repair_delegated", pr.number, blocker.detail)
+
+
 def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | None:
     if blocker.kind != "failed_check":
         return None
@@ -591,7 +601,8 @@ def build_stack_facts(
     for pr in stack.prs:
         effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
         blockers = [
-            latest_repair_invalid_blocker(pr, blocker, ledger)
+            latest_repair_delegated_blocker(pr, blocker, ledger)
+            or latest_repair_invalid_blocker(pr, blocker, ledger)
             or existing_split_stop_blocker(pr, blocker)
             or blocker
             for blocker in effective
@@ -668,6 +679,8 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
         return "upper-stack-needs-acceptance"
     for pr in facts.stack.prs:
         blocker_kinds = {blocker.kind for blocker in facts.blockers_by_pr[pr.number]}
+        if DELEGATED_BLOCKER_KINDS & blocker_kinds:
+            return "repair-delegated"
         if "pending_check" in blocker_kinds:
             return "pending-check"
         if "merge_hold" in blocker_kinds and len(blocker_kinds) == 1:
@@ -685,6 +698,7 @@ def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
     return any(
         blocker.kind == "pending_check"
         or blocker.kind in HUMAN_BLOCKER_KINDS
+        or blocker.kind in DELEGATED_BLOCKER_KINDS
         or blocker.kind in TERMINAL_BLOCKER_KINDS
         for blocker in facts.all_blockers
     )
@@ -698,6 +712,7 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
         and (
             blocker.kind == "pending_check"
             or blocker.kind in HUMAN_BLOCKER_KINDS
+            or blocker.kind in DELEGATED_BLOCKER_KINDS
             or blocker.kind in TERMINAL_BLOCKER_KINDS
         )
         for blocker in facts.all_blockers

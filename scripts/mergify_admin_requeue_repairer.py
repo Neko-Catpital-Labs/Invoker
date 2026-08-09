@@ -9,15 +9,15 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
-    from .mergify_admin_requeue_plan import is_queue_only_required_check
-    from .mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
+    from .mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
+    from .mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, invalid_repair_errors, is_manual_split_validation, validate_current_pr_body
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
-    from mergify_admin_requeue_plan import is_queue_only_required_check
-    from mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
+    from mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
+    from mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, invalid_repair_errors, is_manual_split_validation, validate_current_pr_body
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
     import mergify_admin_requeue_async_repair as async_repair
 
@@ -29,6 +29,14 @@ def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tupl
         if name == check_name:
             return urls
     return ()
+
+
+def validation_mentions_tooling_policy(validation: Mapping[str, object]) -> bool:
+    review_units = validation.get("reviewUnits")
+    if isinstance(review_units, list) and any(str(unit) == "tooling-policy" for unit in review_units):
+        return True
+    errors = validation.get("errors")
+    return isinstance(errors, list) and any("tooling-policy" in str(error) for error in errors)
 
 
 class AdminBypassRepairer:
@@ -114,6 +122,56 @@ class AdminBypassRepairer:
             return not path.read_text(encoding="utf-8").strip()
         except OSError:
             return False
+
+    def preflight_non_trunk_pr_body_split(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome | None:
+        if check_name != "PR Body" or pr.base_ref_name == TRUNK:
+            return None
+        work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
+        work_root.parent.mkdir(parents=True, exist_ok=True)
+        checkout_pr_head(self.repo, pr, work_root)
+        checked_out_head = git_output(work_root, "rev-parse", "HEAD").strip()
+        terminal = self.terminal_repair_outcome(pr, check_name, checked_out_head, checked_out_head, work_root)
+        if terminal:
+            return terminal
+        validation = validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+        if validation.get("valid"):
+            self.logger.trace(
+                "admin-bypass-pr-body-valid-noop",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                head_sha=pr.head_ref_oid,
+            )
+            self.ledger.record("repair-noop", pr.number, pr.head_ref_oid, check_name, now)
+            return self.blocked_outcome("noop", check_name, pr.head_ref_oid, pr.head_ref_oid)
+        if not is_manual_split_validation(validation):
+            return None
+
+        errors = invalid_repair_errors(validation, pr.base_ref_name)
+        if validation_mentions_tooling_policy(validation):
+            self.ledger.record("repair-delegated", pr.number, pr.head_ref_oid, check_name, now, meta={"errors": errors})
+            self.logger.trace(
+                "admin-bypass-repair-delegated",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                head_sha=pr.head_ref_oid,
+                errors=errors,
+            )
+            return self.blocked_outcome("delegated", check_name, pr.head_ref_oid, pr.head_ref_oid, errors=errors)
+
+        body = "Mergify repair stopped: " + "; ".join(errors)
+        self.gh.comment(self.repo, pr.number, body)
+        self.ledger.record("repair-invalid", pr.number, pr.head_ref_oid, check_name, now, meta={"errors": errors})
+        self.logger.trace(
+            "admin-bypass-repair-invalid",
+            repo=self.repo,
+            pr_number=pr.number,
+            check_name=check_name,
+            head_sha=pr.head_ref_oid,
+            errors=errors,
+        )
+        return self.blocked_outcome("blocked_invalid", check_name, pr.head_ref_oid, pr.head_ref_oid, errors=errors)
 
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
         ctx = pr.checks.get(check_name)

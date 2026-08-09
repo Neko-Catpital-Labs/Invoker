@@ -154,17 +154,21 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                     else:
                         check_name = action.key
-                        workflow_id = resolve_workflow_for_pr(action.pr_number)
-                        if workflow_id:
-                            submit_repair_review_gate_ci(action.pr_number)
-                            ledger.record(
-                                "repair-check", action.pr_number, pr.head_ref_oid, check_name, now,
-                                meta={"workflowId": workflow_id, "via": "fastpath"},
-                            )
-                            progressed = True
+                        outcome = repairer.preflight_non_trunk_pr_body_split(pr, check_name, now)
+                        if outcome is not None:
+                            progressed = outcome.status in {"delegated", "blocked_invalid", "noop"}
                         else:
-                            outcome = repairer.repair_check(pr, check_name, now)
-                            progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
+                            workflow_id = resolve_workflow_for_pr(action.pr_number)
+                            if workflow_id:
+                                submit_repair_review_gate_ci(action.pr_number)
+                                ledger.record(
+                                    "repair-check", action.pr_number, pr.head_ref_oid, check_name, now,
+                                    meta={"workflowId": workflow_id, "via": "fastpath"},
+                                )
+                                progressed = True
+                            else:
+                                outcome = repairer.repair_check(pr, check_name, now)
+                                progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
                     repair_dispatch_failed += 1
