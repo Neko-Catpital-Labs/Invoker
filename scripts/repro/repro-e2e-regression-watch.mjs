@@ -143,6 +143,17 @@ function testWorkflowCommandMapping() {
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
+  const legacyVars = buildPlanVars({
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9e',
+  }, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (legacyVars.verify_command.includes('No local verify command is mapped')) {
+    fail('historical launch-dispatch-stuck-lease job must not use fallback verification');
+  }
+  if (!legacyVars.verify_command.includes('launch-dispatch-stuck-lease-cap.spec.ts')
+    || !legacyVars.verify_command.includes('launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('historical launch-dispatch-stuck-lease job must verify both stuck-lease specs');
+  }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
 
