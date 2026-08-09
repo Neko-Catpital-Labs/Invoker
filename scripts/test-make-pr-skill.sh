@@ -161,4 +161,16 @@ must_contain "$SKILL_MD" "After any branch update, rebase, force-push, or stacke
 must_contain "$SKILL_MD" "ensure the PR title still matches the current slice after any branch update or force-push" "make-pr skill validation checklist must include the PR-title staleness check"
 must_contain "$SKILL_MD" 'ensure the `## Summary` section still describes the current diff, not the earlier version' "make-pr skill validation checklist must include the Summary staleness check"
 
+# Visual proof claims must be backed by actually looking at the media, not just
+# capturing it. Locks the prove-it hard gate wiring.
+must_contain "$SKILL_MD" "actually open that exact media yourself" "make-pr skill must require actually opening visual proof media before claiming it"
+must_contain "$SKILL_MD" "Do not trust an automated DOM/test assertion as a substitute for looking" "make-pr skill must reject automated assertions as a substitute for looking at proof"
+must_contain "$SKILL_MD" 'rejects a Visual Proof section that has media but no `Manually inspected:` line' "make-pr skill must document the Manually inspected validator gate"
+must_contain "$SKILL_MD" "skills/prove-it/SKILL.md" "make-pr skill must reference the shared prove-it evidence rule"
+must_contain "$SKILL_MD" "Manually inspected: state exactly what you saw when you opened the image or video yourself" "make-pr skill schema must include the Manually inspected template line"
+
+# Proof-lane assertions must test the exact claim, not an easier proxy signal.
+must_contain "$REVIEW_COMPRESSION_MD" "## Proof Must Match the Claim" "review-compression must keep the proof-must-match-the-claim section heading"
+must_contain "$REVIEW_COMPRESSION_MD" "A proxy assertion can pass while the real behavior described in the claim is still broken" "review-compression must explain why a proxy assertion is unsafe"
+
 echo "OK: make-pr skill contract checks passed"

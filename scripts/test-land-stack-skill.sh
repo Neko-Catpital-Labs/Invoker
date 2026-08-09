@@ -52,4 +52,11 @@ must_appear_before "before any write" \
   "node scripts/land-stack.mjs <bottom-pr> ... --execute" \
   "land-stack must require the guard before its landing command"
 
+must_contain "re-run the exact \`gh pr view\`/queue query in that same turn" \
+  "land-stack must require a fresh status query before reporting PR state"
+must_contain "\"Merging\" is not \"merged\"" \
+  "land-stack must distinguish an in-progress merge from a completed one"
+must_contain "skills/prove-it/SKILL.md" \
+  "land-stack must reference the shared prove-it evidence rule"
+
 echo "OK: land-stack skill contract checks passed"
