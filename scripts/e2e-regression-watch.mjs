@@ -340,6 +340,22 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  // Historical CI runs briefly had a dedicated duplicate matrix entry named
+  // `playwright / launch-dispatch-stuck-lease`. Current CI owns those specs
+  // through the deduplicated 9-of-9 shard, but active watcher state is keyed by
+  // the original job name. Keep that key repairable without reintroducing the
+  // duplicate workflow matrix entry that the shard-inventory guard rejects.
+  if (
+    !definitions.has('playwright / launch-dispatch-stuck-lease')
+    && definitions.has('playwright / 9-of-9')
+  ) {
+    const current = definitions.get('playwright / 9-of-9');
+    definitions.set('playwright / launch-dispatch-stuck-lease', {
+      ...current,
+      jobName: 'playwright / launch-dispatch-stuck-lease',
+      legacyAliasFor: current.jobName,
+    });
+  }
   return definitions;
 }
 
