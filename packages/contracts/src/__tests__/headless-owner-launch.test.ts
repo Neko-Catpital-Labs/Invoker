@@ -39,10 +39,23 @@ describe('resolveHeadlessOwnerLaunchSpec', () => {
     });
   });
 
-  it('uses the packaged invoker-ui wrapper when present', () => {
+  it('gives the packaged invoker-ui wrapper the same Linux stability flags as the repo path', () => {
     expect(resolveHeadlessOwnerLaunchSpec({
       repoRoot: '/repo',
       platform: 'linux',
+      env: {},
+      which: (command) => (command === 'invoker-ui' ? '/usr/local/bin/invoker-ui' : undefined),
+      existsSync: () => false,
+    })).toEqual({
+      command: '/usr/local/bin/invoker-ui',
+      args: [...LINUX_HEADLESS_ELECTRON_FLAGS, '--headless', 'owner-serve'],
+    });
+  });
+
+  it('keeps the packaged invoker-ui wrapper free of Linux-only switches on macOS', () => {
+    expect(resolveHeadlessOwnerLaunchSpec({
+      repoRoot: '/repo',
+      platform: 'darwin',
       env: {},
       which: (command) => (command === 'invoker-ui' ? '/usr/local/bin/invoker-ui' : undefined),
       existsSync: () => false,

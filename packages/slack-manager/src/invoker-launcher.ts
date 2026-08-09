@@ -13,7 +13,8 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { openSync } from 'node:fs';
+import { existsSync, openSync } from 'node:fs';
+import { delimiter } from 'node:path';
 
 import {
   resolveHeadlessOwnerLaunchSpec,
@@ -27,6 +28,23 @@ const SLACK_ENV_VARS = [
   'SLACK_CHANNEL_ID',
   'SLACK_LOBBY_CHANNEL_ID',
 ] as const;
+
+/**
+ * The packaged Electron owner aborts with SIGSEGV during startup when PATH
+ * carries directories that do not exist -- systemd's default user PATH ends in
+ * /snap/bin, which is absent on hosts without snapd, so the supervised owner
+ * crashed on every launch while the same binary ran fine from a login shell.
+ */
+export function withoutMissingPathEntries(
+  pathValue: string | undefined,
+  directoryExists: (path: string) => boolean = existsSync,
+): string | undefined {
+  if (!pathValue) return pathValue;
+  return pathValue
+    .split(delimiter)
+    .filter((entry) => entry.length > 0 && directoryExists(entry))
+    .join(delimiter);
+}
 
 export interface InvokerLauncherOptions {
   repoRoot: string;
@@ -59,6 +77,7 @@ export function createInvokerLauncher(options: InvokerLauncherOptions): InvokerL
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         LIBGL_ALWAYS_SOFTWARE: process.platform === 'linux' ? '1' : process.env.LIBGL_ALWAYS_SOFTWARE,
+        PATH: withoutMissingPathEntries(process.env.PATH),
       };
       for (const key of SLACK_ENV_VARS) delete env[key];
 
