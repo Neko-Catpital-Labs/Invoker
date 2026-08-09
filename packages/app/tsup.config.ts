@@ -20,6 +20,7 @@ export default defineConfig({
     '@invoker/transport',
     '@invoker/execution-engine',
     '@invoker/planning-core',
+    '@invoker/shell',
     'yaml',
   ],
   clean: true,
