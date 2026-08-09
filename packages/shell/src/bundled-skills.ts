@@ -442,10 +442,31 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Crude but safe: a text scan for the TOML table header, never a full parse. */
-function isTomlInvokerServerRegistered(content: string, serverName: string): boolean {
+function readTomlInvokerServerBlocks(content: string, serverName: string): string[][] {
   const headerRe = new RegExp(`^\\[mcp_servers\\.${escapeRegExp(serverName)}\\]\\s*$`, 'm');
-  return headerRe.test(content);
+  const lines = content.split('\n');
+  const blocks: string[][] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!headerRe.test(lines[i]!)) continue;
+    const block: string[] = [];
+    for (const line of lines.slice(i + 1)) {
+      if (/^\s*\[/.test(line)) break;
+      block.push(line);
+    }
+    blocks.push(block);
+  }
+
+  return blocks;
+}
+
+/** Crude but safe: a text scan for the TOML table and expected Invoker MCP keys, never a full parse. */
+function isTomlInvokerServerRegistered(content: string, serverName: string): boolean {
+  return readTomlInvokerServerBlocks(content, serverName).some((block) => {
+    const hasCommand = block.some((line) => /^\s*command\s*=\s*"invoker-cli"\s*(?:#.*)?$/.test(line));
+    const hasArgs = block.some((line) => /^\s*args\s*=\s*\[\s*"mcp"\s*\]\s*(?:#.*)?$/.test(line));
+    return hasCommand && hasArgs;
+  });
 }
 
 function isMcpTargetInstalled(target: McpTargetCandidate): boolean {

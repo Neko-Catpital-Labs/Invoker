@@ -277,6 +277,59 @@ describe('bundled-skills', () => {
     }
   });
 
+  it('does not treat a mismatched Codex TOML MCP entry as installed', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const codexHome = makeTempRoot('invoker-codex-mismatch-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = codexHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      const configPath = join(codexHome, '.codex', 'config.toml');
+      mkdirSync(join(codexHome, '.codex'), { recursive: true });
+      writeFileSync(configPath, [
+        'model = "gpt-5.5"',
+        '',
+        '[mcp_servers.invoker]',
+        'command = "wrong-cli"',
+        'args = ["mcp"]',
+        '',
+      ].join('\n'));
+
+      const before = resolveBundledSkillsStatus({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+        isInstalled: (command) => command === 'codex',
+      });
+      expect(before.mcpTargets.find((target) => target.id === 'codex')?.installed).toBe(false);
+
+      const installed = installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+        isInstalled: (command) => command === 'codex',
+      });
+      const codexTarget = installed.mcpTargets.find((target) => target.id === 'codex');
+      const toml = readFileSync(configPath, 'utf-8');
+      expect(toml.split('[mcp_servers.invoker]')).toHaveLength(3);
+      expect(toml).toContain('command = "wrong-cli"');
+      expect(toml).toContain('command = "invoker-cli"');
+      expect(codexTarget?.installed).toBe(true);
+      expect(codexTarget?.upToDate).toBe(true);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
   it('installs skills into the OMP agent skill root so omp resolves make-pr', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
