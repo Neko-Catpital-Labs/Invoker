@@ -6,7 +6,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.head_ref) || format('pr-{0}', github.event.pull_request.number) }}
-  cancel-in-progress: true
+  # Mergify treats cancelled required checks as failed checks. Merge-queue
+  # wrapper PRs can emit several pull_request_target events for the same head,
+  # so let those runs finish instead of cancelling an earlier PR Body check
+  # that Mergify may already be watching.
+  cancel-in-progress: ${{ !startsWith(github.head_ref, 'mergify/merge-queue/') }}
 
 permissions:
   contents: read
