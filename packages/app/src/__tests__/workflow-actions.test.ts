@@ -1750,7 +1750,7 @@ describe('buildCancelInFlight', () => {
     });
     await cancel('workflow', 'wf-1');
 
-    expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1', { detachDependents: false });
     expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(1, 'task-a');
     expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(2, 'task-b');
     expect(orchestrator.cancelTask).not.toHaveBeenCalled();

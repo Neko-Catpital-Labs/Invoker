@@ -344,7 +344,7 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
       expect(adapter.listWorkflowMutationIntents('wf-race')).toHaveLength(0);
     });
 
-    it('repro: calling the coordinator directly (bypassing the helper) still throws the raw foreign-key error', async () => {
+    it('repro: calling the adapter directly bypasses the soft-delete guard and can queue a stale intent', async () => {
       const adapter = await SQLiteAdapter.create(':memory:');
       adapters.push(adapter);
       adapter.saveWorkflow({
@@ -355,8 +355,19 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
       });
       adapter.deleteWorkflow('wf-race-2');
 
-      expect(() => adapter.enqueueWorkflowMutationIntent('wf-race-2', 'invoker:start-ready', [{}], 'normal'))
-        .toThrow(/FOREIGN KEY constraint failed/);
+      expect(adapter.loadWorkflow('wf-race-2')).toBeUndefined();
+
+      const intentId = adapter.enqueueWorkflowMutationIntent('wf-race-2', 'invoker:start-ready', [{}], 'normal');
+
+      expect(intentId).toBeGreaterThan(0);
+      expect(adapter.listWorkflowMutationIntents('wf-race-2')).toMatchObject([
+        {
+          id: intentId,
+          workflowId: 'wf-race-2',
+          channel: 'invoker:start-ready',
+          status: 'queued',
+        },
+      ]);
     });
   });
 });
