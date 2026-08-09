@@ -126,6 +126,8 @@ graph TD
 
 Required when the diff changes UI-impacting files. Include before/after screenshots or a video link.
 
+Manually inspected: state exactly what you saw when you opened the image or video yourself, not just that it was captured.
+
 ## Revert Plan
 
 <details>
@@ -150,6 +152,8 @@ Test Plan and Revert Plan are the opposite: keep their `## Test Plan` / `## Reve
 CI validates the declared Review Lane and Review Unit against the actual changed files. Keep `behavior`, `refactor`, and `cleanup` slices separate from docs, policy, and proof files. Keep `proof` separate from product, docs, and policy files. Keep `policy` separate from product and proof files. Keep `docs` separate from product, policy, proof, and product-test files. The exact classification and review-unit boundaries live in `scripts/validate-pr-body.mjs` and `scripts/review-unit-rules.mjs`; split the PR when the local validator reports a mismatch.
 
 When an existing PR changes after its body or proof was written, rerun this skill from the current diff before updating the PR. If the new diff touches UI-impacting files, rerun `skills/visual-proof/SKILL.md` and replace old screenshot or video links with fresh proof for the current code. Do not reuse earlier proof media after UI behavior changes.
+Before writing any "Fixed"/"resolves"/"no longer happens" claim backed by a screenshot or video, actually open that exact media yourself — Read the image, or extract and Read video frames — in the same turn you write the claim. Do not trust an automated DOM/test assertion as a substitute for looking; a test passing proves the test's assertion, not that you looked at what the media shows. State precisely what you saw on a `Manually inspected:` line inside `## Visual Proof`. `scripts/validate-pr-body.mjs` rejects a Visual Proof section that has media but no `Manually inspected:` line. See `skills/prove-it/SKILL.md` for the full rule, including the same standard applied to live-system status claims.
+
 Visual proof must show the changed behavior itself, not just the changed screen area. Before creating or updating the PR, open every screenshot or video and verify the user-visible target is present and identifiable. For conditional or event-driven UI, drive the exact condition that triggers the new state and capture that state. A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof, even when the right file changed.
 
 If the changed behavior spans multiple states or a state transition — for example restart persistence, before/after workflow transitions, progress animations, opening then dismissing overlays, or any proof labeled “before” and “after” — use animated proof. A gif, mp4, webm, or walkthrough video is required; static screenshots alone are not enough.

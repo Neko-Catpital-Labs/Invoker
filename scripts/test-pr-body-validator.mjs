@@ -329,6 +329,8 @@ const restartAnimatedProofErrors = await validatePrBody(`${validMinimal}
 Animated restart proof showing the drafted chat, app relaunch, and restored chat.
 
 ![Restart walkthrough](proof-restart.gif)
+
+Manually inspected: watched proof-restart.gif frame by frame and confirmed the drafted chat survives the relaunch.
 `, { requiresVisualProof: true });
 assert(
   restartAnimatedProofErrors.length === 0,
@@ -768,10 +770,12 @@ const validVisualProof = `${validMinimal}
 Restored chat with the draft-ready bar visible.
 
 ![restored chat](restored-chat.png)
+
+Manually inspected: opened restored-chat.png and confirmed the draft-ready bar renders above the input box.
 `;
 assert(
   (await validatePrBody(validVisualProof, { requiresVisualProof: true })).length === 0,
-  'single-state screenshot proof should satisfy UI proof requirement',
+  'single-state screenshot proof with a Manually inspected line should satisfy UI proof requirement',
 );
 
 const warningOnlyVisualProofErrors = await validatePrBody(`${validMinimal}
@@ -783,6 +787,34 @@ const warningOnlyVisualProofErrors = await validatePrBody(`${validMinimal}
 assert(
   warningOnlyVisualProofErrors.some((error) => error.includes('UI-impacting changes require a ## Visual Proof section')),
   'warning-only visual proof should not satisfy UI proof requirement',
+);
+
+const missingManualInspectionErrors = await validatePrBody(`${validMinimal}
+
+## Visual Proof
+
+Restored chat with the draft-ready bar visible.
+
+![restored chat](restored-chat.png)
+`, { requiresVisualProof: true });
+assert(
+  missingManualInspectionErrors.some((error) => error.includes('"Manually inspected:" line')),
+  'screenshot proof without a Manually inspected line should fail validation',
+);
+
+const manualInspectionCaseInsensitiveBody = `${validMinimal}
+
+## Visual Proof
+
+Restored chat with the draft-ready bar visible.
+
+![restored chat](restored-chat.png)
+
+**MANUALLY INSPECTED:** opened restored-chat.png and confirmed the draft-ready bar renders above the input box.
+`;
+assert(
+  (await validatePrBody(manualInspectionCaseInsensitiveBody, { requiresVisualProof: true })).length === 0,
+  'Manually inspected line should match case-insensitively and inside bold markdown',
 );
 
 const prAuthoringPolicyErrors = await validatePrBody(validMinimal.replace('- behavior', '- policy').replace('- routing', '- tooling-policy'), {
@@ -1304,6 +1336,8 @@ const preloadRegressionBody = `${validMinimal}
 The preload script is unaffected.
 
 ![screenshot](proof.png)
+
+Manually inspected: opened proof.png and confirmed the preload-adjacent UI is unchanged.
 `;
 const preloadRegressionErrors = await validatePrBody(preloadRegressionBody, { requiresVisualProof: true });
 assert(

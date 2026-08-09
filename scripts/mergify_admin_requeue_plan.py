@@ -95,6 +95,7 @@ class StackFacts:
     suppressed_failed_checks_by_pr: Mapping[int, tuple[str, ...]]
     blockers_by_pr: Mapping[int, tuple[Blocker, ...]]
     all_blockers: tuple[Blocker, ...]
+    stale_base_by_pr: Mapping[int, bool]
 
 
 def is_queue_only_required_check(name: str) -> bool:
@@ -567,6 +568,7 @@ def build_stack_facts(
     open_pr_numbers: Collection[int],
     open_pr_numbers_by_head: Mapping[str, Collection[int]],
     trunk: str,
+    stale_base_by_pr: Mapping[int, bool] | None = None,
 ) -> StackFacts:
     required = frozenset(required_checks)
     bottom_topology = classify_bottom_topology(stack, trunk, open_pr_numbers_by_head)
@@ -622,6 +624,7 @@ def build_stack_facts(
             for pr in stack.prs
             for blocker in blockers_by_pr[pr.number]
         ),
+        stale_base_by_pr=dict(stale_base_by_pr or {}),
     )
     _assert_stack_facts_invariants(facts)
     return facts
@@ -885,6 +888,17 @@ def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
     return None
 
 
+def plan_rebase_onto_base(pr: PrSnapshot, trunk: str, ledger: Ledger, max_attempts: int, reason: str) -> Action:
+    rebase_attempts = ledger.count("rebase-onto-base-conflict", pr.number, pr.head_ref_oid, trunk)
+    if rebase_attempts >= max_attempts:
+        return cap_action(
+            pr,
+            Blocker("rebase-onto-base", "rebase_conflict", pr.number, "rebase onto base"),
+            f"rebase onto `{trunk}` keeps hitting a real conflict; a human needs to rebase PR #{pr.number} manually",
+        )
+    return Action("rebase_onto_base", pr.number, trunk, f"rebase #{pr.number} onto `{trunk}`: {reason}")
+
+
 def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts: int) -> Action | None:
     if _bottom_has_pending_or_human_blocker(facts):
         return None
@@ -929,6 +943,8 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return None
     if has_active_queue_event(bottom):
         return None
+    if bottom.base_ref_name == facts.trunk and facts.stale_base_by_pr.get(bottom.number):
+        return plan_rebase_onto_base(bottom, facts.trunk, ledger, max_requeue_attempts, "base pointer moved but content was never rebased")
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
     if latest and latest.state == "dequeued":
@@ -1028,8 +1044,9 @@ def plan_stack_execution(
     max_requeue_attempts: int = 2,
     max_repair_attempts: int = 3,
     trunk: str = TRUNK,
+    stale_base_by_pr: Mapping[int, bool] | None = None,
 ) -> StackExecutionPlan:
-    facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head, trunk)
+    facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head, trunk, stale_base_by_pr=stale_base_by_pr)
     summary = summarize_stack(facts)
     if facts.prereq_status and facts.prereq_status.is_open:
         return StackExecutionPlan(
@@ -1047,10 +1064,11 @@ def plan_stack_execution(
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
         )
+    wait_reason = "repair-in-flight" if has_active_repair_for_current_blocker(facts, ledger, now_epoch) else wait_reason_for_facts(facts)
     return StackExecutionPlan(
         summary=summary,
         actions=(),
-        wait_reason=wait_reason_for_facts(facts),
+        wait_reason=wait_reason,
         prereq_status=facts.prereq_status,
         queue_only_noop_check=facts.queue_only_noop_check,
     )

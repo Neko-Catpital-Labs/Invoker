@@ -171,6 +171,10 @@ function clearViewportInlineTransform(viewportElement: HTMLElement | null): void
   viewportElement?.style.removeProperty('transform');
 }
 
+function viewportChanged(a: GraphCameraViewport, b: GraphCameraViewport): boolean {
+  return a.x !== b.x || a.y !== b.y || a.zoom !== b.zoom;
+}
+
 function schedulePanePanAnimation(pan: PanePan): void {
   if (pan.animationFrame !== 0) return;
 
@@ -600,20 +604,9 @@ function WorkflowGraphInner({
     pan.visualViewport = { ...pan.targetViewport };
     snapshotViewportAfterMove(setViewport(pan.targetViewport, { duration: 0 }));
     onViewportSnapshot?.(pan.targetViewport);
-    if (pan.hasMoved) {
-      // A real drag changed the target viewport, so setViewport() above
-      // changed React Flow's own store and its reactive render will replace
-      // this element's imperatively-set transform with a fresh one -- clear
-      // it so that render isn't fighting a stale inline style.
+    if (pan.hasMoved && viewportChanged(pan.targetViewport, pan.startViewport)) {
       clearViewportInlineTransform(pan.viewportElement);
     } else {
-      // No movement occurred (a plain click): targetViewport is identical
-      // to the viewport React Flow's store already has, so setViewport()
-      // above is a no-op and no reactive render will ever follow to replace
-      // this element's transform. Clearing it here would strand the DOM
-      // with no transform at all (nodes render at raw, untransformed
-      // positions -- looks like an unwanted zoom). Re-apply the unchanged
-      // viewport instead of clearing it.
       applyViewportTransform(pan.viewportElement, pan.targetViewport);
     }
   }, [onViewportSnapshot, setViewport, snapshotViewportAfterMove]);
