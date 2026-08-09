@@ -103,15 +103,28 @@ function diskCheckResult(diskKb: number | undefined): PrerequisiteCheck {
   };
 }
 
+function redactRepoUrlUserInfo(repoUrl: string): string {
+  try {
+    const parsed = new URL(repoUrl);
+    if (parsed.username === '' && parsed.password === '') return repoUrl;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    return repoUrl;
+  }
+}
+
 function pushAuthCheckResult(repoUrl: string, status: 'ok' | 'missing' | undefined): PrerequisiteCheck {
+  const displayRepoUrl = redactRepoUrlUserInfo(repoUrl);
   if (status === 'ok') {
-    return { id: 'push-auth', name: 'GitHub push credentials (remote)', status: 'ok', detail: `Remote box can reach ${repoUrl}` };
+    return { id: 'push-auth', name: 'GitHub push credentials (remote)', status: 'ok', detail: `Remote box can reach ${displayRepoUrl}` };
   }
   return {
     id: 'push-auth',
     name: 'GitHub push credentials (remote)',
     status: 'error',
-    detail: `Remote box could not reach ${repoUrl} with its own git credentials`,
+    detail: `Remote box could not reach ${displayRepoUrl} with its own git credentials`,
     remediation: 'Give the remote box its own way to authenticate to GitHub (deploy key, ssh-agent forwarding, or an HTTPS credential helper), then re-run `invoker-cli setup machines`.',
   };
 }
