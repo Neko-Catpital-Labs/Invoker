@@ -54,7 +54,7 @@ command: "cd packages/surfaces && pnpm test"
 
 ### Worktree provisioning
 
-Git worktrees created by `WorktreeExecutor` run `pnpm install --frozen-lockfile` to provision dependencies. No rebuild step needed.
+`WorktreeExecutor` does not run any dependency install by default (see `default-worktree-provision-command.ts`). A pool's `worktreeTargets` config can opt a local target back in with an explicit `provisionCommand` such as `pnpm install --frozen-lockfile`; this repo's own local dev config does this for `local-mac`/`local-fallback`. That command applies to every `repoUrl` routed through the pool, so a workflow targeting a non-Node repo needs its own entry in the top-level `repoProvisionCommands` config (keyed by `repoUrl`, empty string for "no install step") to avoid a hard provisioning failure — see `packages/execution-engine/src/base-executor.ts`.
 
 Verify worktree provisioning end-to-end:
 
