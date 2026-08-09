@@ -23,7 +23,7 @@ Env always wins over config. Two more optional knobs:
 Localhost (desktop app already running):
 
 ```
-INVOKER_WEB_TOKEN=secret ./run.sh
+INVOKER_WEB_TOKEN=secret invoker-ui
 # open http://127.0.0.1:4200/?token=secret
 ```
 
@@ -31,7 +31,7 @@ Remote / headless host (e.g. the DO box):
 
 ```
 INVOKER_WEB_TOKEN=secret INVOKER_WEB_HOST=0.0.0.0 INVOKER_WEB_PORT=4200 \
-  INVOKER_HEADLESS_STANDALONE=1 ./run.sh --headless run plan.yaml
+  INVOKER_HEADLESS_STANDALONE=1 invoker-ui --headless run plan.yaml
 # from your laptop: open http://<do-ip>:4200/?token=secret
 ```
 
