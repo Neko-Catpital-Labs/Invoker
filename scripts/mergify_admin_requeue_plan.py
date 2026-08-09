@@ -1047,10 +1047,11 @@ def plan_stack_execution(
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
         )
+    wait_reason = "repair-in-flight" if has_active_repair_for_current_blocker(facts, ledger, now_epoch) else wait_reason_for_facts(facts)
     return StackExecutionPlan(
         summary=summary,
         actions=(),
-        wait_reason=wait_reason_for_facts(facts),
+        wait_reason=wait_reason,
         prereq_status=facts.prereq_status,
         queue_only_noop_check=facts.queue_only_noop_check,
     )
