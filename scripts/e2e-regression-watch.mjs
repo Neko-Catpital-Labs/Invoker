@@ -54,6 +54,19 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const PLAYWRIGHT_SHARD_INVENTORY_COMMAND = 'node scripts/repro/repro-ci-playwright-shard-inventory.mjs';
+const RETIRED_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -268,6 +281,8 @@ function commandForJob(jobId, job, matrix) {
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
     const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
     const command = [
+      PLAYWRIGHT_SHARD_INVENTORY_COMMAND,
+      '&&',
       'env',
       `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
       'INVOKER_PLAYWRIGHT_WORKERS=1',
@@ -337,6 +352,18 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const alias of RETIRED_PLAYWRIGHT_JOB_ALIASES) {
+      if (definitions.has(alias.jobName)) continue;
+      definitions.set(alias.jobName, {
+        jobId: 'playwright',
+        jobName: alias.jobName,
+        matrix: alias.matrix,
+        verifyCommand: commandForJob('playwright', playwrightJob, alias.matrix),
       });
     }
   }
