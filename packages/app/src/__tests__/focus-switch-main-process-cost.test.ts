@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -135,7 +135,7 @@ describe('focus-switch main-process cost repro', () => {
     expect(failedAttempt?.history?.length).toBeGreaterThan(0);
   });
 
-  it('dbPoll-like loadTasks+JSON.stringify stays under 100ms across 50 running workflows × 8 tasks', async () => {
+  it('dbPoll-like batched loadTasks+JSON.stringify visits 50 running workflows × 8 tasks with one task query', async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'focus-dbpoll-'));
     adapter = await SQLiteAdapter.create(join(tmpDir, 'invoker.db'), { ownerCapability: true });
 
@@ -167,26 +167,29 @@ describe('focus-switch main-process cost repro', () => {
       }
     }
 
-    const started = performance.now();
-    const workflows = adapter.listWorkflows();
-    let taskVisits = 0;
-    for (const wf of workflows) {
-      if (wf.status === 'completed' || wf.status === 'failed') continue;
-      const tasks = adapter.loadTasks(wf.id);
-      for (const task of tasks) {
-        taskVisits += 1;
-        if (task.execution.selectedAttemptId) {
-          adapter.loadAttempt?.(task.execution.selectedAttemptId);
-        }
-        JSON.stringify(task);
-      }
-    }
-    const elapsedMs = performance.now() - started;
+    const loadTasks = vi.spyOn(adapter, 'loadTasks');
+    const loadTasksForWorkflows = vi.spyOn(adapter, 'loadTasksForWorkflows');
+    const loadAttempt = vi.spyOn(adapter, 'loadAttempt');
 
+    const workflows = adapter.listWorkflows();
+    const activeWorkflowIds = workflows
+      .filter((wf) => wf.status !== 'completed' && wf.status !== 'failed')
+      .map((wf) => wf.id);
+    const tasks = adapter.loadTasksForWorkflows(activeWorkflowIds);
+    let taskVisits = 0;
+    for (const task of tasks) {
+      taskVisits += 1;
+      if (task.execution.selectedAttemptId) {
+        adapter.loadAttempt?.(task.execution.selectedAttemptId);
+      }
+      JSON.stringify(task);
+    }
+
+    expect(activeWorkflowIds).toHaveLength(workflowCount);
     expect(taskVisits).toBe(workflowCount * tasksPerWorkflow);
-    expect(
-      elapsedMs,
-      `dbPoll-like scan took ${elapsedMs.toFixed(1)}ms (workflows=${workflowCount}, tasks=${taskVisits})`,
-    ).toBeLessThan(100);
+    expect(loadTasks).not.toHaveBeenCalled();
+    expect(loadTasksForWorkflows).toHaveBeenCalledTimes(1);
+    expect(loadTasksForWorkflows).toHaveBeenCalledWith(activeWorkflowIds);
+    expect(loadAttempt).not.toHaveBeenCalled();
   });
 });
