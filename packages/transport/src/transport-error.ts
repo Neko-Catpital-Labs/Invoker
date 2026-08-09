@@ -14,6 +14,10 @@ export const TransportErrorCode = {
   HANDLER_ERROR: 'HANDLER_ERROR',
   /** The request exceeded its deadline without receiving a response. */
   REQUEST_TIMEOUT: 'REQUEST_TIMEOUT',
+  /** The socket path is structurally unusable (e.g. exceeds the OS's Unix
+   *  domain socket path length limit), so connecting or serving on it can
+   *  never succeed no matter how many times it is retried. */
+  SOCKET_PATH_INVALID: 'SOCKET_PATH_INVALID',
 } as const;
 
 export type TransportErrorCode = (typeof TransportErrorCode)[keyof typeof TransportErrorCode];
