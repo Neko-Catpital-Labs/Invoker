@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,17 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const legacyStuckLease = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (legacyStuckLease.includes('No local verify command is mapped')) {
+    fail('legacy launch-dispatch-stuck-lease job must not use fallback verify command');
+  }
+  if (!legacyStuckLease.includes('ci-playwright-launch-dispatch-stuck-lease')) {
+    fail('legacy launch-dispatch-stuck-lease command must preserve the historical run label');
+  }
+  if (!legacyStuckLease.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !legacyStuckLease.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('legacy launch-dispatch-stuck-lease command must run the stuck-lease specs');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -156,6 +168,19 @@ function testPlanVarsAndDryRunRendering() {
   const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
   if (!vars.marker.includes('job=required-fast / Vitest Workspace')) fail('marker must include job name');
   if (!vars.verify_command.includes('10-vitest-workspace.sh')) fail('verify command must be job-specific');
+
+  const legacyState = loadEmptyState();
+  reconcileCiRun(legacyState, fakeRun(401, 'a5d6b3e626ace9e963e924c0de9410dc0302de9e', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 41),
+  ]));
+  const [legacyFailure] = getActionableFailures(legacyState);
+  const legacyVars = buildPlanVars(legacyFailure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (legacyVars.verify_command.includes('No local verify command is mapped')) {
+    fail('legacy launch-dispatch-stuck-lease plan vars must not render fallback verify command');
+  }
+  if (!legacyVars.verify_command.includes('ci-playwright-launch-dispatch-stuck-lease')) {
+    fail('legacy launch-dispatch-stuck-lease plan vars must render the mapped Playwright command');
+  }
 
   const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-render-'));
   try {
