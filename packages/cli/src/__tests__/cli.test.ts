@@ -177,12 +177,14 @@ describe('invoker-cli', () => {
 
   it('rejects an unknown worker toggle id', async () => {
     const output = captureProcessOutput();
+    try {
+      const code = await main(['worker', 'toggles', '--enable', 'not-a-real-toggle']);
 
-    const code = await main(['worker', 'toggles', '--enable', 'not-a-real-toggle']);
-
-    expect(code).toBe(1);
-    expect(output.stderr).toContain('Unknown worker toggle id');
-    output.restore();
+      expect(code).toBe(1);
+      expect(output.stderr).toContain('Unknown worker toggle id');
+    } finally {
+      output.restore();
+    }
   });
 
   it('mcp command starts the MCP server runner', async () => {
