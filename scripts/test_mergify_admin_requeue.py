@@ -1139,10 +1139,16 @@ class WorkflowFastpathTests(unittest.TestCase):
     def test_resolve_workflow_for_pr_honors_review_gate_test_seam(self):
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}\n", stderr="")
         with mock.patch.dict(os.environ, {"INVOKER_PR_CRON_REVIEW_GATE_CMD": "/tmp/review-gate"}):
-            with mock.patch.object(fastpath.subprocess, "run", return_value=completed) as run:
+            with mock.patch.object(headless_shell.subprocess, "run", return_value=completed) as run:
                 result = fastpath.resolve_workflow_for_pr(6579)
         self.assertIsNone(result)
-        self.assertEqual(run.call_args.args[0], ["/tmp/review-gate", "6579"])
+        args = run.call_args.args[0]
+        self.assertEqual(args[0], "bash")
+        self.assertEqual(args[1], "-c")
+        self.assertIn('"$2" "$3"', args[2])
+        self.assertIn("headless-lib.sh", " ".join(str(part) for part in args))
+        self.assertIn("/tmp/review-gate", args)
+        self.assertIn("6579", args)
 
     def test_resolve_workflow_for_pr_raises_on_lookup_failure(self):
         completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")

@@ -4,7 +4,6 @@ import dataclasses
 import json
 import os
 import re
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -307,12 +306,7 @@ def submit_async_repair_plan(plan: AsyncRepairPlan) -> None:
     try:
         submit_cmd = os.environ.get("INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD")
         if submit_cmd:
-            completed = subprocess.run(
-                [submit_cmd, str(plan_path), plan.plan_name],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            completed = run_headless('"$2" "$3" "$4"', submit_cmd, str(plan_path), plan.plan_name)
         else:
             completed = run_headless('headless_mutation --no-track run "$2"', str(plan_path))
         if completed.returncode != 0:

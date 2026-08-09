@@ -186,16 +186,17 @@ class AsyncRepairPlanTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         written_paths = []
 
-        def fake_submit(args, **_kwargs):
-            written_paths.append(Path(args[1]))
-            self.assertEqual(args[0], "/tmp/submit-async")
-            self.assertEqual(args[2], plan.plan_name)
+        def fake_run_headless(command, *extra_args):
+            self.assertEqual(command, '"$2" "$3" "$4"')
+            self.assertEqual(extra_args[0], "/tmp/submit-async")
+            written_paths.append(Path(extra_args[1]))
+            self.assertEqual(extra_args[2], plan.plan_name)
             self.assertTrue(written_paths[-1].exists())
             self.assertEqual(written_paths[-1].read_text(encoding="utf-8"), "name: x\n")
             return completed
 
         with mock.patch.dict(os.environ, {"INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD": "/tmp/submit-async"}):
-            with mock.patch.object(async_repair.subprocess, "run", side_effect=fake_submit) as run:
+            with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", side_effect=fake_run_headless) as run:
                 async_repair.submit_async_repair_plan(plan)
         run.assert_called_once()
         self.assertFalse(written_paths[0].exists())

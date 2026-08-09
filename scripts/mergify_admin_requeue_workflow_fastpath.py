@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -20,12 +19,7 @@ def resolve_workflow_for_pr(pr_number: int) -> str | None:
     # exception rather than silently falling back to ad-hoc repair.
     review_gate_cmd = os.environ.get("INVOKER_PR_CRON_REVIEW_GATE_CMD")
     if review_gate_cmd:
-        completed = subprocess.run(
-            [review_gate_cmd, str(pr_number)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        completed = _run_headless('"$2" "$3"', review_gate_cmd, str(pr_number))
     else:
         completed = _run_headless('headless_query query review-gate "$2" --output json', str(pr_number))
     if completed.returncode != 0:
