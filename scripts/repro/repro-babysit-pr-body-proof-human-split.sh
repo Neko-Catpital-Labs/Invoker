@@ -20,6 +20,7 @@ export HOME="$TMP/home"
 WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
 mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
+export REAL_NODE="$(command -v node)"
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
@@ -40,6 +41,22 @@ exit 0
 EOF
 chmod +x "$TMP/bin/claude"
 
+cat > "$TMP/bin/review-gate" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/bin/review-gate"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/bin/review-gate"
+
+cat > "$TMP/bin/submit-async-repair" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+test -s "${1:?plan path required}"
+EOF
+chmod +x "$TMP/bin/submit-async-repair"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async-repair"
+
 cat > "$TMP/bin/node" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -49,7 +66,7 @@ if [[ "$#" -ge 1 && "$1" == *"/scripts/validate-pr-body-local.mjs" ]]; then
 JSON
   exit 1
 fi
-exec /usr/bin/env node "$@"
+exec "$REAL_NODE" "$@"
 EOF
 chmod +x "$TMP/bin/node"
 

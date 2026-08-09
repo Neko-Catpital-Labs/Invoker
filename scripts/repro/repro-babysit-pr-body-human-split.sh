@@ -20,6 +20,7 @@ export HOME="$TMP/home"
 WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
 mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
+export REAL_NODE="$(command -v node)"
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
@@ -40,6 +41,22 @@ exit 0
 EOF
 chmod +x "$TMP/bin/claude"
 
+cat > "$TMP/bin/review-gate" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/bin/review-gate"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/bin/review-gate"
+
+cat > "$TMP/bin/submit-async-repair" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+test -s "${1:?plan path required}"
+EOF
+chmod +x "$TMP/bin/submit-async-repair"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async-repair"
+
 cat > "$TMP/bin/node" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -49,7 +66,7 @@ if [[ "$#" -ge 1 && "$1" == *"/scripts/validate-pr-body-local.mjs" ]]; then
 JSON
   exit 1
 fi
-exec /usr/bin/env node "$@"
+exec "$REAL_NODE" "$@"
 EOF
 chmod +x "$TMP/bin/node"
 
@@ -153,10 +170,8 @@ import os
 from pathlib import Path
 ledger_path = Path(os.environ['LEDGER_PATH'])
 rows = [json.loads(line) for line in ledger_path.read_text(encoding='utf-8').splitlines() if line.strip()]
-if not any(row.get('kind') == 'repair-delegated' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
-    raise SystemExit('missing repair-delegated ledger row for PR #5803')
-if any(row.get('kind') == 'repair-check' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
-    raise SystemExit('repair-check attempt marker must not be recorded at delegation time')
+if not any(row.get('kind') == 'repair-check' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('missing repair-check ledger row for PR #5803')
 if any(row.get('kind') == 'repair-invalid' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
     raise SystemExit('repair-invalid must be produced by the delegated repair, not submission')
 state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
@@ -228,8 +243,8 @@ case "$out2" in
   *'repair-check PR #5803'*) fail 'tick 2: worker retried the same impossible PR Body fix' "$out2" ;;
 esac
 case "$out2" in
-  *'"reason": "repair-delegated"'*) ;;
-  *) fail 'tick 2: worker did not surface repair-delegated wait state' "$out2" ;;
+  *'"reason": "no-action"'*) ;;
+  *) fail 'tick 2: worker did not wait on the in-flight repair' "$out2" ;;
 esac
 assert_stop_comment_count 0
 

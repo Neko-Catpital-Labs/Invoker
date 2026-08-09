@@ -1136,6 +1136,14 @@ class WorkflowFastpathTests(unittest.TestCase):
             result = fastpath.resolve_workflow_for_pr(6579)
         self.assertIsNone(result)
 
+    def test_resolve_workflow_for_pr_honors_review_gate_test_seam(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}\n", stderr="")
+        with mock.patch.dict(os.environ, {"INVOKER_PR_CRON_REVIEW_GATE_CMD": "/tmp/review-gate"}):
+            with mock.patch.object(fastpath.subprocess, "run", return_value=completed) as run:
+                result = fastpath.resolve_workflow_for_pr(6579)
+        self.assertIsNone(result)
+        self.assertEqual(run.call_args.args[0], ["/tmp/review-gate", "6579"])
+
     def test_resolve_workflow_for_pr_raises_on_lookup_failure(self):
         completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
         with mock.patch.object(headless_shell.subprocess, "run", return_value=completed):
