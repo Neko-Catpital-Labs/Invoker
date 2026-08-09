@@ -14,3 +14,4 @@ bash scripts/repro/repro-babysit-pr-body-human-split.sh
 bash scripts/repro/repro-babysit-no-current-bottom-comment.sh
 bash scripts/repro/repro-babysit-retarget-stale-bottom-base.sh
 bash scripts/repro/repro-babysit-rebase-onto-base.sh
+bash scripts/repro/repro-babysit-stale-base-skips-agent-repair.sh
