@@ -1,5 +1,5 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -495,6 +495,12 @@ function buildMcpConfigState(
   return { ...state, installed, upToDate };
 }
 
+function writeFileAtomic(filePath: string, content: string): void {
+  const tmpPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+  writeFileSync(tmpPath, content);
+  renameSync(tmpPath, filePath);
+}
+
 function readMutableJsonMcpConfig(filePath: string, defaultConfig: JsonRecord): JsonRecord {
   if (!existsSync(filePath)) return { ...defaultConfig };
 
@@ -523,7 +529,7 @@ function installJsonMcpTarget(target: McpTargetCandidate, defaultConfig: JsonRec
     [target.serverName]: INVOKER_MCP_SERVER,
   };
   mkdirSync(path.dirname(target.path), { recursive: true });
-  writeFileSync(target.path, `${JSON.stringify(config, null, 2)}\n`);
+  writeFileAtomic(target.path, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 /**
@@ -546,7 +552,7 @@ function installTomlMcpTarget(target: McpTargetCandidate): void {
     '',
   ].join('\n');
   const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n\n' : existing.length > 0 ? '\n' : '';
-  writeFileSync(target.path, existing + separator + block);
+  writeFileAtomic(target.path, existing + separator + block);
 }
 
 function installMcpTarget(target: McpTargetCandidate): void {
@@ -658,25 +664,35 @@ export function installBundledSkills(
     };
   }
 
+  let lastInstallError: string | undefined;
   for (const target of mcpTargets) {
     if (!target.available) continue;
-    installMcpTarget(target);
-    manifestMcpTargets[target.id] = {
-      path: target.path,
-      serverName: target.serverName,
-    };
+    try {
+      installMcpTarget(target);
+      manifestMcpTargets[target.id] = {
+        path: target.path,
+        serverName: target.serverName,
+      };
+    } catch (error) {
+      lastInstallError = error instanceof Error ? error.message : String(error);
+    }
   }
 
   const manifest: BundledSkillsManifest = {
     bundledHash,
     bundledSkillNames,
     installedAt: new Date().toISOString(),
+    lastInstallError,
     targets: manifestTargets,
     commandTargets: manifestCommandTargets,
     mcpTargets: manifestMcpTargets,
   };
 
   writeManifest(invokerHomeRoot, manifest);
+
+  if (lastInstallError) {
+    throw new Error(lastInstallError);
+  }
 
   const status = resolveBundledSkillsStatus(context);
   return {
