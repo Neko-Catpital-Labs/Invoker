@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { runRemoteDoctorChecks } from '../remote-doctor.js';
+import { runRemoteDoctorChecks, type ExecRemoteCaptureImpl } from '../remote-doctor.js';
 
 const TARGET = { host: '203.0.113.5', user: 'invoker', sshKeyPath: '/tmp/key' };
 const REPO_URL = 'https://github.com/example/repo.git';
@@ -16,6 +16,26 @@ function failingCapture(message: string) {
 }
 
 describe('runRemoteDoctorChecks', () => {
+  it('builds a non-interactive bounded push-auth probe', async () => {
+    const scripts: string[] = [];
+    const capture: ExecRemoteCaptureImpl = async (opts) => {
+      scripts.push(opts.script);
+      return 'check:git:ok\ncheck:node:ok\ncheck:pnpm:ok\ndisk_kb:5242880\ncheck:push-auth:ok';
+    };
+
+    await runRemoteDoctorChecks({
+      target: TARGET,
+      repoUrl: REPO_URL,
+      execRemoteCaptureImpl: capture,
+    });
+
+    const script = scripts[0];
+    expect(script).toContain('export GIT_TERMINAL_PROMPT=0');
+    expect(script).toContain('export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"');
+    expect(script).toContain(`if timeout 30 git ls-remote '${REPO_URL}' >/dev/null 2>&1; then echo "check:push-auth:ok"; else echo "check:push-auth:missing"; fi`);
+    expect(script.indexOf('export GIT_TERMINAL_PROMPT=0')).toBeLessThan(script.indexOf('timeout 30 git ls-remote'));
+  });
+
   it('reports ok for every check when the remote box is fully ready', async () => {
     const stdout = [
       'check:git:ok',
