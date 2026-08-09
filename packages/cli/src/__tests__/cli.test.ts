@@ -148,7 +148,7 @@ describe('invoker-cli', () => {
 
       expect(code).toBe(0);
       expect(output.stdout).toContain('PR maintenance: off (default)');
-      expect(output.stdout).toContain('Disk-headroom cleanup: off (default)');
+      expect(output.stdout).toContain('Disk-headroom cleanup: on (default)');
     } finally {
       output.restore();
       if (saved === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;

@@ -17,6 +17,7 @@ export interface WorkerToggleSpec {
   label: string;
   description: string;
   configPath: WorkerToggleConfigPath;
+  defaultEnabled?: boolean;
 }
 
 export const ONBOARDING_WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
@@ -43,6 +44,7 @@ export const ONBOARDING_WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
     label: 'Disk-headroom cleanup',
     description: 'Automatically reclaims disk space when a machine gets critically full. The monitoring worker always runs; this only controls whether it is allowed to delete anything.',
     configPath: 'diskHeadroom.cleanupEnabled',
+    defaultEnabled: true,
   },
 ] as const;
 
