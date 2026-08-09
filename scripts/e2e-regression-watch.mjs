@@ -55,6 +55,16 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+const LEGACY_PLAYWRIGHT_SHARD_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    requiredFiles: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -326,6 +336,28 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function matrixFiles(matrix) {
+  return String(matrix?.files ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+function addLegacyPlaywrightShardAliases(definitions) {
+  const playwrightDefinitions = [...definitions.values()]
+    .filter((definition) => definition.jobId === 'playwright');
+  for (const alias of LEGACY_PLAYWRIGHT_SHARD_ALIASES) {
+    if (definitions.has(alias.jobName)) continue;
+    const activeDefinition = playwrightDefinitions.find((definition) => {
+      const files = new Set(matrixFiles(definition.matrix));
+      return alias.requiredFiles.every((file) => files.has(file));
+    });
+    if (!activeDefinition) continue;
+    definitions.set(alias.jobName, {
+      ...activeDefinition,
+      jobName: alias.jobName,
+      legacyAliasFor: activeDefinition.jobName,
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +372,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addLegacyPlaywrightShardAliases(definitions);
   return definitions;
 }
 
