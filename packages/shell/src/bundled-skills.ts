@@ -1,4 +1,4 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
@@ -469,6 +469,18 @@ function isTomlInvokerServerRegistered(content: string, serverName: string): boo
   });
 }
 
+function findTomlInvokerServerBlockRange(content: string, serverName: string): { start: number; end: number } | null {
+  const headerRe = new RegExp(`^\\[mcp_servers\\.${escapeRegExp(serverName)}\\]\\s*$`, 'm');
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!headerRe.test(lines[i]!)) continue;
+    let end = i + 1;
+    while (end < lines.length && !/^\s*\[/.test(lines[end]!)) end += 1;
+    return { start: i, end };
+  }
+  return null;
+}
+
 function isMcpTargetInstalled(target: McpTargetCandidate): boolean {
   if (!existsSync(target.path)) return false;
   if (target.format === 'toml') {
@@ -496,9 +508,15 @@ function buildMcpConfigState(
 }
 
 function writeFileAtomic(filePath: string, content: string): void {
+  const mode = existsSync(filePath) ? statSync(filePath).mode & 0o777 : 0o600;
   const tmpPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
-  writeFileSync(tmpPath, content);
-  renameSync(tmpPath, filePath);
+  try {
+    writeFileSync(tmpPath, content, { mode });
+    chmodSync(tmpPath, mode);
+    renameSync(tmpPath, filePath);
+  } finally {
+    rmSync(tmpPath, { force: true });
+  }
 }
 
 function readMutableJsonMcpConfig(filePath: string, defaultConfig: JsonRecord): JsonRecord {
@@ -545,12 +563,21 @@ function installTomlMcpTarget(target: McpTargetCandidate): void {
   const existing = existsSync(target.path) ? readFileSync(target.path, 'utf-8') : '';
   if (isTomlInvokerServerRegistered(existing, target.serverName)) return;
 
-  const block = [
+  const blockLines = [
     `[mcp_servers.${target.serverName}]`,
     'command = "invoker-cli"',
     'args = ["mcp"]',
-    '',
-  ].join('\n');
+  ];
+
+  const staleRange = findTomlInvokerServerBlockRange(existing, target.serverName);
+  if (staleRange) {
+    const lines = existing.split('\n');
+    const replaced = [...lines.slice(0, staleRange.start), ...blockLines, '', ...lines.slice(staleRange.end)];
+    writeFileAtomic(target.path, replaced.join('\n'));
+    return;
+  }
+
+  const block = [...blockLines, ''].join('\n');
   const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n\n' : existing.length > 0 ? '\n' : '';
   writeFileAtomic(target.path, existing + separator + block);
 }
