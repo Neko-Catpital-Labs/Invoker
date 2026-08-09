@@ -33,8 +33,11 @@ Install with npm:
 npm install -g @neko-catpital-labs/invoker-cli
 invoker-cli --version
 invoker-cli doctor
+invoker-cli setup
 invoker-cli run plans/fixtures/hello-world.yaml --standalone
 ```
+
+`invoker-cli setup` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and walks through the rest of onboarding (Slack integration, GitHub auth, a smoke-test plan run) — one command for the full standalone install.
 
 Or download the platform binary from GitHub Releases:
 
@@ -96,11 +99,7 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers from System Setup or:
-
-```bash
-invoker-ui --install-skills
-```
+Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers by running `invoker-cli setup` (or System Setup in the desktop app).
 
 Then, in Codex, Claude, Cursor, or OMP, run:
 
@@ -138,7 +137,7 @@ Invoker reads user config from `~/.invoker/config.json`.
 If you want a repo-specific config file, point the app at it explicitly:
 
 ```bash
-INVOKER_REPO_CONFIG_PATH=$PWD/.invoker.local.json ./run.sh
+INVOKER_REPO_CONFIG_PATH=$PWD/.invoker.local.json invoker-ui
 ```
 
 The config loader does not automatically read `<repo>/.invoker.json`.
@@ -215,15 +214,15 @@ For a guided first run, use [the first agent workflow tutorial](tutorial-first-a
 For day-to-day use, start the desktop app:
 
 ```bash
-./run.sh
+invoker-ui
 ```
 
 Or run a plan through the headless surface:
 
 ```bash
-./run.sh --headless --help
-./run.sh --headless query workflows
-./run.sh --headless run /path/to/plan.yaml
+invoker-ui --headless --help
+invoker-ui --headless query workflows
+invoker-ui --headless run /path/to/plan.yaml
 ```
 
 For app development with hot reload:
@@ -274,15 +273,15 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+If you need to turn a product or implementation plan into an Invoker workflow, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 
 If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
-Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect recovery ownership and decisions with `./run.sh --headless worker status --output text|json|jsonl`. Only **one** process should **write** the workflow database at a time; see [persistence-architecture-single-writer.md](persistence-architecture-single-writer.md).
+Use `--output text|label|json|jsonl` on headless `query` commands. Use `invoker-ui --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect recovery ownership and decisions with `invoker-ui --headless worker status --output text|json|jsonl`. Only **one** process should **write** the workflow database at a time; see [persistence-architecture-single-writer.md](persistence-architecture-single-writer.md).
 
 ### Auto-fix worker (single shared engine)
 
-Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Starting that worker — the Workers-tab off→on toggle — now runs a full scan immediately, submitting a fix-with-agent intent for every task that is already failed, so turning it on reconciles the current backlog at once. After that startup scan, failure lifecycle events wake it and its periodic scan covers missed wakeups. The manual dev door `./run.sh --headless worker autofix` runs the same engine for an explicit one-shot scan. `autoFixRetries` is enforced from a worker-local in-memory ledger before the worker submits another fix intent. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [architecture/recovery-lifecycle-workers.md](architecture/recovery-lifecycle-workers.md).
+Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Starting that worker — the Workers-tab off→on toggle — now runs a full scan immediately, submitting a fix-with-agent intent for every task that is already failed, so turning it on reconciles the current backlog at once. After that startup scan, failure lifecycle events wake it and its periodic scan covers missed wakeups. The manual dev door `invoker-cli worker autofix` runs the same engine for an explicit one-shot scan. `autoFixRetries` is enforced from a worker-local in-memory ledger before the worker submits another fix intent. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [architecture/recovery-lifecycle-workers.md](architecture/recovery-lifecycle-workers.md).
 
 ## Architecture (at a glance)
 
@@ -345,7 +344,7 @@ Layer rules: [ARCHITECTURE.md](../ARCHITECTURE.md). Agent/repo conventions: [CLA
 ## Troubleshooting
 
 - **DB conflicts** — Do not run two writers on the same DB; headless CLI mutations use a standalone owner, while GUI-started workflows stay owned by the desktop app process.
-- **`pnpm` or `git` not found from the desktop app** — On macOS this is often a Finder/GUI `PATH` issue. Launch Invoker from a terminal with `./run.sh`, or make the required binaries available to GUI-launched apps.
+- **`pnpm` or `git` not found from the desktop app** — On macOS this is often a Finder/GUI `PATH` issue. Launch Invoker from a terminal with `invoker-ui`, or make the required binaries available to GUI-launched apps.
 - **Missing bundled agent skills** — `bash scripts/setup-agent-skills.sh`
 - **Install failures** — Use Node 26 as per `engines`
 - **Obsidian (README / Mermaid)** — In **Source** mode the diagram stays plain text. Open **Reading view** (book icon in the header, or the *Toggle reading view* command). **Live Preview** usually renders Mermaid as well; if you see an empty box or a parse error, update Obsidian, try the default theme, and disable CSS snippets (some themes hide Mermaid).
