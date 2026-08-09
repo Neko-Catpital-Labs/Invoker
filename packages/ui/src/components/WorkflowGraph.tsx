@@ -171,6 +171,10 @@ function clearViewportInlineTransform(viewportElement: HTMLElement | null): void
   viewportElement?.style.removeProperty('transform');
 }
 
+function viewportChanged(a: GraphCameraViewport, b: GraphCameraViewport): boolean {
+  return a.x !== b.x || a.y !== b.y || a.zoom !== b.zoom;
+}
+
 function schedulePanePanAnimation(pan: PanePan): void {
   if (pan.animationFrame !== 0) return;
 
@@ -600,7 +604,11 @@ function WorkflowGraphInner({
     pan.visualViewport = { ...pan.targetViewport };
     snapshotViewportAfterMove(setViewport(pan.targetViewport, { duration: 0 }));
     onViewportSnapshot?.(pan.targetViewport);
-    clearViewportInlineTransform(pan.viewportElement);
+    if (pan.hasMoved && viewportChanged(pan.targetViewport, pan.startViewport)) {
+      clearViewportInlineTransform(pan.viewportElement);
+    } else {
+      applyViewportTransform(pan.viewportElement, pan.targetViewport);
+    }
   }, [onViewportSnapshot, setViewport, snapshotViewportAfterMove]);
 
   const onPanePointerMoveCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
