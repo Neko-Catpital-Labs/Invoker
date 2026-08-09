@@ -29,10 +29,12 @@ function buildDoctorScript(repoUrl: string): string {
 
   return [
     'set -u',
+    'export GIT_TERMINAL_PROMPT=0',
+    'export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"',
     toolChecks,
     'disk_kb=$(df -Pk "$HOME" 2>/dev/null | awk \'NR==2{print $4}\')',
     'echo "disk_kb:${disk_kb:-unknown}"',
-    `if git ls-remote ${shellPosixSingleQuote(repoUrl)} >/dev/null 2>&1; then echo "check:push-auth:ok"; else echo "check:push-auth:missing"; fi`,
+    `if timeout 30 git ls-remote ${shellPosixSingleQuote(repoUrl)} >/dev/null 2>&1; then echo "check:push-auth:ok"; else echo "check:push-auth:missing"; fi`,
     'exit 0',
   ].join('\n');
 }
