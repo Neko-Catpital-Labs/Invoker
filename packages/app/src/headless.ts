@@ -219,6 +219,9 @@ async function headlessInstallSkills(
   mode: BundledSkillsInstallMode | undefined,
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
 ): Promise<void> {
+  process.stderr.write(
+    'Deprecated: `invoker-ui --install-skills` will be removed in a future release. Run `invoker-cli setup` instead.\n',
+  );
   if (!deps.installBundledSkills) {
     throw new Error('Bundled AI helper installation is not available in this runtime.');
   }

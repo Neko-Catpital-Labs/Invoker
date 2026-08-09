@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -422,6 +422,7 @@ export interface SetupDeps {
   remoteDoctorChecks?: typeof runRemoteDoctorChecks;
   bundledSkillsInstall?: typeof installBundledSkills;
   resolveSkillsRepoRoot?: typeof resolveRepoRoot;
+  resolveStandaloneSkillsRoot?: typeof resolveStandaloneSkillsRoot;
 }
 
 // ── Slack manifest ───────────────────────────────────────────
@@ -1107,20 +1108,39 @@ async function runWorkerTogglesInteractive(io: SetupIO, assumeYes: boolean): Pro
 }
 
 /**
- * Only works when `setup` runs from inside an Invoker checkout (dev, or a repo
- * clone) — the standalone distribution has nowhere to source `skills/` from.
- * Fails soft: a truly standalone install (or a build without a source checkout)
- * just skips this with a note instead of breaking the rest of `setup`.
+ * Prefers an Invoker checkout (dev, or a repo clone) reachable from the
+ * current directory. The standalone release binary and the npm-cli install
+ * both ship a `skills/` directory next to the running executable
+ * (scripts/archive-cli-binary.sh, packages/npm-cli/scripts/install.js), so
+ * this falls back to that location when `setup` isn't run from a checkout.
+ * Fails soft: if neither is found, this skips with a note instead of
+ * breaking the rest of `setup`.
  */
+function resolveStandaloneSkillsRoot(): string | null {
+  let execPath: string;
+  try {
+    execPath = realpathSync(process.execPath);
+  } catch {
+    execPath = process.execPath;
+  }
+  const candidate = dirname(execPath);
+  return existsSync(join(candidate, 'skills')) ? candidate : null;
+}
+
 function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
   const resolveSkillsRepoRoot = options.resolveSkillsRepoRoot ?? resolveRepoRoot;
+  const resolveStandaloneRoot = options.resolveStandaloneSkillsRoot ?? resolveStandaloneSkillsRoot;
   const install = options.bundledSkillsInstall ?? installBundledSkills;
   let repoRoot: string;
   try {
     repoRoot = resolveSkillsRepoRoot(process.cwd());
   } catch {
-    io.print('Skills: skipped (not running from an Invoker checkout).');
-    return;
+    const standaloneRoot = resolveStandaloneRoot();
+    if (!standaloneRoot) {
+      io.print('Skills: skipped (not running from an Invoker checkout, and no bundled skills next to this binary).');
+      return;
+    }
+    repoRoot = standaloneRoot;
   }
 
   try {
