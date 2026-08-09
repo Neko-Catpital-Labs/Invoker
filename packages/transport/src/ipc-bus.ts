@@ -233,6 +233,17 @@ export function resolveDefaultSocketPath(): string {
   return resolveInvokerIpcSocketPath();
 }
 
+/**
+ * True for errno codes that mean a socket path can never be connected to or
+ * bound, regardless of retries (e.g. it exceeds the OS's `sun_path` length
+ * limit, ~104 bytes on macOS / ~108 on Linux). Every other connect/listen
+ * error (ECONNREFUSED, ENOENT, EACCES from a transient permission race, ...)
+ * is treated as potentially transient elsewhere in this file.
+ */
+function isPermanentSocketPathError(err: NodeJS.ErrnoException): boolean {
+  return err.code === 'EINVAL' || err.code === 'ENAMETOOLONG';
+}
+
 export const DEFAULT_SOCKET_PATH = resolveDefaultSocketPath();
 
 /** Default request deadline in milliseconds (30 s). */
@@ -291,6 +302,7 @@ export class IpcBus implements MessageBus {
   private readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private disconnected = false;
+  private fatalConnectError: TransportError | null = null;
 
   // Request/reply correlation.
   private nextReqId = 0;
@@ -323,6 +335,18 @@ export class IpcBus implements MessageBus {
     this.tryConnect();
   }
 
+  /** Record a permanent socket-path failure, once, for `getFatalConnectError()`. */
+  private recordFatalConnectError(err: NodeJS.ErrnoException): void {
+    if (this.fatalConnectError) return;
+    this.fatalConnectError = new TransportError(
+      TransportErrorCode.SOCKET_PATH_INVALID,
+      `Cannot use IPC socket path "${this.socketPath}" (${this.socketPath.length} chars): `
+        + `${err.code}. Unix domain socket paths are limited to roughly 100 characters on `
+        + 'most operating systems. Set INVOKER_IPC_SOCKET to a shorter path, or shorten '
+        + 'INVOKER_DB_DIR.',
+    );
+  }
+
   private tryConnect(): void {
     const sock = createConnection({ path: this.socketPath }, () => {
       // Connected as client.
@@ -331,6 +355,14 @@ export class IpcBus implements MessageBus {
     });
 
     sock.on('error', (err: NodeJS.ErrnoException) => {
+      if (isPermanentSocketPathError(err)) {
+        // Retrying this path can never succeed, so still keep the existing
+        // resolve+retry contract (every other caller of ready()/request()
+        // depends on it), but record the cause so a caller that specifically
+        // checks getFatalConnectError() can fail fast instead of waiting out
+        // a bootstrap timeout for a condition that will never clear.
+        this.recordFatalConnectError(err);
+      }
       if (!this.allowServe) {
         // A pure client (allowServe: false, e.g. a headless CLI) must never
         // become the server, but the server it's waiting for may simply not
@@ -378,6 +410,10 @@ export class IpcBus implements MessageBus {
       if (err.code === 'EADDRINUSE') {
         // Another process won the race — fall back to client.
         this.tryConnectRetry();
+        return;
+      }
+      if (isPermanentSocketPathError(err)) {
+        this.recordFatalConnectError(err);
       }
       // Other server errors are silently ignored (no payload logging).
     });
@@ -708,6 +744,17 @@ export class IpcBus implements MessageBus {
   /** Wait until the transport is connected or serving. */
   ready(): Promise<void> {
     return this.readyPromise;
+  }
+
+  /**
+   * A permanent, non-retryable reason this bus can never connect or serve
+   * (currently: the socket path is too long for the OS), or null if none has
+   * been observed. Callers that poll on `ready()`/`request()` in a loop with
+   * their own timeout (e.g. headless CLI bootstrap) can check this to fail
+   * fast with a clear cause instead of waiting out the full timeout.
+   */
+  getFatalConnectError(): TransportError | null {
+    return this.fatalConnectError;
   }
 
   /** True when this bus currently owns the listening socket. */

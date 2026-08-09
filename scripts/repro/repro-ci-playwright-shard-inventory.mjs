@@ -60,16 +60,21 @@ function main() {
 
   const listedSet = new Set(listed);
   const discoveredSet = new Set(discovered);
+  const manualListed = [...MANUAL_ONLY_SPECS]
+    .map((file) => `e2e/${file}`)
+    .filter((file) => listedSet.has(file));
+  const manualListedSet = new Set(manualListed);
   const manualMissing = [...MANUAL_ONLY_SPECS]
     .filter((file) => !allDiscoveredSet.has(file))
     .map((file) => `e2e/${file}`);
   const missing = discovered.filter((file) => !listedSet.has(file));
-  const extra = listed.filter((file) => !discoveredSet.has(file));
+  const extra = listed.filter((file) => !discoveredSet.has(file) && !manualListedSet.has(file));
   const duplicates = [...new Set(listed.filter((file, index) => listed.indexOf(file) !== index))];
 
-  if (manualMissing.length || missing.length || extra.length || duplicates.length) {
+  if (manualMissing.length || manualListed.length || missing.length || extra.length || duplicates.length) {
     console.error('[repro-ci-playwright-shard-inventory] Playwright shard inventory drift detected.');
     if (manualMissing.length) console.error(`  Manual spec allowlist entries do not exist: ${manualMissing.join(', ')}`);
+    if (manualListed.length) console.error(`  Manual-only specs assigned to shards: ${manualListed.join(', ')}`);
     if (missing.length) console.error(`  Missing from shards: ${missing.join(', ')}`);
     if (extra.length) console.error(`  Extra in shards: ${extra.join(', ')}`);
     if (duplicates.length) console.error(`  Duplicate shard entries: ${duplicates.join(', ')}`);

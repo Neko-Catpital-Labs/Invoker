@@ -176,6 +176,15 @@ class GhClient:
             capture_output=True,
         )
 
+    def compare_status(self, repo: str, base: str, head: str) -> str:
+        completed = subprocess.run(
+            ["gh", "api", f"repos/{repo}/compare/{base}...{head}"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        return str(json.loads(completed.stdout).get("status") or "")
+
     def resolve_review_thread(self, thread_id: str) -> None:
         query = "mutation($threadId:ID!) { resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } } }"
         subprocess.run(["gh", "api", "graphql", "-f", f"threadId={thread_id}", "-f", f"query={query}"], check=True, text=True, capture_output=True)

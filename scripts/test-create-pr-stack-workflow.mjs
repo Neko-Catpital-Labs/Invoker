@@ -478,6 +478,53 @@ function testDuplicateHelperBasePrsRejectPublication() {
   }
 }
 
+function testOpenHelperBaseWithRestApiLowercaseStateAllowsPublication() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    gitQuiet(work, 'branch', 'pr/previous', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'pr/previous');
+    createTrackedBranch(work, 'feature/on-open-helper', 'origin/pr/previous');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+
+    // GitHub's REST API (gh api repos/.../pulls) reports state as lowercase
+    // "open"/"closed", unlike gh pr view's GraphQL-backed "OPEN"/"CLOSED".
+    // A genuinely open, single helper-base PR must not be treated as stale.
+    const result = runCreatePr(work, harness, ['--title', '[Test Stack](2) add feature', '--base', 'pr/previous', '--body-file', 'pr-body.md'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 86,
+          state: 'open',
+          merged_at: null,
+          html_url: 'https://example.com/pull/86',
+          head: { ref: 'pr/previous', repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_POST_RESPONSE: JSON.stringify({ number: 90, html_url: 'https://example.com/pull/90' }),
+      GH_API_OPEN_PULLS_JSON: JSON.stringify([
+        {
+          number: 90,
+          title: '[Test Stack](2) add feature',
+          html_url: 'https://example.com/pull/90',
+          base: { ref: 'pr/previous' },
+          head: { ref: 'feature/on-open-helper' },
+        },
+      ]),
+    });
+
+    assert(
+      result.status === 0,
+      `single open helper-base PR (lowercase REST state) should allow publication\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      !result.stderr.includes('belongs to a stale helper PR'),
+      `open helper-base PR must not be reported as stale\nstderr:\n${result.stderr}`,
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 
 function testNoFileChangesBlockPrCreation() {
   const harness = createHarness();
@@ -1420,6 +1467,7 @@ const tests = [
   testStaleBaseDetection,
   testStaleMergedHelperBaseRejectsPublication,
   testDuplicateHelperBasePrsRejectPublication,
+  testOpenHelperBaseWithRestApiLowercaseStateAllowsPublication,
   testNoFileChangesBlockPrCreation,
   testEmptyCommitAloneBlocksPrCreation,
   testEmptyCommitMixedWithRealChangeBlocksPrCreation,

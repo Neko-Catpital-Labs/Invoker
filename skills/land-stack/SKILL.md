@@ -78,6 +78,10 @@ before any write (label, thread-resolve, queue, merge).
   to defer those findings; record the deferral on the PR.
 - Do not act on a PR whose head SHA is not in your local clone.
 
+## Prove state before reporting it
+
+Before telling the user a PR is merged, queued, blocked, or failing CI, re-run the exact `gh pr view`/queue query in that same turn — do not repeat a status you checked earlier in the conversation. "Merging" is not "merged"; a queued PR can still fail the re-run suite. See `skills/prove-it/SKILL.md`.
+
 ## Why this exists
 
 A raw workflow-branch PR (#505) shared a branch name with the intended stack

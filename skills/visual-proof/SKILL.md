@@ -34,6 +34,10 @@ animation's motion in a single still frame, a race that only exists for millisec
    concrete non-visual proof instead (a DOM/class assertion, a grep check, a test name) — never
    substitute an image that doesn't actually demonstrate the claim.
 
+## Actually look before you claim
+
+A captured screenshot or video file is not proof that anyone looked at it. Before writing any claim about what the media shows — "fixed," "no longer happens," "stays in place" — open the exact file yourself: `Read` the image, or extract frames from a video (`ffmpeg -vf fps=4 ...`) and `Read` those. State precisely what you saw on a `Manually inspected:` line inside `## Visual Proof`. `scripts/validate-pr-body.mjs` rejects a Visual Proof section that has media but no `Manually inspected:` line. See `skills/prove-it/SKILL.md`.
+
 ## Subcommands
 
 The script `scripts/ui-visual-proof.sh` provides four explicit subcommands:
