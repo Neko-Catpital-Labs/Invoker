@@ -703,6 +703,8 @@ class PlanStackActions(PlannerTestCase):
         ledger.record("repair-check", 5885, HEAD, "build", epoch=NOW - 100)
         actions = p.plan_stack_actions(stack, REQUIRED, ledger, now_epoch=NOW, open_pr_numbers_by_head={})
         self.assertEqual(actions, ())
+        execution = p.plan_stack_execution(stack, REQUIRED, ledger, NOW, (), {}, trunk="master")
+        self.assertEqual(execution.wait_reason, "repair-in-flight")
 
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
