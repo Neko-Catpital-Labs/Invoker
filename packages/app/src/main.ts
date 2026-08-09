@@ -181,7 +181,7 @@ import { createTaskTerminalAdapter } from './task-terminal-adapter.js';
 import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
 import { createEmbeddedTerminalBackend } from './embedded-terminal-backend.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
-import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
+import { installBundledSkills, resolveBundledSkillsStatus } from '@invoker/cli/bundled-skills';
 import {
   maybeAutoInstallCli,
   updateInvokerCli,
