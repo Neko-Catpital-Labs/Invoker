@@ -1553,6 +1553,60 @@ describe('SQLiteAdapter', () => {
       expect(liveAfter?.state).toBe('leased');
     });
 
+    describe('listAbandonableLaunchDispatchLeases enqueued_at format', () => {
+      it('writes enqueued_at in SQLite space-format, not ISO-Z', () => {
+        setupWorkflowAndTask();
+        const row = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-format-check',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+        const result = (adapter as any).db.exec(
+          `SELECT enqueued_at FROM task_launch_dispatch WHERE id = ${row.id}`,
+        ) as Array<{ values: unknown[][] }>;
+        const raw = String(result[0]?.values?.[0]?.[0]);
+        // The production insert path never overrides the schema default
+        // (datetime('now')): "YYYY-MM-DD HH:MM:SS", no 'T', no 'Z'.
+        expect(raw).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      });
+
+      // TODO(#julianday-fix): flip to `it` once listAbandonableLaunchDispatchLeases
+      // compares enqueued_at via julianday() instead of a raw string.
+      it.fails('does not abandon a lease enqueued a minute ago just because the ISO cutoff falls on the same calendar day', () => {
+        setupWorkflowAndTask();
+        const row = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-freshly-enqueued',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+        // Mirrors the real write path: enqueued_at in SQLite's
+        // datetime('now') space-format, at 23:59 on the cutoff's calendar
+        // day -- one minute before "now", nowhere near the 24h age limit.
+        (adapter as any).db.run(
+          `UPDATE task_launch_dispatch
+             SET state = 'leased', dispatch_owner = 'owner-x',
+                 enqueued_at = '2026-08-09 23:59:00',
+                 fenced_until = '2026-08-09T23:59:30.000Z'
+           WHERE id = ?`,
+          [row.id],
+        );
+
+        const candidates = adapter.listAbandonableLaunchDispatchLeases({
+          nowIso: '2026-08-10T00:00:00.000Z',
+          maxAttempts: 10,
+          maxLaunchAgeMs: 24 * 60 * 60 * 1000, // ageCutoff = 2026-08-09T00:00:00.000Z
+        });
+
+        // Real elapsed time is 1 minute, far under the 24h maxLaunchAgeMs.
+        // A string comparison of "2026-08-09 23:59:00" against
+        // "2026-08-09T00:00:00.000Z" reads the row as older than the
+        // cutoff (space < 'T'), which is wrong.
+        expect(candidates.map((c) => c.attemptId)).not.toContain('attempt-freshly-enqueued');
+      });
+    });
+
     describe('claimLaunchDispatchAtomic', () => {
       it('leases the only enqueued row when capacity allows', () => {
         setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
