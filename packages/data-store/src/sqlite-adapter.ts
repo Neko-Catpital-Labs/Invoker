@@ -245,6 +245,14 @@ export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
 export const WORKFLOW_MUTATION_LEASE_MS = 30_000;
 export const EXECUTION_RESOURCE_LEASE_MS = 20 * 60 * 1000;
+/**
+ * TTL for worktree-slot leases (`resource_type: 'worktree'`). Shorter than
+ * `EXECUTION_RESOURCE_LEASE_MS` (SSH) because worktree acquisition churns much
+ * faster; sized as a safe multiple of the default executor heartbeat interval
+ * (`DEFAULT_HEARTBEAT_INTERVAL_MS` in base-executor.ts, 30s) so a live task's
+ * lease never expires between renewals.
+ */
+export const WORKTREE_LEASE_TTL_MS = 3 * 60 * 1000;
 
 export interface ExecutionResourceLease {
   resourceKey: string;
