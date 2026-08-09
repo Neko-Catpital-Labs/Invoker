@@ -25,7 +25,14 @@ function makeLogger() {
 }
 
 function okResult(targetKey: string): DiskCleanupResult {
-  return { targetKey, ok: true, reason: 'reap-orphans', detail: 'removed 1' };
+  return {
+    targetKey,
+    ok: true,
+    reason: 'reap-orphans',
+    detail: 'removed 1',
+    protectedSkipCount: 0,
+    protectedSkipBytes: 0,
+  };
 }
 
 describe('reaper worker', () => {
@@ -104,6 +111,8 @@ describe('reaper worker', () => {
       ok: false,
       reason: 'cleanup-error',
       detail: 'ssh timed out',
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
     };
     const upsertWorkerAction = vi.fn((row: any) => row);
 

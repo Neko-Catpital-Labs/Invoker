@@ -37,7 +37,7 @@ describe('cleanupLocalInvokerHome Electron asar guard repro', () => {
     expect(getNoAsar()).toBeFalsy();
   });
 
-  it.fails('enables process.noAsar during the local disk sweep', async () => {
+  it('enables process.noAsar during the local disk sweep', async () => {
     const { home, userHome } = makeInvokerHome();
     let observedNoAsar: boolean | undefined;
     const observeBeginLine = (message: string) => {
