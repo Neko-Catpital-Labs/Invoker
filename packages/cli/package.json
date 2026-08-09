@@ -34,6 +34,7 @@
     "@invoker/contracts": "workspace:*",
     "@invoker/data-store": "workspace:*",
     "@invoker/execution-engine": "workspace:*",
+    "@invoker/shell": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
