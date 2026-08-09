@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { E2E_REPO_URL, waitForRuntimeMode } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
@@ -78,7 +78,7 @@ async function launchApp(testDir: string, configPath: string): Promise<{ app: El
       NODE_ENV: 'test',
           INVOKER_TEST_WORKFLOW_IDS: '1',
       TZ: 'UTC',
-      INVOKER_GUI_OWNER_MODE: 'standalone',
+      INVOKER_GUI_OWNER_MODE: 'gui',
       INVOKER_DB_DIR: testDir,
       INVOKER_IPC_SOCKET: ipcSocketPath,
       INVOKER_ALLOW_DELETE_ALL: '1',
@@ -93,6 +93,7 @@ async function launchApp(testDir: string, configPath: string): Promise<{ app: El
   });
   const page = await app.firstWindow();
   await waitForInvoker(page);
+  await waitForRuntimeMode(page, 'local-owner', 30_000);
   return { app, page };
 }
 
