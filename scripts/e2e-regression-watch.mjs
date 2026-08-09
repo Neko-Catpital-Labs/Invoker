@@ -54,6 +54,18 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_FILE_SETS = new Map([
+  [
+    'playwright / launch-dispatch-stuck-lease',
+    [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  ],
+]);
+const LEGACY_JOB_RECOVERY_JOBS = new Map([
+  ['playwright / launch-dispatch-stuck-lease', new Set(['playwright / 9-of-9'])],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -153,6 +165,9 @@ export function reconcileCiRun(state, run) {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
       delete normalized.activeFailures[jobName];
+      for (const [legacyJobName, recoveryJobNames] of LEGACY_JOB_RECOVERY_JOBS) {
+        if (recoveryJobNames.has(jobName)) delete normalized.activeFailures[legacyJobName];
+      }
       continue;
     }
 
@@ -337,6 +352,22 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const [jobName, files] of LEGACY_PLAYWRIGHT_JOB_FILE_SETS) {
+      if (definitions.has(jobName)) continue;
+      const matrix = {
+        name: jobName.replace(/^playwright \/\s*/, ''),
+        files: files.join(' '),
+      };
+      definitions.set(jobName, {
+        jobId: 'playwright',
+        jobName,
+        matrix,
+        verifyCommand: commandForJob('playwright', playwrightJob, matrix),
       });
     }
   }
