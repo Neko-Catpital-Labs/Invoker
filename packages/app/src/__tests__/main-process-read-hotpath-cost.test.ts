@@ -84,17 +84,21 @@ describe('main-process read hot-path cost guards', () => {
       }
     });
 
+    const countEventsByTypes = vi.spyOn(adapter, 'countEventsByTypes');
+    const getEventsByTypes = vi.spyOn(adapter, 'getEventsByTypes');
+    const listWorkflows = vi.spyOn(adapter, 'listWorkflows');
+    const loadTasks = vi.spyOn(adapter, 'loadTasks');
     const getEvents = vi.spyOn(adapter, 'getEvents');
-    const started = Date.now();
     const status = collectRecoveryWorkerStatus(adapter);
-    const elapsedMs = Date.now() - started;
 
+    expect(countEventsByTypes).toHaveBeenCalledTimes(1);
+    expect(getEventsByTypes).toHaveBeenCalledTimes(1);
+    expect(listWorkflows).not.toHaveBeenCalled();
+    expect(loadTasks).not.toHaveBeenCalled();
     expect(getEvents).not.toHaveBeenCalled();
     expect(status.wakeups + status.scans + status.submissions + status.skips).toBe(taskCount * eventsPerTask);
     expect(status.recent.length).toBeGreaterThan(0);
     expect(status.recent.length).toBeLessThanOrEqual(10);
-    // Per-type indexed LIMIT+merge must stay well under a 2s UI poll budget.
-    expect(elapsedMs).toBeLessThan(50);
   });
 
   it('projects a stale-pointer task without scanning every attempt under large error blobs', async () => {

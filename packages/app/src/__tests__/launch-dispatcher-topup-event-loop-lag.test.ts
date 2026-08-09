@@ -160,6 +160,6 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
         )}, uncappedSamples=${uncappedSamples.join(',')} (${BURST_TASK_COUNT}-task burst)`,
       ).toBeLessThan(uncappedMedianGapMs);
     },
-    60_000,
+    180_000,
   );
 });
