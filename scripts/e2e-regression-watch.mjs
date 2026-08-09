@@ -54,6 +54,16 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const RETIRED_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrixName: 'launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -238,6 +248,16 @@ function cartesianProduct(entries) {
   }, [{}]);
 }
 
+function matrixFileSet(job) {
+  const files = new Set();
+  for (const entry of expandMatrix(job?.strategy?.matrix)) {
+    for (const file of String(entry.files ?? '').trim().split(/\s+/).filter(Boolean)) {
+      files.add(file);
+    }
+  }
+  return files;
+}
+
 export function expandMatrix(matrix) {
   if (!matrix || typeof matrix !== 'object') return [{}];
   if (Array.isArray(matrix.include) && matrix.include.length > 0) {
@@ -326,6 +346,27 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function addRetiredPlaywrightJobDefinitions(definitions, workflow) {
+  const playwrightJob = workflow.jobs?.playwright;
+  if (!playwrightJob) return;
+  const ownedFiles = matrixFileSet(playwrightJob);
+
+  for (const alias of RETIRED_PLAYWRIGHT_JOB_ALIASES) {
+    if (definitions.has(alias.jobName)) continue;
+    if (!alias.files.every((file) => ownedFiles.has(file))) continue;
+    const matrix = {
+      name: alias.matrixName,
+      files: alias.files.join(' '),
+    };
+    definitions.set(alias.jobName, {
+      jobId: 'playwright',
+      jobName: alias.jobName,
+      matrix,
+      verifyCommand: commandForJob('playwright', playwrightJob, matrix),
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +381,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addRetiredPlaywrightJobDefinitions(definitions, workflow);
   return definitions;
 }
 
