@@ -18,6 +18,7 @@ import {
   PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
   PR_ORPHAN_REPAIR_WORKER_KIND,
+  buildPrMaintenanceEnv,
   createPrAdminBypassLandWorker,
   createPrDuplicateCloseWorker,
   createPrOrphanRepairWorker,
@@ -178,6 +179,25 @@ describe('PR maintenance workers', () => {
       `[worker:${PR_ADMIN_BYPASS_LAND_WORKER_KIND}] diagnostic line`,
       expect.objectContaining({ stream: 'stderr' }),
     );
+  });
+
+  it('forces admin-bypass queue children into existing-owner submitter mode', () => {
+    const repoRoot = makeRepoRoot();
+    const originalStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    try {
+      const env = buildPrMaintenanceEnv(repoRoot, undefined);
+
+      expect(env.INVOKER_HEADLESS_STANDALONE).toBeUndefined();
+      expect(env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER).toBe('1');
+      expect(env.INVOKER_REPO_ROOT).toBe(repoRoot);
+    } finally {
+      if (originalStandalone === undefined) {
+        delete process.env.INVOKER_HEADLESS_STANDALONE;
+      } else {
+        process.env.INVOKER_HEADLESS_STANDALONE = originalStandalone;
+      }
+    }
   });
 
   it('spawns the orphan-repair shell entrypoint', async () => {
