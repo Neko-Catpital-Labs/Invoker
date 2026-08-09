@@ -84,6 +84,24 @@ function testPerHeadFailureDedupAndRecovery() {
   console.log('[repro-e2e-regression-watch] per-HEAD dedup + recovery: PASS');
 }
 
+function testLegacyPlaywrightShardSuccessClearsRetiredFailure() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(105, 'sha-retired-fail', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 15),
+  ]));
+  reconcileCiRun(state, fakeRun(106, 'sha-current-green', [
+    fakeJob('playwright / 9-of-9', 'success', 16),
+  ]));
+
+  assertEqual(getActionableFailures(state), [], 'current shard success clears retired stuck-lease failure');
+  assertEqual(
+    state.heads['sha-current-green'].jobs['playwright / 9-of-9'].state,
+    'ok',
+    'current shard success is recorded on the current job name',
+  );
+  console.log('[repro-e2e-regression-watch] retired playwright shard alias clears: PASS');
+}
+
 function testCancelledAndSkippedDoNotClear() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(200, 'sha-a', [fakeJob('required-fast / Vitest Workspace', 'failure', 20)]));
@@ -128,6 +146,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +158,19 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  if (!defs.get('playwright / 1-of-9').verifyCommand.includes('repro-ci-playwright-shard-inventory.mjs')) {
+    fail('playwright shard command must include the CI shard inventory guard');
+  }
+  const legacyStuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (legacyStuckLeaseCommand.includes('No local verify command is mapped')) {
+    fail('retired launch-dispatch stuck-lease job must not use fallback verify command');
+  }
+  if (
+    !legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+  ) {
+    fail('retired launch-dispatch stuck-lease job must verify the stuck-lease specs');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -224,6 +256,7 @@ function testLiveGithubSmokeIfRequested() {
 function main() {
   testJobClassification();
   testPerHeadFailureDedupAndRecovery();
+  testLegacyPlaywrightShardSuccessClearsRetiredFailure();
   testCancelledAndSkippedDoNotClear();
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();

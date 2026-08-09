@@ -54,6 +54,21 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const PLAYWRIGHT_SHARD_INVENTORY_COMMAND = 'node scripts/repro/repro-ci-playwright-shard-inventory.mjs';
+const LEGACY_CI_JOB_ALIASES = [
+  {
+    legacyJobName: 'playwright / launch-dispatch-stuck-lease',
+    currentJobName: 'playwright / 9-of-9',
+    jobId: 'playwright',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -110,6 +125,14 @@ export function classifyJobConclusion(job) {
   return 'ignored';
 }
 
+function clearedJobNamesForSuccess(jobName) {
+  const cleared = new Set([jobName]);
+  for (const alias of LEGACY_CI_JOB_ALIASES) {
+    if (alias.currentJobName === jobName) cleared.add(alias.legacyJobName);
+  }
+  return cleared;
+}
+
 export function reconcileCiRun(state, run) {
   const normalized = normalizeState(state);
   const sha = String(run.headSha ?? '').trim();
@@ -152,7 +175,9 @@ export function reconcileCiRun(state, run) {
     if (classification === 'ok') {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
-      delete normalized.activeFailures[jobName];
+      for (const clearedJobName of clearedJobNamesForSuccess(jobName)) {
+        delete normalized.activeFailures[clearedJobName];
+      }
       continue;
     }
 
@@ -261,21 +286,25 @@ function withBuildPrefix(command, needsBuild) {
   return needsBuild ? `${BUILD_APP_COMMAND} && ${command}` : command;
 }
 
+function commandForPlaywrightMatrix(jobId, matrix) {
+  const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
+  const runCommand = [
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+  return `${PLAYWRIGHT_SHARD_INVENTORY_COMMAND} && ${runCommand}`;
+}
+
 function commandForJob(jobId, job, matrix) {
   const needsBuild = jobDownloadsBuildArtifacts(job);
   if (jobId === 'build-artifacts') return BUILD_APP_COMMAND;
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
-    const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
-      'env',
-      `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
-      'INVOKER_PLAYWRIGHT_WORKERS=1',
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
-      `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
-      'bash scripts/test-suites/optional/40-playwright-app.sh',
-    ].join(' ');
-    return withBuildPrefix(command, true);
+    return withBuildPrefix(commandForPlaywrightMatrix(jobId, matrix), true);
   }
   if (jobId === 'e2e-proof') {
     const command = [
@@ -339,6 +368,17 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         verifyCommand: commandForJob(jobId, job, matrix),
       });
     }
+  }
+  for (const alias of LEGACY_CI_JOB_ALIASES) {
+    if (definitions.has(alias.legacyJobName)) continue;
+    const job = workflow.jobs?.[alias.jobId];
+    if (!job) continue;
+    definitions.set(alias.legacyJobName, {
+      jobId: alias.jobId,
+      jobName: alias.legacyJobName,
+      matrix: { ...alias.matrix },
+      verifyCommand: commandForJob(alias.jobId, job, alias.matrix),
+    });
   }
   return definitions;
 }
