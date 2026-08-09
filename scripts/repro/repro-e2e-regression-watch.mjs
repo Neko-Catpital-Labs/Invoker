@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -140,10 +141,37 @@ function testWorkflowCommandMapping() {
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
+  const stuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (!stuckLeaseCommand.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-launch-dispatch-stuck-lease'")) {
+    fail('launch-dispatch-stuck-lease job must use its CI run label');
+  }
+  if (
+    !stuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !stuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+  ) {
+    fail('launch-dispatch-stuck-lease job must map to its focused spec list');
+  }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
+}
+
+function testLaunchDispatchJobPlanVarsUseWorkflowCommand() {
+  const failure = {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9e',
+    firstBadRunId: 30983254556,
+    firstJobDatabaseId: 92238737773,
+  };
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git');
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('launch-dispatch-stuck-lease job must not render the fallback verify command');
+  }
+  if (!vars.verify_command.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-launch-dispatch-stuck-lease'")) {
+    fail('launch-dispatch-stuck-lease plan vars must use the workflow-derived verify command');
+  }
+  console.log('[repro-e2e-regression-watch] launch-dispatch job plan vars: PASS');
 }
 
 function testPlanVarsAndDryRunRendering() {
@@ -228,6 +256,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testLaunchDispatchJobPlanVarsUseWorkflowCommand();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
