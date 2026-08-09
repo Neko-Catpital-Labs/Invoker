@@ -111,7 +111,8 @@ if [ "$KEEP_ST" != "completed" ] || [ "$FAIL_ST" != "failed" ]; then
 fi
 
 echo "==> case 2.16: retry-all --follow and observe first 5s"
-bash scripts/retry-failed-and-pending-all-workflows.sh --follow >/tmp/e2e-2.16-retry.log 2>&1 &
+RETRY_LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-retry.log.XXXXXX")"
+bash scripts/retry-failed-and-pending-all-workflows.sh --follow >"$RETRY_LOG_FILE" 2>&1 &
 RETRY_PID=$!
 retry_fail_left_failed=0
 for i in 0 1 2 3 4 5; do
@@ -151,8 +152,9 @@ if [ "$retry_fail_left_failed" -ne 1 ]; then
 fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
+RECREATE_LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-recreate.log.XXXXXX")"
 RECREATE_START_EPOCH="$(date +%s)"
-bash scripts/recreate-all.sh --workflow "$WF_ID" --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
+bash scripts/recreate-all.sh --workflow "$WF_ID" --follow >"$RECREATE_LOG_FILE" 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
@@ -221,4 +223,6 @@ fi
 
 rm -f "$PLAN_PATH"
 rm -f "$SUBMIT_LOG"
+rm -f "$RETRY_LOG_FILE"
+rm -f "$RECREATE_LOG_FILE"
 echo "PASS case 2.16 (retry preserved completed; recreate reset completed task within 5s)"
