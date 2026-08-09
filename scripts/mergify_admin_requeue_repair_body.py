@@ -59,6 +59,29 @@ def is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
     return completed.returncode == 0
 
 
+def needs_rebase_onto_base(cwd: Path, base_ref: str, head_sha: str) -> bool:
+    git_output(cwd, "fetch", "origin", base_ref)
+    return not is_ancestor(cwd, f"origin/{base_ref}", head_sha)
+
+
+def rebase_onto_base(cwd: Path, base_ref: str, branch: str, expected_head: str) -> str | None:
+    git_output(cwd, "fetch", "origin", base_ref)
+    hard_reset_work_root(cwd, expected_head)
+    completed = subprocess.run(
+        ["git", "rebase", f"origin/{base_ref}"],
+        cwd=str(cwd),
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        subprocess.run(["git", "rebase", "--abort"], cwd=str(cwd), check=False, text=True, capture_output=True)
+        return None
+    new_head = git_output(cwd, "rev-parse", "HEAD").strip()
+    safe_push(branch=branch, expected_head=expected_head, cwd=cwd)
+    return new_head
+
+
 def normalize_repair_commit(cwd: Path, start_head: str, end_head: str, check_name: str) -> str:
     if is_ancestor(cwd, start_head, end_head):
         return end_head
