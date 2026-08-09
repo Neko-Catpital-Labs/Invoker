@@ -113,6 +113,44 @@ describe('runRemoteDoctorChecks', () => {
     expect(pushAuth?.detail).toContain(REPO_URL);
   });
 
+  it('redacts embedded HTTPS credentials from push-auth details', async () => {
+    const stdoutOk = [
+      'check:git:ok',
+      'check:node:ok',
+      'check:pnpm:ok',
+      'disk_kb:5242880',
+      'check:push-auth:ok',
+    ].join('\n');
+    const stdoutMissing = [
+      'check:git:ok',
+      'check:node:ok',
+      'check:pnpm:ok',
+      'disk_kb:5242880',
+      'check:push-auth:missing',
+    ].join('\n');
+    const secretRepoUrl = 'https://robot:ghp_secret-token@github.com/example/private-repo.git';
+    const redactedRepoUrl = 'https://github.com/example/private-repo.git';
+
+    const okChecks = await runRemoteDoctorChecks({
+      target: TARGET,
+      repoUrl: secretRepoUrl,
+      execRemoteCaptureImpl: stubCapture(stdoutOk),
+    });
+    const missingChecks = await runRemoteDoctorChecks({
+      target: TARGET,
+      repoUrl: secretRepoUrl,
+      execRemoteCaptureImpl: stubCapture(stdoutMissing),
+    });
+
+    const details = [okChecks, missingChecks].map((checks) => checks.find((check) => check.id === 'push-auth')?.detail ?? '');
+    expect(details).toEqual([
+      `Remote box can reach ${redactedRepoUrl}`,
+      `Remote box could not reach ${redactedRepoUrl} with its own git credentials`,
+    ]);
+    expect(details.join('\n')).not.toContain('robot');
+    expect(details.join('\n')).not.toContain('ghp_secret-token');
+  });
+
   it('reports every check as an error when the SSH round trip itself fails', async () => {
     const checks = await runRemoteDoctorChecks({
       target: TARGET,
