@@ -446,10 +446,10 @@ export async function applyInvalidation(
 // `Orchestrator` class (which imports `applyInvalidation` from here).
 export interface InvalidationDepsOrchestrator {
   cancelTask(taskId: string): { runningCancelled: string[] };
-  cancelWorkflow(workflowId: string): { runningCancelled: string[] };
+  cancelWorkflow(workflowId: string, opts?: { detachDependents?: boolean }): { runningCancelled: string[] };
   /** Deferred-invalidation variant of cancelTask: skips releasing resource leases/abandoning dispatch rows so the caller can kill the real process first. */
   cancelTaskAwaitingKill?(taskId: string): { runningCancelled: string[]; toCancelIds: string[] };
-  cancelWorkflowAwaitingKill?(workflowId: string): { runningCancelled: string[]; toCancelIds: string[] };
+  cancelWorkflowAwaitingKill?(workflowId: string, opts?: { detachDependents?: boolean }): { runningCancelled: string[]; toCancelIds: string[] };
   /** Performs the deferred invalidation skipped above, once every running task has been killed. */
   finalizeCancelInvalidation?(toCancelIds: readonly string[], reason: string): void;
   retryTask(taskId: string): TaskState[];
@@ -586,7 +586,7 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
       try {
         result = scope === 'task'
           ? deps.orchestrator.cancelTaskAwaitingKill!(id)
-          : deps.orchestrator.cancelWorkflowAwaitingKill!(id);
+          : deps.orchestrator.cancelWorkflowAwaitingKill!(id, { detachDependents: false });
       } catch (e) {
         const code = (e as { code?: string })?.code;
         if (code && TERMINAL_CANCEL_ERROR_CODES.has(code)) return;
@@ -606,7 +606,7 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
     try {
       result = scope === 'task'
         ? deps.orchestrator.cancelTask(id)
-        : deps.orchestrator.cancelWorkflow(id);
+        : deps.orchestrator.cancelWorkflow(id, { detachDependents: false });
     } catch (e) {
       const code = (e as { code?: string })?.code;
       if (code && TERMINAL_CANCEL_ERROR_CODES.has(code)) return;

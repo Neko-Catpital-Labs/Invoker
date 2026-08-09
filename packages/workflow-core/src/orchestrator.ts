@@ -2418,7 +2418,7 @@ export class Orchestrator {
       throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `forkWorkflow: workflow ${workflowId} not found (no tasks)`);
     }
 
-    this.cancelWorkflow(workflowId);
+    this.cancelWorkflow(workflowId, { detachDependents: false });
 
     this.refreshWorkflowFromDb(workflowId);
     const settledSourceTasks = this.stateMachine
@@ -3175,8 +3175,37 @@ export class Orchestrator {
    * Cancel all active tasks in a workflow.
    * Terminal tasks (completed/stale) are preserved as-is.
    */
-  cancelWorkflow(workflowId: string): { cancelled: string[]; runningCancelled: string[] } {
-    return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
+  cancelWorkflow(
+    workflowId: string,
+    opts: { detachDependents?: boolean } = {},
+  ): { cancelled: string[]; runningCancelled: string[] } {
+    const detachDependents = opts.detachDependents ?? true;
+    if (!detachDependents) {
+      return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
+    }
+
+    this.syncAllFromDb();
+    const directDependents = this.collectDirectDependentWorkflowIds(workflowId);
+    const workflowMetadata = this.persistence.listWorkflows();
+    const directDependentBaseBranches = new Map<string, string>();
+    for (const dependentWorkflowId of directDependents) {
+      const dependentWorkflow = this.persistence.loadWorkflow?.(dependentWorkflowId)
+        ?? workflowMetadata.find((candidate) => candidate.id === dependentWorkflowId);
+      directDependentBaseBranches.set(
+        dependentWorkflowId,
+        this.resolveDetachDefaultBranch(dependentWorkflowId, dependentWorkflow),
+      );
+    }
+
+    const result = cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
+    for (const dependentWorkflowId of directDependents) {
+      this.detachWorkflowInternal(
+        dependentWorkflowId,
+        workflowId,
+        directDependentBaseBranches.get(dependentWorkflowId)!,
+      );
+    }
+    return result;
   }
 
   /**
@@ -3193,7 +3222,9 @@ export class Orchestrator {
   /** Deferred-invalidation counterpart to `cancelWorkflow` -- see `cancelTaskAwaitingKill`. */
   cancelWorkflowAwaitingKill(
     workflowId: string,
+    opts: { detachDependents?: boolean } = {},
   ): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
+    void opts;
     return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId, { deferInvalidation: true });
   }
 
