@@ -316,8 +316,8 @@ describe('bundled-skills', () => {
       });
       const codexTarget = installed.mcpTargets.find((target) => target.id === 'codex');
       const toml = readFileSync(configPath, 'utf-8');
-      expect(toml.split('[mcp_servers.invoker]')).toHaveLength(3);
-      expect(toml).toContain('command = "wrong-cli"');
+      expect(toml.split('[mcp_servers.invoker]')).toHaveLength(2);
+      expect(toml).not.toContain('command = "wrong-cli"');
       expect(toml).toContain('command = "invoker-cli"');
       expect(codexTarget?.installed).toBe(true);
       expect(codexTarget?.upToDate).toBe(true);
