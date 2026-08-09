@@ -40,6 +40,28 @@ exit 0
 EOF
 chmod +x "$TMP/bin/claude"
 
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+
+cat > "$TMP/submit-async.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="${1:?plan path required}"
+plan_name="${2:?plan name required}"
+test -f "$plan_path"
+case "$plan_name" in
+  admin-bypass-repair-check-pr-5803-pr-body-*) ;;
+  *) echo "unexpected plan name: $plan_name" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$TMP/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/submit-async.sh"
+
 cat > "$TMP/bin/node" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -153,10 +175,10 @@ import os
 from pathlib import Path
 ledger_path = Path(os.environ['LEDGER_PATH'])
 rows = [json.loads(line) for line in ledger_path.read_text(encoding='utf-8').splitlines() if line.strip()]
-if not any(row.get('kind') == 'repair-delegated' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
-    raise SystemExit('missing repair-delegated ledger row for PR #5803')
-if any(row.get('kind') == 'repair-check' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
-    raise SystemExit('repair-check attempt marker must not be recorded at delegation time')
+if not any(row.get('kind') == 'repair-check' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('missing repair-check ledger row for PR #5803')
+if any(row.get('kind') == 'repair-delegated' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('repair-delegated is not the current async repair ledger contract')
 if any(row.get('kind') == 'repair-invalid' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
     raise SystemExit('repair-invalid must be produced by the delegated repair, not submission')
 state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
@@ -228,8 +250,8 @@ case "$out2" in
   *'repair-check PR #5803'*) fail 'tick 2: worker retried the same impossible PR Body fix' "$out2" ;;
 esac
 case "$out2" in
-  *'"reason": "repair-delegated"'*) ;;
-  *) fail 'tick 2: worker did not surface repair-delegated wait state' "$out2" ;;
+  *'"reason": "repair-in-flight"'*) ;;
+  *) fail 'tick 2: worker did not surface repair-in-flight wait state' "$out2" ;;
 esac
 assert_stop_comment_count 0
 
