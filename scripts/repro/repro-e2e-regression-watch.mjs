@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -142,6 +143,18 @@ function testWorkflowCommandMapping() {
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
+  }
+  const launchDispatchStuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (launchDispatchStuckLeaseCommand.includes('No local verify command is mapped')) {
+    fail('launch-dispatch stuck-lease job must not use the fallback verify command');
+  }
+  if (
+    !launchDispatchStuckLeaseCommand.includes('INVOKER_PLAYWRIGHT_RUN_LABEL=') ||
+    !launchDispatchStuckLeaseCommand.includes('ci-playwright-launch-dispatch-stuck-lease') ||
+    !launchDispatchStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts') ||
+    !launchDispatchStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+  ) {
+    fail('launch-dispatch stuck-lease job must map to its Playwright specs');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
