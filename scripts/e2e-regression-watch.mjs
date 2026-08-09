@@ -55,6 +55,17 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+const LEGACY_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrixName: 'launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -340,6 +351,29 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    const currentPlaywrightFiles = new Set(
+      expandMatrix(playwrightJob.strategy?.matrix)
+        .flatMap((matrix) => String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean)),
+    );
+    for (const alias of LEGACY_PLAYWRIGHT_JOB_ALIASES) {
+      if (definitions.has(alias.jobName)) continue;
+      if (!alias.files.every((file) => currentPlaywrightFiles.has(file))) continue;
+      const matrix = {
+        name: alias.matrixName,
+        files: alias.files.join(' '),
+      };
+      definitions.set(alias.jobName, {
+        jobId: 'playwright',
+        jobName: alias.jobName,
+        matrix,
+        verifyCommand: commandForJob('playwright', playwrightJob, matrix),
+      });
+    }
+  }
+
   return definitions;
 }
 
