@@ -963,6 +963,8 @@ def plan_actions_from_facts(
         action = plan_hard_blockers(facts, ledger, bottom_pr_numbers)
         if action is not None:
             return (action,)
+        if has_active_repair_for_current_blocker(facts, ledger, now):
+            return ()
         if _bottom_has_pending_or_human_blocker(facts) or _bottom_has_repairable_blocker(facts):
             return ()
         action = plan_bottom_progress(facts, ledger, max_requeue_attempts)

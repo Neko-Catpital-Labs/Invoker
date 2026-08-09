@@ -728,6 +728,20 @@ class PlanStackActions(PlannerTestCase):
             [("repair_check", QUEUE_ONLY_CHECK)],
         )
 
+    def test_current_bottom_waits_on_active_queue_only_mergify_repair(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, QUEUE_ONLY_CHECK, epoch=NOW - 100)
+        snapshot = pr(
+            checks={},
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            latest_mergify=event(
+                failing=(QUEUE_ONLY_CHECK,),
+                conditions=((QUEUE_ONLY_CHECK, "failure"),),
+            ),
+        )
+        actions = self._plan(snapshot, ledger, required_checks={QUEUE_ONLY_CHECK})
+        self.assertEqual(actions, ())
+
     def test_admin_bypass_stack_members_progress_as_they_become_bottom(self):
         before_land = m.StackGroup(
             "s",
