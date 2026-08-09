@@ -54,6 +54,17 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const PLAYWRIGHT_INVENTORY_COMMAND = 'node scripts/repro/repro-ci-playwright-shard-inventory.mjs';
+const PLAYWRIGHT_COMPATIBILITY_JOBS = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    jobId: 'playwright',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -261,21 +272,28 @@ function withBuildPrefix(command, needsBuild) {
   return needsBuild ? `${BUILD_APP_COMMAND} && ${command}` : command;
 }
 
+function matrixFileList(matrix) {
+  return String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+function playwrightCommand(jobId, matrix, files = matrixFileList(matrix)) {
+  const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
+  return [
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(files.join(' '))}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+}
+
 function commandForJob(jobId, job, matrix) {
   const needsBuild = jobDownloadsBuildArtifacts(job);
   if (jobId === 'build-artifacts') return BUILD_APP_COMMAND;
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
-    const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
-      'env',
-      `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
-      'INVOKER_PLAYWRIGHT_WORKERS=1',
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
-      `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
-      'bash scripts/test-suites/optional/40-playwright-app.sh',
-    ].join(' ');
-    return withBuildPrefix(command, true);
+    return `${PLAYWRIGHT_INVENTORY_COMMAND} && ${withBuildPrefix(playwrightCommand(jobId, matrix), true)}`;
   }
   if (jobId === 'e2e-proof') {
     const command = [
@@ -326,6 +344,34 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function addPlaywrightCompatibilityJobs(definitions) {
+  for (const compat of PLAYWRIGHT_COMPATIBILITY_JOBS) {
+    if (definitions.has(compat.jobName)) continue;
+    const currentOwner = [...definitions.values()].find((definition) => {
+      if (definition.jobId !== compat.jobId) return false;
+      const ownedFiles = new Set(matrixFileList(definition.matrix));
+      return compat.files.every((file) => ownedFiles.has(file));
+    });
+    if (!currentOwner) continue;
+
+    const matrix = {
+      ...currentOwner.matrix,
+      name: compat.jobName.replace(/^playwright \/ /, ''),
+      files: compat.files.join(' '),
+    };
+    definitions.set(compat.jobName, {
+      jobId: compat.jobId,
+      jobName: compat.jobName,
+      matrix,
+      verifyCommand: `${PLAYWRIGHT_INVENTORY_COMMAND} && ${withBuildPrefix(
+        playwrightCommand(compat.jobId, matrix, compat.files),
+        true,
+      )}`,
+      compatibilityTargetJobName: currentOwner.jobName,
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +386,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addPlaywrightCompatibilityJobs(definitions);
   return definitions;
 }
 
