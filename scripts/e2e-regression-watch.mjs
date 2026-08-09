@@ -54,6 +54,15 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const RETIRED_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -257,6 +266,11 @@ function jobDownloadsBuildArtifacts(job) {
   });
 }
 
+function matrixFiles(job) {
+  return expandMatrix(job?.strategy?.matrix)
+    .flatMap((matrix) => String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean));
+}
+
 function withBuildPrefix(command, needsBuild) {
   return needsBuild ? `${BUILD_APP_COMMAND} && ${command}` : command;
 }
@@ -340,7 +354,33 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addRetiredPlaywrightJobAliases(definitions, workflow);
   return definitions;
+}
+
+function addRetiredPlaywrightJobAliases(definitions, workflow) {
+  const playwrightJob = workflow.jobs?.playwright;
+  if (!playwrightJob) return;
+
+  for (const alias of RETIRED_PLAYWRIGHT_JOB_ALIASES) {
+    if (definitions.has(alias.jobName)) continue;
+    const files = alias.files.join(' ');
+    const assigned = matrixFiles(playwrightJob);
+    const hasExactCurrentOwners = alias.files.every(
+      (file) => assigned.filter((assignedFile) => assignedFile === file).length === 1,
+    );
+    if (!hasExactCurrentOwners) continue;
+    const matrix = {
+      name: alias.jobName.replace(/^playwright \/ /, ''),
+      files,
+    };
+    definitions.set(alias.jobName, {
+      jobId: 'playwright',
+      jobName: alias.jobName,
+      matrix,
+      verifyCommand: commandForJob('playwright', playwrightJob, matrix),
+    });
+  }
 }
 
 export function fallbackVerifyCommand(jobName) {
