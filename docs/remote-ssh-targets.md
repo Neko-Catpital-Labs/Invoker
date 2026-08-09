@@ -14,7 +14,7 @@ The easiest way to add a remote target is the machines wizard, available from th
 
 ## Manual Configuration (fallback)
 
-If you prefer to edit the config file directly instead of using the wizard, add remote targets to `~/.invoker/config.json`.
+As a hand-edit fallback, if you prefer to edit the config file directly instead of using the wizard, add remote targets to `~/.invoker/config.json`.
 
 If you want to use a repo-specific config file, launch Invoker with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
 
