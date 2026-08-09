@@ -65,6 +65,7 @@ function readySetupDeps(overrides: SetupDeps = {}): SetupDeps {
     // Real skill install does real commandExists probing + filesystem work —
     // stub it by default so unrelated tests stay fast and deterministic.
     resolveSkillsRepoRoot: () => '/fake-repo-root',
+    resolveStandaloneSkillsRoot: () => null,
     bundledSkillsInstall: () => NOOP_BUNDLED_SKILLS_STATUS,
     ...overrides,
   };
@@ -246,7 +247,40 @@ describe('runSetup', () => {
     }
   });
 
-  it('skips skill installation gracefully when not running from an Invoker checkout', async () => {
+  it('falls back to skills bundled next to the running binary when not in a checkout', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-standalone-'));
+    const saved = { HOME: process.env.HOME };
+    const lines: string[] = [];
+    const fakeStatus = {
+      available: true,
+      promptRecommended: false,
+      managedPrefix: 'invoker-',
+      bundledSkillNames: ['plan-to-invoker'],
+      targets: [{ id: 'claude', name: 'Claude', path: '/x', available: true, installed: true, upToDate: true, installedSkillNames: [] }],
+      commandTargets: [],
+      mcpTargets: [{ id: 'claude', name: 'Claude', path: '/x/.claude.json', available: true, installed: true, upToDate: true, serverName: 'invoker' }],
+    };
+    try {
+      process.env.HOME = home;
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        resolveSkillsRepoRoot: () => { throw new Error('Could not resolve repo root'); },
+        resolveStandaloneSkillsRoot: () => '/fake/vendor',
+        bundledSkillsInstall: () => fakeStatus,
+      }));
+
+      expect(code).toBe(0);
+      expect(lines.join('\n')).toContain('Skills: installed 1 bundled skill(s) for Claude.');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('skips skill installation gracefully when not running from an Invoker checkout and no bundled skills are found', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-none-'));
     const saved = { HOME: process.env.HOME };
     const lines: string[] = [];
@@ -258,10 +292,11 @@ describe('runSetup', () => {
         prompt: async () => 'n',
       }, readySetupDeps({
         resolveSkillsRepoRoot: () => { throw new Error('Could not resolve repo root'); },
+        resolveStandaloneSkillsRoot: () => null,
       }));
 
       expect(code).toBe(0);
-      expect(lines.join('\n')).toContain('Skills: skipped (not running from an Invoker checkout).');
+      expect(lines.join('\n')).toContain('Skills: skipped (not running from an Invoker checkout, and no bundled skills next to this binary).');
     } finally {
       restoreEnv('HOME', saved.HOME);
       rmSync(home, { recursive: true, force: true });
