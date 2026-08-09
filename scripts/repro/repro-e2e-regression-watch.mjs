@@ -146,6 +146,26 @@ function testWorkflowCommandMapping() {
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
 
+function testRetiredWorkflowJobsAreNotActionable() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(350, 'sha-retired', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 35),
+  ]));
+  const defs = buildCiJobDefinitions();
+  if (defs.has('playwright / launch-dispatch-stuck-lease')) {
+    fail('retired stuck-lease shard unexpectedly exists in current workflow');
+  }
+  const unfiltered = getActionableFailures(state);
+  assertEqual(
+    unfiltered.map((failure) => failure.jobName),
+    ['playwright / launch-dispatch-stuck-lease'],
+    'retired job remains in raw state',
+  );
+  const filtered = getActionableFailures(state, defs);
+  assertEqual(filtered, [], 'retired workflow job must not file a new repair');
+  console.log('[repro-e2e-regression-watch] retired workflow jobs are not actionable: PASS');
+}
+
 function testPlanVarsAndDryRunRendering() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(400, 'abc123def456abc123def456abc123def456ab1', [
@@ -228,6 +248,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testRetiredWorkflowJobsAreNotActionable();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();

@@ -198,10 +198,11 @@ export function reconcileCiRun(state, run) {
   return { state: normalized, processedJobs, brokenJobs, okJobs, ignoredJobs };
 }
 
-export function getActionableFailures(state) {
+export function getActionableFailures(state, jobDefinitions = null) {
   const normalized = normalizeState(state);
   return Object.values(normalized.activeFailures)
     .filter((failure) => failure && typeof failure.jobName === 'string' && typeof failure.firstBadSha === 'string')
+    .filter((failure) => !jobDefinitions || jobDefinitions.has(failure.jobName))
     .sort((a, b) => {
       const runDelta = Number(a.firstBadRunId ?? 0) - Number(b.firstBadRunId ?? 0);
       if (runDelta !== 0) return runDelta;
@@ -495,7 +496,7 @@ export async function main() {
     saveState(state);
   }
 
-  const failures = getActionableFailures(state);
+  const failures = getActionableFailures(state, jobDefinitions);
   const toFile = [];
   let groupsSkippedAlreadyAddressed = 0;
   let groupsDeferredByCap = 0;
