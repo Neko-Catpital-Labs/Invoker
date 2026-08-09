@@ -1,0 +1,74 @@
+name: "Repair PR 8115 build artifacts and stack split"
+description: |
+  Repair live PR #8115, "[Onboarding wizard hardening](3) Remove old bundled-skills copy, wire main.ts".
+
+  Evidence from the failed `build-artifacts` job shows `packages/app/scripts/verify-workspace-imports.cjs`
+  rejects `@invoker/shell/bundled-skills` because it compares the full subpath export against
+  `packages/app/package.json` dependencies instead of checking the owning package `@invoker/shell`.
+
+  The latest PR Body job also reports that #8115's base comparison includes activation-surface files
+  while its body declares Review Unit `routing`. Treat that as a stack-topology/split problem:
+  do not force activation-surface and routing changes into one PR. Preserve one review unit per PR.
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: repair-pr-8115-build-and-stack
+    description: |
+      Repair the live #8115 branch and stack shape.
+      Review claim: #8115 passes `build-artifacts` because the app workspace import verifier accepts declared package dependencies for subpath exports while still resolving the exact imported subpath.
+      Safety invariant: The verifier remains strict: every `@invoker/*` import in `packages/app/src/main.ts` must have its owning package declared and the exact specifier resolvable from the app package root.
+      Slice rationale: The build verifier fix belongs with the #8115 routing slice, but any activation-surface files must stay in a prerequisite PR or already-landed base.
+      Architectural effect: No runtime behavior changes; this updates build-time dependency validation and PR stack topology only.
+      Goal: Make #8115 green for `build-artifacts` and remove the PR Body mixed-review-unit blocker without bundling unrelated review units.
+      Motivation: CI is failing because a package dependency guard does not understand workspace subpath exports, and the PR body validator sees upstream activation-surface files in #8115's current base comparison.
+      Alternative considerations: Changing the PR body to `activation-surface` was rejected because the #8115 commit itself changes `packages/app/src/main.ts` routing. Bundling all files into one commit was rejected because the validator requires one Review Unit per PR.
+      Implementation details: Work directly with PR #8115 (`stack/EdbertChan/pr/onboarding-hardening-skills-mcp/onboarding-wizard-hardening-3-remove-old-bundled--cfdec3c4`) and its prerequisite #8110. First verify live state with `gh pr view 8115 --json headRefName,headRefOid,baseRefName,body` and `gh pr view 8110 --json state,headRefName,headRefOid,mergeCommit,baseRefName`. Fetch the #8115 head and reproduce `node packages/app/scripts/verify-workspace-imports.cjs`. Fix `packages/app/scripts/verify-workspace-imports.cjs` so dependency declarations are checked against `@scope/package` from each `@invoker/*` specifier, while `require.resolve` still checks the original specifier. Add or update `packages/app/src/__tests__/workspace-import-resolution.test.ts` so it executes that verifier and catches subpath-export drift.
+      Files:
+      - packages/app/scripts/verify-workspace-imports.cjs
+      - packages/app/src/__tests__/workspace-import-resolution.test.ts
+      - PR #8115 branch/base/body metadata as needed to preserve one review unit per PR
+      Change types:
+      - packages/app/scripts/verify-workspace-imports.cjs: modify
+      - packages/app/src/__tests__/workspace-import-resolution.test.ts: modify
+      - PR #8115 stack metadata: modify only if PR Body still reports mixed review units after refreshing live base state
+      Acceptance criteria:
+      - `node packages/app/scripts/verify-workspace-imports.cjs` exits 0 on the repaired #8115 branch.
+      - `pnpm --filter @invoker/app test -- src/__tests__/workspace-import-resolution.test.ts` exits 0.
+      - The CI-equivalent `build-artifacts` command from `.github/workflows/ci.yml` exits 0, including the final artifact archive step.
+      - PR Body validation no longer reports `Review Unit "routing" cannot ship with activation-surface files`; if it still does, restack or split #8115 so activation-surface files are in #8110 or a separate prerequisite PR and #8115's diff is routing-only.
+      - Do not push until the repaired branch/stack has deterministic local proof. When pushing live branches, use non-destructive safe-push semantics and preserve the existing PR history as much as possible.
+    prompt: |
+      Assume no prior chat context. Repair live PR #8115 in Neko-Catpital-Labs/Invoker: https://github.com/Neko-Catpital-Labs/Invoker/pull/8115. Files: packages/app/scripts/verify-workspace-imports.cjs and packages/app/src/__tests__/workspace-import-resolution.test.ts. Acceptance criteria: the verifier, focused Vitest repro, CI build-artifacts command from .github/workflows/ci.yml, and PR Body mixed-review-unit validation must all pass.
+
+      Review claim: #8115 passes `build-artifacts` because the app workspace import verifier accepts declared package dependencies for subpath exports while still resolving the exact imported subpath.
+      Safety invariant: The verifier remains strict: every `@invoker/*` import in `packages/app/src/main.ts` must have its owning package declared and the exact specifier resolvable from the app package root.
+      Slice rationale: The build verifier fix belongs with the #8115 routing slice, but any activation-surface files must stay in a prerequisite PR or already-landed base.
+      Architectural effect: No runtime behavior changes; this updates build-time dependency validation and PR stack topology only.
+      Goal: Make #8115 green for `build-artifacts` and remove the PR Body mixed-review-unit blocker without bundling unrelated review units.
+      Motivation: CI is failing because `packages/app/scripts/verify-workspace-imports.cjs` rejects `@invoker/shell/bundled-skills` as a missing dependency even though `packages/app/package.json` correctly declares `@invoker/shell`.
+      Alternative considerations: Do not paper over the failure by adding a fake `@invoker/shell/bundled-skills` dependency. Do not change the PR body to an incorrect review unit. Do not bundle activation-surface and routing files into one PR.
+      Implementation details:
+      1. Checkout PR #8115's head branch `stack/EdbertChan/pr/onboarding-hardening-skills-mcp/onboarding-wizard-hardening-3-remove-old-bundled--cfdec3c4`.
+      2. Confirm the build failure by running `node packages/app/scripts/verify-workspace-imports.cjs`.
+      3. Fix `packages/app/scripts/verify-workspace-imports.cjs` so it checks dependency declarations against the owning package name, e.g. `@invoker/shell` for `@invoker/shell/bundled-skills`, and still resolves the exact imported specifier.
+      4. Add or update `packages/app/src/__tests__/workspace-import-resolution.test.ts` so Vitest executes the build-time verifier and catches this exact regression.
+      5. Run `node packages/app/scripts/verify-workspace-imports.cjs`.
+      6. Run `pnpm --filter @invoker/app test -- src/__tests__/workspace-import-resolution.test.ts`.
+      7. Run the CI-equivalent `build-artifacts` command from `.github/workflows/ci.yml`, including the final artifact archive step.
+      8. Inspect `gh pr view 8115 --json baseRefName,headRefName,headRefOid,body` and `gh pr view 8110 --json state,headRefName,headRefOid,mergeCommit,baseRefName`.
+      9. If PR Body validation still reports that #8115 Review Unit `routing` ships activation-surface files, restack or split the live PRs so #8115's effective diff is routing-only. Prefer retargeting #8115 onto the prerequisite branch if that branch is open and valid. If #8110 is unavailable or incorrectly marked merged while not present on `master`, create or restore a prerequisite activation-surface PR from the #8110 commits, then base #8115 on that prerequisite. Keep PR bodies accurate and validate them before pushing.
+      10. Push only after local proof is green and the stack has one review unit per PR.
+      Files:
+      - packages/app/scripts/verify-workspace-imports.cjs
+      - packages/app/src/__tests__/workspace-import-resolution.test.ts
+      - .github/workflows/ci.yml
+      - PR #8115 and PR #8110 branch/base/body metadata
+      Non-goals: No unrelated refactors, no broad lockfile churn, no manual queue command unless the repaired PR/stack is green and existing process requires requeue.
+      Acceptance criteria:
+      - The verifier command must exit 0.
+      - The focused Vitest command must exit 0 and include the verifier repro.
+      - The CI-equivalent build-artifacts command from `.github/workflows/ci.yml` must exit 0.
+      - The PR Body validator must not report mixed `routing` and `activation-surface` files for #8115.
+    dependencies: []
