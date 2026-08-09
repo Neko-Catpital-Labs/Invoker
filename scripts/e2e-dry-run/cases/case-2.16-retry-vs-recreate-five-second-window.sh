@@ -38,7 +38,7 @@ invoker_e2e_case_216_query_json() {
   local out err status attempt
   err="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-query.err.XXXXXX")"
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
-    if out="$(invoker_e2e_run_headless "$@" --output json 2>"$err")"; then
+    if out="$(INVOKER_E2E_TIMEOUT="${INVOKER_E2E_CASE_216_QUERY_TIMEOUT:-5}" invoker_e2e_run_headless "$@" --output json 2>"$err")"; then
       if printf '%s' "$out" | python3 -m json.tool >/dev/null 2>&1; then
         rm -f "$err"
         printf '%s' "$out"
@@ -135,20 +135,24 @@ bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
-  KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
-  FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
+  sample_elapsed_s="$(($(date +%s) - RECREATE_START_EPOCH))"
+  if [ "$sample_elapsed_s" -gt 5 ]; then
+    break
+  fi
   query_status=0
   SNAP_JSON="$(invoker_e2e_case_216_query_json query tasks --workflow "$WF_ID")" || query_status=$?
   if [ "$query_status" -eq 75 ]; then
-    echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=busy"
+    echo "recreate t+$sample_elapsed_s keep=? fail=? counts=busy"
     sleep 1
     continue
   fi
   if [ "$query_status" -ne 0 ]; then
     exit "$query_status"
   fi
+  TASK_STATUSES="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; keep=sys.argv[1]; fail=sys.argv[2]; data=json.load(sys.stdin); by_id={t.get("id"): t.get("status","") for t in data}; print(by_id.get(keep,"") + "\t" + by_id.get(fail,""))' "$KEEP_TASK_ID" "$FAIL_TASK_ID")"
+  IFS=$'\t' read -r KEEP_ST FAIL_ST <<< "$TASK_STATUSES"
   SNAP_COUNTS="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; from collections import Counter; data=json.load(sys.stdin); c=Counter(t.get("status","") for t in data); print(" ".join(f"{k}:{c[k]}" for k in sorted(c)))')"
-  echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
+  echo "recreate t+$sample_elapsed_s keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
 
   if printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if any(t.get("status") in {"pending","queued"} for t in data) else 1)'; then
     recreate_snapshot_has_reset_state=1
