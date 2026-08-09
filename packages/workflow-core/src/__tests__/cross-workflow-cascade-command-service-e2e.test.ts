@@ -21,7 +21,7 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
           orchestrator.cancelTask(id);
           return;
         }
-        orchestrator.cancelWorkflow(id);
+        orchestrator.cancelWorkflow(id, { detachDependents: false });
       } catch (e) {
         const code = (e as { code?: string })?.code;
         if (code === 'TASK_ALREADY_TERMINAL' || code === 'WORKFLOW_ALREADY_TERMINAL') return;
