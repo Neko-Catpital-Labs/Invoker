@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,13 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const stuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (
+    !stuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !stuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+  ) {
+    fail('launch-dispatch-stuck-lease command must include both stuck-lease specs');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -156,6 +164,22 @@ function testPlanVarsAndDryRunRendering() {
   const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
   if (!vars.marker.includes('job=required-fast / Vitest Workspace')) fail('marker must include job name');
   if (!vars.verify_command.includes('10-vitest-workspace.sh')) fail('verify command must be job-specific');
+
+  const stuckLeaseState = loadEmptyState();
+  reconcileCiRun(stuckLeaseState, fakeRun(401, 'abc123def456abc123def456abc123def456ab2', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 41),
+  ]));
+  const [stuckLeaseFailure] = getActionableFailures(stuckLeaseState);
+  const stuckLeaseVars = buildPlanVars(stuckLeaseFailure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (stuckLeaseVars.verify_command.includes('No local verify command is mapped')) {
+    fail('launch-dispatch-stuck-lease failure must not render the fallback verify command');
+  }
+  if (
+    !stuckLeaseVars.verify_command.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !stuckLeaseVars.verify_command.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+  ) {
+    fail('launch-dispatch-stuck-lease plan vars must verify both stuck-lease specs');
+  }
 
   const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-render-'));
   try {
