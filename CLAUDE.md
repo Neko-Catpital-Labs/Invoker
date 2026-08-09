@@ -13,7 +13,7 @@
 - Every step in a plan MUST be testable. Each implementation step must have a corresponding verification with a concrete, executable command that produces a clear pass/fail exit code (e.g. `pnpm test`, `git diff --name-only`). Do not use AI prompts for test tasks — use commands only.
 - Bug fix plans MUST follow a three-phase approach before any implementation:
   1. **Reproduce** -- Find or write a concrete reproduction case (a failing test or a command that demonstrates the bug). Report back the exact repro steps and observed vs. expected behavior. Do not proceed until the bug is reliably reproducible.
-  2. **Debug and report** -- Investigate and report: (a) the root cause — why the code is in the buggy state, and (b) the test gap — how the bug escaped existing tests (missing coverage, wrong assumptions, untested edge case, etc.).
+  2. **Debug and report** -- Investigate and report: (a) the root cause — why the code is in the buggy state, and (b) the test gap — how the bug escaped existing tests (missing coverage, wrong assumptions, untested edge case, etc.). For a UI or runtime behavior bug, instrument or trace the actual failing behavior first (logging, a MutationObserver, a debugger, a targeted repro) before proposing a fix hypothesis. Do not propose a root cause by pattern-matching to a bug that looks similar; a hypothesis that was not directly observed is a guess and must be stated as one until it is.
   3. **Plan the fix** -- Only after completing steps 1 and 2, create the implementation plan. The plan must include a verification step that re-runs the reproduction case to confirm the fix.
 
 ## Landing PR Stacks
