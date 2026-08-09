@@ -13,9 +13,11 @@ const require = createRequire(import.meta.url);
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(currentDir, '..', '..');
 const mainSourcePath = join(packageRoot, 'src', 'main.ts');
+const guiMutationHandlersPath = join(packageRoot, 'src', 'ipc', 'gui-mutation-handlers.ts');
 const packageJsonPath = join(packageRoot, 'package.json');
 
 const mainSource = readFileSync(mainSourcePath, 'utf-8');
+const guiMutationHandlersSource = readFileSync(guiMutationHandlersPath, 'utf-8');
 const appPackageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as AppPackageJson;
 
 function collectInvokerImports(sourceCode: string): string[] {
@@ -63,5 +65,10 @@ describe('workspace import resolution', () => {
         `Unresolvable workspace dependency: ${specifier}. Run pnpm install to refresh workspace links.`,
       ).not.toThrow();
     }
+  });
+
+  it('keeps bundled skill IPC handlers on the app-local implementation', () => {
+    expect(guiMutationHandlersSource).not.toContain("from '@invoker/cli/bundled-skills'");
+    expect(guiMutationHandlersSource).toContain("from '../bundled-skills.js'");
   });
 });
