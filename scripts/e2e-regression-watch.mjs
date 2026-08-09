@@ -261,20 +261,24 @@ function withBuildPrefix(command, needsBuild) {
   return needsBuild ? `${BUILD_APP_COMMAND} && ${command}` : command;
 }
 
+function playwrightVerifyCommand(label, files) {
+  return [
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(label)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(files ?? '').trim().replace(/\s+/g, ' '))}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+}
+
 function commandForJob(jobId, job, matrix) {
   const needsBuild = jobDownloadsBuildArtifacts(job);
   if (jobId === 'build-artifacts') return BUILD_APP_COMMAND;
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
     const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
-      'env',
-      `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
-      'INVOKER_PLAYWRIGHT_WORKERS=1',
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
-      `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
-      'bash scripts/test-suites/optional/40-playwright-app.sh',
-    ].join(' ');
+    const command = playwrightVerifyCommand(`${labelPrefix}-${matrix.name}`, matrix.files);
     return withBuildPrefix(command, true);
   }
   if (jobId === 'e2e-proof') {
@@ -326,6 +330,22 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function legacyVerifyCommandForJob(jobName) {
+  // This dedicated row was removed after duplicate Playwright ownership broke
+  // shard inventory. Keep historical watcher groups actionable by verifying
+  // the exact specs that row used to run.
+  if (jobName === 'playwright / launch-dispatch-stuck-lease') {
+    return withBuildPrefix(
+      playwrightVerifyCommand(
+        'ci-playwright-launch-dispatch-stuck-lease',
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ),
+      true,
+    );
+  }
+  return '';
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -351,7 +371,9 @@ export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefin
   const definition = jobDefinitions.get(failure.jobName);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
-  const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
+  const verifyCommand = definition?.verifyCommand?.trim()
+    || legacyVerifyCommandForJob(failure.jobName)
+    || fallbackVerifyCommand(failure.jobName);
   return {
     repo_url: repoUrl,
     base_branch: 'master',
