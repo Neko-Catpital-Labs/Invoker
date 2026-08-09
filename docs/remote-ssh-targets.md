@@ -83,9 +83,9 @@ Remote SSH targets execute workflow tasks only. Long-lived operator automation b
 For the supported PR-maintenance setup, enable `prMaintenance` in `~/.invoker/config.json` on the owner host and run the surviving built-in worker kinds from the Workers tab or headless CLI:
 
 ```bash
-./run.sh --headless worker status --output text
-./run.sh --headless worker pr-admin-bypass-land
-./run.sh --headless worker pr-orphan-repair
+invoker-ui --headless worker status --output text
+invoker-ui --headless worker pr-admin-bypass-land
+invoker-ui --headless worker pr-orphan-repair
 ```
 
 Do not install separate cron jobs on SSH targets for these maintenance paths. The workers share the owner process, owner database, and per-kind worker locks; SSH targets stay disposable execution capacity.
@@ -178,7 +178,7 @@ SSH member capacity is decided by durable host-keyed leases in `execution_resour
 - **Claim-at-select:** the runner acquires the lease while selecting a pool member, before start. Dispatch renews an already-held lease instead of claiming again.
 - **In-memory maps:** `activeExecutions` / `pendingPoolSelections` still drive kill, heartbeat, and start plumbing, but they do **not** contribute to SSH `poolMemberLoad`. Worktree pool members still use in-memory load.
 - **Reclaim:** orphan-executor reclaim remains useful cleanup; it is not the source of truth for “is this host full?”.
-- **Inspect:** with the GUI/owner up, `./run.sh --headless query execution-leases [--output json|text|label]` lists live holders (`resourceKey`, `poolId`, `poolMemberId`, `taskId`, `holderId`, expiry).
+- **Inspect:** with the GUI/owner up, `invoker-ui --headless query execution-leases [--output json|text|label]` lists live holders (`resourceKey`, `poolId`, `poolMemberId`, `taskId`, `holderId`, expiry).
 - **Regression gate:** `bash scripts/repro/repro-ssh-lease-capacity-battery.sh --gate` (orphan ghosts, cross-pool exclusivity, churn refill, lease/occupancy parity).
 
 ## Member Health & Circuit Breaker
