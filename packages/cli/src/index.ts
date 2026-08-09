@@ -995,7 +995,9 @@ function runWorkerTogglesCommand(args: string[]): number {
   process.stdout.write('Worker toggles\n');
   for (const spec of ONBOARDING_WORKER_TOGGLES) {
     const value = readWorkerToggleValue(config, spec);
-    process.stdout.write(`  ${spec.label}: ${value === undefined ? 'off (default)' : (value ? 'on' : 'off')} — ${spec.description}\n`);
+    const enabled = value ?? spec.defaultEnabled ?? false;
+    const state = enabled ? 'on' : 'off';
+    process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
   }
   return 0;
 }

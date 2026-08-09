@@ -186,9 +186,10 @@ describe('runSetup', () => {
       process.env.HOME = home;
       delete process.env.INVOKER_MCP_CONFIG_PATH;
 
+      const answers = ['n', 'n', 'n', 'n', 'n', 'y'];
       const code = await runSetup([], {
         print: (line) => lines.push(line),
-        prompt: async () => 'n',
+        prompt: async () => answers.shift() ?? 'n',
       }, readySetupDeps());
 
       const mcpPath = join(home, '.invoker', 'mcp.json');
@@ -277,7 +278,7 @@ describe('runSetup', () => {
       // Prompt order: Slack, machines, then the 4 worker toggles in
       // ONBOARDING_WORKER_TOGGLES order (PR maintenance, e2e auto-fix,
       // auto-approve, disk-headroom cleanup).
-      const answers = ['n', 'n', 'n', 'y', 'n', 'n'];
+      const answers = ['n', 'n', 'n', 'y', 'n', 'y'];
       const code = await runSetup([], {
         print: (line) => lines.push(line),
         prompt: async () => answers.shift() ?? 'n',

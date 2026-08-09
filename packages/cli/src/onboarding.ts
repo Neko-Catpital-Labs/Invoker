@@ -1081,11 +1081,6 @@ async function runMachinesSetupJson(io: SetupIO, options: SetupDeps): Promise<nu
   return results.every((result) => result.written) ? 0 : 1;
 }
 
-/**
- * Every toggle defaults to "leave unset" (matches ONBOARDING_WORKER_TOGGLES' own
- * documented off-by-default worker behavior) so mashing Enter through this step,
- * or running it under --yes, reproduces today's default config exactly.
- */
 async function runWorkerTogglesInteractive(io: SetupIO, assumeYes: boolean): Promise<void> {
   const configPath = defaultConfigPath();
   let config = readInvokerConfigFile(configPath);
@@ -1094,8 +1089,8 @@ async function runWorkerTogglesInteractive(io: SetupIO, assumeYes: boolean): Pro
 
   for (const spec of ONBOARDING_WORKER_TOGGLES) {
     io.print(`\n${spec.label}: ${spec.description}`);
-    const enable = assumeYes ? false : await promptYes(io, `Enable ${spec.label}? [y/N] `);
-    const current = readWorkerToggleValue(config, spec) ?? false;
+    const current = readWorkerToggleValue(config, spec) ?? spec.defaultEnabled ?? false;
+    const enable = assumeYes ? current : await promptYes(io, `Enable ${spec.label}? [y/N] `);
     if (enable !== current) {
       config = applyWorkerToggle(config, spec, enable);
       changed = true;
