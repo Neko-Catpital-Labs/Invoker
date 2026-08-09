@@ -88,7 +88,14 @@ export function resolveHeadlessOwnerLaunchSpec(
 
   const invokerUi = which('invoker-ui');
   if (invokerUi) {
-    return { command: invokerUi, args: ['--headless', 'owner-serve'] };
+    return {
+      command: invokerUi,
+      args: [
+        ...(platform === 'linux' ? LINUX_HEADLESS_ELECTRON_FLAGS : []),
+        '--headless',
+        'owner-serve',
+      ],
+    };
   }
 
   const electronCjs = join(options.repoRoot, 'scripts', 'electron.cjs');
