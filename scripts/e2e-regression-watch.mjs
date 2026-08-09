@@ -261,21 +261,29 @@ function withBuildPrefix(command, needsBuild) {
   return needsBuild ? `${BUILD_APP_COMMAND} && ${command}` : command;
 }
 
+function normalizePlaywrightFileList(files) {
+  if (Array.isArray(files)) return files.map((file) => String(file).trim()).filter(Boolean);
+  return String(files ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+function playwrightCommand(jobId, shardName, files) {
+  const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
+  return [
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${shardName}`)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(normalizePlaywrightFileList(files).join(' '))}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+}
+
 function commandForJob(jobId, job, matrix) {
   const needsBuild = jobDownloadsBuildArtifacts(job);
   if (jobId === 'build-artifacts') return BUILD_APP_COMMAND;
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
-    const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
-      'env',
-      `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
-      'INVOKER_PLAYWRIGHT_WORKERS=1',
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
-      `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
-      'bash scripts/test-suites/optional/40-playwright-app.sh',
-    ].join(' ');
-    return withBuildPrefix(command, true);
+    return withBuildPrefix(playwrightCommand(jobId, matrix.name, matrix.files), true);
   }
   if (jobId === 'e2e-proof') {
     const command = [
@@ -343,12 +351,58 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
   return definitions;
 }
 
+function playwrightJobParts(jobName) {
+  const match = String(jobName).match(/^(playwright|playwright-nightly-perf) \/ (.+)$/);
+  if (!match) return null;
+  return { jobId: match[1], shardName: match[2] };
+}
+
+function specStem(file) {
+  const basename = String(file).split('/').pop() ?? '';
+  return basename.replace(/\.spec\.ts$/, '');
+}
+
+function semanticPlaywrightFiles(jobName, jobDefinitions) {
+  const parts = playwrightJobParts(jobName);
+  if (!parts) return [];
+
+  const files = [];
+  const seen = new Set();
+  for (const definition of jobDefinitions.values()) {
+    if (definition?.jobId !== parts.jobId) continue;
+    for (const file of normalizePlaywrightFileList(definition?.matrix?.files)) {
+      const stem = specStem(file);
+      if (stem !== parts.shardName && !stem.startsWith(`${parts.shardName}-`)) continue;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      files.push(file);
+    }
+  }
+  return files;
+}
+
+export function resolveCiJobDefinition(jobName, jobDefinitions = buildCiJobDefinitions()) {
+  const exact = jobDefinitions.get(jobName);
+  if (exact) return exact;
+
+  const parts = playwrightJobParts(jobName);
+  if (!parts) return null;
+  const files = semanticPlaywrightFiles(jobName, jobDefinitions);
+  if (files.length === 0) return null;
+  return {
+    jobId: parts.jobId,
+    jobName,
+    matrix: { name: parts.shardName, files: files.join(' ') },
+    verifyCommand: withBuildPrefix(playwrightCommand(parts.jobId, parts.shardName, files), true),
+  };
+}
+
 export function fallbackVerifyCommand(jobName) {
   return `bash -lc ${shellSingleQuote(`echo "No local verify command is mapped for CI job: ${jobName}" >&2; exit 1`)}`;
 }
 
 export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefinitions()) {
-  const definition = jobDefinitions.get(failure.jobName);
+  const definition = resolveCiJobDefinition(failure.jobName, jobDefinitions);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
   const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);

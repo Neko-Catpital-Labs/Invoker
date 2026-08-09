@@ -18,6 +18,7 @@ import {
   liveQueryHasNonTerminalWork,
   loadEmptyState,
   reconcileCiRun,
+  resolveCiJobDefinition,
 } from '../e2e-regression-watch.mjs';
 
 function fail(message) {
@@ -146,6 +147,47 @@ function testWorkflowCommandMapping() {
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
 
+function testSemanticPlaywrightJobMapping() {
+  const defs = new Map([
+    ['playwright / 9-of-9', {
+      jobId: 'playwright',
+      jobName: 'playwright / 9-of-9',
+      matrix: {
+        name: '9-of-9',
+        files: [
+          'e2e/gui-owner-auto-bootstrap.spec.ts',
+          'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+          'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+          'e2e/workers-surface.spec.ts',
+        ].join(' '),
+      },
+      verifyCommand: 'existing current shard command',
+    }],
+  ]);
+
+  const definition = resolveCiJobDefinition('playwright / launch-dispatch-stuck-lease', defs);
+  if (!definition) fail('semantic Playwright job must map through matching spec stems');
+  if (definition.verifyCommand.includes('No local verify command is mapped')) {
+    fail('semantic Playwright job must not use the unmapped fallback command');
+  }
+  if (!definition.verifyCommand.includes('INVOKER_PLAYWRIGHT_RUN_LABEL=') || !definition.verifyCommand.includes('ci-playwright-launch-dispatch-stuck-lease')) {
+    fail('semantic Playwright command must keep a job-specific run label');
+  }
+  if (!definition.verifyCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('semantic Playwright command must include the cap repro spec');
+  }
+  if (!definition.verifyCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('semantic Playwright command must include the storm repro spec');
+  }
+  if (definition.verifyCommand.includes('cap.spec.ts,e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('semantic Playwright command must keep files whitespace-separated');
+  }
+  if (definition.verifyCommand.includes('e2e/gui-owner-auto-bootstrap.spec.ts')) {
+    fail('semantic Playwright command must not expand to unrelated files in the current shard');
+  }
+  console.log('[repro-e2e-regression-watch] semantic Playwright job mapping: PASS');
+}
+
 function testPlanVarsAndDryRunRendering() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(400, 'abc123def456abc123def456abc123def456ab1', [
@@ -228,6 +270,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testSemanticPlaywrightJobMapping();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
