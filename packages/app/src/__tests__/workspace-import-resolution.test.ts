@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -54,6 +55,15 @@ describe('workspace import resolution', () => {
       const packageName = packageNameOf(specifier);
       expect(declaredDependencies.has(packageName), `Missing dependency declaration for ${packageName} (imported as ${specifier})`).toBe(true);
     }
+  });
+
+  it('accepts package declarations for subpath imports in the build verifier', () => {
+    expect(() => {
+      execFileSync(process.execPath, [join(packageRoot, 'scripts', 'verify-workspace-imports.cjs')], {
+        cwd: packageRoot,
+        stdio: 'pipe',
+      });
+    }).not.toThrow();
   });
 
   it('resolves every @invoker/* import from package root', () => {

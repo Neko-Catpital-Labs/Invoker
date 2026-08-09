@@ -26,9 +26,14 @@ for (const match of mainSource.matchAll(invokerImportPattern)) {
   }
 }
 
+function packageNameOf(specifier) {
+  return specifier.split('/').slice(0, 2).join('/');
+}
+
 for (const specifier of imports) {
-  if (!declaredDependencies.has(specifier)) {
-    throw new Error(`Missing package.json dependency for ${specifier} imported in src/main.ts`);
+  const packageName = packageNameOf(specifier);
+  if (!declaredDependencies.has(packageName)) {
+    throw new Error(`Missing package.json dependency for ${packageName} imported in src/main.ts as ${specifier}`);
   }
 
   try {
