@@ -215,6 +215,7 @@ import {
 } from './global-topup.js';
 import type { WebBridgeTerminalEvents } from './web/web-bridge-server.js';
 import { preserveCrashedInFlightTasks } from './crash-preserved-tasks.js';
+import { executeStandaloneRetryTaskMutation } from './standalone-retry-task-dispatcher.js';
 
 
 import {
@@ -1757,12 +1758,12 @@ function startHeadlessMode(): void {
         }
         if (!workflowMutationDispatcher.has(AUTO_FIX_BARE_RETRY_CHANNEL)) {
           workflowMutationDispatcher.set(AUTO_FIX_BARE_RETRY_CHANNEL, async (...retryArgs: unknown[]) => {
-            const taskId = String(retryArgs[0]);
-            await runHeadless(['retry-task', taskId], {
-              ...headlessDeps,
-              waitForApproval: false,
-              noTrack: true,
-              signal: activeMutationContext?.signal,
+            await executeStandaloneRetryTaskMutation(retryArgs[0], {
+              commandService,
+              orchestrator,
+              taskExecutor: createStandaloneTaskExecutor(),
+              logger,
+              context: 'standalone.retry-task',
               mutationTiming: activeMutationContext?.mutationTiming,
             });
             return { ok: true };
@@ -2918,6 +2919,17 @@ startMainProcessBootstrap({
       workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
         executeStartReady(requestArg as StartReadyRequest | undefined),
       );
+      workflowMutationDispatcher.set(AUTO_FIX_BARE_RETRY_CHANNEL, async (...retryArgs: unknown[]) => {
+        await executeStandaloneRetryTaskMutation(retryArgs[0], {
+          commandService,
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'owner.retry-task',
+          mutationTiming: activeMutationContext?.mutationTiming,
+        });
+        return { ok: true };
+      });
       workflowMutationDispatcher.set('api:approve-task', async (taskIdArg: unknown) => {
         await mutationActions.performSharedApproveTask(String(taskIdArg), 'api');
       });
