@@ -131,6 +131,7 @@ export function makeOrchestrator(persistence: OrchestratorPersistence): Orchestr
     persistence,
     messageBus: new InMemoryBus(),
     maxConcurrency: 8,
+    resolveRepoDefaultBranch: () => 'master',
   });
 }
 
