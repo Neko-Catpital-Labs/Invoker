@@ -9,6 +9,11 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "require": "./src/index.ts"
+    },
+    "./bundled-skills": {
+      "types": "./src/bundled-skills.ts",
+      "import": "./src/bundled-skills.ts",
+      "require": "./src/bundled-skills.ts"
     }
   },
   "scripts": {
@@ -16,6 +21,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@invoker/contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",

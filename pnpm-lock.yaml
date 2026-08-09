@@ -65,6 +65,9 @@ importers:
       '@invoker/runtime-service':
         specifier: workspace:*
         version: link:../runtime-service
+      '@invoker/shell':
+        specifier: workspace:*
+        version: link:../shell
       '@invoker/surfaces':
         specifier: workspace:*
         version: link:../surfaces
@@ -124,6 +127,9 @@ importers:
       '@invoker/execution-engine':
         specifier: workspace:*
         version: link:../execution-engine
+      '@invoker/shell':
+        specifier: workspace:*
+        version: link:../shell
       '@invoker/transport':
         specifier: workspace:*
         version: link:../transport
@@ -390,6 +396,10 @@ importers:
         version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
 
   packages/shell:
+    dependencies:
+      '@invoker/contracts':
+        specifier: workspace:*
+        version: link:../contracts
     devDependencies:
       '@types/node':
         specifier: ^25.3.3

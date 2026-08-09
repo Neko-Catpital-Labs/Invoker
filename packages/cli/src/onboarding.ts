@@ -22,6 +22,7 @@ import {
   updateInvokerConfigFile,
   writeInvokerConfigFile,
 } from '@invoker/contracts';
+import { commandExists } from '@invoker/shell';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
 import { installBundledSkills } from './bundled-skills.js';
@@ -68,10 +69,6 @@ function resolveExperimentalPlannerMcpPath(targetPath: string | undefined, confi
 }
 
 // ── Tool probing & install ───────────────────────────────────
-
-export function commandExists(command: string): boolean {
-  return spawnSync('sh', ['-c', `command -v ${command} >/dev/null 2>&1`], { stdio: 'ignore' }).status === 0;
-}
 
 const INSTALL_SPECS: Record<string, { brew?: string[]; apt?: string[]; npm?: string[] }> = {
   git: { brew: ['git'], apt: ['git'] },

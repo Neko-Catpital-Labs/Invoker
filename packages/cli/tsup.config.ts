@@ -13,6 +13,7 @@ export default defineConfig({
     '@invoker/contracts',
     '@invoker/data-store',
     '@invoker/execution-engine',
+    '@invoker/shell',
     '@invoker/transport',
     '@invoker/workflow-core',
     '@invoker/workflow-graph',
