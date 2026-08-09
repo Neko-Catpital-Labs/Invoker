@@ -780,7 +780,7 @@ export async function cleanupLocalInvokerHome(
     if (hadNoAsar) {
       processWithNoAsar.noAsar = previousNoAsar;
     } else {
-      delete processWithNoAsar.noAsar;
+      Reflect.deleteProperty(processWithNoAsar, 'noAsar');
     }
   }
 }
@@ -866,7 +866,7 @@ export async function cleanupRemoteInvokerHome(opts: {
         `[disk-headroom-cleanup] remote preservation lookup failed ${targetKey}: ${detail}`,
         { module: 'disk-headroom', targetKey },
       );
-      return { targetKey, ok: false, reason: 'cleanup-error', detail };
+      return { targetKey, ok: false, reason: 'cleanup-error', detail, protectedSkipCount: 0, protectedSkipBytes: 0 };
     }
   }
 
