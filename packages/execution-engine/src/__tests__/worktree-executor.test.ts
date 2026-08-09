@@ -1157,6 +1157,46 @@ describe('WorktreeExecutor', () => {
 
       await expect(executor.start(request)).rejects.toThrow();
     });
+
+    it('BUG: leaks the acquired worktree slot when the upstream merge fails for a non-conflict reason', async () => {
+      setupSpawnMock();
+      const pool = mockPool(executor);
+
+      vi.mocked((BaseExecutor.prototype as any).runBash).mockImplementation(
+        async (script: string) => {
+          if (script.includes('PRESERVED=')) {
+            return 'PRESERVED=0\nBASE_SHA=abc123\n';
+          }
+          if (script.includes('Invoker: merge')) {
+            const err = new Error('bash exited with code 30: missing ref');
+            (err as any).exitCode = 30;
+            (err as any).stderr = 'MISSING_REF=experiment/nonexistent-branch';
+            throw err;
+          }
+          return '';
+        },
+      );
+
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          upstreamBranches: ['experiment/dep-parent', 'experiment/nonexistent-branch'],
+          upstreamBase: {
+            branch: 'experiment/dep-parent',
+            commitHash: '5555555555555555555555555555555555555555',
+          },
+        },
+      });
+
+      await expect(executor.start(request)).rejects.toThrow();
+
+      // start() throws here before any WorktreeEntry is registered, so the
+      // acquired worktree slot is never freed — it leaks for the life of the
+      // process. This documents the CURRENT (buggy) behavior; the next PR in
+      // this stack fixes it and flips this assertion.
+      const acquired = await pool.acquireWorktree.mock.results[0]!.value;
+      expect(acquired.softRelease).not.toHaveBeenCalled();
+    });
   });
 
   describe('agent registry validation', () => {
