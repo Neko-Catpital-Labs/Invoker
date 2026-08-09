@@ -54,6 +54,20 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_CI_JOB_ALIASES = [
+  {
+    legacyJobName: 'playwright / launch-dispatch-stuck-lease',
+    currentJobName: 'playwright / 9-of-9',
+    jobId: 'playwright',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -110,6 +124,14 @@ export function classifyJobConclusion(job) {
   return 'ignored';
 }
 
+function clearedJobNamesForSuccess(jobName) {
+  const cleared = new Set([jobName]);
+  for (const alias of LEGACY_CI_JOB_ALIASES) {
+    if (alias.currentJobName === jobName) cleared.add(alias.legacyJobName);
+  }
+  return cleared;
+}
+
 export function reconcileCiRun(state, run) {
   const normalized = normalizeState(state);
   const sha = String(run.headSha ?? '').trim();
@@ -152,7 +174,9 @@ export function reconcileCiRun(state, run) {
     if (classification === 'ok') {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
-      delete normalized.activeFailures[jobName];
+      for (const clearedJobName of clearedJobNamesForSuccess(jobName)) {
+        delete normalized.activeFailures[clearedJobName];
+      }
       continue;
     }
 
@@ -339,6 +363,16 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         verifyCommand: commandForJob(jobId, job, matrix),
       });
     }
+  }
+  for (const alias of LEGACY_CI_JOB_ALIASES) {
+    if (definitions.has(alias.legacyJobName)) continue;
+    const job = workflow.jobs?.[alias.jobId];
+    definitions.set(alias.legacyJobName, {
+      jobId: alias.jobId,
+      jobName: alias.legacyJobName,
+      matrix: { ...alias.matrix },
+      verifyCommand: commandForJob(alias.jobId, job, alias.matrix),
+    });
   }
   return definitions;
 }
