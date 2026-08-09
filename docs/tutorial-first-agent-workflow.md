@@ -29,7 +29,7 @@ bash scripts/setup-agent-skills.sh
 pnpm run build
 ```
 
-For your own changes, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+For your own changes, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 
 Make sure at least one supported agent CLI is installed and authenticated:
 
@@ -69,7 +69,7 @@ You should see a failing `node --test` run. That failure is the work the agent w
 Start the desktop app from the Invoker repo root:
 
 ```bash
-./run.sh
+invoker-ui
 ```
 
 In the left rail, click `Open`.
@@ -125,7 +125,7 @@ If the agent task fails because the agent CLI is missing or unauthenticated, ins
 
 If `verify` fails, select the failed task and read the inspector error. You can right-click the workflow and choose `Retry Workflow`, or right-click an individual failed task and choose a task action such as retry or open terminal.
 
-If the desktop app cannot find `npm`, `node`, `git`, `codex`, or `claude`, quit it and restart with `./run.sh` from your terminal.
+If the desktop app cannot find `npm`, `node`, `git`, `codex`, or `claude`, quit it and restart with `invoker-ui` from your terminal.
 
 ## Use the same pattern on your own repo
 
