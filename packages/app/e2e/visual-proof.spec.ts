@@ -1544,12 +1544,14 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(800);
 
     const miniDagStillVisible = await miniDag.isVisible().catch(() => false);
+    const afterClick = await waitForStableViewportTransform(page, mainViewport);
 
     await captureScreenshot(page, 'docked-15-workflows-after-bg-click');
 
     console.log(`[dag-full-graph-bg-click-noop] mini-DAG visible after select=true, after background click=${miniDagStillVisible}`);
-    console.log(`[dag-full-graph-bg-click-noop] main graph viewport: initial="${beforeSelect}" after-select="${afterSelect}"`);
+    console.log(`[dag-full-graph-bg-click-noop] main graph viewport: initial="${beforeSelect}" after-select="${afterSelect}" after-bg-click="${afterClick}"`);
     expect(miniDagStillVisible, 'mini-DAG panel should still be visible after clicking empty background').toBe(true);
+    expect(afterClick, 'camera viewport should stay exactly where it was after clicking empty background').toBe(afterSelect);
   });
 
   test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {
