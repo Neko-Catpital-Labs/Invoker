@@ -906,7 +906,7 @@ describe('WorktreeExecutor', () => {
         expect.any(String),
         expect.any(String),
         'action-1',
-        { forceFresh: true },
+        { forceFresh: true, leaseHolderId: 'action-1' },
       );
 
       taskProcess.emit('close', 0, null);

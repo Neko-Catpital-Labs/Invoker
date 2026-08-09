@@ -719,6 +719,7 @@ export function selectExecutor(
         agentRegistry: host.executionAgentRegistry,
         provisionCommand: selectedWorktreeTarget?.provisionCommand,
         repoProvisionCommands,
+        leasePersistence: host.persistence,
       });
       host.executorRegistry.register('worktree', worktree);
       host.worktreeExecutorCache.set(configFingerprint, worktree);
