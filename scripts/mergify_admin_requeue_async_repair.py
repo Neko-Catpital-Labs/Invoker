@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -303,7 +305,16 @@ def submit_async_repair_plan(plan: AsyncRepairPlan) -> None:
         handle.write(plan.yaml_text)
         plan_path = Path(handle.name)
     try:
-        completed = run_headless('headless_mutation --no-track run "$2"', str(plan_path))
+        submit_cmd = os.environ.get("INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD")
+        if submit_cmd:
+            completed = subprocess.run(
+                [submit_cmd, str(plan_path), plan.plan_name],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        else:
+            completed = run_headless('headless_mutation --no-track run "$2"', str(plan_path))
         if completed.returncode != 0:
             raise RuntimeError(
                 f"submit_async_repair_plan failed for {plan.plan_name}: "

@@ -682,6 +682,28 @@ class PlanStackActions(PlannerTestCase):
         actions = p.plan_stack_actions(stack, REQUIRED, self._ledger(), now_epoch=0, open_pr_numbers_by_head={})
         self.assertEqual([(action.kind, action.key) for action in actions], [("repair_check", "build")])
 
+    def test_stale_root_waits_on_in_flight_failed_check_repair_before_retarget(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    labels=frozenset({"admin-bypass"}),
+                    checks={"build": check("failure")},
+                ),
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
+        )
+        ledger = self._ledger()
+        ledger.record("repair-check", 5885, HEAD, "build", epoch=NOW - 100)
+        actions = p.plan_stack_actions(stack, REQUIRED, ledger, now_epoch=NOW, open_pr_numbers_by_head={})
+        self.assertEqual(actions, ())
+
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
         # Two prior requeue attempts on this head+key -> the third is capped.

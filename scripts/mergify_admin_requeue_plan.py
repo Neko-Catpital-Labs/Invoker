@@ -814,6 +814,27 @@ def plan_bot_thread_repairs(
     return None
 
 
+def has_active_repair_for_current_blocker(facts: StackFacts, ledger: Ledger, now: int) -> bool:
+    for pr in facts.stack.prs:
+        latest = pr.latest_mergify
+        if latest and latest.state == "dequeued" and latest.head_sha == pr.head_ref_oid:
+            for check_name in latest.failing_checks:
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", check_name, now):
+                    return True
+        for blocker in facts.blockers_by_pr[pr.number]:
+            if blocker.kind == "conflict":
+                key = f"conflict:{pr.number}"
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
+                    return True
+            elif blocker.kind == "failed_check":
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
+                    return True
+            elif blocker.kind == "bot_review_thread":
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
+                    return True
+    return False
+
+
 def plan_hard_blockers(
     facts: StackFacts,
     ledger: Ledger,
@@ -956,6 +977,8 @@ def plan_actions_from_facts(
     action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, now)
     if action is not None:
         return (action,)
+    if has_active_repair_for_current_blocker(facts, ledger, now):
+        return ()
     action = plan_hard_blockers(facts, ledger)
     if action is not None:
         return (action,)
