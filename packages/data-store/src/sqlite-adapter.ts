@@ -305,6 +305,16 @@ export function isDatabaseCorruptionError(err: unknown): boolean {
   return message.includes('malformed') || message.includes('not a database');
 }
 
+export function isCorruptionRecoveryEligible(
+  err: unknown,
+  context: { isFile: boolean; readOnly: boolean; dbPathExists: boolean },
+): boolean {
+  return context.isFile
+    && !context.readOnly
+    && context.dbPathExists
+    && isDatabaseCorruptionError(err);
+}
+
 /**
  * Metadata attached to an adapter that opened via the corruption-recovery
  * branch of {@link SQLiteAdapter.create}. `restoredFromSnapshot` is the source
@@ -821,7 +831,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (isFile && requestWritable && options?.ownerCapability) writeOwnerMarker(dbPath);
       return new SQLiteAdapter(db, isFile ? dbPath : null, options);
     } catch (err) {
-      if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
+      if (!isCorruptionRecoveryEligible(err, {
+        isFile,
+        readOnly: options?.readOnly === true,
+        dbPathExists: existsSync(dbPath),
+      })) {
         throw err;
       }
       const detectedAt = new Date().toISOString();
