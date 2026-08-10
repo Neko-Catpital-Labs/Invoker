@@ -239,7 +239,8 @@ When those hardening workflows target Invoker itself, the branch/PR publication 
 
 - File/function-heavy plans: see playbook `playbooks/verify-then-build.md`
 - Schema and required fields: `references/schema.md`
-- Task decomposition and dependency patterns: `references/task-patterns.md`
+- Task decomposition and dependency patterns (code-change plans): `references/task-patterns.md`
+- Structured entity research plans (any plan whose deliverable is a fact about a real-world entity — a stock's filing quirk, a legal case's status, a product spec — not a code change): `references/entity-research-patterns.md`. Do not use `task-patterns.md`'s handoff/task-split conventions for these; use this file instead.
 - Review compression: `../review-compression/SKILL.md`
 - End-to-end examples: `references/examples.md`
 - Efficacy / soft scoring: `references/efficacy-rubric.md`
