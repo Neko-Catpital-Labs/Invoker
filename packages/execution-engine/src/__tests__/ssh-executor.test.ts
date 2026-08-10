@@ -1125,6 +1125,8 @@ describe('SshExecutor entry lifecycle', () => {
     expect(script).toContain('load_remote_profile_path');
     expect(script).toContain('"$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"');
     expect(script.indexOf('load_remote_profile_path')).toBeLessThan(script.indexOf('set -euo pipefail'));
+    expect(script).toContain('grep()');
+    expect(script).toContain('command grep -F -q -- "$fixed_pattern" "$@"');
 
     sshProcess.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
