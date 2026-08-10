@@ -490,6 +490,20 @@ class NativeDatabaseCompat {
   }
 }
 
+/** Prepares `sql` against `db`, runs `run` against the statement, and always frees it. */
+export function runWithFreedStatement<S extends { free(): void }, T>(
+  db: { prepare(sql: string): S },
+  sql: string,
+  run: (stmt: S) => T,
+): T {
+  const stmt = db.prepare(sql);
+  try {
+    return run(stmt);
+  } finally {
+    stmt.free();
+  }
+}
+
 export interface WorkflowMutationIntent {
   id: number;
   workflowId: string;
@@ -957,27 +971,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
     const startedAt = performance.now();
-    const stmt = this.db.prepare(sql);
-    try {
+    return runWithFreedStatement(this.db, sql, (stmt) => {
       const row = stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
       this.noteSlowQuery(startedAt, sql, row === undefined ? 0 : 1);
       return row;
-    } finally {
-      stmt.free();
-    }
+    });
   }
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
     const startedAt = performance.now();
-    const stmt = this.db.prepare(sql);
-    try {
+    return runWithFreedStatement(this.db, sql, (stmt) => {
       const rows = stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
       this.noteSlowQuery(startedAt, sql, rows.length);
       return rows;
-    } finally {
-      stmt.free();
-    }
+    });
   }
 
   private ensureWritable(): void {
