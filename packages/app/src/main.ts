@@ -94,7 +94,6 @@ import {
   createWorkerRegistry,
   GitHubMergeGateProvider,
   PR_STATUS_WORKER_KIND,
-  E2E_AUTOFIX_WORKER_KIND,
   registerBuiltinAgents,
   registerBuiltinWorkers,
   parseSpawnRepairWorkflowMutationArgs,
@@ -1936,9 +1935,7 @@ function startHeadlessMode(): void {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
           ),
-          autoStartKinds: invokerConfig.e2eAutoFixEnabled
-            ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]
-            : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
@@ -3075,9 +3072,7 @@ startMainProcessBootstrap({
             await requireTaskExecutor().checkMergeGateStatuses();
           },
         ),
-        autoStartKinds: invokerConfig.e2eAutoFixEnabled
-          ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]
-          : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+        autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
