@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter, hasLiveWritableOwner } from '../sqlite-adapter.js';
@@ -85,11 +85,43 @@ describe('SQLiteAdapter exclusiveLocking', () => {
       owner.saveWorkflow(wf);
       expect(existsSync(`${dbPath}-wal`)).toBe(true);
       expect(existsSync(`${dbPath}-shm`)).toBe(false);
+      // The read-only rejection below is driven by hasLiveWritableOwner; pin its
+      // verdict here so the two cannot silently diverge in this sidecar shape.
+      expect(hasLiveWritableOwner(dbPath)).toBe(true);
       await expect(
         SQLiteAdapter.create(dbPath, { readOnly: true }),
       ).rejects.toThrow(/exclusive locking.*read-only viewers/i);
     } finally {
       owner.close();
+    }
+  });
+
+  it('allows a read-only open when a stale owner marker survives in the exclusive-locking sidecar shape', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true, exclusiveLocking: true });
+    owner.saveWorkflow(wf);
+    expect(existsSync(`${dbPath}-wal`)).toBe(true);
+    expect(existsSync(`${dbPath}-shm`)).toBe(false);
+
+    // Snapshot the live -wal bytes before the owner cleanly shuts down (which
+    // would checkpoint it away), then restore them after close to recreate the
+    // filesystem state a crashed owner would leave behind: -wal present with no
+    // -shm, and a stale marker naming a PID that is no longer alive.
+    const walSnapshot = readFileSync(`${dbPath}-wal`);
+    owner.close();
+    writeFileSync(`${dbPath}-wal`, walSnapshot);
+    // PID 2^22 is above every configured pid_max, so it can never be alive.
+    writeFileSync(`${dbPath}.owner`, '4194304', 'utf-8');
+
+    // Both the exported guard and the read-only open it gates must agree that
+    // no live writable owner remains in this sidecar shape.
+    expect(hasLiveWritableOwner(dbPath)).toBe(false);
+    const survivor = await SQLiteAdapter.create(dbPath, { readOnly: true });
+    try {
+      expect(survivor.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
+    } finally {
+      survivor.close();
     }
   });
 
