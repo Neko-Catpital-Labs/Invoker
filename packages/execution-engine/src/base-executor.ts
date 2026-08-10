@@ -22,6 +22,43 @@ const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
 const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
 const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
 
+// Retry the common copied-from-Markdown form `\`` as a literal backtick search
+// only after normal `grep -q` reports no match.
+const COMMAND_PAYLOAD_SHELL_PRELUDE = `grep() {
+  local had_errexit=0
+  case "$-" in
+    *e*) had_errexit=1; set +e ;;
+  esac
+  command grep "$@"
+  local status=$?
+  if [ "$had_errexit" -eq 1 ]; then
+    set -e
+  fi
+  if [ "$status" -ne 1 ]; then
+    return "$status"
+  fi
+  if [ "$#" -ge 2 ] && [ "$1" = "-q" ]; then
+    local pattern="$2"
+    local backtick
+    printf -v backtick '\\140'
+    local fixed_pattern="\${pattern//\\\\$backtick/$backtick}"
+    if [ "$fixed_pattern" != "$pattern" ]; then
+      shift 2
+      if [ "$had_errexit" -eq 1 ]; then
+        set +e
+      fi
+      command grep -F -q -- "$fixed_pattern" "$@"
+      status=$?
+      if [ "$had_errexit" -eq 1 ]; then
+        set -e
+      fi
+      return "$status"
+    fi
+  fi
+  return "$status"
+}
+`;
+
 /**
  * Canonicalizes a repoUrl for `repoProvisionCommands` lookups so
  * `git@github.com:org/repo.git`, `https://github.com/org/repo.git`, and
@@ -1177,6 +1214,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
   // ── Shared command building ─────────────────────────────
 
+  protected buildCommandPayload(command: string): string {
+    return `${COMMAND_PAYLOAD_SHELL_PRELUDE}${command}`;
+  }
+
   /**
    * Build command, args, and optional agent session from a WorkRequest.
    * When an AgentRegistry is available, uses it for 'claude' actions;
@@ -1191,7 +1232,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       return {
         cmd: '/bin/bash',
-        args: ['-c', command],
+        args: ['-c', this.buildCommandPayload(command)],
       };
     }
     if (request.actionType === 'ai_task') {

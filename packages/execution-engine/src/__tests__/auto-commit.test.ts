@@ -2389,8 +2389,29 @@ describe('BaseExecutor.buildCommandAndArgs', () => {
     req.actionType = 'command';
     const result = executor.testBuildCommandAndArgs(req);
     expect(result.cmd).toBe('/bin/bash');
-    expect(result.args).toEqual(['-c', 'echo hello']);
+    expect(result.args[0]).toBe('-c');
+    expect(result.args[1]).toContain('grep()');
+    expect(result.args[1]).toMatch(/\necho hello$/);
     expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it('runs Markdown-escaped backtick grep proofs as literal searches', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grep-proof-test-'));
+    try {
+      writeFileSync(
+        join(dir, 'doc.md'),
+        'Only `pr-status` auto-starts unconditionally; every other built-in worker requires its own config field set to enable auto-start.\n',
+      );
+      const req = makeRequest('act', {
+        command: "grep -q 'Only \\`pr-status\\` auto-starts unconditionally' doc.md",
+      });
+      req.actionType = 'command';
+      const result = executor.testBuildCommandAndArgs(req);
+
+      expect(() => execFileSync(result.cmd, result.args, { cwd: dir })).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('throws when actionType=command has no command', () => {
