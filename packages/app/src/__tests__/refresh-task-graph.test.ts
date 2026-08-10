@@ -99,21 +99,20 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
     ]);
   });
 
-  it.fails('uses the caller\'s own local streamSequence on a successful delegated read, not the remote reply\'s', async () => {
-    // PROOF for a live infinite-resync-loop incident: streamSequence is a
-    // per-caller delivery count (how many deltas THIS process has locally
+  it('uses the caller\'s own local streamSequence on a successful delegated read, not the remote reply\'s', async () => {
+    // REGRESSION for a live infinite-resync-loop incident: streamSequence is
+    // a per-caller delivery count (how many deltas THIS process has locally
     // stamped and forwarded to its own renderer). The remote owner cannot
     // know that count -- especially a headless standalone owner, whose own
     // "streamSequence" is a hardcoded 0 stub (main.ts, `getStreamSequence: () => 0`
     // for the standalone `headless.query` handler) because it has no
-    // renderer of its own. Today, resolveRefreshTaskGraphSnapshot trusts the
+    // renderer of its own. resolveRefreshTaskGraphSnapshot used to trust the
     // remote reply's streamSequence on a successful delegated read, handing
     // callers a number from a different process's counter -- which could
     // never satisfy their own gap-detection watermark, so a resync could
-    // never actually close the gap that triggered it, looping forever. This
-    // assertion is expected to fail against today's code (it.fails); the
-    // next slice in this stack fixes resolveRefreshTaskGraphSnapshot and
-    // flips this to a normal `it`.
+    // never actually close the gap that triggered it, looping forever. Fixed
+    // by reporting the caller's own local streamSequence instead (previous
+    // slice in this stack proved this as `it.fails`).
     const remoteTask = makeTask('wf-9/task-1');
     const remoteWorkflow = { id: 'wf-9', name: 'Remote', status: 'running' };
 
