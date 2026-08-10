@@ -129,7 +129,79 @@ tasks:
     command: echo "Hello"
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-    expect(() => parsePlan(yaml)).toThrow('must have a "repoUrl" field');
+    expect(() => parsePlan(yaml)).toThrow('must have either a "repoUrl" field');
+  });
+
+  it('parses a scratch: true plan with no repoUrl, defaulting onFinish/mergeMode', () => {
+    const yaml = `
+name: Scratch Plan
+scratch: true
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.scratch).toBe(true);
+    expect(plan.repoUrl).toBeUndefined();
+    expect(plan.onFinish).toBe('none');
+    expect(plan.mergeMode).toBe('no_op');
+  });
+
+  it('rejects a plan that sets both scratch: true and repoUrl', () => {
+    const yaml = `
+name: Conflicting Plan
+scratch: true
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('cannot set both "scratch: true" and "repoUrl"');
+  });
+
+  it('rejects a scratch plan with a mergeMode other than no_op', () => {
+    const yaml = `
+name: Bad Merge Mode Scratch Plan
+scratch: true
+mergeMode: manual
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('mergeMode: "no_op"');
+  });
+
+  it('rejects a scratch plan task that sets poolId', () => {
+    const yaml = `
+name: Bad Scratch Pool Plan
+scratch: true
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+    poolId: some-pool
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/dockerImage.*poolId/);
+  });
+
+  it('does not require repoUrl to be cloneable when scratch: true is set', async () => {
+    const planPath = join(tmpdir(), `invoker-scratch-plan-${process.pid}.yaml`);
+    writeFileSync(planPath, `
+name: Scratch File Plan
+scratch: true
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`);
+    const plan = await parsePlanFile(planPath);
+    expect(plan.scratch).toBe(true);
   });
 
   it('rejects blank intermediateRepoUrl', () => {

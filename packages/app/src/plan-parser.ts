@@ -100,6 +100,7 @@ export interface RawPlan {
   mergeMode?: string;
   reviewProvider?: string;
   repoUrl?: string;
+  scratch?: boolean;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -337,13 +338,23 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
   }
   assertNoLegacyRoutingKeys(ownerLabel, raw as object);
 
+  if (raw.scratch !== undefined && typeof raw.scratch !== 'boolean') {
+    throw new PlanParseError(`${ownerLabel} "scratch" must be a boolean when provided.`);
+  }
+  const scratch = raw.scratch === true;
+
   const validOnFinishValues = ['none', 'merge', 'pull_request'] as const;
   if (raw.onFinish !== undefined && !validOnFinishValues.includes(raw.onFinish as any)) {
     throw new PlanParseError(
       `"onFinish" must be one of: ${validOnFinishValues.join(', ')}. Got: "${raw.onFinish}"`,
     );
   }
-  const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'pull_request';
+  if (scratch && raw.onFinish !== undefined && raw.onFinish !== 'none') {
+    throw new PlanParseError(
+      `${ownerLabel} with "scratch: true" must use onFinish: "none" (or omit it) — there is no branch/PR to finish.`,
+    );
+  }
+  const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? (scratch ? 'none' : 'pull_request');
 
   const validMergeModes = ['manual', 'automatic', 'external_review', 'no_op'] as const;
   if (raw.mergeMode !== undefined && !validMergeModes.includes(raw.mergeMode as any)) {
@@ -351,7 +362,12 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       `"mergeMode" must be one of: ${validMergeModes.join(', ')}. Got: "${raw.mergeMode}"`,
     );
   }
-  const rawMergeMode = raw.mergeMode as (typeof validMergeModes)[number] | undefined;
+  if (scratch && raw.mergeMode !== undefined && raw.mergeMode !== 'no_op') {
+    throw new PlanParseError(
+      `${ownerLabel} with "scratch: true" must use mergeMode: "no_op" (or omit it) — there is no repo/branch to merge.`,
+    );
+  }
+  const rawMergeMode = (raw.mergeMode as (typeof validMergeModes)[number] | undefined) ?? (scratch ? 'no_op' : undefined);
   const mergeMode = rawMergeMode !== undefined
     ? normalizeMergeModeForPersistence(rawMergeMode)
     : undefined;
@@ -364,9 +380,14 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     raw.featureBranch = `plan/${slug}`;
   }
 
-  if (!raw.repoUrl || typeof raw.repoUrl !== 'string') {
+  if (scratch && raw.repoUrl !== undefined) {
     throw new PlanParseError(
-      `${ownerLabel} must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).`,
+      `${ownerLabel} cannot set both "scratch: true" and "repoUrl" — scratch plans run with no git repo.`,
+    );
+  }
+  if (!scratch && (!raw.repoUrl || typeof raw.repoUrl !== 'string')) {
+    throw new PlanParseError(
+      `${ownerLabel} must have either a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git) or "scratch: true" (no-repo mode).`,
     );
   }
   if (raw.intermediateRepoUrl !== undefined) {
@@ -415,6 +436,12 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       );
     }
 
+    if (scratch && (task.dockerImage || task.poolId)) {
+      throw new PlanParseError(
+        `Task "${task.id}" sets "dockerImage"/"poolId" but ${ownerLabel.toLowerCase()} has "scratch: true" — scratch tasks always run in a plain temp directory.`,
+      );
+    }
+
     if (task.externalDependencies !== undefined) {
       throw new PlanParseError(
         `Task "${task.id}" uses task-level "externalDependencies", which is no longer supported. ` +
@@ -460,6 +487,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     mergeMode,
     reviewProvider,
     repoUrl: raw.repoUrl,
+    scratch: scratch || undefined,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
@@ -489,6 +517,7 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
   return {
     ...workflow,
     repoUrl: workflow.repoUrl ?? stack.repoUrl,
+    scratch: workflow.scratch ?? stack.scratch,
     intermediateRepoUrl: workflow.intermediateRepoUrl ?? stack.intermediateRepoUrl,
     onFinish: workflow.onFinish ?? stack.onFinish,
     baseBranch: workflow.baseBranch ?? stack.baseBranch,
@@ -559,7 +588,7 @@ export async function parsePlanFile(filePath: string): Promise<PlanDefinition> {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(filePath, 'utf-8');
   const plan = parsePlan(content);
-  assertRepoUrlCloneable(plan.repoUrl!);
+  if (!plan.scratch) assertRepoUrlCloneable(plan.repoUrl!);
   return plan;
 }
 
@@ -568,7 +597,7 @@ export async function parsePlanSubmissionBundleFile(filePath: string): Promise<P
   const content = await readFile(filePath, 'utf-8');
   const submission = parsePlanSubmissionBundle(content);
   for (const plan of submission.plans) {
-    assertRepoUrlCloneable(plan.repoUrl!);
+    if (!plan.scratch) assertRepoUrlCloneable(plan.repoUrl!);
   }
   return submission;
 }
