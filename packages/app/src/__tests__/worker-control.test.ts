@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AUTO_APPROVE_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
+  DISK_HEADROOM_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
   INFRA_REPAIR_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  REAPER_WORKER_KIND,
+  REQUEUE_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -15,6 +20,7 @@ import {
 import type { WorkerActionRecord } from '@invoker/data-store';
 import {
   autoStartedOwnerWorkerKinds,
+  autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
   listWorkerActionHistory,
@@ -90,6 +96,21 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
+type AutoStartConfig = Parameters<typeof autoStartedOwnerWorkerKindsForConfig>[0];
+
+function expectConfigGate(
+  workerKind: string,
+  configWhenTrue: AutoStartConfig,
+  configWhenFalse: AutoStartConfig,
+): void {
+  expect(autoStartedOwnerWorkerKindsForConfig(configWhenTrue)).toEqual([
+    PR_STATUS_WORKER_KIND,
+    workerKind,
+  ]);
+  expect(autoStartedOwnerWorkerKindsForConfig(configWhenFalse)).toEqual([PR_STATUS_WORKER_KIND]);
+  expect(autoStartedOwnerWorkerKindsForConfig({})).not.toContain(workerKind);
+}
+
 function controller(
   autoStartKinds: readonly string[] = autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: true }),
   desiredState: Record<string, boolean> = {},
@@ -131,6 +152,85 @@ function controller(
     }),
   };
 }
+
+describe('autoStartedOwnerWorkerKindsForConfig', () => {
+  it('fresh install auto-start config includes only pr-status', () => {
+    expect(autoStartedOwnerWorkerKindsForConfig({})).toEqual([PR_STATUS_WORKER_KIND]);
+  });
+
+  it('includes disk-headroom only when diskHeadroom.cleanupEnabled is true', () => {
+    expectConfigGate(
+      DISK_HEADROOM_WORKER_KIND,
+      { diskHeadroom: { cleanupEnabled: true } },
+      { diskHeadroom: { cleanupEnabled: false } },
+    );
+  });
+
+  it('includes auto-approve only when autoApproveAIFixes is true', () => {
+    expectConfigGate(
+      AUTO_APPROVE_WORKER_KIND,
+      { autoApproveAIFixes: true },
+      { autoApproveAIFixes: false },
+    );
+  });
+
+  it('includes infra-repair only when infraRepair.enabled is true', () => {
+    expectConfigGate(
+      INFRA_REPAIR_WORKER_KIND,
+      { infraRepair: { enabled: true } },
+      { infraRepair: { enabled: false } },
+    );
+  });
+
+  it('includes autofix only when autofix.enabled is true', () => {
+    expectConfigGate(
+      AUTO_FIX_WORKER_KIND,
+      { autofix: { enabled: true } },
+      { autofix: { enabled: false } },
+    );
+  });
+
+  it('includes reaper only when reaper.enabled is true', () => {
+    expectConfigGate(
+      REAPER_WORKER_KIND,
+      { reaper: { enabled: true } },
+      { reaper: { enabled: false } },
+    );
+  });
+
+  it('includes workflow-resume only when workflowResume.enabled is true', () => {
+    expectConfigGate(
+      WORKFLOW_RESUME_WORKER_KIND,
+      { workflowResume: { enabled: true } },
+      { workflowResume: { enabled: false } },
+    );
+  });
+
+  it('includes requeue only when requeueEnabled is true', () => {
+    expectConfigGate(
+      REQUEUE_WORKER_KIND,
+      { requeueEnabled: true },
+      { requeueEnabled: false },
+    );
+  });
+
+  it('includes e2e-autofix only when e2eAutoFixEnabled is true', () => {
+    expectConfigGate(
+      E2E_AUTOFIX_WORKER_KIND,
+      { e2eAutoFixEnabled: true },
+      { e2eAutoFixEnabled: false },
+    );
+  });
+
+  it('prMaintenance.enabled adds all PR-maintenance workers together', () => {
+    expect(autoStartedOwnerWorkerKindsForConfig({ prMaintenance: { enabled: true } })).toEqual([
+      PR_STATUS_WORKER_KIND,
+      PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+      PR_ORPHAN_REPAIR_WORKER_KIND,
+      PR_DUPLICATE_CLOSE_WORKER_KIND,
+    ]);
+  });
+});
 
 describe('createWorkerRuntimeController', () => {
   it('auto-start starts every built-in owner worker except workflow-resume and orphan-repair', () => {
