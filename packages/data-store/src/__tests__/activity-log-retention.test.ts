@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { SQLiteAdapter, shouldPruneActivityLog } from '../sqlite-adapter.js';
 
 const PRUNE_INTERVAL = 1_000; // matches ACTIVITY_LOG_PRUNE_INTERVAL in sqlite-adapter.ts
 
@@ -55,6 +55,13 @@ describe('activity_log retention', () => {
     const newest = adapter.getActivityLogs(0, writes).map((r) => r.message);
     expect(newest).toContain(`entry-${writes - 1}`);
     expect(newest).not.toContain('entry-0');
+  });
+
+  it('shouldPruneActivityLog throttles on the writes-since-prune/interval threshold', () => {
+    expect(shouldPruneActivityLog(0, PRUNE_INTERVAL)).toBe(false);
+    expect(shouldPruneActivityLog(PRUNE_INTERVAL - 1, PRUNE_INTERVAL)).toBe(false);
+    expect(shouldPruneActivityLog(PRUNE_INTERVAL, PRUNE_INTERVAL)).toBe(true);
+    expect(shouldPruneActivityLog(PRUNE_INTERVAL + 1, PRUNE_INTERVAL)).toBe(true);
   });
 
   it('treats maxRows <= 0 as retention disabled (reproduces the unbounded growth)', async () => {
