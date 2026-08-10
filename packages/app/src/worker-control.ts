@@ -60,6 +60,7 @@ type AutoStartedOwnerWorkerKindConfig = {
   autoApproveAIFixes?: boolean;
   infraRepair?: { enabled?: boolean };
   autofix?: { enabled?: boolean };
+  e2eAutoFixEnabled?: boolean;
   reaper?: { enabled?: boolean };
   workflowResume?: { enabled?: boolean };
   requeueEnabled?: boolean;
@@ -118,7 +119,7 @@ export function autoStartedOwnerWorkerKinds(
 export function autoStartedOwnerWorkerKindsForConfig(
   config?: AutoStartedOwnerWorkerKindConfig,
 ): readonly string[] {
-  return autoStartedOwnerWorkerKinds({
+  const workerKinds = autoStartedOwnerWorkerKinds({
     prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled),
     diskHeadroomCleanupEnabled: Boolean(config?.diskHeadroom?.cleanupEnabled),
     autoApproveAIFixes: Boolean(config?.autoApproveAIFixes),
@@ -128,6 +129,9 @@ export function autoStartedOwnerWorkerKindsForConfig(
     workflowResumeEnabled: Boolean(config?.workflowResume?.enabled),
     requeueEnabled: Boolean(config?.requeueEnabled),
   });
+  return config?.e2eAutoFixEnabled
+    ? [...workerKinds, E2E_AUTOFIX_WORKER_KIND]
+    : workerKinds;
 }
 
 export interface WorkerRuntimeController {
