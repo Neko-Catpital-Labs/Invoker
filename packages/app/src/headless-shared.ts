@@ -428,13 +428,15 @@ const preemptSkipCodes: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A racing owner can delete the workflow's tasks between cancelWorkflowImpl's
- * DB read and its per-task `task.cancelled` event write, tripping the
- * `events.task_id -> tasks(id)` foreign key. That raw error isn't an
- * OrchestratorError, so it can't carry a `WORKFLOW_NOT_FOUND` code through
- * CommandService — check the message text and confirm against persistence.
+ * A racing owner can delete the workflow's tasks between another write's DB
+ * read and its own follow-up write (e.g. cancelWorkflowImpl's per-task
+ * `task.cancelled` event insert), tripping a `-> tasks(id)`/`-> workflows(id)`
+ * foreign key. That raw error isn't an OrchestratorError, so it can't carry a
+ * `WORKFLOW_NOT_FOUND` code through CommandService — check the message text
+ * and confirm against persistence. Used by both preemptWorkflowExecution
+ * (cancel) and headlessDeleteWorkflow (delete) call sites.
  */
-function isRaceLostForeignKeyConstraintFailure(message: string, workflowId: string, deps: HeadlessDeps): boolean {
+export function isRaceLostForeignKeyConstraintFailure(message: string, workflowId: string, deps: HeadlessDeps): boolean {
   return message.includes('FOREIGN KEY constraint failed') && !deps.persistence.loadWorkflow?.(workflowId);
 }
 
