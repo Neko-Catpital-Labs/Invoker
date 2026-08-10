@@ -1158,7 +1158,7 @@ describe('WorktreeExecutor', () => {
       await expect(executor.start(request)).rejects.toThrow();
     });
 
-    it('BUG: leaks the acquired worktree slot when the upstream merge fails for a non-conflict reason', async () => {
+    it('releases the acquired worktree slot when the upstream merge fails for a non-conflict reason', async () => {
       setupSpawnMock();
       const pool = mockPool(executor);
 
@@ -1190,12 +1190,12 @@ describe('WorktreeExecutor', () => {
 
       await expect(executor.start(request)).rejects.toThrow();
 
-      // start() throws here before any WorktreeEntry is registered, so the
-      // acquired worktree slot is never freed — it leaks for the life of the
-      // process. This documents the CURRENT (buggy) behavior; the next PR in
-      // this stack fixes it and flips this assertion.
+      // Regression test: start() throws here before any WorktreeEntry is
+      // registered, so the only way the acquired worktree slot gets freed is
+      // the try/catch around mergeRequestUpstreamBranches releasing it
+      // directly. Without that fix, this slot leaks for the life of the process.
       const acquired = await pool.acquireWorktree.mock.results[0]!.value;
-      expect(acquired.softRelease).not.toHaveBeenCalled();
+      expect(acquired.softRelease).toHaveBeenCalledTimes(1);
     });
   });
 
