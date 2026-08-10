@@ -1,0 +1,16 @@
+# Run: bash scripts/verify-scratch-execution.sh
+#
+# Asserts scratch mode end to end: a plan with no repoUrl at all, running
+# through the real headless submit path, completes with runnerKind=scratch
+# and a workspace_path that is a plain temp directory, never the repo
+# checkout.
+name: "Verify scratch execution (headless Invoker)"
+scratch: true
+onFinish: none
+mergeMode: no_op
+
+tasks:
+  - id: verify-scratch-command
+    description: "Command task proves it ran with no git repo present"
+    command: test ! -e .git && pwd
+    dependencies: []
