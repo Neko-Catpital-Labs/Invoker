@@ -342,6 +342,25 @@ export function isCorruptionRecoveryEligible(
 }
 
 /**
+ * Enforces owner-only writable initialization for file-backed databases:
+ * a writable open of a file-backed database must carry ownerCapability, or
+ * it throws so non-owner processes are forced to delegate mutations via IPC.
+ */
+export function assertOwnerCapabilityForWritableOpen(
+  isFile: boolean,
+  requestWritable: boolean,
+  ownerCapability: boolean | undefined,
+): void {
+  if (isFile && requestWritable && !ownerCapability) {
+    throw new Error(
+      'Writable persistence initialization requires owner capability. ' +
+      'Non-owner processes must delegate mutations via IPC (headless.run, headless.resume, headless.exec) ' +
+      'or open the database in read-only mode.',
+    );
+  }
+}
+
+/**
  * Metadata attached to an adapter that opened via the corruption-recovery
  * branch of {@link SQLiteAdapter.create}. `restoredFromSnapshot` is the source
  * of the recovered data when auto-restore succeeded, or `null` when no clean
@@ -873,13 +892,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
 
     // Enforce owner-only writable initialization for file-backed databases
-    if (isFile && requestWritable && !options?.ownerCapability) {
-      throw new Error(
-        'Writable persistence initialization requires owner capability. ' +
-        'Non-owner processes must delegate mutations via IPC (headless.run, headless.resume, headless.exec) ' +
-        'or open the database in read-only mode.',
-      );
-    }
+    assertOwnerCapabilityForWritableOpen(isFile, requestWritable, options?.ownerCapability);
 
     if (isFile) {
       mkdirSync(dirname(dbPath), { recursive: true });
