@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
+import { sshHostLeaseLoad, type TaskRunnerPoolHost } from '../task-runner-pool.js';
 import type { TaskState } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '@invoker/data-store';
 
@@ -116,6 +117,25 @@ describe('SSH lease capacity authority (proof)', () => {
 
     expect((runner as any).persistence.listExecutionResourceLeases()).toEqual([]);
     expect(() => runner.selectExecutor(makeTask('wf-2/task-b', 'pnpm-ssh'))).not.toThrow();
+  });
+
+  // Direct-call proof: sshHostLeaseLoad reads the durable lease count, not activeExecutions.
+  it('sshHostLeaseLoad returns the durable lease count rather than in-memory activeExecutions size', () => {
+    const host = {
+      persistence: {
+        countExecutionResourceLeases: () => 3,
+      },
+      getRemoteTargets: () => ({
+        'remote-shared': sharedHost,
+      }),
+      activeExecutions: new Map([
+        ['some-other-attempt', { poolId: 'pnpm-ssh', poolMemberKey: 'ssh:remote-shared' }],
+      ]),
+    } as unknown as TaskRunnerPoolHost;
+
+    const member = { type: 'ssh', id: 'remote-shared', maxConcurrentTasks: 1 } as const;
+
+    expect(sshHostLeaseLoad(host, member)).toBe(3);
   });
 
   // Host-keyed claim-at-select prevents two pools from double-booking one droplet.
