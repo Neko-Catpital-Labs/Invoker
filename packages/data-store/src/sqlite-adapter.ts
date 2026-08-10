@@ -100,6 +100,10 @@ const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
 const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000; // prune at most once per N writes
 
+export function shouldPruneActivityLog(writesSincePrune: number, interval: number): boolean {
+  return writesSincePrune >= interval;
+}
+
 const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
 
 export interface OutputChunk {
@@ -2832,7 +2836,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [source, level, message],
     );
     this.activityLogWritesSincePrune += 1;
-    if (this.activityLogWritesSincePrune >= ACTIVITY_LOG_PRUNE_INTERVAL) {
+    if (shouldPruneActivityLog(this.activityLogWritesSincePrune, ACTIVITY_LOG_PRUNE_INTERVAL)) {
       this.activityLogWritesSincePrune = 0;
       try {
         this.pruneActivityLog();
