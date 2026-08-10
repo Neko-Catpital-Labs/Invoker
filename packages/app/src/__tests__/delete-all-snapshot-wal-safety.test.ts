@@ -19,9 +19,11 @@
  * halves of the correct fix.
  */
 import { describe, expect, it, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { createGunzip } from 'node:zlib';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { Workflow } from '@invoker/data-store';
 import { createHourlySnapshot } from '../delete-all-snapshot.js';
@@ -37,6 +39,15 @@ afterEach(() => {
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 });
+
+/** Snapshots are gzipped on write; decompress to a plain file so SQLiteAdapter can open it. */
+async function openSnapshotReadOnly(snapshotPath: string): Promise<SQLiteAdapter> {
+  const dir = mkdtempSync(join(tmpdir(), 'hourly-snapshot-read-'));
+  roots.push(dir);
+  const decompressed = join(dir, 'snapshot.db');
+  await pipeline(createReadStream(snapshotPath), createGunzip(), createWriteStream(decompressed));
+  return SQLiteAdapter.create(decompressed, { readOnly: true });
+}
 
 function makeWorkflow(id: string): Workflow {
   const now = new Date().toISOString();
@@ -102,7 +113,7 @@ describe('hourly snapshot with a live WAL owner', () => {
       // Open the snapshot in a fresh reader and confirm every commit is there.
       // If the snapshot were just a raw copy of .db, most or all of these rows
       // would be missing.
-      const reader = await SQLiteAdapter.create(snapshot as string, { readOnly: true });
+      const reader = await openSnapshotReadOnly(snapshot as string);
       try {
         const ids = new Set(reader.listWorkflows().map((w) => w.id));
         for (let i = 0; i < 20; i += 1) {
@@ -126,7 +137,7 @@ describe('hourly snapshot with a live WAL owner', () => {
       const snapshot = await createHourlySnapshot(root, (dest) => owner.backupTo(dest));
       expect(snapshot).not.toBeNull();
 
-      const reader = await SQLiteAdapter.create(snapshot as string, { readOnly: true });
+      const reader = await openSnapshotReadOnly(snapshot as string);
       try {
         const ids = reader.listWorkflows().map((w) => w.id);
         expect(ids).toContain('wf-consistent');
