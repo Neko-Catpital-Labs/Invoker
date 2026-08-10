@@ -81,21 +81,25 @@ The built-in set includes `autofix` as the default recovery worker for failed-ta
 
 ## Auto-Started Workers
 
-On owner boot `startAutoStartedWorkers()` starts two tiers of built-in workers
-(`autoStartedOwnerWorkerKinds` in `packages/app/src/worker-control.ts`):
+On owner boot `startAutoStartedWorkers()` starts `pr-status`
+unconditionally. Every other built-in worker is opt-in through its own config
+field, and those fields all default to off:
 
-- **Always started:** `pr-status`, `pr-summary-refresh`, `ci-failure`,
-  `review-gate-merge-conflict` (queues `invoker:rebase-recreate` when a
-  review-gate PR reports a merge conflict), `disk-headroom`, `requeue`, and
-  `auto-approve`.
-- **Gated on `prMaintenance.enabled`:** `pr-admin-bypass-land` (the mergify
-  admin-bypass landing scan) auto-starts only when the flag is true.
-- **Registered but manual by default:** `pr-orphan-repair` stays in the built-in
-  registry and can be started on demand, but it does not auto-start from the
-  `prMaintenance.enabled` gate.
+- `disk-headroom` auto-starts when `diskHeadroom.cleanupEnabled` is true.
+- `autoapprove` auto-starts when `autoApproveAIFixes` is true.
+- `pr-admin-bypass-land`, `pr-orphan-repair`, and `pr-duplicate-close`
+  auto-start when the shared `prMaintenance.enabled` field is true.
+- `e2e-autofix` auto-starts when `e2eAutoFixEnabled` is true.
+- `infra-repair` auto-starts when `infraRepair.enabled` is true.
+- `autofix` auto-starts when `autofix.enabled` is true.
+- `reaper` auto-starts when `reaper.enabled` is true.
+- `workflow-resume` auto-starts when `workflowResume.enabled` is true.
+- `requeue` auto-starts when `requeueEnabled` is true.
 
 Saved per-worker desired state (Workers tab / `worker start|stop`) overrides
 the auto-start default in both directions.
+
+Only `pr-status` auto-starts unconditionally; every other built-in worker requires its own config field set to enable auto-start.
 
 ## Worker Wakeups
 
