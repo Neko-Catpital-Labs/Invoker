@@ -357,6 +357,18 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         bench('WorktreeExecutor.mergeRequestUpstreamBranches.failed', {
           error: err instanceof Error ? err.message : String(err),
         });
+        // No WorktreeEntry exists yet for this failure (registration happens
+        // further below) — release the acquired slot directly so it doesn't
+        // leak for the life of this process. Soft release only: keep the
+        // workspace on disk, matching the post-registration
+        // provisioning-failure path's "keep for debugging" behavior below.
+        try {
+          acquired.softRelease();
+        } catch (releaseErr) {
+          console.warn(
+            `[WorktreeExecutor] softRelease failed after upstream-merge error for ${acquired.worktreePath}: ${releaseErr}`,
+          );
+        }
         throw err;
       }
     }
