@@ -29,17 +29,17 @@ Use Invoker commands first. Direct database reads are only allowed when the user
 ### List workflows
 
 ```bash
-./run.sh --headless query workflows --output text
-./run.sh --headless query workflows --status failed --output json
+invoker-ui --headless query workflows --output text
+invoker-ui --headless query workflows --status failed --output json
 ```
 
 ### List tasks
 
 ```bash
-./run.sh --headless query tasks --workflow <workflowId> --output text
-./run.sh --headless query tasks --workflow <workflowId> --status pending --output json
-./run.sh --headless query tasks --workflow <workflowId> --status failed --output json
-./run.sh --headless query tasks --workflow <workflowId> --status running --output json
+invoker-ui --headless query tasks --workflow <workflowId> --output text
+invoker-ui --headless query tasks --workflow <workflowId> --status pending --output json
+invoker-ui --headless query tasks --workflow <workflowId> --status failed --output json
+invoker-ui --headless query tasks --workflow <workflowId> --status running --output json
 ```
 
 If the request says "all workflows", first list workflows, then query each workflow through `query tasks --workflow <workflowId>`.
@@ -47,31 +47,31 @@ If the request says "all workflows", first list workflows, then query each workf
 ### Retry failed tasks
 
 ```bash
-./run.sh --headless retry-tasks --status failed --parallel 8
+invoker-ui --headless retry-tasks --status failed --parallel 8
 ```
 
 ### Retry pending tasks
 
 ```bash
-./run.sh --headless retry-tasks --status pending --parallel 8
+invoker-ui --headless retry-tasks --status pending --parallel 8
 ```
 
 ### Dry-run a bulk retry
 
 ```bash
-./run.sh --headless retry-tasks --status pending --parallel 8 --dry-run
+invoker-ui --headless retry-tasks --status pending --parallel 8 --dry-run
 ```
 
 ### Retry one task
 
 ```bash
-./run.sh --headless retry-task <taskId> --no-track
+invoker-ui --headless retry-task <taskId> --no-track
 ```
 
 ### Retry one workflow
 
 ```bash
-./run.sh --headless retry <workflowId> --no-track
+invoker-ui --headless retry <workflowId> --no-track
 ```
 
 ## Acknowledgement boundary
@@ -85,7 +85,7 @@ After submitting, verify with query commands, not database reads.
 ## Workflow for "retry/restart all failed or pending tasks"
 
 1. Run a dry-run if the request is broad or destructive-looking.
-2. Run `./run.sh --headless retry-tasks --status <status> --parallel 8`.
+2. Run `invoker-ui --headless retry-tasks --status <status> --parallel 8`.
 3. Report accepted and failed submission counts from command output.
 4. Verify remaining tasks with `query tasks` commands when the user asks for current state.
 
