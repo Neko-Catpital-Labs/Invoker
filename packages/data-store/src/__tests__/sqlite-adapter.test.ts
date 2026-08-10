@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter, isLaunchDispatchCandidateStale } from '../sqlite-adapter.js';
+import { SQLiteAdapter, isLaunchDispatchCandidateStale, runWithFreedStatement } from '../sqlite-adapter.js';
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
 import { createAttempt, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
@@ -6077,6 +6077,29 @@ describe('SQLiteAdapter', () => {
       } finally {
         handle.restore();
       }
+    });
+
+    it('runWithFreedStatement frees the statement and returns the callback result', () => {
+      const stmt = { free: vi.fn() };
+      const db = { prepare: vi.fn(() => stmt) };
+      const result = runWithFreedStatement(db, 'SELECT 1', (s) => {
+        expect(s).toBe(stmt);
+        return 'ok';
+      });
+      expect(result).toBe('ok');
+      expect(db.prepare).toHaveBeenCalledWith('SELECT 1');
+      expect(stmt.free).toHaveBeenCalledTimes(1);
+    });
+
+    it('runWithFreedStatement frees the statement when the callback throws', () => {
+      const stmt = { free: vi.fn() };
+      const db = { prepare: vi.fn(() => stmt) };
+      expect(() =>
+        runWithFreedStatement(db, 'SELECT 1', () => {
+          throw new Error('boom');
+        }),
+      ).toThrow('boom');
+      expect(stmt.free).toHaveBeenCalledTimes(1);
     });
 
     it('frees the prepared statement when stmt.get throws with params inside queryOne', () => {
