@@ -10,7 +10,12 @@ import {
 } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter, isDatabaseCorruptionError, findLatestCleanHourlySnapshot } from '../sqlite-adapter.js';
+import {
+  SQLiteAdapter,
+  isDatabaseCorruptionError,
+  isCorruptionRecoveryEligible,
+  findLatestCleanHourlySnapshot,
+} from '../sqlite-adapter.js';
 
 /**
  * SQLiteAdapter.create() recovers a corrupt database by renaming it (and its
@@ -119,6 +124,51 @@ describe('SQLiteAdapter.create recovery', () => {
 
     expect(readdirSync(dir).some((name) => name.includes('.corrupt-'))).toBe(false);
     expect(existsSync(join(dbPath, 'sentinel'))).toBe(true);
+  });
+});
+
+describe('isCorruptionRecoveryEligible', () => {
+  const corruptionErr = { errcode: 11 }; // SQLITE_CORRUPT
+  const operationalErr = { errcode: 14 }; // SQLITE_CANTOPEN, not corruption
+
+  it('is eligible when the target is a file, writable, existing, and the error is corruption', () => {
+    expect(isCorruptionRecoveryEligible(corruptionErr, {
+      isFile: true,
+      readOnly: false,
+      dbPathExists: true,
+    })).toBe(true);
+  });
+
+  it('is NOT eligible for a non-file (e.g. in-memory/ephemeral) database', () => {
+    expect(isCorruptionRecoveryEligible(corruptionErr, {
+      isFile: false,
+      readOnly: false,
+      dbPathExists: true,
+    })).toBe(false);
+  });
+
+  it('is NOT eligible when opened read-only', () => {
+    expect(isCorruptionRecoveryEligible(corruptionErr, {
+      isFile: true,
+      readOnly: true,
+      dbPathExists: true,
+    })).toBe(false);
+  });
+
+  it('is NOT eligible when the db file does not exist yet', () => {
+    expect(isCorruptionRecoveryEligible(corruptionErr, {
+      isFile: true,
+      readOnly: false,
+      dbPathExists: false,
+    })).toBe(false);
+  });
+
+  it('is NOT eligible when the error is not classified as corruption', () => {
+    expect(isCorruptionRecoveryEligible(operationalErr, {
+      isFile: true,
+      readOnly: false,
+      dbPathExists: true,
+    })).toBe(false);
   });
 });
 
