@@ -220,6 +220,40 @@ describe('applyDelta', () => {
       expect(stored.status).toBe('running');
     });
 
+    it('drops a stale delta without mutating cache, then quarantines a genuine forward gap', () => {
+      const cache = new TaskSnapshotCache();
+      cache.set('t1', JSON.stringify(makeTask('t1', { taskStateVersion: 5, status: 'running' })));
+
+      const staleResult = applyDelta({
+        type: 'updated',
+        taskId: 't1',
+        changes: { status: 'completed' },
+        taskStateVersion: 4,
+        previousTaskStateVersion: 3,
+      }, cache);
+
+      expect(staleResult.accepted).toBe(false);
+      expect(staleResult.quarantined).toEqual([]);
+      expect(cache.isQuarantined('t1')).toBe(false);
+      const afterStale = JSON.parse(cache.get('t1')!);
+      expect(afterStale.status).toBe('running');
+      expect(afterStale.taskStateVersion).toBe(5);
+
+      const gapResult = applyDelta({
+        type: 'updated',
+        taskId: 't1',
+        changes: { status: 'completed' },
+        taskStateVersion: 10,
+        previousTaskStateVersion: 9, // gap: cached taskStateVersion is 5, not 9
+      }, cache);
+
+      expect(gapResult.quarantined).toEqual(['t1']);
+      expect(cache.getEntry('t1')?.quarantined).toBe(true);
+      const afterGap = JSON.parse(cache.get('t1')!);
+      expect(afterGap.status).toBe('running');
+      expect(afterGap.taskStateVersion).toBe(5);
+    });
+
     it('quarantines when task is unknown (no prior created)', () => {
       const cache = new TaskSnapshotCache();
 
