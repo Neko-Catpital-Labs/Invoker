@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter, isLaunchDispatchCandidateStale, runWithFreedStatement } from '../sqlite-adapter.js';
+import { SQLiteAdapter, isLaunchDispatchCandidateStale, runWithFreedStatement, assertOwnerCapabilityForWritableOpen } from '../sqlite-adapter.js';
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
 import { createAttempt, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
@@ -6192,6 +6192,29 @@ describe('SQLiteAdapter', () => {
       } finally {
         handle.restore();
       }
+    });
+  });
+
+  describe('assertOwnerCapabilityForWritableOpen', () => {
+    it('throws when a writable open of a file-backed database lacks ownerCapability', () => {
+      expect(() => assertOwnerCapabilityForWritableOpen(true, true, undefined)).toThrow(
+        'Writable persistence initialization requires owner capability.',
+      );
+      expect(() => assertOwnerCapabilityForWritableOpen(true, true, false)).toThrow(
+        'Writable persistence initialization requires owner capability.',
+      );
+    });
+
+    it('does not throw when ownerCapability is granted for a writable file-backed open', () => {
+      expect(() => assertOwnerCapabilityForWritableOpen(true, true, true)).not.toThrow();
+    });
+
+    it('does not throw for a read-only request regardless of ownerCapability', () => {
+      expect(() => assertOwnerCapabilityForWritableOpen(true, false, undefined)).not.toThrow();
+    });
+
+    it('does not throw for a non-file-backed (ephemeral) database regardless of ownerCapability', () => {
+      expect(() => assertOwnerCapabilityForWritableOpen(false, true, undefined)).not.toThrow();
     });
   });
 });
