@@ -142,6 +142,15 @@ export function hasLiveWritableOwner(dbPath: string): boolean {
   return sidecarsExist && readLiveOwnerPid(dbPath) !== null;
 }
 
+/**
+ * Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
+ */
+export function applyExclusiveLockingBeforeWal(db: DatabaseSync, exclusiveLocking: boolean): void {
+  if (exclusiveLocking) {
+    db.exec('PRAGMA locking_mode = EXCLUSIVE');
+  }
+}
+
 function writeOwnerMarker(dbPath: string): void {
   try {
     writeFileSync(ownerMarkerPath(dbPath), String(process.pid), 'utf-8');
@@ -925,10 +934,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.nativeDb.exec('PRAGMA busy_timeout = 5000');
     this.nativeDb.exec('PRAGMA foreign_keys = ON');
     if (fileBacked) {
-      if (this.exclusiveLocking) {
-        // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
-        this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');
-      }
+      applyExclusiveLockingBeforeWal(this.nativeDb, this.exclusiveLocking);
       this.nativeDb.exec('PRAGMA journal_mode = WAL');
       this.nativeDb.exec('PRAGMA synchronous = FULL');
       this.nativeDb.exec('PRAGMA wal_autocheckpoint = 1000');
