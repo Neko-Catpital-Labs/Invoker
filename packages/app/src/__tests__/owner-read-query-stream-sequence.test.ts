@@ -13,14 +13,13 @@ import { createTaskDeltaStreamSequence } from '../task-delta-stream-sequence.js'
 // (owner-read-query.ts:243-251), so this 0 is what standalone always
 // answers.
 //
-// Today, resolveRefreshTaskGraphSnapshot (refresh-task-graph.ts) blindly
-// trusts this value for delegated reads, handing callers a number from a
+// resolveRefreshTaskGraphSnapshot (refresh-task-graph.ts) used to blindly
+// trust this value for delegated reads, handing callers a number from a
 // different process's counter that could never satisfy their own
-// gap-detection watermark (see refresh-task-graph.test.ts, "uses the
-// caller's own local streamSequence..." — currently `it.fails`, fixed in
-// the next slice of this stack). Once that lands, this 0 answer becomes
-// provably inert instead of silently wrong. This test guards the stub's
-// own behavior either way.
+// gap-detection watermark. That's fixed there now (see
+// refresh-task-graph.test.ts, "uses the caller's own local
+// streamSequence...") — the fix makes this 0 answer provably inert, not
+// wrong-but-unused. This test guards the stub's own behavior either way.
 describe('owner-read-query: standalone getStreamSequence stub stays inert', () => {
   it('task-graph-refresh answers streamSequence 0 even after real deltas have been stamped past 0', () => {
     // The real, single, shared counter every live delta gets stamped with —
