@@ -7,8 +7,8 @@ description: >
   Invoker tasks. For benchmark/direct-output prompts with "Required output path",
   write a complete YAML document directly to that literal path; it must start
   with top-level name, onFinish, mergeMode,
-  repoUrl, and tasks, never version or metadata wrappers, and must not scan,
-  validate, submit, or discover env vars.
+  repoUrl (or scratch: true for no-repo mode), and tasks, never version or metadata wrappers,
+  and must not scan, validate, submit, or discover env vars.
 ---
 
 # plan-to-invoker
@@ -27,15 +27,15 @@ In benchmark/direct-output mode:
 - Do not scan the repository, schema, examples, references, or scripts unless the prompt explicitly asks for those files.
 - Do not self-run `skill-doctor`, validation loops, or submit commands. Validation happens outside this direct-output mode.
 - After writing the file, print only a short confirmation that includes the path.
-- Always include the skeleton's required top-level fields: `name`, `onFinish`, `mergeMode`, `repoUrl`, and `tasks`.
+- Always include the skeleton's required top-level fields: `name`, `onFinish`, `mergeMode`, `repoUrl` (or `scratch: true` in place of `repoUrl` — see below), and `tasks`.
 - The YAML must start with `name:`. Do not use `version:`, `metadata:`, `title:`, or nested wrappers in place of the required top-level fields.
 - Treat any YAML found in the session text as source material only, not as the final output. Do not copy partial YAML fragments from the session text.
 - Synthesize a fresh complete plan using the skeleton below. The first byte of the file must be the `n` in top-level `name:`.
-- A benchmark output that begins with `version:`, wraps fields under `metadata:`, or omits top-level `repoUrl:` is invalid. Do not write it.
-- Before writing, make the first five non-comment top-level keys exactly this envelope order: `name:`, `onFinish:`, `mergeMode:`, `repoUrl:`, then `tasks:`.
-- If the prompt has Invoker session metadata but no explicit repo URL, use `https://github.com/Neko-Catpital-Labs/Invoker.git` for `repoUrl` without inspecting git remotes.
+- A benchmark output that begins with `version:`, wraps fields under `metadata:`, or omits top-level `repoUrl:` is invalid. Do not write it. The same applies when `scratch: true` is used in place of `repoUrl` — one of the two must always be present.
+- Before writing, make the first five non-comment top-level keys exactly this envelope order: `name:`, `onFinish:`, `mergeMode:`, `repoUrl:` (or `scratch:` in its place), then `tasks:`.
 - When the benchmark prompt says not to submit and forbids external dependencies, generate a command-only verification plan: use top-level task `command:` fields, `dependencies: []`, and `onFinish: none`. Do not generate prompt tasks, nested `steps:`, or implementation tasks that would call an agent or autofix.
-- For those isolated benchmark plans, encode the session goal in task descriptions and use deterministic local smoke commands such as `printf` or shell checks that do not assume unprovided artifacts exist.
+- For those isolated benchmark plans, encode the session goal in task descriptions and use deterministic local smoke commands such as `printf` or shell checks that do not assume unprovided artifacts exist. Set `scratch: true` in place of `repoUrl` for these plans, since the tasks never touch a repo.
+- If the prompt has Invoker session metadata but no explicit repo URL, and the plan's tasks genuinely need a real repo, use `https://github.com/Neko-Catpital-Labs/Invoker.git` for `repoUrl` without inspecting git remotes.
 
 Compact YAML skeleton for common benchmark plans:
 
@@ -70,7 +70,11 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 ## Intended flow (do not skip steps)
 
 1. Discuss scope/risk with the user; before authoring YAML, propose each
-   `Safety invariant:` and ask the user to confirm or correct it.
+   `Safety invariant:` and ask the user to confirm or correct it. If the work
+   has no repo URL, do not silently pick or invent one — force an explicit
+   acknowledgment: confirm with the user whether the plan should use
+   `scratch: true` (tasks run in a plain temp directory, no git involved,
+   `onFinish: none` + `mergeMode: no_op` required) or a real `repoUrl`.
 2. Phase 1a static analysis.
 3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts — prefer rendering a matching formula (`skills/plan-to-invoker/formulas/`) and specializing its slots over authoring the shape from scratch.
