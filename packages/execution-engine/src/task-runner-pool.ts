@@ -19,6 +19,7 @@ import { ResourceLimitError } from './repo-pool.js';
 import { traceExecution } from './exec-trace.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
+import { ScratchExecutor } from './scratch-executor.js';
 import { MergeGateExecutor } from './merge-gate-executor.js';
 import { SshExecutor } from './ssh-executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
@@ -684,6 +685,15 @@ export function selectExecutor(
       host.executorRegistry.register(`docker:${task.id}`, docker);
       traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
       return { executor: docker, resolvedExecution, selectedPoolMemberId };
+    }
+
+    if (effectiveType === 'scratch') {
+      const scratch = new ScratchExecutor({
+        agentRegistry: host.executionAgentRegistry,
+      });
+      host.executorRegistry.register('scratch', scratch);
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=scratch → scratch (lazy registered)`);
+      return { executor: scratch, resolvedExecution, selectedPoolMemberId };
     }
 
     if (effectiveType === 'worktree') {
