@@ -224,7 +224,8 @@ export type ExecutorRoutingReason =
   | { type: 'dockerImage' }
   | { type: 'poolId'; poolId: string }
   | { type: 'routingRule'; poolId: string; pattern?: string; regex?: string }
-  | { type: 'defaultWorktree' };
+  | { type: 'defaultWorktree' }
+  | { type: 'scratch' };
 
 export function buildExecutorRoutedPayload(
   runnerKind: RunnerKind,
