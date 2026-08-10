@@ -669,6 +669,18 @@ export interface TaskLineageExpectation {
   generation?: number;
 }
 
+export function isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
+  if (!attempt) return false;
+  if (isDiscardedAttempt(attempt)) return false;
+  if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
+  if (attempt.leaseExpiresAt) {
+    return attempt.leaseExpiresAt.getTime() >= now;
+  }
+  const anchor = attempt.lastHeartbeatAt ?? attempt.claimedAt ?? attempt.startedAt;
+  if (!anchor) return true;
+  return anchor.getTime() + ATTEMPT_LEASE_MS >= now;
+}
+
 export class Orchestrator {
   private static readonly EXPEDITED_PRIORITY = LIFECYCLE_EXPEDITED_PRIORITY;
   private static readonly LAUNCH_DEFERRAL_BASE_BACKOFF_MS = 15_000;
@@ -1031,15 +1043,7 @@ export class Orchestrator {
   }
 
   private isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
-    if (!attempt) return false;
-    if (isDiscardedAttempt(attempt)) return false;
-    if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
-    if (attempt.leaseExpiresAt) {
-      return attempt.leaseExpiresAt.getTime() >= now;
-    }
-    const anchor = this.attemptLeaseAnchor(attempt);
-    if (!anchor) return true;
-    return anchor.getTime() + ATTEMPT_LEASE_MS >= now;
+    return isAttemptLeaseActive(attempt, now);
   }
 
   private isAttemptLeaseExpired(attempt: Attempt | undefined, now: number = Date.now()): boolean {
