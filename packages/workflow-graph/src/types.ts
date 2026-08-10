@@ -90,7 +90,13 @@ export interface MergeTaskConfig extends BaseTaskConfig {
   readonly dockerImage?: never;
 }
 
-export type TaskConfig = WorktreeTaskConfig | DockerTaskConfig | SshTaskConfig | MergeTaskConfig;
+/** No-repo config: task runs in a plain temp directory, no git involved. */
+export interface ScratchTaskConfig extends BaseTaskConfig {
+  readonly runnerKind: 'scratch';
+  readonly dockerImage?: never;
+}
+
+export type TaskConfig = WorktreeTaskConfig | DockerTaskConfig | SshTaskConfig | MergeTaskConfig | ScratchTaskConfig;
 
 export type ExternalGatePolicy = 'completed' | 'review_ready' | 'ci_failed';
 

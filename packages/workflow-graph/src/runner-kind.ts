@@ -1,8 +1,8 @@
 /** All executor types accepted at runtime (includes internal 'merge'). */
-export type RunnerKind = 'worktree' | 'docker' | 'ssh' | 'merge';
+export type RunnerKind = 'worktree' | 'docker' | 'ssh' | 'scratch' | 'merge';
 
 export const SUPPORTED_EXECUTOR_TYPES = new Set<RunnerKind>([
-  'worktree', 'docker', 'ssh',
+  'worktree', 'docker', 'ssh', 'scratch',
   'merge',  // internal: merge-node only
 ]);
 
