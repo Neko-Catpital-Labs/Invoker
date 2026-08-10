@@ -87,10 +87,17 @@ export async function resolveRefreshTaskGraphSnapshot(
       await deps.messageBus.request('headless.query', { kind: 'task-graph-refresh' }) as unknown,
       deps.resolveInvokerHomeRoot(),
     );
+    // streamSequence is a per-caller delivery count (how many deltas THIS
+    // process has locally stamped and forwarded to its own renderer), not a
+    // value the remote owner can know. Trusting `delegated.streamSequence`
+    // here handed the caller a number from a different process's counter
+    // (or the standalone owner's unrelated stub) — never comparable to the
+    // watermark the caller's own gap-detection tracks, so a resync could
+    // never actually close the gap that triggered it.
     return {
       tasks: delegated.tasks,
       workflows: delegated.workflows,
-      streamSequence: delegated.streamSequence,
+      streamSequence: deps.getStreamSequence(),
     };
   } catch (err) {
     deps.logger.warn(
