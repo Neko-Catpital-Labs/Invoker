@@ -81,7 +81,7 @@ For policy-matrix inputs, `skill-doctor` now fails if the coverage map or stack 
 #### Phase 1b-invoker — Headless Invoker (`submit-plan.sh`)
 
 - **Actually execute** `./submit-plan.sh plans/verify-<slug>.yaml` after `pnpm --filter @invoker/app build` if `packages/app/dist/main.js` is missing.
-- Optionally wrap with `./run.sh --headless delete-all` first to avoid duplicate task IDs.
+- Optionally wrap with `invoker-ui --headless delete-all` first to avoid duplicate task IDs.
 - **Record** exit code and relevant log lines (e.g. `tee /tmp/invoker-verify.txt`).
 - **Authoring** a verify YAML or running **`validate-plan.sh` only** does **not** satisfy Phase 1b-invoker — those do not run the orchestrator or write SQLite.
 
@@ -112,7 +112,7 @@ Must exit 0. This validates schema + dependency wiring + deterministic **atomici
 #### Agent must run Invoker (Phase 1b-invoker)
 
 ```bash
-./run.sh --headless delete-all   # optional: avoid PlanConflictError on duplicate task IDs
+invoker-ui --headless delete-all   # optional: avoid PlanConflictError on duplicate task IDs
 ./submit-plan.sh plans/verify-<slug>.yaml 2>&1 | tee /tmp/invoker-verify.txt
 ```
 
@@ -134,7 +134,7 @@ bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt
 #### Clean up before implementation
 
 ```bash
-./run.sh --headless delete-all
+invoker-ui --headless delete-all
 ```
 
 Remove verification workflows before submitting the **implementation** plan if you need a clean graph.
