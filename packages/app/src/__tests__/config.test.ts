@@ -324,6 +324,40 @@ describe('loadConfig', () => {
     expect(config.diskHeadroom).toEqual({ cleanupEnabled: false });
   });
 
+  it('defaults opt-in worker gates to undefined when absent', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultBranch: 'main' }),
+    );
+    const config = loadConfig() as Record<string, unknown>;
+    expect(config.infraRepair).toBeUndefined();
+    expect(config.autofix).toBeUndefined();
+    expect(config.reaper).toBeUndefined();
+    expect(config.workflowResume).toBeUndefined();
+    expect(config.requeueEnabled).toBeUndefined();
+  });
+
+  it('reads opt-in worker gates from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        infraRepair: { enabled: true },
+        autofix: { enabled: true },
+        reaper: { enabled: false },
+        workflowResume: { enabled: true },
+        requeueEnabled: true,
+      }),
+    );
+    const config = loadConfig();
+    expect(config).toMatchObject({
+      infraRepair: { enabled: true },
+      autofix: { enabled: true },
+      reaper: { enabled: false },
+      workflowResume: { enabled: true },
+      requeueEnabled: true,
+    });
+  });
+
   it('reads imageStorage from user config', () => {
     const imageStorage = {
       provider: 'r2',
@@ -480,4 +514,3 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
     )).toThrow(/Invalid embedded terminal backend/);
   });
 });
-
