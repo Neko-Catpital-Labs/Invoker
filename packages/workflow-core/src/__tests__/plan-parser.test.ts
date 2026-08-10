@@ -122,4 +122,74 @@ tasks:
     expect(plan.mergeMode).toBe('no_op');
     expect(plan.onFinish).toBe('none');
   });
+
+  it('rejects plans without repoUrl and without scratch: true', () => {
+    const yaml = `
+name: No Repo No Scratch Plan
+tasks:
+  - id: work
+    description: Do work
+    command: echo "ok"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/repoUrl.*scratch: true/);
+  });
+
+  it('parses a scratch: true plan with no repoUrl, defaulting onFinish/mergeMode', () => {
+    const yaml = `
+name: Scratch Plan
+scratch: true
+tasks:
+  - id: work
+    description: Do work
+    command: echo "ok"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.scratch).toBe(true);
+    expect(plan.repoUrl).toBeUndefined();
+    expect(plan.onFinish).toBe('none');
+    expect(plan.mergeMode).toBe('no_op');
+  });
+
+  it('rejects a plan that sets both scratch: true and repoUrl', () => {
+    const yaml = `
+name: Conflicting Plan
+scratch: true
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo "ok"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/cannot set both "scratch: true" and "repoUrl"/);
+  });
+
+  it('rejects a scratch plan with a mergeMode other than no_op', () => {
+    const yaml = `
+name: Bad Merge Mode Scratch Plan
+scratch: true
+mergeMode: manual
+tasks:
+  - id: work
+    description: Do work
+    command: echo "ok"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/mergeMode: "no_op"/);
+  });
+
+  it('rejects a scratch plan task that sets dockerImage', () => {
+    const yaml = `
+name: Bad Scratch Docker Plan
+scratch: true
+tasks:
+  - id: work
+    description: Do work
+    command: echo "ok"
+    dockerImage: some/image:latest
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/dockerImage.*poolId/);
+  });
 });
