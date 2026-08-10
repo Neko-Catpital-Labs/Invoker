@@ -48,6 +48,7 @@ export interface RawPlan {
   mergeMode?: string;
   reviewProvider?: string;
   repoUrl?: string;
+  scratch?: boolean;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -167,21 +168,35 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
   assertNoLegacyRoutingKeys('Plan', raw as object);
 
+  if (raw.scratch !== undefined && typeof raw.scratch !== 'boolean') {
+    throw new PlanParseError('Plan "scratch" must be a boolean when provided.');
+  }
+  const scratch = raw.scratch === true;
+
   const validOnFinishValues = ['none', 'merge', 'pull_request'] as const;
   if (raw.onFinish !== undefined && !validOnFinishValues.includes(raw.onFinish as any)) {
     throw new PlanParseError(`"onFinish" must be one of: ${validOnFinishValues.join(', ')}. Got: "${raw.onFinish}"`);
   }
-  const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'pull_request';
+  if (scratch && raw.onFinish !== undefined && raw.onFinish !== 'none') {
+    throw new PlanParseError('Plan with "scratch: true" must use onFinish: "none" (or omit it) — there is no branch/PR to finish.');
+  }
+  const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? (scratch ? 'none' : 'pull_request');
 
   const validMergeModes = ['manual', 'automatic', 'external_review', 'no_op'] as const;
   if (raw.mergeMode !== undefined && !validMergeModes.includes(raw.mergeMode as any)) {
     throw new PlanParseError(`"mergeMode" must be one of: ${validMergeModes.join(', ')}. Got: "${raw.mergeMode}"`);
   }
-  const mergeMode = raw.mergeMode as (typeof validMergeModes)[number] | undefined;
+  if (scratch && raw.mergeMode !== undefined && raw.mergeMode !== 'no_op') {
+    throw new PlanParseError('Plan with "scratch: true" must use mergeMode: "no_op" (or omit it) — there is no repo/branch to merge.');
+  }
+  const mergeMode = (raw.mergeMode as (typeof validMergeModes)[number] | undefined) ?? (scratch ? 'no_op' : undefined);
   const reviewProvider = raw.reviewProvider ?? (raw.mergeMode === 'external_review' ? 'github' : undefined);
 
-  if (!raw.repoUrl || typeof raw.repoUrl !== 'string') {
-    throw new PlanParseError('Plan must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).');
+  if (scratch && raw.repoUrl !== undefined) {
+    throw new PlanParseError('Plan cannot set both "scratch: true" and "repoUrl" — scratch plans run with no git repo.');
+  }
+  if (!scratch && (!raw.repoUrl || typeof raw.repoUrl !== 'string')) {
+    throw new PlanParseError('Plan must have either a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git) or "scratch: true" (no-repo mode).');
   }
   if (raw.intermediateRepoUrl !== undefined) {
     if (typeof raw.intermediateRepoUrl !== 'string' || raw.intermediateRepoUrl.trim() === '') {
@@ -213,6 +228,9 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     }
     if (task.command && /\bnpx vitest run\b/.test(task.command)) {
       throw new PlanParseError(`Task "${task.id}" uses 'npx vitest run' which may not resolve correctly. Use 'pnpm test' instead.`);
+    }
+    if (scratch && (task.dockerImage || task.poolId)) {
+      throw new PlanParseError(`Task "${task.id}" sets "dockerImage"/"poolId" but the plan has "scratch: true" — scratch tasks always run in a plain temp directory.`);
     }
 
     if (task.externalDependencies !== undefined) {
@@ -258,6 +276,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     mergeMode,
     reviewProvider,
     repoUrl: raw.repoUrl,
+    scratch: scratch || undefined,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
