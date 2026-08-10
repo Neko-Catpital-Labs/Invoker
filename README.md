@@ -100,7 +100,7 @@ Spread work across SSH targets and remote machines you already manage — same a
 
 Invoker background work is owned by the built-in worker registry. `autofix` is the default failed-task recovery worker; it reconciles persisted state and submits normal `fix-with-agent` intents instead of running recovery from task-state producers.
 
-Run workers on the Invoker owner host. Operators can start and stop them from the desktop Workers tab, inspect them with `./run.sh --headless worker status --output text|json|jsonl`, or trigger one explicit scan with `./run.sh --headless worker <kind>`. Each kind takes its own single-instance lock, so a second scan of the same worker is refused without blocking other worker kinds.
+Run workers on the Invoker owner host. Operators can start and stop them from the desktop Workers tab, inspect them with `invoker-ui --headless worker status --output text|json|jsonl`, or trigger one explicit scan with `invoker-ui --headless worker <kind>`. Each kind takes its own single-instance lock, so a second scan of the same worker is refused without blocking other worker kinds.
 
 PR maintenance uses the same owner-host worker path. Enable `prMaintenance` to launch `pr-admin-bypass-land`, keep `pr-orphan-repair` available from the same built-in registry, and do not install separate cron jobs or external worker launchers for the supported setup.
 
@@ -110,15 +110,12 @@ PR maintenance uses the same owner-host worker path. Enable `prMaintenance` to l
 npm install -g @neko-catpital-labs/invoker-ui
 npm install -g @neko-catpital-labs/invoker-cli
 npm install -g @neko-catpital-labs/invoker-slack
+invoker-cli setup
 ```
 
 Or grab desktop builds and standalone binaries from [GitHub Releases](https://github.com/Neko-Catpital-Labs/Invoker/releases/latest). Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
 
-Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers from System Setup or:
-
-```bash
-invoker-ui --install-skills
-```
+`invoker-cli setup` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and walks through the rest of onboarding (Slack integration, GitHub auth, a smoke-test plan run).
 
 Then, in Codex, Claude, Cursor, or OMP, run:
 
@@ -140,7 +137,7 @@ The command plans first, writes `plans/invoker-handoff.md`, converts it to `plan
 
 More: [local macOS release build](docs/local-macos-release-build.md), [remote SSH targets](docs/remote-ssh-targets.md), [Docker executor](docs/docker-executor.md), [web surface](docs/web-surface.md), [UI/backend drift tracing](docs/ui-backend-drift-tracing.md), [product story](docs/invoker-medium-article.md).
 
-If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+If you need to turn a product or implementation plan into an Invoker workflow, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 ## License
 
 [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (SPDX: **FSL-1.1-ALv2**). Permitted use, competing use, and the future Apache License 2.0 grant are defined in the license file.
