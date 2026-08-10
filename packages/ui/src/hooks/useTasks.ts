@@ -24,6 +24,9 @@ export interface UseTasksResult {
 export interface UseTasksOptions {
   onTaskGraphSnapshotApplied?: () => void;
 }
+/** Consecutive gap-resync round trips that don't close the gap before we
+ * stop auto-retrying and fast-forward the watermark instead of looping. */
+const MAX_CONSECUTIVE_RESYNC_FAILURES = 3;
 function normalizeWorkflowMeta(workflow: WorkflowMeta): WorkflowMeta {
   return {
     ...workflow,
@@ -176,6 +179,9 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   const reportedStartupSnapshotRef = useRef(false);
   const uiTaskGraphStreamWatermarkRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
   const isResyncInFlightRef = useRef<boolean>(false);
+  const consecutiveResyncFailuresRef = useRef<number>(0);
+  /** The sequence the in-flight resync needs to reach to actually close its gap. */
+  const resyncTargetSeqRef = useRef<number>(0);
   const workflowMetadataRefreshInFlightRef = useRef<boolean>(false);
   const workflowMetadataRefreshPendingRef = useRef<boolean>(false);
 
@@ -220,6 +226,9 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       });
       if (typeof result.streamSequence === 'number') {
         uiTaskGraphStreamWatermarkRef.current = result.streamSequence;
+        if (result.streamSequence >= resyncTargetSeqRef.current) {
+          consecutiveResyncFailuresRef.current = 0;
+        }
       }
       isResyncInFlightRef.current = false;
       const replaceDurationMs = performance.now() - replaceStartedAt;
@@ -350,6 +359,16 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           );
           uiTaskGraphStreamWatermarkRef.current = Math.max(uiTaskGraphStreamWatermarkRef.current, firstEvent.streamSequence);
           isResyncInFlightRef.current = false;
+          // Only a resync snapshot that actually reaches the sequence its
+          // gap needed counts as closing that gap. Reset here (not just on
+          // the next in-order delta) so a later, unrelated gap starts its
+          // own count instead of inheriting this one's -- but a snapshot
+          // that's still stuck behind the target must NOT reset the count,
+          // or the cap could never trip and a real stuck-resync loop would
+          // retry forever.
+          if (firstEvent.streamSequence >= resyncTargetSeqRef.current) {
+            consecutiveResyncFailuresRef.current = 0;
+          }
           onTaskGraphSnapshotApplied?.();
           void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
             taskCount: firstEvent.tasks.length,
@@ -499,12 +518,32 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
             actual: seq,
             gapSize,
           });
+          consecutiveResyncFailuresRef.current += 1;
+          if (consecutiveResyncFailuresRef.current > MAX_CONSECUTIVE_RESYNC_FAILURES) {
+            // The last N resyncs each came back without actually closing the
+            // gap that triggered them — retrying again would just repeat the
+            // same cycle forever. Stop, report it so it's observable instead
+            // of a silent infinite loop, and fast-forward the watermark so
+            // live updates can resume; the skipped deltas are lost, same as
+            // they would be in a failed resync, but the UI stops being stuck.
+            window.invoker.reportUiPerf?.('ui_delta_stream_resync_exhausted', {
+              attempts: consecutiveResyncFailuresRef.current,
+              expected: lastSeen + 1,
+              actual: seq,
+            });
+            consecutiveResyncFailuresRef.current = 0;
+            uiTaskGraphStreamWatermarkRef.current = seq;
+            graphEventPipelineRef.current?.push(event);
+            return;
+          }
           isResyncInFlightRef.current = true;
+          resyncTargetSeqRef.current = seq;
           graphEventPipelineRef.current?.clear();
           refreshTaskGraph();
           return;
         }
         uiTaskGraphStreamWatermarkRef.current = seq;
+        consecutiveResyncFailuresRef.current = 0;
       }
 
       graphEventPipelineRef.current?.push(event);
