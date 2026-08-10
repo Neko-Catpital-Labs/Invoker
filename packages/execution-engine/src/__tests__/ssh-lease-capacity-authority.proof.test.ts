@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import { sshHostLeaseLoad, type TaskRunnerPoolHost } from '../task-runner-pool.js';
+import { acquirePoolSelectionLease, sshHostLeaseLoad, type PoolSelection, type TaskRunnerPoolHost } from '../task-runner-pool.js';
 import type { TaskState } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '@invoker/data-store';
 
@@ -136,6 +136,57 @@ describe('SSH lease capacity authority (proof)', () => {
     const member = { type: 'ssh', id: 'remote-shared', maxConcurrentTasks: 1 } as const;
 
     expect(sshHostLeaseLoad(host, member)).toBe(3);
+  });
+
+  // Direct-call proof: acquirePoolSelectionLease claims the host lease at select
+  // time, so a future refactor that moves the claim later fails this unit test
+  // even if the higher-level selectExecutor integration test still passes.
+  it('acquirePoolSelectionLease claims on first call and rejects a conflicting second call', () => {
+    const claims = new Map<string, string>();
+    const persistence = {
+      claimExecutionResourceLease: vi.fn(
+        (params: { resourceKey: string; holderId: string }) => {
+          const existingHolder = claims.get(params.resourceKey);
+          if (existingHolder && existingHolder !== params.holderId) return false;
+          claims.set(params.resourceKey, params.holderId);
+          return true;
+        },
+      ),
+      logEvent: vi.fn(),
+    };
+    const host = {
+      persistence,
+      runnerInstanceId: 'runner-1',
+      getRemoteTargets: () => ({
+        'remote-shared': sharedHost,
+      }),
+      getExecutionPools: () => ({
+        'pnpm-ssh': {
+          selectionStrategy: 'leastLoaded',
+          maxConcurrentTasksPerMember: 1,
+          members: [{ id: 'remote-shared', type: 'ssh', maxConcurrentTasks: 1 }],
+        },
+      }),
+    } as unknown as TaskRunnerPoolHost;
+
+    const member = { type: 'ssh', id: 'remote-shared', maxConcurrentTasks: 1 } as const;
+    const makeSelection = (): PoolSelection => ({
+      poolId: 'pnpm-ssh',
+      member,
+      memberKey: 'ssh:remote-shared',
+      selectionStrategy: 'leastLoaded',
+    });
+
+    const firstTask = makeTask('wf-1/task-a', 'pnpm-ssh');
+    const firstSelection = makeSelection();
+    expect(acquirePoolSelectionLease(host, firstTask, 'wf-1/task-a-attempt', firstSelection)).toBe(true);
+    expect(firstSelection.leaseResourceKey).toBeDefined();
+    expect(firstSelection.leaseHolderId).toBeDefined();
+
+    const secondTask = makeTask('wf-2/task-b', 'pnpm-ssh');
+    const secondSelection = makeSelection();
+    expect(acquirePoolSelectionLease(host, secondTask, 'wf-2/task-b-attempt', secondSelection)).toBe(false);
+    expect(secondSelection.leaseResourceKey).toBeUndefined();
   });
 
   // Host-keyed claim-at-select prevents two pools from double-booking one droplet.
