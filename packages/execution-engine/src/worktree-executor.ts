@@ -61,8 +61,6 @@ interface WorktreeEntry extends BaseEntry {
   worktreeDir: string;
   branch: string;
   phase: 'preparing' | 'provisioning' | 'running' | 'completed';
-  /** Full pool release: git worktree remove (used on provision failure, not on destroyAll). */
-  poolRelease?: () => Promise<void>;
   /** Soft-release: frees the pool slot without removing the worktree from disk. */
   poolSoftRelease?: () => void;
   /** Agent session ID for resuming sessions. */
@@ -264,7 +262,6 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         completeListeners: new Set(),
         heartbeatListeners: new Set(),
         completed: false,
-        poolRelease: acquired.release,
         poolSoftRelease: acquired.softRelease,
         leaseResourceKey: acquired.leaseResourceKey,
         leaseHolderId: acquired.leaseHolderId,
@@ -341,7 +338,6 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
             outputBufferBytes: 0, evictedChunkCount: 0,
             completeListeners: new Set(), heartbeatListeners: new Set(),
             completed: true,
-            poolRelease: acquired.release,
             poolSoftRelease: acquired.softRelease,
             leaseResourceKey: acquired.leaseResourceKey,
             leaseHolderId: acquired.leaseHolderId,
@@ -398,7 +394,6 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         outputBufferBytes: 0, evictedChunkCount: 0,
         completeListeners: new Set(), heartbeatListeners: new Set(),
         completed: false,
-        poolRelease: acquired.release,
         poolSoftRelease: acquired.softRelease,
         leaseResourceKey: acquired.leaseResourceKey,
         leaseHolderId: acquired.leaseHolderId,
@@ -432,7 +427,6 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       completeListeners: new Set(),
       heartbeatListeners: new Set(),
       completed: false,
-      poolRelease: acquired.release,
       poolSoftRelease: acquired.softRelease,
       leaseResourceKey: acquired.leaseResourceKey,
       leaseHolderId: acquired.leaseHolderId,
