@@ -9,8 +9,11 @@ import {
   appendFileSync,
   closeSync,
   copyFileSync,
+  createReadStream,
+  createWriteStream,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
@@ -22,6 +25,8 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { createGunzip } from 'node:zlib';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type {
   TaskState,
@@ -353,14 +358,35 @@ export interface CorruptionRecovery {
 /** Prefix produced by `createHourlySnapshot` in `packages/app/src/delete-all-snapshot.ts`. */
 const HOURLY_SNAPSHOT_LABEL = 'hourly-auto-';
 
+/** Gunzip `gzPath` to `destPath`, streamed so large snapshots never fully buffer in memory. */
+async function gunzipToFile(gzPath: string, destPath: string): Promise<void> {
+  await pipeline(createReadStream(gzPath), createGunzip(), createWriteStream(destPath));
+}
+
 /**
  * Run `PRAGMA quick_check` on the raw file at `dbPath`. Returns `true` iff the
  * check reports a single `'ok'` row. Any open failure, IO error, or non-ok row
  * yields `false` so callers can treat the file as unusable without unwrapping
  * SQLite error taxonomy. The connection is closed before returning so we never
  * leave a `-shm` mapping on a file we're about to copy or ignore.
+ *
+ * `.gz` candidates (see `createDbSnapshot` in `packages/app/src/delete-all-snapshot.ts`)
+ * are decompressed to a temp file first, since SQLite can only open a real
+ * database file, not a gzip stream.
  */
 async function fileQuickCheckOk(dbPath: string): Promise<boolean> {
+  if (dbPath.endsWith('.gz')) {
+    const tempDir = mkdtempSync(join(tmpdir(), 'invoker-snapshot-check-'));
+    try {
+      const tempFile = join(tempDir, 'candidate.db');
+      await gunzipToFile(dbPath, tempFile);
+      return await fileQuickCheckOk(tempFile);
+    } catch {
+      return false;
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
   try {
     const { DatabaseSync } = await loadNativeSqlite();
     const db = new DatabaseSync(dbPath, { readOnly: true });
@@ -893,13 +919,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const cleanSnapshot = await findLatestCleanHourlySnapshot(backupDir, basename(dbPath));
       let restoredFromSnapshot: string | null = null;
       if (cleanSnapshot) {
+        // Restore to a staging file first, then rename into place, so a
+        // gunzip/copy failure partway through never leaves dbPath holding a
+        // truncated snapshot -- the code below must see dbPath either fully
+        // restored or still absent (never partially written).
+        const stagingPath = `${dbPath}.restore-staging-${Date.now()}`;
         try {
-          copyFileSync(cleanSnapshot, dbPath);
+          if (cleanSnapshot.endsWith('.gz')) {
+            await gunzipToFile(cleanSnapshot, stagingPath);
+          } else {
+            copyFileSync(cleanSnapshot, stagingPath);
+          }
+          renameSync(stagingPath, dbPath);
           restoredFromSnapshot = cleanSnapshot;
           console.error(
             `[SQLiteAdapter] Auto-restored ${dbPath} from clean snapshot ${cleanSnapshot}.`,
           );
         } catch (copyErr) {
+          if (existsSync(stagingPath)) rmSync(stagingPath, { recursive: true, force: true });
           console.error(
             `[SQLiteAdapter] Failed to restore from ${cleanSnapshot}: ` +
               (copyErr instanceof Error ? copyErr.message : String(copyErr)) +
