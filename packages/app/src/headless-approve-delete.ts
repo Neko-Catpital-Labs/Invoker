@@ -23,6 +23,7 @@ import {
   trackHeadlessWorkflow,
   withRestoredTaskUnlessDeleteAllWon,
   preemptWorkflowExecution,
+  isRaceLostForeignKeyConstraintFailure,
 } from './headless-shared.js';
 
 function buildHeadlessApproveAction(
@@ -315,7 +316,9 @@ export async function headlessDeleteWorkflow(workflowId: string, deps: HeadlessD
   // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
   const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.deleteWorkflow(envelope);
-  if (!result.ok) throw new Error(result.error.message);
+  if (!result.ok && !isRaceLostForeignKeyConstraintFailure(result.error.message, workflowId, deps)) {
+    throw new Error(result.error.message);
+  }
   process.stdout.write(`Deleted workflow: ${workflowId}\n`);
 }
 
