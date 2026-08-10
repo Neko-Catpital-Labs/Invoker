@@ -810,8 +810,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       && existsSync(`${dbPath}-wal`)
       && !existsSync(`${dbPath}-shm`)
     ) {
-      const ownerPid = readLiveOwnerPid(dbPath);
-      if (ownerPid !== null) {
+      if (hasLiveWritableOwner(dbPath)) {
+        const ownerPid = readLiveOwnerPid(dbPath);
         throw new Error(
           `Cannot open SQLite database read-only while writable owner PID ${ownerPid} is using exclusive locking for ${dbPath}. ` +
           'exclusiveLocking is incompatible with delegated read-only viewers; restart the owner in normal WAL mode.',
