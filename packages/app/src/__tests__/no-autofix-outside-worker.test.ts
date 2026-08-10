@@ -153,7 +153,7 @@ function collectRepoSourceFiles(root: string): SourceFile[] {
 }
 
 /** Return every trigger-signal hit across the given files. */
-function scanForAutoFixTriggers(files: ReadonlyArray<SourceFile>): TriggerHit[] {
+export function scanForAutoFixTriggers(files: ReadonlyArray<SourceFile>): TriggerHit[] {
   const hits: TriggerHit[] = [];
   for (const file of files) {
     const lines = file.content.split('\n');
@@ -170,7 +170,7 @@ function scanForAutoFixTriggers(files: ReadonlyArray<SourceFile>): TriggerHit[] 
 }
 
 /** Trigger hits that fall outside the sanctioned allowlist — i.e. violations. */
-function findAutoFixViolations(
+export function findAutoFixViolations(
   files: ReadonlyArray<SourceFile>,
   allowlist: ReadonlySet<string>,
 ): TriggerHit[] {
