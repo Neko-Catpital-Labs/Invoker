@@ -183,6 +183,39 @@ export interface InvokerConfig {
    */
   autoFixCi?: boolean;
   /**
+   * Owner-side infra-repair worker config.
+   * Default: false.
+   */
+  infraRepair?: {
+    enabled?: boolean;
+  };
+  /**
+   * Owner-side autofix worker config.
+   * Default: false.
+   */
+  autofix?: {
+    enabled?: boolean;
+  };
+  /**
+   * Owner-side reaper worker config.
+   * Default: false.
+   */
+  reaper?: {
+    enabled?: boolean;
+  };
+  /**
+   * Owner-side workflow-resume worker config.
+   * Default: false.
+   */
+  workflowResume?: {
+    enabled?: boolean;
+  };
+  /**
+   * Enables stalled-task requeue behavior.
+   * Default: false.
+   */
+  requeueEnabled?: boolean;
+  /**
    * Read-only diagnostics tuning for the Action Graph view.
    * Default stall threshold: 60000ms. Env fallback:
    * INVOKER_ACTION_STALL_THRESHOLD_MS.
