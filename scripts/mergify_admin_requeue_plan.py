@@ -745,6 +745,11 @@ def plan_mergify_queue_repairs(
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
+        if facts.stale_base_by_pr.get(pr.number) and pr.latest_mergify and pr.latest_mergify.failing_checks:
+            return plan_rebase_onto_base(
+                pr, facts.trunk, ledger, max_repair_attempts,
+                "structural stale base is blocking its failing check(s), not a code problem",
+            )
         actions = mergify_failed_check_actions(
             pr, ledger, max_repair_attempts, now, facts.suppressed_failed_checks_by_pr.get(pr.number, ()),
         )
@@ -776,6 +781,11 @@ def plan_direct_repairs(
                     continue
                 return Action("repair_conflict", pr.number, key, blocker.detail)
             if blocker.kind == "failed_check":
+                if facts.stale_base_by_pr.get(pr.number):
+                    return plan_rebase_onto_base(
+                        pr, facts.trunk, ledger, max_repair_attempts,
+                        "structural stale base is blocking its failing check(s), not a code problem",
+                    )
                 count, crashed_on_infra = repair_attempt_count_excluding_infra_crash(
                     ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
                     repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid),

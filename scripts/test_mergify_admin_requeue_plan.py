@@ -462,6 +462,28 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
         self.assertEqual(actions[0].kind, "repair_check")
 
+    def test_failed_check_with_stale_base_skips_agent_repair(self):
+        # PR #7727 incident: no coding-agent repair can fix a git-history
+        # problem. Once the base is known to be structurally stale, the
+        # direct-repair ladder must route to rebase_onto_base, never
+        # repair_check, and must not spend a repair-check ledger attempt.
+        ledger = self._ledger()
+        snapshot = pr(number=42, checks={"build": check("failure")})
+        actions = self._plan(snapshot, ledger=ledger, stale_base_by_pr={42: True})
+        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("rebase_onto_base", 42, "master"))
+        self.assertEqual(ledger.count("repair-check", 42, HEAD, "build"), 0)
+
+    def test_failed_check_with_stale_base_skips_agent_repair_via_mergify_dequeue(self):
+        ledger = self._ledger()
+        snapshot = pr(number=43, latest_mergify=event(failing=("build",)))
+        actions = self._plan(snapshot, ledger=ledger, stale_base_by_pr={43: True})
+        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("rebase_onto_base", 43, "master"))
+        self.assertEqual(ledger.count("repair-check", 43, HEAD, "build"), 0)
+
+    def test_failed_check_with_clean_base_still_repairs_via_agent(self):
+        actions = self._plan(pr(checks={"build": check("failure")}), stale_base_by_pr={1: False})
+        self.assertEqual(actions[0].kind, "repair_check")
+
 
     def test_clean_bottom_missing_label_nudges_human(self):
         actions = self._plan(pr())  # green, no admin-bypass label
