@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executor.js';
-import { RepoPool } from './repo-pool.js';
+import { RepoPool, type RepoPoolLeasePersistence } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
@@ -51,6 +51,8 @@ export interface WorktreeExecutorConfig {
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
   maxDurationMs?: number;
+  /** Optional DB-backed lease authority for worktree slots (see RepoPoolConfig). */
+  leasePersistence?: RepoPoolLeasePersistence;
 }
 
 
@@ -69,6 +71,9 @@ interface WorktreeEntry extends BaseEntry {
   agentName?: string;
   rawStdout?: string;
   poolSlotReleased?: boolean;
+  /** Set only when the acquired worktree claimed a DB-backed lease. */
+  leaseResourceKey?: string;
+  leaseHolderId?: string;
 }
 
 /**
@@ -96,6 +101,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       cacheDir: config.cacheDir,
       maxWorktrees: config.maxWorktrees,
       worktreeBaseDir: this.worktreeBaseDir,
+      leasePersistence: config.leasePersistence,
     });
   }
 
@@ -233,6 +239,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         request.actionId,
         {
           forceFresh: request.inputs.freshWorkspace === true,
+          leaseHolderId: request.attemptId ?? request.actionId,
           ...(request.inputs.reusableWorktree
             ? { reusableWorktree: request.inputs.reusableWorktree }
             : {}),
@@ -259,10 +266,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         completed: false,
         poolRelease: acquired.release,
         poolSoftRelease: acquired.softRelease,
+        leaseResourceKey: acquired.leaseResourceKey,
+        leaseHolderId: acquired.leaseHolderId,
       };
       this.registerEntry(handle, entry);
       handle.workspacePath = acquired.worktreePath;
       handle.branch = acquired.branch;
+      handle.leaseResourceKey = acquired.leaseResourceKey;
+      handle.leaseHolderId = acquired.leaseHolderId;
       bench('WorktreeExecutor.registerEntry.reconciliation.done', {
         workspacePath: handle.workspacePath,
         branch: handle.branch,
@@ -301,6 +312,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       request.actionId,
       {
         forceFresh: request.inputs.freshWorkspace === true,
+        leaseHolderId: request.attemptId ?? request.actionId,
         ...(request.inputs.reusableWorktree
           ? { reusableWorktree: request.inputs.reusableWorktree }
           : {}),
@@ -331,10 +343,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
             completed: true,
             poolRelease: acquired.release,
             poolSoftRelease: acquired.softRelease,
+            leaseResourceKey: acquired.leaseResourceKey,
+            leaseHolderId: acquired.leaseHolderId,
           };
           this.registerEntry(handle, entry);
           handle.workspacePath = acquired.worktreePath;
           handle.branch = acquired.branch;
+          handle.leaseResourceKey = acquired.leaseResourceKey;
+          handle.leaseHolderId = acquired.leaseHolderId;
           const response: WorkResponse = {
             requestId: request.requestId,
             actionId: request.actionId,
@@ -384,10 +400,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         completed: false,
         poolRelease: acquired.release,
         poolSoftRelease: acquired.softRelease,
+        leaseResourceKey: acquired.leaseResourceKey,
+        leaseHolderId: acquired.leaseHolderId,
       };
       this.registerEntry(handle, entry);
       handle.workspacePath = acquired.worktreePath;
       handle.branch = acquired.branch;
+      handle.leaseResourceKey = acquired.leaseResourceKey;
+      handle.leaseHolderId = acquired.leaseHolderId;
       bench('WorktreeExecutor.registerEntry.noCommand.done', {
         workspacePath: handle.workspacePath,
         branch: handle.branch,
@@ -414,10 +434,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       completed: false,
       poolRelease: acquired.release,
       poolSoftRelease: acquired.softRelease,
+      leaseResourceKey: acquired.leaseResourceKey,
+      leaseHolderId: acquired.leaseHolderId,
     };
     this.registerEntry(handle, entry);
     handle.workspacePath = acquired.worktreePath;
     handle.branch = acquired.branch;
+    handle.leaseResourceKey = acquired.leaseResourceKey;
+    handle.leaseHolderId = acquired.leaseHolderId;
     bench('WorktreeExecutor.registerEntry.provisioning.done', {
       workspacePath: handle.workspacePath,
       branch: handle.branch,

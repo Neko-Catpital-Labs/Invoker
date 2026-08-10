@@ -11,6 +11,14 @@ export interface ExecutorHandle {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  /**
+   * Set when this executor claimed a DB-backed resource lease during
+   * start() (e.g. a worktree slot) that dispatch should renew on heartbeat
+   * and release on completion via the generic `activeExecution.leaseResourceKey`/
+   * `leaseHolderId` path already used for SSH pool-member leases.
+   */
+  leaseResourceKey?: string;
+  leaseHolderId?: string;
 }
 
 export interface TerminalSpec {

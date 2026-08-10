@@ -370,8 +370,12 @@ export async function dispatchExecutor(
     taskId: task.id,
     poolId: poolSelection?.poolId,
     poolMemberKey: poolSelection?.memberKey,
-    leaseResourceKey: poolSelection?.leaseResourceKey,
-    leaseHolderId: poolSelection?.leaseHolderId,
+    // Prefer the handle's own lease (claimed inside executor.start(), e.g. a
+    // worktree slot) over poolSelection's (claimed before start(), SSH-only
+    // today) — both feed the same generic heartbeat-renewal/finalize-release
+    // path below, so either executor type gets crash-safe leases for free.
+    leaseResourceKey: activeHandle.leaseResourceKey ?? poolSelection?.leaseResourceKey,
+    leaseHolderId: activeHandle.leaseHolderId ?? poolSelection?.leaseHolderId,
   });
   host.logger.info(
     `[TaskRunner] active execution registered task=${task.id} attempt=${attemptId} ` +
