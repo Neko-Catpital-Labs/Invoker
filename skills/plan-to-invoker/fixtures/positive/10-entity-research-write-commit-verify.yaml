@@ -1,0 +1,98 @@
+# Positive fixture: Entity research write-and-commit-in-one-task, with independent verify
+# Source: entity-research-patterns.md Rule 1/2 — formulas/entity-research/
+# Pattern: gate-check -> research-write-and-commit -> independent HEAD re-check (no separate downstream commit task)
+
+name: "Entity research: CPB"
+description: |
+  Research CPB (S&P 500 index-removal candidate (stock ticker)) for the most recent 10-K inventory accounting method (FIFO vs LIFO) and any other choice that understates book value and
+  commit the resulting record. The write task commits its own output in the
+  same task — no separate downstream commit task exists in this shape.
+
+  REPLACE_ME: 1-3 sentences on why this entity/batch matters and what the
+  record will be used for.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: git@github.com:EdbertChan/hidden.git
+
+tasks:
+  - id: gate-check-cpb
+    description: |
+      Deterministic eligibility check before spending research effort on CPB.
+      Review claim: CPB either passes or fails eligibility with a machine-checkable command; no research happens if it fails. REPLACE_ME with the real gate condition.
+      Review lane: docs
+      Safety invariant: This task never writes or modifies the record itself; only a pass/fail signal.
+      Slice rationale: One deterministic gate slice, separate from the research/write slice that follows it.
+      Architectural effect: None; produces no product code, only a gating signal for its own workflow.
+      Goal: Fail fast, before research, if CPB does not qualify.
+      Motivation: Cheap gating avoids wasted research effort on ineligible entities. REPLACE_ME if this batch has a real eligibility list.
+      Alternative considerations: Skipping the gate and letting research fail was rejected — it wastes the expensive step instead of the cheap one.
+      Implementation details: Run `true`; exit non-zero if CPB is ineligible. REPLACE_ME with the concrete check.
+      Non-goals: No research, no record write, no commit of the record file here.
+      Layer: docs
+      Feature state: active
+      Acceptance criteria:
+      - `true` exits 0.
+    command: "true"
+    dependencies: []
+
+  - id: research-write-cpb
+    description: |
+      Research the most recent 10-K inventory accounting method (FIFO vs LIFO) and any other choice that understates book value for CPB and write AND commit
+      the record in this same task. Do not defer the commit to a later task
+      — there must be no task after this one that touches data/stocks/CPB.json.
+      Review claim: data/stocks/CPB.json matches the fixed record envelope and every claim traces to a committed source excerpt. REPLACE_ME with the precise research claim.
+      Review lane: docs
+      Safety invariant: Every claims[] entry has a non-empty source_excerpt and source_url backed by a file under sources/CPB/; no claim is asserted without a primary-source citation.
+      Slice rationale: One research slice: write the record and commit it, nothing else.
+      Architectural effect: None; adds one data file and its source citations, no code.
+      Goal: Produce a committed, schema-valid, source-cited record for CPB.
+      Motivation: the most recent 10-K inventory accounting method (FIFO vs LIFO) and any other choice that understates book value REPLACE_ME with why this fact matters for CPB.
+      Alternative considerations: A separate downstream commit task was rejected — that split is the exact shape that silently dropped ticker CPB's record in wf-1786134278894-20 (task-runner-prepare.ts's dependency guard only checks .branch, not .commit).
+      Implementation details: Research the most recent 10-K inventory accounting method (FIFO vs LIFO) and any other choice that understates book value; write data/stocks/CPB.json matching the schema below; commit both data/stocks/CPB.json and sources/CPB/*.md yourself, in this task.
+      Non-goals: No aggregation across entities, no schema changes beyond method (enum: fifo|lifo|weighted_average|other), understatement_flag (bool), no edits outside data/stocks/CPB.json and sources/CPB/.
+      Layer: docs
+      Feature state: active
+      Files:
+      - data/stocks/CPB.json
+      - sources/CPB/*.md
+      Change types:
+      - data/stocks/CPB.json: create
+      - sources/CPB/*.md: create
+      Acceptance criteria:
+      - data/stocks/CPB.json exists, is valid JSON, and has at minimum entity_id (string), as_of (ISO date), and claims[] where each entry has value, source_excerpt, and source_url.
+      - method (enum: fifo|lifo|weighted_average|other), understatement_flag (bool) are present and correctly typed.
+      - The commit for this task includes data/stocks/CPB.json — verify with `git show --stat HEAD | grep data/stocks/CPB.json`.
+    prompt: |
+      Goal: Research the most recent 10-K inventory accounting method (FIFO vs LIFO) and any other choice that understates book value for CPB and commit a schema-valid, source-cited record.
+      Review lane: docs
+      Motivation: the most recent 10-K inventory accounting method (FIFO vs LIFO) and any other choice that understates book value REPLACE_ME with why this fact matters for CPB.
+      Alternative considerations: Do not defer the commit to a later task; there is none in this shape.
+      Implementation details: Write data/stocks/CPB.json with entity_id, as_of, claims[] (each with value, source_excerpt, source_url), plus method (enum: fifo|lifo|weighted_average|other), understatement_flag (bool). Save verbatim source excerpts under sources/CPB/. Commit data/stocks/CPB.json and sources/CPB/*.md yourself as part of this task — there is no later task that will commit this for you.
+      Non-goals: No aggregation, no schema invention beyond method (enum: fifo|lifo|weighted_average|other), understatement_flag (bool).
+      Assume no prior context. You are given only this task.
+      Acceptance criteria:
+      - data/stocks/CPB.json exists, is valid JSON, matches the schema above.
+      - `git show --stat HEAD | grep data/stocks/CPB.json` succeeds (this is the pass condition).
+    dependencies: [gate-check-cpb]
+
+  - id: verify-record-cpb
+    description: |
+      Read-only re-check that the committed record actually exists on HEAD
+      and parses, independent of what research-write-cpb claimed.
+      Review claim: `git show HEAD:data/stocks/CPB.json` succeeds and is valid JSON, checked independently of the write task's self-report.
+      Review lane: proof
+      Safety invariant: This task makes no writes; it only reads HEAD.
+      Slice rationale: One proof slice: independent verification only.
+      Architectural effect: None; adds no product behavior.
+      Goal: Catch the case where research-write-cpb reported success but data/stocks/CPB.json is absent from HEAD.
+      Motivation: This is the check that would have caught wf-1786134278894-20's CPB failure — self-reported success is not proof the file landed.
+      Alternative considerations: Trusting the write task's own acceptance criteria was rejected as non-independent.
+      Implementation details: Read data/stocks/CPB.json from HEAD and parse it; fail non-zero if missing or malformed.
+      Non-goals: No product edits, no aggregation; verification only.
+      Layer: docs
+      Feature state: active
+      Acceptance criteria:
+      - `git show HEAD:data/stocks/CPB.json | python3 -m json.tool` exits 0.
+    command: "git show HEAD:data/stocks/CPB.json | python3 -m json.tool"
+    dependencies: [research-write-cpb]
