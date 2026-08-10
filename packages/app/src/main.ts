@@ -162,7 +162,7 @@ import {
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
-import { writeStdoutFlushAndExit } from './headless-stdout-flush.js';
+import { writeStdoutFlushAndExit, flushStdoutAndStderr } from './headless-stdout-flush.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
@@ -967,6 +967,7 @@ function startHeadlessMode(): void {
         if (delegated) {
           // Successfully delegated to owner
           delegationBus.disconnect();
+          await flushStdoutAndStderr();
           process.exit(process.exitCode ?? 0);
           return; // Guard: process.exit() may not halt in Electron async context
         }
@@ -2013,6 +2014,13 @@ function startHeadlessMode(): void {
       if (!headlessSignalShutdownInProgress) {
         headlessSignalShutdownInProgress = true;
         await runHeadlessShutdownCleanup('Application quit');
+        // The standalone-mode fallback (no owner answered delegation)
+        // writes its result via writeOut() -> raw process.stdout.write(),
+        // unlike the delegated path which already flushes through
+        // writeStdoutFlushAndExit(). A large payload on a piped stdout
+        // truncates silently at the OS pipe buffer size if process.exit()
+        // runs before that write finishes draining.
+        await flushStdoutAndStderr();
         process.exit(exitCode);
       }
     }
