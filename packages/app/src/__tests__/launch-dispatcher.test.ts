@@ -3,7 +3,7 @@ import { SQLiteAdapter } from '@invoker/data-store';
 import { DISPATCH_LEASE_MS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
-import { LaunchDispatcher } from '../launch-dispatcher.js';
+import { LaunchDispatcher, releaseTaskResourceLeases } from '../launch-dispatcher.js';
 
 function makeLogger(): Logger & {
   records: { level: 'info' | 'warn' | 'error' | 'debug'; msg: string; fields?: Record<string, unknown> }[];
@@ -489,6 +489,59 @@ describe('LaunchDispatcher', () => {
         expect(payload.reason).toBe('launch-dispatch-abandoned');
       }
       expect(prepare).toHaveBeenCalledWith('wf-r/t1', 'launch-dispatch-abandoned');
+    });
+
+    it('CD.2: releaseTaskResourceLeases releases only the owned task leases when called directly', () => {
+      seed();
+      const owned1 = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh-pool/host-A',
+        resourceType: 'ssh-pool-slot',
+        holderId: 'direct-holder-1',
+        taskId: 'wf-r/t1',
+        poolId: 'ssh-pool',
+        poolMemberId: 'host-A',
+      });
+      const owned2 = adapter.claimExecutionResourceLease({
+        resourceKey: 'worktree-pool/slot-9',
+        resourceType: 'worktree-pool-slot',
+        holderId: 'direct-holder-2',
+        taskId: 'wf-r/t1',
+        poolId: 'worktree-pool',
+        poolMemberId: 'slot-9',
+      });
+      const unrelated = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh-pool/host-C',
+        resourceType: 'ssh-pool-slot',
+        holderId: 'direct-holder-3',
+        taskId: 'wf-other/tY',
+        poolId: 'ssh-pool',
+        poolMemberId: 'host-C',
+      });
+      expect(owned1).toBe(true);
+      expect(owned2).toBe(true);
+      expect(unrelated).toBe(true);
+
+      const logger = makeLogger();
+      releaseTaskResourceLeases(adapter, logger, 'owner-direct', 'wf-r/t1', 4242);
+
+      expect(adapter.listExecutionResourceLeasesByTask('wf-r/t1')).toHaveLength(0);
+      const stillThere = adapter.listExecutionResourceLeasesByTask('wf-other/tY');
+      expect(stillThere).toHaveLength(1);
+
+      const events = adapter.getEvents('wf-r/t1');
+      const releaseEvents = events.filter(
+        (event) => event.eventType === 'task.launch_dispatch_lease_released',
+      );
+      expect(releaseEvents).toHaveLength(2);
+      const keys = releaseEvents
+        .map((event) => JSON.parse(event.payload!).resourceKey as string)
+        .sort();
+      expect(keys).toEqual(['ssh-pool/host-A', 'worktree-pool/slot-9']);
+      for (const event of releaseEvents) {
+        const payload = JSON.parse(event.payload!);
+        expect(payload.dispatchId).toBe(4242);
+        expect(payload.reason).toBe('launch-dispatch-abandoned');
+      }
     });
 
     it('CD.2: abandonStuckLeases is a no-op for leases when no resource leases are held', () => {
