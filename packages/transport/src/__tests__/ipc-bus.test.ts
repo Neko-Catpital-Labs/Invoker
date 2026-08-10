@@ -11,6 +11,7 @@ import {
   MALFORMED_FRAME_RATE_LIMIT_MS,
   resolveDefaultSocketPath,
   isServeRecoveryEligible,
+  shouldForwardRelayedErrorResponse,
   type MalformedFrameEvent,
 } from '../ipc-bus.js';
 import { TransportError, TransportErrorCode } from '../transport-error.js';
@@ -389,6 +390,23 @@ describe('IpcBus', () => {
 
     const result = await requester.request<number, number>('delayed-double', 5);
     expect(result).toBe(10);
+  });
+
+  describe('shouldForwardRelayedErrorResponse', () => {
+    it('does not forward a NO_HANDLER response while other peers are still awaited', () => {
+      expect(shouldForwardRelayedErrorResponse(true, 2)).toBe(false);
+      expect(shouldForwardRelayedErrorResponse(true, 1)).toBe(false);
+    });
+
+    it('forwards once the last peer has responded with NO_HANDLER', () => {
+      expect(shouldForwardRelayedErrorResponse(true, 0)).toBe(true);
+    });
+
+    it('forwards a non-NO_HANDLER error immediately, regardless of peers still awaited', () => {
+      expect(shouldForwardRelayedErrorResponse(false, 2)).toBe(true);
+      expect(shouldForwardRelayedErrorResponse(false, 1)).toBe(true);
+      expect(shouldForwardRelayedErrorResponse(false, 0)).toBe(true);
+    });
   });
 
   // ---------------------------------------------------------------
