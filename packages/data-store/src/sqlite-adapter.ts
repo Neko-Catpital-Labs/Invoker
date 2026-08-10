@@ -3972,7 +3972,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
            AND acknowledged_at IS NULL
            AND (
              attempts_count >= ?
-             OR (? IS NOT NULL AND enqueued_at <= ?)
+             OR (? IS NOT NULL AND julianday(enqueued_at) <= julianday(?))
            )
          ORDER BY id ASC`,
       [now, options.maxAttempts, ageCutoff, ageCutoff],

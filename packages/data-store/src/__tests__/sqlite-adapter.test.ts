@@ -1571,9 +1571,7 @@ describe('SQLiteAdapter', () => {
         expect(raw).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
       });
 
-      // TODO(#julianday-fix): flip to `it` once listAbandonableLaunchDispatchLeases
-      // compares enqueued_at via julianday() instead of a raw string.
-      it.fails('does not abandon a lease enqueued a minute ago just because the ISO cutoff falls on the same calendar day', () => {
+      it('does not abandon a lease enqueued a minute ago just because the ISO cutoff falls on the same calendar day', () => {
         setupWorkflowAndTask();
         const row = adapter.enqueueLaunchDispatch({
           taskId: 'wf-launch/t1',
