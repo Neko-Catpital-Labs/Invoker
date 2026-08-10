@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter, hasLiveWritableOwner } from '../sqlite-adapter.js';
+import { DatabaseSync } from 'node:sqlite';
+import { SQLiteAdapter, hasLiveWritableOwner, applyExclusiveLockingBeforeWal } from '../sqlite-adapter.js';
 import type { Workflow } from '../adapter.js';
 
 /**
@@ -41,6 +42,26 @@ describe('SQLiteAdapter exclusiveLocking', () => {
       expect(existsSync(`${dbPath}-wal`)).toBe(true); // still WAL, just heap wal-index
     } finally {
       adapter.close();
+    }
+  });
+
+  it('applyExclusiveLockingBeforeWal sets EXCLUSIVE locking_mode when true, leaves default when false', () => {
+    const dir = makeDir();
+
+    const exclusiveDb = new DatabaseSync(join(dir, 'exclusive.db'));
+    try {
+      applyExclusiveLockingBeforeWal(exclusiveDb, true);
+      expect((exclusiveDb.prepare('PRAGMA locking_mode').get() as { locking_mode?: string }).locking_mode).toBe('exclusive');
+    } finally {
+      exclusiveDb.close();
+    }
+
+    const normalDb = new DatabaseSync(join(dir, 'normal.db'));
+    try {
+      applyExclusiveLockingBeforeWal(normalDb, false);
+      expect((normalDb.prepare('PRAGMA locking_mode').get() as { locking_mode?: string }).locking_mode).toBe('normal');
+    } finally {
+      normalDb.close();
     }
   });
 
