@@ -1,5 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import * as path from 'node:path';
+import { createGzip } from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
 import {
   resolveInvokerHomeRoot,
   hourlySnapshotRetention,
@@ -26,6 +28,18 @@ export type SnapshotBackupFn = (destinationPath: string) => Promise<void>;
 function utcTimestampCompact(): string {
   const iso = new Date().toISOString();
   return iso.replace(/[-:]/g, '').replace('T', '-').replace('.', '-');
+}
+
+/**
+ * Gzip `rawPath` to `rawPath + '.gz'` and remove the raw file. Streamed (not
+ * `zlib.gzipSync`) so a ~700MB+ snapshot never gets buffered twice in memory
+ * or blocks the event loop on small droplets.
+ */
+async function gzipInPlace(rawPath: string): Promise<string> {
+  const gzPath = `${rawPath}.gz`;
+  await pipeline(createReadStream(rawPath), createGzip(), createWriteStream(gzPath));
+  unlinkSync(rawPath);
+  return gzPath;
 }
 
 async function createDbSnapshot(
@@ -55,7 +69,7 @@ async function createDbSnapshot(
     copyFileSync(dbPath, snapshotPath);
   }
 
-  return snapshotPath;
+  return gzipInPlace(snapshotPath);
 }
 
 /**

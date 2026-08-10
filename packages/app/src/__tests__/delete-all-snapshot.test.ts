@@ -7,10 +7,12 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { gunzipSync } from 'node:zlib';
 import {
   createDeleteAllSnapshot,
   createHourlySnapshot,
@@ -24,6 +26,11 @@ function makeDbRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'invoker-db-snapshot-test-'));
   tmpRoots.push(root);
   return root;
+}
+
+/** Snapshots are gzipped on write; decode back to the original text for assertions. */
+function readSnapshotText(snapshotPath: string): string {
+  return gunzipSync(readFileSync(snapshotPath)).toString('utf-8');
 }
 
 afterEach(() => {
@@ -44,8 +51,10 @@ describe('delete-all-snapshot (no-adapter fallback)', () => {
 
     const snapshot = await createDeleteAllSnapshot(root);
     expect(snapshot).toContain(join(root, 'db-backups', 'invoker.db.before-delete-all-'));
+    expect(snapshot).toMatch(/\.gz$/);
     expect(existsSync(snapshot as string)).toBe(true);
-    expect(readFileSync(snapshot as string, 'utf-8')).toBe('db-main');
+    expect(existsSync((snapshot as string).replace(/\.gz$/, ''))).toBe(false); // raw intermediate removed
+    expect(readSnapshotText(snapshot as string)).toBe('db-main');
     expect(existsSync(`${snapshot}-wal`)).toBe(false);
     expect(existsSync(`${snapshot}-shm`)).toBe(false);
   });
@@ -59,8 +68,9 @@ describe('delete-all-snapshot (no-adapter fallback)', () => {
 
     const snapshot = await createHourlySnapshot(root);
     expect(snapshot).toContain(join(root, 'db-backups', 'invoker.db.hourly-auto-'));
+    expect(snapshot).toMatch(/\.gz$/);
     expect(existsSync(snapshot as string)).toBe(true);
-    expect(readFileSync(snapshot as string, 'utf-8')).toBe('db-main');
+    expect(readSnapshotText(snapshot as string)).toBe('db-main');
 
     expect(existsSync(`${snapshot}-wal`)).toBe(false);
     expect(existsSync(`${snapshot}-shm`)).toBe(false);
@@ -87,7 +97,7 @@ describe('delete-all-snapshot (no-adapter fallback)', () => {
     mkdirSync(join(root, 'db-backups'), { recursive: true });
 
     const snapshot = await createDeleteAllSnapshot(root);
-    expect(readFileSync(snapshot as string, 'utf-8')).toBe('restored-db');
+    expect(readSnapshotText(snapshot as string)).toBe('restored-db');
   });
 });
 
@@ -107,8 +117,8 @@ describe('delete-all-snapshot (adapter-backed backup)', () => {
       writeFileSync(dest, 'from-adapter-backup');
     });
 
-    expect(calls).toEqual([snapshot]);
-    expect(readFileSync(snapshot as string, 'utf-8')).toBe('from-adapter-backup');
+    expect(calls).toEqual([snapshot?.replace(/\.gz$/, '')]); // backup callback writes the raw path pre-compression
+    expect(readSnapshotText(snapshot as string)).toBe('from-adapter-backup');
     expect(existsSync(`${snapshot}-wal`)).toBe(false);
     expect(existsSync(`${snapshot}-shm`)).toBe(false);
   });
@@ -228,5 +238,39 @@ describe('hourly snapshot retention', () => {
     for (const blank of ['', '   ']) {
       expect(await keptWith(blank)).toBe(unsetKept);
     }
+  });
+});
+
+describe('hourly snapshot compression', () => {
+  it('gzips the snapshot and shrinks realistic, compressible SQLite-shaped content', async () => {
+    const root = makeDbRoot();
+    // Real SQLite DBs are dominated by repeated schema/text structure, not
+    // random bytes -- a repeating string is a closer proxy than random data
+    // for what gzip actually sees in production.
+    const compressible = 'CREATE TABLE tasks (id TEXT, description TEXT); '.repeat(20_000);
+    writeFileSync(join(root, 'invoker.db'), compressible);
+
+    const snapshot = await createHourlySnapshot(root);
+    const rawBytes = Buffer.byteLength(compressible, 'utf-8');
+    const gzBytes = statSync(snapshot as string).size;
+
+    expect(readSnapshotText(snapshot as string)).toBe(compressible);
+    expect(gzBytes).toBeLessThan(rawBytes / 2); // repetitive text compresses well below half
+  });
+
+  it('prunes a mix of legacy uncompressed and new .gz snapshots by count, oldest first', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const backupDir = join(root, 'db-backups');
+    seedHourly(backupDir, 3); // legacy uncompressed, oldest
+
+    const snapshot = await createHourlySnapshot(root, undefined, 2); // new .gz snapshot, newest
+
+    const remaining = hourlyBaseNames(backupDir);
+    expect(remaining).toHaveLength(2);
+    expect(remaining).toContain(join(backupDir, 'invoker.db.hourly-auto-20260101-000002-000Z').split('/').pop());
+    expect(existsSync(snapshot as string)).toBe(true); // the new .gz snapshot survives
+    expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000000-000Z'))).toBe(false);
+    expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000001-000Z'))).toBe(false);
   });
 });
