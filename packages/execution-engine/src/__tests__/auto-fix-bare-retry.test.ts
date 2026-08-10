@@ -12,6 +12,7 @@ import {
   AUTO_FIX_WORKER_KIND,
   createAutoFixRecoveryTick,
 } from '../auto-fix-recovery.js';
+import { autoFixBareRetryExternalKey } from '../auto-fix-retry-cap.js';
 
 const logger = {
   info: vi.fn(),
@@ -80,6 +81,17 @@ function makeHarness(task = makeFailedTask()) {
   const attemptLedger = createAutoFixAttemptLedger();
   return { tasks, actions, store, submit, attemptLedger };
 }
+
+describe('autoFixBareRetryExternalKey', () => {
+  it('is keyed by taskId alone, stable across calls and distinct per taskId', () => {
+    const first = autoFixBareRetryExternalKey('wf-1/build');
+    const second = autoFixBareRetryExternalKey('wf-1/build');
+    expect(first).toBe(second);
+
+    const other = autoFixBareRetryExternalKey('wf-1/test');
+    expect(other).not.toBe(first);
+  });
+});
 
 describe('AutoFixWorker attempt-0 bare retry', () => {
   it('submits invoker:retry-task on the first tick and does not consume an auto-fix attempt', async () => {
