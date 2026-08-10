@@ -34,35 +34,41 @@ echo "==> submit-plan (headless run) $PLAN"
 ./submit-plan.sh "$PLAN"
 
 DB="$TMPDB/invoker.db"
-if [[ -f "$DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
-  STATUS=$(sqlite3 "$DB" "SELECT status FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
-  RUNNER_KIND=$(sqlite3 "$DB" "SELECT runner_kind FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
-  WORKSPACE_PATH=$(sqlite3 "$DB" "SELECT workspace_path FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
-
-  if [[ "$STATUS" != "completed" ]]; then
-    echo "FAIL: expected scratch task to complete, got status='$STATUS'" >&2
-    exit 1
-  fi
-  if [[ "$RUNNER_KIND" != "scratch" ]]; then
-    echo "FAIL: expected persisted task runner_kind=scratch, got '$RUNNER_KIND'" >&2
-    exit 1
-  fi
-  if [[ -z "$WORKSPACE_PATH" ]]; then
-    echo "FAIL: expected a workspace_path for the scratch task, got empty" >&2
-    exit 1
-  fi
-  case "$WORKSPACE_PATH" in
-    "$ROOT"|"$ROOT"/*)
-      echo "FAIL: scratch task workspace_path is inside the repo checkout ($WORKSPACE_PATH); scratch mode must never use the repo" >&2
-      exit 1
-      ;;
-  esac
-  # A bare `run` (not `owner-serve`) never calls executor destroyAll() for
-  # ANY executor type -- worktrees are not reclaimed after it either, per
-  # verify-executor-routing.sh. So the scratch temp dir persisting here is
-  # expected, not a leak; only owner-serve's shutdown path reclaims it.
-  echo "PASS: scratch task completed with runner_kind=$RUNNER_KIND workspace_path=$WORKSPACE_PATH (outside repo)"
-else
-  echo "FAIL: expected a queryable sqlite DB at $DB" >&2
+if [[ ! -f "$DB" ]]; then
+  echo "FAIL: expected invoker.db at $DB, but it does not exist" >&2
+  echo "==> Contents of $TMPDB:" >&2
+  ls -la "$TMPDB" >&2 || true
   exit 1
 fi
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "FAIL: sqlite3 CLI is not installed on this machine" >&2
+  exit 1
+fi
+
+STATUS=$(sqlite3 "$DB" "SELECT status FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
+RUNNER_KIND=$(sqlite3 "$DB" "SELECT runner_kind FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
+WORKSPACE_PATH=$(sqlite3 "$DB" "SELECT workspace_path FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
+
+if [[ "$STATUS" != "completed" ]]; then
+  echo "FAIL: expected scratch task to complete, got status='$STATUS'" >&2
+  exit 1
+fi
+if [[ "$RUNNER_KIND" != "scratch" ]]; then
+  echo "FAIL: expected persisted task runner_kind=scratch, got '$RUNNER_KIND'" >&2
+  exit 1
+fi
+if [[ -z "$WORKSPACE_PATH" ]]; then
+  echo "FAIL: expected a workspace_path for the scratch task, got empty" >&2
+  exit 1
+fi
+case "$WORKSPACE_PATH" in
+  "$ROOT"|"$ROOT"/*)
+    echo "FAIL: scratch task workspace_path is inside the repo checkout ($WORKSPACE_PATH); scratch mode must never use the repo" >&2
+    exit 1
+    ;;
+esac
+# A bare `run` (not `owner-serve`) never calls executor destroyAll() for
+# ANY executor type -- worktrees are not reclaimed after it either, per
+# verify-executor-routing.sh. So the scratch temp dir persisting here is
+# expected, not a leak; only owner-serve's shutdown path reclaims it.
+echo "PASS: scratch task completed with runner_kind=$RUNNER_KIND workspace_path=$WORKSPACE_PATH (outside repo)"
