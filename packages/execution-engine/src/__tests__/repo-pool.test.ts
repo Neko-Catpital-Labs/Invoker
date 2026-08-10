@@ -409,6 +409,98 @@ describe('RepoPool', () => {
     await limitedPool.destroyAll();
   });
 
+  describe('lease persistence (DB-backed worktree slots)', () => {
+    /** Minimal in-memory stand-in for the execution_resource_leases table. */
+    function makeFakeLeasePersistence() {
+      const rows = new Map<string, { resourceKey: string; holderId: string }>();
+      return {
+        rows,
+        claimExecutionResourceLease: vi.fn((options: {
+          resourceKey: string;
+          resourceType: string;
+          holderId: string;
+          maxHolders?: number;
+        }) => {
+          const key = `${options.resourceKey}::${options.holderId}`;
+          if (rows.has(key)) return true;
+          const maxHolders = Math.max(1, options.maxHolders ?? 1);
+          const otherHolders = [...rows.values()].filter((r) => r.resourceKey === options.resourceKey).length;
+          if (otherHolders >= maxHolders) return false;
+          rows.set(key, { resourceKey: options.resourceKey, holderId: options.holderId });
+          return true;
+        }),
+        releaseExecutionResourceLease: vi.fn((resourceKey: string, holderId: string) => {
+          rows.delete(`${resourceKey}::${holderId}`);
+        }),
+      };
+    }
+
+    it('claims a lease on acquire and releases it on softRelease', async () => {
+      const leasePersistence = makeFakeLeasePersistence();
+      const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1, leasePersistence });
+      const wt = await limitedPool.acquireWorktree(localRepoUrl, 'branch-lease-1', undefined, undefined, {
+        leaseHolderId: 'attempt-1',
+      });
+
+      expect(leasePersistence.claimExecutionResourceLease).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceType: 'worktree', holderId: 'attempt-1', maxHolders: 1 }),
+      );
+      expect(wt.leaseHolderId).toBe('attempt-1');
+      expect(leasePersistence.rows.size).toBe(1);
+
+      wt.softRelease();
+      expect(leasePersistence.releaseExecutionResourceLease).toHaveBeenCalledWith(wt.leaseResourceKey, 'attempt-1');
+      expect(leasePersistence.rows.size).toBe(0);
+      await limitedPool.destroyAll();
+    });
+
+    it('claims a lease on acquire and releases it on full release', async () => {
+      const leasePersistence = makeFakeLeasePersistence();
+      const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1, leasePersistence });
+      const wt = await limitedPool.acquireWorktree(localRepoUrl, 'branch-lease-2', undefined, undefined, {
+        leaseHolderId: 'attempt-2',
+      });
+      expect(leasePersistence.rows.size).toBe(1);
+
+      await wt.release();
+      expect(leasePersistence.rows.size).toBe(0);
+    });
+
+    it('throws ResourceLimitError when the DB lease is exhausted, without mutating the in-memory Set beyond it', async () => {
+      const leasePersistence = makeFakeLeasePersistence();
+      // Pre-fill the DB lease for this repo as already held by a different holder,
+      // simulating a slot reserved by another process instance.
+      const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 5, leasePersistence });
+      leasePersistence.rows.set('bootstrap-key::other-holder', { resourceKey: 'bootstrap-key', holderId: 'other-holder' });
+      // Use the pool's own repo-key computation via a real acquire first, then
+      // saturate the DB lease at maxHolders=5 with distinct external holders.
+      const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-lease-3a', undefined, undefined, {
+        leaseHolderId: 'attempt-3a',
+      });
+      const repoKey = wt1.leaseResourceKey!;
+      for (let i = 0; i < 4; i += 1) {
+        leasePersistence.rows.set(`${repoKey}::external-${i}`, { resourceKey: repoKey, holderId: `external-${i}` });
+      }
+      // In-memory Set only has 1 active worktree (well under maxWorktrees=5),
+      // but the DB lease is now saturated (1 real + 4 external = 5).
+      await expect(
+        limitedPool.acquireWorktree(localRepoUrl, 'branch-lease-3b', undefined, undefined, {
+          leaseHolderId: 'attempt-3b',
+        }),
+      ).rejects.toThrow(ResourceLimitError);
+      await limitedPool.destroyAll();
+    });
+
+    it('degrades to in-memory-only capacity when no leaseHolderId is supplied, even with persistence configured', async () => {
+      const leasePersistence = makeFakeLeasePersistence();
+      const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 2, leasePersistence });
+      const wt = await limitedPool.acquireWorktree(localRepoUrl, 'branch-lease-4');
+      expect(leasePersistence.claimExecutionResourceLease).not.toHaveBeenCalled();
+      expect(wt.leaseResourceKey).toBeUndefined();
+      await limitedPool.destroyAll();
+    });
+  });
+
   it('reconcileActiveWorktrees clears stale slot reservations', async () => {
     const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1 });
     const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-stale');
