@@ -19,6 +19,7 @@ import { ResourceLimitError } from './repo-pool.js';
 import { traceExecution } from './exec-trace.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
+import { ScratchExecutor } from './scratch-executor.js';
 import { MergeGateExecutor } from './merge-gate-executor.js';
 import { SshExecutor } from './ssh-executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
@@ -616,6 +617,24 @@ export function selectExecutor(
   clearPendingPoolSelection(host, task.id);
   reclaimSupersededExecutionSlots(host, task);
   reclaimOrphanedExecutionSlots(host);
+
+  // Scratch tasks never resolve a pool: no repo to clone means no pool
+  // member (ssh/worktree) can ever run them. A poolId attached to a scratch
+  // task by any other path (config default pool, routing rule, replacement
+  // task inheriting a parent's poolId) must never override this.
+  if (effectiveType === 'scratch') {
+    const registered = host.executorRegistry.get('scratch');
+    if (registered) {
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=scratch → scratch (cached)`);
+      return { executor: registered, resolvedExecution, selectedPoolMemberId: undefined };
+    }
+    const scratch = new ScratchExecutor({
+      agentRegistry: host.executionAgentRegistry,
+    });
+    host.executorRegistry.register('scratch', scratch);
+    traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=scratch → scratch (lazy registered)`);
+    return { executor: scratch, resolvedExecution, selectedPoolMemberId: undefined };
+  }
 
   if (task.config.poolId && explicitPoolMemberId) {
     const pool = host.getExecutionPools()[task.config.poolId];

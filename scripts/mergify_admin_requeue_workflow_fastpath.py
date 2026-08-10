@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import tempfile
 from pathlib import Path
 
 try:
+    from .mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from .mergify_admin_requeue_headless_shell import run_headless as _run_headless
 except ImportError:
+    from mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from mergify_admin_requeue_headless_shell import run_headless as _run_headless
 
 
@@ -19,7 +22,21 @@ def resolve_workflow_for_pr(pr_number: int) -> str | None:
     # exception rather than silently falling back to ad-hoc repair.
     review_gate_cmd = os.environ.get("INVOKER_PR_CRON_REVIEW_GATE_CMD")
     if review_gate_cmd:
-        completed = _run_headless('"$2" "$3"', review_gate_cmd, str(pr_number))
+        try:
+            completed = subprocess.run(
+                [review_gate_cmd, str(pr_number)],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=DEFAULT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            completed = subprocess.CompletedProcess(
+                [review_gate_cmd, str(pr_number)],
+                returncode=124,
+                stdout="",
+                stderr=f"timed out after {DEFAULT_TIMEOUT_SECONDS}s",
+            )
     else:
         completed = _run_headless('headless_query query review-gate "$2" --output json', str(pr_number))
     if completed.returncode != 0:

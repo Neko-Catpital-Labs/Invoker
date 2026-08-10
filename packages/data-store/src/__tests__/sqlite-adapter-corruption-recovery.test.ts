@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter, isDatabaseCorruptionError } from '../sqlite-adapter.js';
+import { SQLiteAdapter, isDatabaseCorruptionError, findLatestCleanHourlySnapshot } from '../sqlite-adapter.js';
 
 /**
  * SQLiteAdapter.create() recovers a corrupt database by renaming it (and its
@@ -192,6 +192,36 @@ describe('SQLiteAdapter.create auto-restore from hourly snapshot', () => {
     } finally {
       adapter.close();
     }
+  });
+
+  it('findLatestCleanHourlySnapshot picks the newest clean snapshot from a fixture directory, skipping corrupt ones', async () => {
+    const dir = makeDir();
+    const backupDir = join(dir, 'db-backups');
+    mkdirSync(backupDir);
+    const dbBasename = 'invoker.db';
+
+    await seedSnapshot(join(backupDir, `${dbBasename}.hourly-auto-20260708-090000-000Z`), ['wf-clean-older']);
+    writeFileSync(
+      join(backupDir, `${dbBasename}.hourly-auto-20260708-100000-000Z`),
+      Buffer.from('xx not a sqlite header xx '.repeat(50)),
+    );
+
+    const result = await findLatestCleanHourlySnapshot(backupDir, dbBasename);
+    expect(result).toBe(join(backupDir, `${dbBasename}.hourly-auto-20260708-090000-000Z`));
+  });
+
+  it('findLatestCleanHourlySnapshot returns null when no snapshot in the fixture directory is clean', async () => {
+    const dir = makeDir();
+    const backupDir = join(dir, 'db-backups');
+    mkdirSync(backupDir);
+    const dbBasename = 'invoker.db';
+    writeFileSync(
+      join(backupDir, `${dbBasename}.hourly-auto-20260708-090000-000Z`),
+      Buffer.from('xx not a sqlite header xx '.repeat(50)),
+    );
+
+    const result = await findLatestCleanHourlySnapshot(backupDir, dbBasename);
+    expect(result).toBeNull();
   });
 
   it('falls back to an empty DB when db-backups has no clean snapshot', async () => {

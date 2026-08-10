@@ -2,7 +2,7 @@
   "name": "@invoker/app",
   "productName": "Invoker",
   "desktopName": "invoker.desktop",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Invoker desktop app",
   "homepage": "https://github.com/Neko-Catpital-Labs/Invoker",
   "author": {
@@ -77,6 +77,7 @@
     "@invoker/planning-core": "workspace:*",
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
+    "@invoker/shell": "workspace:*",
     "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",

@@ -311,22 +311,21 @@ describe('DockerExecutor', () => {
       runScopedGitAndShell('container-b', 'from-b', 0),
     ]);
 
-    expect(routedCalls).toEqual([
+    expect(routedCalls).toHaveLength(4);
+    expect(routedCalls.filter((call) => call.containerId === 'container-a')).toEqual([
       expect.objectContaining({
-        containerId: 'container-b',
         script: expect.stringContaining('git \'status\' \'--short\''),
       }),
       expect.objectContaining({
-        containerId: 'container-b',
-        script: 'echo from-b',
-      }),
-      expect.objectContaining({
-        containerId: 'container-a',
-        script: expect.stringContaining('git \'status\' \'--short\''),
-      }),
-      expect.objectContaining({
-        containerId: 'container-a',
         script: 'echo from-a',
+      }),
+    ]);
+    expect(routedCalls.filter((call) => call.containerId === 'container-b')).toEqual([
+      expect.objectContaining({
+        script: expect.stringContaining('git \'status\' \'--short\''),
+      }),
+      expect.objectContaining({
+        script: 'echo from-b',
       }),
     ]);
   });

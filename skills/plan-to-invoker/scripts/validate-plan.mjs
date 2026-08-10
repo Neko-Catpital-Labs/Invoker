@@ -47,7 +47,7 @@ const yamlPath = resolveYamlModulePath(__dirname);
 const { parse: parseYaml } = await import(yamlPath);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
-const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review'];
+const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review', 'no_op'];
 const VALID_REQUIRED_STATUS = ['completed', 'review_ready'];
 const VALID_GATE_POLICY = ['completed', 'review_ready'];
 
@@ -519,11 +519,20 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
-  if (!raw.repoUrl || typeof raw.repoUrl !== 'string' || raw.repoUrl.trim() === '') {
+  const hasRepoUrl = typeof raw.repoUrl === 'string' && raw.repoUrl.trim() !== '';
+  const isScratch = raw.scratch === true;
+  if (isScratch && hasRepoUrl) {
+    errors.push({
+      errorType: 'conflicting_fields',
+      field: 'repoUrl',
+      message: 'Plan cannot set both "scratch: true" and "repoUrl" — scratch plans run with no git repo',
+      value: raw.repoUrl,
+    });
+  } else if (!isScratch && !hasRepoUrl) {
     errors.push({
       errorType: 'missing_required_field',
       field: 'repoUrl',
-      message: 'Plan must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git)',
+      message: 'Plan must have either a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git) or "scratch: true" (no-repo mode)',
       value: raw.repoUrl,
     });
   }

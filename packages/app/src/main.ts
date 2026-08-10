@@ -181,7 +181,7 @@ import { createTaskTerminalAdapter } from './task-terminal-adapter.js';
 import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
 import { createEmbeddedTerminalBackend } from './embedded-terminal-backend.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
-import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
+import { installBundledSkills, resolveBundledSkillsStatus } from '@invoker/shell/bundled-skills';
 import {
   maybeAutoInstallCli,
   updateInvokerCli,
@@ -365,6 +365,7 @@ function buildRegisteredOwnerWorkerDeps(
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
+      cleanupEnabled: invokerConfig.diskHeadroom?.cleanupEnabled,
     },
     infraRepair: {
       ownerRepoRoot: repoRoot,
@@ -542,6 +543,9 @@ const invokerConfig: InvokerConfig = (() => {
     return loadConfig();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // logger.error is a synchronous appendFileSync; process.stderr.write on a
+    // piped stderr is not guaranteed to flush before the exit() below.
+    logger.error(`[startup] config load failed fatally: ${message}`, { module: 'startup' });
     process.stderr.write(`${message}\n`);
     process.exit(1);
   }
@@ -1995,6 +1999,13 @@ function startHeadlessMode(): void {
         );
         exitCode = resolution.exitCode;
       } else {
+        // Same flush-race concern as the loadConfig() catch above: a fatal
+        // owner-serve startup error must survive process.exit() below even
+        // when stderr is a pipe, or it vanishes with no trace anywhere.
+        logger.error(
+          `[headless] ${command ?? 'unknown command'} failed fatally: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+          { module: 'headless', command: command ?? 'unknown' },
+        );
         process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
         exitCode = 1;
       }

@@ -5,9 +5,11 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+  readInvokerConfigFile,
   resolveHeadlessOwnerLaunchSpec,
   resolveInvokerHomeRoot,
   resolveRepoRoot,
+  updateInvokerConfigFile,
   type HeadlessOwnerLaunchSpec,
   type Logger,
 } from '@invoker/contracts';
@@ -48,9 +50,15 @@ import {
   type LiveOwnerInfo,
 } from './live-owner-bus.js';
 import { runMcpServer } from './mcp-server.js';
-import { runDoctor, runSetup } from './onboarding.js';
+import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
+import {
+  applyWorkerToggle,
+  findWorkerToggle,
+  ONBOARDING_WORKER_TOGGLES,
+  readWorkerToggleValue,
+} from './worker-toggles.js';
 
-const VERSION = '0.0.9';
+const VERSION = '0.0.10';
 
 type CliOptions = {
   dbDir?: string;
@@ -176,6 +184,7 @@ function usage(): string {
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
+    '  invoker-cli worker toggles [--enable <id>|--disable <id> ...]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
@@ -192,6 +201,7 @@ function usage(): string {
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
+    '  worker toggles      Show or set the on/off state of optional owner workers (PR maintenance, e2e auto-fix, auto-approve, disk-headroom cleanup).',
     '',
     'Options:',
     '  --planner-url <url>   Planner service URL for `setup planner`.',
@@ -947,6 +957,51 @@ function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
   }
 }
 
+/**
+ * `invoker-cli worker toggles [--enable <id>|--disable <id> ...]`
+ * With no flags, prints each toggle's current state. Each flag applies
+ * immediately, writing to ~/.invoker/config.json (or INVOKER_REPO_CONFIG_PATH).
+ */
+function runWorkerTogglesCommand(args: string[]): number {
+  const changes: Array<{ spec: ReturnType<typeof findWorkerToggle>; enabled: boolean }> = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const flag = args[i];
+    if (flag !== '--enable' && flag !== '--disable') {
+      throw new Error(`Unknown option for worker toggles: "${flag}". Usage: invoker-cli worker toggles [--enable <id>|--disable <id> ...]`);
+    }
+    const id = args[++i];
+    const spec = id ? findWorkerToggle(id) : undefined;
+    if (!spec) {
+      const knownIds = ONBOARDING_WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
+      throw new Error(`Unknown worker toggle id: "${id ?? ''}". Known ids: ${knownIds}`);
+    }
+    changes.push({ spec, enabled: flag === '--enable' });
+  }
+
+  if (changes.length > 0) {
+    const configPath = defaultConfigPath();
+    updateInvokerConfigFile(configPath, (config) => {
+      for (const { spec, enabled } of changes) {
+        Object.assign(config, applyWorkerToggle(config, spec!, enabled));
+      }
+    });
+    for (const { spec, enabled } of changes) {
+      process.stdout.write(`${spec!.label}: ${enabled ? 'on' : 'off'}\n`);
+    }
+    return 0;
+  }
+
+  const config = readInvokerConfigFile(defaultConfigPath());
+  process.stdout.write('Worker toggles\n');
+  for (const spec of ONBOARDING_WORKER_TOGGLES) {
+    const value = readWorkerToggleValue(config, spec);
+    const enabled = value ?? spec.defaultEnabled ?? false;
+    const state = enabled ? 'on' : 'off';
+    process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+  }
+  return 0;
+}
+
 function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorkerRuntime {
   return 'finished' in worker && worker.finished instanceof Promise;
 }
@@ -1070,6 +1125,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
+      if (subcommand === 'toggles') {
+        return runWorkerTogglesCommand(argv.slice(2));
+      }
       const registry = registerExternalWorkers(
         registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,

@@ -23,6 +23,7 @@ const vendor = join(root, 'vendor');
 const archivePath = join(vendor, asset);
 const sumsPath = join(vendor, 'SHA256SUMS');
 const binaryPath = join(vendor, 'invoker-cli');
+const skillsPath = join(vendor, 'skills');
 
 if (!['darwin', 'linux'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) {
   throw new Error(`Unsupported Invoker CLI platform: ${process.platform}-${process.arch}`);
@@ -52,6 +53,7 @@ function expectedHash(sums, name) {
 
 await mkdir(vendor, { recursive: true });
 await rm(binaryPath, { force: true });
+await rm(skillsPath, { force: true, recursive: true });
 await download(`${baseUrl}/SHA256SUMS`, sumsPath);
 await download(`${baseUrl}/${asset}`, archivePath);
 
@@ -66,9 +68,15 @@ if (actual !== expected) {
 }
 
 execFileSync('tar', ['-xzf', archivePath, '-C', vendor], { stdio: 'inherit' });
-const extracted = join(vendor, asset.replace(/\.tar\.gz$/, ''), 'invoker-cli');
+const extractedDir = join(vendor, asset.replace(/\.tar\.gz$/, ''));
+const extracted = join(extractedDir, 'invoker-cli');
 if (!existsSync(extracted)) {
   throw new Error(`Downloaded archive did not contain ${extracted}`);
 }
 execFileSync('cp', [extracted, binaryPath]);
 await chmod(binaryPath, 0o755);
+
+const extractedSkills = join(extractedDir, 'skills');
+if (existsSync(extractedSkills)) {
+  execFileSync('cp', ['-r', extractedSkills, skillsPath]);
+}
