@@ -401,6 +401,8 @@ export interface PlanDefinition {
   mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
   reviewProvider?: string;
   repoUrl?: string;
+  /** No-repo mode: every task runs in a plain temp directory, no git involved. Mutually exclusive with repoUrl. */
+  scratch?: boolean;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId: string;
@@ -1356,14 +1358,18 @@ export class Orchestrator {
     const validatedTasks: TaskState[] = [];
     const resolvedRoutingByTaskId = new Map<string, ExecutorRoutingReason>();
     for (const taskDef of plan.tasks) {
-      const resolvedRouting = resolveExecutorRouting(
-        taskDef.id,
-        taskDef.command,
-        taskDef.poolId,
-        this.defaultPoolId,
-        this.executorRoutingRules,
-        this.availablePoolIds,
-      );
+      // Scratch plans never resolve a pool: no clone, no config-level default
+      // pool, no routing rule can ever hijack a scratch task's runnerKind.
+      const resolvedRouting: ReturnType<typeof resolveExecutorRouting> = plan.scratch
+        ? { poolId: undefined, reason: { type: 'scratch' } }
+        : resolveExecutorRouting(
+            taskDef.id,
+            taskDef.command,
+            taskDef.poolId,
+            this.defaultPoolId,
+            this.executorRoutingRules,
+            this.availablePoolIds,
+          );
       const effectivePoolId = resolvedRouting.poolId;
 
       const scopedId = localToScoped.get(taskDef.id)!;
@@ -1391,7 +1397,9 @@ export class Orchestrator {
         poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
-      if (taskDef.dockerImage) {
+      if (plan.scratch) {
+        taskConfig = { ...baseConfig, runnerKind: 'scratch' as const };
+      } else if (taskDef.dockerImage) {
         taskConfig = { ...baseConfig, runnerKind: 'docker' as const, dockerImage: taskDef.dockerImage };
       } else if (effectivePoolId) {
         taskConfig = { ...baseConfig, runnerKind: 'ssh' as const };
@@ -2660,6 +2668,9 @@ export class Orchestrator {
             ...rtBase, runnerKind: 'ssh',
             poolMemberId: task.config.runnerKind === 'ssh' ? (task.config as { poolMemberId?: string }).poolMemberId : undefined,
           } as unknown) as TaskConfig;
+          break;
+        case 'scratch':
+          rtConfig = { ...rtBase, runnerKind: 'scratch' as const };
           break;
         default:
           rtConfig = { ...rtBase, runnerKind: 'worktree' as const };
