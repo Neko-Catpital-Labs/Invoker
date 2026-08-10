@@ -429,8 +429,30 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
   const sha = typeof failureOrSha === 'object' ? failureOrSha.firstBadSha : failureOrSha;
   const job = typeof failureOrSha === 'object' ? failureOrSha.jobName : jobName;
   const marker = buildMarker(sha, job);
-  const workflows = JSON.parse(queryFn());
-  const items = Array.isArray(workflows) ? workflows : workflows.items ?? [];
+  let workflows;
+  try {
+    workflows = JSON.parse(queryFn());
+  } catch (err) {
+    // A bad query response (truncated output, transient CLI failure, ...)
+    // must not crash the whole sweep and must not risk filing a duplicate
+    // fix for work that may already be running -- fail closed by assuming
+    // non-terminal work exists, so this one failure is skipped this round
+    // and picked back up on the next sweep once the query is healthy again.
+    console.error(`ci-regression-watch: liveQueryHasNonTerminalWork query failed for marker "${marker}", assuming non-terminal work exists: ${err instanceof Error ? err.message : String(err)}`);
+    return true;
+  }
+  const items = Array.isArray(workflows)
+    ? workflows
+    : Array.isArray(workflows?.items)
+      ? workflows.items
+      : null;
+  if (items === null) {
+    // Valid JSON that isn't the expected shape (e.g. `null`, a bare object
+    // without an `items` array) -- fail closed the same way a parse error
+    // does, instead of throwing past this function's own try/catch.
+    console.error(`ci-regression-watch: liveQueryHasNonTerminalWork received an invalid response shape for marker "${marker}", assuming non-terminal work exists`);
+    return true;
+  }
   return items.some(
     (w) => !TERMINAL_WORKFLOW_STATUSES.has(w.status)
       && typeof w.description === 'string'
