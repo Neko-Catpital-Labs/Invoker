@@ -20,12 +20,38 @@ import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { computeRepoCacheHash, computeRepoCacheKey, sanitizeBranchForPath } from './git-utils.js';
 import { cleanGitRepositoryEnv } from './process-utils.js';
+import { WORKTREE_LEASE_TTL_MS } from '@invoker/data-store';
+
+/**
+ * Minimal lease surface RepoPool needs, matching `SQLiteAdapter`'s
+ * `execution_resource_leases` methods. Kept structural (not imported as
+ * `SQLiteAdapter`) so RepoPool stays constructible without persistence, as
+ * every existing `repo-pool.test.ts` case already does.
+ */
+export interface RepoPoolLeasePersistence {
+  claimExecutionResourceLease(options: {
+    resourceKey: string;
+    resourceType: string;
+    holderId: string;
+    maxHolders?: number;
+    leaseMs?: number;
+    metadata?: unknown;
+  }): boolean;
+  releaseExecutionResourceLease(resourceKey: string, holderId: string): void;
+}
 
 export interface RepoPoolConfig {
   cacheDir: string;
   maxWorktrees?: number;
   /** When set, worktrees are created here instead of inside the clone. */
   worktreeBaseDir?: string;
+  /**
+   * Optional DB-backed lease authority for worktree slots, mirroring the SSH
+   * pool-member lease in `execution_resource_leases`. Additive: the in-memory
+   * `activeWorktrees` Set stays the primary capacity gate for callers that
+   * don't pass this (e.g. unit tests constructing RepoPool directly).
+   */
+  leasePersistence?: RepoPoolLeasePersistence;
 }
 
 export interface RepoPoolTiming {
@@ -40,6 +66,9 @@ export interface AcquiredWorktree {
   release: () => Promise<void>;
   /** Free the pool slot without removing the worktree from disk. */
   softRelease: () => void;
+  /** Set only when a DB-backed worktree lease was actually claimed. */
+  leaseResourceKey?: string;
+  leaseHolderId?: string;
 }
 
 export interface AcquireWorktreeOptions {
@@ -48,6 +77,13 @@ export interface AcquireWorktreeOptions {
     branch: string;
     workspacePath: string;
   };
+  /**
+   * Identity for the DB-backed worktree lease (e.g. the task attempt id).
+   * Required for this acquisition to claim a lease even when
+   * `RepoPoolConfig.leasePersistence` is configured — without it, capacity
+   * is enforced by the in-memory Set only, same as today.
+   */
+  leaseHolderId?: string;
 }
 
 interface RebaseRefreshBatch {
@@ -81,6 +117,7 @@ export class RepoPool {
   private readonly cacheDir: string;
   private readonly maxWorktrees: number;
   private readonly worktreeBaseDir?: string;
+  private readonly leasePersistence?: RepoPoolLeasePersistence;
   private activeWorktrees = new Map<string, Set<string>>();
   private cloneLocks = new Map<string, Promise<string>>();
   /** Chain of operations per repo to serialize git operations. */
@@ -91,6 +128,7 @@ export class RepoPool {
     this.cacheDir = config.cacheDir;
     this.maxWorktrees = config.maxWorktrees ?? 5;
     this.worktreeBaseDir = config.worktreeBaseDir;
+    this.leasePersistence = config.leasePersistence;
   }
 
   private cloneDir(repoUrl: string): string {
@@ -766,6 +804,37 @@ export class RepoPool {
     if (active.size >= this.maxWorktrees) {
       throw new ResourceLimitError(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
     }
+
+    // DB-backed lease: additive to the in-memory Set above, never a way to
+    // grant more capacity than it already allows. Skipped (not a hard
+    // failure) when persistence or a holder id isn't supplied, so every
+    // existing no-persistence caller (all current repo-pool.test.ts cases)
+    // behaves exactly as before.
+    let leaseHolderId: string | undefined = opts?.leaseHolderId;
+    if (this.leasePersistence && leaseHolderId) {
+      let claimed = true;
+      try {
+        claimed = this.leasePersistence.claimExecutionResourceLease({
+          resourceKey: repoKey,
+          resourceType: 'worktree',
+          holderId: leaseHolderId,
+          maxHolders: this.maxWorktrees,
+          leaseMs: WORKTREE_LEASE_TTL_MS,
+          metadata: { repoUrl, branch },
+        });
+      } catch (err) {
+        console.warn(`[RepoPool] claimExecutionResourceLease failed for ${repoKey} holder=${leaseHolderId}: ${err}`);
+        leaseHolderId = undefined;
+      }
+      if (leaseHolderId && !claimed) {
+        throw new ResourceLimitError(
+          `Worktree limit reached for ${repoUrl}: lease capacity exhausted (max ${this.maxWorktrees})`,
+        );
+      }
+    } else {
+      leaseHolderId = undefined;
+    }
+
     const sanitized = sanitizeBranchForPath(branch);
     const urlHash = computeRepoCacheHash(repoUrl);
     const worktreePath = this.worktreeBaseDir
@@ -994,6 +1063,15 @@ export class RepoPool {
       activeCount: active.size,
     });
 
+    const releaseLeaseBestEffort = () => {
+      if (!leaseHolderId) return;
+      try {
+        this.leasePersistence?.releaseExecutionResourceLease(repoKey, leaseHolderId);
+      } catch (err) {
+        console.warn(`[RepoPool] releaseExecutionResourceLease failed for ${repoKey} holder=${leaseHolderId}: ${err}`);
+      }
+    };
+
     const release = async () => {
       try {
         await this.execGit(['worktree', 'remove', '--force', effectivePath], clonePath);
@@ -1001,12 +1079,24 @@ export class RepoPool {
         try { await this.execGit(['worktree', 'prune'], clonePath); } catch { /* best-effort */ }
       }
       active.delete(effectivePath);
+      releaseLeaseBestEffort();
     };
 
-    const softRelease = () => { active.delete(effectivePath); };
+    const softRelease = () => {
+      active.delete(effectivePath);
+      releaseLeaseBestEffort();
+    };
 
     bench('RepoPool.doAcquireWorktree.returning', { effectivePath });
-    return { clonePath, worktreePath: effectivePath, branch, release, softRelease };
+    return {
+      clonePath,
+      worktreePath: effectivePath,
+      branch,
+      release,
+      softRelease,
+      leaseResourceKey: leaseHolderId ? repoKey : undefined,
+      leaseHolderId,
+    };
   }
 
   /** Get the deterministic clone directory path for a given repo URL. */
