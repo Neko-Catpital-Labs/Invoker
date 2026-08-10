@@ -11,6 +11,7 @@ import {
   DockerExecutor,
   getEffectivePath,
   WorktreeExecutor,
+  ScratchExecutor,
   SshExecutor,
   type Executor,
   type ExecutorHandle,
@@ -251,15 +252,21 @@ export function resolveTaskTerminalSpec(
       });
       executorRegistry.register('worktree', worktree);
       executor = worktree;
+    } else if (repairedMeta.runnerKind === 'scratch') {
+      const scratch = new ScratchExecutor({
+        agentRegistry: opts.executionAgentRegistry,
+      });
+      executorRegistry.register('scratch', scratch);
+      executor = scratch;
     } else {
       executor = executorRegistry.getDefault();
     }
   }
 
-  // Managed-workspace executors (worktree, ssh, docker) MUST have a resolved workspacePath.
+  // Managed-workspace executors (worktree, ssh, docker, scratch) MUST have a resolved workspacePath.
   // Refuse fallback to repoRoot host cwd to prevent silent data loss when workspace metadata is missing.
-  const managedRunnerKinds = ['worktree', 'ssh', 'docker'];
-  const hostWorkspaceRunnerKinds = ['worktree'];
+  const managedRunnerKinds = ['worktree', 'ssh', 'docker', 'scratch'];
+  const hostWorkspaceRunnerKinds = ['worktree', 'scratch'];
   const isManagedExecutor = managedRunnerKinds.includes(repairedMeta.runnerKind);
   if (isManagedExecutor && !repairedMeta.workspacePath) {
     const errorMsg = [
