@@ -321,6 +321,39 @@ describe('Invoker terminal (component)', () => {
     };
   }
 
+  it('shows the submitted-plan bar running state while the workflow is still running', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        readOnly: true,
+        submittedPlanName: 'Submitted Plan',
+        workflowRunning: true,
+        onOpenGraph: vi.fn(),
+      })}
+    />);
+
+    const bar = screen.getByTestId('invoker-terminal-submitted-bar');
+    expect(within(bar).getByText(/Workflow running\.\.\./)).toBeInTheDocument();
+    expect(bar).toHaveTextContent('"Submitted Plan"');
+    expect(bar).not.toHaveTextContent('Plan ready');
+    expect(within(bar).getByTestId('invoker-terminal-open-graph')).toBeInTheDocument();
+  });
+
+  it('keeps the submitted-plan bar Plan ready content when the workflow is not running', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        readOnly: true,
+        submittedPlanName: 'Submitted Plan',
+        workflowRunning: false,
+        onOpenGraph: vi.fn(),
+      })}
+    />);
+
+    const bar = screen.getByTestId('invoker-terminal-submitted-bar');
+    expect(bar).toHaveTextContent('Plan ready · "Submitted Plan" · review the graph, then Start ready work');
+    expect(bar).not.toHaveTextContent('Workflow running');
+    expect(within(bar).getByTestId('invoker-terminal-open-graph')).toBeInTheDocument();
+  });
+
   function makePlanningTerminalSession(
     overrides: Partial<TerminalSessionDescriptor> = {},
   ): TerminalSessionDescriptor {
