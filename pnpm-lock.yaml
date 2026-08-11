@@ -282,6 +282,8 @@ importers:
         specifier: workspace:*
         version: link:../npm-cli
 
+  packages/npm-watcher: {}
+
   packages/persistence:
     dependencies:
       '@invoker/data-store':
