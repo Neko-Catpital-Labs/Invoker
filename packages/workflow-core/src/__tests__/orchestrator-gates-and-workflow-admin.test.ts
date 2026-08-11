@@ -2396,6 +2396,37 @@ describe('Orchestrator', () => {
       expect(waiting.length).toBeGreaterThan(0);
       expect(waiting.at(-1)?.payload).toMatchObject({ attempts: 1 });
     });
+
+    it('isLaunchParked returns true before the backoff elapses and false after, called directly', () => {
+      const parkOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        deferRunningUntilLaunch: true,
+        launchDeferralBackoffMs: 60_000,
+      });
+      parkOrchestrator.loadPlan({
+        name: 'defer-park-direct',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const firstStarted = parkOrchestrator.startExecution();
+      expect(firstStarted).toHaveLength(1);
+      const taskId = firstStarted[0].id;
+
+      const beforeDefer = Date.now();
+      parkOrchestrator.deferTask(taskId, {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: parkOrchestrator.getTask(taskId)!.execution.selectedAttemptId,
+        phase: 'launching',
+      });
+      const afterDefer = Date.now();
+
+      // Backoff is fixed at 60s, so `until` lands within [beforeDefer+60000, afterDefer+60000].
+      expect(parkOrchestrator.isLaunchParked(taskId, beforeDefer + 1)).toBe(true);
+      expect(parkOrchestrator.isLaunchParked(taskId, afterDefer + 60_000 + 1)).toBe(false);
+    });
     it.skip('keeps a parked resource-limit task queued between scheduler polls', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
