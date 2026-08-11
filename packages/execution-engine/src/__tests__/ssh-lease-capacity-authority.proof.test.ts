@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import { sshHostLeaseLoad } from '../task-runner-pool.js';
+import { acquirePoolSelectionLease, sshHostLeaseLoad } from '../task-runner-pool.js';
+import type { PoolSelection } from '../task-runner-pool.js';
 import type { TaskState } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '@invoker/data-store';
 
@@ -137,6 +138,50 @@ describe('SSH lease capacity authority (proof)', () => {
 
     expect(load).toBe(3);
     expect(countExecutionResourceLeases).toHaveBeenCalledWith('ssh:invoker@shared.example.com:22');
+  });
+
+  // acquirePoolSelectionLease is the claim-at-select guard itself: called
+  // directly (not through selectExecutor), it must claim on a first call and
+  // refuse a conflicting second claim for the same host.
+  it('acquirePoolSelectionLease claims a host lease once and blocks a conflicting second claim', () => {
+    const task = makeTask('wf-1/task-a', 'mixed-local-ssh');
+    const claimExecutionResourceLease = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const host = {
+      getRemoteTargets: () => ({ 'remote-shared': sharedHost }),
+      getExecutionPools: () => ({
+        'mixed-local-ssh': {
+          selectionStrategy: 'leastLoaded',
+          maxConcurrentTasksPerMember: 1,
+          members: [{ id: 'remote-shared', type: 'ssh', maxConcurrentTasks: 1 }],
+        },
+      }),
+      runnerInstanceId: 'runner-1',
+      persistence: {
+        claimExecutionResourceLease,
+        logEvent: vi.fn(),
+      },
+    } as unknown as Parameters<typeof acquirePoolSelectionLease>[0];
+
+    const selection: PoolSelection = {
+      poolId: 'mixed-local-ssh',
+      member: { id: 'remote-shared', type: 'ssh', maxConcurrentTasks: 1 },
+      memberKey: 'ssh:remote-shared',
+      selectionStrategy: 'leastLoaded',
+    };
+    expect(acquirePoolSelectionLease(host, task, 'wf-1/task-a-attempt-1', selection)).toBe(true);
+    expect(selection.leaseResourceKey).toBe('ssh:invoker@shared.example.com:22');
+    expect(selection.leaseHolderId).toBeDefined();
+
+    const conflictingSelection: PoolSelection = {
+      poolId: 'pnpm-ssh',
+      member: { id: 'remote-shared', type: 'ssh', maxConcurrentTasks: 1 },
+      memberKey: 'ssh:remote-shared',
+      selectionStrategy: 'leastLoaded',
+    };
+    expect(acquirePoolSelectionLease(host, task, 'wf-2/task-b-attempt-1', conflictingSelection)).toBe(false);
+    expect(claimExecutionResourceLease).toHaveBeenCalledTimes(2);
   });
 
   // Host-keyed claim-at-select prevents two pools from double-booking one droplet.
