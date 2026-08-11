@@ -1843,6 +1843,14 @@ export function App() {
     [tasks, workflows, attentionTaskIdsWithFailures],
   );
   const runningEntries = useMemo(() => getRunningTaskEntries(tasks, workflows, queueStatus), [tasks, workflows, queueStatus]);
+  const runningWorkflowCount = useMemo(() => {
+    const workflowIds = new Set<string>();
+    for (const { task } of runningEntries) {
+      const workflowId = task.config.workflowId;
+      if (workflowId) workflowIds.add(workflowId);
+    }
+    return workflowIds.size;
+  }, [runningEntries]);
   const commandPaletteWorkflowEntries = useMemo(
     () => workflowEntries.slice(0, COMMAND_PALETTE_MAX_ROWS),
     [workflowEntries],
@@ -4986,6 +4994,7 @@ export function App() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <LeftStatusColumn
           workflowCount={workflowEntries.length}
+          runningWorkflowCount={runningWorkflowCount}
           attentionCount={attentionEntries.length}
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
