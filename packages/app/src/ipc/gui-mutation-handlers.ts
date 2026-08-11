@@ -253,12 +253,14 @@ export async function resolveGuiQueueStatusRead({
   orchestrator,
   logger,
   markDaemonOwnerUnavailable,
+  refresh,
 }: {
   ownerMode: boolean;
   messageBus: Pick<MessageBus, 'request'>;
   orchestrator: Pick<Orchestrator, 'getQueueStatus'>;
   logger: Logger;
   markDaemonOwnerUnavailable: (reason: string) => void;
+  refresh?: boolean;
 }): Promise<QueueStatus> {
   if (!ownerMode) {
     try {
@@ -274,7 +276,7 @@ export async function resolveGuiQueueStatusRead({
     }
     return orchestrator.getQueueStatus({ refresh: true });
   }
-  return orchestrator.getQueueStatus({ refresh: false });
+  return orchestrator.getQueueStatus({ refresh: refresh === true });
 }
 
 type RendererTaskFeed = ReturnType<typeof createRendererTaskFeed>;
@@ -1824,12 +1826,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return workerRuntimeController.stop(String(kindArg));
   });
 
-  ipcMain.handle('invoker:get-queue-status', () => resolveGuiQueueStatusRead({
+  ipcMain.handle('invoker:get-queue-status', (_event, options?: { refresh?: boolean }) => resolveGuiQueueStatusRead({
     ownerMode,
     messageBus,
     orchestrator,
     logger,
     markDaemonOwnerUnavailable,
+    refresh: options?.refresh,
   }));
   ipcMain.handle('invoker:get-worker-status', async () => {
     if (!ownerMode) {
