@@ -98,6 +98,14 @@ function Harness({
     () => workflowProgressSurfaces.getRunningTaskEntries(tasks, workflows, null),
     [tasks, workflows],
   );
+  const runningWorkflowCount = useMemo(() => {
+    const workflowIds = new Set<string>();
+    for (const { task } of runningEntries) {
+      const workflowId = task.config.workflowId;
+      if (workflowId) workflowIds.add(workflowId);
+    }
+    return workflowIds.size;
+  }, [runningEntries]);
 
   return (
     <div>
@@ -107,6 +115,7 @@ function Harness({
       <span data-testid="parent-render-count">{renderCount}</span>
       <LeftStatusColumn
         workflowCount={workflowEntries.length}
+        runningWorkflowCount={runningWorkflowCount}
         attentionCount={attentionEntries.length}
         workerStatus={null}
         selectedSurface="home"
@@ -114,6 +123,7 @@ function Harness({
         onSelectSurface={() => {}}
         onToggleCollapsed={() => {}}
         planningSessionCount={0}
+        planningAttentionCount={0}
         onOpenSettings={() => {}}
         theme="dark"
         onToggleTheme={() => {}}
@@ -163,6 +173,25 @@ describe('CommandPalette', () => {
     expect(screen.getByText(/Go home/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Needs Attention/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Workflows/i).length).toBeGreaterThan(0);
+  });
+
+  it('drives the sidebar running workflow indicator from running task entries', () => {
+    const { workflows, tasks } = buildFixtures();
+    const { rerender } = render(<Harness workflows={workflows} tasks={tasks} />);
+
+    expect(screen.getByTestId('sidebar-workflows')).toHaveAttribute('data-tone', 'running');
+    expect(screen.getByTestId('sidebar-running')).toBeVisible();
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('1 workflow running');
+
+    const idleTasks = new Map(tasks);
+    idleTasks.set('t-2', {
+      ...tasks.get('t-2')!,
+      status: 'completed',
+    });
+    rerender(<Harness workflows={workflows} tasks={idleTasks} />);
+
+    expect(screen.getByTestId('sidebar-workflows')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
   });
 
   it('lists workflows and calls onSelectWorkflow on click', async () => {
