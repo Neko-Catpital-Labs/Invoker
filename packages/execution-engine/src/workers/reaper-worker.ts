@@ -11,6 +11,7 @@ import {
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
   reapStaleAutomationCheckouts,
+  reapStaleWorktrees,
   trimOversizedLogs,
 } from './reaper-reclaim.js';
 
@@ -37,6 +38,8 @@ export interface ReaperWorkerOptions {
   reapOrphans?: typeof reapDeletingOrphans;
   /** Test seam: override the stale automation-checkout reap. */
   reapCheckouts?: typeof reapStaleAutomationCheckouts;
+  /** Test seam: override stale task-worktree reap. */
+  reapWorktrees?: typeof reapStaleWorktrees;
   /** Test seam: override snapshot-retention enforcement. */
   enforceRetention?: typeof enforceHourlySnapshotRetention;
   /** Test seam: override oversized-log trimming. */
@@ -48,6 +51,7 @@ export interface ReaperWorkerOptions {
 export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime {
   const reapOrphans = options.reapOrphans ?? reapDeletingOrphans;
   const reapCheckouts = options.reapCheckouts ?? reapStaleAutomationCheckouts;
+  const reapWorktrees = options.reapWorktrees ?? reapStaleWorktrees;
   const enforceRetention = options.enforceRetention ?? enforceHourlySnapshotRetention;
   const trimLogs = options.trimLogs ?? trimOversizedLogs;
 
@@ -77,12 +81,22 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         invokerHome: options.invokerHome,
         logger: options.logger,
       });
+      const worktreeResults = await reapWorktrees({
+        invokerHome: options.invokerHome,
+        remoteTargets: options.remoteTargets ?? [],
+        logger: options.logger,
+      });
+      const worktreesRemoved = worktreeResults.reduce((sum, result) => {
+        const match = result.detail?.match(/^removed (\d+)$/);
+        return sum + (match ? Number.parseInt(match[1] ?? '0', 10) : 0);
+      }, 0);
 
-      const failed = orphanResults.filter((result) => !result.ok);
+      const orphanFailed = orphanResults.filter((result) => !result.ok);
+      const failed = [...orphanResults, ...worktreeResults].filter((result) => !result.ok);
       const summary =
-        `Reaper pass: orphan targets ${orphanResults.length - failed.length}/${orphanResults.length} ok, `
+        `Reaper pass: orphan targets ${orphanResults.length - orphanFailed.length}/${orphanResults.length} ok, `
         + `checkouts removed ${checkoutsRemoved.length}, snapshots pruned ${snapshotsPruned}, `
-        + `logs trimmed ${logsTrimmed.length}`;
+        + `logs trimmed ${logsTrimmed.length}, worktrees removed ${worktreesRemoved}`;
 
       if (options.store) {
         recordWorkerDecisionRow(options.store, {
@@ -99,6 +113,8 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
             checkoutsRemoved,
             snapshotsPruned,
             logsTrimmed,
+            worktreeResults,
+            worktreesRemoved,
           },
           incrementAttempt: true,
         });
@@ -114,7 +130,7 @@ export function registerReaperWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: REAPER_WORKER_KIND,
-    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, excess hourly snapshots, and oversized logs on an interval.',
+    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, stale task worktrees, excess hourly snapshots, and oversized logs on an interval.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createReaperWorker({
         logger: deps.logger,
