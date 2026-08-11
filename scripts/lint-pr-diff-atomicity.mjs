@@ -39,6 +39,10 @@ const POLICY = {
     severity: 'warning',
     message: 'A skipped test (.skip) was added; confirm the skip is intentional.',
   },
+  'test-assertion-weakened': {
+    severity: 'fatal',
+    message: 'A test assertion was flipped (negation or expected value changed) in the same diff as a non-test file change; confirm the test still catches the original bug instead of matching a regression.',
+  },
   'unrelated-areas': {
     severity: 'warning',
     message: 'The diff spans multiple unrelated top-level areas; confirm this is one atomic change.',
@@ -133,8 +137,17 @@ function finalizeFile(file) {
     lines[lineNumber - 1] = text;
   }
   file.newContent = lines.join('\n');
+
+  const oldMax = file.oldLineMap.size > 0 ? Math.max(...file.oldLineMap.keys()) : 0;
+  const oldLines = new Array(oldMax).fill('');
+  for (const [lineNumber, text] of file.oldLineMap) {
+    oldLines[lineNumber - 1] = text;
+  }
+  file.oldContent = oldLines.join('\n');
+
   file.category = classifyPath(file.path);
   delete file.newLineMap;
+  delete file.oldLineMap;
   return file;
 }
 
@@ -143,6 +156,7 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
   const lines = (diffText || '').split('\n');
   let current = null;
   let counter = 0;
+  let oldCounter = 0;
 
   const start = (header) => {
     const finalized = finalizeFile(current);
@@ -157,12 +171,16 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
       path: '',
       changeType: 'modify',
       addedLineNumbers: new Set(),
+      removedLineNumbers: new Set(),
       removedCount: 0,
       newLineMap: new Map(),
+      oldLineMap: new Map(),
       newContent: '',
+      oldContent: '',
       category: 'other',
     };
     counter = 0;
+    oldCounter = 0;
   };
 
   for (const line of lines) {
@@ -202,11 +220,12 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
       continue;
     }
     if (line.startsWith('@@')) {
-      const match = /@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-      counter = match ? Number.parseInt(match[1], 10) : 0;
+      const match = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      oldCounter = match ? Number.parseInt(match[1], 10) : 0;
+      counter = match ? Number.parseInt(match[2], 10) : 0;
       continue;
     }
-    if (counter < 1) {
+    if (counter < 1 && oldCounter < 1) {
       continue;
     }
     if (line.startsWith('+') && !line.startsWith('+++')) {
@@ -216,12 +235,17 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
       continue;
     }
     if (line.startsWith('-') && !line.startsWith('---')) {
+      current.oldLineMap.set(oldCounter, line.slice(1));
+      current.removedLineNumbers.add(oldCounter);
       current.removedCount += 1;
+      oldCounter += 1;
       continue;
     }
     if (line.startsWith(' ')) {
       current.newLineMap.set(counter, line.slice(1));
+      current.oldLineMap.set(oldCounter, line.slice(1));
       counter += 1;
+      oldCounter += 1;
     }
   }
 
@@ -269,6 +293,80 @@ function collectAstFindings(file) {
   };
 
   walk(sourceFile);
+  return findings;
+}
+
+function analyzeAssertionCall(ts, node) {
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression) || !ts.isIdentifier(node.expression.name)) {
+    return null;
+  }
+  const matcherName = node.expression.name.text;
+  const matcherArgs = node.arguments.map((arg) => arg.getText()).join(', ');
+
+  let cursor = node.expression.expression;
+  let negated = false;
+  while (ts.isPropertyAccessExpression(cursor) && ts.isIdentifier(cursor.name)) {
+    if (cursor.name.text === 'not') {
+      negated = true;
+    }
+    cursor = cursor.expression;
+  }
+  if (!ts.isCallExpression(cursor) || !ts.isIdentifier(cursor.expression) || cursor.expression.text !== 'expect') {
+    return null;
+  }
+  const target = cursor.arguments.map((arg) => arg.getText()).join(', ').trim();
+  return { target, matcherName, matcherArgs, negated };
+}
+
+function collectAssertionCalls(file, content, lineNumbers) {
+  if (!CODE_EXTENSIONS.has(path.extname(file.path)) || lineNumbers.size === 0) {
+    return [];
+  }
+  const ts = getTypeScript();
+  const sourceFile = ts.createSourceFile(file.path, content, ts.ScriptTarget.Latest, true, scriptKindFor(ts, file.path));
+  const assertions = [];
+
+  const walk = (node) => {
+    const assertion = analyzeAssertionCall(ts, node);
+    if (assertion) {
+      const lineNumber = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+      if (lineNumbers.has(lineNumber)) {
+        assertions.push({ ...assertion, line: lineNumber });
+      }
+    }
+    ts.forEachChild(node, walk);
+  };
+
+  walk(sourceFile);
+  return assertions;
+}
+
+function collectTestAssertionWeakenedFindings(files) {
+  const hasNonTestFile = files.some((file) => file.category !== 'test' && file.path && file.path !== '/dev/null');
+  if (!hasNonTestFile) {
+    return [];
+  }
+
+  const findings = [];
+  for (const file of files) {
+    if (file.category !== 'test') {
+      continue;
+    }
+    const removedAssertions = collectAssertionCalls(file, file.oldContent, file.removedLineNumbers);
+    if (removedAssertions.length === 0) {
+      continue;
+    }
+    const addedAssertions = collectAssertionCalls(file, file.newContent, file.addedLineNumbers);
+    for (const added of addedAssertions) {
+      const flipped = removedAssertions.some((removed) =>
+        removed.target === added.target
+        && removed.matcherName === added.matcherName
+        && (removed.negated !== added.negated || removed.matcherArgs !== added.matcherArgs));
+      if (flipped) {
+        findings.push(makeFinding('test-assertion-weakened', file.path, added.line, file.source));
+      }
+    }
+  }
   return findings;
 }
 
@@ -366,6 +464,8 @@ export function collectDiffAtomicityFindings(options = {}) {
   for (const file of files) {
     findings.push(...collectAstFindings(file));
   }
+
+  findings.push(...collectTestAssertionWeakenedFindings(files));
 
   const areas = new Set();
   for (const file of files) {

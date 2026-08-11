@@ -192,6 +192,74 @@ function kinds(findings) {
   assert.match(formatDiffAtomicityFindings(spreadFindings)[0], /packages\/app/);
 }
 
+// Case 7: a same-PR test-assertion flip alongside a product-code change is fatal.
+{
+  const text = diff([
+    'diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx',
+    '--- a/packages/ui/src/App.tsx',
+    '+++ b/packages/ui/src/App.tsx',
+    '@@ -1,3 +1,3 @@',
+    ' export function App() {',
+    '-  return null;',
+    '+  return <Banner />;',
+    ' }',
+    'diff --git a/packages/ui/src/App.test.tsx b/packages/ui/src/App.test.tsx',
+    '--- a/packages/ui/src/App.test.tsx',
+    '+++ b/packages/ui/src/App.test.tsx',
+    '@@ -1,3 +1,3 @@',
+    " it('hides banner', () => {",
+    "-  expect(screen.queryByText('Banner')).not.toBeInTheDocument();",
+    "+  expect(screen.queryByText('Banner')).toBeInTheDocument();",
+    ' });',
+  ]);
+  const findings = collectDiffAtomicityFindings({ diffText: text });
+  assert.deepEqual(kinds(findings), ['test-assertion-weakened']);
+  assert.equal(findings[0].severity, 'fatal');
+  assert.equal(findings[0].path, 'packages/ui/src/App.test.tsx');
+  assert.equal(findings[0].line, 2);
+}
+
+// Case 8: the same flipped assertion with only test-file changes does not
+// fire — the policy targets a same-PR product-code + test-flip pairing, not
+// a bare test edit.
+{
+  const text = diff([
+    'diff --git a/packages/ui/src/App.test.tsx b/packages/ui/src/App.test.tsx',
+    '--- a/packages/ui/src/App.test.tsx',
+    '+++ b/packages/ui/src/App.test.tsx',
+    '@@ -1,3 +1,3 @@',
+    " it('hides banner', () => {",
+    "-  expect(screen.queryByText('Banner')).not.toBeInTheDocument();",
+    "+  expect(screen.queryByText('Banner')).toBeInTheDocument();",
+    ' });',
+  ]);
+  assert.deepEqual(collectDiffAtomicityFindings({ diffText: text }), []);
+}
+
+// Case 9: a product-code change alongside a test file change with no
+// assertion flip does not fire.
+{
+  const text = diff([
+    'diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx',
+    '--- a/packages/ui/src/App.tsx',
+    '+++ b/packages/ui/src/App.tsx',
+    '@@ -1,3 +1,3 @@',
+    ' export function App() {',
+    '-  return null;',
+    '+  return <Banner />;',
+    ' }',
+    'diff --git a/packages/ui/src/App.test.tsx b/packages/ui/src/App.test.tsx',
+    '--- a/packages/ui/src/App.test.tsx',
+    '+++ b/packages/ui/src/App.test.tsx',
+    '@@ -1,3 +1,4 @@',
+    " it('shows banner', () => {",
+    "+  render(<Banner />);",
+    "   expect(screen.getByText('Banner')).toBeInTheDocument();",
+    ' });',
+  ]);
+  assert.deepEqual(collectDiffAtomicityFindings({ diffText: text }), []);
+}
+
 // Temp git case: the git entry path flags a real added debugger and exits 1,
 // and a clean follow-up change passes with the success message on stdout.
 {
