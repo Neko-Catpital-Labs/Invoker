@@ -11,6 +11,10 @@ process.env[E2E_BROWSER_REGISTRY_ENV] ??= path.join(
   mkdtempSync(path.join(tmpdir(), 'invoker-e2e-browser-registry-')),
   'user-data-dirs.txt',
 );
+process.env.INVOKER_E2E_XVFB_STATE ??= path.join(
+  mkdtempSync(path.join(tmpdir(), 'invoker-e2e-xvfb-')),
+  'xvfb.json',
+);
 
 export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
