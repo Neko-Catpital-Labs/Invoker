@@ -617,7 +617,7 @@ function planConversationConfig(
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput'> & { mcpConfigPath?: string },
   threadTs: string,
   selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
-  options: { conversationalPlanning?: boolean } = {},
+  options: { conversationalPlanning?: boolean; draftingPreauthorized?: boolean } = {},
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -630,6 +630,7 @@ function planConversationConfig(
     repoUrl: deps.config.defaultRepoUrl,
     experimentalPlanner: deps.config.experimentalPlanner,
     conversationalPlanning: options.conversationalPlanning ?? false,
+    draftingPreauthorized: options.draftingPreauthorized ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
     harnessSessionDriver: selectHarnessSessionDriver(preset, {
@@ -761,7 +762,7 @@ export async function planFromGoal(
 
   try {
     const { PlanConversation, extractYamlPlan, selectHarnessSessionDriver } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver));
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver, { conversationalPlanning: true, draftingPreauthorized: true }));
     const plannerOutput = await conversation.sendMessage(goal);
     const planText = extractYamlPlan(plannerOutput);
     if (!planText) {
@@ -1304,7 +1305,7 @@ export async function restorePlanningChatSessions(
       ? { ...deps, workingDir: restoredWorktreePath, mcpConfigPath: planningMcpConfigPath(restoredWorktreePath) }
       : deps;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver));
+    const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver, { conversationalPlanning: true }));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
