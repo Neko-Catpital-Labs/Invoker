@@ -28,7 +28,7 @@ function makeDeps(overrides: {
       loadWorkflow: vi.fn(() => (overrides.workflowExists ? { id: 'wf-1' } : undefined)),
     } as unknown as SQLiteAdapter,
     commandService: {
-      cancelWorkflow: vi.fn(async () => ({ ok: false, error: overrides.cancelWorkflowError })),
+      preemptWorkflow: vi.fn(async () => ({ ok: false, error: overrides.cancelWorkflowError })),
     } as unknown as CommandService,
     executorRegistry: {} as any,
     messageBus: {} as any,
