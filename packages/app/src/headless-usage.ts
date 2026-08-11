@@ -41,6 +41,8 @@ ${BOLD}Execute:${RESET}
   recreate-downstream <taskId>                         Recreate downstream of task only (target preserved)
   fork-workflow <workflowId>                          Fork a live workflow into a new branched workflow (Step 14)
   detach-workflow <workflowId> <upstreamWorkflowId>  Detach one upstream workflow and void downstream to pending
+  attach-workflow <workflowId> <upstreamWorkflowId> [--gate-policy P] [--task-id T] [--force]
+                                                     Attach a workflow to an upstream's gate (new or previously detached)
   rebase-retry <workflowId|mergeTaskId|taskId>        Refresh pool base, then retry incomplete work
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
   repair-review-gate-ci <prNumber|prUrl>              Queue CI repair for one mapped review-gate PR

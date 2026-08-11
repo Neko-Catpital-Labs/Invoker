@@ -107,6 +107,7 @@ import {
   headlessDeleteWorkflow,
   headlessDeleteTask,
   headlessDetachWorkflow,
+  headlessAttachWorkflow,
   headlessOpenTerminal,
 } from './headless-approve-delete.js';
 
@@ -311,6 +312,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'detach-workflow':
       await headlessDetachWorkflow(args[1], args[2], deps);
+      break;
+    case 'attach-workflow':
+      await headlessAttachWorkflow(args[1], args[2], args.slice(3), deps);
       break;
     case 'rebase-retry':
       await headlessRebaseRetry(args[1], deps);
