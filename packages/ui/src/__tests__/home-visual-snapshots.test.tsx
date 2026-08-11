@@ -40,7 +40,7 @@ describe('Visual proof snapshots', () => {
     expect(screen.getByTestId('sidebar-planning')).toHaveAccessibleName('Plan graph');
     expect(screen.getByTestId('sidebar-workflows')).toHaveAccessibleName('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveAccessibleName('Needs Attention');
-    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
     expect(screen.getByText('Describe a change, investigate a bug, or ask Invoker to draft a full plan. Review the graph before starting work.')).toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
