@@ -490,7 +490,7 @@ export function takeResolvedExecutionSelection(host: TaskRunnerPoolHost, taskId:
   return resolvedExecution;
 }
 
-function releaseAndKillOrphanedExecution(
+export function releaseAndKillOrphanedExecution(
   host: TaskRunnerPoolHost,
   attemptId: string,
   entry: ActiveExecutionEntry,
@@ -548,7 +548,7 @@ function reclaimSupersededExecutionSlots(host: TaskRunnerPoolHost, task: TaskSta
  * *other* tasks waiting on a wedged member; this pass does, using orchestrator
  * truth so genuinely live executions are never dropped.
  */
-function reclaimOrphanedExecutionSlots(host: TaskRunnerPoolHost & MergeRunnerHost): void {
+export function reclaimOrphanedExecutionSlots(host: TaskRunnerPoolHost & MergeRunnerHost): void {
   const getTask = host.orchestrator?.getTask?.bind(host.orchestrator);
   if (!getTask) return;
   const allTasks = host.orchestrator.getAllTasks?.() ?? [];
