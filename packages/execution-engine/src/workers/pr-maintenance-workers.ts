@@ -16,13 +16,14 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
 export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const PR_DUPLICATE_CLOSE_WORKER_KIND = 'pr-duplicate-close';
+export const PR_AUTO_LABEL_WORKER_KIND = 'pr-auto-label';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 /**
- * Even spacing between each PR-maintenance worker's first tick, so the 3
+ * Even spacing between each PR-maintenance worker's first tick, so the 4
  * workers sharing the cron lock (scripts/cron-pr-lib.sh) don't all wake on
  * the same intervalMs boundary and race for it every cycle.
  */
-export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 3;
+export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 4;
 /**
  * Wall-clock cap on a single tick's spawned child before it is killed and the
  * tick fails. Default four minutes: comfortably under the five-minute poll
@@ -38,7 +39,8 @@ export const DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS = 4 * 60_000;
 export type PrMaintenanceWorkerKind =
   | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
   | typeof PR_ORPHAN_REPAIR_WORKER_KIND
-  | typeof PR_DUPLICATE_CLOSE_WORKER_KIND;
+  | typeof PR_DUPLICATE_CLOSE_WORKER_KIND
+  | typeof PR_AUTO_LABEL_WORKER_KIND;
 
 type EnvOverrides = Record<string, string | undefined>;
 
@@ -62,6 +64,11 @@ const PR_DUPLICATE_CLOSE_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_DUPLICATE_CLOSE_WORKER_KIND,
   scriptRelativePath: 'scripts/cron-pr-duplicate-close.sh',
   note: 'Closes open PRs already landed on master or duplicating another open PR, via one Invoker close task per PR.',
+};
+const PR_AUTO_LABEL_ENTRYPOINT: PrMaintenanceEntrypoint = {
+  kind: PR_AUTO_LABEL_WORKER_KIND,
+  scriptRelativePath: 'scripts/cron-pr-auto-label.sh',
+  note: 'Adds admin-bypass to self-authored PRs whose title marks them refactor/bugfix/repro, or whose diff is test-only, via one submitted Invoker command per PR.',
 };
 
 export interface PrMaintenanceWorkerConfig {
@@ -130,6 +137,7 @@ export function registerPrMaintenanceWorkers(
   registerPrAdminBypassLandWorker(registry);
   registerPrOrphanRepairWorker(registry);
   registerPrDuplicateCloseWorker(registry);
+  registerPrAutoLabelWorker(registry);
   return registry;
 }
 
@@ -184,6 +192,23 @@ export function registerPrDuplicateCloseWorker(
   return registry;
 }
 
+export function registerPrAutoLabelWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: PR_AUTO_LABEL_WORKER_KIND,
+    note: PR_AUTO_LABEL_ENTRYPOINT.note,
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrAutoLabelWorker({
+        logger: deps.logger,
+        ...deps.prMaintenance,
+        store: deps.store,
+        startDelayMs: 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+      }),
+  });
+  return registry;
+}
+
 export function createPrAdminBypassLandWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(PR_ADMIN_BYPASS_LAND_ENTRYPOINT, options);
 }
@@ -194,6 +219,10 @@ export function createPrOrphanRepairWorker(options: PrMaintenanceWorkerOptions):
 
 export function createPrDuplicateCloseWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(PR_DUPLICATE_CLOSE_ENTRYPOINT, options);
+}
+
+export function createPrAutoLabelWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
+  return createPrMaintenanceWorker(PR_AUTO_LABEL_ENTRYPOINT, options);
 }
 
 

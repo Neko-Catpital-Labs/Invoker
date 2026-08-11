@@ -4,6 +4,7 @@ import {
   AUTO_FIX_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_AUTO_LABEL_WORKER_KIND,
   PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
@@ -136,6 +137,8 @@ function controller(
   register(INFRA_REPAIR_WORKER_KIND, 'Repairs infra-owned SSH and CI failures.');
   register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
   register(PR_ORPHAN_REPAIR_WORKER_KIND, 'Repairs unmapped broken pull requests.');
+  register(PR_DUPLICATE_CLOSE_WORKER_KIND, 'Closes duplicate or already-landed pull requests.');
+  register(PR_AUTO_LABEL_WORKER_KIND, 'Auto-labels refactor/bugfix/repro/test-only PRs with admin-bypass.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
@@ -228,6 +231,7 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       PR_ORPHAN_REPAIR_WORKER_KIND,
       PR_DUPLICATE_CLOSE_WORKER_KIND,
+      PR_AUTO_LABEL_WORKER_KIND,
     ]);
   });
 });
@@ -355,6 +359,8 @@ describe('createWorkerRuntimeController', () => {
       AUTO_FIX_WORKER_KIND,
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       PR_ORPHAN_REPAIR_WORKER_KIND,
+      PR_DUPLICATE_CLOSE_WORKER_KIND,
+      PR_AUTO_LABEL_WORKER_KIND,
     ] as const) {
       expect(setup.controller.start(kind)).toMatchObject({
         kind,

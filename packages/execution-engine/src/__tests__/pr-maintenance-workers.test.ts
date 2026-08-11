@@ -15,11 +15,13 @@ import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_AUTO_LABEL_WORKER_KIND,
   PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   buildPrMaintenanceEnv,
   createPrAdminBypassLandWorker,
+  createPrAutoLabelWorker,
   createPrDuplicateCloseWorker,
   createPrOrphanRepairWorker,
   type PrMaintenanceLockProbeOptions,
@@ -242,9 +244,30 @@ describe('PR maintenance workers', () => {
     }));
   });
 
-  it('staggers the duplicate-close worker 2/3 of the interval after the other two', async () => {
+  it('spawns the auto-label shell entrypoint', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    const worker = createPrAutoLabelWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
+      command: 'bash',
+      args: [resolve(repoRoot, 'scripts/cron-pr-auto-label.sh')],
+      options: expect.objectContaining({ cwd: repoRoot }),
+    }));
+  });
+
+  it('staggers the duplicate-close worker 2/4 of the interval after the other workers', async () => {
     vi.useFakeTimers();
-    expect(PR_MAINTENANCE_WORKER_STAGGER_STEP_MS).toBe(DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 3);
+    expect(PR_MAINTENANCE_WORKER_STAGGER_STEP_MS).toBe(DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 4);
 
     // createWorkerRuntime's beginPolling() sets an interval-cadence timer once
     // startDelayMs elapses, so the *first* tick lands at startDelayMs +
@@ -266,6 +289,32 @@ describe('PR maintenance workers', () => {
     expect(spawnHarness.calls).toEqual([]);
 
     const firstTickAt = 2 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS + DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS;
+    await vi.advanceTimersByTimeAsync(firstTickAt - 1);
+    expect(spawnHarness.calls).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(spawnHarness.calls).toHaveLength(1);
+    await worker.stop();
+  });
+
+  it('staggers the auto-label worker 3/4 of the interval after the other workers', async () => {
+    vi.useFakeTimers();
+
+    const repoRoot = makeRepoRoot();
+    const spawnHarness = makeSpawnHarness();
+    const worker = createPrAutoLabelWorker({
+      logger: makeLogger(),
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      startDelayMs: 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+    });
+
+    worker.start();
+    expect(spawnHarness.calls).toEqual([]);
+
+    const firstTickAt = 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS + DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS;
     await vi.advanceTimersByTimeAsync(firstTickAt - 1);
     expect(spawnHarness.calls).toEqual([]);
 
