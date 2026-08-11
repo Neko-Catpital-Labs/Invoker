@@ -58,7 +58,7 @@ import {
   readWorkerToggleValue,
 } from './worker-toggles.js';
 
-const VERSION = '0.0.10';
+const VERSION = '0.0.11';
 
 type CliOptions = {
   dbDir?: string;

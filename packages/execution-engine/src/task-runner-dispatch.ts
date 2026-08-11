@@ -327,7 +327,13 @@ export async function dispatchExecutor(
         containerId: handle.containerId ?? undefined,
       },
     };
-    host.persistence.updateTask(task.id, changes);
+    try {
+      host.persistence.updateTask(task.id, changes);
+    } catch (err) {
+      host.releasePoolSelectionLease(host.pendingPoolSelections.get(task.id));
+      host.pendingPoolSelections.delete(task.id);
+      throw err;
+    }
     // Mirror branch + workspacePath onto the attempt row so reconciliation
     // and post-mortem flows can recover provenance from the attempt without
     // joining back to the task. Pairs with the early `onBranchResolved`
