@@ -160,7 +160,7 @@ function poolMemberLimit(pool: ExecutionPoolConfig, member: ExecutionPoolMember)
   return member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
 }
 
-function poolMemberHasCapacity(host: TaskRunnerPoolHost, poolId: string, pool: ExecutionPoolConfig, member: ExecutionPoolMember): boolean {
+export function poolMemberHasCapacity(host: TaskRunnerPoolHost, poolId: string, pool: ExecutionPoolConfig, member: ExecutionPoolMember): boolean {
   const limit = poolMemberLimit(pool, member);
   return limit === undefined || poolMemberLoad(host, poolId, member) < limit;
 }

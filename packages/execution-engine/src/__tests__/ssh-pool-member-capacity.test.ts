@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import type { ExecutionPoolMember } from '../task-runner-pool.js';
+import type { ExecutionPoolConfig, ExecutionPoolMember } from '../task-runner-pool.js';
+import { poolMemberHasCapacity } from '../task-runner-pool.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
@@ -89,6 +90,22 @@ describe('SSH pool member capacity', () => {
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).cause).toBeInstanceOf(ResourceLimitError);
     }
+  });
+
+  it('poolMemberHasCapacity reports true at and false over the member limit', () => {
+    const member: ExecutionPoolMember = { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 };
+    const pool: ExecutionPoolConfig = {
+      selectionStrategy: 'leastLoaded',
+      maxConcurrentTasksPerMember: 1,
+      members: [member],
+    };
+    const runner = makeRunner({ members: [member] });
+
+    expect(poolMemberHasCapacity(runner as any, 'ssh-pool', pool, member)).toBe(true);
+
+    runner.selectExecutor(makeTask('wf-1/task-a'));
+
+    expect(poolMemberHasCapacity(runner as any, 'ssh-pool', pool, member)).toBe(false);
   });
 
   it('round-robin skips full members and uses the next available member', () => {
