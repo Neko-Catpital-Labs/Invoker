@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
-import { collectDiffAtomicityFindings, formatDiffAtomicityFindings } from './lint-pr-diff-atomicity.mjs';
+import { collectDiffAtomicityFindings, formatDiffAtomicityFindings, parseUnifiedDiff } from './lint-pr-diff-atomicity.mjs';
 import {
   formatReviewUnits,
   getLabelSection,
@@ -316,6 +316,47 @@ export function validatePrScope({ changedFiles = [], reviewLane = '', body = '' 
   return errors;
 }
 
+const GUARDED_BEHAVIOR_MARKER_PATTERN = /\/\/\s*guarded-behavior:\s*([A-Za-z0-9][\w-]*)/;
+
+export function collectGuardedBehaviorMarkers(diffText) {
+  if (!diffText) return [];
+
+  const markers = [];
+  const seen = new Set();
+  for (const file of parseUnifiedDiff(diffText)) {
+    if (!file.path || file.path === '/dev/null') continue;
+    for (const content of [file.newContent, file.oldContent]) {
+      const lines = content.split('\n');
+      for (let index = 0; index < lines.length; index += 1) {
+        const match = GUARDED_BEHAVIOR_MARKER_PATTERN.exec(lines[index]);
+        if (!match) continue;
+        const line = index + 1;
+        const key = `${file.path}:${line}:${match[1]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        markers.push({ id: match[1], path: file.path, line });
+      }
+    }
+  }
+  return markers;
+}
+
+export function validateGuardedBehaviorMarkers({ diffText = '', body = '' } = {}) {
+  const markers = collectGuardedBehaviorMarkers(diffText);
+  if (markers.length === 0) return [];
+
+  const claimedIds = `${getSectionBody(body, '## Safety Invariant')}\n${getSectionBody(body, '## Non-goals')}`;
+  const errors = [];
+  for (const marker of markers) {
+    if (!claimedIds.includes(marker.id)) {
+      errors.push(
+        `Guarded behavior "${marker.id}" at ${marker.path}:${marker.line} is touched by this diff but not mentioned in ## Safety Invariant or ## Non-goals. Name it explicitly so reviewers know this decision is intentional.`,
+      );
+    }
+  }
+  return errors;
+}
+
 export function getPrAtomicityBlockers(options = {}) {
   const diffText = options.diffText ?? '';
   if (!diffText) return [];
@@ -504,6 +545,7 @@ export async function validatePrBody(body, options = {}) {
     for (const line of formatDiffAtomicityFindings(fatalFindings)) {
       errors.push(`Diff atomicity violation: ${line}`);
     }
+    errors.push(...validateGuardedBehaviorMarkers({ diffText: options.diffText, body: trimmed }));
   }
 
   return errors;
