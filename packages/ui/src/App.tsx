@@ -613,9 +613,11 @@ function isTextInputElement(target: EventTarget | null): target is HTMLInputElem
 function PlanningSessionStatusIcon({
   busy,
   status,
+  workflowRunning,
 }: {
   busy: boolean;
   status: InAppPlanningSessionStatus;
+  workflowRunning: boolean;
 }): JSX.Element {
   if (busy) {
     return (
@@ -630,6 +632,14 @@ function PlanningSessionStatusIcon({
       <span
         className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"
         aria-label="Needs attention"
+      />
+    );
+  }
+  if (status === 'submitted' && workflowRunning) {
+    return (
+      <span
+        className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary"
+        aria-label="Workflow running"
       />
     );
   }
@@ -1843,6 +1853,14 @@ export function App() {
     [tasks, workflows, attentionTaskIdsWithFailures],
   );
   const runningEntries = useMemo(() => getRunningTaskEntries(tasks, workflows, queueStatus), [tasks, workflows, queueStatus]);
+  const runningWorkflowCount = useMemo(() => {
+    const workflowIds = new Set<string>();
+    for (const { task } of runningEntries) {
+      const workflowId = task.config.workflowId;
+      if (workflowId) workflowIds.add(workflowId);
+    }
+    return workflowIds.size;
+  }, [runningEntries]);
   const commandPaletteWorkflowEntries = useMemo(
     () => workflowEntries.slice(0, COMMAND_PALETTE_MAX_ROWS),
     [workflowEntries],
@@ -4458,6 +4476,9 @@ export function App() {
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
           const preview = previewPlanningMessage(session);
+          const workflowRunning = session.submittedWorkflowId
+            ? workflows.get(session.submittedWorkflowId)?.status === 'running'
+            : false;
           return (
             <div
               key={session.id}
@@ -4469,7 +4490,11 @@ export function App() {
                 onClick={() => setActivePlanningSessionId(session.id)}
                 className={`flex w-full min-w-0 flex-1 items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
               >
-                <PlanningSessionStatusIcon busy={session.busy} status={session.status} />
+                <PlanningSessionStatusIcon
+                  busy={session.busy}
+                  status={session.status}
+                  workflowRunning={workflowRunning}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
                     <div className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium leading-5" title={session.title}>
@@ -4986,6 +5011,7 @@ export function App() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <LeftStatusColumn
           workflowCount={workflowEntries.length}
+          runningWorkflowCount={runningWorkflowCount}
           attentionCount={attentionEntries.length}
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}

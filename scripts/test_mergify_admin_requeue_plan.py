@@ -33,12 +33,20 @@ def check(state, name="build"):
     return m.CheckContext(name=name, state=state, details_url="", head_sha=HEAD, completed_at="")
 
 
-def event(state="dequeued", head=HEAD, comment_id="cm1", failing=(), conditions=(), queue_rule_name="admin-bypass"):
+def event(
+    state="dequeued",
+    head=HEAD,
+    comment_id="cm1",
+    failing=(),
+    conditions=(),
+    queue_rule_name="admin-bypass",
+    queued_at="2026-07-07T05:00:00Z",
+):
     return m.MergifyQueueEvent(
         comment_id=comment_id,
         state=state,
         queue_rule_name=queue_rule_name,
-        queued_at="2026-07-07T05:00:00Z",
+        queued_at=queued_at,
         head_sha=head,
         waiting_for=(),
         failing_checks=failing,
@@ -511,6 +519,40 @@ class PlanStackActions(PlannerTestCase):
         )
         self.assertEqual(plan.actions, ())
         self.assertEqual(plan.wait_reason, "bottom-already-queued")
+
+    def test_stale_matching_head_queue_event_refreshes_then_hands_off_after_cap(self):
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="queued", head=HEAD))
+        ledger = self._ledger()
+
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual(
+            (actions[0].kind, actions[0].key),
+            ("refresh_stale_queue", p.STALE_QUEUE_EVENT_REFRESH_KEY),
+        )
+
+        ledger.record(
+            p.REFRESH_STALE_QUEUE_LEDGER_KIND,
+            1,
+            HEAD,
+            p.STALE_QUEUE_EVENT_REFRESH_KEY,
+            epoch=NOW - 2,
+        )
+        ledger.record(
+            p.REFRESH_STALE_QUEUE_LEDGER_KIND,
+            1,
+            HEAD,
+            p.STALE_QUEUE_EVENT_REFRESH_KEY,
+            epoch=NOW - 1,
+        )
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
+        self.assertIn("stale Mergify queue event", actions[0].detail)
+
+        fresh = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="queued", head=HEAD, queued_at="2033-05-18T03:33:00Z"),
+        )
+        self.assertEqual(self._plan(fresh), ())
 
     def test_pending_queue_command_suppresses_requeue(self):
         # Incident 2026-08-04 (PR #7420): a `queue` command still evaluating

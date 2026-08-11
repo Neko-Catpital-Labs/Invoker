@@ -18,6 +18,7 @@ import type { ThemeMode } from '../lib/theme.js';
 
 interface LeftStatusColumnProps {
   workflowCount: number;
+  runningWorkflowCount: number;
   attentionCount: number;
   workerStatus: WorkerStatusSnapshot | null;
   selectedSurface: SidebarSurface;
@@ -64,6 +65,7 @@ function countClass(tone: SourceItem['tone']): string {
 
 export function LeftStatusColumn({
   workflowCount,
+  runningWorkflowCount,
   attentionCount,
   workerStatus,
   selectedSurface,
@@ -83,7 +85,7 @@ export function LeftStatusColumn({
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionCount, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
     { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
-    { key: 'workflows', label: 'Workflows', count: workflowCount, tone: 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
+    { key: 'workflows', label: 'Workflows', count: workflowCount, tone: runningWorkflowCount > 0 ? 'running' : 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
 
   return (
@@ -181,6 +183,7 @@ export function LeftStatusColumn({
               type="button"
               aria-label={source.label}
               data-testid={`sidebar-${source.key}`}
+              data-tone={source.tone}
               data-sidebar-nav-item
               aria-current={selected ? 'page' : undefined}
               onClick={() => onSelectSurface(source.key)}
@@ -212,7 +215,16 @@ export function LeftStatusColumn({
           );
         })}
       </nav>
-      <span data-testid="sidebar-running" hidden aria-hidden="true">Running</span>
+      {runningWorkflowCount > 0 && (
+        <div
+          data-testid="sidebar-running"
+          role="status"
+          aria-live="polite"
+          className={collapsed ? 'sr-only' : 'mt-3 px-2.5 text-[11px] text-muted-foreground'}
+        >
+          {runningWorkflowCount} workflow{runningWorkflowCount === 1 ? '' : 's'} running
+        </div>
+      )}
 
       {!collapsed && (
         <div className="mt-6 flex-1 overflow-y-auto scrollbar-sleek px-2.5 text-xs text-muted-foreground">

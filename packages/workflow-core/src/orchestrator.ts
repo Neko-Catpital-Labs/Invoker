@@ -681,6 +681,18 @@ export interface TaskLineageExpectation {
   generation?: number;
 }
 
+export function isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
+  if (!attempt) return false;
+  if (isDiscardedAttempt(attempt)) return false;
+  if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
+  if (attempt.leaseExpiresAt) {
+    return attempt.leaseExpiresAt.getTime() >= now;
+  }
+  const anchor = attempt.lastHeartbeatAt ?? attempt.claimedAt ?? attempt.startedAt;
+  if (!anchor) return true;
+  return anchor.getTime() + ATTEMPT_LEASE_MS >= now;
+}
+
 export class Orchestrator {
   private static readonly EXPEDITED_PRIORITY = LIFECYCLE_EXPEDITED_PRIORITY;
   private static readonly LAUNCH_DEFERRAL_BASE_BACKOFF_MS = 15_000;
@@ -2010,6 +2022,29 @@ export class Orchestrator {
     this.updateSelectedAttempt(taskId, {
       status: 'failed',
       error: reason ?? 'Rejected',
+      completedAt: changes.execution?.completedAt,
+    });
+    const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
+    this.persistence.logEvent?.(taskId, 'task.failed', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    this.checkWorkflowCompletion(task.config.workflowId);
+  }
+
+  failTask(taskId: string, reason?: string): void {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task || task.status === 'completed' || task.status === 'failed' || task.status === 'closed' || task.status === 'stale') return;
+
+    const error = reason ?? 'Failed';
+    const changes: TaskStateChanges = {
+      status: 'failed',
+      execution: { error, completedAt: new Date(), fixSessionEntryStatus: undefined },
+    };
+    const updated = this.writeAndSync(taskId, changes);
+    this.updateSelectedAttempt(taskId, {
+      status: 'failed',
+      error,
       completedAt: changes.execution?.completedAt,
     });
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);

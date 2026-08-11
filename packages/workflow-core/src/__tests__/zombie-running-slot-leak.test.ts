@@ -100,3 +100,28 @@ describe('zombie running task consumes a concurrency slot', () => {
     expect(isAttemptLeaseActive(attempt, now + ATTEMPT_LEASE_MS + 1)).toBe(false);
   });
 });
+
+describe('isAttemptLeaseActive', () => {
+  it('returns true for a running attempt with no leaseExpiresAt and a recent heartbeat', () => {
+    const now = Date.now();
+    const attempt = createAttempt('task-a', {
+      status: 'running',
+      lastHeartbeatAt: new Date(now - 1000),
+      leaseExpiresAt: undefined,
+    });
+
+    expect(isAttemptLeaseActive(attempt, now)).toBe(true);
+  });
+
+  it('returns false once now passes lastHeartbeatAt + ATTEMPT_LEASE_MS', () => {
+    const heartbeatAt = new Date(0);
+    const attempt = createAttempt('task-a', {
+      status: 'running',
+      lastHeartbeatAt: heartbeatAt,
+      leaseExpiresAt: undefined,
+    });
+
+    expect(isAttemptLeaseActive(attempt, heartbeatAt.getTime() + ATTEMPT_LEASE_MS)).toBe(true);
+    expect(isAttemptLeaseActive(attempt, heartbeatAt.getTime() + ATTEMPT_LEASE_MS + 1)).toBe(false);
+  });
+});
