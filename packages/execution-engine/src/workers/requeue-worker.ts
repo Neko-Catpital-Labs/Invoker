@@ -11,6 +11,10 @@ import {
   requeueLedgerKeyFromTask,
   type RequeueAttemptLedger,
 } from '../requeue-attempt-ledger.js';
+import {
+  checkRequeueRetryCap,
+  recordRequeueRetryConsumed,
+} from '../requeue-retry-cap.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
@@ -151,6 +155,36 @@ export function createRequeueRecoveryTick(options: RequeueWorkerPolicyOptions): 
       handled.add(candidate.taskId);
 
       const key = requeueLedgerKeyFromTask(latest);
+      const retryCap = checkRequeueRetryCap(options.store, latest.id, budget);
+      if (!retryCap.allowed) {
+        if (options.ledger.hasEscalated(key)) continue;
+        const prompt = buildStallEscalationPrompt(retryCap.consumed, retryCap.budget);
+        const intentId = options.submitter.submit(
+          workflowId,
+          'normal',
+          REQUEUE_ESCALATE_CHANNEL,
+          buildRequeueEscalateMutationArgs(latest.id, prompt),
+        );
+        options.ledger.markEscalated(key);
+        options.store.logEvent?.(latest.id, 'recovery.worker.submit', {
+          worker: REQUEUE_WORKER_KIND,
+          phase: 'requeue-escalate',
+          workflowId,
+          intentId,
+          channel: REQUEUE_ESCALATE_CHANNEL,
+          attempts: retryCap.consumed,
+          budget: retryCap.budget,
+        });
+        options.logger.info(`[worker:${REQUEUE_WORKER_KIND}] escalated stalled task to needs_input`, {
+          module: 'requeue-worker',
+          taskId: latest.id,
+          workflowId,
+          attempts: retryCap.consumed,
+          budget: retryCap.budget,
+        });
+        continue;
+      }
+
       const decision = options.ledger.decide(key, budget, backoffMs, nowMs);
 
       if (decision.kind === 'backoff') {
@@ -200,6 +234,9 @@ export function createRequeueRecoveryTick(options: RequeueWorkerPolicyOptions): 
         REQUEUE_COMMAND_CHANNEL,
         buildRequeueMutationArgs(latest.id),
       );
+      recordRequeueRetryConsumed(options.store, latest.id, {
+        workflowId,
+      });
       options.store.logEvent?.(latest.id, 'recovery.worker.submit', {
         worker: REQUEUE_WORKER_KIND,
         phase: 'requeue',
