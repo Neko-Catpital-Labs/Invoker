@@ -8,7 +8,7 @@
  */
 
 import { makeEnvelope } from '@invoker/contracts';
-import type { TaskState } from '@invoker/workflow-core';
+import type { TaskState, ExternalGatePolicy } from '@invoker/workflow-core';
 import { TaskRunner } from '@invoker/execution-engine';
 import { approveTask } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -343,5 +343,40 @@ export async function headlessDetachWorkflow(
   process.stdout.write(
     `Detached workflow ${workflowId} from upstream workflow ${upstreamWorkflowId}. ` +
       `Active dependency removed; detached lineage remains visible.\n`,
+  );
+}
+
+export async function headlessAttachWorkflow(
+  workflowId: string,
+  upstreamWorkflowId: string,
+  flags: string[],
+  deps: Pick<HeadlessDeps, 'commandService'>,
+): Promise<void> {
+  if (!workflowId || !upstreamWorkflowId) {
+    throw new Error(
+      'Missing arguments. Usage: --headless attach-workflow <workflowId> <upstreamWorkflowId> '
+      + '[--gate-policy completed|review_ready|ci_failed] [--task-id <taskId>] [--force]',
+    );
+  }
+  const gatePolicyIndex = flags.indexOf('--gate-policy');
+  const taskIdIndex = flags.indexOf('--task-id');
+  const rawGatePolicy = gatePolicyIndex >= 0 ? flags[gatePolicyIndex + 1] : undefined;
+  const validGatePolicies: readonly ExternalGatePolicy[] = ['completed', 'review_ready', 'ci_failed'];
+  if (rawGatePolicy !== undefined && !validGatePolicies.includes(rawGatePolicy as ExternalGatePolicy)) {
+    throw new Error(`Invalid --gate-policy "${rawGatePolicy}"; expected one of ${validGatePolicies.join(', ')}`);
+  }
+  const gatePolicy = rawGatePolicy as ExternalGatePolicy | undefined;
+  const envelope = makeEnvelope('attach-workflow', 'headless', 'workflow', {
+    workflowId,
+    upstreamWorkflowId,
+    ...(gatePolicy !== undefined ? { gatePolicy } : {}),
+    ...(taskIdIndex >= 0 ? { taskId: flags[taskIdIndex + 1] } : {}),
+    ...(flags.includes('--force') ? { force: true } : {}),
+  });
+  const result = await deps.commandService.attachWorkflow(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  process.stdout.write(
+    `Attached workflow ${workflowId} to upstream workflow ${upstreamWorkflowId}. `
+    + `Dependency added; any previously detached lineage for this upstream was cleared.\n`,
   );
 }
