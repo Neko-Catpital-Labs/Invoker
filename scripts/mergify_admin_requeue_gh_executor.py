@@ -127,7 +127,7 @@ class AdminBypassGhExecutor:
             body = f"Mergify repair stopped: {detail}"
             if not self.has_blocked_comment(pr, body):
                 self.gh.comment(self.repo, pr.number, body)
-            self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, key, now)
+            self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, key, now, meta={"detail": detail})
             return
         if (
             key == "no-current-bottom"
@@ -135,7 +135,14 @@ class AdminBypassGhExecutor:
             and not self.has_blocked_comment(pr.number, detail)
         ):
             self.gh.comment(self.repo, pr.number, f"Mergify repair stopped: {detail}")
-            self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, "no-current-bottom:exact", now)
+            self.ledger.record(
+                "comment-blocked",
+                pr.number,
+                pr.head_ref_oid,
+                "no-current-bottom:exact",
+                now,
+                meta={"detail": detail},
+            )
 
     def execute(self, action: Action, pr: PrSnapshot, now: int) -> bool:
         self.logger.trace("admin-bypass-action-execute", action=self.logger.action_payload(action))
