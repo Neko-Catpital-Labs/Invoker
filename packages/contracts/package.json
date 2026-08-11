@@ -14,6 +14,11 @@
       "types": "./src/ipc-channels.ts",
       "import": "./src/ipc-channels.ts",
       "require": "./src/ipc-channels.ts"
+    },
+    "./planning-surface": {
+      "types": "./src/planning-surface.ts",
+      "import": "./src/planning-surface.ts",
+      "require": "./src/planning-surface.ts"
     }
   },
   "scripts": {
