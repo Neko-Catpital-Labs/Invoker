@@ -140,6 +140,13 @@ export interface PlanConversationConfig {
   onHarnessSessionId?: (sessionId: string) => void;
   /** Opt in to a scoping-first planning conversation before YAML drafting. Default: false. */
   conversationalPlanning?: boolean;
+  /**
+   * With `conversationalPlanning`, treat drafting as already authorized from the
+   * first turn instead of requiring explicit draft intent in the message text.
+   * For single-shot goal→plan callers that have no prior scoping turns to draw
+   * authorization from. Default: false.
+   */
+  draftingPreauthorized?: boolean;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
   /**
@@ -461,6 +468,7 @@ export class PlanConversation {
   private experimentalPlanner?: boolean;
   private preferStackedWorkflows?: boolean;
   private conversationalPlanning: boolean;
+  private draftingPreauthorized: boolean;
   private log: LogFn;
   private onRawPlannerOutput?: RawPlannerOutputHandler;
   private plannerRetryLimit: number;
@@ -498,6 +506,7 @@ export class PlanConversation {
     this.experimentalPlanner = config.experimentalPlanner;
     this.preferStackedWorkflows = config.preferStackedWorkflows ?? true;
     this.conversationalPlanning = config.conversationalPlanning ?? false;
+    this.draftingPreauthorized = config.draftingPreauthorized ?? false;
     this.onRawPlannerOutput = config.onRawPlannerOutput;
     this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
     this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
@@ -802,7 +811,8 @@ export class PlanConversation {
     const systemPrompt = this.mode === 'plan'
       ? buildPlanSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl, {
           conversationalPlanning: this.conversationalPlanning,
-          draftingAuthorized: this.conversationalPlanning && isDraftingAuthorizedForPrompt(this.messages),
+          draftingAuthorized: this.conversationalPlanning
+            && (this.draftingPreauthorized || isDraftingAuthorizedForPrompt(this.messages)),
           preferStackedWorkflows: this.preferStackedWorkflows,
           planFilePath: this.planDraftFilePath() ?? undefined,
         })
