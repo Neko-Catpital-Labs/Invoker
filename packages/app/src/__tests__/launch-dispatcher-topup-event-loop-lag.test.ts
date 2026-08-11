@@ -17,6 +17,24 @@ import { Orchestrator, type PlanDefinition } from '@invoker/workflow-core';
  * real incident, where the 150 tasks were 'pending' the whole time and
  * simply weren't being dispatched (misrouted to an overloaded SSH pool),
  * not tasks unblocked by a dependency completing.
+ *
+ * getTaskLaunchReadinessImpl() (packages/workflow-core/src/orchestrator/
+ * scheduler-domain.ts) used to call refreshFromDb() -- reloading every
+ * active workflow's tasks from the DB -- once per ready task inside
+ * planPendingLaunchQueue()'s map and once more per dequeued job inside
+ * drainSchedulerImpl()'s while loop, on top of startExecution()'s own
+ * initial refresh. That made a single startExecution() call cost roughly
+ * `1 + 2*readyTaskCount` full task-table reloads instead of one, and was
+ * the actual driver of this blocking (confirmed live on a larger DB via
+ * `[SQLiteAdapter] slow query summary`, INV-279). The capped
+ * `{ limit: 32 }` mitigation below only capped how many jobs get marked
+ * launch-ready per poll -- it did not stop drainScheduler from still
+ * readiness-checking (and re-refreshing for) every non-ready job left in
+ * the queue, so it did not fix the underlying blocking for a large
+ * backlog. This first test used to assert the blocking WAS present
+ * (>500ms); now that refreshFromDb() is called a small constant number of
+ * times per startExecution() regardless of ready-task count, it asserts
+ * the blocking stays bounded instead.
  */
 
 const BURST_TASK_COUNT = 150;
@@ -96,17 +114,20 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   // remains meaningful under loaded workspace runs.
 
   it(
-    'reproduces multi-hundred-ms blocking: unbounded startExecution() over a 150-task ready burst',
+    'stays bounded: unbounded startExecution() over a 150-task ready burst no longer blocks for seconds',
     async () => {
       const orchestrator = await buildBurstOrchestrator();
       const maxGapMs = await measureMaxSyncGapMs(() => {
         const started = orchestrator.startExecution();
         expect(started.length).toBe(BURST_TASK_COUNT);
       });
+      // Before the refreshFromDb() N+1 fix, this measured ~2.2s (see the
+      // file-level comment). Regressing back toward that scale would mean
+      // the per-ready-task refresh storm came back.
       expect(
         maxGapMs,
         `maxGapMs=${maxGapMs} (uncapped startExecution over ${BURST_TASK_COUNT}-task burst)`,
-      ).toBeGreaterThan(500);
+      ).toBeLessThan(1200);
     },
     30_000,
   );

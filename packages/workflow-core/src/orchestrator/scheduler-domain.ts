@@ -126,6 +126,11 @@ function hasPendingLaunchRuntimeState(task: TaskState): boolean {
 }
 
 function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): TaskJob[] {
+  // Refresh once for the whole batch, not once per candidate job below --
+  // readiness for every job in this pass is evaluated against the same
+  // in-memory snapshot, so a per-job refresh only re-reads data this
+  // function already has.
+  host.refreshFromDb();
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
     const task = host.stateGetTask(sourceJob.taskId);
@@ -163,7 +168,7 @@ function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJo
       return {
         job,
         task,
-        ready: getTaskLaunchReadinessImpl(host, job.taskId, {
+        ready: getTaskLaunchReadinessCore(host, job.taskId, {
           bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
         }).ready,
       };
@@ -316,12 +321,26 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
   return drainSchedulerImpl(host);
 }
 
+// Public entry point: always refreshes first, for callers making a single
+// standalone readiness check (e.g. LaunchDispatcher.dispatchActive()).
 export function getTaskLaunchReadinessImpl(
   host: SchedulerDomainHost,
   taskId: string,
   opts?: LaunchReadinessOptions,
 ): TaskLaunchReadiness {
   host.refreshFromDb();
+  return getTaskLaunchReadinessCore(host, taskId, opts);
+}
+
+// Internal core: no refresh. Callers evaluating readiness for many jobs in
+// the same pass (planPendingLaunchQueue, drainSchedulerImpl) refresh once
+// for the whole batch and call this directly, instead of re-reloading every
+// active workflow's tasks from the DB once per job.
+function getTaskLaunchReadinessCore(
+  host: SchedulerDomainHost,
+  taskId: string,
+  opts?: LaunchReadinessOptions,
+): TaskLaunchReadiness {
   const task = host.stateGetTask(taskId);
   if (!task) {
     return { ready: false, reason: `task ${taskId} not found` };
@@ -364,6 +383,9 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
 }
 
 export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
+  // Refresh once for the whole drain pass, not once per dequeued job below
+  // (see planPendingLaunchQueue for the same reasoning).
+  host.refreshFromDb();
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);
@@ -374,7 +396,7 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
   });
   let job = availableSlots > 0 ? host.scheduler.takeNext() : null;
   while (job && availableSlots > 0) {
-    const readiness = getTaskLaunchReadinessImpl(host, job.taskId, {
+    const readiness = getTaskLaunchReadinessCore(host, job.taskId, {
       bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
     });
     host.logger.info('[orchestrator] drainScheduler: dequeued', {
