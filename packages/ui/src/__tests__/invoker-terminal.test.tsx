@@ -1747,6 +1747,48 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getAllByText(/submitted/i).length).toBeGreaterThan(0);
   });
 
+  it('shows a running workflow dot only for submitted planning sessions whose workflow is still running', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-running', name: 'Running workflow', status: 'running' },
+      { id: 'wf-completed', name: 'Completed workflow', status: 'completed' },
+    ];
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'submitted-running-chat',
+          title: 'Submitted running chat',
+          status: 'submitted',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          submittedWorkflowId: 'wf-running',
+          submittedPlanName: 'Running workflow plan',
+        }),
+        makePlanningSessionSummary({
+          id: 'submitted-completed-chat',
+          title: 'Submitted completed chat',
+          status: 'submitted',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          submittedWorkflowId: 'wf-completed',
+          submittedPlanName: 'Completed workflow plan',
+        }),
+      ],
+    })) as any;
+    mock.setTasks([], workflows);
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-home'));
+
+    const runningRow = getPlanningSessionRowByText('Submitted running chat');
+    const completedRow = getPlanningSessionRowByText('Submitted completed chat');
+
+    expect(within(runningRow).getByLabelText('Workflow running')).toHaveClass('bg-primary');
+    expect(within(completedRow).queryByLabelText('Workflow running')).not.toBeInTheDocument();
+  });
+
   it('opens the graph from a submitted planning chat by restoring the saved viewport instead of fitting', async () => {
     const savedViewport = { x: -444, y: 156, zoom: 0.71 };
     const workflows: WorkflowMeta[] = [{ id: 'wf-submitted', name: 'Submitted workflow', status: 'running' }];
