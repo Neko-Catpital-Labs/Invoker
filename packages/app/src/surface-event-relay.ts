@@ -31,6 +31,47 @@ export interface SurfaceEventRelayDeps {
 const PROGRESS_DEBOUNCE_MS = 2500;
 const TERMINAL_DERIVED_STATUSES = new Set(['completed', 'failed', 'closed']);
 
+export interface SurfaceAlertFields {
+  severity: string;
+  source: string;
+  subject: string;
+  message: string;
+  alertKey: string;
+}
+
+export function publishSurfaceAlert(messageBus: MessageBus, alert: SurfaceAlertFields): void;
+export function publishSurfaceAlert(
+  messageBus: MessageBus,
+  severity: string,
+  source: string,
+  subject: string,
+  message: string,
+  alertKey: string,
+): void;
+export function publishSurfaceAlert(
+  messageBus: MessageBus,
+  alertOrSeverity: SurfaceAlertFields | string,
+  source?: string,
+  subject?: string,
+  message?: string,
+  alertKey?: string,
+): void {
+  const alert = typeof alertOrSeverity === 'string'
+    ? {
+        severity: alertOrSeverity,
+        source: source ?? '',
+        subject: subject ?? '',
+        message: message ?? '',
+        alertKey: alertKey ?? '',
+      }
+    : alertOrSeverity;
+
+  messageBus.publish(Channels.SURFACE_EVENT, {
+    type: 'alert' as const,
+    alert,
+  });
+}
+
 /** Derive the owning workflow id from a task id (`wf-…/task` or `__merge__wf-…`). */
 function workflowIdFromTaskId(taskId: string): string | undefined {
   if (taskId.startsWith('__merge__')) return taskId.slice('__merge__'.length);
