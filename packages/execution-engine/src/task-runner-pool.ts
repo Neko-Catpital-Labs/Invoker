@@ -133,7 +133,7 @@ function memoryPoolMemberLoad(host: TaskRunnerPoolHost, poolId: string, memberKe
   return load;
 }
 
-function sshHostLeaseLoad(host: TaskRunnerPoolHost, member: Extract<ExecutionPoolMember, { type: 'ssh' }>): number | undefined {
+export function sshHostLeaseLoad(host: TaskRunnerPoolHost, member: Extract<ExecutionPoolMember, { type: 'ssh' }>): number | undefined {
   const target = host.getRemoteTargets()[member.id];
   if (!target) return undefined;
   const resourceKey = sshResourceKey(target);
