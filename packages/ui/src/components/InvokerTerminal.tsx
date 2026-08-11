@@ -70,6 +70,7 @@ interface InvokerTerminalProps {
   terminalBusy?: boolean;
   terminalError?: string | null;
   terminalActive?: boolean;
+  workflowRunning?: boolean;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
@@ -486,6 +487,7 @@ export function InvokerTerminal({
   terminalBusy = false,
   terminalError = null,
   terminalActive = true,
+  workflowRunning = false,
   onValueChange,
   onSubmit,
   onPresetChange,
@@ -853,9 +855,21 @@ export function InvokerTerminal({
               className="sticky bottom-0 z-10 border-t border-border bg-card/80 px-4 py-3.5 text-sm text-foreground backdrop-blur-sm"
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="text-xs text-muted-foreground">
-                  Plan ready · &quot;{submittedPlanName}&quot; · review the graph, then Start ready work
-                </span>
+                {workflowRunning ? (
+                  <span className="inline-flex min-w-0 items-center gap-2 text-xs text-foreground">
+                    <span
+                      className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border border-primary/30 border-t-primary"
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 truncate">
+                      Workflow running... · &quot;{submittedPlanName}&quot; · open the graph to monitor progress
+                    </span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    Plan ready · &quot;{submittedPlanName}&quot; · review the graph, then Start ready work
+                  </span>
+                )}
                 <button
                   type="button"
                   data-testid="invoker-terminal-open-graph"
