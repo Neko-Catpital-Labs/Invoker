@@ -17,7 +17,14 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
-import { buildPlanningHandoffInstructions, isDraftingAuthorized, summarizePlanText } from '@invoker/planning-core';
+import {
+  buildPlanningHandoffInstructions,
+  formatPlanningHostedTurn,
+  isDraftingAuthorized,
+  planningHostContext,
+  summarizePlanText,
+  type PlanningHostSurface,
+} from '@invoker/planning-core';
 import type { LogFn } from '../surface.js';
 import {
   buildTrackedChangesRevertedNotice,
@@ -140,6 +147,7 @@ export interface PlanConversationConfig {
   onHarnessSessionId?: (sessionId: string) => void;
   /** Opt in to a scoping-first planning conversation before YAML drafting. Default: false. */
   conversationalPlanning?: boolean;
+  planningSurface?: PlanningHostSurface;
   /**
    * With `conversationalPlanning`, treat drafting as already authorized from the
    * first turn instead of requiring explicit draft intent in the message text.
@@ -280,6 +288,7 @@ export interface BuildPlanSystemPromptOptions {
   draftingAuthorized?: boolean;
   preferStackedWorkflows?: boolean;
   planFilePath?: string;
+  planningSurface?: PlanningHostSurface;
 }
 
 function buildDirectPlanSystemPrompt(
@@ -360,11 +369,17 @@ function buildConversationalPlanSystemPrompt(
   options: BuildPlanSystemPromptOptions,
 ): string {
   const draftingAuthorized = options.draftingAuthorized ?? false;
+  if (!options.planningSurface) {
+    throw new Error('Conversational planning requires an explicit planningSurface.');
+  }
+  const hostContext = planningHostContext(options.planningSurface);
   const handoffInstructions = buildPlanningHandoffInstructions({
     planFilePath: options.planFilePath,
-    reviewInstruction: 'After the YAML exists, the hosting surface reads that exact YAML, renders the ordered steps in its review flow, and owns the approval step.',
+    reviewInstruction: options.planningSurface === 'in_app'
+      ? 'After the YAML exists, the in-app planner reads that exact YAML, renders the ordered steps in its review panel, and owns the approval step.'
+      : 'After the YAML exists, the Slack planner reads that exact YAML, renders the ordered steps in its Approve/Cancel review card, and owns the approval step.',
     shortReplyInstruction: 'Then reply in chat with only a one-or-two-sentence summary. Never paste the YAML into chat.',
-    submissionInstruction: 'Only the hosting surface (the Slack orchestrator or the in-app planner) may submit the plan after your draft is approved in its review flow. Never run `invoker-cli`, `invoker_submit_plan`, `scripts/headless-ipc.js`, or any other submission command yourself. This rule overrides the plan-to-invoker skill\'s Harness handoff mode in this session.',
+    submissionInstruction: 'Only the current planning host may submit the plan after the draft is approved in its review flow. Never run `invoker-cli`, `invoker_submit_plan`, `scripts/headless-ipc.js`, or any other submission command yourself. This rule overrides the plan-to-invoker skill\'s Harness handoff mode in this session.',
   });
   const draftingInstructions = draftingAuthorized
     ? `
@@ -380,6 +395,8 @@ Before drafting is authorized:
 5. End by asking whether the user wants you to draft the YAML plan.`;
 
   return `You are an assistant for the Invoker orchestrator in conversational planning mode.
+
+${hostContext}
 
 This session is a planning conversation before any task plan exists. Your job is to help scope the work clearly before drafting.
 
@@ -468,6 +485,7 @@ export class PlanConversation {
   private experimentalPlanner?: boolean;
   private preferStackedWorkflows?: boolean;
   private conversationalPlanning: boolean;
+  private planningSurface?: PlanningHostSurface;
   private draftingPreauthorized: boolean;
   private log: LogFn;
   private onRawPlannerOutput?: RawPlannerOutputHandler;
@@ -506,6 +524,10 @@ export class PlanConversation {
     this.experimentalPlanner = config.experimentalPlanner;
     this.preferStackedWorkflows = config.preferStackedWorkflows ?? true;
     this.conversationalPlanning = config.conversationalPlanning ?? false;
+    this.planningSurface = config.planningSurface;
+    if (this.conversationalPlanning && !this.planningSurface) {
+      throw new Error('Conversational planning requires an explicit planningSurface.');
+    }
     this.draftingPreauthorized = config.draftingPreauthorized ?? false;
     this.onRawPlannerOutput = config.onRawPlannerOutput;
     this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
@@ -798,7 +820,10 @@ export class PlanConversation {
   /** Latest message only when resuming a continuity-supporting session; otherwise the full history prompt. */
   private buildTurnPrompt(): string {
     if (this.harnessSessionDriver?.supportsSessionContinuity && this._harnessSessionId) {
-      return this.messages[this.messages.length - 1]?.content ?? '';
+      const latestMessage = this.messages[this.messages.length - 1]?.content ?? '';
+      return this.conversationalPlanning && this.planningSurface
+        ? formatPlanningHostedTurn(this.planningSurface, latestMessage)
+        : latestMessage;
     }
     return this.buildCursorPrompt();
   }
@@ -815,6 +840,7 @@ export class PlanConversation {
             && (this.draftingPreauthorized || isDraftingAuthorizedForPrompt(this.messages)),
           preferStackedWorkflows: this.preferStackedWorkflows,
           planFilePath: this.planDraftFilePath() ?? undefined,
+          planningSurface: this.planningSurface,
         })
       : buildAgentSystemPrompt(this.planIntentSignalFilePath() ?? undefined);
     const parts: string[] = [systemPrompt];
