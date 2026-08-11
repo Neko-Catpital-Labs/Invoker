@@ -122,6 +122,83 @@ export function dispatchThroughOutboxOnly(
   return leased != null;
 }
 
+/**
+ * Release every execution-resource lease (SSH pool slot, worktree
+ * pool member, ...) held on behalf of a task whose launch dispatch
+ * was just abandoned. Best-effort: each release runs in its own
+ * try/catch so a single stuck row cannot prevent the others from
+ * being released, and any I/O failure is logged but does not
+ * propagate (abandonStuckLeases must remain idempotent under
+ * repeated polls).
+ *
+ * Exported as a standalone function (rather than only a private
+ * class method) so it is directly testable without going through
+ * the full abandon flow.
+ */
+export function releaseTaskResourceLeases(
+  persistence: LaunchDispatcherPersistence,
+  logger: Logger | undefined,
+  ownerId: string,
+  taskId: string,
+  dispatchId: number,
+  reason = 'launch-dispatch-abandoned',
+): void {
+  let leases: ReadonlyArray<{ resourceKey: string; holderId: string; resourceType: string }> = [];
+  try {
+    leases = persistence.listExecutionResourceLeasesByTask(taskId);
+  } catch (err) {
+    logger?.warn?.(
+      '[launch-dispatcher] listExecutionResourceLeasesByTask failed',
+      {
+        ownerId,
+        taskId,
+        dispatchId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      },
+    );
+    return;
+  }
+  if (leases.length === 0) return;
+  let released = 0;
+  for (const lease of leases) {
+    try {
+      persistence.releaseExecutionResourceLease(lease.resourceKey, lease.holderId);
+      released += 1;
+      persistence.logEvent?.(taskId, 'task.launch_dispatch_lease_released', {
+        dispatchId,
+        resourceKey: lease.resourceKey,
+        resourceType: lease.resourceType,
+        holderId: lease.holderId,
+        reason,
+      });
+    } catch (err) {
+      logger?.warn?.(
+        '[launch-dispatcher] releaseExecutionResourceLease failed',
+        {
+          ownerId,
+          taskId,
+          dispatchId,
+          resourceKey: lease.resourceKey,
+          holderId: lease.holderId,
+          error: err instanceof Error ? err.message : String(err),
+          module: 'launch-dispatcher',
+        },
+      );
+    }
+  }
+  if (released > 0) {
+    logger?.info?.('[launch-dispatcher] released resource leases', {
+      ownerId,
+      taskId,
+      dispatchId,
+      released,
+      total: leases.length,
+      module: 'launch-dispatcher',
+    });
+  }
+}
+
 export class LaunchDispatcher {
   private readonly persistence: LaunchDispatcherPersistence;
   private readonly orchestrator?: LaunchDispatcherOrchestrator;
@@ -441,7 +518,7 @@ export class LaunchDispatcher {
   ): void {
     const accepted = this.persistence.markLaunchDispatchAbandoned(dispatch.id, message, undefined, reason);
     if (accepted) {
-      this.releaseTaskResourceLeases(dispatch.taskId, dispatch.id, reason);
+      releaseTaskResourceLeases(this.persistence, this.logger, this.ownerId, dispatch.taskId, dispatch.id, reason);
     }
     this.persistence.logEvent?.(dispatch.taskId, 'task.launch_dispatch_invalidated', {
       dispatchId: dispatch.id,
@@ -552,7 +629,7 @@ export class LaunchDispatcher {
     const accepted = this.persistence.markLaunchDispatchAbandoned(row.id, message, nowIso, abandonReason);
     if (!accepted) return false;
 
-    this.releaseTaskResourceLeases(row.taskId, row.id);
+    releaseTaskResourceLeases(this.persistence, this.logger, this.ownerId, row.taskId, row.id);
     return true;
   }
 
@@ -603,76 +680,6 @@ export class LaunchDispatcher {
         taskId,
         dispatchId,
         error: err instanceof Error ? err.message : String(err),
-        module: 'launch-dispatcher',
-      });
-    }
-  }
-
-  /**
-   * Release every execution-resource lease (SSH pool slot, worktree
-   * pool member, ...) held on behalf of a task whose launch dispatch
-   * was just abandoned. Best-effort: each release runs in its own
-   * try/catch so a single stuck row cannot prevent the others from
-   * being released, and any I/O failure is logged but does not
-   * propagate (abandonStuckLeases must remain idempotent under
-   * repeated polls).
-   */
-  private releaseTaskResourceLeases(
-    taskId: string,
-    dispatchId: number,
-    reason = 'launch-dispatch-abandoned',
-  ): void {
-    let leases: ReadonlyArray<{ resourceKey: string; holderId: string; resourceType: string }> = [];
-    try {
-      leases = this.persistence.listExecutionResourceLeasesByTask(taskId);
-    } catch (err) {
-      this.logger?.warn?.(
-        '[launch-dispatcher] listExecutionResourceLeasesByTask failed',
-        {
-          ownerId: this.ownerId,
-          taskId,
-          dispatchId,
-          error: err instanceof Error ? err.message : String(err),
-          module: 'launch-dispatcher',
-        },
-      );
-      return;
-    }
-    if (leases.length === 0) return;
-    let released = 0;
-    for (const lease of leases) {
-      try {
-        this.persistence.releaseExecutionResourceLease(lease.resourceKey, lease.holderId);
-        released += 1;
-        this.persistence.logEvent?.(taskId, 'task.launch_dispatch_lease_released', {
-          dispatchId,
-          resourceKey: lease.resourceKey,
-          resourceType: lease.resourceType,
-          holderId: lease.holderId,
-          reason,
-        });
-      } catch (err) {
-        this.logger?.warn?.(
-          '[launch-dispatcher] releaseExecutionResourceLease failed',
-          {
-            ownerId: this.ownerId,
-            taskId,
-            dispatchId,
-            resourceKey: lease.resourceKey,
-            holderId: lease.holderId,
-            error: err instanceof Error ? err.message : String(err),
-            module: 'launch-dispatcher',
-          },
-        );
-      }
-    }
-    if (released > 0) {
-      this.logger?.info?.('[launch-dispatcher] released resource leases', {
-        ownerId: this.ownerId,
-        taskId,
-        dispatchId,
-        released,
-        total: leases.length,
         module: 'launch-dispatcher',
       });
     }
