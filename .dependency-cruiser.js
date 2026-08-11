@@ -123,11 +123,11 @@ module.exports = {
         'Layer 0 packages (contracts, workflow-graph, transport, runtime-domain, runtime-service, shell, ui) should not depend on other workspace packages.',
       severity: 'error',
       from: {
-        path: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+        path: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|npm-cli|npm-slack|npm-ui|svc-api|web-app)/',
       },
       to: {
         path: '^packages/',
-        pathNot: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+        pathNot: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|npm-cli|npm-slack|npm-ui|svc-api|web-app)/',
       },
     },
     {
@@ -142,7 +142,7 @@ module.exports = {
         path: '^packages/',
         pathNot: [
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
-          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|npm-cli|npm-slack|npm-ui|svc-api|web-app)/',
         ],
       },
     },
@@ -159,7 +159,7 @@ module.exports = {
         pathNot: [
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
-          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|npm-cli|npm-slack|npm-ui|svc-api|web-app)/',
         ],
       },
     },
@@ -177,7 +177,7 @@ module.exports = {
           '^packages/(execution-engine|surfaces|planning-core)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
-          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|npm-cli|npm-slack|npm-ui|svc-api|web-app)/',
         ],
       },
     },
@@ -187,12 +187,12 @@ module.exports = {
         'Layer 4 packages (test-kit, app) can only depend on Layers 0, 1, 2, and 3.',
       severity: 'error',
       from: {
-        path: '^packages/(test-kit|app)/',
+        path: '^packages/(test-kit|app|cli|slack-manager)/',
       },
       to: {
         path: '^packages/',
         pathNot: [
-          '^packages/(test-kit|app)/',
+          '^packages/(test-kit|app|cli|slack-manager)/',
           '^packages/(execution-engine|surfaces|planning-core)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
