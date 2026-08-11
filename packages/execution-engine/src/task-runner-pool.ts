@@ -490,7 +490,7 @@ export function takeResolvedExecutionSelection(host: TaskRunnerPoolHost, taskId:
   return resolvedExecution;
 }
 
-function releaseAndKillOrphanedExecution(
+export function releaseAndKillOrphanedExecution(
   host: TaskRunnerPoolHost,
   attemptId: string,
   entry: ActiveExecutionEntry,
