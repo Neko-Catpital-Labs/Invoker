@@ -123,6 +123,7 @@ async function dispatchHeadlessRunnableTasks(
     orchestrator: {
       prepareTaskForNewAttempt: (taskId, reason) =>
         deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
+      failTask: (taskId, reason) => deps.orchestrator.failTask(taskId, reason),
       syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
       getTask: (taskId) => deps.orchestrator.getTask(taskId),
       getTaskLaunchReadiness: (taskId) => deps.orchestrator.getTaskLaunchReadiness(taskId),

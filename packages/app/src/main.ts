@@ -2847,6 +2847,7 @@ startMainProcessBootstrap({
         orchestrator: {
           prepareTaskForNewAttempt: (taskId, reason) =>
             orchestrator.prepareTaskForNewAttempt(taskId, reason),
+          failTask: (taskId, reason) => orchestrator.failTask(taskId, reason),
           syncFromDb: (workflowId) => orchestrator.syncFromDb(workflowId),
           getTask: (taskId) => orchestrator.getTask(taskId),
           getTaskLaunchReadiness: (taskId) => orchestrator.getTaskLaunchReadiness(taskId),
