@@ -113,7 +113,9 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:get-status':
         return orchestrator.getWorkflowStatus();
       case 'invoker:get-queue-status':
-        return orchestrator.getQueueStatus({ refresh: false });
+        return orchestrator.getQueueStatus({
+          refresh: (args[0] as { refresh?: boolean } | undefined)?.refresh === true,
+        });
       case 'invoker:get-worker-status':
       case 'invoker:get-workers':
         return deps.getWorkers?.() ?? { generatedAt: new Date().toISOString(), workers: [] };

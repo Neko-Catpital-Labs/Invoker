@@ -1229,7 +1229,7 @@ export const IpcChannels = {
 
   // Queue & Configuration
   'invoker:get-queue-status': {} as {
-    request: [];
+    request: [options?: { refresh?: boolean }];
     response: QueueStatus;
   },
   'invoker:get-worker-status': {} as {

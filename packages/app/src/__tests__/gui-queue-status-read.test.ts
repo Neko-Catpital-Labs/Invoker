@@ -39,6 +39,24 @@ describe('resolveGuiQueueStatusRead', () => {
     expect(getQueueStatus).toHaveBeenCalledWith({ refresh: false });
   });
 
+  it('force-refreshes local owner reads when requested', async () => {
+    const ownerQueue = makeQueueStatus('owner running task');
+    const request = vi.fn();
+    const getQueueStatus = vi.fn(() => ownerQueue);
+
+    await expect(resolveGuiQueueStatusRead({
+      ownerMode: true,
+      messageBus: { request } as never,
+      orchestrator: { getQueueStatus } as never,
+      logger: makeLogger() as never,
+      markDaemonOwnerUnavailable: vi.fn(),
+      refresh: true,
+    })).resolves.toEqual(ownerQueue);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(getQueueStatus).toHaveBeenCalledWith({ refresh: true });
+  });
+
   it('delegates viewer reads to the owner queue query', async () => {
     const delegatedQueue = makeQueueStatus('owner running task');
     const request = vi.fn(async () => delegatedQueue);
