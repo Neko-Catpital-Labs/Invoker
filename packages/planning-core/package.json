@@ -17,6 +17,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@invoker/contracts": "workspace:*",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
