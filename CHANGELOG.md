@@ -4,6 +4,21 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.11
+
+- Add scratch execution mode: a `scratch: true` plan runs its tasks in a plain temp directory with no git repo involved at all, for benchmark/direct-output plans that never touch a real checkout (#8243-8249, #8256, #8257).
+- Add opt-in gating for owner workers: `infra-repair`, `autofix`, `reaper`, `workflow-resume`, and `requeue` now each require an explicit config field to auto-start, instead of running unconditionally or only because of an undocumented persisted database row (#8221-8224, #8230, #8312).
+- Fix a live incident where large piped stdout from headless queries and the e2e-autofix sweep could be truncated before the process exited, silently corrupting downstream JSON parsing; both paths now flush stdout/stderr before exit, and the sweep fails closed instead of crashing on a bad query response (#8266, #8268-8270).
+- Fix a planning-chat resync loop: a delegated resync used to trust a remote owner's own streamSequence, which belongs to a different process's counter and could never satisfy the caller's watermark; the client now also caps consecutive resync failures and only resets the counter when a resync snapshot actually closes the gap that triggered it (#8238-8242).
+- Fix several SSH/worktree pool and lease bugs: a worktree lease could leak on a non-conflict upstream-merge failure (#8168-8174); SSH pool load is now counted only from durable, unexpired lease rows, claimed at pool-member selection time, with `maxConcurrentTasks` enforced as a hard cap (#8328, #8330, #8332); a lease with no expiry is no longer treated as permanently active, and an orphaned execution slot is now reclaimed across tasks (#8317, #8324, #8325); and abandoning a stuck launch now releases every resource lease it was holding (#8338).
+- Fix a benign foreign-key race: `--headless delete <id>` could report a foreign key failure and exit 1 even though the workflow row was already removed by a concurrent write (#8241).
+- Fix launch-dispatch `enqueued_at` comparisons to use `julianday` instead of a raw string comparison that broke on timestamp format drift (#8153).
+- Fix SQLite corruption recovery: a failed snapshot restore could leave the database partially overwritten instead of falling back to a clean empty database; restores now write to a staging file and rename atomically into place (#8265). Also extracted the corruption-recovery eligibility decision, the exclusive-locking WAL guard, and the owner-capability write gate into named, independently-tested functions (#8223, #8227, #8308).
+- Compress hourly DB snapshots to shrink `db-backups` disk usage (#8265).
+- Point README, docs, and bundled agent skills at `invoker-cli setup` and `invoker-ui --headless`/`invoker-ui`, replacing stale `./run.sh` and `invoker-ui --install-skills` references that don't exist outside a repo checkout (#8275, #8276, #8280).
+- Add a real-git end-to-end proof that a structurally stale-based failing check skips agent repair instead of looping forever, and wire it into the required CI suite (#8161-8163).
+- Continued CI and worker-safety hardening: `invoker-cli standalone` skill install and Linux Electron launch flags (#8196-8205), bare-restart worker actions now keyed by task id alone (#8313), a dedicated regression test for the durable auto-fix retry cap (#8311), and dozens of extract-and-cover-with-a-direct-test hardening slices across the owner, orchestrator, and execution-engine layers.
+
 ## 0.0.10
 
 - Add a machine-onboarding wizard: config/domain layer, CLI wizard, app bridge, GUI wizard, and docs (#7794, #7415, #7813, #7822, #7828, #7842, #7850). Hardened today with real skill installation and MCP server registration during setup, consolidated into a shared `@invoker/shell` package so both the CLI and the desktop app use one implementation instead of two (#8112, #8110, #8115, #8114).
