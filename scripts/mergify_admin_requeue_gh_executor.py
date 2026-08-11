@@ -76,6 +76,10 @@ class AdminBypassGhExecutor:
         self.gh.comment(self.repo, pr.number, "@mergifyio queue")
         self.ledger.record("requeue", pr.number, pr.head_ref_oid, key, now)
 
+    def refresh_stale_queue(self, pr: PrSnapshot, key: str, now: int) -> None:
+        self.gh.comment(self.repo, pr.number, "@mergifyio refresh")
+        self.ledger.record("refresh-stale-queue", pr.number, pr.head_ref_oid, key, now)
+
     def restore_admin_bypass_label(self, pr: PrSnapshot, now: int) -> None:
         if self.ledger.count(RESTORE_ADMIN_BYPASS_LABEL_LEDGER_KIND, pr.number, pr.head_ref_oid, "admin-bypass") == 0:
             self.gh.edit_label(self.repo, pr.number, add="admin-bypass")
@@ -141,6 +145,7 @@ class AdminBypassGhExecutor:
         self.logger.trace("admin-bypass-action-execute", action=self.logger.action_payload(action))
         if action.kind in {
             "requeue",
+            "refresh_stale_queue",
             "restore_admin_bypass_label",
             "retarget_base",
             "comment_admin_bypass_nudge",
@@ -151,6 +156,9 @@ class AdminBypassGhExecutor:
             return False
         if action.kind == "requeue":
             self.requeue(pr, action.key, now)
+            return True
+        if action.kind == "refresh_stale_queue":
+            self.refresh_stale_queue(pr, action.key, now)
             return True
         if action.kind == "restore_admin_bypass_label":
             self.restore_admin_bypass_label(pr, now)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Collection, Literal, Mapping
 
 try:
@@ -59,6 +60,9 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
     "required-fast / Submit Workflow Chain",
 })
 ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
+STALE_QUEUE_EVENT_TTL_SECONDS = 5400
+REFRESH_STALE_QUEUE_LEDGER_KIND = "refresh-stale-queue"
+STALE_QUEUE_EVENT_REFRESH_KEY = "admin-bypass-current-head"
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
 TERMINAL_BLOCKER_KINDS = frozenset({"merged"})
@@ -104,7 +108,48 @@ def is_queue_only_required_check(name: str) -> bool:
     return name in QUEUE_ONLY_REQUIRED_CHECKS
 
 
-def has_active_queue_event(pr: PrSnapshot) -> bool:
+def queue_event_queued_epoch(event: MergifyQueueEvent) -> int | None:
+    if not event.queued_at:
+        return None
+    try:
+        queued_at = datetime.fromisoformat(event.queued_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if queued_at.tzinfo is None:
+        queued_at = queued_at.replace(tzinfo=timezone.utc)
+    return int(queued_at.timestamp())
+
+
+def queue_event_is_stale(event: MergifyQueueEvent, now: int) -> bool:
+    queued_epoch = queue_event_queued_epoch(event)
+    if queued_epoch is None:
+        return False
+    return now - queued_epoch >= STALE_QUEUE_EVENT_TTL_SECONDS
+
+
+def has_stale_matching_head_queue_event(pr: PrSnapshot, now: int) -> bool:
+    latest = pr.latest_mergify
+    return bool(
+        latest
+        and latest.queue_rule_name == "admin-bypass"
+        and latest.state in ACTIVE_QUEUE_STATES
+        and latest.head_sha == pr.head_ref_oid
+        and queue_event_is_stale(latest, now)
+    )
+
+
+def stale_matching_head_queue_event_detail(pr: PrSnapshot) -> str:
+    latest = pr.latest_mergify
+    if not latest:
+        return "stale Mergify queue event on current head"
+    queued_at = latest.queued_at or "unknown time"
+    return (
+        f"stale Mergify queue event stayed {latest.state} on admin-bypass "
+        f"for current head since {queued_at}; force re-evaluation with @mergifyio refresh"
+    )
+
+
+def has_active_queue_event(pr: PrSnapshot, now: int) -> bool:
     latest = pr.latest_mergify
     if not latest:
         return False
@@ -118,7 +163,7 @@ def has_active_queue_event(pr: PrSnapshot) -> bool:
     if latest.queue_rule_name != "admin-bypass" or latest.state not in ACTIVE_QUEUE_STATES:
         return False
     if latest.head_sha == pr.head_ref_oid:
-        return True
+        return not queue_event_is_stale(latest, now)
     if not latest.head_sha:
         return True
     return "queued" in pr.labels
@@ -666,7 +711,7 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
     }
 
 
-def wait_reason_for_facts(facts: StackFacts) -> str:
+def wait_reason_for_facts(facts: StackFacts, now: int) -> str:
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
     for pr in facts.stack.prs:
@@ -679,7 +724,7 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
             return "terminal-merged"
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
-    if facts.bottom and has_active_queue_event(facts.bottom):
+    if facts.bottom and has_active_queue_event(facts.bottom, now):
         return "bottom-already-queued"
     return "no-action"
 
@@ -909,7 +954,7 @@ def plan_rebase_onto_base(pr: PrSnapshot, trunk: str, ledger: Ledger, max_attemp
     return Action("rebase_onto_base", pr.number, trunk, f"rebase #{pr.number} onto `{trunk}`: {reason}")
 
 
-def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts: int) -> Action | None:
+def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts: int, now: int) -> Action | None:
     if _bottom_has_pending_or_human_blocker(facts):
         return None
     if any(blocker.kind == "merge_hold" for blocker in facts.all_blockers):
@@ -951,8 +996,23 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
         return None
-    if has_active_queue_event(bottom):
+    if has_active_queue_event(bottom, now):
         return None
+    if has_stale_matching_head_queue_event(bottom, now):
+        detail = stale_matching_head_queue_event_detail(bottom)
+        attempts = ledger.count(
+            REFRESH_STALE_QUEUE_LEDGER_KIND,
+            bottom.number,
+            bottom.head_ref_oid,
+            STALE_QUEUE_EVENT_REFRESH_KEY,
+        )
+        if attempts >= max_requeue_attempts:
+            return cap_action(
+                bottom,
+                Blocker(STALE_QUEUE_EVENT_REFRESH_KEY, "stale_queue_event", bottom.number, detail),
+                detail,
+            )
+        return Action("refresh_stale_queue", bottom.number, STALE_QUEUE_EVENT_REFRESH_KEY, detail)
     if bottom.base_ref_name == facts.trunk and facts.stale_base_by_pr.get(bottom.number):
         return plan_rebase_onto_base(bottom, facts.trunk, ledger, max_requeue_attempts, "base pointer moved but content was never rebased")
     requeue_reason = "eligible-when-ready"
@@ -993,7 +1053,7 @@ def plan_actions_from_facts(
             return ()
         if _bottom_has_pending_or_human_blocker(facts) or _bottom_has_repairable_blocker(facts):
             return ()
-        action = plan_bottom_progress(facts, ledger, max_requeue_attempts)
+        action = plan_bottom_progress(facts, ledger, max_requeue_attempts, now)
         if action is not None:
             return (action,)
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now)
@@ -1016,7 +1076,7 @@ def plan_actions_from_facts(
     action = plan_merge_hold_cleanup(facts, ledger)
     if action is not None:
         return (action,)
-    action = plan_bottom_progress(facts, ledger, max_requeue_attempts)
+    action = plan_bottom_progress(facts, ledger, max_requeue_attempts, now)
     if action is not None:
         return (action,)
     return ()
@@ -1074,7 +1134,7 @@ def plan_stack_execution(
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
         )
-    wait_reason = "repair-in-flight" if has_active_repair_for_current_blocker(facts, ledger, now_epoch) else wait_reason_for_facts(facts)
+    wait_reason = "repair-in-flight" if has_active_repair_for_current_blocker(facts, ledger, now_epoch) else wait_reason_for_facts(facts, now_epoch)
     return StackExecutionPlan(
         summary=summary,
         actions=(),
