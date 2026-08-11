@@ -761,7 +761,7 @@ export async function planFromGoal(
 
   try {
     const { PlanConversation, extractYamlPlan, selectHarnessSessionDriver } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver));
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver, { conversationalPlanning: true }));
     const plannerOutput = await conversation.sendMessage(goal);
     const planText = extractYamlPlan(plannerOutput);
     if (!planText) {
@@ -1304,7 +1304,7 @@ export async function restorePlanningChatSessions(
       ? { ...deps, workingDir: restoredWorktreePath, mcpConfigPath: planningMcpConfigPath(restoredWorktreePath) }
       : deps;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver));
+    const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver, { conversationalPlanning: true }));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
