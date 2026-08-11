@@ -42,7 +42,8 @@ describe('restored in-app planning chat conversational mode', () => {
 
     expect(result.ok).toBe(true);
     expect(prompt).toContain('conversational planning mode');
-    expect(prompt).toContain('Drafting is not authorized yet.');
+    expect(prompt).toContain('The user has explicitly approved drafting.');
+    expect(prompt).not.toContain('Drafting is not authorized yet.');
     expect(prompt).not.toContain('You are a normal coding agent running in a git worktree for a Slack thread.');
     expect(prompt).not.toContain('type `/plan <request>`');
   });
