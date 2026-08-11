@@ -458,11 +458,11 @@ export async function preemptWorkflowExecution(workflowId: string, deps: Headles
   if (deps.preemptWorkflowExecution) {
     return deps.preemptWorkflowExecution(workflowId);
   }
-  if (typeof deps.commandService.cancelWorkflow !== 'function') {
+  if (typeof deps.commandService.preemptWorkflow !== 'function') {
     return { cancelled: [], runningCancelled: [] };
   }
-  const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
-  const result = await deps.commandService.cancelWorkflow(envelope);
+  const envelope = makeEnvelope('preempt-workflow', 'headless', 'workflow', { workflowId });
+  const result = await deps.commandService.preemptWorkflow(envelope);
   if (!result.ok) {
     if (preemptSkipCodes.has(result.error.code)) return { cancelled: [], runningCancelled: [] };
     if (isRaceLostForeignKeyConstraintFailure(result.error.message, workflowId, deps)) {
