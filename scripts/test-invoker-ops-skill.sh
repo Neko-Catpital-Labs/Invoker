@@ -26,8 +26,8 @@ must_contain() {
 [[ -x "$RETRY_SCRIPT" ]] || fail "expected executable $RETRY_SCRIPT"
 
 must_contain "$SKILL_MD" "Do not query or mutate the SQLite database directly" "skill must forbid normal direct DB operations"
-must_contain "$SKILL_MD" "./run.sh --headless retry-tasks --status failed --parallel 8" "skill must document failed retry command"
-must_contain "$SKILL_MD" "./run.sh --headless retry-tasks --status pending --parallel 8" "skill must document pending retry command"
+must_contain "$SKILL_MD" "invoker-ui --headless retry-tasks --status failed --parallel 8" "skill must document failed retry command"
+must_contain "$SKILL_MD" "invoker-ui --headless retry-tasks --status pending --parallel 8" "skill must document pending retry command"
 must_contain "$SKILL_MD" "Bulk retry commands must use \`--no-track\`" "skill must document acknowledgement boundary"
 must_contain "$SKILL_MD" "Do not invent SQL as the fallback" "skill must reject SQL fallback"
 
