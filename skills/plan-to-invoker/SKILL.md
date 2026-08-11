@@ -56,7 +56,9 @@ For implementation benchmark plans, switch `onFinish` and `mergeMode` only when 
 
 ## Harness handoff mode
 
-Use this mode when invoked by the installed command or MCP prompt. Do not use this mode from a Slack `plan:` or agent thread. The orchestrator owns Slack plan submission, so in those threads do not invoke CLI or MCP handoff tools yourself.
+Use this mode when invoked by the installed command or MCP prompt.
+
+> **Not this mode:** Slack `plan:` and agent threads use a separate, orchestrator-owned Slack plan submission path. Do not invoke the CLI or MCP handoff tools from those threads.
 
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
