@@ -566,7 +566,7 @@ describe('PlanConversation', () => {
   });
 
   it('conversational planning asks for scope before drafting', async () => {
-    const conversational = new PlanConversation({ conversationalPlanning: true });
+    const conversational = new PlanConversation({ conversationalPlanning: true, planningSurface: 'in_app' });
     mockCursorResponse('What behavior should change first?');
 
     await conversational.sendMessage('Build better planning');
@@ -582,8 +582,14 @@ describe('PlanConversation', () => {
     expect(prompt).not.toContain('Generate a YAML task plan');
   });
 
+  it('requires conversational callers to identify their review host', () => {
+    expect(() => new PlanConversation({ conversationalPlanning: true })).toThrow(
+      'Conversational planning requires an explicit planningSurface.',
+    );
+  });
+
   it('conversational planning treats confirmation without YAML as draft approval', async () => {
-    const conversational = new PlanConversation({ conversationalPlanning: true });
+    const conversational = new PlanConversation({ conversationalPlanning: true, planningSurface: 'in_app' });
     (conversational as any).messages.push({
       role: 'assistant',
       content: 'I understand the scope. Would you like me to draft the YAML plan?',
@@ -877,14 +883,22 @@ describe('PlanConversation prompt construction', () => {
   });
 
   it('buildPlanSystemPrompt conversational mode without drafting authorization is unchanged', () => {
-    const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: true, draftingAuthorized: false });
+    const prompt = buildPlanSystemPrompt('main', undefined, {
+      conversationalPlanning: true,
+      draftingAuthorized: false,
+      planningSurface: 'in_app',
+    });
     expect(prompt).toContain('Drafting is not authorized yet.');
     expect(prompt).toContain('Ask scoping questions first');
     expect(prompt).not.toContain('name: "Plan Name"');
   });
 
   it('buildPlanSystemPrompt conversational mode with drafting authorized points at the plan-to-invoker skill instead of embedding the ad hoc contract', () => {
-    const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: true, draftingAuthorized: true });
+    const prompt = buildPlanSystemPrompt('main', undefined, {
+      conversationalPlanning: true,
+      draftingAuthorized: true,
+      planningSurface: 'in_app',
+    });
     expect(prompt).toContain('plan-to-invoker');
     expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
     expect(prompt).toContain('Harness handoff mode');
@@ -1178,6 +1192,43 @@ describe('PlanConversation harness session driver', () => {
     expect(driver.append).toHaveBeenCalledTimes(1);
     expect(driver.append.mock.calls[0][0]).toBe('restored-session');
     expect(conv.harnessSessionId).toBe('restored-session');
+  });
+
+  it('overrides stale Slack context on a resumed in-app planning turn', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: true });
+    const conv = new PlanConversation({
+      conversationalPlanning: true,
+      planningSurface: 'in_app',
+      harnessSessionDriver: driver,
+      harnessSessionId: 'restored-in-app-session',
+    });
+
+    mockCursorResponse('Reply after restart');
+    await conv.sendMessage('Continue where we left off');
+
+    expect(driver.append).toHaveBeenCalledTimes(1);
+    const prompt = driver.append.mock.calls[0][1];
+    expect(prompt).toContain('Current planning host: Invoker in-app planner.');
+    expect(prompt).toContain('Never direct the user to Slack');
+    expect(prompt).toContain('User message:\nContinue where we left off');
+    expect(prompt).not.toContain('Current planning host: Invoker Slack planner.');
+  });
+
+  it('restates Slack ownership on a resumed Slack planning turn', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: true });
+    const conv = new PlanConversation({
+      conversationalPlanning: true,
+      planningSurface: 'slack',
+      harnessSessionDriver: driver,
+      harnessSessionId: 'restored-slack-session',
+    });
+
+    mockCursorResponse('Reply after restart');
+    await conv.sendMessage('Continue where we left off');
+
+    const prompt = driver.append.mock.calls[0][1];
+    expect(prompt).toContain('Current planning host: Invoker Slack planner.');
+    expect(prompt).toContain('Approve/Cancel review card');
   });
 
   it('keeps sending full conversation history to a driver without session continuity', async () => {
