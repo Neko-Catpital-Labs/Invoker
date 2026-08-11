@@ -42,6 +42,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'replace-task', kind: 'special' },
   { name: 'fork-workflow', kind: 'write' },
   { name: 'detach-workflow', kind: 'write' },
+  { name: 'attach-workflow', kind: 'write' },
   { name: 'rebase-retry', kind: 'write' },
   { name: 'rebase-recreate', kind: 'write' },
   { name: 'repair-review-gate-ci', kind: 'write' },
