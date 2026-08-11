@@ -1,0 +1,151 @@
+name: "Reaper workers for finished e2e and admin-bypass tasks"
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+workflows:
+  - name: "Reaper workers Step 1: centralized category rules"
+    featureBranch: plan/reaper-workers-category-rules
+    tasks:
+      - id: implement-category-rules
+        description: "Add a single shared file that classifies a workflow name as e2e or admin-bypass"
+        prompt: >
+          Create packages/execution-engine/src/workers/task-category-rules.ts. This becomes the
+          single centralized place that decides whether a workflow belongs to the "e2e" or
+          "admin-bypass" category, so other workers (a task/workflow reaper, and an
+          admin-bypass-accountability worker, both added in later slices) import from here instead
+          of re-implementing their own name matching.
+
+          Export a small list of category rule definitions and a function such as
+          `classifyWorkflowCategory(name: string): 'e2e' | 'admin-bypass' | undefined`.
+
+          Rules to encode:
+          - "e2e": the workflow name starts with the prefix "CI regression: " — this is the prefix
+            the e2e auto-fix pipeline uses today (see the plan template at
+            skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml
+            and scripts/e2e-regression-watch.mjs, which builds names as
+            `CI regression: <job_slug>`).
+          - "admin-bypass": the workflow name is exactly "Admin-bypass accountability babysit loop"
+            — this is the static name scripts/submit-admin-bypass-accountability-loop.sh's
+            `write_plan` function always uses (this workflow name never varies per run, unlike the
+            e2e one).
+
+          Add unit tests at packages/execution-engine/src/__tests__/task-category-rules.test.ts
+          covering: an e2e-prefixed name classifies as 'e2e', the exact admin-bypass name
+          classifies as 'admin-bypass', and an unrelated workflow name classifies as undefined.
+        dependencies: []
+      - id: verify-category-rules
+        description: "Run the new category-rules unit tests"
+        command: "cd packages/execution-engine && pnpm test -- src/__tests__/task-category-rules.test.ts"
+        dependencies: [implement-category-rules]
+
+  - name: "Reaper workers Step 2: task/workflow reaper worker"
+    featureBranch: plan/reaper-workers-task-workflow-reaper
+    tasks:
+      - id: implement-task-workflow-reaper
+        description: "Add a worker that deletes finished e2e/admin-bypass workflows and wipes their workspaces"
+        prompt: >
+          Add a new built-in worker at
+          packages/execution-engine/src/workers/task-workflow-reaper-worker.ts. This is a distinct
+          concern from the existing packages/execution-engine/src/workers/reaper-worker.ts, which
+          only does INVOKER_HOME disk hygiene (orphaned checkout dirs, log trimming, snapshot
+          retention) and never touches workflow/task DB rows — give this new worker its own
+          WORKER_KIND (do not reuse 'reaper').
+
+          On each tick:
+          1. List workflows via the store's listWorkflows() (see
+             packages/data-store/src/adapter.ts:351 for the interface, and
+             packages/data-store/src/sqlite-adapter.ts for the implementation).
+          2. For each workflow, compute its derived status the same way the rest of the codebase
+             does, via computeWorkflowStatusFromTaskGraph in
+             packages/workflow-graph/src/workflow-rollup.ts.
+          3. Classify the workflow's name using classifyWorkflowCategory from
+             packages/execution-engine/src/workers/task-category-rules.ts (added in the prior
+             slice of this stack).
+          4. If the workflow classifies as 'e2e' or 'admin-bypass' AND its derived status is one
+             of 'completed', 'closed', or 'stale', reap it:
+             a. For each of its tasks that has a workspace_path, remove the on-disk workspace —
+                run `git worktree remove --force <workspace_path>` from the task's repo clone
+                root, and if that fails because git no longer tracks the path, fall back to a
+                recursive force-delete of the directory. Mirror the existing fallback pattern in
+                RepoPool.reconcileStaleWorktreePath (packages/execution-engine/src/repo-pool.ts,
+                around line 480), which already handles exactly this "worktree remove, then
+                rmSync fallback, then git worktree prune" sequence.
+             b. Call the store's deleteWorkflow(workflowId) (see
+                packages/data-store/src/sqlite-adapter.ts:1661) to cascade-delete the workflow's
+                task rows and tombstone the workflow. This already does the correct DB-side
+                cascade — do not reimplement row deletion by hand.
+          5. Explicitly do NOT reap a workflow whose derived status is 'failed' (or anything else
+             non-terminal) — failed workflows must be left alone since they may still be retried.
+
+          Follow the existing built-in worker conventions: a WORKER_KIND constant, a
+          register<Name>Worker(registry) function, built on createWorkerRuntime
+          (packages/execution-engine/src/worker-runtime.ts). Give it its own config type (e.g.
+          TaskWorkflowReaperWorkerConfig) with an overridable intervalMs, defaulting to 30 minutes
+          (cleanup is not time-critical, so this is deliberately less frequent than the 5-minute
+          PR-maintenance workers but more frequent than the hourly disk reaper). Extend
+          WorkerRuntimeDependencies (packages/execution-engine/src/worker-runtime-dependencies.ts)
+          with whatever store surface you need (listWorkflows/deleteWorkflow), and register the
+          new worker in registerBuiltinWorkers
+          (packages/execution-engine/src/builtin-workers.ts).
+
+          Add tests at
+          packages/execution-engine/src/__tests__/task-workflow-reaper-worker.test.ts covering:
+          reaps a completed e2e workflow and wipes its workspace; reaps a stale admin-bypass
+          workflow; leaves a failed e2e/admin-bypass workflow untouched; leaves a completed
+          workflow whose name doesn't match either category rule untouched.
+        dependencies: []
+      - id: verify-task-workflow-reaper
+        description: "Run the new task/workflow reaper unit tests"
+        command: "cd packages/execution-engine && pnpm test -- src/__tests__/task-workflow-reaper-worker.test.ts"
+        dependencies: [implement-task-workflow-reaper]
+
+  - name: "Reaper workers Step 3: admin-bypass-accountability worker"
+    featureBranch: plan/reaper-workers-admin-bypass-accountability-worker
+    tasks:
+      - id: implement-admin-bypass-accountability-worker
+        description: "Add a worker that submits the admin-bypass accountability loop on a 5-minute interval, skipping if one is already in flight"
+        prompt: >
+          scripts/submit-admin-bypass-accountability-loop.sh currently has no scheduler at all —
+          it is not invoked by any cron job, systemd timer, or existing worker (confirmed: no
+          cron-*.sh wrapper references it, and no entry exists in
+          packages/execution-engine/src/workers/). Give it one.
+
+          Add a new built-in worker at
+          packages/execution-engine/src/workers/admin-bypass-accountability-worker.ts, modeled on
+          the shell-spawner pattern in
+          packages/execution-engine/src/workers/e2e-autofix-worker.ts: spawn the script via
+          child_process.spawn, stream its stdout/stderr into the worker logger, and reject the
+          tick promise on a nonzero exit code or spawn error.
+
+          Default interval: 5 minutes (e.g. `DEFAULT_ADMIN_BYPASS_ACCOUNTABILITY_INTERVAL_MS = 5 *
+          60_000`), overridable via the worker's own config type.
+
+          Before spawning on each tick, guard against duplicate concurrent runs: the script always
+          submits a workflow named exactly "Admin-bypass accountability babysit loop" (see its
+          `write_plan` function) with no in-flight check of its own. Query the store's
+          listWorkflows() for a workflow with that exact name, compute its derived status via
+          computeWorkflowStatusFromTaskGraph (packages/workflow-graph/src/workflow-rollup.ts), and
+          if one exists whose derived status is NOT 'completed', 'closed', 'stale', or 'failed'
+          (i.e. it is still active), skip spawning this tick and log that a run is already in
+          flight instead. Reuse the 'admin-bypass' classification from
+          packages/execution-engine/src/workers/task-category-rules.ts (added earlier in this
+          stack) rather than hardcoding the name string again.
+
+          Follow the existing built-in worker conventions: a WORKER_KIND constant, a
+          register<Name>Worker(registry) function built on createWorkerRuntime
+          (packages/execution-engine/src/worker-runtime.ts), extend
+          WorkerRuntimeDependencies (packages/execution-engine/src/worker-runtime-dependencies.ts)
+          with whatever store/config surface you need, and register the worker in
+          registerBuiltinWorkers (packages/execution-engine/src/builtin-workers.ts).
+
+          Add tests at
+          packages/execution-engine/src/__tests__/admin-bypass-accountability-worker.test.ts
+          covering: spawns the script when no matching workflow exists; spawns when the only
+          matching workflow is already terminal (completed/closed/stale/failed); skips spawning
+          when a non-terminal "Admin-bypass accountability babysit loop" workflow already exists.
+        dependencies: []
+      - id: verify-admin-bypass-accountability-worker
+        description: "Run the new admin-bypass-accountability worker unit tests"
+        command: "cd packages/execution-engine && pnpm test -- src/__tests__/admin-bypass-accountability-worker.test.ts"
+        dependencies: [implement-admin-bypass-accountability-worker]
