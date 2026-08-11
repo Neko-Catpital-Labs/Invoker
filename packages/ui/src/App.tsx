@@ -2442,6 +2442,7 @@ export function App() {
   ]);
 
 
+  // guarded-behavior: dag-surface-background-click-noop — see #4982
   const handleDagSurfaceClick = useCallback(() => {
     if (contextMenu || workflowContextMenu) {
       setContextMenu(null);
