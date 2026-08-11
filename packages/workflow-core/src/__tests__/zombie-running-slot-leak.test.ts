@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { Orchestrator, isAttemptLeaseActive } from '../orchestrator.js';
+import { InMemoryPersistence, InMemoryBus } from './helpers/cross-workflow-cascade-helpers.js';
 import { createAttempt } from '@invoker/workflow-graph';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
-import { InMemoryPersistence, InMemoryBus } from './helpers/cross-workflow-cascade-helpers.js';
 
 function makeOrchestratorWith(persistence: InMemoryPersistence, maxConcurrency: number): Orchestrator {
   return new Orchestrator({ persistence, messageBus: new InMemoryBus(), maxConcurrency });
@@ -87,6 +87,17 @@ describe('zombie running task consumes a concurrency slot', () => {
     const started = orchestrator.startExecution();
     expect(started.map((t) => t.id)).toContain(waitingId);
     expect(orchestrator.getQueueStatus({ refresh: true }).runningCount).toBeLessThanOrEqual(1);
+  });
+
+  it('isAttemptLeaseActive: true for a running attempt with no leaseExpiresAt and a recent heartbeat, false once the heartbeat goes stale', () => {
+    const now = Date.now();
+    const attempt = createAttempt('task-1', {
+      status: 'running',
+      lastHeartbeatAt: new Date(now),
+    });
+
+    expect(isAttemptLeaseActive(attempt, now)).toBe(true);
+    expect(isAttemptLeaseActive(attempt, now + ATTEMPT_LEASE_MS + 1)).toBe(false);
   });
 });
 

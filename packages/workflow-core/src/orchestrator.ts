@@ -208,6 +208,18 @@ function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
 }
 
+export function isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
+  if (!attempt) return false;
+  if (isDiscardedAttempt(attempt)) return false;
+  if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
+  if (attempt.leaseExpiresAt) {
+    return attempt.leaseExpiresAt.getTime() >= now;
+  }
+  const anchor = attempt.lastHeartbeatAt ?? attempt.claimedAt ?? attempt.startedAt;
+  if (!anchor) return true;
+  return anchor.getTime() + ATTEMPT_LEASE_MS >= now;
+}
+
 export function isWorkerResponseGenerationValid(response: WorkResponse, activeGeneration: number): boolean {
   return response.executionGeneration === undefined || response.executionGeneration === activeGeneration;
 }
@@ -667,18 +679,6 @@ export interface TaskLineageExpectation {
   taskId?: string;
   selectedAttemptId?: string;
   generation?: number;
-}
-
-export function isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
-  if (!attempt) return false;
-  if (isDiscardedAttempt(attempt)) return false;
-  if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
-  if (attempt.leaseExpiresAt) {
-    return attempt.leaseExpiresAt.getTime() >= now;
-  }
-  const anchor = attempt.lastHeartbeatAt ?? attempt.claimedAt ?? attempt.startedAt;
-  if (!anchor) return true;
-  return anchor.getTime() + ATTEMPT_LEASE_MS >= now;
 }
 
 export class Orchestrator {
