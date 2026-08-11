@@ -8,6 +8,7 @@
 import type { CommandEnvelope, CommandResult } from '@invoker/contracts';
 import { OrchestratorError } from './orchestrator.js';
 import type { Orchestrator, ExternalGatePolicyUpdate, TaskReplacementDef } from './orchestrator.js';
+import type { ExternalGatePolicy } from '@invoker/workflow-graph';
 import {
   applyInvalidation,
   buildOrchestratorOnlyInvalidationDeps,
@@ -451,6 +452,30 @@ export class CommandService {
       () => this.orchestrator.detachWorkflow(
         envelope.payload.workflowId,
         envelope.payload.upstreamWorkflowId,
+      ),
+      undefined,
+    );
+  }
+
+  async attachWorkflow(
+    envelope: CommandEnvelope<{
+      workflowId: string;
+      upstreamWorkflowId: string;
+      taskId?: string;
+      gatePolicy?: ExternalGatePolicy;
+      force?: boolean;
+    }>,
+  ): Promise<CommandResult<void>> {
+    return this.executeCommand<void>(
+      'ATTACH_WORKFLOW_FAILED',
+      () => this.orchestrator.attachWorkflow(
+        envelope.payload.workflowId,
+        envelope.payload.upstreamWorkflowId,
+        {
+          taskId: envelope.payload.taskId,
+          gatePolicy: envelope.payload.gatePolicy,
+          force: envelope.payload.force,
+        },
       ),
       undefined,
     );
