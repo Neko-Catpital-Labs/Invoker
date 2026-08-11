@@ -111,7 +111,7 @@ export function createMockInvoker(
   let workflowSnapshot = initialWorkflows;
   let historySnapshot: TaskHistoryEntry[] = [];
   const eventsByTask = new Map<string, TaskEvent[]>();
-  let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
+  const graphEventCallbacks = new Set<(event: TaskGraphEvent) => void>();
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const planningChatStreamCallbacks = new Set<(event: InAppPlanningStreamEvent) => void>();
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
@@ -168,20 +168,22 @@ export function createMockInvoker(
       () =>
         new Promise<void>((resolve) => {
           queueMicrotask(() => {
-            graphEventCallback?.({
-              type: 'snapshot',
-              tasks: taskSnapshot,
-              workflows: workflowSnapshot,
-              reason: 'mock-refresh',
-              streamSequence: 0,
-            });
+            for (const cb of graphEventCallbacks) {
+              cb({
+                type: 'snapshot',
+                tasks: taskSnapshot,
+                workflows: workflowSnapshot,
+                reason: 'mock-refresh',
+                streamSequence: 0,
+              });
+            }
             resolve();
           });
         }),
     ),
     onTaskGraphEvent: vi.fn((cb: (event: TaskGraphEvent) => void) => {
-      graphEventCallback = cb;
-      return () => { graphEventCallback = undefined; };
+      graphEventCallbacks.add(cb);
+      return () => { graphEventCallbacks.delete(cb); };
     }),
     onWorkflowsChanged: vi.fn((cb: (workflows: unknown[]) => void) => {
       workflowsCallback = cb;
@@ -470,7 +472,7 @@ export function createMockInvoker(
 
       // Fire created graph events for each task after subscribers attach.
       for (const task of tasks) {
-        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task }, workflowRollups: [] });
+        for (const cb of graphEventCallbacks) cb({ type: 'delta', delta: { type: 'created', task }, workflowRollups: [] });
       }
     });
   }
@@ -500,10 +502,10 @@ export function createMockInvoker(
 
 
   function fireDelta(delta: TaskDelta) {
-    graphEventCallback?.({ type: 'delta', delta, workflowRollups: [] });
+    for (const cb of graphEventCallbacks) cb({ type: 'delta', delta, workflowRollups: [] });
   }
   function fireGraphEvent(event: TaskGraphEvent) {
-    graphEventCallback?.(event);
+    for (const cb of graphEventCallbacks) cb(event);
   }
 
 
