@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
@@ -16,6 +17,10 @@ import { SQLiteAdapter } from '@invoker/data-store';
 
 const REPO_A = 'https://example.com/repo-a.git';
 const REPO_B = 'https://example.com/repo-b.git';
+const REAPER_INCIDENT_PLAN_TEXT = readFileSync(
+  fileURLToPath(new URL('./fixtures/planning-review-ad665bff.yaml', import.meta.url)),
+  'utf8',
+).trim();
 
 const EXPLORE_REPLY = 'This repo is an Invoker planning chat redesign. No draft was requested.';
 
@@ -254,6 +259,72 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> repo swi
     } finally {
       adapter.close();
       rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('planning chat incident ad665bff: valid sidecar after repository answer', () => {
+  let incidentSessionId: string | undefined;
+
+  afterEach(() => {
+    if (incidentSessionId) rmSync(sidecarPathFor(incidentSessionId), { force: true });
+    vi.restoreAllMocks();
+  });
+
+  it.fails('persists the exact recovered reaper draft and makes it review-ready', async () => {
+    const workingDir = mkdtempSync(join(tmpdir(), 'planning-chat-ad665bff-'));
+    const adapter = await SQLiteAdapter.create(':memory:');
+    const sessions = createInAppPlanningChatSessions();
+    const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
+    const loadGeneratedPlan = vi.fn(async () => ({
+      planName: 'Reaper workers for finished e2e and admin-bypass tasks',
+      workflowId: 'wf-reaper-incident',
+    }));
+
+    try {
+      const created = await createPlanningChatSession({}, {
+        config: { defaultRepoUrl: REPO_A, defaultBranch: 'main' },
+        loadGeneratedPlan,
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+        workingDir,
+      });
+      if (!created.ok) throw new Error(created.error);
+      incidentSessionId = created.session.id;
+
+      vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementationOnce(function writeIncidentSidecar() {
+        const planDraftPath = this.planDraftFilePath();
+        if (!planDraftPath) throw new Error('Incident repro requires a plan draft path.');
+        writeFileSync(planDraftPath, REAPER_INCIDENT_PLAN_TEXT, 'utf8');
+        return Promise.resolve('I wrote the 3-slice plan to the draft file.');
+      });
+
+      const result = await sendPlanningChatMessage({
+        sessionId: incidentSessionId,
+        message: 'github.com/Neko-Catpital-Labs/Invoker/',
+      }, {
+        config: { defaultRepoUrl: REPO_A, defaultBranch: 'main' },
+        loadGeneratedPlan,
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+        workingDir,
+      });
+      if (!result.ok) throw new Error(result.error);
+
+      expect(result.draftPlanAvailable).toBe(true);
+      expect(result.draftPlanText).toBe(REAPER_INCIDENT_PLAN_TEXT);
+      expect(result.draftPlanSummary).toMatchObject({
+        name: 'Reaper workers for finished e2e and admin-bypass tasks',
+        workflowCount: 3,
+        taskCount: 6,
+      });
+      expect(sessions.get(incidentSessionId)?.status).toBe('draft_ready');
+      expect(adapter.loadInAppPlanningSession(incidentSessionId)?.draftPlanText).toBe(REAPER_INCIDENT_PLAN_TEXT);
+    } finally {
+      adapter.close();
+      rmSync(workingDir, { recursive: true, force: true });
     }
   });
 });

@@ -862,6 +862,43 @@ test.describe('Visual proof capture', () => {
     });
   });
 
+  test('planning review incident ad665bff shows the in-app approval banner', async ({ page }) => {
+    const planYaml = await fs.readFile(
+      path.resolve(__dirname, '..', 'src', '__tests__', 'fixtures', 'planning-review-ad665bff.yaml'),
+      'utf8',
+    );
+    await page.evaluate(async ({ yaml }) => {
+      await window.invoker.setTestPlanningChatResponse({
+        planYaml: yaml,
+        planName: 'Reaper workers for finished e2e and admin-bypass tasks',
+        reply: 'I wrote the 3-slice plan to the draft file.',
+      });
+    }, { yaml: planYaml });
+
+    await page.getByTestId('sidebar-home').click();
+    await page.getByRole('button', { name: 'Options' }).click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+    await captureScreenshot(page, 'planning-review-ad665bff-before');
+    if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(1_000);
+
+    await page.getByTestId('invoker-terminal-input').fill('github.com/Neko-Catpital-Labs/Invoker/');
+    if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(750);
+    await page.getByRole('button', { name: 'Send' }).click();
+
+    const readyBar = page.getByTestId('invoker-terminal-ready-bar');
+    await expect(readyBar).toBeVisible();
+    await expect(readyBar).toContainText(
+      'Draft ready · Reaper workers for finished e2e and admin-bypass tasks · 3 workflows · 6 tasks',
+    );
+    await expect(page.getByRole('button', { name: 'Review draft' })).toBeVisible();
+    await captureScreenshot(page, 'planning-review-ad665bff-after');
+    if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(1_000);
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
   test('planning context sidebar shows repo bind status', async ({ page }) => {
     await page.getByTestId('sidebar-home').click();
     await page.getByRole('button', { name: 'Options' }).click();
