@@ -28,6 +28,19 @@ export interface SurfaceEventRelayDeps {
   logWarn: (message: string) => void;
 }
 
+export interface SurfaceAlertFields {
+  readonly severity: string;
+  readonly source: string;
+  readonly subject: string;
+  readonly message: string;
+  readonly alertKey: string;
+}
+
+export interface SurfaceAlertEvent {
+  readonly type: 'alert';
+  readonly alert: SurfaceAlertFields;
+}
+
 const PROGRESS_DEBOUNCE_MS = 2500;
 const TERMINAL_DERIVED_STATUSES = new Set(['completed', 'failed', 'closed']);
 
@@ -59,6 +72,44 @@ function reviewStateLabel(substate: ReturnType<typeof buildReviewGateQueryRespon
     default:
       return undefined;
   }
+}
+
+export function publishSurfaceAlert(messageBus: MessageBus, alert: SurfaceAlertFields): void;
+export function publishSurfaceAlert(
+  messageBus: MessageBus,
+  severity: string,
+  source: string,
+  subject: string,
+  message: string,
+  alertKey: string,
+): void;
+export function publishSurfaceAlert(
+  messageBus: MessageBus,
+  alertOrSeverity: SurfaceAlertFields | string,
+  source?: string,
+  subject?: string,
+  message?: string,
+  alertKey?: string,
+): void {
+  const alert = typeof alertOrSeverity === 'string'
+    ? {
+        severity: alertOrSeverity,
+        source: source ?? '',
+        subject: subject ?? '',
+        message: message ?? '',
+        alertKey: alertKey ?? '',
+      }
+    : {
+        severity: alertOrSeverity.severity,
+        source: alertOrSeverity.source,
+        subject: alertOrSeverity.subject,
+        message: alertOrSeverity.message,
+        alertKey: alertOrSeverity.alertKey,
+      };
+  messageBus.publish<SurfaceAlertEvent>(Channels.SURFACE_EVENT, {
+    type: 'alert',
+    alert,
+  });
 }
 
 export function startSurfaceEventRelay(deps: SurfaceEventRelayDeps): () => void {
