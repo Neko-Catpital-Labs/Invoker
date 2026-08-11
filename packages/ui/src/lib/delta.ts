@@ -27,6 +27,7 @@ export function applyDeltaInPlace(
           ...topLevel,
           config: { ...existing.config, ...cfgChanges },
           execution: { ...existing.execution, ...execChanges },
+          taskStateVersion: delta.taskStateVersion,
         });
       } else {
         console.warn(

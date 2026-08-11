@@ -350,8 +350,20 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         const t0 = performance.now();
 
         if (firstEvent?.type === 'snapshot') {
+          const previousTasks = nextTasks;
           nextTasks = new Map<string, TaskState>();
-          for (const task of firstEvent.tasks) nextTasks.set(task.id, task);
+          for (const task of firstEvent.tasks) {
+            const existingTask = previousTasks.get(task.id);
+            // A snapshot can race a delta in flight and arrive with data
+            // captured before that delta landed; never let it regress a
+            // task backward from state the renderer has already applied.
+            nextTasks.set(
+              task.id,
+              existingTask && existingTask.taskStateVersion > task.taskStateVersion
+                ? existingTask
+                : task,
+            );
+          }
           nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
             nextWorkflows,
             firstEvent.workflows,
