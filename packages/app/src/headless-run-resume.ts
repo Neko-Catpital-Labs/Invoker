@@ -15,7 +15,7 @@ import {
   type StartReadyRequest,
   type StartReadyResult,
 } from '@invoker/contracts';
-import type { TaskState } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch, type TaskState } from '@invoker/workflow-core';
 import {
   remoteFetchForPool,
   registerBuiltinAgents,
@@ -627,6 +627,35 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
       printTaskOutput: true,
       setExitCodeOnFailure: false,
     });
+  });
+}
+
+export async function headlessSetMergeBranch(
+  workflowId: string,
+  baseBranchArg: string,
+  deps: HeadlessDeps,
+): Promise<void> {
+  deps.persistence.updateWorkflow(workflowId, {
+    baseBranch: normalizeWorkflowBaseBranch(baseBranchArg),
+  });
+
+  const tasks = deps.persistence.loadTasks(workflowId);
+  const mergeTask = tasks.find((task) => task.config.isMergeNode);
+  if (!mergeTask) return;
+
+  const envelope = makeEnvelope('set-merge-branch', 'headless', 'task', { taskId: mergeTask.id });
+  const result = await deps.commandService.retryTask(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+
+  const taskExecutor = createHeadlessExecutor(deps);
+  await dispatchStartedTasksWithGlobalTopup({
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+    logger: deps.logger,
+    context: 'headless.set-merge-branch',
+    started: result.data,
+    scopedTaskIds: [mergeTask.id],
+    mutationTiming: deps.mutationTiming,
   });
 }
 
