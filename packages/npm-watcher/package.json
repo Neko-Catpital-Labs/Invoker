@@ -1,0 +1,27 @@
+{
+  "name": "@neko-catpital-labs/invoker-watcher",
+  "version": "0.0.11",
+  "description": "Invoker standalone owner-restart watcher installer",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neko-Catpital-Labs/Invoker.git",
+    "directory": "packages/npm-watcher"
+  },
+  "bin": {
+    "invoker-watcher": "bin/invoker-watcher.js"
+  },
+  "files": [
+    "bin/**/*",
+    "scripts/**/*",
+    "vendor/.gitkeep",
+    "package.json"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "test": "node bin/invoker-watcher.js --version || true"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
