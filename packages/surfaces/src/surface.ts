@@ -96,6 +96,14 @@ export type SurfaceEvent =
   | { type: 'workflow_status'; status: WorkflowStatus; workflowId?: string }
   | { type: 'workflow_progress'; progress: WorkflowProgress }
   | {
+      type: 'alert';
+      severity: 'info' | 'warning' | 'critical';
+      source: string;
+      subject: string;
+      message: string;
+      alertKey: string;
+    }
+  | {
       type: 'workflow_created';
       workflowId: string;
       requestedBy?: string;
@@ -106,6 +114,17 @@ export type SurfaceEvent =
       planFile?: string;
     }
   | { type: 'error'; message: string };
+
+type SurfaceEventTypecheck<T extends SurfaceEvent> = T;
+
+type SurfaceAlertEventTypecheck = SurfaceEventTypecheck<{
+  type: 'alert';
+  severity: 'info';
+  source: string;
+  subject: string;
+  message: string;
+  alertKey: string;
+}>;
 
 // ── Logging ──────────────────────────────────────────────
 
