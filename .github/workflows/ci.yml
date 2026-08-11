@@ -670,6 +670,8 @@ jobs:
               e2e/start-ready-daemon-owner.spec.ts
               e2e/ui-delta-timeline.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/rebase-recreate-ui-drift-repro.spec.ts
+              e2e/rebase-recreate-ui-never-recovers.spec.ts
           - name: terminal-garbling
             files: >-
               e2e/planning-terminal-live-model.proof.spec.ts
