@@ -87,8 +87,9 @@ field, and those fields all default to off:
 
 - `disk-headroom` auto-starts when `diskHeadroom.cleanupEnabled` is true.
 - `autoapprove` auto-starts when `autoApproveAIFixes` is true.
-- `pr-admin-bypass-land`, `pr-orphan-repair`, and `pr-duplicate-close`
-  auto-start when the shared `prMaintenance.enabled` field is true.
+- `pr-admin-bypass-land`, `pr-orphan-repair`, `pr-duplicate-close`, and
+  `pr-auto-label` auto-start when the shared `prMaintenance.enabled` field
+  is true.
 - `e2e-autofix` auto-starts when `e2eAutoFixEnabled` is true.
 - `infra-repair` auto-starts when `infraRepair.enabled` is true.
 - `autofix` auto-starts when `autofix.enabled` is true.
