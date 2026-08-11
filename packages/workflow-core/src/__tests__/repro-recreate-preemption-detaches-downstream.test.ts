@@ -23,6 +23,12 @@ describe('REPRO: recreate preemption detaches a live downstream dependency', () 
     ]);
     expect(orchestrator.getTask(ctx.downstreamLastId)!.status).toBe('running');
 
+    persistence.updateTask(ctx.upstreamTaskId, { status: 'running' });
+    expect(
+      persistence.getTaskEntry(ctx.upstreamTaskId)!.task.status,
+      'upstream task must be active before preemption, or the cancellation this test asserts is a no-op',
+    ).toBe('running');
+
     const preemptResult = await commandService.preemptWorkflow({
       commandId: 'cmd-preempt-upstream',
       source: 'headless',
@@ -31,6 +37,7 @@ describe('REPRO: recreate preemption detaches a live downstream dependency', () 
       payload: { workflowId: ctx.upstreamWfId },
     });
     expect(preemptResult.ok).toBe(true);
+    expect(preemptResult.ok && preemptResult.data.runningCancelled).toEqual([ctx.upstreamTaskId]);
 
     expect(
       persistence.loadWorkflow(ctx.downstreamWfId)!.externalDependencies,
