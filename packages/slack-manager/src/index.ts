@@ -28,7 +28,7 @@ import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
 import { loadSlackOwnerEnv, runComplaintScoutDraftCommand } from './complaint-scout-bridge.js';
-const VERSION = '0.0.10';
+const VERSION = '0.0.11';
 let runDaemon = true;
 
 if (process.argv.includes('--version') || process.argv.includes('-V')) {
