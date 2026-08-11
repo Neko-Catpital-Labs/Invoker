@@ -2396,6 +2396,36 @@ describe('Orchestrator', () => {
       expect(waiting.length).toBeGreaterThan(0);
       expect(waiting.at(-1)?.payload).toMatchObject({ attempts: 1 });
     });
+
+    it('isLaunchParked returns true before the backoff elapses and false after', () => {
+      const parkOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        deferRunningUntilLaunch: true,
+        launchDeferralBackoffMs: 60_000,
+      });
+      parkOrchestrator.loadPlan({
+        name: 'defer-park-direct',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const firstStarted = parkOrchestrator.startExecution();
+      expect(firstStarted).toHaveLength(1);
+      const taskId = firstStarted[0].id;
+      const dispatchedAt = Date.now();
+
+      parkOrchestrator.deferTask(taskId, {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: parkOrchestrator.getTask(taskId)!.execution.selectedAttemptId,
+        phase: 'launching',
+      });
+
+      expect(parkOrchestrator.isLaunchParked(taskId, dispatchedAt)).toBe(true);
+      expect(parkOrchestrator.isLaunchParked(taskId, dispatchedAt + 60_001)).toBe(false);
+    });
+
     it.skip('keeps a parked resource-limit task queued between scheduler polls', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
