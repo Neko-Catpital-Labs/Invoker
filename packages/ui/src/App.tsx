@@ -52,6 +52,7 @@ import { Trash2 } from 'lucide-react';
 import { Button } from './components/primitives/index.js';
 import { ChevronDownIcon, PlayIcon } from './components/icons/index.js';
 import { CommandPalette, COMMAND_PALETTE_MAX_ROWS } from './components/CommandPalette.js';
+import { AttachWorkflowPicker } from './components/AttachWorkflowPicker.js';
 import {
   getAttentionTaskEntries,
   getRunningTaskEntries,
@@ -706,6 +707,7 @@ interface WorkflowContextMenuProps {
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
   onDetachWorkflow: (workflowId: string) => void;
+  onAttachWorkflow: (workflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
   /** True when this workflow has exactly one upstream dependency that can be detached from the UI. */
   canDetach: boolean;
@@ -744,6 +746,7 @@ function WorkflowContextMenu({
   onCancelWorkflow,
   onDeleteWorkflow,
   onDetachWorkflow,
+  onAttachWorkflow,
   onCopyWorkflowId,
   canDetach,
   onClose,
@@ -836,6 +839,7 @@ function WorkflowContextMenu({
           ...(canDetach
             ? [{ id: 'detach-workflow', label: 'Detach Upstream Workflow', className: dangerButtonClass, action: () => runAction(onDetachWorkflow) }]
             : []),
+          { id: 'attach-workflow', label: 'Attach to...', className: buttonClass, action: () => runAction(onAttachWorkflow) },
           { id: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, action: () => runAction(onDeleteWorkflow) },
         ]),
   ];
@@ -1172,6 +1176,7 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const [attachPickerWorkflowId, setAttachPickerWorkflowId] = useState<string | null>(null);
   const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
   const [startReadyMenuOpen, setStartReadyMenuOpen] = useState(false);
   const [startReadyBusy, setStartReadyBusy] = useState(false);
@@ -2629,6 +2634,35 @@ export function App() {
       notifyMutationError('Detach Workflow failed:', err);
     }
   }, [workflows, refreshTaskGraph]);
+
+  const handleAttachWorkflow = useCallback((workflowId: string) => {
+    setWorkflowContextMenu(null);
+    setAttachPickerWorkflowId(workflowId);
+  }, []);
+
+  const handleAttachWorkflowSelect = useCallback(async (upstreamWorkflowId: string) => {
+    const workflowId = attachPickerWorkflowId;
+    setAttachPickerWorkflowId(null);
+    if (!workflowId) return;
+    const workflow = workflows.get(workflowId);
+    const downstreamName = workflow?.name ?? workflowId;
+    const upstreamName = workflows.get(upstreamWorkflowId)?.name ?? upstreamWorkflowId;
+    const confirmed = window.confirm(
+      `Attach "${downstreamName}" to upstream "${upstreamName}"?\n\n` +
+      `This adds a dependency so "${downstreamName}" waits on "${upstreamName}"'s merge. ` +
+      `Tasks that already ran ahead of this gate are left untouched.`,
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.attachWorkflow(workflowId, upstreamWorkflowId);
+      setDetachNotice(
+        `Attached "${downstreamName}" to upstream "${upstreamName}". The dependency was added.`,
+      );
+      refreshTaskGraph();
+    } catch (err) {
+      notifyMutationError('Attach Workflow failed:', err);
+    }
+  }, [workflows, refreshTaskGraph, attachPickerWorkflowId]);
 
   useEffect(() => {
     if (!detachNotice) return;
@@ -4956,6 +4990,17 @@ export function App() {
         }}
         planningSessionCount={planningSessions.length}
       />
+      <AttachWorkflowPicker
+        open={attachPickerWorkflowId !== null}
+        downstreamName={
+          attachPickerWorkflowId ? (workflows.get(attachPickerWorkflowId)?.name ?? attachPickerWorkflowId) : ''
+        }
+        entries={Array.from(workflows.values())
+          .filter((candidate) => candidate.id !== attachPickerWorkflowId)
+          .map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+        onSelect={(upstreamWorkflowId) => void handleAttachWorkflowSelect(upstreamWorkflowId)}
+        onClose={() => setAttachPickerWorkflowId(null)}
+      />
 
       {showSystemBanner && (
         <div className="px-4 py-3 border-b border-amber-700 bg-amber-950/50 flex items-center justify-between gap-4">
@@ -5340,6 +5385,7 @@ export function App() {
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
           onDetachWorkflow={(workflowId) => void handleDetachWorkflow(workflowId)}
+          onAttachWorkflow={(workflowId) => void handleAttachWorkflow(workflowId)}
           canDetach={(workflows.get(workflowContextMenu.workflowId)?.externalDependencies?.length ?? 0) === 1}
           onCopyWorkflowId={handleCopyWorkflowId}
           onClose={closeContextMenu}

@@ -287,6 +287,11 @@ export interface GuiMutationTaskActions {
   logAutoFixDebug: (taskId: string, phase: string, details?: Record<string, unknown>) => void;
   performDeleteWorkflow: (workflowId: string) => Promise<void>;
   performDetachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
+  performAttachWorkflow: (
+    workflowId: string,
+    upstreamWorkflowId: string,
+    opts?: { taskId?: string; gatePolicy?: string; force?: boolean },
+  ) => Promise<void>;
   performCancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   performDeleteTask: (taskId: string) => Promise<void>;
   performCancelWorkflow: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -635,6 +640,25 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     requestWorkflowMetadataPublish('detach-workflow');
   }
 
+  async function performAttachWorkflow(
+    workflowId: string,
+    upstreamWorkflowId: string,
+    opts?: { taskId?: string; gatePolicy?: string; force?: boolean },
+  ): Promise<void> {
+    logger.info(`performAttachWorkflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    const envelope = makeEnvelope('attach-workflow', 'ui', 'workflow', {
+      workflowId,
+      upstreamWorkflowId,
+      taskId: opts?.taskId,
+      gatePolicy: opts?.gatePolicy as 'completed' | 'review_ready' | 'ci_failed' | undefined,
+      force: opts?.force,
+    });
+    const result = await commandService.attachWorkflow(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    logger.info(`performAttachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    requestWorkflowMetadataPublish('attach-workflow');
+  }
+
   /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
   const preemptSkipCodes: ReadonlySet<string> = new Set([
     OrchestratorErrorCode.TASK_NOT_FOUND,
@@ -976,6 +1000,17 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.exec', request: { args: ['delete', String(arg0)], noTrack: true } };
       case 'invoker:detach-workflow':
         return { channel: 'headless.exec', request: { args: ['detach-workflow', String(arg0), String(arg1)], noTrack: true } };
+      case 'invoker:attach-workflow': {
+        const opts = arg2 as { taskId?: string; gatePolicy?: string; force?: boolean } | undefined;
+        const flags: string[] = [];
+        if (opts?.gatePolicy) flags.push('--gate-policy', opts.gatePolicy);
+        if (opts?.taskId) flags.push('--task-id', opts.taskId);
+        if (opts?.force) flags.push('--force');
+        return {
+          channel: 'headless.exec',
+          request: { args: ['attach-workflow', String(arg0), String(arg1), ...flags], noTrack: true },
+        };
+      }
       case 'invoker:provide-input':
         return { channel: 'headless.exec', request: { args: ['input', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:approve':
@@ -1091,6 +1126,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     logAutoFixDebug,
     performDeleteWorkflow,
     performDetachWorkflow,
+    performAttachWorkflow,
     performCancelTask,
     performDeleteTask,
     performCancelWorkflow,
@@ -1178,6 +1214,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const preemptWorkflowExecution = actions.preemptWorkflowExecution;
   const performDeleteWorkflow = actions.performDeleteWorkflow;
   const performDetachWorkflow = actions.performDetachWorkflow;
+  const performAttachWorkflow = actions.performAttachWorkflow;
   const performSharedApproveTask = actions.performSharedApproveTask;
   const executeFixWithAgentMutation = actions.executeFixWithAgentMutation;
   const executeSpawnRepairWorkflowMutation = actions.executeSpawnRepairWorkflowMutation;
@@ -1648,6 +1685,27 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         await performDetachWorkflow(workflowId, upstreamWorkflowId);
       } catch (err) {
         logger.error(`detach-workflow failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+    },
+  );
+
+  registerWorkflowScopedGuiMutationHandler(
+    'invoker:attach-workflow',
+    (workflowIdArg: unknown) => String(workflowIdArg),
+    'high',
+    async (workflowIdArg: unknown, upstreamWorkflowIdArg: unknown, optsArg: unknown) => {
+      const workflowId = String(workflowIdArg);
+      const upstreamWorkflowId = String(upstreamWorkflowIdArg);
+      const opts = optsArg as { taskId?: string; gatePolicy?: string; force?: boolean } | undefined;
+      logger.info(
+        `attach-workflow: workflow="${workflowId}" upstream="${upstreamWorkflowId}"`,
+        { module: 'ipc' },
+      );
+      try {
+        await performAttachWorkflow(workflowId, upstreamWorkflowId, opts);
+      } catch (err) {
+        logger.error(`attach-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     },
