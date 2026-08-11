@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import type { ExecutionPoolMember } from '../task-runner-pool.js';
+import { poolMemberHasCapacity } from '../task-runner-pool.js';
+import type { ExecutionPoolConfig, ExecutionPoolMember, TaskRunnerPoolHost } from '../task-runner-pool.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
@@ -89,6 +90,29 @@ describe('SSH pool member capacity', () => {
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).cause).toBeInstanceOf(ResourceLimitError);
     }
+  });
+
+  it('poolMemberHasCapacity treats maxConcurrentTasks as a hard cap at the boundary', () => {
+    const member: ExecutionPoolMember = { id: 'member-a', type: 'worktree', maxConcurrentTasks: 2 };
+    const pool: ExecutionPoolConfig = { members: [member] };
+    const host = {
+      pendingPoolSelections: new Map(),
+      activeExecutions: new Map([
+        ['attempt-1', { handle: {} as any, executor: {} as any, taskId: 'task-1', poolId: 'pool-1', poolMemberKey: 'worktree:member-a' }],
+      ]),
+    } as unknown as TaskRunnerPoolHost;
+
+    expect(poolMemberHasCapacity(host, 'pool-1', pool, member)).toBe(true);
+
+    host.activeExecutions.set('attempt-2', {
+      handle: {} as any,
+      executor: {} as any,
+      taskId: 'task-2',
+      poolId: 'pool-1',
+      poolMemberKey: 'worktree:member-a',
+    });
+
+    expect(poolMemberHasCapacity(host, 'pool-1', pool, member)).toBe(false);
   });
 
   it('round-robin skips full members and uses the next available member', () => {
