@@ -1154,6 +1154,9 @@ export function App() {
     () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
   );
   const activePlanningReadOnly = activePlanningSessionSubmitted || runtimeStatus?.readOnly === true;
+  const activePlanningWorkflowRunning = activePlanningSession.submittedWorkflowId
+    ? workflows.get(activePlanningSession.submittedWorkflowId)?.status === 'running'
+    : false;
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
@@ -4792,6 +4795,7 @@ export function App() {
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
+            workflowRunning={activePlanningWorkflowRunning}
             submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
