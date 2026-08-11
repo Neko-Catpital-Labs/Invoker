@@ -1045,6 +1045,10 @@ export const IpcChannels = {
     request: [workflowId: string, upstreamWorkflowId: string];
     response: WorkflowMutationAcceptedResult;
   },
+  'invoker:attach-workflow': {} as {
+    request: [workflowId: string, upstreamWorkflowId: string, opts?: { taskId?: string; gatePolicy?: string; force?: boolean }];
+    response: WorkflowMutationAcceptedResult;
+  },
   'invoker:load-workflow': {} as {
     request: [workflowId: string];
     response: { workflow: unknown; tasks: unknown[] };
