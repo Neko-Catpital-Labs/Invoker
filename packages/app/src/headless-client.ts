@@ -89,6 +89,8 @@ const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const OPTIONAL_READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 2_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 15_000;
 const GENERIC_READ_OWNER_PING_TIMEOUT_MS = 10_000;
+const EXISTING_MUTATION_OWNER_DISCOVERY_TIMEOUT_MS = 3_000;
+const EXISTING_MUTATION_OWNER_REFRESH_DISCOVERY_TIMEOUT_MS = 1_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
 const REQUIRE_EXISTING_OWNER_ENV = 'INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER';
@@ -592,6 +594,14 @@ function shouldUseSharedMutationOwner(args: string[], standaloneMode: boolean, i
   return isHeadlessMutatingCommand(args) && !standaloneMode && !internalOwnerServe;
 }
 
+function liveWritableOwnerDbPath(): string {
+  return resolve(resolveInvokerHomeRoot(), 'invoker.db');
+}
+
+function hasLiveWritableOwnerMarker(): boolean {
+  return hasLiveWritableOwner(liveWritableOwnerDbPath());
+}
+
 /**
  * Resolve a writable owner endpoint using the resolver, then delegate.
  *
@@ -691,6 +701,69 @@ async function resolveOwnerAndDelegate(
   return null; // Could not resolve
 }
 
+async function resolveExistingOwnerAndDelegate(
+  args: string[],
+  deps: HeadlessClientDeps,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<number | null> {
+  delegationClientLog(`resolveExistingOwnerAndDelegate begin command=${args[0] ?? '<missing>'} noTrack=${noTrack ? 'true' : 'false'}`);
+  const resolver = createOwnerResolver(
+    {
+      messageBus: deps.messageBus,
+      refreshMessageBus: deps.refreshMessageBus,
+      ensureStandaloneOwner: async () => {},
+    },
+    {
+      discoveryTimeoutMs: EXISTING_MUTATION_OWNER_DISCOVERY_TIMEOUT_MS,
+      refreshDiscoveryTimeoutMs: EXISTING_MUTATION_OWNER_REFRESH_DISCOVERY_TIMEOUT_MS,
+      maxBootstrapAttempts: 0,
+    },
+  );
+
+  const discovered = await resolver.discover();
+  const resolved = discovered.resolved ? discovered : await resolver.refreshAndDiscover();
+  if (!resolved.resolved) {
+    delegationClientLog('resolveExistingOwnerAndDelegate no compatible existing owner');
+    return null;
+  }
+
+  let outcome: DelegationOutcome;
+  try {
+    outcome = await delegateMutation(
+      args,
+      resolved.bus,
+      waitForApproval,
+      noTrack,
+      noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
+    );
+  } catch (err) {
+    if (isAcceptedStaleOwnerNoTrackTaskMutationError(args, noTrack, err)) {
+      delegationClientLog(
+        `accepted stale-owner no-track task mutation command=${args[0]} workflow=${explicitTaskTargetWorkflowId(args)}`,
+      );
+      process.stdout.write('Delegated to owner\n');
+      process.stdout.write('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
+      const exitCode = process.exitCode;
+      return typeof exitCode === 'number' ? exitCode : 0;
+    }
+    throw err;
+  }
+
+  if (outcome.kind === 'delegated') {
+    const exitCode = process.exitCode;
+    return typeof exitCode === 'number' ? exitCode : 0;
+  }
+
+  const detail = outcome.kind === 'protocol-error'
+    ? `: ${outcome.message}`
+    : ` (${outcome.kind})`;
+  process.stderr.write(
+    `${RED}Error:${RESET} Compatible owner "${resolved.owner.ownerId}" responded to discovery but did not accept mutation command "${args[0] ?? ''}"${detail}.\n`,
+  );
+  return 1;
+}
+
 export async function runHeadlessClientCommand(
   argv: string[],
   deps: HeadlessClientDeps,
@@ -749,6 +822,21 @@ export async function runHeadlessClientCommand(
       return 0;
     }
     return runLocalWorkersQuery(args, invokerConfig);
+  }
+
+  if (standaloneMode && isHeadlessMutatingCommand(args) && !internalOwnerServe) {
+    const delegatedToExistingOwner = await resolveExistingOwnerAndDelegate(args, deps, waitForApproval, noTrack);
+    if (delegatedToExistingOwner !== null) {
+      return delegatedToExistingOwner;
+    }
+    if (hasLiveWritableOwnerMarker()) {
+      process.stderr.write(
+        `${RED}Error:${RESET} Standalone mutation command "${args[0] ?? ''}" found a live writable owner marker but could not reach a compatible owner over IPC.\n` +
+        'Refusing writable standalone fallback while another owner may have the database open.\n',
+      );
+      return 1;
+    }
+    return deps.runElectronHeadless(argv);
   }
 
   if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe)) {
