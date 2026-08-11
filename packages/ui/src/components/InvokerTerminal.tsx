@@ -920,7 +920,6 @@ export function InvokerTerminal({
                           className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
                         >
                           <option value="require">Ask first</option>
-                          <option value="auto_submit">Auto-submit</option>
                         </select>
                       </label>
                     </div>
