@@ -2019,6 +2019,29 @@ export class Orchestrator {
     this.checkWorkflowCompletion(task.config.workflowId);
   }
 
+  failTask(taskId: string, reason?: string): void {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task || task.status === 'completed' || task.status === 'failed' || task.status === 'closed' || task.status === 'stale') return;
+
+    const error = reason ?? 'Failed';
+    const changes: TaskStateChanges = {
+      status: 'failed',
+      execution: { error, completedAt: new Date(), fixSessionEntryStatus: undefined },
+    };
+    const updated = this.writeAndSync(taskId, changes);
+    this.updateSelectedAttempt(taskId, {
+      status: 'failed',
+      error,
+      completedAt: changes.execution?.completedAt,
+    });
+    const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
+    this.persistence.logEvent?.(taskId, 'task.failed', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    this.checkWorkflowCompletion(task.config.workflowId);
+  }
+
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);

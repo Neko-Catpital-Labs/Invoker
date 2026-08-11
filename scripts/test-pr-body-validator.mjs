@@ -1345,4 +1345,50 @@ assert(
   `a PR body whose Visual Proof section merely mentions "preload" should pass with a static screenshot: ${preloadRegressionErrors.join('; ')}`,
 );
 
+const guardedBehaviorTouchingDiff = `diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx
+--- a/packages/ui/src/App.tsx
++++ b/packages/ui/src/App.tsx
+@@ -10,7 +10,7 @@
+   // guarded-behavior: dag-surface-background-click-noop — see #4982
+   const handleDagSurfaceClick = useCallback(() => {
+-    if (contextMenu || workflowContextMenu) {
++    if (contextMenu) {
+       setContextMenu(null);
+       setWorkflowContextMenu(null);
+     }
+   }, [contextMenu, workflowContextMenu]);
+`;
+
+const guardedBehaviorNonTouchingDiff = `diff --git a/packages/ui/src/Other.tsx b/packages/ui/src/Other.tsx
+--- a/packages/ui/src/Other.tsx
++++ b/packages/ui/src/Other.tsx
+@@ -1,3 +1,3 @@
+   const label = 'sidebar';
+-  const count = 1;
++  const count = 2;
+   return label;
+`;
+
+const guardedBehaviorOmittedIdErrors = await validatePrBody(validMinimal, { diffText: guardedBehaviorTouchingDiff });
+assert(
+  guardedBehaviorOmittedIdErrors.some((error) => error.includes('Guarded behavior "dag-surface-background-click-noop"') && error.includes('not mentioned in ## Safety Invariant or ## Non-goals')),
+  'a diff touching a guarded-behavior marker line should fail when the PR body omits the marker id',
+);
+
+const guardedBehaviorClaimedBody = validMinimal.replace(
+  'Only the refresh path changes.',
+  'Only the refresh path changes. dag-surface-background-click-noop stays a no-op.',
+);
+const guardedBehaviorClaimedErrors = await validatePrBody(guardedBehaviorClaimedBody, { diffText: guardedBehaviorTouchingDiff });
+assert(
+  !guardedBehaviorClaimedErrors.some((error) => error.includes('Guarded behavior "dag-surface-background-click-noop"')),
+  'a diff touching a guarded-behavior marker line should pass when the PR body names the marker id in Safety Invariant or Non-goals',
+);
+
+const guardedBehaviorNonTouchingErrors = await validatePrBody(validMinimal, { diffText: guardedBehaviorNonTouchingDiff });
+assert(
+  !guardedBehaviorNonTouchingErrors.some((error) => error.includes('Guarded behavior')),
+  'a diff that does not touch any guarded-behavior marker line should have no effect regardless of PR body content',
+);
+
 console.log('OK: PR body validator checks passed');

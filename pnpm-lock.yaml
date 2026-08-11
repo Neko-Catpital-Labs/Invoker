@@ -282,6 +282,8 @@ importers:
         specifier: workspace:*
         version: link:../npm-cli
 
+  packages/npm-watcher: {}
+
   packages/persistence:
     dependencies:
       '@invoker/data-store':
@@ -655,6 +657,25 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2)
+
+  packages/watcher:
+    dependencies:
+      '@invoker/slack-manager':
+        specifier: workspace:*
+        version: link:../slack-manager
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.3
+        version: 25.3.3
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
 
   packages/web-app:
     devDependencies:

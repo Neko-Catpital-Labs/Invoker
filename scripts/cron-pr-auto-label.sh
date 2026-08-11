@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # Auto-labels open, self-authored PRs with admin-bypass when either:
-#   (a) the PR title case-insensitively mentions refactor, bugfix, or repro
-#       -- matches the existing "[Bugfix: ...]" / "[REFACTOR: ...]" title tag
-#       convention already used across this repo's own stacked PRs, or
+#   (a) the PR title case-insensitively mentions refactor, bugfix, repro, or
+#       test-only -- matches the existing "[Bugfix: ...]" / "[REFACTOR: ...]"
+#       / "[Test-only: ...]" title tag convention already used across this
+#       repo's own stacked PRs, or
 #   (b) every changed file in the PR is a test file.
 #
 # The label add is submitted as a real Invoker command (scratch execution,
@@ -28,7 +29,7 @@ source "$(dirname "$0")/cron-pr-lib.sh"
 # ---------------------------------------------------------------------------
 
 title_matches_marker() {
-  grep -qiE 'refactor|bugfix|repro' <<<"$1"
+  grep -qiE 'refactor|bugfix|repro|test-only' <<<"$1"
 }
 
 # Mirrors scripts/review-unit-rules.mjs's test-file path classifier so

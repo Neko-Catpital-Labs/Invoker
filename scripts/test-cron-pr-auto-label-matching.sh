@@ -46,6 +46,7 @@ assert_title_matches "[Bugfix: a lease with no expiry must never be treated as p
 assert_title_matches "Add repro proof for stale-format comparison"
 assert_title_matches "REFACTOR: extract method"
 assert_title_matches "bugfix: lowercase still matches"
+assert_title_matches "[Test-only: prove WAL snapshot isolation under an interleaved write](1) Add a WAL snapshot isolation test for an already-open reader"
 
 # --- title marker non-matches ---
 assert_title_no_match "Document the new machine-setup readiness checks"
