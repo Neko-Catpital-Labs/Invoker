@@ -1380,6 +1380,10 @@ export const IpcTestOnlyChannels = {
     ];
     response: void;
   },
+  'invoker:get-test-planning-chat-system-prompt': {} as {
+    request: [sessionId: string];
+    response: { systemPrompt: string | null };
+  },
   'invoker:seed-main-process-hitch-fixture': {} as {
     request: [];
     response: {
