@@ -53,6 +53,7 @@ export type LaunchDispatcherPersistence = Pick<
  */
 export interface LaunchDispatcherOrchestrator {
   prepareTaskForNewAttempt(taskId: string, reason: string): unknown;
+  failTask?(taskId: string, reason: string): unknown;
   syncFromDb?(workflowId: string): void;
   getTask?(taskId: string): TaskState | undefined;
   getTaskLaunchReadiness?(taskId: string): TaskLaunchReadiness;
@@ -588,6 +589,7 @@ export class LaunchDispatcher {
         maxStuckLeaseRetries: MAX_STUCK_LEASE_RETRIES,
         module: 'launch-dispatcher',
       });
+      this.orchestrator?.failTask?.(row.taskId, message);
       return;
     }
 
