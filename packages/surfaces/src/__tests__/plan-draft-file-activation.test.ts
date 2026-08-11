@@ -183,6 +183,7 @@ describe('plan draft-file activation prompt policy', () => {
     const prompt = buildPlanSystemPrompt('main', undefined, {
       conversationalPlanning: true,
       draftingAuthorized: false,
+      planningSurface: 'slack',
     });
 
     expect(prompt).toContain('conversational planning mode');
@@ -200,6 +201,7 @@ describe('plan draft-file activation prompt policy', () => {
     const prompt = buildPlanSystemPrompt('develop', undefined, {
       conversationalPlanning: true,
       draftingAuthorized: true,
+      planningSurface: 'slack',
     });
 
     expect(prompt).toContain('The user has explicitly approved drafting');
