@@ -1,4 +1,7 @@
 import {
+  execFileSync,
+} from 'node:child_process';
+import {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,16 +19,30 @@ import type { RemoteDiskTarget } from '../workers/disk-headroom-monitor.js';
 import {
   AUTOMATION_CHECKOUT_DIRS,
   buildDeletingOrphanReapScript,
+  buildStaleWorktreeReapScript,
   DELETING_ORPHAN_MIN_AGE_MINUTES,
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
+  reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
+  reapStaleWorktrees,
+  STALE_WORKTREE_MIN_AGE_HOURS,
   trimOversizedLogs,
 } from '../workers/reaper-reclaim.js';
 
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    execFileSync: vi.fn(),
+  };
+});
+
 const tempDirs: string[] = [];
+const mockedExecFileSync = vi.mocked(execFileSync);
 
 afterEach(() => {
+  mockedExecFileSync.mockReset();
   vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -117,6 +134,115 @@ describe('reapDeletingOrphans', () => {
     expect(script).not.toContain('$INVOKER_HOME/worktrees');
     expect(script).not.toContain('$INVOKER_HOME/repos');
     expect(script).not.toContain('TMP_CLEAN');
+  });
+});
+
+describe('reapStaleWorktrees', () => {
+  it('leaves worktree entries younger than forty-eight hours untouched', () => {
+    const { root, home } = makeHome();
+    mkdirSync(join(home, 'repos', 'repoabc123456'), { recursive: true });
+    mkdirSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'), { recursive: true });
+
+    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+
+    expect(removed).toEqual([]);
+    expect(existsSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'))).toBe(true);
+    expect(mockedExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('removes stale entries with git worktree remove and prunes once per repo group', () => {
+    const { root, home } = makeHome();
+    const repoHash = 'repoabc123456';
+    const oldA = join(home, 'worktrees', repoHash, 'old-a');
+    const oldB = join(home, 'worktrees', repoHash, 'old-b');
+    mkdirSync(join(home, 'repos', repoHash), { recursive: true });
+    mkdirSync(oldA, { recursive: true });
+    mkdirSync(oldB, { recursive: true });
+    backdate(oldA, (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
+    backdate(oldB, (STALE_WORKTREE_MIN_AGE_HOURS + 2) * 60 * 60 * 1000);
+    mockedExecFileSync.mockImplementation((_cmd, args) => {
+      const argv = args as string[];
+      if (argv[3] === 'remove') rmSync(argv[5]!, { recursive: true, force: true });
+      return Buffer.from('');
+    });
+
+    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+
+    expect(removed.sort()).toEqual([oldA, oldB].sort());
+    expect(existsSync(oldA)).toBe(false);
+    expect(existsSync(oldB)).toBe(false);
+    const calls = mockedExecFileSync.mock.calls.map((call) => call[1] as string[]);
+    expect(calls.filter((args) => args[3] === 'remove')).toHaveLength(2);
+    expect(calls.filter((args) => args[3] === 'prune')).toHaveLength(1);
+    expect(calls.find((args) => args[3] === 'prune')).toEqual([
+      '-C',
+      join(home, 'repos', repoHash),
+      'worktree',
+      'prune',
+    ]);
+  });
+
+  it('falls back to rm -rf when git worktree remove fails', () => {
+    const { root, home } = makeHome();
+    const repoHash = 'repoabc123456';
+    const old = join(home, 'worktrees', repoHash, 'old-fallback');
+    mkdirSync(join(home, 'repos', repoHash), { recursive: true });
+    mkdirSync(old, { recursive: true });
+    backdate(old, (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
+    mockedExecFileSync.mockImplementation((_cmd, args) => {
+      const argv = args as string[];
+      if (argv[3] === 'remove') throw new Error('worktree metadata missing');
+      return Buffer.from('');
+    });
+
+    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+
+    expect(removed).toEqual([old]);
+    expect(existsSync(old)).toBe(false);
+    const calls = mockedExecFileSync.mock.calls.map((call) => call[1] as string[]);
+    expect(calls.filter((args) => args[3] === 'remove')).toHaveLength(1);
+    expect(calls.filter((args) => args[3] === 'prune')).toHaveLength(1);
+  });
+
+  it('builds and runs the age-gated stale-worktree reap script on remote targets', async () => {
+    const { root, home } = makeHome();
+    const target: RemoteDiskTarget = {
+      name: 'remote-1',
+      connection: { host: 'h', user: 'u', sshKeyPath: '/k' },
+      remotePath: '~/.invoker',
+    };
+    const runRemoteScript = vi.fn(async () => 'removed /home/u/.invoker/worktrees/repo/old\n');
+
+    const results = await reapStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      remoteTargets: [target],
+      runRemoteScript,
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results[1]).toMatchObject({
+      ok: true,
+      targetKey: 'ssh:remote-1 ~/.invoker',
+      reason: 'reap-worktrees',
+      detail: 'removed 1',
+    });
+    expect(runRemoteScript).toHaveBeenCalledTimes(1);
+    const script = runRemoteScript.mock.calls[0]?.[1] as unknown as string;
+    expect(script).toContain('INVOKER_HOME=\'~/.invoker\'');
+    expect(script).toContain('Refusing unsafe INVOKER_HOME');
+    expect(script).toContain('find "$INVOKER_HOME/worktrees" -mindepth 2 -maxdepth 2 -type d');
+    expect(script).toContain(`-mmin +${STALE_WORKTREE_MIN_AGE_HOURS * 60}`);
+    expect(script).toContain('git -C "$repo" worktree remove --force "$path"');
+    expect(script).toContain('rm -rf "$path"');
+    expect(script).toContain('git -C "$INVOKER_HOME/repos/$repo_hash" worktree prune');
+  });
+
+  it('does not include the orphan glob in the stale-worktree remote script', () => {
+    const script = buildStaleWorktreeReapScript('~/.invoker', STALE_WORKTREE_MIN_AGE_HOURS);
+    expect(script).toContain('$INVOKER_HOME/worktrees');
+    expect(script).toContain('$INVOKER_HOME/repos/$repo_hash');
+    expect(script).not.toContain("'*.deleting.*'");
   });
 });
 
