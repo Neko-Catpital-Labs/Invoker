@@ -292,5 +292,7 @@ export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
       return null;
     case 'error':
       return formatError(event.message);
+    case 'alert':
+      return null;
   }
 }
