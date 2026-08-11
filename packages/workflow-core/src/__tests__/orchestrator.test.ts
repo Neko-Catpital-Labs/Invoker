@@ -6156,6 +6156,53 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── startExecution scaling ───────────────────────────────
+
+  describe('startExecution scaling', () => {
+    it('does not reload every active workflow once per ready task (N+1 regression)', () => {
+      const persistence = new CountingPersistence();
+      const bus = new InMemoryBus();
+      const o = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 100,
+      });
+
+      const workflowCount = 6;
+      for (let i = 0; i < workflowCount; i++) {
+        o.loadPlan({
+          name: `scaling-wf-${i}`,
+          tasks: [{ id: 't1', prompt: 'go' }],
+        });
+      }
+
+      let refreshCount = 0;
+      const origRefresh = (Orchestrator.prototype as any).refreshFromDb;
+      (Orchestrator.prototype as any).refreshFromDb = function (...args: unknown[]) {
+        refreshCount += 1;
+        return origRefresh.apply(this, args);
+      };
+      let started: TaskState[];
+      try {
+        started = o.startExecution();
+      } finally {
+        (Orchestrator.prototype as any).refreshFromDb = origRefresh;
+      }
+
+      expect(started.length).toBe(workflowCount);
+      // Before the fix, getTaskLaunchReadinessImpl() called refreshFromDb()
+      // -- reloading every active workflow's tasks from the DB -- once per
+      // ready task inside planPendingLaunchQueue()'s map and once more per
+      // dequeued job inside drainSchedulerImpl()'s while loop, on top of
+      // the single refresh startExecution() already does at its own top.
+      // That made refreshFromDb() calls scale with the number of ready
+      // tasks in a single startExecution() call rather than staying
+      // constant. It must now stay at a small, fixed count regardless of
+      // how many tasks are ready.
+      expect(refreshCount).toBeLessThanOrEqual(5);
+    });
+  });
+
   // ── retryWorkflow ────────────────────────────────────────
 
   describe('retryWorkflow', () => {
