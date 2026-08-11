@@ -12,6 +12,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import { resolvePlanningSubmitAction } from '@invoker/contracts/planning-surface';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -3017,10 +3018,12 @@ export function App() {
       return;
     }
 
-    if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
-      if (activePlanningSession.draftPlanAvailable || activePlanningSession.status === 'draft_ready') {
-        await handlePlanningSubmitDraft();
-      }
+    const planningSubmitAction = resolvePlanningSubmitAction(
+      input,
+      activePlanningSession.draftPlanAvailable || activePlanningSession.status === 'draft_ready',
+    );
+    if (planningSubmitAction === 'submit_ready') {
+      await handlePlanningSubmitDraft();
       return;
     }
 
@@ -3088,9 +3091,6 @@ export function App() {
         if (result.draftPlanAvailable) {
           setReviewDraftSessionId(result.sessionId);
           setPlanningContextCollapsed(false);
-          if ((result.confirmationMode ?? 'require') === 'auto_submit') {
-            void handlePlanningSubmitDraft(result.sessionId);
-          }
         }
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));

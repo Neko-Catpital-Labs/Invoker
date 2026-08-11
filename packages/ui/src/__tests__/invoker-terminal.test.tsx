@@ -1487,7 +1487,7 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
-  it('does not submit or send typed submit before a draft is ready', async () => {
+  it('sends typed submit as a draft request before a draft is ready', async () => {
     mock.api.planningChatList = vi.fn(async () => ({
       ok: true,
       sessions: [
@@ -1525,9 +1525,24 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('submit');
 
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        sessionId: 'session-1',
+        message: 'submit',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+    });
     expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
-    expect(mock.api.planningChatSend).not.toHaveBeenCalled();
     expect(mock.api.startReady).not.toHaveBeenCalled();
+  });
+
+  it('does not offer auto-submit in conversational planning', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    expect(screen.queryByRole('option', { name: 'Auto-submit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Ask first' })).toBeInTheDocument();
   });
 
   it('shows the bound repo and short commit sha in the planning context sidebar', async () => {
