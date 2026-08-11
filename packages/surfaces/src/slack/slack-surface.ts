@@ -15,6 +15,7 @@ import {
   formatPlanSummaryLines,
   formatSlackPlanBrief,
   preparePlanningReview,
+  resolvePlanningSubmitAction,
   summarizePlanText,
   type PlanSummary,
   type PlanningConfirmationMode,
@@ -283,6 +284,7 @@ export function parsePlanningRequest(
   repositoryUrls?: string[];
   hasExplicitPreset?: boolean;
   confirmationMode?: PlanningConfirmationMode;
+  autoSubmitRequested?: boolean;
   text: string;
   unknownPreset?: string;
 } {
@@ -290,6 +292,7 @@ export function parsePlanningRequest(
   let presetKey = defaultPresetKey;
   let repo: string | undefined;
   let confirmationMode: PlanningConfirmationMode | undefined;
+  let autoSubmitRequested = false;
   let unknownPreset: string | undefined;
   let hasExplicitPreset = false;
   const keyset = new Set(presetKeys.map((k) => k.toLowerCase()));
@@ -306,7 +309,8 @@ export function parsePlanningRequest(
     }
     const normalized = raw.toLowerCase().replace(/\s+/g, '').replace(/^plain/, '');
     if (normalized === 'auto-submit' || normalized === 'autosubmit') {
-      confirmationMode = 'auto_submit';
+      confirmationMode = 'require';
+      autoSubmitRequested = true;
       rest = rest.slice(m[0].length);
       continue;
     }
@@ -331,6 +335,7 @@ export function parsePlanningRequest(
     ...(repositoryUrls.length > 0 ? { repositoryUrls } : {}),
     ...(hasExplicitPreset ? { hasExplicitPreset } : {}),
     ...(confirmationMode ? { confirmationMode } : {}),
+    ...(autoSubmitRequested ? { autoSubmitRequested } : {}),
     ...(unknownPreset ? { unknownPreset } : {}),
   };
 }
@@ -592,7 +597,7 @@ export class SlackSurface implements Surface {
     this.defaultHarnessPreset = config.defaultHarnessPreset ?? DEFAULT_HARNESS_PRESET;
     this.repoAliases = config.repoAliases ?? {};
     this.defaultRepoUrl = config.defaultRepoUrl ?? config.repoUrl;
-    this.defaultPlanningConfirmationMode = config.defaultPlanningConfirmationMode ?? 'require';
+    this.defaultPlanningConfirmationMode = 'require';
     this.workflowChannelRepo = config.workflowChannelRepo;
     this.gatherWorkflowContext = config.gatherWorkflowContext;
     this.runWorkflowOp = config.runWorkflowOp;
@@ -1004,8 +1009,29 @@ export class SlackSurface implements Surface {
       return;
     }
     const threadTs = event.thread_ts ?? event.ts;
+    if (parsed.autoSubmitRequested) {
+      await say({
+        text: 'Auto-submit is unavailable in conversational planning. I will stage the draft for review instead.',
+        thread_ts: threadTs,
+      });
+    }
     if (/^\/plan\s*$/i.test(parsed.text)) {
       await this.handleExplicitPlanAction(channel, threadTs, event.user ?? 'unknown', say);
+      return;
+    }
+
+    const readyDraft = this.slackPlanDraftRepo?.getReady(channel, threadTs);
+    const submitAction = resolvePlanningSubmitAction(parsed.text, Boolean(readyDraft));
+    if (submitAction === 'submit_ready' && readyDraft) {
+      if (!event.user || readyDraft.requestedBy !== event.user) {
+        await say({ text: 'Only the user who requested this plan may submit it.', thread_ts: threadTs });
+        return;
+      }
+      try {
+        await this.submitSlackPlanDraft(readyDraft, { userId: event.user });
+      } catch (error) {
+        await say({ text: error instanceof Error ? error.message : String(error), thread_ts: threadTs });
+      }
       return;
     }
 
@@ -1111,9 +1137,7 @@ export class SlackSurface implements Surface {
           return;
         }
       }
-      const effectiveConfirmationMode = parsed.confirmationMode
-        ?? storedContext?.confirmationMode
-        ?? this.defaultPlanningConfirmationMode;
+      const effectiveConfirmationMode: PlanningConfirmationMode = 'require';
       const context = storedContext
         ? { ...storedContext, confirmationMode: effectiveConfirmationMode }
         : {
@@ -1237,13 +1261,6 @@ export class SlackSurface implements Surface {
       // second, orphaned draft instead of reconciling the one that exists.
       this.log('slack', 'error', `Posting plan draft ${draft.draftId}:${draft.version} failed: ${error instanceof Error ? error.message : String(error)}`);
       return;
-    }
-    if (draftReview.confirmationMode === 'auto_submit') {
-      try {
-        await this.submitSlackPlanDraft(this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft, { userId });
-      } catch (error) {
-        this.log('slack', 'error', `Auto-submit failed for draft ${draft.draftId}:${draft.version}: ${error instanceof Error ? error.message : String(error)}`);
-      }
     }
   }
 
@@ -1470,8 +1487,9 @@ export class SlackSurface implements Surface {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
     const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs) {
+    if (!draft || !context.channel || !context.threadTs || !context.userId
+      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
+      || draft.requestedBy !== context.userId) {
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1486,8 +1504,9 @@ export class SlackSurface implements Surface {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
     const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs) {
+    if (!draft || !context.channel || !context.threadTs || !context.userId
+      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
+      || draft.requestedBy !== context.userId) {
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1507,8 +1526,9 @@ export class SlackSurface implements Surface {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
     const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs) {
+    if (!draft || !context.channel || !context.threadTs || !context.userId
+      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
+      || draft.requestedBy !== context.userId) {
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -3053,6 +3073,7 @@ ${text}`;
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
         conversationalPlanning: this.conversationalPlanning,
+        planningSurface: 'slack',
         harnessSessionDriver: opts?.harnessSessionDriver,
         harnessSessionId: opts?.harnessSessionId,
         onHarnessSessionId: (sessionId) => this.persistHarnessSessionId(threadTs, sessionId),
@@ -3152,6 +3173,7 @@ ${text}`;
             plannerRetryLimit: this.plannerRetryLimit,
             plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
             conversationalPlanning: this.conversationalPlanning,
+            planningSurface: 'slack',
             ...this.harnessDriverSessionOpts(harness, context ?? {}),
             onHarnessSessionId: (sessionId) => this.persistHarnessSessionId(entry.threadTs, sessionId),
           });

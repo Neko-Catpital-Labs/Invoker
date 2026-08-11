@@ -44,6 +44,7 @@ import type { AgentRegistry } from '@invoker/execution-engine';
 import {
   decideWorktreeBinding,
   evaluatePlanningTurn,
+  formatPlanningHostedTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
   preparePlanningReview,
@@ -356,10 +357,10 @@ function titleFromMessage(message: string): string {
   return firstLine.length > 56 ? `${firstLine.slice(0, 53).trimEnd()}…` : firstLine;
 }
 function normalizePlanningConfirmationMode(
-  value: string | null | undefined,
-  fallback: PlanningConfirmationMode = 'require',
+  _value: string | null | undefined,
+  _fallback: PlanningConfirmationMode = 'require',
 ): PlanningConfirmationMode {
-  return value === 'auto_submit' || value === 'require' ? value : fallback;
+  return 'require';
 }
 
 function resolveDefaultPlanningConfirmationMode(config: InvokerConfig): PlanningConfirmationMode {
@@ -587,19 +588,6 @@ function saveOverrideConversation(
   );
 }
 
-function formatConversationalPlanningMessage(message: string): string {
-  return [
-    message,
-    '',
-    'In-app planning chat rule:',
-    '- Treat this as a conversation before a plan.',
-    '- Talk through edge cases, corner cases, architecture, and ambiguity with the human.',
-    '- Resolve those points before producing a YAML plan.',
-    '- If anything important is unclear, ask concise questions instead of drafting.',
-    '- Draft YAML only after the human asks you to draft/proceed, or after the conversation has already resolved the important choices.',
-  ].join('\n');
-}
-
 export function hasExplicitDraftIntent(message: string): boolean {
   return hasCoreExplicitDraftIntent(message);
 }
@@ -630,6 +618,7 @@ function planConversationConfig(
     repoUrl: deps.config.defaultRepoUrl,
     experimentalPlanner: deps.config.experimentalPlanner,
     conversationalPlanning: options.conversationalPlanning ?? false,
+    planningSurface: options.conversationalPlanning ? 'in_app' : undefined,
     draftingPreauthorized: options.draftingPreauthorized ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
@@ -883,7 +872,7 @@ export async function sendPlanningChatMessage(
 
       try {
         const { extractYamlPlan } = await loadPlannerSurfaces();
-        const formattedMessage = formatConversationalPlanningMessage(message);
+        const hostedMessage = formatPlanningHostedTurn('in_app', message);
         if (deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
             await ensurePlanningWorktreeReady(deps.repoPool, {
@@ -897,10 +886,10 @@ export async function sendPlanningChatMessage(
           }
         }
         const reply = deps.plannerReplyOverride
-          ? await deps.plannerReplyOverride(formattedMessage)
-          : await activeSession.conversation.sendMessage(formattedMessage);
+          ? await deps.plannerReplyOverride(hostedMessage)
+          : await activeSession.conversation.sendMessage(message);
         if (deps.plannerReplyOverride) {
-          saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
+          saveOverrideConversation(deps.conversationRepo, activeSession.id, message, reply);
         }
         const reasoningParts = deps.plannerReplyOverride
           ? []
@@ -913,6 +902,7 @@ export async function sendPlanningChatMessage(
           immediateDraftPlanText: deps.plannerReplyOverride
             ? extractYamlPlan(reply)
             : activeSession.conversation.lastTurnDraftPlanText,
+          hasExistingDraft: hasDraftPlan(activeSession),
         });
         if (result.kind === 'message') {
           activeSession.status = hasDraftPlan(activeSession)
