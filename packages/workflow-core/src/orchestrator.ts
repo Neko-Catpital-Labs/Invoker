@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ExternalGatePolicy, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass } from '@invoker/workflow-graph';
+import { createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass, computeWorkflowRollup } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -3033,6 +3033,120 @@ export class Orchestrator {
   detachWorkflow(workflowId: string, upstreamWorkflowId: string): void {
     this.syncAllFromDb();
     this.detachWorkflowInternal(workflowId, upstreamWorkflowId);
+  }
+
+  /**
+   * Attach a workflow to an upstream workflow's merge gate, dynamically,
+   * regardless of whether the two were ever previously linked (including
+   * re-attaching a pair that a prior `detachWorkflow` severed). This is a
+   * forward-only, non-invalidating mutation: it never resets or cancels any
+   * existing task, so it has no retroactive effect on a downstream task
+   * that already ran past the point the gate would have held it — it only
+   * gates tasks that are still pending/queued when the new dependency is
+   * added, via the normal `getExternalDependencyBlocker` scheduling check.
+   *
+   * Hard-blocked (never overridable, would corrupt the dependency graph):
+   * attaching a workflow to itself, or attaching in a direction that would
+   * create a dependency cycle (the proposed upstream already transitively
+   * depends on the proposed downstream).
+   *
+   * Blocked unless `opts.force` is set: attaching across two different
+   * `repoUrl`s, or attaching onto a downstream workflow whose rollup status
+   * is already `completed` or `closed` (a new gate could never hold a
+   * workflow that is already done).
+   */
+  attachWorkflow(
+    workflowId: string,
+    upstreamWorkflowId: string,
+    opts?: { taskId?: string; gatePolicy?: ExternalGatePolicy; force?: boolean },
+  ): void {
+    this.refreshFromDb();
+
+    if (workflowId === upstreamWorkflowId) {
+      throw new Error(`Cannot attach workflow ${workflowId} to itself`);
+    }
+
+    const targetTasks = this.stateMachine.getAllTasks().filter(
+      (task) => task.config.workflowId === workflowId,
+    );
+    if (targetTasks.length === 0) {
+      throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
+    }
+    const upstreamTasks = this.stateMachine.getAllTasks().filter(
+      (task) => task.config.workflowId === upstreamWorkflowId,
+    );
+    if (upstreamTasks.length === 0) {
+      throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${upstreamWorkflowId} not found`);
+    }
+
+    if (this.collectDownstreamWorkflowIds(workflowId).includes(upstreamWorkflowId)) {
+      throw new Error(
+        `Cannot attach workflow ${workflowId} to ${upstreamWorkflowId}: ${upstreamWorkflowId} already transitively depends on ${workflowId}, so this would create a dependency cycle`,
+      );
+    }
+
+    const targetWorkflow = this.persistence.loadWorkflow?.(workflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
+    const upstreamWorkflow = this.persistence.loadWorkflow?.(upstreamWorkflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === upstreamWorkflowId);
+
+    if (!opts?.force && targetWorkflow?.repoUrl && upstreamWorkflow?.repoUrl
+      && targetWorkflow.repoUrl !== upstreamWorkflow.repoUrl) {
+      throw new Error(
+        `Cannot attach workflow ${workflowId} (repo ${targetWorkflow.repoUrl}) to ${upstreamWorkflowId} `
+        + `(repo ${upstreamWorkflow.repoUrl}): different repos. Pass { force: true } to override.`,
+      );
+    }
+
+    const targetStatus = computeWorkflowRollup(targetTasks).status;
+    if (!opts?.force && (targetStatus === 'completed' || targetStatus === 'closed')) {
+      throw new Error(
+        `Cannot attach workflow ${workflowId}: it is already ${targetStatus}, so a new dependency would `
+        + `never gate anything. Pass { force: true } to override.`,
+      );
+    }
+
+    const deps = targetWorkflow?.externalDependencies ?? [];
+    if (deps.some((dep) => dep.workflowId === upstreamWorkflowId)) {
+      throw new Error(`Workflow ${workflowId} already depends on upstream workflow ${upstreamWorkflowId}`);
+    }
+
+    const newDep: ExternalDependency = {
+      workflowId: upstreamWorkflowId,
+      taskId: opts?.taskId?.trim() || '__merge__',
+      requiredStatus: 'completed',
+      gatePolicy: opts?.gatePolicy ?? 'completed',
+    };
+    const nextDeps: ExternalDependency[] = [...deps, newDep];
+
+    const now = workflowTimestamp().toISOString();
+    const existingChanges = targetWorkflow?.externalDependencyChanges ?? [];
+    const dependencyChanges: ExternalDependencyChange[] = [...existingChanges, { after: newDep, changedAt: now }];
+
+    const existingProvenance = targetWorkflow?.detachedExternalDependencies ?? [];
+    const nextProvenance = existingProvenance.filter((dep) => dep.workflowId !== upstreamWorkflowId);
+
+    this.taskRepository.updateWorkflow(workflowId, {
+      externalDependencies: nextDeps,
+      externalDependencyChanges: dependencyChanges,
+      detachedExternalDependencies: nextProvenance.length > 0 ? nextProvenance : undefined,
+    });
+
+    const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];
+    this.persistence.logEvent?.(eventTask.id, 'workflow.external_dependency_changed', {
+      workflowId,
+      upstreamWorkflowId,
+      action: 'added',
+      changes: dependencyChanges.slice(existingChanges.length),
+    });
+    this.persistence.logEvent?.(eventTask.id, 'task.external_dependency_changed', {
+      workflowId,
+      upstreamWorkflowId,
+      action: 'added',
+    });
+
+    this.autoStartExternallyUnblockedReadyTasks();
+    this.checkWorkflowCompletion(workflowId);
   }
 
   /**
