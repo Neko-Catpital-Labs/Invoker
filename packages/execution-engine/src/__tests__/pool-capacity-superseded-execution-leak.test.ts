@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
+import { reclaimOrphanedExecutionSlots } from '../task-runner-pool.js';
 import type { TaskState } from '@invoker/workflow-core';
 
 /**
@@ -122,6 +123,40 @@ describe('pool capacity: superseded execution slot leak', () => {
     expect(() => runner.selectExecutor(makeTask('wf-2/task-b', 'wf-2/task-b-attempt'))).not.toThrow();
     expect((runner as unknown as { activeExecutions: Map<string, unknown> }).activeExecutions.has('wf-1/task-a-old')).toBe(false);
     expect(runner.pendingPoolSelections.get('wf-2/task-b')?.member.id).toBe('remote-a');
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("reclaims another task's orphaned non-live attempt so a waiter can fill the member (direct call)", () => {
+    const taskA = makeTask('wf-1/task-a', 'wf-1/task-a-live');
+    const kill = vi.fn().mockResolvedValue(undefined);
+    const executor = { kill } as never;
+    const activeExecutions = new Map<string, unknown>();
+    activeExecutions.set('wf-1/task-a-live', {
+      handle: { attemptId: 'wf-1/task-a-live' },
+      executor,
+      taskId: 'wf-1/task-a',
+      poolMemberKey: 'ssh:remote-a',
+    });
+    activeExecutions.set('wf-1/task-a-old', {
+      handle: { attemptId: 'wf-1/task-a-old' },
+      executor,
+      taskId: 'wf-1/task-a',
+      poolMemberKey: 'ssh:remote-a',
+    });
+    const host = {
+      orchestrator: {
+        getTask: (id: string) => (id === taskA.id ? taskA : null),
+        getAllTasks: () => [taskA],
+      },
+      activeExecutions,
+      persistence: { releaseExecutionResourceLease: vi.fn() },
+      logger: { warn: vi.fn() },
+    } as never;
+
+    reclaimOrphanedExecutionSlots(host);
+
+    expect(activeExecutions.has('wf-1/task-a-live')).toBe(true);
+    expect(activeExecutions.has('wf-1/task-a-old')).toBe(false);
     expect(kill).toHaveBeenCalledTimes(1);
   });
 });
