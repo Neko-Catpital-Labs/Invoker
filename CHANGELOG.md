@@ -4,6 +4,11 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.12
+
+- Fix an owner-startup incident: the scheduler reloaded every active workflow's tasks from the database once per ready task on every scheduling pass instead of once per pass, so a large ready-task backlog could make the owner process's boot effectively never finish (confirmed live: the same query firing thousands of times with zero deceleration). A cold boot against a real 900-task/300-workflow database dropped from 12.4s to well under a second. Covered by a repro test and a real cold-boot-against-a-large-persisted-DB test (#8502, #8504, INV-279).
+- Add `Orchestrator.attachWorkflow`, the dynamic mirror of `detachWorkflow`, plus its headless CLI surface, so a workflow left with a lasting Detached badge after a recreate can be relinked without a full workflow recreate (#8494-8496).
+
 ## 0.0.11
 
 - Add scratch execution mode: a `scratch: true` plan runs its tasks in a plain temp directory with no git repo involved at all, for benchmark/direct-output plans that never touch a real checkout (#8243-8249, #8256, #8257).
