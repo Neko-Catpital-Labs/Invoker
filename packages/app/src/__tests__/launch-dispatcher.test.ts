@@ -3,7 +3,7 @@ import { SQLiteAdapter } from '@invoker/data-store';
 import { DISPATCH_LEASE_MS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
-import { LaunchDispatcher } from '../launch-dispatcher.js';
+import { LaunchDispatcher, releaseTaskResourceLeases } from '../launch-dispatcher.js';
 
 function makeLogger(): Logger & {
   records: { level: 'info' | 'warn' | 'error' | 'debug'; msg: string; fields?: Record<string, unknown> }[];
@@ -489,6 +489,48 @@ describe('LaunchDispatcher', () => {
         expect(payload.reason).toBe('launch-dispatch-abandoned');
       }
       expect(prepare).toHaveBeenCalledWith('wf-r/t1', 'launch-dispatch-abandoned');
+    });
+
+    it('CD.2: releaseTaskResourceLeases (exported) releases only leases held by the given task', () => {
+      seed();
+      const owned = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh-pool/host-A',
+        resourceType: 'ssh-pool-slot',
+        holderId: 'direct-holder-1',
+        taskId: 'wf-r/t1',
+        poolId: 'ssh-pool',
+        poolMemberId: 'host-A',
+      });
+      const unrelated = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh-pool/host-B',
+        resourceType: 'ssh-pool-slot',
+        holderId: 'direct-holder-2',
+        taskId: 'wf-other/tX',
+        poolId: 'ssh-pool',
+        poolMemberId: 'host-B',
+      });
+      expect(owned).toBe(true);
+      expect(unrelated).toBe(true);
+
+      const logger = makeLogger();
+      releaseTaskResourceLeases(
+        { persistence: adapter, logger, ownerId: 'owner-test' },
+        'wf-r/t1',
+        999,
+      );
+
+      expect(adapter.listExecutionResourceLeasesByTask('wf-r/t1')).toHaveLength(0);
+      expect(adapter.listExecutionResourceLeasesByTask('wf-other/tX')).toHaveLength(1);
+
+      const events = adapter.getEvents('wf-r/t1');
+      const releaseEvents = events.filter(
+        (event) => event.eventType === 'task.launch_dispatch_lease_released',
+      );
+      expect(releaseEvents).toHaveLength(1);
+      const payload = JSON.parse(releaseEvents[0].payload!);
+      expect(payload.dispatchId).toBe(999);
+      expect(payload.resourceKey).toBe('ssh-pool/host-A');
+      expect(payload.reason).toBe('launch-dispatch-abandoned');
     });
 
     it('CD.2: abandonStuckLeases is a no-op for leases when no resource leases are held', () => {
