@@ -39,8 +39,9 @@ function launchArgs(): string[] {
 }
 
 async function waitForInvoker(page: Page): Promise<void> {
+  await page.waitForURL((url) => url.href !== 'about:blank', { timeout: 30_000 });
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30_000 });
 }
 
 function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) {
@@ -67,6 +68,7 @@ async function launchApp(testDir: string, extraEnv: Record<string, string>): Pro
       INVOKER_REPO_CONFIG_PATH: configPath,
       INVOKER_STARTUP_POLL_DELAY_MS: '0',
       INVOKER_USER_DATA_DIR: electronUserDataDir,
+      INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       ...extraEnv,
     },
   });
