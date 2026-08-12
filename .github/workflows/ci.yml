@@ -958,8 +958,7 @@ jobs:
   docker:
     if: ${{ github.event_name != 'pull_request' }}
     needs: build-artifacts
-    runs-on:
-      labels: Runner_2_4_core
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     timeout-minutes: 60
     name: docker / comprehensive
 
