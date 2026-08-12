@@ -79,7 +79,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: TypeScript Types
             command: pnpm run check:types
-            runner_label: Github_Runner
+            runner_label: Runner_2_4_core
 
     name: quality / ${{ matrix.name }}
 
