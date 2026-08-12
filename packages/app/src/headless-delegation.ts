@@ -54,7 +54,7 @@ export async function tryDelegateRun(
   const traceId = createTraceId('headless.run');
   return tryDelegate(
     'headless.run',
-    { planPath: resolvePath(planPath), traceId },
+    { planPath: resolvePath(planPath), noTrack, traceId },
     messageBus,
     {
       waitForApproval,
