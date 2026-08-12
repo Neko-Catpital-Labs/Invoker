@@ -29,6 +29,17 @@ import { stringify as yamlStringify } from 'yaml';
 import { _electron as electron, type Locator, type Page } from '@playwright/test';
 import { SQLiteAdapter, type WorkerActionWrite, type InAppPlanningSessionRecord } from '@invoker/data-store';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
+
+type SqliteFixtureDb = {
+  prepare(sql: string): {
+    run(...params: unknown[]): unknown;
+  };
+};
+
+function sqliteFixtureDb(adapter: SQLiteAdapter): SqliteFixtureDb {
+  return (adapter as unknown as { db: SqliteFixtureDb }).db;
+}
+
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
   name: 'Queue Semantics Visual Proof',
@@ -603,6 +614,60 @@ async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId
     adapter.close();
   }
 }
+
+async function seedVerboseActivityTruncationFixture(dbPath: string): Promise<void> {
+  const sessionId = 'in-app-verbose-activity-truncated-session';
+  const turnId = 'in-app-verbose-activity-truncated-turn';
+  const now = '2026-08-12T00:00:00.000Z';
+  const record: InAppPlanningSessionRecord = {
+    id: sessionId,
+    title: 'Verbose activity truncation fixture',
+    presetKey: 'codex',
+    confirmationMode: 'require',
+    status: 'still_discussing',
+    messages: [
+      { id: 1, role: 'user', text: 'Show a persisted truncation warning.', createdAt: now },
+      { id: 2, role: 'assistant', text: 'Persisted verbose activity fixture is complete.', createdAt: '2026-08-12T00:00:02.000Z' },
+    ],
+    pendingResponse: false,
+    createdAt: now,
+    updatedAt: '2026-08-12T00:00:02.000Z',
+  };
+  const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+  try {
+    adapter.upsertInAppPlanningSession(record);
+    adapter.startInAppPlanningTurnActivity({
+      sessionId,
+      turnId,
+      userMessageId: 1,
+      startedAt: now,
+    });
+    adapter.appendInAppPlanningTurnActivity({
+      sessionId,
+      turnId,
+      source: 'stdout',
+      text: 'persisted stdout retained before truncation\n',
+      createdAt: '2026-08-12T00:00:01.000Z',
+    });
+    adapter.finalizeInAppPlanningTurnActivity({
+      sessionId,
+      turnId,
+      status: 'completed',
+      assistantMessageId: 2,
+      completedAt: '2026-08-12T00:00:02.000Z',
+    });
+    sqliteFixtureDb(adapter).prepare(`
+      UPDATE in_app_planning_turn_activity
+        SET dropped_bytes = ?,
+            truncated = 1,
+            updated_at = ?
+        WHERE session_id = ? AND turn_id = ?
+    `).run(32768, '2026-08-12T00:00:02.000Z', sessionId, turnId);
+  } finally {
+    adapter.close();
+  }
+}
+
 async function seedWorkerTimelineActions(
   dbPath: string,
   workflowId: string,
@@ -1140,6 +1205,91 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'planning-chat-busy-state-immediate-indicator');
 
     await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('Busy state response.', { timeout: 8000 });
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
+  test('in-app-verbose-activity — verbose panel states', async ({ page, testDir }) => {
+    const stdoutText = 'VISUAL_VERBOSE_STDOUT raw planner stdout line';
+    const stderrText = 'VISUAL_VERBOSE_STDERR raw planner stderr line';
+    const reasoningText = 'VISUAL_VERBOSE_REASONING provider exposed reasoning summary';
+    const toolCallRaw = '{"type":"tool_call","name":"shell","args":{"cmd":"pnpm test --filter visual-proof"}}';
+    const planYaml = yamlStringify({
+      name: 'Verbose Activity Visual Proof',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        { id: 'verbose-activity-proof', description: 'Verbose activity proof task', command: 'echo ok', dependencies: [] as string[] },
+      ],
+    });
+
+    await page.evaluate(async ({ planYaml: py, stdoutText: out, stderrText: err, reasoningText: reasoning, toolCallRaw: tool }) => {
+      await window.invoker.setTestPlanningChatResponse({
+        planYaml: py,
+        planName: 'Verbose Activity Visual Proof',
+        reply: 'Verbose activity complete.',
+        delayMs: 4000,
+        activity: [
+          { source: 'stdout', text: `${out}\n` },
+          { source: 'stderr', text: `${err}\n` },
+          { source: 'reasoning', text: reasoning },
+          { source: 'stdout', text: `${tool}\n`, delayMs: 100 },
+        ],
+      });
+    }, { planYaml, stdoutText, stderrText, reasoningText, toolCallRaw });
+
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await page.getByTestId('invoker-terminal-input').fill('Draft a plan and show raw activity.');
+    await page.getByRole('button', { name: 'Send' }).click();
+
+    await expect(page.getByTestId('invoker-terminal-planner-stream')).toHaveAttribute('data-state', 'streaming');
+    await expect(transcript, 'verbose defaults off: stdout is not visible before the toggle is enabled').not.toContainText(stdoutText);
+    await expect(transcript, 'verbose defaults off: stderr is not visible before the toggle is enabled').not.toContainText(stderrText);
+    await captureScreenshot(page, 'in-app-verbose-activity-1-verbose-off');
+
+    await page.getByTestId('in-app-verbose-activity-toggle').click();
+    const activityPanel = page.getByTestId('in-app-verbose-activity-panel');
+    await expect(activityPanel, 'streaming-expanded state shows stdout').toContainText(stdoutText);
+    await expect(activityPanel, 'streaming-expanded state shows stderr').toContainText(stderrText);
+    await expect(activityPanel, 'streaming-expanded state preserves provider-exposed reasoning exactly').toContainText(reasoningText);
+    await expect(activityPanel, 'streaming-expanded state shows the tool-call-shaped raw record').toContainText(toolCallRaw);
+    await captureScreenshot(page, 'in-app-verbose-activity-2-streaming-expanded');
+
+    await expect(transcript).toContainText('Verbose activity complete.', { timeout: 8000 });
+    await page.getByRole('button', { name: 'Collapse verbose activity' }).click();
+    await expect(activityPanel, 'completed-collapsed state hides raw stdout').not.toContainText(stdoutText);
+    await expect(page.getByTestId('in-app-verbose-activity-turn'), 'completed-collapsed state is recorded on the turn').toHaveAttribute('data-state', 'collapsed');
+    await captureScreenshot(page, 'in-app-verbose-activity-3-completed-collapsed');
+
+    await page.getByRole('button', { name: 'Expand verbose activity' }).click();
+    await expect(activityPanel, 'completed-expanded state restores stdout').toContainText(stdoutText);
+    await expect(activityPanel, 'completed-expanded state restores stderr').toContainText(stderrText);
+    await expect(page.getByTestId('in-app-verbose-activity-turn'), 'completed-expanded state is recorded on the turn').toHaveAttribute('data-state', 'expanded');
+    await captureScreenshot(page, 'in-app-verbose-activity-4-completed-expanded');
+
+    await seedVerboseActivityTruncationFixture(path.join(testDir, 'invoker.db'));
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: /Verbose activity truncation fixture/ }).click();
+    const truncationPanel = page.getByTestId('in-app-verbose-activity-panel');
+    if (!(await truncationPanel.isVisible().catch(() => false))) {
+      await page.getByTestId('in-app-verbose-activity-toggle').click();
+    }
+    const expandPersisted = page.getByRole('button', { name: 'Expand verbose activity' });
+    if (await expandPersisted.count()) {
+      await expandPersisted.first().click();
+    }
+    const warning = page.getByTestId('in-app-verbose-activity-truncation-warning');
+    await expect(warning, 'truncation-warning state names omitted raw bytes').toContainText('Some raw activity was truncated.');
+    await expect(warning, 'truncation-warning state reports the deterministic dropped byte count').toContainText('32,768 bytes were omitted.');
+    await expect(truncationPanel, 'truncation-warning state keeps retained raw text visible').toContainText('persisted stdout retained before truncation');
+    await captureScreenshot(page, 'in-app-verbose-activity-5-truncation-warning');
 
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);
