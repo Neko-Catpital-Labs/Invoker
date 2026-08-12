@@ -62,9 +62,10 @@ function makeClient(channels: SlackBugScanChannelSummary[], messagesByChannel: M
 const CHANNEL_WITH_REPO: SlackBugScanChannelSummary = {
   id: 'C1',
   name: 'general',
-  topic: 'repo: git@github.com:acme/widgets.git',
+  topic: 'repo: https://github.com/acme/widgets.git',
 };
 const CHANNEL_NO_REPO: SlackBugScanChannelSummary = { id: 'C2', name: 'random' };
+const ALLOWED_REPO_HOSTS = ['github.com'] as const;
 
 // The worker seeds a channel's watermark to a real wall-clock Slack ts (epoch
 // seconds) on first sight, so test fixture messages must use realistic
@@ -100,6 +101,7 @@ describe('slack-bug-scan worker', () => {
         store,
         classify,
         draftAndSubmitPlan,
+        allowedRepoHosts: ALLOWED_REPO_HOSTS,
         intervalMs: 0,
         tickOnStart: false,
       },
@@ -125,6 +127,7 @@ describe('slack-bug-scan worker', () => {
         store,
         classify,
         draftAndSubmitPlan,
+        allowedRepoHosts: ALLOWED_REPO_HOSTS,
         intervalMs: 0,
         tickOnStart: false,
       },
@@ -132,6 +135,19 @@ describe('slack-bug-scan worker', () => {
 
     expect(runtime.identity.kind).toBe(SLACK_BUG_SCAN_WORKER_KIND);
     expect(runtime.isRunning()).toBe(false);
+  });
+
+  it('does not create a runtime without configured repo hosts', () => {
+    const store = makeStore();
+    const { client } = makeClient([CHANNEL_WITH_REPO], new Map());
+    const classify: SlackBugScanClassifier = vi.fn(async () => ({ isBugComplaint: true }));
+    const draftAndSubmitPlan: SlackBugScanPlanSubmitter = vi.fn(async () => ({ planName: 'P', workflowId: 'wf-1' }));
+
+    expect(() => createSlackBugScanWorker({
+      logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: [],
+      intervalMs: 0, tickOnStart: false,
+    })).toThrow(/requires at least one allowed repo host/);
   });
 
   it('skips a channel with no parseable repo url in topic/purpose', async () => {
@@ -143,12 +159,38 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual');
     await runtime.tick('manual'); // second tick so watermark seeding doesn't mask the assertion
 
     expect(classify).not.toHaveBeenCalled();
+  });
+
+  it('skips a channel with an untrusted repo host in topic/purpose', async () => {
+    const store = makeStore();
+    const channel: SlackBugScanChannelSummary = {
+      id: 'C3',
+      name: 'supply-chain',
+      topic: 'repo: https://evil.example/acme/widgets.git',
+      purpose: 'repo: http://github.com/acme/widgets.git',
+    };
+    const messages = new Map([[channel.id, [bugMessage(1)]]]);
+    const { client } = makeClient([channel], messages);
+    const classify = vi.fn();
+    const draftAndSubmitPlan = vi.fn();
+
+    const runtime = createSlackBugScanWorker({
+      logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
+      intervalMs: 0, tickOnStart: false,
+    });
+    await runtime.tick('manual');
+    await runtime.tick('manual');
+
+    expect(classify).not.toHaveBeenCalled();
+    expect(draftAndSubmitPlan).not.toHaveBeenCalled();
   });
 
   it('seeds the watermark to now on first sight and does not scan backlog', async () => {
@@ -160,6 +202,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual'); // first sight: seeds watermark, does not scan the pre-existing message
@@ -176,6 +219,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual'); // seed watermark
@@ -184,7 +228,7 @@ describe('slack-bug-scan worker', () => {
     await runtime.tick('manual');
 
     expect(classify).toHaveBeenCalledTimes(1);
-    expect(classify).toHaveBeenCalledWith(expect.objectContaining({ repoUrl: 'git@github.com:acme/widgets.git' }));
+    expect(classify).toHaveBeenCalledWith(expect.objectContaining({ repoUrl: 'https://github.com/acme/widgets.git' }));
     expect(draftAndSubmitPlan).toHaveBeenCalledTimes(1);
     expect(posted).toHaveLength(1);
     expect(posted[0]?.text).toContain('wf-1');
@@ -199,6 +243,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual');
@@ -220,6 +265,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual'); // seed
@@ -243,6 +289,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual'); // seed
@@ -270,6 +317,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual');
@@ -289,6 +337,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false,
     });
     await runtime.tick('manual');
@@ -303,7 +352,7 @@ describe('slack-bug-scan worker', () => {
 
   it('enforces the per-tick submission cap, deferring rather than dropping candidates', async () => {
     const store = makeStore();
-    const channelB: SlackBugScanChannelSummary = { id: 'C3', name: 'ops', topic: 'repo: git@github.com:acme/ops.git' };
+    const channelB: SlackBugScanChannelSummary = { id: 'C3', name: 'ops', topic: 'repo: https://github.com/acme/ops.git' };
     const messages = new Map<string, SlackBugScanMessage[]>([[CHANNEL_WITH_REPO.id, []], [channelB.id, []]]);
     const { client } = makeClient([CHANNEL_WITH_REPO, channelB], messages);
     const classify: SlackBugScanClassifier = vi.fn(async () => ({ isBugComplaint: true, problemStatement: 'x' }));
@@ -311,6 +360,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false, maxAutoSubmissionsPerTick: 1,
     });
     await runtime.tick('manual'); // seed both channels
@@ -331,6 +381,7 @@ describe('slack-bug-scan worker', () => {
 
     const runtime = createSlackBugScanWorker({
       logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      allowedRepoHosts: ALLOWED_REPO_HOSTS,
       intervalMs: 0, tickOnStart: false, maxAutoSubmissionsPerDay: 1, maxAutoSubmissionsPerTick: 5,
     });
     await runtime.tick('manual'); // seed

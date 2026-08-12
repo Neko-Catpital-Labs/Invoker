@@ -1,6 +1,8 @@
 import type { Logger } from '@invoker/contracts';
 import {
+  normalizeAllowedRepoHosts,
   resolveChannelRepoUrl,
+  resolveSlackBugScanAllowedRepoHosts,
   resolveSlackBugScanIntervalMs,
   resolveSlackBugScanMaxPerDay,
   resolveSlackBugScanMaxPerTick,
@@ -40,6 +42,7 @@ export interface SlackBugScanWorkerConfig {
   store?: WorkerDecisionStore;
   classify?: SlackBugScanClassifier;
   draftAndSubmitPlan?: SlackBugScanPlanSubmitter;
+  allowedRepoHosts?: readonly string[];
   maxAutoSubmissionsPerDay?: number;
   maxAutoSubmissionsPerTick?: number;
   onTick?: WorkerTick;
@@ -51,6 +54,7 @@ export interface SlackBugScanWorkerOptions {
   store: WorkerDecisionStore;
   classify: SlackBugScanClassifier;
   draftAndSubmitPlan: SlackBugScanPlanSubmitter;
+  allowedRepoHosts?: readonly string[];
   intervalMs?: number;
   tickOnStart?: boolean;
   startDelayMs?: number;
@@ -108,6 +112,10 @@ async function postOutcome(
 export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): WorkerRuntime {
   const maxPerDay = options.maxAutoSubmissionsPerDay ?? resolveSlackBugScanMaxPerDay();
   const maxPerTick = options.maxAutoSubmissionsPerTick ?? resolveSlackBugScanMaxPerTick();
+  const allowedRepoHosts = normalizeAllowedRepoHosts(options.allowedRepoHosts ?? resolveSlackBugScanAllowedRepoHosts());
+  if (allowedRepoHosts.length === 0) {
+    throw new Error('slack-bug-scan worker requires at least one allowed repo host to be configured.');
+  }
 
   return createWorkerRuntime({
     kind: SLACK_BUG_SCAN_WORKER_KIND,
@@ -127,7 +135,7 @@ export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): Wo
 
       for (const channel of channels) {
         if (ctx.signal?.aborted) return;
-        const repoUrl = resolveChannelRepoUrl(channel.topic, channel.purpose);
+        const repoUrl = resolveChannelRepoUrl(channel.topic, channel.purpose, allowedRepoHosts);
         if (!repoUrl) continue;
 
         const candidates = await scanChannelForCandidates(options.client, options.store, channel.id, nowSlackTs);
@@ -214,6 +222,7 @@ export function registerSlackBugScanWorker(
         store: config.store ?? deps.store,
         classify: config.classify,
         draftAndSubmitPlan: config.draftAndSubmitPlan,
+        allowedRepoHosts: config.allowedRepoHosts,
         intervalMs: config.intervalMs,
         tickOnStart: config.tickOnStart,
         startDelayMs: config.startDelayMs,
