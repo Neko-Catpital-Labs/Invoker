@@ -55,6 +55,23 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+const HISTORICAL_CI_JOB_COMMANDS = new Map([
+  [
+    'playwright / launch-dispatch-stuck-lease',
+    withBuildPrefix([
+      'env',
+      `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote('ci-playwright-launch-dispatch-stuck-lease')}`,
+      'INVOKER_PLAYWRIGHT_WORKERS=1',
+      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote([
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '))}`,
+      `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+      'bash scripts/test-suites/optional/40-playwright-app.sh',
+    ].join(' '), true),
+  ],
+]);
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -351,7 +368,9 @@ export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefin
   const definition = jobDefinitions.get(failure.jobName);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
-  const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
+  const verifyCommand = definition?.verifyCommand?.trim()
+    || HISTORICAL_CI_JOB_COMMANDS.get(failure.jobName)
+    || fallbackVerifyCommand(failure.jobName);
   return {
     repo_url: repoUrl,
     base_branch: 'master',

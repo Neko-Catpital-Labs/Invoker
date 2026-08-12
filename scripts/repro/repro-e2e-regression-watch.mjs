@@ -143,6 +143,25 @@ function testWorkflowCommandMapping() {
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
+  const historicalVars = buildPlanVars({
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9e',
+    firstBadRunId: 30983254556,
+    firstJobDatabaseId: 92238737773,
+  }, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (historicalVars.verify_command.includes('No local verify command is mapped')) {
+    fail('historical launch-dispatch-stuck-lease job must map to a current verify command');
+  }
+  if (!historicalVars.verify_command.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-launch-dispatch-stuck-lease'")) {
+    fail('historical launch-dispatch-stuck-lease job must keep its dedicated verify label');
+  }
+  if (!historicalVars.verify_command.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !historicalVars.verify_command.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('historical launch-dispatch-stuck-lease verify command must include both stuck-lease specs');
+  }
+  if (historicalVars.verify_command.includes('e2e/workers-surface.spec.ts')) {
+    fail('historical launch-dispatch-stuck-lease verify command must not inherit unrelated shard specs');
+  }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
 
