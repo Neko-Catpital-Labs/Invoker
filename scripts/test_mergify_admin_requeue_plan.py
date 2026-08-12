@@ -346,6 +346,28 @@ class PlanStackActions(PlannerTestCase):
     def test_pending_check_means_wait_do_nothing(self):
         self.assertEqual(self._plan(pr(checks={"build": check("pending")})), ())
 
+    def test_all_mergify_required_fast_checks_missing_after_head_change_requeue(self):
+        _trunk, _labels, required_checks = m.load_mergify_rules(Path(".mergify.yml"))
+        required_checks = set(required_checks)
+        required_checks.add("required-fast / future-required-check")
+        ordinary_pr_checks = {
+            name: check("success", name)
+            for name in required_checks
+            if not name.startswith("required-fast / ")
+        }
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            checks=ordinary_pr_checks,
+            latest_mergify=event(head="b" * 40),
+        )
+
+        actions = self._plan(snapshot, required_checks=required_checks)
+
+        self.assertEqual(
+            [(action.kind, action.key) for action in actions],
+            [("requeue", "cm1")],
+        )
+
     def test_merged_pr_is_terminal_noop(self):
         plan = p.plan_stack_execution(
             m.StackGroup("s", (pr(number=6108, state="MERGED", labels=frozenset({"admin-bypass"})),)),
