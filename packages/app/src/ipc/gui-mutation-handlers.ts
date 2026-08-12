@@ -134,6 +134,7 @@ import {
 
 export interface HeadlessRunMutationPayload {
   planPath: string;
+  noTrack?: boolean;
   traceId?: string;
 }
 
@@ -305,7 +306,7 @@ export interface GuiMutationTaskActions {
   ) => Promise<TaskState[]>;
   executeHeadlessRun: (
     payload: HeadlessRunMutationPayload,
-  ) => Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }>;
+  ) => Promise<{ workflowId: string; tasks?: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string; ok?: true; accepted?: true }>;
   executeHeadlessResume: (payload: HeadlessResumeMutationPayload) => Promise<{ workflowId: string; tasks: TaskState[] }>;
   executeHeadlessExec: (payload: HeadlessExecMutationPayload) => Promise<unknown>;
   executeSpawnRepairWorkflowMutation: (payload: unknown) => Promise<unknown>;
@@ -671,7 +672,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
 
   async function executeHeadlessRun(
     payload: HeadlessRunMutationPayload,
-  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
+  ): Promise<{ workflowId: string; tasks?: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string; ok?: true; accepted?: true }> {
     const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
     const submission = await parsePlanSubmissionBundleFile(payload.planPath);
     taskHandles.clear();
@@ -710,6 +711,20 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     const workflowId = workflowIds[workflowIds.length - 1];
     if (!workflowId) {
       throw new Error('Loaded plan did not create a workflow.');
+    }
+    if (payload.noTrack) {
+      logger.info(
+        `accepted no-track run across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+        { module: 'ipc-delegate' },
+      );
+      return {
+        ok: true,
+        accepted: true,
+        workflowId,
+        workflowIds,
+        workflowCount: workflowIds.length,
+        planName: submission.name,
+      };
     }
     const started = orchestrator.startExecution();
     logger.info(

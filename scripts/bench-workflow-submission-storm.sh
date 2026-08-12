@@ -164,7 +164,7 @@ plan_path.write_text(contents.replace(
 PY
 
 cat > "$CONFIG_PATH" <<'EOF'
-{"autoFixRetries":0,"maxConcurrency":4}
+{"autoFixRetries":0,"maxConcurrency":4,"disableAutoRunOnStartup":true}
 EOF
 
 COMMON_ENV=(
