@@ -68,7 +68,7 @@ export async function deleteAllWorkflowsFast(page: Page): Promise<void> {
 }
 
 export async function waitForInvokerBridge(page: Page, timeoutMs = 15_000): Promise<void> {
-  await page.waitForLoadState('domcontentloaded');
+  await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => undefined);
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
 }
 
@@ -214,9 +214,10 @@ exit 64
     const pathEnv = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
     const forceReadOnlyStatus = guiOwnerMode === 'read-only-status';
     const forceConnectionLostStatus = guiOwnerMode === 'connection-lost-status';
-    // Playwright's `use.video` option only applies to browser contexts, so the
-    // Electron walkthrough video must be requested at launch time.
-    const recordVideo = process.env.CAPTURE_VIDEO
+    // Playwright's `use.video` option only applies to browser contexts. Keep
+    // Electron recordVideo opt-in because it can prevent firstWindow() from
+    // navigating under xvfb on some Linux capture runners.
+    const recordVideo = process.env.CAPTURE_VIDEO && process.env.INVOKER_E2E_ELECTRON_RECORD_VIDEO === '1'
       ? { recordVideo: { dir: path.resolve(__dirname, '..', 'test-results', 'videos') } }
       : {};
     const app = await electron.launch({
@@ -504,7 +505,7 @@ async function ensureScreenshotViewport(page: Page): Promise<void> {
 export async function assertPageScreenshot(page: Page, name: string): Promise<void> {
   // Skip pixel-level screenshot comparison on CI (no Linux baselines committed).
   // DOM assertions in the calling test still run.
-  if (process.env.CI) return;
+  if (process.env.CI || process.env.CAPTURE_MODE) return;
   await ensureScreenshotViewport(page);
   await waitForStableUI(page);
   await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 0 });
