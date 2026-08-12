@@ -140,10 +140,42 @@ function testWorkflowCommandMapping() {
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
+  if (!defs.get('playwright / 1-of-9').verifyCommand.startsWith('node scripts/repro/repro-ci-playwright-shard-inventory.mjs && ')) {
+    fail('playwright shard command must run the shard inventory guard first');
+  }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
+}
+
+function testLegacyPlaywrightShardCommandMapping() {
+  const defs = buildCiJobDefinitions();
+  const def = defs.get('playwright / launch-dispatch-stuck-lease');
+  if (!def) fail('missing legacy CI job definition for playwright / launch-dispatch-stuck-lease');
+  if (def.verifyCommand.includes('No local verify command is mapped')) {
+    fail('legacy launch-dispatch-stuck-lease job must not use fallback verify command');
+  }
+  if (!def.verifyCommand.startsWith('node scripts/repro/repro-ci-playwright-shard-inventory.mjs && ')) {
+    fail('legacy launch-dispatch-stuck-lease verifier must run the shard inventory guard first');
+  }
+  for (const spec of [
+    'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+    'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+  ]) {
+    if (!def.verifyCommand.includes(spec)) fail(`legacy launch-dispatch-stuck-lease verifier missing ${spec}`);
+  }
+
+  const vars = buildPlanVars({
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9e',
+    firstBadRunId: 30983254556,
+    firstJobDatabaseId: 92238737773,
+  }, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('legacy launch-dispatch-stuck-lease plan vars must not use fallback verify command');
+  }
+  console.log('[repro-e2e-regression-watch] legacy playwright shard mapping: PASS');
 }
 
 function testPlanVarsAndDryRunRendering() {
@@ -228,6 +260,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testLegacyPlaywrightShardCommandMapping();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
