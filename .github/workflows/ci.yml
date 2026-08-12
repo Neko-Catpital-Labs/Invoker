@@ -615,6 +615,7 @@ jobs:
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts
