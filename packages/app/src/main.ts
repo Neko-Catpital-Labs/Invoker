@@ -1220,6 +1220,10 @@ function startHeadlessMode(): void {
         if (!workflowId) {
           throw new Error(`Failed to resolve workflow id for delegated plan: ${payload.planPath}`);
         }
+        if (payload.noTrack) {
+          logger.info(`standalone accepted no-track run for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+          return { ok: true, accepted: true, workflowId };
+        }
         const started = orchestrator.startExecution();
         logger.info(`standalone started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
@@ -1814,7 +1818,7 @@ function startHeadlessMode(): void {
 
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
-        ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> => {
+        ): Promise<{ workflowId: string; tasks?: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string; ok?: true; accepted?: true }> => {
           const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
           const submission = await parsePlanSubmissionBundleFile(payload.planPath);
           const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
@@ -1850,6 +1854,20 @@ function startHeadlessMode(): void {
           if (!workflowId) {
             throw new Error('Loaded plan did not create a workflow.');
           }
+          if (payload.noTrack) {
+            logger.info(
+              `accepted no-track run across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+              { module: 'ipc-delegate' },
+            );
+            return {
+              ok: true,
+              accepted: true,
+              workflowId,
+              workflowIds,
+              workflowCount: workflowIds.length,
+              planName: submission.name,
+            };
+          }
           const started = orchestrator.startExecution();
           logger.info(
             `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
@@ -1872,14 +1890,15 @@ function startHeadlessMode(): void {
 
         messageBus.onRequest('headless.run', async (req: unknown) => {
           noteStandaloneOwnerActivity();
-          const { planPath, traceId } = req as { planPath: string; traceId?: string };
+          const { planPath, noTrack, traceId } = req as { planPath: string; noTrack?: boolean; traceId?: string };
           logger.info(
-            `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=standalone`,
+            `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" noTrack=${noTrack ? 'true' : 'false'} ownerId=${workflowMutationOwnerId} mode=standalone`,
             { module: 'ipc-delegate' },
           );
-          const result = await executeStandaloneHeadlessRun({ planPath });
+          const result = await executeStandaloneHeadlessRun({ planPath, noTrack });
+          const taskCount = Array.isArray(result.tasks) ? result.tasks.length : 0;
           logger.info(
-            `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${result.tasks.length} mode=standalone`,
+            `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${taskCount} mode=standalone`,
             { module: 'ipc-delegate' },
           );
           return result;
@@ -3029,14 +3048,15 @@ startMainProcessBootstrap({
           resetUiPerfStats,
         }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
-        const { planPath, traceId } = req as { planPath: string; traceId?: string };
+        const { planPath, noTrack, traceId } = req as { planPath: string; noTrack?: boolean; traceId?: string };
         logger.info(
-          `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=gui`,
+          `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" noTrack=${noTrack ? 'true' : 'false'} ownerId=${workflowMutationOwnerId} mode=gui`,
           { module: 'ipc-delegate' },
         );
-        const result = await mutationActions.executeHeadlessRun({ planPath });
+        const result = await mutationActions.executeHeadlessRun({ planPath, noTrack });
+        const taskCount = Array.isArray(result.tasks) ? result.tasks.length : 0;
         logger.info(
-          `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${result.tasks.length} mode=gui`,
+          `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${taskCount} mode=gui`,
           { module: 'ipc-delegate' },
         );
         return result;
