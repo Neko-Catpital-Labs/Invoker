@@ -644,6 +644,7 @@ jobs:
               e2e/embedded-terminal-spawn-failure.spec.ts
               e2e/embedded-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
