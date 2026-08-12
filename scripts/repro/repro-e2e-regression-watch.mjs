@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
