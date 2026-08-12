@@ -73,7 +73,7 @@ import type {
   StartReadyRequest,
   StartReadyResult,
 } from '@invoker/contracts';
-import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
+import { ConversationRepository, SqliteTaskRepository, hasLiveWritableOwner } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -915,6 +915,60 @@ const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
+const EXISTING_HEADLESS_MUTATION_OWNER_DISCOVERY_TIMEOUT_MS = 3_000;
+const EXISTING_HEADLESS_MUTATION_OWNER_REFRESH_TIMEOUT_MS = 1_000;
+
+function hasLiveWritableOwnerMarker(): boolean {
+  return hasLiveWritableOwner(path.join(resolveInvokerHomeRoot(), 'invoker.db'));
+}
+
+async function tryDelegateHeadlessMutationToBus(
+  args: string[],
+  bus: MessageBus,
+  command: string | undefined,
+): Promise<boolean> {
+  if (command === 'run') {
+    const planPath = args[1];
+    if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
+    return isDelegated(await tryDelegateRun(planPath, bus, waitForApproval, noTrack));
+  }
+  if (command === 'resume') {
+    const workflowId = args[1];
+    if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
+    return isDelegated(await tryDelegateResume(workflowId, bus, waitForApproval, noTrack));
+  }
+  const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(args);
+  return isDelegated(await tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs));
+}
+
+async function tryDelegateHeadlessMutationToExistingOwner(
+  args: string[],
+  command: string | undefined,
+): Promise<'delegated' | 'no-compatible-owner' | 'failed'> {
+  let delegationBus = new IpcBus(undefined, { allowServe: false });
+  try {
+    await delegationBus.ready();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const timeoutMs = attempt === 0
+        ? EXISTING_HEADLESS_MUTATION_OWNER_DISCOVERY_TIMEOUT_MS
+        : EXISTING_HEADLESS_MUTATION_OWNER_REFRESH_TIMEOUT_MS;
+      const owner = await discoverOwner(delegationBus, timeoutMs);
+      if (isStandaloneCapable(owner)) {
+        return await tryDelegateHeadlessMutationToBus(args, delegationBus, command)
+          ? 'delegated'
+          : 'failed';
+      }
+      if (attempt === 0) {
+        delegationBus.disconnect();
+        delegationBus = new IpcBus(undefined, { allowServe: false });
+        await delegationBus.ready();
+      }
+    }
+    return 'no-compatible-owner';
+  } finally {
+    delegationBus.disconnect();
+  }
+}
 
 function startHeadlessMode(): void {
   const runHeadlessMain = async (): Promise<void> => {
@@ -940,40 +994,54 @@ function startHeadlessMode(): void {
     }
 
     // Try delegation for mutating commands first (owner mode).
-    // In standalone mode we skip delegation and run locally.
-    if (mutatingMode && !standaloneMode) {
-      // Delegating headless commands must never become the IPC server.
-      // Otherwise a transient submitter can steal the transport socket away
-      // from the actual shared mutation owner.
-      const delegationBus = new IpcBus(undefined, { allowServe: false });
-      try {
-        await delegationBus.ready();
-
-        let delegated = false;
-        if (command === 'run') {
-          const planPath = cliArgs[1];
-          if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-          delegated = isDelegated(await tryDelegateRun(planPath, delegationBus, waitForApproval, noTrack));
-        } else if (command === 'resume') {
-          const workflowId = cliArgs[1];
-          if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-          delegated = isDelegated(await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack));
-        } else {
-          const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(cliArgs);
-          delegated = isDelegated(await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack, timeoutMs));
-        }
-
-        if (delegated) {
-          // Successfully delegated to owner
-          delegationBus.disconnect();
-          await flushStdoutAndStderr();
-          process.exit(process.exitCode ?? 0);
+    if (mutatingMode && command !== 'owner-serve') {
+      if (standaloneMode) {
+        try {
+          const delegationResult = await tryDelegateHeadlessMutationToExistingOwner(cliArgs, command);
+          if (delegationResult === 'delegated') {
+            await flushStdoutAndStderr();
+            process.exit(process.exitCode ?? 0);
+            return; // Guard: process.exit() may not halt in Electron async context
+          }
+          if (delegationResult === 'failed') {
+            process.stderr.write(
+              `${RED}Error:${RESET} Compatible owner responded to discovery but did not accept mutation command "${command ?? ''}".\n`,
+            );
+            process.exit(1);
+            return; // Guard: process.exit() may not halt in Electron async context
+          }
+          if (hasLiveWritableOwnerMarker()) {
+            process.stderr.write(
+              `${RED}Error:${RESET} Standalone mutation command "${command ?? ''}" found a live writable owner marker but could not reach a compatible owner over IPC.\n` +
+              'Refusing writable standalone fallback while another owner may have the database open.\n',
+            );
+            process.exit(1);
+            return; // Guard: process.exit() may not halt in Electron async context
+          }
+        } catch (err) {
+          process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
+          process.exit(1);
           return; // Guard: process.exit() may not halt in Electron async context
         }
+      } else {
+        // Delegating headless commands must never become the IPC server.
+        // Otherwise a transient submitter can steal the transport socket away
+        // from the actual shared mutation owner.
+        const delegationBus = new IpcBus(undefined, { allowServe: false });
+        try {
+          await delegationBus.ready();
 
-        // Delegation failed: no owner handler available.
-        delegationBus.disconnect();
-        if (!standaloneMode) {
+          const delegated = await tryDelegateHeadlessMutationToBus(cliArgs, delegationBus, command);
+          if (delegated) {
+            // Successfully delegated to owner
+            delegationBus.disconnect();
+            await flushStdoutAndStderr();
+            process.exit(process.exitCode ?? 0);
+            return; // Guard: process.exit() may not halt in Electron async context
+          }
+
+          // Delegation failed: no owner handler available.
+          delegationBus.disconnect();
           process.stderr.write(
             `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
             `\n${BOLD}Options:${RESET}\n` +
@@ -983,12 +1051,12 @@ function startHeadlessMode(): void {
           );
           process.exit(1);
           return; // Guard: process.exit() may not halt in Electron async context
+        } catch (err) {
+          process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
+          delegationBus.disconnect();
+          process.exit(1);
+          return; // Guard: process.exit() may not halt in Electron async context
         }
-      } catch (err) {
-        process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-        delegationBus.disconnect();
-        process.exit(1);
-        return; // Guard: process.exit() may not halt in Electron async context
       }
     }
 
