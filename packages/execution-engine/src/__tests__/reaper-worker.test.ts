@@ -96,6 +96,7 @@ describe('reaper worker', () => {
     expect(reapCheckouts).toHaveBeenCalledTimes(1);
     expect(reapCheckouts.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
     expect(reapTempDirs).toHaveBeenCalledTimes(1);
+    expect(reapTempDirs.mock.calls[0]?.[0]).toMatchObject({ tempRoot: expect.any(String) });
     expect(enforceRetention).toHaveBeenCalledTimes(1);
     expect(enforceRetention.mock.calls[0]?.[0]).toBe('/tmp/invoker-home');
     expect(trimLogs).toHaveBeenCalledTimes(1);
