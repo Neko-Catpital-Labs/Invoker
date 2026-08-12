@@ -18,6 +18,7 @@ priority_rules:
       - label=fast-lane
     priority: high
 
+    allow_checks_interruption: true
 queue_rules:
   - name: fast-lane
     merge_method: squash
