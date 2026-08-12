@@ -18,6 +18,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
+import { cleanupStandaloneOwnersForTestDir } from './headless-client.js';
 import { killOwnedProcessGroup } from './process-group.js';
 
 export type ElectronFixtures = {
@@ -270,6 +271,7 @@ exit 64
     });
     await use(app);
     await closeElectronApp(app);
+    await cleanupStandaloneOwnersForTestDir(testDir);
   },
 
   page: async ({ electronApp, guiOwnerMode }, use) => {
@@ -292,7 +294,12 @@ exit 64
 
     await use(page);
     try {
-      await deleteAllWorkflowsFast(page);
+      const cleanup = deleteAllWorkflowsFast(page);
+      cleanup.catch(() => undefined);
+      await Promise.race([
+        cleanup,
+        delay(5_000).then(() => undefined),
+      ]);
     } catch {
       // Best-effort cleanup; the test failure itself should remain the signal.
     }

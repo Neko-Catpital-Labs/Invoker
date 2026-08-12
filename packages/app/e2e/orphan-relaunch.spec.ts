@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { closeElectronApp, E2E_REPO_URL } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -126,7 +126,7 @@ base.describe('Orphan task relaunch on restart', () => {
         ]);
       }, { slowTaskId: loadedSlow!.id, fastTaskId: loadedFast!.id, staleIso });
 
-      await app.close();
+      await closeElectronApp(app);
       app = undefined as never;
       await delay(1500);
 
@@ -150,7 +150,7 @@ base.describe('Orphan task relaunch on restart', () => {
         error: 'Application quit',
       });
     } finally {
-      if (app) await app.close().catch(() => undefined);
+      if (app) await closeElectronApp(app).catch(() => undefined);
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true });
       }

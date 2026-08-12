@@ -17,6 +17,8 @@ const PLAN_TASKS_PER_WORKFLOW = 7;
 const TASKS_PER_WORKFLOW = 8;
 const ITERATIONS = 5;
 const RECOVERY_TIMEOUT_MS = 10000;
+const SYNTHETIC_GAP_SEQUENCE_START = Number.MAX_SAFE_INTEGER - ITERATIONS - 1;
+const SYNTHETIC_GAPS_PER_RENDERER_SESSION = 3;
 
 async function launchElectronApp(testDir: string, extraEnv?: Record<string, string>) {
   const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
@@ -139,18 +141,19 @@ async function getHighestActivityLogId(page: Page): Promise<number> {
 
 async function runIterationOnce(app: ElectronApplication, page: Page, iteration: number): Promise<IterationResult> {
   const baselineId = await getHighestActivityLogId(page);
+  const syntheticStreamSequence = SYNTHETIC_GAP_SEQUENCE_START + iteration;
 
-  await app.evaluate(({ BrowserWindow }) => {
+  await app.evaluate(({ BrowserWindow }, streamSequence) => {
     const win = BrowserWindow.getAllWindows()[0];
     win?.webContents.send('invoker:task-graph-event', {
       type: 'delta',
       delta: {
         type: 'removed',
         taskId: '__gap_trigger__',
-        streamSequence: Number.MAX_SAFE_INTEGER,
+        streamSequence,
       },
     });
-  });
+  }, syntheticStreamSequence);
 
   let markers: PerfMarker[] = [];
   const deadline = Date.now() + RECOVERY_TIMEOUT_MS;
@@ -224,6 +227,11 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
       for (let i = 1; i <= ITERATIONS; i += 1) {
         const result = await runIterationOnce(app, page, i);
         iterations.push(result);
+        if (i < ITERATIONS && i % SYNTHETIC_GAPS_PER_RENDERER_SESSION === 0) {
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          await waitForInvokerBridge(page);
+          await waitForWorkflowGraphVisible(page, 10000);
+        }
         await page.waitForTimeout(150);
       }
 
