@@ -103,19 +103,19 @@ invoker_e2e_ssh_prune_login_path_file() {
   local env_path="$1"
   [ -f "$env_path" ] || return 0
   awk '
-    /# invoker-e2e-ssh-pnpm-path / {
+    /# invoker-e2e-ssh-runtime-env / {
       prefix = $0
-      sub(/[[:space:]]*# invoker-e2e-ssh-pnpm-path .*/, "", prefix)
+      sub(/[[:space:]]*# invoker-e2e-ssh-runtime-env .*/, "", prefix)
       if (prefix != "") print prefix
-      skip_path = 1
+      skip_exports = 2
       next
     }
-    skip_path && /^export PATH=/ {
-      skip_path = 0
+    skip_exports > 0 && /^export (PATH|electron_config_cache)=/ {
+      skip_exports--
       next
     }
     {
-      skip_path = 0
+      skip_exports = 0
       print
     }
   ' "$env_path" > "${env_path}.tmp" || true
@@ -153,6 +153,17 @@ invoker_e2e_ssh_provision_command() {
 
 invoker_e2e_ssh_config_provision_command() {
   printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+}
+
+invoker_e2e_electron_cache_dir() {
+  if [ -n "${electron_config_cache:-}" ]; then
+    printf '%s\n' "$electron_config_cache"
+    return 0
+  fi
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "$HOME/Library/Caches/electron" ;;
+    *) printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/electron" ;;
+  esac
 }
 
 # --------------------------------------------------------------------------- #
@@ -219,7 +230,7 @@ invoker_e2e_ssh_init() {
 # SshExecutor uses a non-login shell and sources remoteInvokerHome/env.sh.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
-  local pnpm_bin node_bin pnpm_dir node_dir
+  local pnpm_bin node_bin pnpm_dir node_dir electron_cache_dir
   pnpm_bin="$(command -v pnpm || true)"
   node_bin="$(command -v node || true)"
   if [ -z "$pnpm_bin" ] || [ -z "$node_bin" ]; then
@@ -228,15 +239,17 @@ invoker_e2e_ssh_install_login_path() {
   fi
   pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
+  electron_cache_dir="$(invoker_e2e_electron_cache_dir)"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   chmod 600 "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   invoker_e2e_ssh_prune_login_path_file "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
-  if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
+  if ! grep -Fq "# invoker-e2e-ssh-runtime-env ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
     {
-      printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
+      printf '%s\n' "# invoker-e2e-ssh-runtime-env ${_INVOKER_E2E_SSH_TAG}"
       printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+      printf 'export electron_config_cache="%s"\n' "$electron_cache_dir"
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   fi
 
