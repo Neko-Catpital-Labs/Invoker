@@ -39,7 +39,19 @@ PLAN_FILE="$REPO_ROOT/plans/test-docker-comprehensive.yaml"
 PATCHED_PLAN_FILE=""
 FIXTURE_IMAGE_TAG="${FIXTURE_IMAGE_TAG:-invoker-docker-comprehensive:latest}"
 
+cleanup_docker_resources() {
+  local containers
+  containers="$(docker ps -aq --filter "ancestor=$FIXTURE_IMAGE_TAG" 2>/dev/null || true)"
+  if [[ -n "$containers" ]]; then
+    # Use rm -f so restored tail containers do not each wait for Docker's
+    # default stop timeout on persistent CI runners.
+    docker rm -f $containers >/dev/null 2>&1 || true
+  fi
+  docker image rm "$FIXTURE_IMAGE_TAG" >/dev/null 2>&1 || true
+}
+
 cleanup() {
+  cleanup_docker_resources
   if [[ -n "$PATCHED_PLAN_FILE" ]]; then
     rm -f "$PATCHED_PLAN_FILE" 2>/dev/null || true
   fi
@@ -407,13 +419,7 @@ fi
 
 echo ""
 echo "==> Cleaning up test containers"
-for TASK_ID in $RESTORABLE_TASKS; do
-  CID=$(task_container_id "$TASK_ID")
-  if [ -n "$CID" ] && [ "$CID" != "null" ]; then
-    docker stop "$CID" >/dev/null 2>&1 || true
-    docker rm "$CID" >/dev/null 2>&1 || true
-  fi
-done
+cleanup_docker_resources
 
 echo "==> Clearing Invoker state"
 ./run.sh --headless delete-all 2>/dev/null || true
