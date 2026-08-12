@@ -5,8 +5,10 @@
 # Unlike scripts/repro/repro-headless-thundering-herd.sh (which asserts
 # process-count invariants for concurrent *retries*), this measures the
 # initial `run` submission path itself, sequentially, against a single
-# already-warm standalone owner — so numbers reflect steady-state
-# submission cost, not one-time Electron bootstrap.
+# already-warm standalone owner. The bootstrap workflow creates an
+# approval-gated prerequisite, and the timed submissions depend on that
+# prerequisite so the benchmark covers submission cost without turning into
+# an executor throughput test.
 #
 # Usage:
 #   bash scripts/bench-workflow-submission-storm.sh [--count N] [--gate] [--budget-ms N]
@@ -25,6 +27,7 @@ TMP_DIR="$(mktemp -d)"
 HOME_DIR="$TMP_DIR/home"
 DB_DIR="$HOME_DIR/.invoker"
 IPC_SOCKET="$TMP_DIR/ipc-transport.sock"
+BLOCKER_PLAN_PATH="$TMP_DIR/blocker-plan.yaml"
 PLAN_PATH="$TMP_DIR/storm-plan.yaml"
 CONFIG_PATH="$TMP_DIR/config.json"
 REMOTE_REPO="$TMP_DIR/remote.git"
@@ -138,27 +141,38 @@ if [[ ! -f packages/app/dist/headless-client.js ]]; then
   echo "==> Building @invoker/app (headless-client.js missing)"
   pnpm --filter @invoker/app build >/dev/null
 fi
-
 git init --bare "$REMOTE_REPO" >/dev/null 2>&1
+SEED_REPO="$TMP_DIR/seed-repo"
+git init "$SEED_REPO" >/dev/null 2>&1
+git -C "$SEED_REPO" config user.email bench@example.invalid
+git -C "$SEED_REPO" config user.name "Bench Runner"
+printf 'bench repository\n' > "$SEED_REPO/README.md"
+git -C "$SEED_REPO" add README.md
+git -C "$SEED_REPO" commit -m "seed benchmark repository" >/dev/null 2>&1
+git -C "$SEED_REPO" branch -M main
+git -C "$SEED_REPO" remote add origin "$REMOTE_REPO"
+git -C "$SEED_REPO" push origin main >/dev/null 2>&1
 
-cat > "$PLAN_PATH" <<EOF
-name: Workflow Submission Storm Bench
+cat > "$BLOCKER_PLAN_PATH" <<EOF
+name: Workflow Submission Storm Blocker
 onFinish: none
+baseBranch: main
 tasks:
   - id: root
-    description: Root task
-    command: echo root
+    description: Approval-gated blocker
+    command: echo blocker
+    requiresManualApproval: true
 EOF
 
-python3 - "$PLAN_PATH" "$REMOTE_REPO" <<'PY'
+python3 - "$BLOCKER_PLAN_PATH" "$REMOTE_REPO" <<'PY'
 from pathlib import Path
 import sys
 plan_path = Path(sys.argv[1])
 remote_repo = Path(sys.argv[2]).as_uri()
 contents = plan_path.read_text()
 plan_path.write_text(contents.replace(
-    "name: Workflow Submission Storm Bench\n",
-    f"name: Workflow Submission Storm Bench\nrepoUrl: {remote_repo}\n",
+    "name: Workflow Submission Storm Blocker\n",
+    f"name: Workflow Submission Storm Blocker\nrepoUrl: {remote_repo}\n",
     1,
 ))
 PY
@@ -178,7 +192,7 @@ echo "==> Submission 0 (bootstrap): spawns + waits for a REAL persistent owner p
 echo "    (NOT using INVOKER_HEADLESS_STANDALONE=1 — that runs in-process with no owner at all,"
 echo "     which under-measures every later submission's real IPC-delegation cost)"
 BOOTSTRAP_START=$(date +%s%N)
-env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
+env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$BLOCKER_PLAN_PATH" \
   >"$TMP_DIR/bootstrap.stdout.log" 2>"$TMP_DIR/bootstrap.stderr.log"
 BOOTSTRAP_END=$(date +%s%N)
 BOOTSTRAP_MS=$(( (BOOTSTRAP_END - BOOTSTRAP_START) / 1000000 ))
@@ -202,6 +216,37 @@ if ! OWNER_PID="$(read_owner_pid)"; then
   cat "$TMP_DIR/bootstrap.stderr.log" >&2 || true
   exit 1
 fi
+BLOCKER_WORKFLOW_ID="$(
+  sed -n 's/.*workflow: \(wf-[^[:space:]]*\).*/\1/p' "$TMP_DIR/bootstrap.stdout.log" | head -1
+)"
+if [[ -z "$BLOCKER_WORKFLOW_ID" ]]; then
+  echo "bench: bootstrap submission did not report a workflow id" >&2
+  cat "$TMP_DIR/bootstrap.stdout.log" >&2 || true
+  cat "$TMP_DIR/bootstrap.stderr.log" >&2 || true
+  exit 1
+fi
+
+python3 - "$PLAN_PATH" "$REMOTE_REPO" "$BLOCKER_WORKFLOW_ID" <<'PY'
+from pathlib import Path
+import sys
+
+plan_path = Path(sys.argv[1])
+remote_repo = Path(sys.argv[2]).as_uri()
+blocker_workflow_id = sys.argv[3]
+plan_path.write_text(f"""name: Workflow Submission Storm Bench
+repoUrl: {remote_repo}
+onFinish: none
+baseBranch: main
+externalDependencies:
+  - workflowId: {blocker_workflow_id}
+    taskId: root
+    gatePolicy: completed
+tasks:
+  - id: root
+    description: Root task
+    command: echo root
+""")
+PY
 
 echo "==> Submitting $COUNT workflows sequentially against the warm owner"
 : > "$TIMINGS_FILE"
