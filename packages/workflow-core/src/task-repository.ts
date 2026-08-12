@@ -119,7 +119,23 @@ export interface TaskRepository {
   saveTask(workflowId: string, task: TaskState): void;
 
   /** Apply a partial update to an existing task. */
-  updateTask(taskId: string, changes: TaskStateChanges): void;
+  updateTask(
+    taskId: string,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void;
+
+  /**
+   * Same logical write as updateTask, but lets adapters avoid re-reading the
+   * pre-update task when the orchestrator already has the authoritative
+   * in-memory state for this mutation.
+   */
+  updateTaskFromKnownState?(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void;
 
   /** Delete one task and its task-owned rows. */
   deleteTask(taskId: string): void;
