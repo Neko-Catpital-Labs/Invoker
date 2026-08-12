@@ -738,7 +738,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-label', 'Plan graph');
     await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('aria-label', 'Workflows');
     await expect(page.getByTestId('sidebar-attention')).toHaveAttribute('aria-label', 'Needs Attention');
-    await expect(page.getByTestId('sidebar-running')).toBeAttached();
+    await expect(page.getByTestId('sidebar-running')).toHaveCount(0);
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
@@ -862,7 +862,7 @@ test.describe('Visual proof capture', () => {
     });
   });
 
-  test('planning review incident ad665bff shows the in-app approval banner', async ({ page }) => {
+  test('planning review incident ad665bff shows ask-first YAML review', async ({ page }) => {
     const planYaml = await fs.readFile(
       path.resolve(__dirname, '..', 'src', '__tests__', 'fixtures', 'planning-review-ad665bff.yaml'),
       'utf8',
@@ -885,12 +885,14 @@ test.describe('Visual proof capture', () => {
     if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(750);
     await page.getByRole('button', { name: 'Send' }).click();
 
-    const readyBar = page.getByTestId('invoker-terminal-ready-bar');
-    await expect(readyBar).toBeVisible();
-    await expect(readyBar).toContainText(
-      'Draft ready · Reaper workers for finished e2e and admin-bypass tasks · 3 workflows · 6 tasks',
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await expect(transcript).toContainText('I wrote the 3-slice plan to the draft file.');
+    await expect(transcript.locator('details').last()).toContainText('View YAML');
+    await transcript.locator('details').last().locator('summary').click();
+    await expect(transcript.locator('pre code').last()).toContainText(
+      'name: "Reaper workers for finished e2e and admin-bypass tasks"',
     );
-    await expect(page.getByRole('button', { name: 'Review draft' })).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await captureScreenshot(page, 'planning-review-ad665bff-after');
     if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(1_000);
 
