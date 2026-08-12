@@ -217,6 +217,9 @@ export function registerSlackBugScanWorker(
     note: 'Scans Slack threads across all member channels, LLM-classifies bug complaints, and auto-submits an Invoker plan with no human approval gate. High blast-radius — off by default.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime => {
       const config = deps.slackBugScan;
+      if (config?.enabled !== true) {
+        throw new Error('slack-bug-scan worker is disabled; set slackBugScan.enabled to true to start it.');
+      }
       if (!config?.client || !config.classify || !config.draftAndSubmitPlan) {
         throw new Error('slack-bug-scan worker requires client, classify, and draftAndSubmitPlan to be configured.');
       }
