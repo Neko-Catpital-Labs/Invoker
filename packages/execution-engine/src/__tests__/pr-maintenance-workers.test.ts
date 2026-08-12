@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -411,6 +411,40 @@ describe('PR maintenance workers', () => {
       subjectType: 'repo',
       subjectId: repoRoot,
     });
+  });
+
+  it('ignores comment-blocked ledger rows with malformed PR numbers', async () => {
+    const repoRoot = makeRepoRoot();
+    const ledgerPath = join(repoRoot, 'mergify-admin-requeue-state.jsonl');
+    writeFileSync(ledgerPath, [
+      { kind: 'comment-blocked', pr: 12, headSha: 'valid-number-sha', key: 'valid-number' },
+      { kind: 'comment-blocked', pr: '34', headSha: 'valid-string-sha', key: 'valid-string' },
+      { kind: 'comment-blocked', pr: '12invalid', headSha: 'bad-suffix-sha', key: 'bad-suffix' },
+      { kind: 'comment-blocked', pr: '3.5', headSha: 'bad-fraction-sha', key: 'bad-fraction' },
+    ].map((row) => JSON.stringify(row)).join('\n'));
+    const store = {
+      getWorkerAction: vi.fn(() => undefined),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => write as WorkerActionRecord),
+    };
+    const worker = createPrAdminBypassLandWorker({
+      logger: makeLogger(),
+      repoRoot,
+      env: {
+        INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: ledgerPath,
+      },
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      store,
+    });
+
+    await worker.tick();
+
+    const blockedPrRows = store.upsertWorkerAction.mock.calls
+      .map((call) => call[0] as WorkerActionWrite)
+      .filter((write) => write.actionType === 'mergify-blocked-pr');
+    expect(blockedPrRows.map((write) => write.subjectId)).toEqual(['12', '34']);
+    expect(blockedPrRows.map((write) => write.payload?.ledgerKey)).toEqual(['valid-number', 'valid-string']);
   });
 
   it('does not record a decision row when the lock is held', async () => {
