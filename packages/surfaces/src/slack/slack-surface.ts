@@ -2251,6 +2251,7 @@ ${text}`;
 
     const bound: string[] = [];
     const failed: string[] = [];
+    const inviteFailed: string[] = [];
     for (const pair of pairs) {
       const channelId = await this.resolveOrCreatePublicChannel(pair.channelName);
       if (!channelId) {
@@ -2269,13 +2270,35 @@ ${text}`;
         createdAt: new Date().toISOString(),
       });
       bound.push(`<#${channelId}> -> \`${repoDisplayName(repoUrl)}\``);
+      const inviteError = await this.inviteRequesterToChannel(channelId, userId);
+      if (inviteError) {
+        inviteFailed.push(`<#${channelId}> (${inviteError})`);
+      }
     }
 
     const lines = [
       ...(bound.length ? [`Configured ${bound.length} channel repository default${bound.length === 1 ? '' : 's'}:`, ...bound.map((item) => `- ${item}`)] : []),
+      ...(inviteFailed.length ? [
+        `The repository default is bound, but I could not invite you to ${inviteFailed.join(', ')}. Ask a workspace admin to invite you, or check that the bot has permission to invite users to public channels and was reinstalled after permission changes.`,
+      ] : []),
       ...(failed.length ? [`Failed to configure: ${failed.join(', ')}.`] : []),
     ];
     await say({ text: lines.join('\n') || 'No channel repository defaults were configured.', thread_ts: event.ts });
+  }
+
+  private async inviteRequesterToChannel(channelId: string, userId: string): Promise<string | undefined> {
+    try {
+      await this.app.client.conversations.invite({ channel: channelId, users: userId });
+      return undefined;
+    } catch (err) {
+      const code = this.slackErrorCode(err);
+      if (code === 'already_in_channel' || code === 'cant_invite_self') {
+        return undefined;
+      }
+      const error = code ?? (err instanceof Error ? err.message : String(err));
+      this.log('slack', 'warn', `Failed to invite ${userId} to public repo channel ${channelId}: ${err}`);
+      return error;
+    }
   }
 
   private async resolveOrCreatePublicChannel(name: string): Promise<string | undefined> {
