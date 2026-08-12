@@ -18,6 +18,9 @@ SHARD_INDEX="${INVOKER_TEST_ALL_SHARD_INDEX:-}"
 SHARD_TOTAL="${INVOKER_TEST_ALL_SHARD_TOTAL:-1}"
 AGGREGATE="${INVOKER_TEST_ALL_AGGREGATE:-0}"
 SHARDED=0
+TMP_ROOT="${TMPDIR:-/tmp}"
+
+mkdir -p "$TMP_ROOT"
 
 if [ "$PROOF" = "1" ]; then
   FORCE_RERUN=1
@@ -153,7 +156,7 @@ load_state() {
 
 persist_state() {
   local tmp
-  tmp="$(mktemp "${TMPDIR:-/tmp}/invoker-test-state.XXXXXX")"
+  tmp="$(mktemp "$TMP_ROOT/invoker-test-state.XXXXXX")"
   : > "$tmp"
   for key in "${!STATE_MAP[@]}"; do
     IFS='|' read -r mode suite <<<"$key"
@@ -215,7 +218,7 @@ suite_preflight() {
 cleanup_proof_tmp() {
   [ "$PROOF" = "1" ] || return 0
   [ "$JOBS" -eq 1 ] || return 0
-  local tmp_root="${TMPDIR:-/tmp}"
+  local tmp_root="$TMP_ROOT"
   [ -d "$tmp_root" ] || return 0
   local state_real=""
   if [ -n "${STATE_FILE:-}" ] && [ -e "$STATE_FILE" ]; then
