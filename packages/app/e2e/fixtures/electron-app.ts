@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 import { killOwnedProcessGroup } from './process-group.js';
+import { cleanupStandaloneOwnersForTestDir } from './headless-client.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -268,8 +269,12 @@ exit 64
         PATH: pathEnv,
       },
     });
-    await use(app);
-    await closeElectronApp(app);
+    try {
+      await use(app);
+    } finally {
+      await closeElectronApp(app);
+      await cleanupStandaloneOwnersForTestDir(testDir);
+    }
   },
 
   page: async ({ electronApp, guiOwnerMode }, use) => {
