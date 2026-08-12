@@ -178,6 +178,8 @@ export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): Wo
 
           if (!classification.isBugComplaint) {
             recordCandidateOutcome(options.store, candidate, 'skipped', 'Classified as not a bug complaint');
+            await postOutcome(options.client, options.logger, candidate,
+              'I scanned this thread and did not classify it as a bug report, so I will not file an Invoker workflow.');
             continue;
           }
 

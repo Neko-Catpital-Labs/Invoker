@@ -154,7 +154,8 @@ describe('slack-bug-scan worker', () => {
 
     expect(classify).toHaveBeenCalledTimes(1);
     expect(draftAndSubmitPlan).not.toHaveBeenCalled();
-    expect(posted).toHaveLength(0);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.text).toContain('did not classify it as a bug report');
   });
 
   it('does not re-submit the same complaint across ticks (fingerprint dedup)', async () => {
