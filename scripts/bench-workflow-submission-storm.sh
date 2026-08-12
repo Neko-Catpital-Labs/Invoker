@@ -164,7 +164,7 @@ plan_path.write_text(contents.replace(
 PY
 
 cat > "$CONFIG_PATH" <<'EOF'
-{"autoFixRetries":0,"maxConcurrency":4}
+{"autoFixRetries":0,"maxConcurrency":1}
 EOF
 
 COMMON_ENV=(
@@ -172,6 +172,7 @@ COMMON_ENV=(
   INVOKER_DB_DIR="$DB_DIR"
   INVOKER_IPC_SOCKET="$IPC_SOCKET"
   INVOKER_REPO_CONFIG_PATH="$CONFIG_PATH"
+  INVOKER_SKIP_BOOTSTRAP_CHECK=1
 )
 
 echo "==> Submission 0 (bootstrap): spawns + waits for a REAL persistent owner process, excluded from the p95 stats below"

@@ -48,6 +48,10 @@ if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [ "$JOBS" -lt 1 ]; then
   exit 2
 fi
 
+if [ -n "${TMPDIR:-}" ]; then
+  mkdir -p "$TMPDIR"
+fi
+
 MODE_KEY="required"
 if [ "$EXTENDED" = "1" ]; then
   MODE_KEY="extended"
