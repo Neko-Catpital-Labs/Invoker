@@ -638,10 +638,10 @@ function parseCommentBlockedLedgerRow(value: unknown): MergifyCommentBlockedLedg
 function parseLedgerPrNumber(value: unknown): number | undefined {
   const pr = typeof value === 'number'
     ? value
-    : typeof value === 'string'
-      ? Number.parseInt(value, 10)
+    : typeof value === 'string' && /^\d+$/.test(value.trim())
+      ? Number(value.trim())
       : Number.NaN;
-  return Number.isInteger(pr) && pr > 0 ? pr : undefined;
+  return Number.isSafeInteger(pr) && pr > 0 ? pr : undefined;
 }
 
 function resolveMergifyAdminRequeueLedgerPath(env: NodeJS.ProcessEnv): string {
