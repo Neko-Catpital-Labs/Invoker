@@ -54,6 +54,12 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_FILES = new Map([
+  [
+    'playwright / launch-dispatch-stuck-lease',
+    'e2e/launch-dispatch-stuck-lease-storm.spec.ts e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+  ],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -326,6 +332,21 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function commandForLegacyJob(jobName) {
+  const files = LEGACY_PLAYWRIGHT_JOB_FILES.get(jobName);
+  if (!files) return '';
+  const name = jobName.replace(/^playwright\s*\/\s*/, '').trim();
+  const command = [
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`ci-playwright-${name}`)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(files)}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+  return withBuildPrefix(command, true);
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -339,6 +360,15 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         verifyCommand: commandForJob(jobId, job, matrix),
       });
     }
+  }
+  for (const jobName of LEGACY_PLAYWRIGHT_JOB_FILES.keys()) {
+    if (definitions.has(jobName)) continue;
+    definitions.set(jobName, {
+      jobId: 'playwright',
+      jobName,
+      matrix: { name: jobName.replace(/^playwright\s*\/\s*/, '').trim() },
+      verifyCommand: commandForLegacyJob(jobName),
+    });
   }
   return definitions;
 }
