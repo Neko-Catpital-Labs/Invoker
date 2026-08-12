@@ -162,7 +162,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: Large File Guardrail
             command: pnpm run check:large-files
-            runner_label: Runner_1
+            runner_label: Runner_2_4_core
           - name: Release Version Sync
             command: pnpm run check:versions
             runner_label: Runner_2_4_core
