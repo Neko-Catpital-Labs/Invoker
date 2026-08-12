@@ -87,13 +87,7 @@ export function appendJournalEntry(
   db: SqliteExecutor,
   entry: SyncJournalEntryInput,
 ): SyncJournalEntry {
-  const entityType = entry.entityType ?? entry.entity_type;
-  const entityId = entry.entityId ?? entry.entity_id;
-  if (!entityType) throw new Error('sync journal entry requires entityType');
-  if (!entityId) throw new Error('sync journal entry requires entityId');
-  const createdAt = entry.createdAt ?? entry.created_at ?? new Date().toISOString();
-  const origin = entry.origin ?? LOCAL_SYNC_ORIGIN;
-  const payload = JSON.stringify(entry.payload ?? null);
+  const { entityType, entityId, createdAt, origin, payload } = normalizeJournalEntryInput(entry);
 
   db.execRun(
     `INSERT INTO sync_journal (entity_type, entity_id, op, payload, origin, created_at)
@@ -113,6 +107,35 @@ export function appendJournalEntry(
     throw new Error(`Failed to load sync journal entry ${seq} after insert`);
   }
   return mapJournalRow(row);
+}
+
+export function appendJournalEntryWithoutReadback(
+  db: SqliteExecutor,
+  entry: SyncJournalEntryInput,
+): void {
+  const { entityType, entityId, createdAt, origin, payload } = normalizeJournalEntryInput(entry);
+  db.execRun(
+    `INSERT INTO sync_journal (entity_type, entity_id, op, payload, origin, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [entityType, entityId, entry.op, payload, origin, createdAt],
+  );
+}
+
+function normalizeJournalEntryInput(entry: SyncJournalEntryInput): {
+  entityType: SyncEntityType;
+  entityId: string;
+  createdAt: string;
+  origin: string;
+  payload: string;
+} {
+  const entityType = entry.entityType ?? entry.entity_type;
+  const entityId = entry.entityId ?? entry.entity_id;
+  if (!entityType) throw new Error('sync journal entry requires entityType');
+  if (!entityId) throw new Error('sync journal entry requires entityId');
+  const createdAt = entry.createdAt ?? entry.created_at ?? new Date().toISOString();
+  const origin = entry.origin ?? LOCAL_SYNC_ORIGIN;
+  const payload = JSON.stringify(entry.payload ?? null);
+  return { entityType, entityId, createdAt, origin, payload };
 }
 
 export function readJournalSince(
