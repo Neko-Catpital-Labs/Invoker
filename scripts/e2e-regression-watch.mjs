@@ -55,6 +55,21 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+// Active watcher failures can outlive a CI matrix rename/removal; keep those
+// historical job names mapped to focused local commands until they recover.
+const RETIRED_PLAYWRIGHT_SHARDS = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -337,6 +352,18 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const { jobName, matrix } of RETIRED_PLAYWRIGHT_SHARDS) {
+      if (definitions.has(jobName)) continue;
+      definitions.set(jobName, {
+        jobId: 'playwright',
+        jobName,
+        matrix,
+        verifyCommand: commandForJob('playwright', playwrightJob, matrix),
       });
     }
   }
