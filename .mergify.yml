@@ -6,8 +6,29 @@
 # Require every GitHub review thread to be resolved before queueing or merging.
 # This makes CodeRabbit and human review comments explicit blockers instead of
 # letting an approval send unresolved feedback to Mergify.
+# The `fast-lane` label is human-applied only, for low-risk PRs that must
+# bypass the full queue under runner saturation. It still requires build
+# artifacts, PR Body schema, and type-checks, and is listed first so it
+# outranks the default and admin-bypass queues.
 
 queue_rules:
+  - name: fast-lane
+    merge_method: squash
+    batch_size: 1
+    batch_max_wait_time: 0 s
+    checks_timeout: 30min
+    queue_conditions:
+      - base=master
+      - -draft
+      - label=fast-lane
+      - -label=merge-hold
+      - "#review-threads-unresolved = 0"
+    merge_conditions:
+      - check-success = build-artifacts
+      - check-success = PR Body
+      - check-success = quality / TypeScript Types
+      - "#review-threads-unresolved = 0"
+
   - name: default
     merge_method: squash
     batch_size: 5
@@ -84,6 +105,18 @@ pull_request_rules:
     actions:
       queue:
         name: admin-bypass
+
+  - name: autoqueue fast-lane PRs to master
+    conditions:
+      - base=master
+      - -draft
+      - label=fast-lane
+      - -label=admin-bypass
+      - -label=merge-hold
+      - "#review-threads-unresolved = 0"
+    actions:
+      queue:
+        name: fast-lane
 
   # Merged head branches were never cleaned up, so the remote accumulated
   # ~25.8k branches, 222 of them already merged into master. `force` stays at
