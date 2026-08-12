@@ -88,7 +88,8 @@ export interface InAppPlannerDeps {
   executionAgentRegistry?: Pick<AgentRegistry, 'get' | 'getSessionDriver'>;
   conversationRepo?: ConversationRepository;
   logger?: Logger;
-  plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  plannerReplyOverride?: (formattedMessage: string, context: { session: InAppPlanningChatSession }) => Promise<string>;
+  plannerReplyOverrideDraftAuthorized?: boolean;
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
 }
 
@@ -897,7 +898,7 @@ export async function sendPlanningChatMessage(
           }
         }
         const reply = deps.plannerReplyOverride
-          ? await deps.plannerReplyOverride(formattedMessage)
+          ? await deps.plannerReplyOverride(formattedMessage, { session: activeSession })
           : await activeSession.conversation.sendMessage(formattedMessage);
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
@@ -911,8 +912,9 @@ export async function sendPlanningChatMessage(
           messagesBeforeTurn,
           assistantReply: reply,
           immediateDraftPlanText: deps.plannerReplyOverride
-            ? extractYamlPlan(reply)
+            ? extractYamlPlan(reply) ?? activeSession.conversation.getDraftedPlan()
             : activeSession.conversation.lastTurnDraftPlanText,
+          requireDraftAuthorization: !deps.plannerReplyOverrideDraftAuthorized,
         });
         if (result.kind === 'message') {
           activeSession.status = hasDraftPlan(activeSession)

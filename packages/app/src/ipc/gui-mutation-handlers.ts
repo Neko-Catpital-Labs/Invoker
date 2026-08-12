@@ -1,5 +1,5 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
@@ -1290,7 +1290,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   // given message. The error variant lets visual-proof specs render the
   // exhausted-retry error path without spawning a real planner subprocess.
   let testPlanningChatResponse:
-    | { planYaml: string; planName: string; reply?: string; delayMs?: number }
+    | { planYaml: string; planName: string; reply?: string; delayMs?: number; writePlanSidecar?: boolean }
     | { throwError: string }
     | null = null;
 
@@ -1329,12 +1329,20 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
     const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
     const plannerReplyOverride = planningChatResponseOverride
-      ? async (): Promise<string> => {
+      ? async (_formattedMessage, { session }): Promise<string> => {
         if ('throwError' in planningChatResponseOverride) {
           throw new Error(planningChatResponseOverride.throwError);
         }
         if (planningChatResponseOverride.delayMs) {
           await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
+        }
+        if (planningChatResponseOverride.writePlanSidecar) {
+          const sidecarPath = session.conversation.planDraftFilePath();
+          if (!sidecarPath) throw new Error('Test planning sidecar requested but no plan draft path is available.');
+          const sidecarDir = dirname(sidecarPath);
+          mkdirSync(sidecarDir, { recursive: true });
+          writeFileSync(sidecarPath, planningChatResponseOverride.planYaml, 'utf8');
+          return planningChatResponseOverride.reply ?? 'Draft plan ready.';
         }
         return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
       }
@@ -1350,6 +1358,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       planningSessionStore: ownerMode ? persistence : undefined,
       logger,
       plannerReplyOverride,
+      plannerReplyOverrideDraftAuthorized: Boolean(
+        planningChatResponseOverride
+        && !('throwError' in planningChatResponseOverride)
+        && planningChatResponseOverride.writePlanSidecar,
+      ),
       onRawPlannerOutput: emitPlanningChatStream,
       repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
     });

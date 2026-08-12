@@ -738,7 +738,8 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-label', 'Plan graph');
     await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('aria-label', 'Workflows');
     await expect(page.getByTestId('sidebar-attention')).toHaveAttribute('aria-label', 'Needs Attention');
-    await expect(page.getByTestId('sidebar-running')).toBeAttached();
+    await expect(page.getByTestId('sidebar-workers')).toHaveAttribute('aria-label', 'Workers');
+    await expect(page.getByTestId('sidebar-running')).toHaveCount(0);
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
@@ -872,6 +873,7 @@ test.describe('Visual proof capture', () => {
         planYaml: yaml,
         planName: 'Reaper workers for finished e2e and admin-bypass tasks',
         reply: 'I wrote the 3-slice plan to the draft file.',
+        writePlanSidecar: true,
       });
     }, { yaml: planYaml });
 

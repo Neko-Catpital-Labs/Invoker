@@ -2,7 +2,7 @@
 
 import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { config as loadDotenv } from 'dotenv';
 import {
@@ -1266,7 +1266,7 @@ function startHeadlessMode(): void {
       });
 
       let testPlanningChatResponse:
-        | { planYaml: string; planName: string; reply?: string; delayMs?: number }
+        | { planYaml: string; planName: string; reply?: string; delayMs?: number; writePlanSidecar?: boolean }
         | { throwError: string }
         | null = null;
 
@@ -1328,12 +1328,20 @@ function startHeadlessMode(): void {
           case 'invoker:planning-chat-send': {
             const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
             const plannerReplyOverride = planningChatResponseOverride
-              ? async (): Promise<string> => {
+              ? async (_formattedMessage, { session }): Promise<string> => {
                 if ('throwError' in planningChatResponseOverride) {
                   throw new Error(planningChatResponseOverride.throwError);
                 }
                 if (planningChatResponseOverride.delayMs) {
                   await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
+                }
+                if (planningChatResponseOverride.writePlanSidecar) {
+                  const sidecarPath = session.conversation.planDraftFilePath();
+                  if (!sidecarPath) throw new Error('Test planning sidecar requested but no plan draft path is available.');
+                  const sidecarDir = path.dirname(sidecarPath);
+                  mkdirSync(sidecarDir, { recursive: true });
+                  writeFileSync(sidecarPath, planningChatResponseOverride.planYaml, 'utf8');
+                  return planningChatResponseOverride.reply ?? 'Draft plan ready.';
                 }
                 return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
               }
@@ -1349,6 +1357,11 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
               logger,
               plannerReplyOverride,
+              plannerReplyOverrideDraftAuthorized: Boolean(
+                planningChatResponseOverride
+                && !('throwError' in planningChatResponseOverride)
+                && planningChatResponseOverride.writePlanSidecar,
+              ),
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
