@@ -416,6 +416,9 @@ jobs:
     name: required-fast / ${{ matrix.name }}
 
     steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
       - name: Checkout
         uses: actions/checkout@v4
         with:
