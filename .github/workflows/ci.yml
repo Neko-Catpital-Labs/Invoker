@@ -660,6 +660,7 @@ jobs:
             files: >-
               e2e/focus-switch-hitch-responsiveness.spec.ts
               e2e/planning-chat-hitch-responsiveness.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/command-palette-open.spec.ts
               e2e/task-new-attempt-reset.spec.ts
               e2e/persistence-recovery.spec.ts
