@@ -13,6 +13,7 @@ REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || t
 NODE_BIN="$(command -v node)"
 SERVICE_SRC="${REPO_ROOT:+$REPO_ROOT/packages/watcher/deploy/watcher.service}"
 WATCHER_BIN="$(command -v invoker-watcher || true)"
+INSTALL_USER="${USER:-$(id -un)}"
 
 if [ -z "$NODE_BIN" ]; then echo "node not found on PATH" >&2; exit 1; fi
 
@@ -32,7 +33,7 @@ else
   WORK_DIR="${REPO_ROOT:-$HOME}"
 fi
 
-if command -v systemctl >/dev/null 2>&1; then
+if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
   UNIT_DIR="$HOME/.config/systemd/user"
   UNIT_NAME="invoker-watcher.service"
   mkdir -p "$UNIT_DIR"
@@ -62,10 +63,18 @@ EOF
   fi
   systemctl --user daemon-reload
   systemctl --user enable --now "$UNIT_NAME"
-  loginctl enable-linger "$USER" || true
+  if command -v loginctl >/dev/null 2>&1; then
+    if loginctl enable-linger "$INSTALL_USER"; then
+      echo "Enabled linger for $INSTALL_USER so the watcher can survive logout and reboot."
+    else
+      echo "Warning: failed to enable linger for $INSTALL_USER; the watcher may stop after logout and may not start after reboot." >&2
+    fi
+  else
+    echo "Warning: loginctl not found; the watcher may stop after logout and may not start after reboot." >&2
+  fi
   echo "Installed. Logs: journalctl --user -u invoker-watcher -f"
 else
-  echo "systemd not available - installing @reboot cron keepalive fallback."
+  echo "systemd --user not available - installing @reboot cron keepalive fallback."
   if [ -z "$REPO_ROOT" ]; then
     echo "Cron keepalive needs a monorepo checkout; install systemd or clone the repo." >&2
     exit 1
