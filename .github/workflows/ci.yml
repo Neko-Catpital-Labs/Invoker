@@ -635,6 +635,7 @@ jobs:
               e2e/autofix-worker-ui.spec.ts
               e2e/orphan-relaunch.spec.ts
               e2e/gap-recovery-bench.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/planning-chat-send-long-deadline.spec.ts
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
