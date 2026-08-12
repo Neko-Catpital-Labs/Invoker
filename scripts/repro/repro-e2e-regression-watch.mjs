@@ -127,6 +127,7 @@ function testWorkflowCommandMapping() {
   const defs = buildCiJobDefinitions();
   const expected = [
     'playwright / 1-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'playwright / 9-of-9',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
@@ -139,6 +140,17 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const stuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (stuckLeaseCommand.includes('No local verify command is mapped')) {
+    fail('legacy stuck-lease job must not use the fallback verify command');
+  }
+  if (
+    !stuckLeaseCommand.includes('ci-playwright-launch-dispatch-stuck-lease')
+    || !stuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !stuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+  ) {
+    fail('legacy stuck-lease job must map to the stuck-lease Playwright specs');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -173,6 +185,25 @@ function testPlanVarsAndDryRunRendering() {
     rmSync(outRoot, { recursive: true, force: true });
   }
   console.log('[repro-e2e-regression-watch] plan vars + dry-run rendering: PASS');
+}
+
+function testLegacyStuckLeasePlanVars() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(425, 'a5d6b3e626ace9e963e924c0de9410dc0302de9e', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 42),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', buildCiJobDefinitions());
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('legacy stuck-lease plan vars must not render fallback verify command');
+  }
+  if (!vars.verify_command.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('legacy stuck-lease plan vars must include cap spec');
+  }
+  if (!vars.verify_command.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('legacy stuck-lease plan vars must include storm spec');
+  }
+  console.log('[repro-e2e-regression-watch] legacy stuck-lease plan vars: PASS');
 }
 
 function testLiveSubmissionUsesNoTrack() {
@@ -229,6 +260,7 @@ function main() {
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
   testPlanVarsAndDryRunRendering();
+  testLegacyStuckLeasePlanVars();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
