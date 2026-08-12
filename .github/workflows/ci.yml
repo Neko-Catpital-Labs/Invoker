@@ -611,6 +611,7 @@ jobs:
             files: >-
               e2e/claude-planning-preset-visual-proof.spec.ts
               e2e/planning-presets-load-failure.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/action-graph-visual-proof.spec.ts
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
