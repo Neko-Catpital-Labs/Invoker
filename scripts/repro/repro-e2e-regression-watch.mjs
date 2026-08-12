@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,14 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const legacyStuckLease = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (
+    !legacyStuckLease.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !legacyStuckLease.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+    || legacyStuckLease.includes('No local verify command is mapped')
+  ) {
+    fail('legacy launch-dispatch-stuck-lease job must map to the focused stuck-lease Playwright specs');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -156,6 +165,21 @@ function testPlanVarsAndDryRunRendering() {
   const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
   if (!vars.marker.includes('job=required-fast / Vitest Workspace')) fail('marker must include job name');
   if (!vars.verify_command.includes('10-vitest-workspace.sh')) fail('verify command must be job-specific');
+
+  const legacyVars = buildPlanVars(
+    {
+      jobName: 'playwright / launch-dispatch-stuck-lease',
+      firstBadSha: 'abc123def456abc123def456abc123def456ab1',
+    },
+    'git@github.com:Neko-Catpital-Labs/Invoker.git',
+    defs,
+  );
+  if (!legacyVars.verify_command.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('legacy launch-dispatch-stuck-lease plan vars must use a real verifier');
+  }
+  if (legacyVars.verify_command.includes('No local verify command is mapped')) {
+    fail('legacy launch-dispatch-stuck-lease plan vars must not use the fallback verifier');
+  }
 
   const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-render-'));
   try {
