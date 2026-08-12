@@ -204,9 +204,19 @@ def is_proof_tooling_policy_validation(value: Mapping[str, object]) -> bool:
     review_units = value.get("reviewUnits")
     if value.get("reviewLane") != "proof" or value.get("reviewUnit") != "proof":
         return False
-    if review_units != ["tooling-policy"]:
+    if not isinstance(review_units, list):
         return False
-    if scope_kinds not in ([], ["policy"]):
+    review_unit_set = {str(unit) for unit in review_units}
+    if "tooling-policy" not in review_unit_set:
+        return False
+    if not review_unit_set.issubset({"proof", "tooling-policy"}):
+        return False
+    if not isinstance(scope_kinds, list):
+        return False
+    scope_kind_set = {str(kind) for kind in scope_kinds}
+    if scope_kind_set and (
+        "policy" not in scope_kind_set or not scope_kind_set.issubset({"policy", "product-test", "proof"})
+    ):
         return False
     if not isinstance(errors, list):
         return False
