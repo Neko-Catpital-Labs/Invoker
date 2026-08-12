@@ -54,6 +54,11 @@ assert(
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
 
+assert(jobs['required-package-builds'], 'Missing required-package-builds job');
+assert(
+  jobs['required-package-builds'].if === ORDINARY_PR_GATE,
+  'required-package-builds must run on ordinary PRs and skip merge queue refs',
+);
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
