@@ -1,4 +1,5 @@
 import type { Logger } from '@invoker/contracts';
+import { tmpdir } from 'node:os';
 
 import { resolveInvokerHomeRoot } from '../worker-lock.js';
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
@@ -80,7 +81,10 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         invokerHome: options.invokerHome,
         logger: options.logger,
       });
-      const tempDirsRemoved = await reapTempDirs({ logger: options.logger });
+      const tempDirsRemoved = await reapTempDirs({
+        tempRoot: tmpdir(),
+        logger: options.logger,
+      });
       if (ctx.signal?.aborted) return;
       const snapshotsPruned = enforceRetention(options.invokerHome);
       const logsTrimmed = trimLogs({
