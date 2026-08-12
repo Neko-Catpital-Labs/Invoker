@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 
@@ -18,6 +19,7 @@ export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const PR_DUPLICATE_CLOSE_WORKER_KIND = 'pr-duplicate-close';
 export const PR_AUTO_LABEL_WORKER_KIND = 'pr-auto-label';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_MERGIFY_ADMIN_REQUEUE_LEDGER_RELATIVE_PATH = '.invoker/mergify-admin-requeue-state.jsonl';
 /**
  * Even spacing between each PR-maintenance worker's first tick, so the 4
  * workers sharing the cron lock (scripts/cron-pr-lib.sh) don't all wake on
@@ -462,6 +464,7 @@ async function runPrMaintenanceEntrypoint(
         if (code === 0) {
           options.logger.info(`[worker:${options.entrypoint.kind}] shell entrypoint completed`, fields);
           recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'completed', 'PR maintenance run completed');
+          recordAdminBypassBlockedPrRows(options, env);
           resolvePromise();
           return;
         }
@@ -506,6 +509,169 @@ function recordPrMaintenanceRun(
     incrementAttempt: status === 'running',
     ...(payload ? { payload } : {}),
   });
+}
+
+interface MergifyCommentBlockedLedgerRow {
+  pr: number;
+  headSha: string;
+  key: string;
+  detail: string;
+}
+
+function recordAdminBypassBlockedPrRows(
+  options: PrMaintenanceTickOptions,
+  env: NodeJS.ProcessEnv,
+): void {
+  if (!options.store || options.entrypoint.kind !== PR_ADMIN_BYPASS_LAND_WORKER_KIND) return;
+
+  const ledgerPath = resolveMergifyAdminRequeueLedgerPath(env);
+  for (const row of readCommentBlockedLedgerRows(options, ledgerPath)) {
+    recordBlockedPrDecisionRow(options, row, ledgerPath);
+    recordBlockedPrAlertSend(options, row, ledgerPath);
+  }
+}
+
+function recordBlockedPrDecisionRow(
+  options: PrMaintenanceTickOptions,
+  row: MergifyCommentBlockedLedgerRow,
+  ledgerPath: string,
+): void {
+  if (!options.store) return;
+  recordWorkerDecisionRow(options.store, {
+    workerKind: options.entrypoint.kind,
+    actionType: 'mergify-blocked-pr',
+    externalKey: blockedPrDecisionExternalKey(row),
+    subjectType: 'pr',
+    subjectId: String(row.pr),
+    status: 'needs_input',
+    summary: row.detail,
+    payload: {
+      pr: row.pr,
+      ledgerKey: row.key,
+      headSha: row.headSha,
+      ledgerPath,
+    },
+  });
+}
+
+function recordBlockedPrAlertSend(
+  options: PrMaintenanceTickOptions,
+  row: MergifyCommentBlockedLedgerRow,
+  ledgerPath: string,
+): void {
+  if (!options.store) return;
+  recordWorkerDecisionRow(options.store, {
+    workerKind: options.entrypoint.kind,
+    actionType: 'alert-send',
+    externalKey: blockedPrAlertExternalKey(row),
+    subjectType: 'pr',
+    subjectId: String(row.pr),
+    status: 'completed',
+    summary: row.detail,
+    payload: {
+      message: row.detail,
+      pr: row.pr,
+      ledgerKey: row.key,
+      headSha: row.headSha,
+      ledgerPath,
+    },
+  });
+}
+
+function readCommentBlockedLedgerRows(
+  options: PrMaintenanceTickOptions,
+  ledgerPath: string,
+): MergifyCommentBlockedLedgerRow[] {
+  if (!existsSync(ledgerPath)) return [];
+
+  const rowsByKey = new Map<string, MergifyCommentBlockedLedgerRow>();
+  let raw: string;
+  try {
+    raw = readFileSync(ledgerPath, 'utf8');
+  } catch (err) {
+    options.logger.warn(`[worker:${options.entrypoint.kind}] could not read Mergify admin-bypass ledger`, {
+      module: 'pr-maintenance-worker',
+      worker: options.entrypoint.kind,
+      ledgerPath,
+      err,
+    });
+    return [];
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const row = parseCommentBlockedLedgerRow(parsed);
+    if (!row) continue;
+    rowsByKey.set(blockedPrLedgerExternalKey(row), row);
+  }
+
+  return [...rowsByKey.values()];
+}
+
+function parseCommentBlockedLedgerRow(value: unknown): MergifyCommentBlockedLedgerRow | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const row = value as Record<string, unknown>;
+  if (row.kind !== 'comment-blocked') return undefined;
+
+  const pr = parseLedgerPrNumber(row.pr);
+  const headSha = typeof row.headSha === 'string' ? row.headSha.trim() : '';
+  const key = typeof row.key === 'string' ? row.key.trim() : '';
+  if (pr === undefined || !headSha || !key) return undefined;
+
+  const meta = row.meta && typeof row.meta === 'object'
+    ? row.meta as Record<string, unknown>
+    : {};
+  const detail = typeof meta.detail === 'string' && meta.detail.trim().length > 0
+    ? meta.detail.trim()
+    : `Mergify repair stopped for PR #${pr}: ${key}`;
+
+  return { pr, headSha, key, detail };
+}
+
+function parseLedgerPrNumber(value: unknown): number | undefined {
+  const pr = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value, 10)
+      : Number.NaN;
+  return Number.isInteger(pr) && pr > 0 ? pr : undefined;
+}
+
+function resolveMergifyAdminRequeueLedgerPath(env: NodeJS.ProcessEnv): string {
+  const configured = env.INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE
+    ?? env.MERGIFY_ADMIN_REQUEUE_STATE_FILE;
+  if (configured && configured.trim().length > 0) {
+    return resolveHomePath(configured.trim(), env);
+  }
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  return resolve(home, DEFAULT_MERGIFY_ADMIN_REQUEUE_LEDGER_RELATIVE_PATH);
+}
+
+function resolveHomePath(path: string, env: NodeJS.ProcessEnv): string {
+  if (path === '~' || path.startsWith('~/')) {
+    const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+    return resolve(home, path.slice(2));
+  }
+  return resolve(path);
+}
+
+function blockedPrLedgerExternalKey(row: MergifyCommentBlockedLedgerRow): string {
+  return `pr:${row.pr}:ledger:${row.key}:head:${row.headSha}`;
+}
+
+function blockedPrDecisionExternalKey(row: MergifyCommentBlockedLedgerRow): string {
+  return `mergify-blocked:${blockedPrLedgerExternalKey(row)}`;
+}
+
+function blockedPrAlertExternalKey(row: MergifyCommentBlockedLedgerRow): string {
+  return `alert-send:${blockedPrLedgerExternalKey(row)}`;
 }
 
 function attachChildStreamLogger(
