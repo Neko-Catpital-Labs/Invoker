@@ -54,6 +54,15 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_FILE_SET_ALIASES = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -110,10 +119,24 @@ export function classifyJobConclusion(job) {
   return 'ignored';
 }
 
-export function reconcileCiRun(state, run) {
+function aliasesByCanonicalJob(jobDefinitions) {
+  const aliases = new Map();
+  if (!jobDefinitions) return aliases;
+  for (const [jobName, definition] of jobDefinitions) {
+    const canonicalJobName = definition?.canonicalJobName;
+    if (!canonicalJobName || canonicalJobName === jobName) continue;
+    const existing = aliases.get(canonicalJobName) ?? [];
+    existing.push(jobName);
+    aliases.set(canonicalJobName, existing);
+  }
+  return aliases;
+}
+
+export function reconcileCiRun(state, run, opts = {}) {
   const normalized = normalizeState(state);
   const sha = String(run.headSha ?? '').trim();
   if (!sha) return { state: normalized, processedJobs: 0, brokenJobs: 0, okJobs: 0, ignoredJobs: 0 };
+  const canonicalAliases = aliasesByCanonicalJob(opts.jobDefinitions);
 
   const headRecord = normalized.heads[sha] ?? {
     sha,
@@ -153,6 +176,9 @@ export function reconcileCiRun(state, run) {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
       delete normalized.activeFailures[jobName];
+      for (const aliasName of canonicalAliases.get(jobName) ?? []) {
+        delete normalized.activeFailures[aliasName];
+      }
       continue;
     }
 
@@ -326,6 +352,35 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function matrixFiles(matrix) {
+  return String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+function addLegacyPlaywrightAliases(definitions) {
+  for (const alias of LEGACY_PLAYWRIGHT_FILE_SET_ALIASES) {
+    if (definitions.has(alias.jobName)) continue;
+    const matchingOwners = [...definitions.values()].filter((definition) => {
+      if (definition.jobId !== 'playwright') return false;
+      const files = new Set(matrixFiles(definition.matrix));
+      return alias.files.every((file) => files.has(file));
+    });
+    if (matchingOwners.length !== 1) continue;
+    const owner = matchingOwners[0];
+    const matrix = {
+      name: alias.jobName.replace(/^playwright \/\s*/, ''),
+      files: alias.files.join(' '),
+    };
+    definitions.set(alias.jobName, {
+      ...owner,
+      jobName: alias.jobName,
+      canonicalJobName: owner.jobName,
+      legacyFiles: alias.files,
+      matrix,
+      verifyCommand: commandForJob('playwright', {}, matrix),
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +395,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addLegacyPlaywrightAliases(definitions);
   return definitions;
 }
 
@@ -507,7 +563,7 @@ export async function main() {
   let jobsIgnored = 0;
   for (const runSummary of runs) {
     const run = getCiRun(runSummary.databaseId);
-    const result = reconcileCiRun(state, run);
+    const result = reconcileCiRun(state, run, { jobDefinitions });
     runsProcessed += 1;
     jobsProcessed += result.processedJobs;
     jobsBroken += result.brokenJobs;
