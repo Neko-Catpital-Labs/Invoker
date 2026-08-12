@@ -672,6 +672,7 @@ jobs:
               e2e/workers-surface.spec.ts
           - name: terminal-garbling
             files: >-
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-surface-navigation-garble-repro.spec.ts
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
