@@ -247,6 +247,10 @@ export interface InvokerConfig {
   slackRepos?: Record<string, string>;
   /** Repo URL used for Slack planning when the message carries no `[repo:]` tag. */
   defaultRepoUrl?: string;
+  /** Slack user IDs allowed to run Slack administrative actions. */
+  slackAdminUserIds?: string[];
+  /** Stable Slack channel ID → default repository URL for channel-scoped planning. */
+  slackChannelRepos?: Record<string, string>;
   /** Maximum number of tasks that can run concurrently. Default: 6. */
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */

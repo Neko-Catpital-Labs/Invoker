@@ -119,6 +119,8 @@ export interface SlackSurfaceConfig {
   repoAliases?: Record<string, string>;
   /** Repo URL used when the message carries no `[repo:]` tag. */
   defaultRepoUrl?: string;
+  /** Channel ID → repo URL defaults. Channel IDs are stable across renames; channel names are not accepted here. */
+  channelRepoBindings?: Record<string, string>;
   /** Default Slack plan review mode. Default: 'require'. */
   defaultPlanningConfirmationMode?: PlanningConfirmationMode;
   /** Persisted workflow↔channel mapping for routing + channel creation. */
@@ -219,6 +221,9 @@ const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
 const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
+const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
+const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
+const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -388,6 +393,45 @@ function repositoryIdentity(repoUrl: string): string {
   return `${host}/${path}`;
 }
 
+function channelRepoBindingWorkflowId(channelId: string): string {
+  return `${CHANNEL_REPO_BINDING_WORKFLOW_PREFIX}${channelId}`;
+}
+
+function isChannelRepoBinding(mapping: WorkflowChannel | undefined | null): boolean {
+  return !!mapping?.workflowId?.startsWith(CHANNEL_REPO_BINDING_WORKFLOW_PREFIX);
+}
+
+function normalizePublicChannelName(name: string): string {
+  return name.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+interface ChannelRepoSetupPair {
+  channelName: string;
+  repoUrl: string;
+}
+
+function parseChannelRepoSetupRequest(text: string): ChannelRepoSetupPair[] | null {
+  if (!CHANNEL_REPO_SETUP_INTENT_RE.test(text)) return null;
+  const repositoryUrls = extractRepositoryUrls(text);
+  if (repositoryUrls.length === 0) return null;
+
+  const pairs: ChannelRepoSetupPair[] = [];
+  const seenChannels = new Set<string>();
+  for (const match of text.matchAll(CHANNEL_REPO_PAIR_RE)) {
+    const channelName = normalizePublicChannelName(match[1]);
+    let rawRepo = (match[3] ?? match[2]).trim();
+    while (rawRepo && TRAILING_URL_PUNCTUATION.has(rawRepo.at(-1)!)) {
+      rawRepo = rawRepo.slice(0, -1);
+    }
+    const repoUrl = normalizeSupportedRepoCandidate(rawRepo);
+    if (!channelName || !repoUrl || seenChannels.has(channelName)) return null;
+    seenChannels.add(channelName);
+    pairs.push({ channelName, repoUrl });
+  }
+
+  return pairs.length === repositoryUrls.length ? pairs : null;
+}
+
 // ── Lobby intent routing ─────────────────────────────────────
 
 export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
@@ -551,6 +595,7 @@ export class SlackSurface implements Surface {
   private defaultHarnessPreset: string;
   private repoAliases: Record<string, string>;
   private defaultRepoUrl?: string;
+  private channelRepoBindings: Record<string, string>;
   private workflowChannelRepo?: WorkflowChannelRepository;
   private gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   private runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
@@ -592,6 +637,7 @@ export class SlackSurface implements Surface {
     this.defaultHarnessPreset = config.defaultHarnessPreset ?? DEFAULT_HARNESS_PRESET;
     this.repoAliases = config.repoAliases ?? {};
     this.defaultRepoUrl = config.defaultRepoUrl ?? config.repoUrl;
+    this.channelRepoBindings = config.channelRepoBindings ?? {};
     this.defaultPlanningConfirmationMode = config.defaultPlanningConfirmationMode ?? 'require';
     this.workflowChannelRepo = config.workflowChannelRepo;
     this.gatherWorkflowContext = config.gatherWorkflowContext;
@@ -966,7 +1012,7 @@ export class SlackSurface implements Surface {
     channel: string,
     mapping?: WorkflowChannel,
   ): Promise<void> {
-    if (mapping) {
+    if (mapping && !isChannelRepoBinding(mapping)) {
       this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=workflow workflow=${mapping.workflowId}`);
       await this.handleWorkflowAssistantMention(mapping, event, say);
       return;
@@ -1009,6 +1055,12 @@ export class SlackSurface implements Surface {
       return;
     }
 
+    const channelRepoSetup = parseChannelRepoSetupRequest(parsed.text);
+    if (channelRepoSetup) {
+      await this.handleChannelRepoSetup(channelRepoSetup, event, channel, say);
+      return;
+    }
+
     const preset = this.resolveHarnessPreset(parsed.presetKey);
     const explicitRepoResolution = parsed.repo ? this.resolveRepoUrl(parsed.repo) : {};
     if (explicitRepoResolution.error) {
@@ -1031,10 +1083,19 @@ export class SlackSurface implements Surface {
       ? this.findMentionedRepoAlias(parsed.text)
       : undefined;
     const mentionedRepoResolution = mentionedRepoAlias ? this.resolveRepoUrl(mentionedRepoAlias) : {};
+    const channelDefaultRepoUrl = this.resolveChannelDefaultRepoUrl(channel);
     const routeRepoUrl = explicitRepoResolution.url
       ?? detectedRepoResolution.url
       ?? mentionedRepoResolution.url
+      ?? channelDefaultRepoUrl
       ?? this.resolveRepoUrl().url;
+
+    if ((parsed.repo || repositoryUrls.length === 1) && channelDefaultRepoUrl && routeRepoUrl && !sameRepoUrl(channelDefaultRepoUrl, routeRepoUrl)) {
+      await say({
+        text: `Using explicitly selected repository \`${repoDisplayName(routeRepoUrl)}\` instead of this channel's default \`${repoDisplayName(channelDefaultRepoUrl)}\`.`,
+        thread_ts: event.ts,
+      });
+    }
 
     if (/^\/plan\s+.+/i.test(parsed.text)) {
       const context: PlanningContext = {
@@ -1215,11 +1276,13 @@ export class SlackSurface implements Surface {
       });
       return;
     }
+    const normalizedPlanText = this.normalizeDraftedPlanRepoUrl(draftReview.planText, context.repoUrl);
+    const normalizedSummary = summarizePlanText(normalizedPlanText) ?? draftReview.summary;
     const draft = this.slackPlanDraftRepo.create({
       channelId: channel,
       threadTs,
-      planText: draftReview.planText,
-      summaryJson: JSON.stringify(draftReview.summary),
+      planText: normalizedPlanText,
+      summaryJson: JSON.stringify(normalizedSummary),
       repoUrl: context.repoUrl,
       harnessPreset: context.presetKey,
       workingDir: context.workingDir,
@@ -1227,7 +1290,7 @@ export class SlackSurface implements Surface {
       confirmationMode: draftReview.confirmationMode,
     });
     try {
-      await this.postSlackPlanDraft(draft, draftReview.summary, say);
+      await this.postSlackPlanDraft(draft, normalizedSummary, say);
     } catch (error) {
       // The draft row already exists at this point and postSlackPlanDraft has
       // already surfaced the failure by updating the Slack message in place,
@@ -1251,14 +1314,15 @@ export class SlackSurface implements Surface {
     if (!this.slackPlanDraftRepo) {
       throw new Error('Slack plan reviews are not configured in this deployment.');
     }
-    const summary = summarizePlanText(input.planText);
+    const planText = this.normalizeDraftedPlanRepoUrl(input.planText, input.repoUrl);
+    const summary = summarizePlanText(planText);
     if (!summary) {
       throw new Error('The supplied plan YAML could not be summarized for Slack review.');
     }
     const draft = this.slackPlanDraftRepo.create({
       channelId: input.channelId,
       threadTs: input.threadTs,
-      planText: input.planText,
+      planText,
       summaryJson: JSON.stringify(summary),
       repoUrl: input.repoUrl,
       harnessPreset: input.harnessPreset,
@@ -1444,9 +1508,10 @@ export class SlackSurface implements Surface {
     }
     await this.replacePlanDraftMessage(draft, 'Starting plan execution…', []);
     try {
+      const planText = this.normalizeDraftedPlanRepoUrl(draft.planText, draft.repoUrl);
       const result = await this.onCommand?.({
         type: 'start_plan',
-        planText: draft.planText,
+        planText,
         repoUrl: draft.repoUrl,
         harnessPreset: draft.harnessPreset,
         requestedBy: draft.requestedBy,
@@ -2157,6 +2222,83 @@ ${text}`;
     );
   }
 
+  private resolveChannelDefaultRepoUrl(channelId: string | undefined): string | undefined {
+    if (!channelId) return undefined;
+    const configured = this.channelRepoBindings[channelId];
+    if (configured) return this.normalizeRepositoryUrl(configured);
+    const mapping = this.workflowChannelRepo?.getByChannelId(channelId);
+    if (isChannelRepoBinding(mapping) && mapping?.repoUrl) {
+      return this.normalizeRepositoryUrl(mapping.repoUrl);
+    }
+    return undefined;
+  }
+
+  private async handleChannelRepoSetup(
+    pairs: ChannelRepoSetupPair[],
+    event: SlackMentionEvent,
+    channel: string,
+    say: SayFn,
+  ): Promise<void> {
+    const userId = event.user;
+    if (!userId || !this.adminUserIds.has(userId)) {
+      await say({ text: 'Permission denied. Slack channel repository setup requires admin access.', thread_ts: event.ts });
+      return;
+    }
+    if (!this.workflowChannelRepo) {
+      await say({ text: 'Slack channel repository setup is not available because channel persistence is not configured.', thread_ts: event.ts });
+      return;
+    }
+
+    const bound: string[] = [];
+    const failed: string[] = [];
+    for (const pair of pairs) {
+      const channelId = await this.resolveOrCreatePublicChannel(pair.channelName);
+      if (!channelId) {
+        failed.push(`#${pair.channelName}`);
+        continue;
+      }
+      const repoUrl = this.normalizeRepositoryUrl(pair.repoUrl);
+      this.workflowChannelRepo.save({
+        workflowId: channelRepoBindingWorkflowId(channelId),
+        channelId,
+        requestedBy: userId,
+        lobbyChannelId: channel,
+        lobbyThreadTs: event.ts,
+        harnessPreset: this.defaultHarnessPreset,
+        repoUrl,
+        createdAt: new Date().toISOString(),
+      });
+      bound.push(`<#${channelId}> -> \`${repoDisplayName(repoUrl)}\``);
+    }
+
+    const lines = [
+      ...(bound.length ? [`Configured ${bound.length} channel repository default${bound.length === 1 ? '' : 's'}:`, ...bound.map((item) => `- ${item}`)] : []),
+      ...(failed.length ? [`Failed to configure: ${failed.join(', ')}.`] : []),
+    ];
+    await say({ text: lines.join('\n') || 'No channel repository defaults were configured.', thread_ts: event.ts });
+  }
+
+  private async resolveOrCreatePublicChannel(name: string): Promise<string | undefined> {
+    const client = this.app.client;
+    try {
+      const created = await client.conversations.create({ name, is_private: false });
+      return created.channel?.id;
+    } catch (err) {
+      const code = this.slackErrorCode(err);
+      if (code !== 'name_taken') {
+        this.log('slack', 'error', `Failed to create public channel ${name}: ${err}`);
+        return undefined;
+      }
+      try {
+        const list = await client.conversations.list({ types: 'public_channel', limit: 1000 });
+        return (list.channels ?? []).find((candidate) => candidate.name === name && !candidate.is_private)?.id;
+      } catch (listErr) {
+        this.log('slack', 'error', `Failed to list public channels after name_taken for ${name}: ${listErr}`);
+        return undefined;
+      }
+    }
+  }
+
   private resolveRepoUrl(repo?: string): { url?: string; error?: string } {
     if (!repo) return { url: this.defaultRepoUrl && this.normalizeRepositoryUrl(this.defaultRepoUrl) };
     const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repo.toLowerCase());
@@ -2189,6 +2331,20 @@ ${text}`;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return planText;
 
     const plan = raw as Record<string, unknown>;
+    if (plan.scratch === true) return planText;
+    if (contextRepoUrl) {
+      plan.repoUrl = contextRepoUrl;
+      if (Array.isArray(plan.workflows)) {
+        for (const workflow of plan.workflows) {
+          if (workflow && typeof workflow === 'object' && !Array.isArray(workflow)) {
+            const child = workflow as Record<string, unknown>;
+            if (child.scratch !== true) child.repoUrl = contextRepoUrl;
+          }
+        }
+      }
+      return stringifyYaml(plan);
+    }
+
     if (typeof plan.repoUrl !== 'string') return planText;
     const repoUrl = plan.repoUrl.trim();
     const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repoUrl.toLowerCase());
@@ -2563,7 +2719,8 @@ ${text}`;
       if (this.botUserId && (msg.text ?? '').includes(`<@${this.botUserId}>`)) return;
 
       const channel = (msg.channel as string | undefined) ?? this.channelId;
-      if (msg.channel && this.workflowChannelRepo?.getByChannelId(msg.channel)) return;
+      const mapping = msg.channel ? this.workflowChannelRepo?.getByChannelId(msg.channel) : null;
+      if (mapping && !isChannelRepoBinding(mapping)) return;
 
       const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
       if (!text) return;

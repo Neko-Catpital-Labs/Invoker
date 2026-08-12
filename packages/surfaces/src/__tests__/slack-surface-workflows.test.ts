@@ -676,8 +676,9 @@ describe('lobby verb routing', () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     const conversationRepo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
     const slackSessionRepo = new SlackSessionRepository(adapter);
-    const surface = lobbySurface(true, { conversationRepo, slackSessionRepo, ...extra });
-    return { adapter, conversationRepo, slackSessionRepo, surface };
+    const workflowChannelRepo = new WorkflowChannelRepository(adapter);
+    const surface = lobbySurface(true, { conversationRepo, slackSessionRepo, workflowChannelRepo, ...extra });
+    return { adapter, conversationRepo, slackSessionRepo, workflowChannelRepo, surface };
   }
 
   it('returns only the final Codex message from one-shot Slack replies', async () => {
@@ -1130,6 +1131,244 @@ describe('lobby verb routing', () => {
     });
     expect(multipleSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('multiple repository URLs') }));
     expect(planConversationConfigs).toHaveLength(0);
+  });
+
+  it('provisions the reported public repo channels and routes each channel by resolved ID', async () => {
+    const { adapter, slackSessionRepo, workflowChannelRepo, surface } = await persistentLobbySurface({
+      adminUserIds: ['U_ADMIN'],
+      defaultRepoUrl: 'https://github.com/example/default',
+    });
+    const client = (surface.getApp() as any).client;
+    client.conversations.create
+      .mockResolvedValueOnce({ channel: { id: 'C_INVOKER_REPO' } })
+      .mockResolvedValueOnce({ channel: { id: 'C_RIPS_REPO' } });
+
+    try {
+      await surface.start(async (cmd) => { received.push(cmd); });
+      const setupSay = vi.fn().mockResolvedValue({ ts: 'setup-reply' });
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> set up #invoker-repo https://github.com/Neko-Catpital-Labs/Invoker and #rips-clone-mobile-repo https://github.com/EdbertChan/notarepo',
+          ts: 'setup-thread',
+          user: 'U_ADMIN',
+          channel: 'CLOBBY',
+        },
+        say: setupSay,
+      });
+
+      expect(client.conversations.create).toHaveBeenNthCalledWith(1, { name: 'invoker-repo', is_private: false });
+      expect(client.conversations.create).toHaveBeenNthCalledWith(2, { name: 'rips-clone-mobile-repo', is_private: false });
+      expect(setupSay.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('multiple repository URLs');
+      expect(workflowChannelRepo.getByChannelId('C_INVOKER_REPO')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+      expect(workflowChannelRepo.getByChannelId('C_RIPS_REPO')?.repoUrl).toBe('https://github.com/EdbertChan/notarepo');
+      expect(planConversationConfigs).toHaveLength(0);
+
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> plan: harden routing', ts: 'invoker-thread', user: 'U1', channel: 'C_INVOKER_REPO' },
+        say: vi.fn().mockResolvedValue({ ts: 'invoker-reply' }),
+      });
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> plan: harden routing', ts: 'rips-thread', user: 'U1', channel: 'C_RIPS_REPO' },
+        say: vi.fn().mockResolvedValue({ ts: 'rips-reply' }),
+      });
+
+      expect(planConversationConfigs.at(-2)).toEqual(expect.objectContaining({
+        channelId: 'C_INVOKER_REPO',
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker',
+      }));
+      expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
+        channelId: 'C_RIPS_REPO',
+        repoUrl: 'https://github.com/EdbertChan/notarepo',
+      }));
+      expect(slackSessionRepo.getLaunchContext('invoker-thread')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+      expect(slackSessionRepo.getLaunchContext('rips-thread')?.repoUrl).toBe('https://github.com/EdbertChan/notarepo');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('denies channel repository setup from a non-admin before Slack channel creation', async () => {
+    const { adapter, workflowChannelRepo, surface } = await persistentLobbySurface({ adminUserIds: ['U_ADMIN'] });
+    const client = (surface.getApp() as any).client;
+    try {
+      await surface.start(async () => {});
+      const say = vi.fn().mockResolvedValue({ ts: 'denied' });
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> set up #invoker-repo https://github.com/Neko-Catpital-Labs/Invoker and #rips-clone-mobile-repo https://github.com/EdbertChan/notarepo',
+          ts: 'setup-denied',
+          user: 'U_INTRUDER',
+          channel: 'CLOBBY',
+        },
+        say,
+      });
+
+      expect(client.conversations.create).not.toHaveBeenCalled();
+      expect(workflowChannelRepo.list()).toHaveLength(0);
+      expect(planConversationConfigs).toHaveLength(0);
+      expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Permission denied') }));
+      expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('multiple repository URLs');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('reuses an existing public channel ID on channel setup name_taken', async () => {
+    const { adapter, workflowChannelRepo, surface } = await persistentLobbySurface({ adminUserIds: ['U_ADMIN'] });
+    const client = (surface.getApp() as any).client;
+    client.conversations.create.mockRejectedValueOnce({ data: { error: 'name_taken' } });
+    client.conversations.list.mockResolvedValueOnce({ channels: [{ id: 'C_EXISTING', name: 'invoker-repo', is_private: false }] });
+
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> map #invoker-repo to https://github.com/Neko-Catpital-Labs/Invoker',
+          ts: 'setup-name-taken',
+          user: 'U_ADMIN',
+          channel: 'CLOBBY',
+        },
+        say: vi.fn().mockResolvedValue({ ts: 'ok' }),
+      });
+
+      expect(client.conversations.list).toHaveBeenCalledWith({ types: 'public_channel', limit: 1000 });
+      expect(workflowChannelRepo.getByChannelId('C_EXISTING')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('keeps successful channel bindings when a later setup pair fails', async () => {
+    const { adapter, workflowChannelRepo, surface } = await persistentLobbySurface({ adminUserIds: ['U_ADMIN'] });
+    const client = (surface.getApp() as any).client;
+    client.conversations.create
+      .mockResolvedValueOnce({ channel: { id: 'C_OK' } })
+      .mockRejectedValueOnce({ data: { error: 'missing_scope' } });
+
+    try {
+      await surface.start(async () => {});
+      const say = vi.fn().mockResolvedValue({ ts: 'partial' });
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> setup #invoker-repo https://github.com/Neko-Catpital-Labs/Invoker #rips-clone-mobile-repo https://github.com/EdbertChan/notarepo',
+          ts: 'setup-partial',
+          user: 'U_ADMIN',
+          channel: 'CLOBBY',
+        },
+        say,
+      });
+
+      expect(workflowChannelRepo.getByChannelId('C_OK')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+      expect(workflowChannelRepo.list()).toHaveLength(1);
+      expect(say.mock.calls.map((call) => call[0].text).join('\n')).toContain('Failed to configure: #rips-clone-mobile-repo');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('falls back to defaultRepoUrl in an unmapped channel', async () => {
+    const surface = lobbySurface(true, { defaultRepoUrl: 'https://github.com/example/default' });
+    await surface.start(async () => {});
+
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> plan: add fallback behavior', ts: 'fallback-thread', user: 'U1', channel: 'C_UNMAPPED' },
+      say: vi.fn().mockResolvedValue({ ts: 'fallback' }),
+    });
+
+    expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
+      channelId: 'C_UNMAPPED',
+      repoUrl: 'https://github.com/example/default',
+    }));
+  });
+
+  it('lets an explicit repo selector win over a channel default with a visible notice', async () => {
+    const { adapter, surface } = await persistentLobbySurface({
+      defaultRepoUrl: 'https://github.com/example/default',
+      channelRepoBindings: { C_INVOKER: 'https://github.com/Neko-Catpital-Labs/Invoker' },
+      repoAliases: { mobile: 'https://github.com/EdbertChan/notarepo' },
+    });
+    try {
+      await surface.start(async () => {});
+      const say = vi.fn().mockResolvedValue({ ts: 'notice' });
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> [repo:mobile] plan: add mobile behavior', ts: 'override-thread', user: 'U1', channel: 'C_INVOKER' },
+        say,
+      });
+
+      expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
+        channelId: 'C_INVOKER',
+        repoUrl: 'https://github.com/EdbertChan/notarepo',
+      }));
+      expect(say.mock.calls.map((call) => call[0].text).join('\n')).toContain('instead of this channel\'s default');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('keeps an existing thread pinned when the channel default changes', async () => {
+    const { adapter, slackSessionRepo, surface } = await persistentLobbySurface({
+      defaultRepoUrl: 'https://github.com/example/default',
+      channelRepoBindings: { C_INVOKER: 'https://github.com/Neko-Catpital-Labs/Invoker' },
+    });
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> plan: start here', ts: 'pinned-thread', user: 'U1', channel: 'C_INVOKER' },
+        say: vi.fn().mockResolvedValue({ ts: 'start' }),
+      });
+
+      (surface as any).channelRepoBindings.C_INVOKER = 'https://github.com/EdbertChan/notarepo';
+
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> continue planning', ts: 'pinned-thread-reply', thread_ts: 'pinned-thread', user: 'U1', channel: 'C_INVOKER' },
+        say: vi.fn().mockResolvedValue({ ts: 'continue' }),
+      });
+
+      expect(slackSessionRepo.getLaunchContext('pinned-thread')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+      expect(planConversationConfigs[0].repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+      expect(planConversationConfigs).toHaveLength(1);
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('routes by resolved channel ID after the setup channel is renamed', async () => {
+    const { adapter, surface } = await persistentLobbySurface({ adminUserIds: ['U_ADMIN'] });
+    const client = (surface.getApp() as any).client;
+    client.conversations.create.mockRejectedValueOnce({ data: { error: 'name_taken' } });
+    client.conversations.list.mockResolvedValueOnce({ channels: [{ id: 'C_STABLE', name: 'old-invoker-repo', is_private: false }] });
+
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> bind #old-invoker-repo to https://github.com/Neko-Catpital-Labs/Invoker',
+          ts: 'setup-rename',
+          user: 'U_ADMIN',
+          channel: 'CLOBBY',
+        },
+        say: vi.fn().mockResolvedValue({ ts: 'setup' }),
+      });
+
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> plan: after rename', ts: 'renamed-thread', user: 'U1', channel: 'C_STABLE' },
+        say: vi.fn().mockResolvedValue({ ts: 'renamed' }),
+      });
+
+      expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
+        channelId: 'C_STABLE',
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker',
+      }));
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
   });
 
   it('lets a [repo:] tag win over a repo URL in the same first plan message', async () => {

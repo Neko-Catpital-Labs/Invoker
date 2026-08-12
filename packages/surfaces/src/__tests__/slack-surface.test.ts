@@ -642,7 +642,11 @@ describe('SlackSurface', () => {
         respond: vi.fn().mockResolvedValue(undefined),
       });
       expect(receivedCommands).toEqual([
-        expect.objectContaining({ type: 'start_plan', planText }),
+        expect.objectContaining({
+          type: 'start_plan',
+          repoUrl: 'https://github.com/example/repo.git',
+          planText: expect.stringContaining('repoUrl: https://github.com/example/repo.git'),
+        }),
       ]);
     });
 
