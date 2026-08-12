@@ -124,6 +124,10 @@ describe('planning terminal preset ownership repro', () => {
     await openPlanningTerminal();
 
     fireEvent.change(screen.getByTestId('invoker-terminal-harness'), {
+      target: { value: 'omp' },
+    });
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-model')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('invoker-terminal-model'), {
       target: { value: 'omp+claude' },
     });
     fireEvent.click(screen.getByRole('tab', { name: 'Tmux' }));
@@ -135,6 +139,51 @@ describe('planning terminal preset ownership repro', () => {
         confirmationMode: 'require',
       });
       expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('tmux-created-with-claude');
+    });
+  });
+
+  it('sends a changed model preset on an existing chat without replacing the conversation', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'existing-chat',
+          title: 'Existing chat',
+          status: 'still_discussing',
+          presetKey: 'codex',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          updatedAt: '2026-07-26T00:00:00.000Z',
+        }),
+      ],
+    }));
+    mock.api.planningChatSend = vi.fn(async (request: any) => ({
+      ok: true,
+      sessionId: request.sessionId,
+      reply: 'Reply from the selected model.',
+      draftPlanAvailable: false,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), {
+      target: { value: 'omp' },
+    });
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-model')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('invoker-terminal-model'), {
+      target: { value: 'omp+claude' },
+    });
+    submitPlanningText('continue with a different model');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        sessionId: 'existing-chat',
+        message: 'continue with a different model',
+        presetKey: 'omp+claude',
+        confirmationMode: 'require',
+      });
     });
   });
 });

@@ -20,9 +20,66 @@ export interface InvokerTerminalPlanningStream {
   status: 'streaming' | 'failed';
 }
 
-interface PlanningPresetOptionView {
+export interface PlanningPresetOptionView {
   key: string;
   label: string;
+  tool: string;
+  model?: string;
+}
+
+export interface PlanningHarnessChoice {
+  tool: string;
+  label: string;
+  directPreset?: PlanningPresetOptionView;
+  modelPresets: PlanningPresetOptionView[];
+}
+
+function titleCaseIdentifier(value: string): string {
+  return value
+    .split(/[-_\s/]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ');
+}
+
+function formatPlanningHarnessLabel(tool: string, options: PlanningPresetOptionView[]): string {
+  const directPreset = options.find((option) => option.tool === tool && !option.model);
+  return directPreset?.label ?? titleCaseIdentifier(tool);
+}
+
+function formatPlanningModelLabel(model: string): string {
+  return titleCaseIdentifier(model);
+}
+
+export function buildPlanningHarnessChoices(options: PlanningPresetOptionView[]): PlanningHarnessChoice[] {
+  const byTool = new Map<string, PlanningPresetOptionView[]>();
+  for (const option of options) {
+    const existing = byTool.get(option.tool) ?? [];
+    existing.push(option);
+    byTool.set(option.tool, existing);
+  }
+
+  return Array.from(byTool.entries()).map(([tool, toolOptions]) => ({
+    tool,
+    label: formatPlanningHarnessLabel(tool, toolOptions),
+    directPreset: toolOptions.find((option) => !option.model),
+    modelPresets: toolOptions.filter((option) => Boolean(option.model)),
+  }));
+}
+
+function findPresetOption(options: PlanningPresetOptionView[], presetKey: string): PlanningPresetOptionView | undefined {
+  return options.find((option) => option.key === presetKey);
+}
+
+function resolvePresetForHarness(
+  harness: PlanningHarnessChoice,
+  preferredModel: string | undefined,
+): PlanningPresetOptionView | undefined {
+  if (preferredModel) {
+    const matchingModel = harness.modelPresets.find((option) => option.model === preferredModel);
+    if (matchingModel) return matchingModel;
+  }
+  return harness.directPreset ?? harness.modelPresets[0];
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
@@ -613,6 +670,33 @@ export function InvokerTerminal({
   const composerDisabledCursorClass = busy || readOnly ? 'disabled:cursor-not-allowed' : '';
   const sendButtonDisabled = busy || readOnly || !value.trim();
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
+  const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
+  const selectedPreset = useMemo(
+    () => findPresetOption(presetOptions, selectedPresetKey) ?? presetOptions[0],
+    [presetOptions, selectedPresetKey],
+  );
+  const selectedHarness = useMemo(
+    () => harnessChoices.find((choice) => choice.tool === selectedPreset?.tool) ?? harnessChoices[0],
+    [harnessChoices, selectedPreset?.tool],
+  );
+  const selectedHarnessValue = selectedHarness?.tool ?? '';
+  const modelSelectOptions = selectedHarness
+    ? [
+        ...(selectedHarness.directPreset ? [selectedHarness.directPreset] : []),
+        ...selectedHarness.modelPresets,
+      ]
+    : [];
+  const showModelSelect = Boolean(selectedHarness && selectedHarness.modelPresets.length > 0);
+  const selectedModelPresetKey = selectedPreset && modelSelectOptions.some((option) => option.key === selectedPreset.key)
+    ? selectedPreset.key
+    : modelSelectOptions[0]?.key ?? '';
+
+  const handleHarnessChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+    const nextHarness = harnessChoices.find((choice) => choice.tool === event.target.value);
+    if (!nextHarness) return;
+    const nextPreset = resolvePresetForHarness(nextHarness, selectedPreset?.model);
+    if (nextPreset) onPresetChange(nextPreset.key);
+  }, [harnessChoices, onPresetChange, selectedPreset?.model]);
 
   const handleValueChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const startedAt = nowMs();
@@ -911,19 +995,37 @@ export function InvokerTerminal({
                   {showComposerOptions && (
                     <div className="ml-3 flex flex-wrap items-center gap-3">
                       <label className="text-xs text-muted-foreground">
-                        Agent
+                        Harness
                         <select
                           data-testid="invoker-terminal-harness"
-                          value={selectedPresetKey}
-                          onChange={(event) => onPresetChange(event.target.value)}
+                          value={selectedHarnessValue}
+                          onChange={handleHarnessChange}
                           disabled={readOnly}
                           className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
                         >
-                          {presetOptions.map((option) => (
-                            <option key={option.key} value={option.key}>{option.label}</option>
+                          {harnessChoices.map((option) => (
+                            <option key={option.tool} value={option.tool}>{option.label}</option>
                           ))}
                         </select>
                       </label>
+                      {showModelSelect && (
+                        <label className="text-xs text-muted-foreground">
+                          Model
+                          <select
+                            data-testid="invoker-terminal-model"
+                            value={selectedModelPresetKey}
+                            onChange={(event) => onPresetChange(event.target.value)}
+                            disabled={readOnly}
+                            className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                          >
+                            {modelSelectOptions.map((option) => (
+                              <option key={option.key} value={option.key}>
+                                {option.model ? formatPlanningModelLabel(option.model) : 'Default'}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <label className="text-xs text-muted-foreground">
                         Review
                         <select

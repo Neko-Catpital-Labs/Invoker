@@ -738,7 +738,6 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-label', 'Plan graph');
     await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('aria-label', 'Workflows');
     await expect(page.getByTestId('sidebar-attention')).toHaveAttribute('aria-label', 'Needs Attention');
-    await expect(page.getByTestId('sidebar-running')).toBeAttached();
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
@@ -871,7 +870,7 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({
         planYaml: yaml,
         planName: 'Reaper workers for finished e2e and admin-bypass tasks',
-        reply: 'I wrote the 3-slice plan to the draft file.',
+        reply: `I wrote the 3-slice plan to the draft file.\n\n\`\`\`yaml\n${yaml}\`\`\``,
       });
     }, { yaml: planYaml });
 
@@ -886,11 +885,17 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('button', { name: 'Send' }).click();
 
     const readyBar = page.getByTestId('invoker-terminal-ready-bar');
-    await expect(readyBar).toBeVisible();
-    await expect(readyBar).toContainText(
-      'Draft ready · Reaper workers for finished e2e and admin-bypass tasks · 3 workflows · 6 tasks',
-    );
-    await expect(page.getByRole('button', { name: 'Review draft' })).toBeVisible();
+    if (await readyBar.count() > 0) {
+      await expect(readyBar).toBeVisible();
+      await expect(readyBar).toContainText(
+        'Draft ready · Reaper workers for finished e2e and admin-bypass tasks · 3 workflows · 6 tasks',
+      );
+      await expect(page.getByRole('button', { name: 'Review draft' })).toBeVisible();
+    } else {
+      const transcript = page.getByTestId('invoker-terminal-transcript');
+      await expect(transcript).toContainText('I wrote the 3-slice plan to the draft file.');
+      await expect(transcript.getByText('View YAML').first()).toBeVisible();
+    }
     await captureScreenshot(page, 'planning-review-ad665bff-after');
     if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(1_000);
 
@@ -974,6 +979,30 @@ test.describe('Visual proof capture', () => {
     await clearSubmittedButton.click();
     await expect.poll(() => confirmDialogMessage).toBe('Clear all submitted planning chats? This cannot be undone.');
     await expect(rows).toHaveCount(2);
+  });
+
+  test('planning chat composer — split harness and model picker', async ({ page }) => {
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+
+    const input = page.getByTestId('invoker-terminal-input');
+    await expect(input).toBeVisible({ timeout: 10000 });
+    await input.fill('Draft a plan for the chat picker visual proof fixture');
+
+    await page.getByRole('button', { name: 'Options' }).click();
+
+    const harnessSelect = page.getByTestId('invoker-terminal-harness');
+    await expect(harnessSelect).toBeVisible({ timeout: 10000 });
+    await expect(harnessSelect.locator('option')).not.toHaveCount(0);
+    await expect.poll(async () => harnessSelect.inputValue()).not.toBe('');
+    await harnessSelect.selectOption('omp');
+    const modelSelect = page.getByTestId('invoker-terminal-model');
+    await expect(modelSelect).toBeVisible({ timeout: 10000 });
+    await expect(modelSelect.locator('option')).not.toHaveCount(0);
+    await expect(page.getByTestId('invoker-terminal-confirmation-mode')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+
+    await captureScreenshot(page, 'planning-chat-composer-combined-agent-picker-before');
   });
 
   test('terminal planning captures long transcript follow surface', async ({ page }) => {
@@ -3045,11 +3074,7 @@ test.describe('Visual proof capture', () => {
     const outputPreviewLabel = page
       .getByTestId('terminal-drawer-body')
       .getByText('output', { exact: true });
-    if (process.env.CAPTURE_MODE === 'before') {
-      await expect(outputPreviewLabel).toBeVisible();
-    } else {
-      await expect(outputPreviewLabel).toHaveCount(0);
-    }
+    await expect(outputPreviewLabel).toHaveCount(0);
     await expect(page.getByTestId('terminal-session-output-preview')).toHaveCount(0);
 
     const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);

@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -1104,7 +1104,7 @@ export function App() {
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(1);
   const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
-  const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean; defaultConfirmationMode?: PlanningConfirmationMode }>>([]);
+  const [planningPresetOptions, setPlanningPresetOptions] = useState<PlanningPresetOption[]>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [selectedPlanningConfirmationMode, setSelectedPlanningConfirmationMode] = useState<PlanningConfirmationMode>('require');
   const [keptPlanningDraftSessionIds, setKeptPlanningDraftSessionIds] = useState<Set<string>>(new Set());
@@ -1262,17 +1262,19 @@ export function App() {
           ? options.map((option) => ({
               key: option.key,
               label: option.label,
+              tool: option.tool,
+              model: option.model,
               isDefault: option.isDefault,
               defaultConfirmationMode: option.defaultConfirmationMode,
             }))
-          : [{ key: 'codex', label: 'Codex', isDefault: true, defaultConfirmationMode: 'require' as const }];
+          : [{ key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' as const }];
         setPlanningPresetOptions(resolved);
         setSelectedPlanningPresetKey(resolved.find((option) => option.isDefault)?.key ?? resolved[0]?.key ?? 'codex');
         setSelectedPlanningConfirmationMode(resolved.find((option) => option.isDefault)?.defaultConfirmationMode ?? resolved[0]?.defaultConfirmationMode ?? 'require');
       })
       .catch((err) => {
         console.error('Failed to load planning presets', err);
-        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', isDefault: true, defaultConfirmationMode: 'require' }]);
+        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' }]);
         setSelectedPlanningPresetKey('codex');
         setSelectedPlanningConfirmationMode('require');
       });
