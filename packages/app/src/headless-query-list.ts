@@ -19,7 +19,7 @@ import {
   type WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, createWorkerRegistry, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
-import type { CostAttributionAttempt } from '@invoker/data-store';
+import type { CostAttributionAttempt, WorkerActionRecord } from '@invoker/data-store';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
@@ -53,7 +53,7 @@ import {
  * per request, so concurrent delegated queries never cross output.
  */
 const queryOutputSink = new AsyncLocalStorage<(chunk: string) => void>();
-const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks';
+const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, alert-history, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks';
 const QUERY_SUBCOMMAND_USAGE = QUERY_SUBCOMMANDS.replaceAll(', ', '|');
 
 function writeOut(chunk: string): void {
@@ -71,6 +71,30 @@ export type HeadlessQueryDeps = Pick<
   HeadlessDeps,
   'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig' | 'getUiPerfStats' | 'resetUiPerfStats'
 >;
+
+function hasStringProp(value: unknown, key: string): boolean {
+  return Boolean(value && typeof value === 'object' && typeof (value as Record<string, unknown>)[key] === 'string');
+}
+
+function isAlertWorkerAction(action: WorkerActionRecord): boolean {
+  const searchable = [
+    action.actionType,
+    action.subjectType,
+    action.subjectId,
+    action.externalKey,
+  ].join(' ').toLowerCase();
+  if (searchable.includes('alert')) return true;
+  const payload = action.payload;
+  return hasStringProp(payload, 'alertKey')
+    || hasStringProp(payload, 'alertSource')
+    || (hasStringProp(payload, 'severity') && (hasStringProp(payload, 'subject') || hasStringProp(payload, 'message')));
+}
+
+export function listAlertHistoryRows(
+  persistence: Pick<HeadlessQueryDeps['persistence'], 'listWorkerActions'>,
+): WorkerActionRecord[] {
+  return persistence.listWorkerActions().filter(isAlertWorkerAction);
+}
 
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
@@ -339,6 +363,16 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         case 'json': writeOut(formatAsJson(response.actions) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(response.actions) + '\n'); break;
         default: writeOut(formatWorkerDecisions(response.actions) + '\n'); break;
+      }
+      break;
+    }
+    case 'alert-history': {
+      const alerts = listAlertHistoryRows(deps.persistence);
+      switch (flags.output) {
+        case 'label': writeOut(formatAsLabel(alerts) + '\n'); break;
+        case 'json': writeOut(formatAsJson(alerts.map(serializeWorkerAction)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(alerts.map(serializeWorkerAction)) + '\n'); break;
+        default: writeOut(formatWorkerActions(alerts) + '\n'); break;
       }
       break;
     }
