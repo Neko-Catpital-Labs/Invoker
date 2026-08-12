@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 
@@ -20,15 +20,26 @@ process.stdout.write(payload, () => { process.exitCode = 0; });
 `;
 
 // Mirrors writeOut()'s raw process.stdout.write() in headless-query-list.ts
-// followed immediately by process.exit() in main.ts's standalone exit path
-// -- the pattern that shipped, before this file's flushStdoutAndStderr fix.
+// followed immediately by process.exit() in main.ts's standalone exit path.
+// Model the OS pipe backpressure deterministically: the write callback is
+// pending when process.exit() runs, so any real pipe payload may be dropped.
 const buggyScript = `
-const payload = JSON.stringify(Array.from({ length: 3000 }, (_, i) => ({
-  id: 'wf-' + i,
-  description: 'synthetic workflow row ' + i + ' padded-padded-padded-padded-padded-padded-padded-padded',
-  status: 'completed',
-})));
-process.stdout.write(payload);
+let callbackRan = false;
+process.stdout.write = (chunk, encoding, callback) => {
+  const cb = typeof encoding === 'function' ? encoding : callback;
+  setTimeout(() => {
+    callbackRan = true;
+    process.stderr.write('write callback ran\\n');
+    if (cb) cb();
+  }, 25);
+  return false;
+};
+process.on('exit', () => {
+  process.stderr.write(callbackRan ? 'callback-before-exit\\n' : 'exit-before-callback\\n');
+});
+process.stdout.write('payload', () => {
+  callbackRan = true;
+});
 process.exit(0);
 `;
 
@@ -44,14 +55,13 @@ describe('headless stdout flush', () => {
     }
   });
 
-  it('reproduces the live incident: raw write + immediate exit truncates large piped stdout', () => {
-    const payload = buildPayload();
-    expect(payload.length).toBeGreaterThanOrEqual(250 * 1024);
+  it('reproduces the live incident: raw write + immediate exit does not wait for stdout', () => {
+    const output = spawnSync(process.execPath, ['-e', buggyScript], { encoding: 'utf8' });
 
-    const output = execFileSync(process.execPath, ['-e', buggyScript], { encoding: 'utf8' });
-    // Truncates at the OS pipe buffer boundary -- deterministic, not flaky.
-    expect(output.length).toBeLessThan(payload.length);
-    expect(() => JSON.parse(output)).toThrow();
+    expect(output.status).toBe(0);
+    expect(output.stdout).toBe('');
+    expect(output.stderr).toContain('exit-before-callback');
+    expect(output.stderr).not.toContain('write callback ran');
   });
 
   it('flushStdoutAndStderr resolves only after both streams drain', async () => {

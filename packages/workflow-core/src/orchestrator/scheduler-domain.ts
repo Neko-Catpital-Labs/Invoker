@@ -13,10 +13,10 @@
  */
 
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/workflow-graph';
-import { topologicalSort } from '@invoker/workflow-graph';
+import { createAttempt, topologicalSort } from '@invoker/workflow-graph';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Logger } from '@invoker/contracts';
-import { isDiscardedAttempt } from '../attempt-policy.js';
+import { isDiscardedAttempt, isOutcomeTerminalAttempt } from '../attempt-policy.js';
 import { assertResetComplete, buildTaskResetChanges } from '../task-reset-policy.js';
 import type { TaskStateMachine } from '../state-machine.js';
 import type { TaskJob, TaskScheduler } from '../scheduler.js';
@@ -29,6 +29,10 @@ import type {
 } from '../orchestrator.js';
 
 const TASK_DELTA_CHANNEL = 'task.delta';
+
+type BatchSchedulerOptions = LaunchReadinessOptions & {
+  skipBatchRefresh?: boolean;
+};
 
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
@@ -109,6 +113,35 @@ function isReusableLaunchAttempt(
   return false;
 }
 
+function createPendingLaunchAttempt(
+  host: SchedulerDomainHost,
+  task: TaskState,
+  opts: Partial<Omit<Attempt, 'id' | 'nodeId' | 'createdAt'>> = {},
+  supersededAttempt?: Attempt,
+): string {
+  const current = supersededAttempt ?? (task.execution.selectedAttemptId
+    ? host.loadAttemptById(task.execution.selectedAttemptId)
+    : undefined);
+  if (isReusableLaunchAttempt(host, task, current)) {
+    return current.id;
+  }
+
+  const upstreamAttemptIds = task.dependencies
+    .map((depId) => host.stateGetTask(depId)?.execution.selectedAttemptId)
+    .filter((id): id is string => !!id);
+  const freshAttempt = createAttempt(task.id, {
+    status: 'pending',
+    upstreamAttemptIds,
+    supersedesAttemptId: current?.id,
+    ...opts,
+  });
+  if (current && !isOutcomeTerminalAttempt(current) && !isDiscardedAttempt(current)) {
+    host.taskRepository.updateAttempt(current.id, { status: 'superseded' });
+  }
+  host.taskRepository.saveAttempt(freshAttempt);
+  return freshAttempt.id;
+}
+
 function hasPendingLaunchRuntimeState(task: TaskState): boolean {
   return Boolean(
     task.execution.phase
@@ -125,12 +158,16 @@ function hasPendingLaunchRuntimeState(task: TaskState): boolean {
   );
 }
 
-function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): TaskJob[] {
-  // Refresh once for the whole batch, not once per candidate job below --
-  // readiness for every job in this pass is evaluated against the same
-  // in-memory snapshot, so a per-job refresh only re-reads data this
-  // function already has.
-  host.refreshFromDb();
+function planPendingLaunchQueue(
+  host: SchedulerDomainHost,
+  candidateJobs: TaskJob[],
+  opts?: BatchSchedulerOptions,
+): TaskJob[] {
+  // Refresh once for the whole batch unless the caller already refreshed and
+  // is deliberately evaluating this pass against that current snapshot.
+  if (!opts?.skipBatchRefresh) {
+    host.refreshFromDb();
+  }
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
     const task = host.stateGetTask(sourceJob.taskId);
@@ -194,28 +231,50 @@ function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJo
 export function getPendingLaunchQueueSnapshotImpl(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
+  opts?: BatchSchedulerOptions,
 ): TaskJob[] {
-  return planPendingLaunchQueue(host, candidateJobs);
+  return planPendingLaunchQueue(host, candidateJobs, opts);
 }
 
-function rebuildPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): void {
+function rebuildPendingLaunchQueue(
+  host: SchedulerDomainHost,
+  candidateJobs: TaskJob[],
+  opts?: BatchSchedulerOptions,
+): void {
   const orderedJobs: TaskJob[] = [];
-  for (const job of planPendingLaunchQueue(host, candidateJobs)) {
+  for (const job of planPendingLaunchQueue(host, candidateJobs, opts)) {
     const task = host.stateGetTask(job.taskId);
     if (!task) continue;
-    const attemptId = host.ensureCurrentPendingAttempt(task);
+    const attemptId = job.attemptId ?? task.execution.selectedAttemptId;
     const currentAttempt = host.loadAttemptById(attemptId);
-    if ((currentAttempt?.queuePriority ?? 0) !== job.priority) {
+    if (attemptId && (currentAttempt?.queuePriority ?? 0) !== job.priority) {
       host.taskRepository.updateAttempt(attemptId, { queuePriority: job.priority });
     }
     orderedJobs.push({
       taskId: task.id,
-      attemptId,
+      ...(attemptId ? { attemptId } : {}),
       priority: job.priority,
       ...(job.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
     });
   }
   host.scheduler.replaceQueue(orderedJobs);
+}
+
+function materializeQueuedAttempts(host: SchedulerDomainHost): void {
+  const queuedJobs = host.scheduler.getQueuedJobs();
+  if (queuedJobs.length === 0) return;
+  let changed = false;
+  const materialized = queuedJobs.map((job) => {
+    if (job.attemptId) return job;
+    const task = host.stateGetTask(job.taskId);
+    if (!task) return job;
+    const attemptId = host.ensureCurrentPendingAttempt(task);
+    changed = true;
+    return { ...job, attemptId };
+  });
+  if (changed) {
+    host.scheduler.replaceQueue(materialized);
+  }
 }
 
 
@@ -225,39 +284,41 @@ export function autoStartReadyTasksImpl(
   host: SchedulerDomainHost,
   taskIds: string[],
   priority: number = 0,
-  opts?: LaunchReadinessOptions,
+  opts?: BatchSchedulerOptions,
 ): TaskState[] {
-  const candidateJobs: TaskJob[] = [];
-  for (const taskId of taskIds) {
-    let task = host.stateGetTask(taskId);
-    if (!task) continue;
-    if (host.getExternalDependencyBlocker(task) !== undefined) continue;
-
-    // Unblock: if a blocked task's deps are all complete, it's genuinely ready
-    if (task.status === 'blocked') {
-      host.logger.info('[orchestrator] autoStartReadyTasks: unblocking blocked task', {
-        taskId,
-      });
-      host.replaceSelectedAttempt(task, { status: 'pending' });
-      const resetBefore = host.stateGetTask(taskId);
-      if (!resetBefore) continue;
-      const changes = buildTaskResetChanges('readyUnblock');
-      const updated = host.writeAndSync(taskId, changes);
-      assertResetComplete(resetBefore, updated, 'readyUnblock', { execution: changes.execution });
-      task = host.stateGetTask(taskId);
+  return host.taskRepository.runInTransaction(() => {
+    const candidateJobs: TaskJob[] = [];
+    for (const taskId of taskIds) {
+      let task = host.stateGetTask(taskId);
       if (!task) continue;
+      if (host.getExternalDependencyBlocker(task) !== undefined) continue;
+
+      // Unblock: if a blocked task's deps are all complete, it's genuinely ready
+      if (task.status === 'blocked') {
+        host.logger.info('[orchestrator] autoStartReadyTasks: unblocking blocked task', {
+          taskId,
+        });
+        host.replaceSelectedAttempt(task, { status: 'pending' });
+        const resetBefore = host.stateGetTask(taskId);
+        if (!resetBefore) continue;
+        const changes = buildTaskResetChanges('readyUnblock');
+        const updated = host.writeAndSync(taskId, changes);
+        assertResetComplete(resetBefore, updated, 'readyUnblock', { execution: changes.execution });
+        task = host.stateGetTask(taskId);
+        if (!task) continue;
+      }
+
+      candidateJobs.push({
+        taskId,
+        attemptId: task.execution.selectedAttemptId,
+        priority: getCandidatePriority(host, task, priority),
+        ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+      });
     }
 
-    candidateJobs.push({
-      taskId,
-      attemptId: task.execution.selectedAttemptId,
-      priority: getCandidatePriority(host, task, priority),
-      ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
-    });
-  }
-
-  rebuildPendingLaunchQueue(host, candidateJobs);
-  return drainSchedulerImpl(host);
+    rebuildPendingLaunchQueue(host, candidateJobs, opts);
+    return drainSchedulerImpl(host, opts);
+  });
 }
 
 export function enqueueIfNotScheduledImpl(
@@ -382,10 +443,12 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
   return undefined;
 }
 
-export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
+export function drainSchedulerImpl(host: SchedulerDomainHost, opts?: BatchSchedulerOptions): TaskState[] {
   // Refresh once for the whole drain pass, not once per dequeued job below
   // (see planPendingLaunchQueue for the same reasoning).
-  host.refreshFromDb();
+  if (!opts?.skipBatchRefresh) {
+    host.refreshFromDb();
+  }
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);
@@ -417,8 +480,24 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     let launchTask = task;
     let attemptId = job.attemptId;
     let currentAttempt = host.loadAttemptById(attemptId);
+    const claimPatch = host.deferRunningUntilLaunch
+      ? {
+          status: 'claimed' as const,
+          claimedAt: now,
+          lastHeartbeatAt: now,
+          leaseExpiresAt: nextLeaseExpiry(now),
+        }
+      : {
+          status: 'running' as const,
+          claimedAt: currentAttempt?.claimedAt ?? now,
+          startedAt: now,
+          lastHeartbeatAt: now,
+          leaseExpiresAt: nextLeaseExpiry(now),
+        };
+    let createdAttemptForLaunch = false;
     if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
-      attemptId = host.ensureCurrentPendingAttempt(task);
+      attemptId = createPendingLaunchAttempt(host, task, claimPatch, currentAttempt);
+      createdAttemptForLaunch = true;
       launchTask = host.stateGetTask(job.taskId) ?? task;
       currentAttempt = host.loadAttemptById(attemptId);
     }
@@ -439,28 +518,12 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
       continue;
     }
     const launchAttemptId = attemptId;
-    const selectedTask = host.stateGetTask(job.taskId) ?? task;
-    if (selectedTask.execution.selectedAttemptId !== launchAttemptId) {
-      host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } });
-    }
+    const clearStaleLaunchLineage = hasPendingLaunchRuntimeState(launchTask);
     let claimSucceeded = false;
-    const claimPatch = host.deferRunningUntilLaunch
-      ? {
-          status: 'claimed' as const,
-          claimedAt: now,
-          lastHeartbeatAt: now,
-          leaseExpiresAt: nextLeaseExpiry(now),
-        }
-      : {
-          status: 'running' as const,
-          claimedAt: currentAttempt?.claimedAt ?? now,
-          startedAt: now,
-          lastHeartbeatAt: now,
-          leaseExpiresAt: nextLeaseExpiry(now),
-        };
-    claimSucceeded = host.taskRepository.claimAttemptForLaunch?.(launchAttemptId, claimPatch, now)
-      ?? !host.isAttemptLeaseActive(currentAttempt, now.getTime());
-    if (claimSucceeded && !host.taskRepository.claimAttemptForLaunch) {
+    claimSucceeded = createdAttemptForLaunch
+      || (host.taskRepository.claimAttemptForLaunch?.(launchAttemptId, claimPatch, now)
+        ?? !host.isAttemptLeaseActive(currentAttempt, now.getTime()));
+    if (claimSucceeded && !createdAttemptForLaunch && !host.taskRepository.claimAttemptForLaunch) {
       host.taskRepository.updateAttempt(launchAttemptId, claimPatch);
     }
     if (!claimSucceeded) {
@@ -478,10 +541,25 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
           execution: {
             selectedAttemptId: launchAttemptId,
             generation: host.getExecutionGeneration(task),
+            startedAt: undefined,
             lastHeartbeatAt: now,
             phase: 'launching',
             launchStartedAt: now,
             launchCompletedAt: undefined,
+            agentSessionId: undefined,
+            containerId: undefined,
+            error: undefined,
+            exitCode: undefined,
+            inputPrompt: undefined,
+            pendingFixError: undefined,
+            summary: undefined,
+            ...(clearStaleLaunchLineage
+              ? {
+                  branch: undefined,
+                  commit: undefined,
+                  workspacePath: undefined,
+                }
+              : {}),
           },
         }
       : {
@@ -494,9 +572,23 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
             phase: 'launching',
             launchStartedAt: now,
             launchCompletedAt: undefined,
+            agentSessionId: undefined,
+            containerId: undefined,
+            error: undefined,
+            exitCode: undefined,
+            inputPrompt: undefined,
+            pendingFixError: undefined,
+            summary: undefined,
+            ...(clearStaleLaunchLineage
+              ? {
+                  branch: undefined,
+                  commit: undefined,
+                  workspacePath: undefined,
+                }
+              : {}),
           },
         };
-    const updated = host.writeAndSync(job.taskId, changes);
+    const updated = host.writeAndSync(job.taskId, changes, { skipWorkflowStatusSync: true });
     host.persistence.logEvent?.(
       job.taskId,
       host.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
@@ -551,5 +643,6 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     availableSlots -= 1;
     job = availableSlots > 0 ? host.scheduler.takeNext() : null;
   }
+  materializeQueuedAttempts(host);
   return started;
 }

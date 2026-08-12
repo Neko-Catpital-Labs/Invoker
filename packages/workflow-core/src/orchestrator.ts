@@ -1509,7 +1509,7 @@ export class Orchestrator {
     this.pruneLaunchDeferrals();
 
     const activeAttempts = this.countActivePersistedAttempts();
-    const readyTasks = this.getExecutableReadyTasks();
+    const readyTasks = this.getExecutableReadyTasks({ skipBatchRefresh: true });
     this.logger.info('[orchestrator] startExecution', {
       ready: readyTasks.length,
       active: activeAttempts,
@@ -1535,7 +1535,7 @@ export class Orchestrator {
       readyTaskIds = readyTaskIds.slice(0, opts.limit);
     }
 
-    return this.autoStartReadyTasks(readyTaskIds);
+    return this.autoStartReadyTasks(readyTaskIds, 0, { skipBatchRefresh: true });
   }
 
   /**
@@ -3248,7 +3248,7 @@ export class Orchestrator {
     return this.stateMachine.getReadyTasks();
   }
 
-  getExecutableReadyTasks(): TaskState[] {
+  getExecutableReadyTasks(opts?: { skipBatchRefresh?: boolean }): TaskState[] {
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
@@ -3260,6 +3260,7 @@ export class Orchestrator {
         attemptId: task.execution.selectedAttemptId,
         priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
       })),
+      opts,
     )
       .map((job) => readyTasksById.get(job.taskId))
       .filter((task): task is TaskState => task !== undefined);
@@ -3402,9 +3403,11 @@ export class Orchestrator {
       phase?: string;
     },
   ): void {
+    const launchStartedAt = this.stateGetTask(taskId)?.execution.launchStartedAt;
+    const launchBackoffBaseMs = launchStartedAt instanceof Date ? launchStartedAt.getTime() : undefined;
     deferTaskImpl(this as unknown as CancellationHost, taskId, reason);
     if (reason?.reason === 'resource-limit') {
-      this.recordLaunchDeferral(taskId);
+      this.recordLaunchDeferral(taskId, launchBackoffBaseMs);
     }
   }
 
@@ -3413,11 +3416,11 @@ export class Orchestrator {
    * execution pool had no member capacity. Attempts drive an exponential
    * schedule so a persistently starved task backs off toward the cap.
    */
-  private recordLaunchDeferral(taskId: string): void {
+  private recordLaunchDeferral(taskId: string, baseTimeMs: number = Date.now()): void {
     const attempts = (this.launchDeferrals.get(taskId)?.attempts ?? 0) + 1;
     const backoff = this.computeLaunchBackoffMs(attempts);
     // lastHeartbeatAt=0 forces a heartbeat on the first parked poll.
-    this.launchDeferrals.set(taskId, { until: Date.now() + backoff, attempts, lastHeartbeatAt: 0 });
+    this.launchDeferrals.set(taskId, { until: baseTimeMs + backoff, attempts, lastHeartbeatAt: 0 });
   }
 
   private computeLaunchBackoffMs(attempts: number): number {
@@ -3724,7 +3727,11 @@ export class Orchestrator {
     checkWorkflowCompletionImpl(this as unknown as TransitionHost, transitionedWorkflowId);
   }
 
-  private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions): TaskState[] {
+  private autoStartReadyTasks(
+    taskIds: string[],
+    priority: number = 0,
+    opts?: LaunchReadinessOptions & { skipBatchRefresh?: boolean },
+  ): TaskState[] {
     return autoStartReadyTasksImpl(this as unknown as SchedulerDomainHost, taskIds, priority, opts);
   }
 

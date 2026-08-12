@@ -6190,16 +6190,10 @@ describe('Orchestrator', () => {
       }
 
       expect(started.length).toBe(workflowCount);
-      // Before the fix, getTaskLaunchReadinessImpl() called refreshFromDb()
-      // -- reloading every active workflow's tasks from the DB -- once per
-      // ready task inside planPendingLaunchQueue()'s map and once more per
-      // dequeued job inside drainSchedulerImpl()'s while loop, on top of
-      // the single refresh startExecution() already does at its own top.
-      // That made refreshFromDb() calls scale with the number of ready
-      // tasks in a single startExecution() call rather than staying
-      // constant. It must now stay at a small, fixed count regardless of
-      // how many tasks are ready.
-      expect(refreshCount).toBeLessThanOrEqual(5);
+      // startExecution() already refreshes at the top of the call; the
+      // scheduler batch must reuse that snapshot instead of reloading every
+      // active workflow again while enqueueing and draining ready tasks.
+      expect(refreshCount).toBe(1);
     });
   });
 

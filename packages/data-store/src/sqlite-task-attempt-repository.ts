@@ -537,10 +537,19 @@ export class SqliteTaskAttemptRepository {
     }
     const statusChanged = changes.status !== undefined && changes.status !== beforeTask.status;
     const workflowId = beforeTask.config.workflowId;
-    const beforeWorkflow = statusChanged && workflowId
+    const isLaunchTransition =
+      (changes.status === 'running' || (changes.status as string | undefined) === 'queued')
+      && changes.execution?.phase === 'launching'
+      && changes.execution.selectedAttemptId !== undefined;
+    const beforeWorkflow = statusChanged && workflowId && !isLaunchTransition
       ? this.loadWorkflowJournalPayload(workflowId)
       : undefined;
     const updateSql = `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`;
+
+    if (isLaunchTransition) {
+      this.exec.execRun(updateSql, values);
+      return;
+    }
 
     this.exec.runTransaction(() => {
       this.exec.execRun(updateSql, values);
@@ -761,7 +770,7 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.exec.runTransaction(() => {
+    const insertAttempt = (): void => {
       this.exec.execRun(`
         INSERT OR REPLACE INTO attempts (
           id, node_id, attempt_number, queue_priority, status,
@@ -796,6 +805,19 @@ export class SqliteTaskAttemptRepository {
         attempt.createdAt.toISOString(),
         attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
       ]);
+    };
+    const isClaimedLaunchAttempt =
+      (attempt.status === 'claimed' || attempt.status === 'running')
+      && attempt.claimedAt
+      && attempt.leaseExpiresAt;
+
+    if (isClaimedLaunchAttempt) {
+      insertAttempt();
+      return;
+    }
+
+    this.exec.runTransaction(() => {
+      insertAttempt();
       const payload = this.loadAttemptJournalPayload(attempt.id);
       if (!payload) {
         throw new Error(`Failed to load attempt ${attempt.id} after insert for sync journal`);
