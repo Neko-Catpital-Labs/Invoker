@@ -271,7 +271,7 @@ describe('planning chat incident ad665bff: valid sidecar after repository answer
     vi.restoreAllMocks();
   });
 
-  it.fails('persists the exact recovered reaper draft and makes it review-ready', async () => {
+  it('persists the exact recovered reaper draft and makes it review-ready', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'planning-chat-ad665bff-'));
     const adapter = await SQLiteAdapter.create(':memory:');
     const sessions = createInAppPlanningChatSessions();

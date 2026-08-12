@@ -738,7 +738,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-label', 'Plan graph');
     await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('aria-label', 'Workflows');
     await expect(page.getByTestId('sidebar-attention')).toHaveAttribute('aria-label', 'Needs Attention');
-    await expect(page.getByTestId('sidebar-running')).toBeAttached();
+    await expect(page.getByTestId('sidebar-workers')).toHaveAttribute('aria-label', 'Workers');
+    await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('data-tone', 'neutral');
+    await expect(page.getByTestId('sidebar-running')).toHaveCount(0);
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
@@ -1899,9 +1901,12 @@ test.describe('Visual proof capture', () => {
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await selectWorkflowNode(page, 'wf-test-1');
     await waitForStableViewportTransform(page, page.getByTestId('workflow-graph-surface').locator('.react-flow__viewport').first());
-    const pendingChip = page.getByTestId('workflow-status-pill-pending');
-    await expect(pendingChip).toBeVisible();
-    await expect(pendingChip).toContainText('pending (1)');
+    const runningWorkflowChip = page
+      .getByTestId('workflow-status-pill-running')
+      .filter({ hasText: 'workflows running (1)' });
+    await expect(runningWorkflowChip).toBeVisible();
+    await expect(page.getByTestId('workflow-status-pill-pending').filter({ hasText: 'pending (0)' })).toBeVisible();
+    await expect(page.getByTestId('queue-chip-queued')).toContainText('Queued (0)');
     await expect(page.getByText('System Log')).toHaveCount(0);
     await captureScreenshot(page, 'status-bar-no-system-log');
     await assertPageScreenshot(page, 'status-bar-no-system-log');
