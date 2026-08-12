@@ -54,6 +54,20 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_CI_JOB_REPLACEMENTS = [
+  {
+    legacyJobName: 'playwright / launch-dispatch-stuck-lease',
+    replacementJobName: 'playwright / 9-of-9',
+    jobId: 'playwright',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -153,6 +167,11 @@ export function reconcileCiRun(state, run) {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
       delete normalized.activeFailures[jobName];
+      for (const replacement of LEGACY_CI_JOB_REPLACEMENTS) {
+        if (replacement.replacementJobName === jobName) {
+          delete normalized.activeFailures[replacement.legacyJobName];
+        }
+      }
       continue;
     }
 
@@ -339,6 +358,19 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         verifyCommand: commandForJob(jobId, job, matrix),
       });
     }
+  }
+  for (const replacement of LEGACY_CI_JOB_REPLACEMENTS) {
+    if (definitions.has(replacement.legacyJobName)) continue;
+    if (!definitions.has(replacement.replacementJobName)) continue;
+    const job = workflow.jobs?.[replacement.jobId];
+    if (!job) continue;
+    definitions.set(replacement.legacyJobName, {
+      jobId: replacement.jobId,
+      jobName: replacement.legacyJobName,
+      matrix: replacement.matrix,
+      replacedByJobName: replacement.replacementJobName,
+      verifyCommand: commandForJob(replacement.jobId, job, replacement.matrix),
+    });
   }
   return definitions;
 }
