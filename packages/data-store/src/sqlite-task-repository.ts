@@ -46,8 +46,25 @@ export class SqliteTaskRepository implements TaskRepository {
     this.adapter.saveTask(workflowId, task);
   }
 
-  updateTask(taskId: string, changes: TaskStateChanges): void {
-    this.adapter.updateTask(taskId, changes);
+  updateTask(
+    taskId: string,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    this.adapter.updateTask(taskId, changes, opts);
+  }
+
+  updateTaskFromKnownState(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    if (this.adapter.updateTaskFromKnownState) {
+      this.adapter.updateTaskFromKnownState(taskId, beforeTask, changes, opts);
+      return;
+    }
+    this.adapter.updateTask(taskId, changes, opts);
   }
 
   deleteTask(taskId: string): void {

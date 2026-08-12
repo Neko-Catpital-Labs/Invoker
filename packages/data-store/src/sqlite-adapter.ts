@@ -821,7 +821,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         : null);
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
-      updateTask: (taskId, changes) => this.updateTask(taskId, changes),
+      updateTask: (taskId, changes, opts) => this.updateTask(taskId, changes, opts),
       updateAttempt: (attemptId, changes) => this.updateAttempt(attemptId, changes),
     });
     this.workflowRepo = new SqliteWorkflowRepository(
@@ -1228,8 +1228,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.taskAttemptRepo.saveTask(workflowId, task);
   }
 
-  updateTask(taskId: string, changes: TaskStateChanges): void {
-    this.taskAttemptRepo.updateTask(taskId, changes);
+  updateTask(
+    taskId: string,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    this.taskAttemptRepo.updateTask(taskId, changes, opts);
+  }
+
+  updateTaskFromKnownState(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    this.taskAttemptRepo.updateTaskFromKnownState(taskId, beforeTask, changes, opts);
   }
 
   loadTasks(workflowId: string): TaskState[] {
