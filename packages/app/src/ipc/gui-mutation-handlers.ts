@@ -1816,14 +1816,14 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     if (!workerRuntimeController) {
       throw new Error('Worker runtime controller is unavailable');
     }
-    return workerRuntimeController.start(String(kindArg));
+    return workerRuntimeController.start(String(kindArg), { source: 'gui-ipc' });
   });
 
   registerGuiMutationHandler('invoker:stop-worker', async (kindArg: unknown) => {
     if (!workerRuntimeController) {
       throw new Error('Worker runtime controller is unavailable');
     }
-    return workerRuntimeController.stop(String(kindArg));
+    return workerRuntimeController.stop(String(kindArg), { source: 'gui-ipc' });
   });
 
   ipcMain.handle('invoker:get-queue-status', (_event, options?: { refresh?: boolean }) => resolveGuiQueueStatusRead({
