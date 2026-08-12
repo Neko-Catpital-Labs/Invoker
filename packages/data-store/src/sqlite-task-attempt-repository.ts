@@ -56,7 +56,11 @@ export function assertSaveTaskPersistsSelectedAttemptId(
  * updateAttempt on the adapter instance).
  */
 export interface TaskAttemptMutators {
-  updateTask(taskId: string, changes: TaskStateChanges): void;
+  updateTask(
+    taskId: string,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void;
   updateAttempt(
     attemptId: string,
     changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>,
@@ -344,9 +348,34 @@ export class SqliteTaskAttemptRepository {
     });
   }
 
-  updateTask(taskId: string, changes: TaskStateChanges): void {
+  updateTask(
+    taskId: string,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
+    this.updateTaskWithBefore(beforeTask, changes, opts);
+  }
+
+  updateTaskFromKnownState(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    if (beforeTask.id !== taskId) {
+      throw new Error(`updateTaskFromKnownState: task id mismatch (${beforeTask.id} !== ${taskId})`);
+    }
+    this.updateTaskWithBefore(beforeTask, changes, opts);
+  }
+
+  private updateTaskWithBefore(
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    const taskId = beforeTask.id;
 
     const setClauses: string[] = [];
     const values: unknown[] = [];
@@ -535,7 +564,10 @@ export class SqliteTaskAttemptRepository {
       const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
-    const statusChanged = changes.status !== undefined && changes.status !== beforeTask.status;
+    const statusChanged =
+      !opts?.skipWorkflowStatusSync
+      && changes.status !== undefined
+      && changes.status !== beforeTask.status;
     const workflowId = beforeTask.config.workflowId;
     const beforeWorkflow = statusChanged && workflowId
       ? this.loadWorkflowJournalPayload(workflowId)
