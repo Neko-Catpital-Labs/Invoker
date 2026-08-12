@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -395,6 +395,9 @@ describe('PR maintenance workers', () => {
     const worker = createPrAdminBypassLandWorker({
       logger,
       repoRoot,
+      env: {
+        INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: join(repoRoot, 'missing-mergify-ledger.jsonl'),
+      },
       spawnProcess: spawnHarness.spawnProcess,
       lockProbe: () => ({ held: false }),
       installSignalHandlers: false,
@@ -411,6 +414,98 @@ describe('PR maintenance workers', () => {
       subjectType: 'repo',
       subjectId: repoRoot,
     });
+  });
+
+  it('records blocked PR decisions and alert sends from the configured Mergify ledger', async () => {
+    const repoRoot = makeRepoRoot();
+    const ledgerPath = join(repoRoot, 'mergify-ledger.jsonl');
+    writeFileSync(ledgerPath, [
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: 8547,
+        headSha: 'f9aa0d9',
+        key: 'required-fast / Vitest Workspace',
+        meta: { detail: 'Mergify repair stopped for PR #8547: test details' },
+      }),
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: '8548',
+        headSha: 'abc123',
+        key: 'PR Body',
+      }),
+      JSON.stringify({
+        kind: 'repair-check-settled',
+        pr: 8549,
+        headSha: 'ignored',
+        key: 'ignored',
+      }),
+      'not json',
+    ].join('\n'));
+    const spawnHarness = makeSpawnHarness({ exitCode: 0 });
+    const actions = new Map<string, WorkerActionRecord>();
+    const store = {
+      getWorkerAction: vi.fn((kind: string, key: string) => actions.get(`${kind}:${key}`)),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+        const mapKey = `${write.workerKind}:${write.externalKey}`;
+        const existing = actions.get(mapKey);
+        const saved = {
+          ...write,
+          attemptCount: write.attemptCount ?? 0,
+          id: existing?.id ?? write.id,
+          createdAt: existing?.createdAt ?? 'now',
+          updatedAt: 'now',
+        } as WorkerActionRecord;
+        actions.set(mapKey, saved);
+        return saved;
+      }),
+    };
+    const worker = createPrAdminBypassLandWorker({
+      logger: makeLogger(),
+      repoRoot,
+      env: {
+        INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: ledgerPath,
+      },
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      store,
+    });
+
+    await worker.tick();
+
+    const writes = store.upsertWorkerAction.mock.calls.map((call) => call[0] as WorkerActionWrite);
+    expect(writes.map((write) => write.actionType)).toEqual([
+      'pr-maintenance-run',
+      'pr-maintenance-run',
+      'mergify-blocked-pr',
+      'alert-send',
+      'mergify-blocked-pr',
+      'alert-send',
+    ]);
+    expect(writes[2]).toMatchObject({
+      workerKind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+      actionType: 'mergify-blocked-pr',
+      externalKey: 'mergify-blocked:pr:8547:ledger:required-fast / Vitest Workspace:head:f9aa0d9',
+      subjectType: 'pr',
+      subjectId: '8547',
+      status: 'needs_input',
+      summary: 'Mergify repair stopped for PR #8547: test details',
+      payload: {
+        pr: 8547,
+        ledgerKey: 'required-fast / Vitest Workspace',
+        headSha: 'f9aa0d9',
+        ledgerPath,
+      },
+    });
+    expect(writes[3]).toMatchObject({
+      actionType: 'alert-send',
+      externalKey: 'alert-send:pr:8547:ledger:required-fast / Vitest Workspace:head:f9aa0d9',
+      status: 'completed',
+      payload: {
+        message: 'Mergify repair stopped for PR #8547: test details',
+      },
+    });
+    expect(writes[4]?.summary).toBe('Mergify repair stopped for PR #8548: PR Body');
   });
 
   it('does not record a decision row when the lock is held', async () => {
