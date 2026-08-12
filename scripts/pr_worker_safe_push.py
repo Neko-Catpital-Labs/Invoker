@@ -227,6 +227,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
         return 0
     except SafePushError as exc:
+        if exc.exit_code == 20 and args.expected_head is not None:
+            print(f"pr-worker-safe-push: skipped push: {exc}", file=sys.stderr)
+            return 0
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return exc.exit_code or 1
     except json.JSONDecodeError as exc:
