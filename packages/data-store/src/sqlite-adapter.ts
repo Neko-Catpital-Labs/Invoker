@@ -826,7 +826,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
     this.workflowRepo = new SqliteWorkflowRepository(
       this.executor,
-      (task) => this.taskAttemptRepo.reconcileTaskFromSelectedAttempt(task),
+      (tasks) => this.taskAttemptRepo.reconcileTasksFromSelectedAttempts(tasks),
     );
     this.configureConnection(dbPath !== null);
     if (!this.readOnly) {

@@ -394,162 +394,168 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     maxConcurrency: host.maxConcurrency,
     availableSlots,
   });
-  let job = availableSlots > 0 ? host.scheduler.takeNext() : null;
-  while (job && availableSlots > 0) {
-    const readiness = getTaskLaunchReadinessCore(host, job.taskId, {
-      bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
-    });
-    host.logger.info('[orchestrator] drainScheduler: dequeued', {
-      taskId: job.taskId,
-      actualStatus: readiness.task?.status ?? 'NOT_FOUND',
-    });
-    if (!readiness.ready) {
-      host.logger.info('[orchestrator] drainScheduler: skipping non-ready task', {
-        taskId: job.taskId,
-        reason: readiness.reason,
+  const pendingDeltas: Array<{ before: TaskState; after: TaskState; changes: TaskStateChanges }> = [];
+  host.taskRepository.runInTransaction(() => {
+    let job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+    while (job && availableSlots > 0) {
+      const readiness = getTaskLaunchReadinessCore(host, job.taskId, {
+        bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
       });
-      job = host.scheduler.takeNext();
-      continue;
-    }
-    const task = readiness.task;
+      host.logger.info('[orchestrator] drainScheduler: dequeued', {
+        taskId: job.taskId,
+        actualStatus: readiness.task?.status ?? 'NOT_FOUND',
+      });
+      if (!readiness.ready) {
+        host.logger.info('[orchestrator] drainScheduler: skipping non-ready task', {
+          taskId: job.taskId,
+          reason: readiness.reason,
+        });
+        job = host.scheduler.takeNext();
+        continue;
+      }
+      const task = readiness.task;
 
-    const now = new Date();
-    let launchTask = task;
-    let attemptId = job.attemptId;
-    let currentAttempt = host.loadAttemptById(attemptId);
-    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
-      attemptId = host.ensureCurrentPendingAttempt(task);
-      launchTask = host.stateGetTask(job.taskId) ?? task;
-      currentAttempt = host.loadAttemptById(attemptId);
-    }
-    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
-      host.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
-        taskId: job.taskId,
-        attemptId,
-        attemptStatus: currentAttempt?.status ?? 'missing',
-      });
-      job = host.scheduler.takeNext();
-      continue;
-    }
-    if (!attemptId) {
-      host.logger.info('[orchestrator] drainScheduler: skipping missing attempt id', {
-        taskId: job.taskId,
-      });
-      job = host.scheduler.takeNext();
-      continue;
-    }
-    const launchAttemptId = attemptId;
-    const selectedTask = host.stateGetTask(job.taskId) ?? task;
-    if (selectedTask.execution.selectedAttemptId !== launchAttemptId) {
-      host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } });
-    }
-    let claimSucceeded = false;
-    const claimPatch = host.deferRunningUntilLaunch
-      ? {
-          status: 'claimed' as const,
-          claimedAt: now,
-          lastHeartbeatAt: now,
-          leaseExpiresAt: nextLeaseExpiry(now),
-        }
-      : {
-          status: 'running' as const,
-          claimedAt: currentAttempt?.claimedAt ?? now,
-          startedAt: now,
-          lastHeartbeatAt: now,
-          leaseExpiresAt: nextLeaseExpiry(now),
-        };
-    claimSucceeded = host.taskRepository.claimAttemptForLaunch?.(launchAttemptId, claimPatch, now)
-      ?? !host.isAttemptLeaseActive(currentAttempt, now.getTime());
-    if (claimSucceeded && !host.taskRepository.claimAttemptForLaunch) {
-      host.taskRepository.updateAttempt(launchAttemptId, claimPatch);
-    }
-    if (!claimSucceeded) {
-      host.logger.info('[orchestrator] drainScheduler: skipping already-claimed attempt', {
-        taskId: job.taskId,
-        attemptId,
-      });
-      job = availableSlots > 0 ? host.scheduler.takeNext() : null;
-      continue;
-    }
-
-    const changes: TaskStateChanges = host.deferRunningUntilLaunch
-      ? {
-          status: 'queued' as TaskStateChanges['status'],
-          execution: {
-            selectedAttemptId: launchAttemptId,
-            generation: host.getExecutionGeneration(task),
+      let launchTask = task;
+      let attemptId = job.attemptId;
+      let currentAttempt = host.loadAttemptById(attemptId);
+      if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
+        attemptId = host.ensureCurrentPendingAttempt(task);
+        launchTask = host.stateGetTask(job.taskId) ?? task;
+        currentAttempt = host.loadAttemptById(attemptId);
+      }
+      if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
+        host.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
+          taskId: job.taskId,
+          attemptId,
+          attemptStatus: currentAttempt?.status ?? 'missing',
+        });
+        job = host.scheduler.takeNext();
+        continue;
+      }
+      if (!attemptId) {
+        host.logger.info('[orchestrator] drainScheduler: skipping missing attempt id', {
+          taskId: job.taskId,
+        });
+        job = host.scheduler.takeNext();
+        continue;
+      }
+      const launchAttemptId = attemptId;
+      const now = new Date();
+      const selectedTask = host.stateGetTask(job.taskId) ?? task;
+      if (selectedTask.execution.selectedAttemptId !== launchAttemptId) {
+        host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } });
+      }
+      const claimPatch = host.deferRunningUntilLaunch
+        ? {
+            status: 'claimed' as const,
+            claimedAt: now,
             lastHeartbeatAt: now,
-            phase: 'launching',
-            launchStartedAt: now,
-            launchCompletedAt: undefined,
-          },
-        }
-      : {
-          status: 'running',
-          execution: {
-            selectedAttemptId: launchAttemptId,
-            generation: host.getExecutionGeneration(task),
+            leaseExpiresAt: nextLeaseExpiry(now),
+          }
+        : {
+            status: 'running' as const,
+            claimedAt: currentAttempt?.claimedAt ?? now,
             startedAt: now,
             lastHeartbeatAt: now,
-            phase: 'launching',
-            launchStartedAt: now,
-            launchCompletedAt: undefined,
-          },
-        };
-    const updated = host.writeAndSync(job.taskId, changes);
-    host.persistence.logEvent?.(
-      job.taskId,
-      host.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
-      changes,
-    );
-    if (
-      typeof host.persistence.enqueueLaunchDispatch === 'function'
-      && task.config.workflowId
-    ) {
-      try {
-        const dispatch = host.persistence.enqueueLaunchDispatch({
-          taskId: job.taskId,
-          attemptId: launchAttemptId,
-          workflowId: task.config.workflowId,
-          generation: host.getExecutionGeneration(task),
-        });
-        host.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
-          ...changes,
-          dispatchId: dispatch.id,
-          attemptId: launchAttemptId,
-          workflowId: task.config.workflowId,
-          generation: host.getExecutionGeneration(task),
-          state: dispatch.state,
-          priority: dispatch.priority,
-        });
-        host.logger.info('[orchestrator] drainScheduler: launch dispatch enqueued', {
-          taskId: job.taskId,
-          attemptId: launchAttemptId,
-          workflowId: task.config.workflowId,
-          generation: host.getExecutionGeneration(task),
-          dispatchId: dispatch.id,
-          state: dispatch.state,
-          priority: dispatch.priority,
-        });
-      } catch (err) {
-        host.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {
-          taskId: job.taskId,
-          attemptId: launchAttemptId,
-          error: err instanceof Error ? err.message : String(err),
-        });
+            leaseExpiresAt: nextLeaseExpiry(now),
+          };
+      const claimSucceeded = host.taskRepository.claimAttemptForLaunch?.(launchAttemptId, claimPatch, now)
+        ?? !host.isAttemptLeaseActive(currentAttempt, now.getTime());
+      if (claimSucceeded && !host.taskRepository.claimAttemptForLaunch) {
+        host.taskRepository.updateAttempt(launchAttemptId, claimPatch);
       }
-    }
-    host.messageBus.publish(TASK_DELTA_CHANNEL, host.buildUpdateDelta(task, updated, changes));
-    started.push(updated);
-    host.logger.info('[orchestrator] drainScheduler: started', {
-      taskId: job.taskId,
-      attemptId: launchAttemptId,
-      phase: 'launching',
-      generation: changes.execution?.generation ?? 'unknown',
-    });
+      if (!claimSucceeded) {
+        host.logger.info('[orchestrator] drainScheduler: skipping already-claimed attempt', {
+          taskId: job.taskId,
+          attemptId,
+        });
+        job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+        continue;
+      }
 
-    availableSlots -= 1;
-    job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+      const changes: TaskStateChanges = host.deferRunningUntilLaunch
+        ? {
+            status: 'queued' as TaskStateChanges['status'],
+            execution: {
+              selectedAttemptId: launchAttemptId,
+              generation: host.getExecutionGeneration(task),
+              lastHeartbeatAt: now,
+              phase: 'launching',
+              launchStartedAt: now,
+              launchCompletedAt: undefined,
+            },
+          }
+        : {
+            status: 'running',
+            execution: {
+              selectedAttemptId: launchAttemptId,
+              generation: host.getExecutionGeneration(task),
+              startedAt: now,
+              lastHeartbeatAt: now,
+              phase: 'launching',
+              launchStartedAt: now,
+              launchCompletedAt: undefined,
+            },
+          };
+      const updated = host.writeAndSync(job.taskId, changes);
+      host.persistence.logEvent?.(
+        job.taskId,
+        host.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
+        changes,
+      );
+      if (
+        typeof host.persistence.enqueueLaunchDispatch === 'function'
+        && task.config.workflowId
+      ) {
+        try {
+          const dispatch = host.persistence.enqueueLaunchDispatch({
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: host.getExecutionGeneration(task),
+          });
+          host.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
+            ...changes,
+            dispatchId: dispatch.id,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: host.getExecutionGeneration(task),
+            state: dispatch.state,
+            priority: dispatch.priority,
+          });
+          host.logger.info('[orchestrator] drainScheduler: launch dispatch enqueued', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: host.getExecutionGeneration(task),
+            dispatchId: dispatch.id,
+            state: dispatch.state,
+            priority: dispatch.priority,
+          });
+        } catch (err) {
+          host.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      pendingDeltas.push({ before: task, after: updated, changes });
+      started.push(updated);
+      host.logger.info('[orchestrator] drainScheduler: started', {
+        taskId: job.taskId,
+        attemptId: launchAttemptId,
+        phase: 'launching',
+        generation: changes.execution?.generation ?? 'unknown',
+      });
+
+      availableSlots -= 1;
+      job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+    }
+  });
+  for (const delta of pendingDeltas) {
+    host.messageBus.publish(TASK_DELTA_CHANNEL, host.buildUpdateDelta(delta.before, delta.after, delta.changes));
   }
   return started;
 }

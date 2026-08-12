@@ -28,6 +28,7 @@ const payload = JSON.stringify(Array.from({ length: 3000 }, (_, i) => ({
   description: 'synthetic workflow row ' + i + ' padded-padded-padded-padded-padded-padded-padded-padded',
   status: 'completed',
 })));
+process.stdout.cork();
 process.stdout.write(payload);
 process.exit(0);
 `;
@@ -49,7 +50,8 @@ describe('headless stdout flush', () => {
     expect(payload.length).toBeGreaterThanOrEqual(250 * 1024);
 
     const output = execFileSync(process.execPath, ['-e', buggyScript], { encoding: 'utf8' });
-    // Truncates at the OS pipe buffer boundary -- deterministic, not flaky.
+    // Corking keeps the payload buffered so the historical write-then-exit
+    // pattern is deterministic across Node/libuv versions.
     expect(output.length).toBeLessThan(payload.length);
     expect(() => JSON.parse(output)).toThrow();
   });

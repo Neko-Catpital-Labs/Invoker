@@ -574,7 +574,7 @@ export class SqliteTaskAttemptRepository {
        WHERE t.workflow_id = ?`,
       [workflowId],
     );
-    return rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
+    return this.reconcileTasksFromSelectedAttempts(rows.map((row) => mapRowToTask(row)));
   }
 
   /**
@@ -594,7 +594,7 @@ export class SqliteTaskAttemptRepository {
        WHERE t.workflow_id IN (${placeholders})`,
       workflowIds,
     );
-    return rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
+    return this.reconcileTasksFromSelectedAttempts(rows.map((row) => mapRowToTask(row)));
   }
 
   loadTask(taskId: string): TaskState | undefined {
@@ -605,7 +605,7 @@ export class SqliteTaskAttemptRepository {
       [taskId],
     );
     if (!row) return undefined;
-    return this.reconcileTaskFromSelectedAttempt(mapRowToTask(row));
+    return this.reconcileTasksFromSelectedAttempts([mapRowToTask(row)])[0];
   }
 
   getAllTaskIds(): string[] {
@@ -965,20 +965,54 @@ export class SqliteTaskAttemptRepository {
   }
 
   reconcileTaskFromSelectedAttempt(task: TaskState): TaskState {
-    const attemptId = task.execution.selectedAttemptId;
-    if (!attemptId) return task;
+    return this.reconcileTasksFromSelectedAttempts([task])[0] ?? task;
+  }
 
-    const taskIsTerminal =
-      task.status === 'completed' ||
+  reconcileTasksFromSelectedAttempts(tasks: TaskState[]): TaskState[] {
+    const candidateAttemptIds = new Set<string>();
+    for (const task of tasks) {
+      if (!task.execution.selectedAttemptId) continue;
+      if (this.isTerminalForAttemptReconcile(task)) continue;
+      candidateAttemptIds.add(task.execution.selectedAttemptId);
+    }
+
+    const attemptsById = this.loadAttemptsByIds([...candidateAttemptIds]);
+    return tasks.map((task) => this.reconcileTaskFromSelectedAttemptRow(task, attemptsById.get(task.execution.selectedAttemptId ?? '')));
+  }
+
+  private isTerminalForAttemptReconcile(task: TaskState): boolean {
+    return task.status === 'completed' ||
       task.status === 'failed' ||
       task.status === 'fixing_with_ai' ||
       task.status === 'needs_input' ||
       task.status === 'awaiting_approval' ||
       task.status === 'review_ready' ||
       task.status === 'stale';
-    if (taskIsTerminal) return task;
+  }
 
-    const attempt = this.loadAttempt(attemptId);
+  private loadAttemptsByIds(attemptIds: string[]): Map<string, Attempt> {
+    const attemptsById = new Map<string, Attempt>();
+    const batchSize = 500;
+    for (let start = 0; start < attemptIds.length; start += batchSize) {
+      const batch = attemptIds.slice(start, start + batchSize);
+      if (batch.length === 0) continue;
+      const rows = this.exec.queryAll(
+        `SELECT * FROM attempts WHERE id IN (${batch.map(() => '?').join(', ')})`,
+        batch,
+      );
+      for (const row of rows) {
+        const attempt = mapRowToAttempt(row);
+        attemptsById.set(attempt.id, attempt);
+      }
+    }
+    return attemptsById;
+  }
+
+  private reconcileTaskFromSelectedAttemptRow(task: TaskState, attempt: Attempt | undefined): TaskState {
+    const attemptId = task.execution.selectedAttemptId;
+    if (!attemptId) return task;
+
+    if (this.isTerminalForAttemptReconcile(task)) return task;
     if (!attempt) return task;
 
     if (attempt.status === 'failed' || isDiscardedAttempt(attempt)) {
