@@ -150,6 +150,13 @@ def append_json_ledger(
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def warn_ledger_record_failed(path: Path, exc: OSError) -> None:
+    print(
+        f"pr-worker-safe-push: warning: could not append ledger {path}: {exc}",
+        file=sys.stderr,
+    )
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Safely update a PR worker-owned branch only when its remote head matches the captured SHA.",
@@ -197,12 +204,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--tsv-key": args.tsv_key,
                 "--tsv-marker": args.tsv_marker,
             })
-            append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
-                kind=args.tsv_kind,
-                key=args.tsv_key,
-                marker=args.tsv_marker,
-            )
+            tsv_ledger = Path(args.record_tsv_ledger).expanduser()
+            try:
+                append_tsv_ledger(
+                    tsv_ledger,
+                    kind=args.tsv_kind,
+                    key=args.tsv_key,
+                    marker=args.tsv_marker,
+                )
+            except OSError as exc:
+                warn_ledger_record_failed(tsv_ledger, exc)
         if args.record_json_ledger:
             require_all("JSONL ledger recording", {
                 "--json-kind": args.json_kind,
@@ -216,17 +227,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not isinstance(decoded, dict):
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
-            append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
-                kind=args.json_kind,
-                pr_number=args.json_pr,
-                head_sha=args.json_head_sha,
-                key=args.json_key,
-                meta=meta,
-            )
+            json_ledger = Path(args.record_json_ledger).expanduser()
+            try:
+                append_json_ledger(
+                    json_ledger,
+                    kind=args.json_kind,
+                    pr_number=args.json_pr,
+                    head_sha=args.json_head_sha,
+                    key=args.json_key,
+                    meta=meta,
+                )
+            except OSError as exc:
+                warn_ledger_record_failed(json_ledger, exc)
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
         return 0
     except SafePushError as exc:
+        if exc.exit_code == 20 and not args.expect_missing:
+            print(f"pr-worker-safe-push: skipped: {exc}")
+            return 0
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return exc.exit_code or 1
     except json.JSONDecodeError as exc:

@@ -90,7 +90,7 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
 
-    def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
+    def test_moved_remote_head_cli_skips_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
         self.clone_other()
         remote_after_race = self.commit(self.other, "race", "race\n")
         git(self.other, "push", "origin", "HEAD:refs/heads/main")
@@ -106,10 +106,22 @@ class SafePushTests(unittest.TestCase):
             "--tsv-marker", "fp1",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipped: stale-head", result.stdout)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
+
+    def test_safe_push_function_stale_head_still_raises_for_python_callers(self) -> None:
+        self.clone_other()
+        self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "repair")
+
+        with self.assertRaises(safe_push.SafePushError) as raised:
+            safe_push.safe_push(branch="main", expected_head=self.expected, cwd=self.repo)
+
+        self.assertEqual(raised.exception.exit_code, 20)
+        self.assertIn("stale-head", str(raised.exception))
 
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
@@ -152,6 +164,24 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("git push", result.stderr)
         self.assertFalse(ledger.exists())
+
+    def test_ledger_write_failure_does_not_fail_verified_push(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        ledger_parent = self.root / "not-a-directory"
+        ledger_parent.write_text("file\n", encoding="utf-8")
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger_parent / "ledger.jsonl"),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "123",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("warning: could not append ledger", result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
 
     def test_new_prerequisite_branch_succeeds_only_when_remote_branch_is_absent(self) -> None:
         git(self.repo, "checkout", "-B", "stack/prereq")
