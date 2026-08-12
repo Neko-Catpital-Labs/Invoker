@@ -135,7 +135,7 @@ describe('HeadlessTransport', () => {
 
       expect(result.ok).toBe(true);
       expect(runHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ planPath: expect.stringContaining('plan.yaml') }),
+        expect.objectContaining({ planPath: expect.stringContaining('plan.yaml'), noTrack: true }),
       );
     });
 

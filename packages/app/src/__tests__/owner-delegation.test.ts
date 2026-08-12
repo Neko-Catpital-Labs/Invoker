@@ -128,7 +128,7 @@ describe('headless→owner delegation', () => {
         label: 'run',
         argv: ['run', '/path/to/plan.yaml', '--no-track'],
         channel: 'headless.run',
-        expectedPayload: { planPath: expect.stringContaining('plan.yaml') },
+        expectedPayload: { planPath: expect.stringContaining('plan.yaml'), noTrack: true },
       },
       {
         label: 'resume',

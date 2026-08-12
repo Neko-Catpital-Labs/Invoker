@@ -134,8 +134,13 @@ import {
 
 export interface HeadlessRunMutationPayload {
   planPath: string;
+  noTrack?: boolean;
   traceId?: string;
 }
+
+export type HeadlessRunMutationResult =
+  | { ok: true; workflowId: string; workflowIds?: string[]; workflowCount?: number; planName?: string }
+  | { workflowId: string; tasks: TaskState[]; workflowIds?: string[]; workflowCount?: number; planName?: string };
 
 export interface HeadlessResumeMutationPayload {
   workflowId: string;
@@ -305,7 +310,7 @@ export interface GuiMutationTaskActions {
   ) => Promise<TaskState[]>;
   executeHeadlessRun: (
     payload: HeadlessRunMutationPayload,
-  ) => Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }>;
+  ) => Promise<HeadlessRunMutationResult>;
   executeHeadlessResume: (payload: HeadlessResumeMutationPayload) => Promise<{ workflowId: string; tasks: TaskState[] }>;
   executeHeadlessExec: (payload: HeadlessExecMutationPayload) => Promise<unknown>;
   executeSpawnRepairWorkflowMutation: (payload: unknown) => Promise<unknown>;
@@ -671,7 +676,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
 
   async function executeHeadlessRun(
     payload: HeadlessRunMutationPayload,
-  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
+  ): Promise<HeadlessRunMutationResult> {
     const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
     const submission = await parsePlanSubmissionBundleFile(payload.planPath);
     taskHandles.clear();
@@ -711,11 +716,15 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     if (!workflowId) {
       throw new Error('Loaded plan did not create a workflow.');
     }
+
     const started = orchestrator.startExecution();
     logger.info(
       `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
       { module: 'ipc-delegate' },
     );
+    if (payload.noTrack) {
+      return { ok: true, workflowId, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
+    }
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
   }

@@ -265,7 +265,7 @@ describe('headless-client', () => {
       label: 'run',
       argv: ['run', '/tmp/plan.yaml', '--no-track'],
       channel: 'headless.run',
-      expectedPayload: { planPath: expect.stringContaining('plan.yaml') },
+      expectedPayload: { planPath: expect.stringContaining('plan.yaml'), noTrack: true },
     },
     {
       label: 'resume',
@@ -560,7 +560,10 @@ describe('headless-client', () => {
 
     expect(exitCode).toBe(0);
     expect(runHandler).toHaveBeenCalledTimes(1);
-    expect(runHandler).toHaveBeenCalledWith(expect.objectContaining({ planPath: expect.stringContaining('plan.yaml') }));
+    expect(runHandler).toHaveBeenCalledWith(expect.objectContaining({
+      planPath: expect.stringContaining('plan.yaml'),
+      noTrack: true,
+    }));
   });
 
   // --- Regression: standalone-owner scope for headless.resume ---

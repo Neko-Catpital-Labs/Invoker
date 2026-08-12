@@ -26,6 +26,7 @@ HOME_DIR="$TMP_DIR/home"
 DB_DIR="$HOME_DIR/.invoker"
 IPC_SOCKET="$TMP_DIR/ipc-transport.sock"
 PLAN_PATH="$TMP_DIR/storm-plan.yaml"
+PREREQ_PLAN_PATH="$TMP_DIR/storm-prereq-plan.yaml"
 CONFIG_PATH="$TMP_DIR/config.json"
 REMOTE_REPO="$TMP_DIR/remote.git"
 TIMINGS_FILE="$TMP_DIR/timings.txt"
@@ -114,6 +115,10 @@ skip_submission() {
   fi
 }
 
+extract_workflow_id() {
+  sed -n 's/^Delegated to owner — workflow: \(wf-[^[:space:]]*\)$/\1/p' "$1" | tail -1
+}
+
 cleanup() {
   stop_owner
   if [[ "$KEEP_TMP" -eq 1 ]]; then
@@ -141,27 +146,17 @@ fi
 
 git init --bare "$REMOTE_REPO" >/dev/null 2>&1
 
-cat > "$PLAN_PATH" <<EOF
-name: Workflow Submission Storm Bench
+cat > "$PREREQ_PLAN_PATH" <<'EOF'
+name: Workflow Submission Storm Prerequisite
+scratch: true
 onFinish: none
+mergeMode: no_op
 tasks:
-  - id: root
-    description: Root task
-    command: echo root
+  - id: hold
+    description: Hold benchmark submissions behind a real external dependency
+    command: echo prerequisite
+    requiresManualApproval: true
 EOF
-
-python3 - "$PLAN_PATH" "$REMOTE_REPO" <<'PY'
-from pathlib import Path
-import sys
-plan_path = Path(sys.argv[1])
-remote_repo = Path(sys.argv[2]).as_uri()
-contents = plan_path.read_text()
-plan_path.write_text(contents.replace(
-    "name: Workflow Submission Storm Bench\n",
-    f"name: Workflow Submission Storm Bench\nrepoUrl: {remote_repo}\n",
-    1,
-))
-PY
 
 cat > "$CONFIG_PATH" <<'EOF'
 {"autoFixRetries":0,"maxConcurrency":4}
@@ -174,15 +169,15 @@ COMMON_ENV=(
   INVOKER_REPO_CONFIG_PATH="$CONFIG_PATH"
 )
 
-echo "==> Submission 0 (bootstrap): spawns + waits for a REAL persistent owner process, excluded from the p95 stats below"
+echo "==> Bootstrap prerequisite: spawns + waits for a REAL persistent owner process, excluded from the p95 stats below"
 echo "    (NOT using INVOKER_HEADLESS_STANDALONE=1 — that runs in-process with no owner at all,"
 echo "     which under-measures every later submission's real IPC-delegation cost)"
 BOOTSTRAP_START=$(date +%s%N)
-env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
+env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PREREQ_PLAN_PATH" \
   >"$TMP_DIR/bootstrap.stdout.log" 2>"$TMP_DIR/bootstrap.stderr.log"
 BOOTSTRAP_END=$(date +%s%N)
 BOOTSTRAP_MS=$(( (BOOTSTRAP_END - BOOTSTRAP_START) / 1000000 ))
-echo "    bootstrap submission: ${BOOTSTRAP_MS}ms (real owner boot + first submit, excluded from p95 — checked separately below)"
+echo "    bootstrap prerequisite: ${BOOTSTRAP_MS}ms (real owner boot + first submit, excluded from p95 — checked separately below)"
 
 if [[ "$GATE" -eq 1 && "$BOOTSTRAP_MS" -gt "$BOOTSTRAP_BUDGET_MS" ]]; then
   echo "  GATE FAIL: bootstrap submission took ${BOOTSTRAP_MS}ms, exceeds bootstrap budget=${BOOTSTRAP_BUDGET_MS}ms" >&2
@@ -191,15 +186,68 @@ if [[ "$GATE" -eq 1 && "$BOOTSTRAP_MS" -gt "$BOOTSTRAP_BUDGET_MS" ]]; then
 fi
 
 if ! grep -q 'Delegated to owner — workflow: wf-' "$TMP_DIR/bootstrap.stdout.log"; then
-  echo "bench: bootstrap submission failed to produce a workflow id" >&2
+  echo "bench: bootstrap prerequisite failed to produce a workflow id" >&2
   cat "$TMP_DIR/bootstrap.stdout.log" >&2 || true
   cat "$TMP_DIR/bootstrap.stderr.log" >&2 || true
+  exit 1
+fi
+PREREQ_WORKFLOW_ID="$(extract_workflow_id "$TMP_DIR/bootstrap.stdout.log")"
+if [[ -z "$PREREQ_WORKFLOW_ID" ]]; then
+  echo "bench: could not parse prerequisite workflow id from bootstrap output" >&2
+  cat "$TMP_DIR/bootstrap.stdout.log" >&2 || true
   exit 1
 fi
 if ! OWNER_PID="$(read_owner_pid)"; then
   echo "bench: bootstrap did not leave a live standalone owner marker at $DB_DIR/invoker.db.owner" >&2
   cat "$TMP_DIR/bootstrap.stdout.log" >&2 || true
   cat "$TMP_DIR/bootstrap.stderr.log" >&2 || true
+  exit 1
+fi
+
+PREREQ_TASK_STATUS=""
+for _ in {1..100}; do
+  env "${COMMON_ENV[@]}" ./run.sh --headless query task "$PREREQ_WORKFLOW_ID/hold" \
+    >"$TMP_DIR/prereq-status.stdout.log" 2>"$TMP_DIR/prereq-status.stderr.log" || true
+  PREREQ_TASK_STATUS="$(tr -d '\r' < "$TMP_DIR/prereq-status.stdout.log" | tail -1)"
+  if [[ "$PREREQ_TASK_STATUS" == "awaiting_approval" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$PREREQ_TASK_STATUS" != "awaiting_approval" ]]; then
+  echo "bench: prerequisite task did not reach awaiting_approval; last status=${PREREQ_TASK_STATUS:-<empty>}" >&2
+  cat "$TMP_DIR/prereq-status.stdout.log" >&2 || true
+  cat "$TMP_DIR/prereq-status.stderr.log" >&2 || true
+  exit 1
+fi
+
+REMOTE_REPO_URI="$(python3 - "$REMOTE_REPO" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).as_uri())
+PY
+)"
+cat > "$PLAN_PATH" <<EOF
+name: Workflow Submission Storm Bench
+repoUrl: $REMOTE_REPO_URI
+externalDependencies:
+  - workflowId: $PREREQ_WORKFLOW_ID
+    taskId: __merge__
+    gatePolicy: completed
+onFinish: none
+tasks:
+  - id: root
+    description: Root task
+    command: echo root
+EOF
+
+echo "==> Submission 0 (target warm-up): primes the exact externally-blocked benchmark plan, excluded from p95"
+env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
+  >"$TMP_DIR/warmup.stdout.log" 2>"$TMP_DIR/warmup.stderr.log"
+if ! grep -q 'Delegated to owner — workflow: wf-' "$TMP_DIR/warmup.stdout.log"; then
+  echo "bench: target warm-up submission failed to produce a workflow id" >&2
+  cat "$TMP_DIR/warmup.stdout.log" >&2 || true
+  cat "$TMP_DIR/warmup.stderr.log" >&2 || true
   exit 1
 fi
 
