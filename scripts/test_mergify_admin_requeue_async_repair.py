@@ -104,6 +104,15 @@ class AsyncRepairPlanTests(unittest.TestCase):
         )
         self.assertIn("python3 -B scripts/mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
 
+    def test_safe_push_ledger_under_submitter_home_expands_on_worker(self):
+        plan = async_repair.build_repair_check_plan(
+            pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
+            log_path="/does/not/exist/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+            start_head=HEAD, state_file=Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl",
+        )
+        self.assertIn("--record-json-ledger '~/.invoker/mergify-admin-requeue-state.jsonl'", plan.yaml_text)
+        self.assertNotIn(f"--record-json-ledger '{Path.home()}", plan.yaml_text)
+
     def test_repair_check_plan_inlines_job_log_content_not_local_path(self):
         # log_path is a tempfile on the orchestrator's own machine; the plan
         # is dispatched to a separate headless worker that does not share

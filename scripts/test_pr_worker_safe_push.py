@@ -90,7 +90,7 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
 
-    def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
+    def test_moved_remote_head_skips_successfully_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
         self.clone_other()
         remote_after_race = self.commit(self.other, "race", "race\n")
         git(self.other, "push", "origin", "HEAD:refs/heads/main")
@@ -106,8 +106,8 @@ class SafePushTests(unittest.TestCase):
             "--tsv-marker", "fp1",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("stale-head", result.stdout)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
@@ -153,6 +153,25 @@ class SafePushTests(unittest.TestCase):
         self.assertIn("git push", result.stderr)
         self.assertFalse(ledger.exists())
 
+    def test_unwritable_json_ledger_warns_after_verified_push(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        not_a_directory = self.root / "ledger-parent"
+        not_a_directory.write_text("not a directory\n", encoding="utf-8")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(not_a_directory / "ledger.jsonl"),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "8595",
+            "--json-head-sha", self.expected,
+            "--json-key", "build-artifacts",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        self.assertIn("warning: unable to record JSONL ledger", result.stderr)
+
     def test_new_prerequisite_branch_succeeds_only_when_remote_branch_is_absent(self) -> None:
         git(self.repo, "checkout", "-B", "stack/prereq")
         first = self.commit(self.repo, "prereq", "prereq\n")
@@ -165,8 +184,8 @@ class SafePushTests(unittest.TestCase):
         del second
         result = self.invoke_helper("--branch", "stack/prereq", "--expect-missing")
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("expected it to be missing", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("expected it to be missing", result.stdout)
         self.assertEqual(self.remote_head("stack/prereq"), first)
 
 

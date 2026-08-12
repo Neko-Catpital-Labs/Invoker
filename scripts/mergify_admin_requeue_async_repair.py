@@ -114,7 +114,7 @@ def _safe_push_task_yaml(
         f"{skip_guard}"
         "python3 scripts/pr_worker_safe_push.py \\\n"
         f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd . \\\n"
-        f"  --record-json-ledger {_shlex(str(state_file))} \\\n"
+        f"  --record-json-ledger {_shlex(_worker_path_arg(state_file))} \\\n"
         f"  --json-kind {_shlex(json_kind)} --json-pr {_shlex(str(pr_number))} \\\n"
         f"  --json-head-sha {_shlex(start_head)} --json-key {_shlex(json_key)}\n"
     )
@@ -125,6 +125,14 @@ def _safe_push_task_yaml(
         "    command: |\n"
         f"{_indent_block(command, 6)}\n"
     )
+
+
+def _worker_path_arg(path: Path) -> str:
+    expanded = path.expanduser()
+    try:
+        return str(Path("~") / expanded.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
 
 
 def _shlex(value: str) -> str:
