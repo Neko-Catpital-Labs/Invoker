@@ -87,13 +87,18 @@ test('workflow select shows mini-DAG within 250ms under a fat events table', asy
   const hitchNode = page.getByTestId(`workflow-node-${seeded.workflowId}`);
   await hitchNode.waitFor({ state: 'attached', timeout: 15_000 });
   await hitchNode.dispatchEvent('click', { bubbles: true });
-  await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('selected-workflow-mini-dag')).toContainText('Main-process hitch fixture', {
+    timeout: 10_000,
+  });
 
   const started = await page.evaluate(() => performance.now());
   await workflowNode.dispatchEvent('click', { bubbles: true });
-  await expect(page.getByTestId('selected-workflow-mini-dag')).toContainText('Workflow Select Ack', {
-    timeout: WORKFLOW_SELECT_ACK_BUDGET_MS + 1500,
-  });
+  await page.waitForFunction(
+    (expectedText) =>
+      document.querySelector('[data-testid="selected-workflow-mini-dag"]')?.textContent?.includes(expectedText),
+    'Workflow Select Ack',
+    { timeout: WORKFLOW_SELECT_ACK_BUDGET_MS + 1500, polling: 'raf' },
+  );
   const ackMs = await page.evaluate((start) => performance.now() - start, started);
 
   expect(
