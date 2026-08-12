@@ -10,6 +10,7 @@ DRY_RUN=0
 SKIP_SYSTEM_PACKAGES="${INVOKER_SKIP_SYSTEM_PACKAGES:-0}"
 SKIP_AGENT_TOOLS="${INVOKER_SKIP_AGENT_TOOLS:-0}"
 SKIP_SHELL_HOOKS="${INVOKER_SKIP_SHELL_HOOKS:-0}"
+REPO_INSTALL_IGNORE_SCRIPTS="${INVOKER_REPO_INSTALL_IGNORE_SCRIPTS:-0}"
 INVOKER_HOME="${INVOKER_HOME:-$HOME/.invoker}"
 INVOKER_ENV_FILE="${INVOKER_ENV_FILE:-$INVOKER_HOME/env.sh}"
 INVOKER_NODE_MAJOR="${INVOKER_NODE_MAJOR:-26}"
@@ -49,6 +50,8 @@ Environment overrides:
   INVOKER_SKIP_SYSTEM_PACKAGES Skip apt/brew package installation when set to 1.
   INVOKER_SKIP_AGENT_TOOLS     Skip codex/claude npm global installs when set to 1.
   INVOKER_SKIP_SHELL_HOOKS     Skip login shell hook writes when set to 1.
+  INVOKER_REPO_INSTALL_IGNORE_SCRIPTS
+                                Run repo pnpm install with --ignore-scripts when set to 1.
   INVOKER_PROVISION_TRACE_FILE Optional file that receives one line per provision run.
 EOF
 }
@@ -457,7 +460,20 @@ repo_stamp_value() {
   script_hash="$(sha256_file "$REPO_DIR/scripts/provision-ssh-worker.sh")"
   node_version="$(node --version)"
   pnpm_version="$(pnpm --version)"
-  printf 'node=%s\npnpm=%s\nlock=%s\nscript=%s\n' "$node_version" "$pnpm_version" "$lock_hash" "$script_hash"
+  printf 'node=%s\npnpm=%s\nlock=%s\nscript=%s\nignore_scripts=%s\n' \
+    "$node_version" \
+    "$pnpm_version" \
+    "$lock_hash" \
+    "$script_hash" \
+    "$REPO_INSTALL_IGNORE_SCRIPTS"
+}
+
+repo_install() {
+  local args=(install --frozen-lockfile)
+  if [[ "$REPO_INSTALL_IGNORE_SCRIPTS" == "1" ]]; then
+    args+=(--ignore-scripts)
+  fi
+  (cd "$REPO_DIR" && pnpm "${args[@]}")
 }
 
 verify_repo_binaries() {
@@ -470,7 +486,9 @@ verify_repo_binaries() {
   fi
   if [[ -d "$REPO_DIR/packages/app" ]]; then
     pnpm --dir "$REPO_DIR/packages/app" exec vitest --version >/dev/null
-    [[ -x "$REPO_DIR/packages/app/node_modules/.bin/electron" ]] || die "Electron binary missing after provisioning: packages/app/node_modules/.bin/electron"
+    if [[ "$REPO_INSTALL_IGNORE_SCRIPTS" != "1" ]]; then
+      [[ -x "$REPO_DIR/packages/app/node_modules/.bin/electron" ]] || die "Electron binary missing after provisioning: packages/app/node_modules/.bin/electron"
+    fi
   fi
 }
 
@@ -489,11 +507,11 @@ ensure_repo_install() {
   fi
   if [[ ! -d "$REPO_DIR/node_modules" || "$current_stamp" != "$desired_stamp" ]]; then
     log "Installing repo dependencies in $REPO_DIR"
-    (cd "$REPO_DIR" && pnpm install --frozen-lockfile)
+    repo_install
   fi
   verify_repo_binaries || {
     log "Repo verification failed; reinstalling dependencies."
-    (cd "$REPO_DIR" && pnpm install --frozen-lockfile)
+    repo_install
     verify_repo_binaries
   }
   mkdir -p "$(dirname "$stamp_path")"
