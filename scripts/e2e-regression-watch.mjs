@@ -55,6 +55,13 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+const LEGACY_VERIFY_JOB_ALIASES = new Map([
+  // The temporary stuck-lease matrix row was removed after its specs were
+  // assigned to shard 9. Keep a verify-command alias so older watcher state
+  // does not render the unmapped-job fallback while the sweep prunes it.
+  ['playwright / launch-dispatch-stuck-lease', 'playwright / 9-of-9'],
+]);
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -209,6 +216,20 @@ export function getActionableFailures(state) {
     });
 }
 
+export function pruneUnmappedActiveFailures(state, jobDefinitions) {
+  const normalized = normalizeState(state);
+  const knownJobs = jobDefinitions instanceof Map
+    ? jobDefinitions
+    : new Map(Object.entries(jobDefinitions ?? {}));
+  let pruned = 0;
+  for (const jobName of Object.keys(normalized.activeFailures)) {
+    if (knownJobs.has(jobName)) continue;
+    delete normalized.activeFailures[jobName];
+    pruned += 1;
+  }
+  return pruned;
+}
+
 function shellSingleQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -348,7 +369,8 @@ export function fallbackVerifyCommand(jobName) {
 }
 
 export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefinitions()) {
-  const definition = jobDefinitions.get(failure.jobName);
+  const definition = jobDefinitions.get(failure.jobName)
+    ?? jobDefinitions.get(LEGACY_VERIFY_JOB_ALIASES.get(failure.jobName));
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
   const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
@@ -496,6 +518,8 @@ export async function main() {
   const state = loadState();
   const repoUrl = getRepoUrl();
   const jobDefinitions = buildCiJobDefinitions();
+  const unmappedActiveFailuresPruned = pruneUnmappedActiveFailures(state, jobDefinitions);
+  if (unmappedActiveFailuresPruned > 0) saveState(state);
   const dryRun = process.env.INVOKER_CI_WATCH_DRY_RUN === '1'
     || process.env.INVOKER_E2E_WATCH_DRY_RUN === '1';
 
@@ -547,6 +571,7 @@ export async function main() {
     groupsFiled: toFile.length,
     groupsSkippedAlreadyAddressed,
     groupsDeferredByCap,
+    unmappedActiveFailuresPruned,
     dryRun,
   });
 }

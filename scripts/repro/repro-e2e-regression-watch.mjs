@@ -17,6 +17,7 @@ import {
   listUnprocessedDefaultBranchRuns,
   liveQueryHasNonTerminalWork,
   loadEmptyState,
+  pruneUnmappedActiveFailures,
   reconcileCiRun,
 } from '../e2e-regression-watch.mjs';
 
@@ -109,6 +110,25 @@ function testEveryFailedJobQueuesSeparately() {
   console.log('[repro-e2e-regression-watch] every failed job queues separately: PASS');
 }
 
+function testUnmappedActiveFailuresArePruned() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(325, 'sha-old', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 325),
+    fakeJob('playwright / 9-of-9', 'failure', 326),
+  ]));
+
+  const pruned = pruneUnmappedActiveFailures(state, new Map([
+    ['playwright / 9-of-9', { verifyCommand: 'verify-current-shard' }],
+  ]));
+  assertEqual(pruned, 1, 'one unmapped active failure is pruned');
+  assertEqual(
+    getActionableFailures(state).map((failure) => failure.jobName),
+    ['playwright / 9-of-9'],
+    'mapped active failure remains actionable',
+  );
+  console.log('[repro-e2e-regression-watch] unmapped active failure pruning: PASS');
+}
+
 function testLiveDedupIsJobScoped() {
   const sha = 'sha-dedup-test';
   const job = 'playwright / 1-of-9';
@@ -142,6 +162,20 @@ function testWorkflowCommandMapping() {
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
+  }
+  const legacyVars = buildPlanVars(
+    {
+      jobName: 'playwright / launch-dispatch-stuck-lease',
+      firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9e',
+    },
+    'git@github.com:Neko-Catpital-Labs/Invoker.git',
+    defs,
+  );
+  if (legacyVars.verify_command.includes('No local verify command is mapped')) {
+    fail('legacy stuck-lease job must not render the unmapped fallback command');
+  }
+  if (!legacyVars.verify_command.includes('ci-playwright-9-of-9')) {
+    fail('legacy stuck-lease job should verify through current shard 9');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
@@ -226,6 +260,7 @@ function main() {
   testPerHeadFailureDedupAndRecovery();
   testCancelledAndSkippedDoNotClear();
   testEveryFailedJobQueuesSeparately();
+  testUnmappedActiveFailuresArePruned();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
   testPlanVarsAndDryRunRendering();
