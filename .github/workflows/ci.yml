@@ -668,6 +668,7 @@ jobs:
               e2e/launch-dispatch-stuck-lease-storm.spec.ts
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
+              e2e/renderer-memory-pressure-recovery.spec.ts
               e2e/ui-delta-timeline.spec.ts
               e2e/workers-surface.spec.ts
           - name: terminal-garbling
