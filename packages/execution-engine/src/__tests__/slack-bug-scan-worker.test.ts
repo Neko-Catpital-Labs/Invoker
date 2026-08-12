@@ -62,7 +62,7 @@ function makeClient(channels: SlackBugScanChannelSummary[], messagesByChannel: M
 const CHANNEL_WITH_REPO: SlackBugScanChannelSummary = {
   id: 'C1',
   name: 'general',
-  topic: 'repo: git@github.com:acme/widgets.git',
+  topic: 'repo: https://github.com/acme/widgets.git',
 };
 const CHANNEL_NO_REPO: SlackBugScanChannelSummary = { id: 'C2', name: 'random' };
 
@@ -184,10 +184,34 @@ describe('slack-bug-scan worker', () => {
     await runtime.tick('manual');
 
     expect(classify).toHaveBeenCalledTimes(1);
-    expect(classify).toHaveBeenCalledWith(expect.objectContaining({ repoUrl: 'git@github.com:acme/widgets.git' }));
+    expect(classify).toHaveBeenCalledWith(expect.objectContaining({ repoUrl: 'https://github.com/acme/widgets.git' }));
     expect(draftAndSubmitPlan).toHaveBeenCalledTimes(1);
     expect(posted).toHaveLength(1);
     expect(posted[0]?.text).toContain('wf-1');
+  });
+
+  it('does not auto-submit for repo urls outside the configured host allowlist', async () => {
+    const store = makeStore();
+    const untrustedChannel: SlackBugScanChannelSummary = {
+      id: 'C-untrusted',
+      name: 'untrusted',
+      topic: 'repo: https://evil.example/acme/widgets.git',
+    };
+    const messages = new Map<string, SlackBugScanMessage[]>([[untrustedChannel.id, []]]);
+    const { client } = makeClient([untrustedChannel], messages);
+    const classify = vi.fn(async () => ({ isBugComplaint: true, problemStatement: 'x' }));
+    const draftAndSubmitPlan = vi.fn(async () => ({ planName: 'P', workflowId: 'wf-1' }));
+
+    const runtime = createSlackBugScanWorker({
+      logger: makeLogger(), client, store, classify, draftAndSubmitPlan,
+      intervalMs: 0, tickOnStart: false, allowedRepoHosts: ['github.com'],
+    });
+    await runtime.tick('manual');
+    messages.set(untrustedChannel.id, [bugMessage(2)]);
+    await runtime.tick('manual');
+
+    expect(classify).not.toHaveBeenCalled();
+    expect(draftAndSubmitPlan).not.toHaveBeenCalled();
   });
 
   it('does not submit when classification says it is not a bug', async () => {
@@ -303,7 +327,7 @@ describe('slack-bug-scan worker', () => {
 
   it('enforces the per-tick submission cap, deferring rather than dropping candidates', async () => {
     const store = makeStore();
-    const channelB: SlackBugScanChannelSummary = { id: 'C3', name: 'ops', topic: 'repo: git@github.com:acme/ops.git' };
+    const channelB: SlackBugScanChannelSummary = { id: 'C3', name: 'ops', topic: 'repo: https://github.com/acme/ops.git' };
     const messages = new Map<string, SlackBugScanMessage[]>([[CHANNEL_WITH_REPO.id, []], [channelB.id, []]]);
     const { client } = makeClient([CHANNEL_WITH_REPO, channelB], messages);
     const classify: SlackBugScanClassifier = vi.fn(async () => ({ isBugComplaint: true, problemStatement: 'x' }));

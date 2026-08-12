@@ -14,6 +14,7 @@ import {
   type SlackBugScanCandidate,
 } from './slack-bug-scan-scanner.js';
 import {
+  resolveSlackBugScanAllowedRepoHosts,
   resolveSlackBugScanIntervalMs,
   resolveSlackBugScanMaxPerDay,
   resolveSlackBugScanMaxPerTick,
@@ -57,6 +58,7 @@ export interface SlackBugScanWorkerConfig {
   draftAndSubmitPlan?: SlackBugScanPlanSubmitter;
   maxAutoSubmissionsPerDay?: number;
   maxAutoSubmissionsPerTick?: number;
+  allowedRepoHosts?: readonly string[];
   onTick?: WorkerTick;
 }
 
@@ -71,6 +73,7 @@ export interface SlackBugScanWorkerOptions {
   startDelayMs?: number;
   maxAutoSubmissionsPerDay?: number;
   maxAutoSubmissionsPerTick?: number;
+  allowedRepoHosts?: readonly string[];
   onTick?: WorkerTick;
 }
 
@@ -123,6 +126,7 @@ async function postOutcome(
 export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): WorkerRuntime {
   const maxPerDay = options.maxAutoSubmissionsPerDay ?? resolveSlackBugScanMaxPerDay();
   const maxPerTick = options.maxAutoSubmissionsPerTick ?? resolveSlackBugScanMaxPerTick();
+  const allowedRepoHosts = options.allowedRepoHosts ?? resolveSlackBugScanAllowedRepoHosts();
 
   return createWorkerRuntime({
     kind: SLACK_BUG_SCAN_WORKER_KIND,
@@ -142,7 +146,7 @@ export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): Wo
 
       for (const channel of channels) {
         if (ctx.signal?.aborted) return;
-        const repoUrl = resolveChannelRepoUrl(channel.topic, channel.purpose);
+        const repoUrl = resolveChannelRepoUrl(channel.topic, channel.purpose, allowedRepoHosts);
         if (!repoUrl) continue;
 
         const candidates = await scanChannelForCandidates(options.client, options.store, channel.id, nowSlackTs);
@@ -234,6 +238,7 @@ export function registerSlackBugScanWorker(
         startDelayMs: config.startDelayMs,
         maxAutoSubmissionsPerDay: config.maxAutoSubmissionsPerDay,
         maxAutoSubmissionsPerTick: config.maxAutoSubmissionsPerTick,
+        allowedRepoHosts: config.allowedRepoHosts,
         onTick: config.onTick,
       });
     },
