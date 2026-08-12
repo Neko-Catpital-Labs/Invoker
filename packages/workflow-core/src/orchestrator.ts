@@ -258,7 +258,7 @@ export interface ExecutionResourceLeaseReleaseRow {
 export type TaskLaunchReadiness =
   | { ready: true; task: TaskState }
   | { ready: false; reason: string; task?: TaskState };
-export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean };
+export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean; activePersistedAttempts?: number };
 export type StartExecutionOptions = { limit?: number };
 
 export interface OrchestratorPersistence {
@@ -282,6 +282,7 @@ export interface OrchestratorPersistence {
   updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
+  updateTaskLaunchState?(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
   listWorkflows(): Array<{
     id: string;
@@ -369,6 +370,7 @@ export interface OrchestratorPersistence {
     workflowId: string;
     priority?: 'high' | 'normal' | 'low';
     generation: number;
+    suppressEvent?: boolean;
   }): {
     id: number;
     state?: 'enqueued' | 'leased' | 'completed' | 'abandoned';
@@ -600,6 +602,14 @@ export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskR
     deleteAllWorkflows: () => p.deleteAllWorkflows?.(),
     saveTask: (wfId, t) => p.saveTask(wfId, t),
     updateTask: (id, c) => p.updateTask(id, c),
+    updateTaskLaunchState: (id, c) => {
+      const maybeLaunchUpdater = partial as Partial<{ updateTaskLaunchState(taskId: string, changes: TaskStateChanges): void }>;
+      if (typeof maybeLaunchUpdater.updateTaskLaunchState === 'function') {
+        maybeLaunchUpdater.updateTaskLaunchState(id, c);
+        return;
+      }
+      p.updateTask(id, c);
+    },
     deleteTask: (id) => {
       if (!p.deleteTask) throw new Error('Persistence adapter does not support deleteTask');
       p.deleteTask(id);
@@ -807,14 +817,18 @@ export class Orchestrator {
   private writeAndSync(
     taskId: string,
     changes: TaskStateChanges,
-    opts?: { skipWorkflowStatusSync?: boolean },
+    opts?: { skipWorkflowStatusSync?: boolean; launchStateUpdate?: boolean },
   ): TaskState {
     const existing = this.stateGetTask(taskId);
     if (!existing) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `writeAndSync: task ${taskId} not found in graph`);
     }
     const id = existing.id;
-    this.taskRepository.updateTask(id, changes);
+    if (opts?.launchStateUpdate && this.taskRepository.updateTaskLaunchState) {
+      this.taskRepository.updateTaskLaunchState(id, changes);
+    } else {
+      this.taskRepository.updateTask(id, changes);
+    }
     this.queueStatusUiCache = null;
     const updated: TaskState = {
       ...existing,
@@ -1535,7 +1549,9 @@ export class Orchestrator {
       readyTaskIds = readyTaskIds.slice(0, opts.limit);
     }
 
-    return this.autoStartReadyTasks(readyTaskIds);
+    return this.taskRepository.runInTransaction(() => this.autoStartReadyTasks(readyTaskIds, 0, {
+      activePersistedAttempts: activeAttempts,
+    }));
   }
 
   /**
