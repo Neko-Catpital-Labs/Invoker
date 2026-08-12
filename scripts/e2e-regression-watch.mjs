@@ -54,6 +54,19 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_ALIASES = [
+  {
+    jobId: 'playwright',
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -340,18 +353,32 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  for (const alias of LEGACY_PLAYWRIGHT_JOB_ALIASES) {
+    if (definitions.has(alias.jobName)) continue;
+    const job = workflow.jobs?.[alias.jobId];
+    if (!job) continue;
+    definitions.set(alias.jobName, {
+      jobId: alias.jobId,
+      jobName: alias.jobName,
+      matrix: alias.matrix,
+      verifyCommand: commandForJob(alias.jobId, job, alias.matrix),
+    });
+  }
   return definitions;
 }
 
+export function resolveVerifyCommand(jobName, jobDefinitions = buildCiJobDefinitions()) {
+  return jobDefinitions.get(jobName)?.verifyCommand?.trim() ?? '';
+}
+
 export function fallbackVerifyCommand(jobName) {
-  return `bash -lc ${shellSingleQuote(`echo "No local verify command is mapped for CI job: ${jobName}" >&2; exit 1`)}`;
+  return `node scripts/e2e-regression-watch.mjs --exec-verify-command ${shellSingleQuote(jobName)}`;
 }
 
 export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefinitions()) {
-  const definition = jobDefinitions.get(failure.jobName);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
-  const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
+  const verifyCommand = resolveVerifyCommand(failure.jobName, jobDefinitions) || fallbackVerifyCommand(failure.jobName);
   return {
     repo_url: repoUrl,
     base_branch: 'master',
@@ -551,10 +578,42 @@ export async function main() {
   });
 }
 
+function runVerifyCommandCli(jobName) {
+  const verifyCommand = resolveVerifyCommand(jobName);
+  if (!verifyCommand) {
+    console.error(`No local verify command is mapped for CI job: ${jobName}`);
+    process.exitCode = 1;
+    return;
+  }
+  execSync(verifyCommand, {
+    cwd: REPO_ROOT,
+    env: process.env,
+    shell: '/bin/bash',
+    stdio: 'inherit',
+  });
+}
+
+function printVerifyCommandCli(jobName) {
+  const verifyCommand = resolveVerifyCommand(jobName);
+  if (!verifyCommand) {
+    console.error(`No local verify command is mapped for CI job: ${jobName}`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(`${verifyCommand}\n`);
+}
+
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  main().catch((err) => {
-    console.error('ci-regression-watch: fatal error', err);
-    process.exitCode = 1;
-  });
+  const [command, ...args] = process.argv.slice(2);
+  if (command === '--exec-verify-command') {
+    runVerifyCommandCli(args.join(' '));
+  } else if (command === '--print-verify-command') {
+    printVerifyCommandCli(args.join(' '));
+  } else {
+    main().catch((err) => {
+      console.error('ci-regression-watch: fatal error', err);
+      process.exitCode = 1;
+    });
+  }
 }
