@@ -39,6 +39,17 @@ for (const jobName of FULL_CI_JOBS) {
 
 assert(jobs['quality-required'], 'Missing quality-required job');
 assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs');
+assert(
+  jobs['quality-required']['runs-on'] === '${{ matrix.runner_label }}',
+  'quality-required must use each matrix entry as the full runner selector',
+);
+const qualityRequiredEntries = jobs['quality-required'].strategy?.matrix?.include ?? [];
+const dependencyCruiseEntry = qualityRequiredEntries.find((entry) => entry.name === 'Dependency Cruise');
+assert(dependencyCruiseEntry, 'quality-required matrix must include Dependency Cruise');
+assert(
+  dependencyCruiseEntry.runner_label === 'ubuntu-latest',
+  'Dependency Cruise must run on a GitHub-hosted runner to avoid self-hosted setup disk pressure',
+);
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
