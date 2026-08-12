@@ -311,6 +311,9 @@ importers:
 
   packages/planning-core:
     dependencies:
+      '@invoker/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       yaml:
         specifier: ^2.7.0
         version: 2.8.2
