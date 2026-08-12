@@ -54,6 +54,15 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_FILES = new Map([
+  [
+    'playwright / launch-dispatch-stuck-lease',
+    [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  ],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -326,6 +335,19 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function commandForLegacyJob(jobName) {
+  const files = LEGACY_PLAYWRIGHT_JOB_FILES.get(jobName);
+  if (!files) return '';
+  return withBuildPrefix([
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`ci-${slugify(jobName)}`)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(files.join(' '))}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' '), true);
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -351,7 +373,9 @@ export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefin
   const definition = jobDefinitions.get(failure.jobName);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
-  const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
+  const verifyCommand = definition?.verifyCommand?.trim()
+    || commandForLegacyJob(failure.jobName)
+    || fallbackVerifyCommand(failure.jobName);
   return {
     repo_url: repoUrl,
     base_branch: 'master',
