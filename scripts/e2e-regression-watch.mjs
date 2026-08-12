@@ -54,6 +54,18 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const PLAYWRIGHT_COMPATIBILITY_JOBS = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -339,6 +351,15 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         verifyCommand: commandForJob(jobId, job, matrix),
       });
     }
+  }
+  for (const { jobName, matrix } of PLAYWRIGHT_COMPATIBILITY_JOBS) {
+    if (definitions.has(jobName)) continue;
+    definitions.set(jobName, {
+      jobId: 'playwright',
+      jobName,
+      matrix,
+      verifyCommand: commandForJob('playwright', workflow.jobs?.playwright ?? {}, matrix),
+    });
   }
   return definitions;
 }
