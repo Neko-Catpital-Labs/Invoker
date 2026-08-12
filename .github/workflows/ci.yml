@@ -646,6 +646,7 @@ jobs:
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
           - name: 7-of-9
             files: >-
               e2e/worker-tab-scroll.spec.ts

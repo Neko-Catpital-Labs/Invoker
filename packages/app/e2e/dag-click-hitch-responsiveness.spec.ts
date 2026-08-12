@@ -35,6 +35,42 @@ async function selectWorkflowForMiniDag(page: Page, workflowId: string) {
   return miniDag;
 }
 
+async function measureWorkflowSelectionAck(page: Page, workflowId: string, expectedText: string): Promise<number> {
+  return page.evaluate(
+    async ({ workflowId, expectedText }) => {
+      const selector = `[data-testid="workflow-node-${CSS.escape(workflowId)}"]`;
+      const workflowNode = document.querySelector<HTMLElement>(selector);
+      if (!workflowNode) {
+        throw new Error(`Workflow node not found: ${workflowId}`);
+      }
+
+      const hasExpectedText = () =>
+        document.querySelector('[data-testid="selected-workflow-mini-dag"]')?.textContent?.includes(expectedText) === true;
+
+      const started = performance.now();
+      workflowNode.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      if (hasExpectedText()) {
+        return performance.now() - started;
+      }
+
+      return new Promise<number>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          observer.disconnect();
+          reject(new Error(`Timed out waiting for selected workflow mini-DAG to contain: ${expectedText}`));
+        }, 1750);
+        const observer = new MutationObserver(() => {
+          if (!hasExpectedText()) return;
+          window.clearTimeout(timeout);
+          observer.disconnect();
+          resolve(performance.now() - started);
+        });
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      });
+    },
+    { workflowId, expectedText },
+  );
+}
+
 test('workflow select shows mini-DAG within 250ms under a fat events table', async ({ page }) => {
   const seeded = await page.evaluate(async () => {
     if (!window.invoker.seedMainProcessHitchFixture) {
@@ -89,12 +125,7 @@ test('workflow select shows mini-DAG within 250ms under a fat events table', asy
   await hitchNode.dispatchEvent('click', { bubbles: true });
   await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10_000 });
 
-  const started = await page.evaluate(() => performance.now());
-  await workflowNode.dispatchEvent('click', { bubbles: true });
-  await expect(page.getByTestId('selected-workflow-mini-dag')).toContainText('Workflow Select Ack', {
-    timeout: WORKFLOW_SELECT_ACK_BUDGET_MS + 1500,
-  });
-  const ackMs = await page.evaluate((start) => performance.now() - start, started);
+  const ackMs = await measureWorkflowSelectionAck(page, smallId, 'Workflow Select Ack');
 
   expect(
     ackMs,
