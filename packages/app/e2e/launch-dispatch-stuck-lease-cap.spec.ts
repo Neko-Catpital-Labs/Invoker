@@ -34,8 +34,9 @@ function launchArgs(): string[] {
 }
 
 async function waitForInvoker(page: Page): Promise<void> {
+  await page.waitForURL((url) => url.href !== 'about:blank', { timeout: 30_000 });
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30_000 });
 }
 
 function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) {
@@ -73,6 +74,7 @@ base.describe('Launch-dispatch stuck-lease retry cap', () => {
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_STARTUP_POLL_DELAY_MS: '0',
           INVOKER_USER_DATA_DIR: electronUserDataDir,
+          INVOKER_E2E_ENABLE_COMPOSITOR: '1',
           INVOKER_LAUNCH_DISPATCH_LEASE_MS: String(LEASE_MS),
           INVOKER_EXECUTOR_START_TIMEOUT_MS: String(HANG_MS * 2),
           INVOKER_E2E_HANG_LAUNCH_STARTUP_MS: String(HANG_MS),
