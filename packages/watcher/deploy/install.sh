@@ -66,13 +66,14 @@ EOF
   echo "Installed. Logs: journalctl --user -u invoker-watcher -f"
 else
   echo "systemd not available - installing @reboot cron keepalive fallback."
-  if [ -z "$REPO_ROOT" ]; then
-    echo "Cron keepalive needs a monorepo checkout; install systemd or clone the repo." >&2
+  if [ ! -d "$WORK_DIR" ]; then
+    echo "Cron keepalive working directory not found: $WORK_DIR" >&2
     exit 1
   fi
-  LINE="@reboot cd $REPO_ROOT && while true; do $EXEC_START >> $HOME/.invoker/watcher.keepalive.log 2>&1; sleep 5; done"
+  mkdir -p "$HOME/.invoker"
+  LINE="@reboot cd $WORK_DIR && while true; do $EXEC_START >> $HOME/.invoker/watcher.keepalive.log 2>&1; sleep 5; done"
   ( crontab -l 2>/dev/null | grep -v 'watcher.keepalive.log' || true; echo "$LINE" ) | crontab -
   echo "Installed cron keepalive. Starting now..."
-  ( cd "$REPO_ROOT" && while true; do $EXEC_START >> "$HOME/.invoker/watcher.keepalive.log" 2>&1; sleep 5; done ) &
+  ( cd "$WORK_DIR" && while true; do $EXEC_START >> "$HOME/.invoker/watcher.keepalive.log" 2>&1; sleep 5; done ) &
   echo "Logs: $HOME/.invoker/watcher.keepalive.log"
 fi
