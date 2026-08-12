@@ -5,8 +5,35 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Mapping, Sequence
 from urllib.parse import quote
+
+GH_COMMAND_TIMEOUT_SECONDS = 20
+GH_RETRY_MAX_ATTEMPTS = 3
+GH_RETRY_BACKOFF_SECONDS = 2
+# Worst case for one call: GH_COMMAND_TIMEOUT_SECONDS * GH_RETRY_MAX_ATTEMPTS, plus
+# backoff between attempts. A run makes 100+ of these calls for ~50 admin-bypass
+# PRs, so this must stay a small fraction of the pr-admin-bypass-land worker's
+# tick timeout (packages/execution-engine/src/workers/pr-maintenance-workers.ts,
+# DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS, currently 240s) or one stuck
+# call can alone blow the whole tick's budget. Keep comfortably under 240s.
+GH_CALL_WORST_CASE_SECONDS = GH_COMMAND_TIMEOUT_SECONDS * GH_RETRY_MAX_ATTEMPTS + GH_RETRY_BACKOFF_SECONDS * (
+    GH_RETRY_MAX_ATTEMPTS * (GH_RETRY_MAX_ATTEMPTS - 1) // 2
+)
+
+TRANSIENT_GH_ERROR_MARKERS = (
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    "bad gateway",
+    "gateway timeout",
+    "stream error",
+    "connection reset",
+    "eof occurred in violation of protocol",
+    "temporary failure in name resolution",
+)
 
 PR_LIST_FIELDS = (
     "number,title,url,headRefName,headRefOid,baseRefName,state,isDraft,"
@@ -133,14 +160,8 @@ class GhClient:
 
     def create_pr(self, repo: str, title: str, body: str, head: str, base: str) -> dict:
         payload = json.dumps({"title": title, "body": body, "head": head, "base": base})
-        completed = subprocess.run(
-            ["gh", "api", f"repos/{repo}/pulls", "--method", "POST", "--input", "-"],
-            check=True,
-            text=True,
-            input=payload,
-            capture_output=True,
-        )
-        value = json.loads(completed.stdout) if completed.stdout.strip() else None
+        out = run_logged(["gh", "api", f"repos/{repo}/pulls", "--method", "POST", "--input", "-"], input=payload)
+        value = json.loads(out) if out.strip() else None
         if not isinstance(value, dict):
             raise RuntimeError("empty PR create response")
         return value
@@ -150,71 +171,90 @@ class GhClient:
         return value if isinstance(value, list) else []
 
     def comment(self, repo: str, number: int, body: str) -> None:
-        subprocess.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=True, text=True, capture_output=True)
+        run_logged(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body])
 
     def edit_label(self, repo: str, number: int, add: str | None = None, remove: str | None = None) -> None:
         if add:
-            subprocess.run(
-                ["gh", "api", "--method", "POST", f"repos/{repo}/issues/{number}/labels", "-f", f"labels[]={add}"],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
+            run_logged(["gh", "api", "--method", "POST", f"repos/{repo}/issues/{number}/labels", "-f", f"labels[]={add}"])
         if remove:
-            subprocess.run(
-                ["gh", "api", "--method", "DELETE", f"repos/{repo}/issues/{number}/labels/{quote(remove, safe='')}"],
-                check=True,
-                text=True,
-                capture_output=True,
-            )
+            run_logged(["gh", "api", "--method", "DELETE", f"repos/{repo}/issues/{number}/labels/{quote(remove, safe='')}"])
 
     def retarget_base(self, repo: str, number: int, base: str) -> None:
-        subprocess.run(
-            ["gh", "api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"base={base}"],
-            check=True,
-            text=True,
-            capture_output=True,
-        )
+        run_logged(["gh", "api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"base={base}"])
 
     def compare_status(self, repo: str, base: str, head: str) -> str:
-        completed = subprocess.run(
-            ["gh", "api", f"repos/{repo}/compare/{base}...{head}"],
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-        return str(json.loads(completed.stdout).get("status") or "")
+        out = run_logged(["gh", "api", f"repos/{repo}/compare/{base}...{head}"])
+        return str(json.loads(out).get("status") or "")
 
     def resolve_review_thread(self, thread_id: str) -> None:
         query = "mutation($threadId:ID!) { resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } } }"
-        subprocess.run(["gh", "api", "graphql", "-f", f"threadId={thread_id}", "-f", f"query={query}"], check=True, text=True, capture_output=True)
+        run_logged(["gh", "api", "graphql", "-f", f"threadId={thread_id}", "-f", f"query={query}"])
 
 
-def run_logged(args: Sequence[str], *, cwd: Path | str | None = None, capture: bool = True) -> str:
-    try:
-        completed = subprocess.run(
-            list(args),
-            cwd=str(cwd) if cwd is not None else None,
-            check=True,
-            text=True,
-            capture_output=capture,
-        )
-    except subprocess.CalledProcessError as exc:
-        print(f"ERROR: command failed: {' '.join(str(part) for part in args)}", file=sys.stderr)
-        if exc.stdout:
-            print(exc.stdout, file=sys.stderr, end="" if exc.stdout.endswith("\n") else "\n")
-        if exc.stderr:
-            print(exc.stderr, file=sys.stderr, end="" if exc.stderr.endswith("\n") else "\n")
-        if is_github_rate_limit_error(exc):
-            raise RuntimeError("GitHub API rate limit exceeded while loading PR snapshots") from exc
-        raise
-    return completed.stdout or ""
+def run_logged(
+    args: Sequence[str],
+    *,
+    cwd: Path | str | None = None,
+    capture: bool = True,
+    input: str | None = None,
+) -> str:
+    last_exc: subprocess.CalledProcessError | subprocess.TimeoutExpired | None = None
+    for attempt in range(1, GH_RETRY_MAX_ATTEMPTS + 1):
+        try:
+            completed = subprocess.run(
+                list(args),
+                cwd=str(cwd) if cwd is not None else None,
+                check=True,
+                text=True,
+                capture_output=capture,
+                input=input,
+                timeout=GH_COMMAND_TIMEOUT_SECONDS,
+            )
+            return completed.stdout or ""
+        except subprocess.TimeoutExpired as exc:
+            last_exc = exc
+            print(
+                f"WARN: command timed out after {GH_COMMAND_TIMEOUT_SECONDS}s "
+                f"(attempt {attempt}/{GH_RETRY_MAX_ATTEMPTS}): {' '.join(str(part) for part in args)}",
+                file=sys.stderr,
+            )
+            if attempt < GH_RETRY_MAX_ATTEMPTS:
+                time.sleep(GH_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            raise RuntimeError(
+                f"command timed out after {GH_RETRY_MAX_ATTEMPTS} attempts: {' '.join(str(part) for part in args)}"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            last_exc = exc
+            if attempt < GH_RETRY_MAX_ATTEMPTS and is_transient_gh_error(exc):
+                print(
+                    f"WARN: transient command failure (attempt {attempt}/{GH_RETRY_MAX_ATTEMPTS}), retrying: "
+                    f"{' '.join(str(part) for part in args)}",
+                    file=sys.stderr,
+                )
+                time.sleep(GH_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            print(f"ERROR: command failed: {' '.join(str(part) for part in args)}", file=sys.stderr)
+            if exc.stdout:
+                print(exc.stdout, file=sys.stderr, end="" if exc.stdout.endswith("\n") else "\n")
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr, end="" if exc.stderr.endswith("\n") else "\n")
+            if is_github_rate_limit_error(exc):
+                raise RuntimeError("GitHub API rate limit exceeded while loading PR snapshots") from exc
+            raise
+    assert last_exc is not None
+    raise last_exc
 
 
 def is_github_rate_limit_error(exc: subprocess.CalledProcessError) -> bool:
     text = "\n".join(str(part or "") for part in (exc.stdout, exc.stderr))
     lowered = text.lower()
     return "rate_limit" in text or "rate limit" in lowered
+
+
+def is_transient_gh_error(exc: subprocess.CalledProcessError) -> bool:
+    text = "\n".join(str(part or "") for part in (exc.stdout, exc.stderr)).lower()
+    return any(marker in text for marker in TRANSIENT_GH_ERROR_MARKERS)
 
 
 def checkout_pr_head(repo: str, pr: PrSnapshot, work_root: Path) -> None:

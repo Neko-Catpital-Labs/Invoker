@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -10,12 +9,12 @@ try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
     from .mergify_admin_requeue_repair_body import rebase_onto_base as run_rebase_onto_base
-    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
+    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
 except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
     from mergify_admin_requeue_repair_body import rebase_onto_base as run_rebase_onto_base
-    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
+    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
 
 
 ADMIN_BYPASS_NUDGE_LEDGER_KIND = "comment-admin-bypass-nudge"
@@ -63,12 +62,7 @@ class AdminBypassGhExecutor:
             return ""
         tmp = Path(tempfile.mkdtemp(prefix=f"mergify-admin-requeue-{pr_number}-"))
         path = tmp / (re.sub(r"[^A-Za-z0-9_.-]+", "-", check_name).strip("-") + ".log")
-        out = subprocess.run(
-            ["gh", "run", "view", "--repo", repo, "--job", match.group(1), "--log"],
-            check=True,
-            text=True,
-            capture_output=True,
-        ).stdout
+        out = run_logged(["gh", "run", "view", "--repo", repo, "--job", match.group(1), "--log"])
         path.write_text(out, encoding="utf-8")
         return str(path)
 
