@@ -23,6 +23,7 @@ import {
   DELETING_ORPHAN_MIN_AGE_MINUTES,
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
+  reapStaleInvokerCliTempDirs,
   reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
   reapStaleWorktrees,
@@ -269,6 +270,37 @@ describe('reapStaleAutomationCheckouts', () => {
   it('returns nothing when the locations are absent', () => {
     const { root, home } = makeHome();
     expect(reapStaleAutomationCheckouts({ invokerHome: home, userHome: root })).toEqual([]);
+  });
+});
+
+describe('reapStaleInvokerCliTempDirs', () => {
+  it('removes stale CLI test directories while preserving fresh and unrelated temp entries', async () => {
+    const { root } = makeHome();
+    const tempRoot = join(root, 'tmp');
+    const stale = join(tempRoot, 'invoker-cli-prompt-stale');
+    const fresh = join(tempRoot, 'invoker-cli-prompt-fresh');
+    const unrelated = join(tempRoot, 'other-tool-stale');
+    mkdirSync(stale, { recursive: true });
+    mkdirSync(fresh, { recursive: true });
+    mkdirSync(unrelated, { recursive: true });
+    backdate(stale, 49 * 60 * 60 * 1000);
+    backdate(unrelated, 49 * 60 * 60 * 1000);
+
+    const removed = await reapStaleInvokerCliTempDirs({ tempRoot, userHome: join(root, 'user') });
+
+    expect(removed).toEqual([stale]);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+  });
+
+  it('refuses unsafe temp roots', async () => {
+    const { root } = makeHome();
+    const userHome = join(root, 'user');
+    mkdirSync(userHome, { recursive: true });
+
+    await expect(reapStaleInvokerCliTempDirs({ tempRoot: '/', userHome })).resolves.toEqual([]);
+    await expect(reapStaleInvokerCliTempDirs({ tempRoot: userHome, userHome })).resolves.toEqual([]);
   });
 });
 
