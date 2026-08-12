@@ -4,7 +4,7 @@ import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SshExecutor } from '../ssh-executor.js';
+import { SshExecutor, resolveLegacyCiWatchVerifySentinel } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
@@ -171,6 +171,22 @@ describe('SshExecutor pre-flight validation', () => {
       expect.any(Object),
       expect.objectContaining({ base: '0123456789abcdef0123456789abcdef01234567' }),
     );
+  });
+});
+
+describe('resolveLegacyCiWatchVerifySentinel', () => {
+  it('defers stale CI-watch missing-command sentinels to the current watcher mapping', () => {
+    const staleCommand = 'bash -lc \'echo "No local verify command is mapped for CI job: playwright / launch-dispatch-stuck-lease" >&2; exit 1\'';
+
+    expect(resolveLegacyCiWatchVerifySentinel(staleCommand)).toBe(
+      "node scripts/e2e-regression-watch.mjs --exec-verify-command 'playwright / launch-dispatch-stuck-lease'",
+    );
+  });
+
+  it('leaves ordinary commands unchanged', () => {
+    const command = 'bash scripts/test-suites/required/10-vitest-workspace.sh';
+
+    expect(resolveLegacyCiWatchVerifySentinel(command)).toBe(command);
   });
 });
 
