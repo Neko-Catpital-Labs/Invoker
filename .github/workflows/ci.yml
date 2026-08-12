@@ -160,9 +160,6 @@ jobs:
           - name: Required Package Builds
             command: pnpm run check:required-builds
             runner_label: Runner_2_4_core
-          - name: Large File Guardrail
-            command: pnpm run check:large-files
-            runner_label: Runner_1
           - name: Release Version Sync
             command: pnpm run check:versions
             runner_label: Runner_2_4_core
@@ -192,6 +189,33 @@ jobs:
 
       - name: Run quality check
         run: ${{ matrix.command }}
+
+  quality-large-file-guardrail:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: quality / Large File Guardrail
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Run large file guardrail
+        run: pnpm run check:large-files
 
   e2e-proof:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
