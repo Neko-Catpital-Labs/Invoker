@@ -281,7 +281,13 @@ export interface OrchestratorPersistence {
   }): void;
   updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
-  updateTask(taskId: string, changes: TaskStateChanges): void;
+  updateTask(taskId: string, changes: TaskStateChanges, opts?: { skipWorkflowStatusSync?: boolean }): void;
+  updateTaskFromKnownState?(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
   listWorkflows(): Array<{
     id: string;
@@ -599,7 +605,15 @@ export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskR
     deleteWorkflow: (id) => p.deleteWorkflow?.(id),
     deleteAllWorkflows: () => p.deleteAllWorkflows?.(),
     saveTask: (wfId, t) => p.saveTask(wfId, t),
-    updateTask: (id, c) => p.updateTask(id, c),
+    updateTask: (id, c, opts) => p.updateTask(id, c, opts),
+    updateTaskFromKnownState: (id, before, c, opts) => {
+      const knownStateUpdater = (partial as Partial<OrchestratorPersistence>).updateTaskFromKnownState;
+      if (typeof knownStateUpdater === 'function') {
+        knownStateUpdater.call(p, id, before, c, opts);
+        return;
+      }
+      p.updateTask(id, c, opts);
+    },
     deleteTask: (id) => {
       if (!p.deleteTask) throw new Error('Persistence adapter does not support deleteTask');
       p.deleteTask(id);
@@ -814,7 +828,11 @@ export class Orchestrator {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `writeAndSync: task ${taskId} not found in graph`);
     }
     const id = existing.id;
-    this.taskRepository.updateTask(id, changes);
+    if (this.taskRepository.updateTaskFromKnownState) {
+      this.taskRepository.updateTaskFromKnownState(id, existing, changes, opts);
+    } else {
+      this.taskRepository.updateTask(id, changes, opts);
+    }
     this.queueStatusUiCache = null;
     const updated: TaskState = {
       ...existing,
@@ -1101,6 +1119,12 @@ export class Orchestrator {
   private countActivePersistedAttempts(now: number = Date.now()): number {
     let count = 0;
     for (const task of this.stateMachine.getAllTasks()) {
+      if (
+        (task.status === 'pending' || (task.status as string) === 'queued')
+        && !this.hasPendingLaunchRuntimeState(task)
+      ) {
+        continue;
+      }
       if (this.isTaskExecutionActive(task, this.getSelectedAttempt(task), now)) {
         count += 1;
       }
@@ -1143,6 +1167,12 @@ export class Orchestrator {
   getPersistedActiveTaskIds(now: number = Date.now()): Set<string> {
     const active = new Set<string>();
     for (const task of this.stateMachine.getAllTasks()) {
+      if (
+        (task.status === 'pending' || (task.status as string) === 'queued')
+        && !this.hasPendingLaunchRuntimeState(task)
+      ) {
+        continue;
+      }
       if (this.isTaskExecutionActive(task, this.getSelectedAttempt(task), now)) {
         active.add(task.id);
       }
@@ -1150,7 +1180,10 @@ export class Orchestrator {
     return active;
   }
 
-  private ensureCurrentPendingAttempt(task: TaskState): string {
+  private ensureCurrentPendingAttempt(
+    task: TaskState,
+    writeOpts?: { skipWorkflowStatusSync?: boolean; deferTaskSelectionWriteWhenClean?: boolean },
+  ): string {
     const selected = this.getSelectedAttempt(task);
     if (selected && this.isReusablePendingLaunchAttempt(task, selected)) {
       return selected.id;
@@ -1162,7 +1195,19 @@ export class Orchestrator {
     const current = attempts[attempts.length - 1];
     if (current && this.isReusablePendingLaunchAttempt(task, current)) {
       if (task.execution.selectedAttemptId !== current.id) {
-        this.writeAndSync(task.id, { execution: { selectedAttemptId: current.id } });
+        if (
+          writeOpts?.deferTaskSelectionWriteWhenClean
+          && task.status === 'pending'
+          && !this.hasPendingLaunchRuntimeState(task)
+        ) {
+          this.stateMachine.restoreTask({
+            ...task,
+            execution: { ...task.execution, selectedAttemptId: current.id },
+          });
+          this.queueStatusUiCache = null;
+          return current.id;
+        }
+        this.writeAndSync(task.id, { execution: { selectedAttemptId: current.id } }, writeOpts);
       }
       return current.id;
     }
@@ -1179,12 +1224,25 @@ export class Orchestrator {
       this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
     }
     this.taskRepository.saveAttempt(freshAttempt);
+    if (
+      writeOpts?.deferTaskSelectionWriteWhenClean
+      && task.status === 'pending'
+      && !this.hasPendingLaunchRuntimeState(task)
+    ) {
+      this.stateMachine.restoreTask({
+        ...task,
+        execution: { ...task.execution, selectedAttemptId: freshAttempt.id },
+      });
+      this.queueStatusUiCache = null;
+      return freshAttempt.id;
+    }
     this.writeResetAndSync(
       task,
       'newAttempt',
       buildTaskResetChanges('newAttempt', {
         execution: { selectedAttemptId: freshAttempt.id },
       }),
+      writeOpts,
     );
     return freshAttempt.id;
   }
@@ -1509,7 +1567,12 @@ export class Orchestrator {
     this.pruneLaunchDeferrals();
 
     const activeAttempts = this.countActivePersistedAttempts();
-    const readyTasks = this.getExecutableReadyTasks();
+    const hasPerCallLimit = typeof opts?.limit === 'number' && opts.limit >= 0;
+    const readyTasks = hasPerCallLimit
+      ? this.getExecutableReadyTasks({ alreadyRefreshed: true })
+      : this.stateMachine
+        .getReadyTasks()
+        .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
     this.logger.info('[orchestrator] startExecution', {
       ready: readyTasks.length,
       active: activeAttempts,
@@ -1531,7 +1594,7 @@ export class Orchestrator {
       })
       .map((task) => task.id);
 
-    if (typeof opts?.limit === 'number' && opts.limit >= 0) {
+    if (hasPerCallLimit) {
       readyTaskIds = readyTaskIds.slice(0, opts.limit);
     }
 
@@ -3248,7 +3311,7 @@ export class Orchestrator {
     return this.stateMachine.getReadyTasks();
   }
 
-  getExecutableReadyTasks(): TaskState[] {
+  getExecutableReadyTasks(opts?: { alreadyRefreshed?: boolean }): TaskState[] {
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
@@ -3260,6 +3323,7 @@ export class Orchestrator {
         attemptId: task.execution.selectedAttemptId,
         priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
       })),
+      opts,
     )
       .map((job) => readyTasksById.get(job.taskId))
       .filter((task): task is TaskState => task !== undefined);
@@ -3402,9 +3466,15 @@ export class Orchestrator {
       phase?: string;
     },
   ): void {
+    const taskBeforeDefer = reason?.reason === 'resource-limit'
+      ? this.stateGetTask(taskId)
+      : undefined;
+    const launchAnchor = taskBeforeDefer?.execution.launchStartedAt
+      ?? taskBeforeDefer?.execution.startedAt
+      ?? taskBeforeDefer?.execution.lastHeartbeatAt;
     deferTaskImpl(this as unknown as CancellationHost, taskId, reason);
     if (reason?.reason === 'resource-limit') {
-      this.recordLaunchDeferral(taskId);
+      this.recordLaunchDeferral(taskId, launchAnchor);
     }
   }
 
@@ -3413,11 +3483,15 @@ export class Orchestrator {
    * execution pool had no member capacity. Attempts drive an exponential
    * schedule so a persistently starved task backs off toward the cap.
    */
-  private recordLaunchDeferral(taskId: string): void {
+  private recordLaunchDeferral(taskId: string, anchor?: Date): void {
     const attempts = (this.launchDeferrals.get(taskId)?.attempts ?? 0) + 1;
     const backoff = this.computeLaunchBackoffMs(attempts);
+    const anchorMs = anchor?.getTime();
+    const startAt = anchorMs !== undefined && Number.isFinite(anchorMs)
+      ? anchorMs
+      : Date.now();
     // lastHeartbeatAt=0 forces a heartbeat on the first parked poll.
-    this.launchDeferrals.set(taskId, { until: Date.now() + backoff, attempts, lastHeartbeatAt: 0 });
+    this.launchDeferrals.set(taskId, { until: startAt + backoff, attempts, lastHeartbeatAt: 0 });
   }
 
   private computeLaunchBackoffMs(attempts: number): number {
