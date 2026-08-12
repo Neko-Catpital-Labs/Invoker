@@ -207,6 +207,19 @@ def run_cycle(args: argparse.Namespace) -> bool:
                                     pr_number=pr.number,
                                     check_name=check_name,
                                 )
+                            elif outcome.status == "noop" and check_name == "PR Body":
+                                # See plan.py's plan_stack_execution: without this record,
+                                # a PR whose body is already valid (or whose PR was merged/
+                                # closed mid-repair) keeps re-running the same local PR-Body
+                                # checkout+validate cycle every tick instead of the bottom
+                                # check staying suppressed.
+                                ledger.record("repair-noop", pr.number, pr.head_ref_oid, check_name, now)
+                                logger.trace(
+                                    "admin-bypass-repair-noop",
+                                    repo=args.repo,
+                                    pr_number=pr.number,
+                                    check_name=check_name,
+                                )
                             progressed = outcome.status in {"pushed", "prereq_created", "submitted", "queue_only_noop"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1

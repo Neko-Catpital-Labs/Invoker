@@ -74,6 +74,52 @@ def _record_queue_only_noop_if_applicable(
         Ledger(state_file).record("queue-only-noop", pr_number, start_head, check_name)
 
 
+# The agent repair task made no commit for a failing "PR Body" check. Two
+# very different situations look identical from here, so decide which one it
+# is by re-checking validity now:
+#   - the body is actually fine (already valid, or the PR was merged/closed
+#     out from under the repair mid-flight, so there's nothing left to fix) --
+#     record "repair-noop", which plan.py's plan_stack_execution reads
+#     (hardcoded to the "PR Body" key) to stop treating this check as blocking.
+#   - the body is still invalid, and the agent had every chance to fix it but
+#     didn't -- that's a human decision, not something worth re-submitting
+#     every tick. Record "repair-invalid" (see plan.py's
+#     latest_repair_invalid_blocker, which reads it into a human_decision
+#     blocker) and post the stop comment once, the same shape
+#     AdminBypassGhExecutor.comment_blocked posts from the synchronous path.
+# Deliberately NOT decided at submission time (see
+# repro-babysit-pr-body-human-split.sh): a real agent might still fix a body
+# that looks invalid right now, so the async repair always gets the chance to
+# try before anything here calls it unfixable.
+def _record_repair_noop_or_invalid_for_pr_body(
+    state_file: Path, repo: str, pr_number: int, start_head: str, check_name: str, base: str, cwd: Path,
+) -> None:
+    if check_name != "PR Body":
+        return
+    gh = GhClient()
+    detail = gh.pr_detail(repo, pr_number)
+    ledger = Ledger(state_file)
+    if str(detail.get("state") or "OPEN") != "OPEN":
+        # The PR was merged or closed while the repair was in flight. There is
+        # no longer a base to diff against (an orphaned/merged branch may not
+        # even share history with it), and nothing left to fix either way.
+        ledger.record("repair-noop", pr_number, start_head, check_name)
+        return
+    body = str(detail.get("body") or "")
+    validation = validate_current_pr_body(cwd, body, base)
+    if validation.get("valid"):
+        ledger.record("repair-noop", pr_number, start_head, check_name)
+        return
+    errors = invalid_repair_errors(validation, base)
+    if not errors:
+        return
+    ledger.record("repair-invalid", pr_number, start_head, check_name, meta={"errors": errors})
+    stop_body = "Mergify repair stopped: " + "\n".join(errors)
+    existing = gh.issue_comments(repo, pr_number)
+    if not any(str(comment.get("body") or "").strip() == stop_body for comment in existing):
+        gh.comment(repo, pr_number, stop_body)
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Normalize an async admin-bypass repair commit before safe-push.")
     parser.add_argument("--repo", required=True)
@@ -107,12 +153,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     end_head = git_output(cwd, "rev-parse", "HEAD").strip()
     if end_head == start_head:
         _record_queue_only_noop_if_applicable(state_file, args.pr, start_head, args.check)
+        _record_repair_noop_or_invalid_for_pr_body(state_file, args.repo, args.pr, start_head, args.check, args.base, cwd)
         print("noop: repair task made no commit")
         return 0
 
     end_head = normalize_repair_commit(cwd, start_head, end_head, args.check)
     if end_head == start_head:
         _record_queue_only_noop_if_applicable(state_file, args.pr, start_head, args.check)
+        _record_repair_noop_or_invalid_for_pr_body(state_file, args.repo, args.pr, start_head, args.check, args.base, cwd)
         print("noop: repair diff was empty after normalization")
         return 0
 

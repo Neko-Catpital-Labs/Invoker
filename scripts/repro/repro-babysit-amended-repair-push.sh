@@ -123,6 +123,43 @@ git clone "$REMOTE" "$WORK_ROOT" >/dev/null
 ( cd "$WORK_ROOT" && git config user.email repro@example.test && git config user.name 'Repro Bot' )
 write_state
 
+# Incident 2026-08-12: resolve_workflow_for_pr and submit_async_repair_plan
+# both default to a live Invoker owner over IPC, which this hermetic repro
+# never provides. Mock both env hooks (same pattern as
+# repro-babysit-pr-body-human-split.sh) and simulate the real 3-task async
+# plan in order: repair (the claude wrapper above amends the commit),
+# normalize (validates + prepares the push), safe-push (the real script the
+# generated plan's safe-push task runs).
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+
+cat > "$TMP/bin/submit-async.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="\${1:?plan path required}"
+test -f "\$plan_path"
+cd "$WORK_ROOT"
+git fetch origin stack/5806 >/dev/null
+git checkout stack/5806 >/dev/null 2>&1
+"$TMP/bin/claude"
+python3 "$ROOT/scripts/mergify_admin_requeue_repair_normalize.py" \\
+  --repo fake/repo --pr 5806 --check "PR Body" \\
+  --start-head "$ORIGINAL_HEAD" --base master --trunk master \\
+  --state-file "$LEDGER_PATH"
+python3 "$ROOT/scripts/pr_worker_safe_push.py" \\
+  --branch stack/5806 --expected-head "$ORIGINAL_HEAD" --cwd . \\
+  --record-json-ledger "$LEDGER_PATH" \\
+  --json-kind repair-check-settled --json-pr 5806 \\
+  --json-head-sha "$ORIGINAL_HEAD" --json-key "PR Body"
+EOF
+chmod +x "$TMP/bin/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async.sh"
+
 if ! out="$(run_worker)"; then
   fail 'worker failed to push amended repair as descendant' "$out"
 fi

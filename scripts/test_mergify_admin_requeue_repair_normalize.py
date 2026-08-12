@@ -110,19 +110,97 @@ class RepairNormalizeTests(unittest.TestCase):
         self.assertIn("blocked_dirty", stderr.getvalue())
         self.assertIn("?? stray.txt", stderr.getvalue())
 
-    def test_no_commit_returns_zero_without_further_work(self):
+    def test_no_commit_on_valid_pr_body_records_repair_noop(self):
+        # Incident 2026-08-12: deliberately NOT decided at submission time (see
+        # repro-babysit-pr-body-human-split.sh's comment) -- a real agent might
+        # still fix a body that looked invalid at submission, so this check is
+        # only made here, after the agent has already had its chance and made
+        # no commit either way.
         with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
             with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=HEAD):
                 with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
-                    code = normalize.main(self.argv())
+                    gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nok\n"}
+                    with mock.patch(
+                        "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                        return_value={"valid": True, "errors": []},
+                    ):
+                        code = normalize.main(self.argv())
         self.assertEqual(code, 0)
-        gh_cls.assert_not_called()
+        self.assertEqual(self.kind_rows("repair-noop"), self.kind_rows("repair-noop"))
+        rows = self.kind_rows("repair-noop")
+        self.assertEqual(len(rows), 1)
+        self.assertIn('"pr": 2647', rows[0])
+        gh_cls.return_value.comment.assert_not_called()
         self.assertEqual(self.queue_only_noop_rows(), [])
 
-    def queue_only_noop_rows(self):
+    def test_no_commit_on_merged_pr_records_repair_noop_without_diffing(self):
+        # Incident 2026-08-12 (repro-babysit-merged-during-repair.sh): the PR
+        # merged/closed out from under an in-flight repair. It may not even
+        # share history with its base anymore (an orphan branch, say), so
+        # diffing for PR-body validation must never be attempted here --
+        # only that the state is terminal.
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                    gh_cls.return_value.pr_detail.return_value = {"state": "MERGED", "body": "## Summary\n\nok\n"}
+                    with mock.patch(
+                        "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                    ) as validate:
+                        code = normalize.main(self.argv())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.kind_rows("repair-noop")), 1)
+        validate.assert_not_called()
+
+    def test_no_commit_on_invalid_pr_body_records_repair_invalid_and_comments_once(self):
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                    gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nmixed\n"}
+                    gh_cls.return_value.issue_comments.return_value = []
+                    with mock.patch(
+                        "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                        return_value=MANUAL_SPLIT_VALIDATION,
+                    ):
+                        code = normalize.main(self.argv(**{"--base": "stack/base"}))
+        self.assertEqual(code, 0)
+        rows = self.kind_rows("repair-invalid")
+        self.assertEqual(len(rows), 1)
+        self.assertIn('"pr": 2647', rows[0])
+        self.assertIn("human stack split required", rows[0])
+        gh_cls.return_value.comment.assert_called_once()
+        posted_body = gh_cls.return_value.comment.call_args.args[-1]
+        self.assertTrue(posted_body.startswith("Mergify repair stopped: "))
+        self.assertIn("human stack split required", posted_body)
+
+    def test_no_commit_on_invalid_pr_body_does_not_double_post_existing_comment(self):
+        stop_body = (
+            "Mergify repair stopped: PR body mentions multiple review units (validation-policy, routing); "
+            "split into one conceptual unit per diff/task.\n"
+            'PR body Review Unit "routing" cannot ship with tooling-policy, proof files in the same PR. '
+            "Split this into one Review Unit per PR.\n"
+            "worker cannot auto-split this PR on a non-trunk base; human stack split required"
+        )
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                    gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nmixed\n"}
+                    gh_cls.return_value.issue_comments.return_value = [{"body": stop_body}]
+                    with mock.patch(
+                        "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                        return_value=MANUAL_SPLIT_VALIDATION,
+                    ):
+                        code = normalize.main(self.argv(**{"--base": "stack/base"}))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.kind_rows("repair-invalid")), 1)
+        gh_cls.return_value.comment.assert_not_called()
+
+    def kind_rows(self, kind):
         if not self.state_file.exists():
             return []
-        return [line for line in self.state_file.read_text(encoding="utf-8").splitlines() if '"queue-only-noop"' in line]
+        return [line for line in self.state_file.read_text(encoding="utf-8").splitlines() if f'"{kind}"' in line]
+
+    def queue_only_noop_rows(self):
+        return self.kind_rows("queue-only-noop")
 
     def test_no_commit_on_queue_only_check_records_queue_only_noop(self):
         # Incident 2026-08-12: an async repair for a queue-only required check

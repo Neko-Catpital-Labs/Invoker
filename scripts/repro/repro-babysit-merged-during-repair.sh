@@ -59,6 +59,12 @@ export HEAD_SHA
 git -C "$TMP/seed" push -q origin HEAD:refs/heads/stack/6111
 mkdir -p "$(dirname "$WORK_ROOT")"
 git clone -q "$ORIGIN" "$WORK_ROOT"
+# $ORIGIN's bare HEAD is never set to a real branch (only master and
+# stack/6111 exist, pushed as two disconnected roots), so the clone above
+# leaves $WORK_ROOT in a headless state -- check out the PR's own branch
+# explicitly, matching what a real async repair task's checkout would do.
+git -C "$WORK_ROOT" fetch -q origin stack/6111
+git -C "$WORK_ROOT" checkout -q stack/6111
 
 cat > "$TMP/bin/claude" <<'SH'
 #!/usr/bin/env bash
@@ -79,6 +85,17 @@ PY
 echo "fake repair: PR merged during repair"
 SH
 chmod +x "$TMP/bin/claude"
+
+# resolve_workflow_for_pr defaults to a live Invoker owner over IPC when this
+# is unset; mock it to report a genuine miss (no local workflow), so this
+# repro is fully hermetic instead of depending on real local Invoker state.
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
 
 python3 - <<'PY'
 import json
@@ -122,6 +139,26 @@ Path(os.environ["STATE_PATH"]).write_text(json.dumps(state, indent=2), encoding=
 PY
 : > "$LEDGER_PATH"
 : > "$CALLS_PATH"
+
+# Incident 2026-08-12: submit_async_repair_plan's default path shells out to a
+# live Invoker owner over IPC, which this hermetic repro never provides.
+# Mock it (same pattern as repro-babysit-pr-body-human-split.sh): run the
+# claude wrapper above (marks the PR merged mid-repair, makes no commit),
+# then the real normalize step against that no-op outcome.
+cat > "$TMP/bin/submit-async.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="\${1:?plan path required}"
+test -f "\$plan_path"
+cd "$WORK_ROOT"
+"$TMP/bin/claude"
+python3 "$ROOT/scripts/mergify_admin_requeue_repair_normalize.py" \\
+  --repo fake/repo --pr 6111 --check "PR Body" \\
+  --start-head "$HEAD_SHA" --base master --trunk master \\
+  --state-file "$LEDGER_PATH"
+EOF
+chmod +x "$TMP/bin/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async.sh"
 
 if ! out="$(python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 6111 2>&1)"; then
   fail 'worker failed after PR merged during repair' "$out"
