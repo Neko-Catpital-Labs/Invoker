@@ -25,7 +25,18 @@ set -euo pipefail
 BASE_SHA="${BASE_SHA:-}"
 DEPTH="${FETCH_PR_DIFF_BASE_DEPTH:-1000}"
 
-git fetch --no-tags --depth="$DEPTH" origin "$BASE_REF"
+base_fetch_error=""
+if ! base_fetch_error="$(git fetch --no-tags --depth="$DEPTH" origin "$BASE_REF" 2>&1)"; then
+  if git merge-base "origin/$BASE_REF" "$HEAD_SHA" >/dev/null 2>&1; then
+    echo "Warning: failed to refresh origin/$BASE_REF; using the cached base ref because it can still produce a merge-base with $HEAD_SHA." >&2
+    printf '%s\n' "$base_fetch_error" >&2
+  else
+    printf '%s\n' "$base_fetch_error" >&2
+    exit 1
+  fi
+elif [ -n "$base_fetch_error" ]; then
+  printf '%s\n' "$base_fetch_error" >&2
+fi
 
 merge_base="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA" 2>/dev/null || true)"
 if [ -z "$merge_base" ]; then
