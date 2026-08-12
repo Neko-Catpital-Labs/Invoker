@@ -54,6 +54,16 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_DEFINITIONS = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrixName: 'launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -221,6 +231,10 @@ function collapseShellLines(value) {
     .join(' && ');
 }
 
+function splitMatrixFiles(files) {
+  return String(files ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
 function renderGithubTemplate(value, matrix = {}) {
   return String(value).replace(/\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}/g, (_match, key) => {
     const rendered = matrix[key];
@@ -271,7 +285,7 @@ function commandForJob(jobId, job, matrix) {
       'env',
       `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
       'INVOKER_PLAYWRIGHT_WORKERS=1',
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
+      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(splitMatrixFiles(matrix.files).join(' '))}`,
       `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
       'bash scripts/test-suites/optional/40-playwright-app.sh',
     ].join(' ');
@@ -326,6 +340,31 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function addLegacyCiJobDefinitions(definitions, workflow) {
+  const playwrightJob = workflow.jobs?.playwright;
+  if (!playwrightJob) return;
+
+  const currentPlaywrightFiles = new Set(
+    expandMatrix(playwrightJob.strategy?.matrix).flatMap((matrix) => splitMatrixFiles(matrix.files)),
+  );
+
+  for (const legacy of LEGACY_PLAYWRIGHT_JOB_DEFINITIONS) {
+    if (definitions.has(legacy.jobName)) continue;
+    if (!legacy.files.every((file) => currentPlaywrightFiles.has(file))) continue;
+
+    const matrix = {
+      name: legacy.matrixName,
+      files: legacy.files.join(' '),
+    };
+    definitions.set(legacy.jobName, {
+      jobId: 'playwright',
+      jobName: legacy.jobName,
+      matrix,
+      verifyCommand: commandForJob('playwright', playwrightJob, matrix),
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +379,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addLegacyCiJobDefinitions(definitions, workflow);
   return definitions;
 }
 
