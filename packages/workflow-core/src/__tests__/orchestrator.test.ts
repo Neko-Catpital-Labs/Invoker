@@ -248,10 +248,16 @@ class InMemoryPersistence implements OrchestratorPersistence {
 
 class CountingPersistence extends InMemoryPersistence {
   loadTasksCalls: string[] = [];
+  transactionCalls = 0;
 
   override loadTasks(workflowId: string): TaskState[] {
     this.loadTasksCalls.push(workflowId);
     return super.loadTasks(workflowId);
+  }
+
+  runInTransaction<T>(work: () => T): T {
+    this.transactionCalls += 1;
+    return work();
   }
 }
 
@@ -6190,6 +6196,7 @@ describe('Orchestrator', () => {
       }
 
       expect(started.length).toBe(workflowCount);
+      expect(persistence.transactionCalls).toBe(1);
       // Before the fix, getTaskLaunchReadinessImpl() called refreshFromDb()
       // -- reloading every active workflow's tasks from the DB -- once per
       // ready task inside planPendingLaunchQueue()'s map and once more per

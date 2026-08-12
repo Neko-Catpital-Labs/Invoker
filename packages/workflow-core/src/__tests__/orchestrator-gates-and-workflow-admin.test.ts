@@ -2413,7 +2413,6 @@ describe('Orchestrator', () => {
       const firstStarted = parkOrchestrator.startExecution();
       expect(firstStarted).toHaveLength(1);
       const taskId = firstStarted[0].id;
-      const dispatchedAt = Date.now();
 
       parkOrchestrator.deferTask(taskId, {
         reason: 'resource-limit',
@@ -2422,8 +2421,9 @@ describe('Orchestrator', () => {
         phase: 'launching',
       });
 
-      expect(parkOrchestrator.isLaunchParked(taskId, dispatchedAt)).toBe(true);
-      expect(parkOrchestrator.isLaunchParked(taskId, dispatchedAt + 60_001)).toBe(false);
+      const deferredAt = Date.now();
+      expect(parkOrchestrator.isLaunchParked(taskId, deferredAt)).toBe(true);
+      expect(parkOrchestrator.isLaunchParked(taskId, deferredAt + 60_001)).toBe(false);
     });
 
     it.skip('keeps a parked resource-limit task queued between scheduler polls', () => {
