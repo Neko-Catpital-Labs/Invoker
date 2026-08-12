@@ -148,6 +148,36 @@ jobs:
       - name: Run UI vitest
         run: pnpm --filter @invoker/ui test
 
+  quality-required-builds:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: quality / Required Package Builds
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run required package builds
+        run: pnpm run check:required-builds
+
   quality-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     runs-on:
@@ -157,9 +187,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Required Package Builds
-            command: pnpm run check:required-builds
-            runner_label: Runner_2_4_core
           - name: Large File Guardrail
             command: pnpm run check:large-files
             runner_label: Runner_1

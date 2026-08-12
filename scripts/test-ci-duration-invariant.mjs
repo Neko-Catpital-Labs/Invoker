@@ -6,6 +6,7 @@ const MAX_PR_FACING_TIMEOUT_MINUTES = 5;
 
 const BUDGETED_JOBS = new Set([
   'quality-required',
+  'quality-required-builds',
   'ui-vitest',
   'quality-extra',
 ]);
