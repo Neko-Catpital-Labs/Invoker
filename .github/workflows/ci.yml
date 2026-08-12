@@ -76,7 +76,7 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
-            runner_label: Runner_2_4_core
+            runner_label: Github_Runner
           - name: TypeScript Types
             command: pnpm run check:types
             runner_label: Github_Runner
