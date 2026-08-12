@@ -90,7 +90,7 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
 
-    def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
+    def test_moved_remote_head_exits_zero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
         self.clone_other()
         remote_after_race = self.commit(self.other, "race", "race\n")
         git(self.other, "push", "origin", "HEAD:refs/heads/main")
@@ -106,10 +106,22 @@ class SafePushTests(unittest.TestCase):
             "--tsv-marker", "fp1",
         )
 
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("stale-head", result.stderr)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
+
+    def test_safe_push_api_keeps_stale_head_as_error_for_strict_callers(self) -> None:
+        self.clone_other()
+        self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "repair")
+
+        with self.assertRaises(safe_push.SafePushError) as caught:
+            safe_push.safe_push(branch="main", expected_head=self.expected, cwd=self.repo)
+
+        self.assertEqual(caught.exception.exit_code, safe_push.STALE_HEAD_EXIT_CODE)
+        self.assertIn("stale-head", str(caught.exception))
 
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
@@ -165,7 +177,7 @@ class SafePushTests(unittest.TestCase):
         del second
         result = self.invoke_helper("--branch", "stack/prereq", "--expect-missing")
 
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
 
