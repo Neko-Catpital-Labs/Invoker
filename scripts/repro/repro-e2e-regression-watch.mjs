@@ -11,6 +11,7 @@ import {
   buildMarker,
   buildPlanVars,
   classifyJobConclusion,
+  fallbackVerifyCommand,
   fileBugfixPlan,
   getActionableFailures,
   getCiRun,
@@ -18,6 +19,7 @@ import {
   liveQueryHasNonTerminalWork,
   loadEmptyState,
   reconcileCiRun,
+  resolveVerifyCommand,
 } from '../e2e-regression-watch.mjs';
 
 function fail(message) {
@@ -128,6 +130,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -140,10 +143,42 @@ function testWorkflowCommandMapping() {
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
+  const legacyStuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease').verifyCommand;
+  if (!legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('legacy stuck-lease shard command must include the cap spec');
+  }
+  if (!legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('legacy stuck-lease shard command must include the storm spec');
+  }
+  if (legacyStuckLeaseCommand.includes('No local verify command is mapped')) {
+    fail('legacy stuck-lease shard command must not use the fallback verify command');
+  }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
+}
+
+function testFallbackVerifyCommandDefersResolution() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(375, 'abc789def456abc123def456abc123def456ab3', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 37),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', new Map());
+  const expectedFallback = fallbackVerifyCommand('playwright / launch-dispatch-stuck-lease');
+
+  assertEqual(vars.verify_command, expectedFallback, 'unmapped jobs use the deferred fallback command');
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('fallback verify command must not be a permanent sentinel');
+  }
+  if (!vars.verify_command.includes('--exec-verify-command')) {
+    fail('fallback verify command must resolve through the current watcher at execution time');
+  }
+  if (!resolveVerifyCommand('playwright / launch-dispatch-stuck-lease').includes('launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('current watcher mapping must resolve legacy stuck-lease command');
+  }
+  console.log('[repro-e2e-regression-watch] fallback verify command defers resolution: PASS');
 }
 
 function testPlanVarsAndDryRunRendering() {
@@ -228,6 +263,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testFallbackVerifyCommandDefersResolution();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
