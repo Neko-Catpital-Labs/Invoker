@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator, type PlanDefinition } from '@invoker/workflow-core';
@@ -38,42 +38,11 @@ import { Orchestrator, type PlanDefinition } from '@invoker/workflow-core';
  */
 
 const BURST_TASK_COUNT = 150;
-const PAIRED_SAMPLE_COUNT = 3;
-
 function singleTaskWorkflow(name: string): PlanDefinition {
   return {
     name,
     tasks: [{ id: 'run', description: `${name}/run`, command: 'sleep 3600', dependencies: [] }],
   };
-}
-
-/**
- * Measures the max gap between consecutive probe ticks while `fn()` runs,
- * matching the renderer event-loop-lag probe idiom already used in
- * packages/ui/src/App.tsx:1497-1523 (setInterval + performance.now(),
- * tracking now - previousTickAt, reporting the max observed delta).
- */
-async function measureMaxSyncGapMs(fn: () => void, probeMs = 4): Promise<number> {
-  let maxGapMs = 0;
-  let previousTickAt = performance.now();
-  const timer = setInterval(() => {
-    const now = performance.now();
-    maxGapMs = Math.max(maxGapMs, now - previousTickAt);
-    previousTickAt = now;
-  }, probeMs);
-  try {
-    fn();
-  } finally {
-    // Let a pending probe tick land so the gap spanning the sync call is captured.
-    await new Promise((resolve) => setTimeout(resolve, probeMs * 4));
-    clearInterval(timer);
-  }
-  return maxGapMs;
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
 }
 
 describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
@@ -89,7 +58,7 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
    * or handleWorkerResponse() call happens during setup, so the burst is
    * fully intact for whichever startExecution() call the test measures.
    */
-  async function buildBurstOrchestrator(): Promise<Orchestrator> {
+  async function buildBurstOrchestrator(): Promise<{ orchestrator: Orchestrator; persistence: SQLiteAdapter }> {
     const persistence = await SQLiteAdapter.create(':memory:');
     adapters.push(persistence);
     const orchestrator = new Orchestrator({
@@ -104,7 +73,7 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
     for (let i = 0; i < BURST_TASK_COUNT; i += 1) {
       orchestrator.loadPlan(singleTaskWorkflow(`burst-wf-${i}`));
     }
-    return orchestrator;
+    return { orchestrator, persistence };
   }
 
   // Measured on this machine (in-memory SQLite, no other load): unbounded
@@ -114,72 +83,40 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   // remains meaningful under loaded workspace runs.
 
   it(
-    'stays bounded: unbounded startExecution() over a 150-task ready burst no longer blocks for seconds',
+    'stays bounded: unbounded startExecution() over a 150-task ready burst avoids per-task reloads',
     async () => {
-      const orchestrator = await buildBurstOrchestrator();
-      const maxGapMs = await measureMaxSyncGapMs(() => {
-        const started = orchestrator.startExecution();
-        expect(started.length).toBe(BURST_TASK_COUNT);
-      });
+      const { orchestrator, persistence } = await buildBurstOrchestrator();
+      const bulkTaskLoadSpy = vi.spyOn(persistence, 'loadTasksForWorkflows');
+      const perWorkflowTaskLoadSpy = vi.spyOn(persistence, 'loadTasks');
+
+      const started = orchestrator.startExecution();
+
+      expect(started.length).toBe(BURST_TASK_COUNT);
       // Before the refreshFromDb() N+1 fix, this measured ~2.2s (see the
-      // file-level comment). Regressing back toward that scale would mean
-      // the per-ready-task refresh storm came back.
-      expect(
-        maxGapMs,
-        `maxGapMs=${maxGapMs} (uncapped startExecution over ${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(1200);
+      // file-level comment) because each ready task triggered another DB
+      // refresh. Assert the read shape directly so loaded CI hosts do not
+      // turn the regression guard into a wall-clock race.
+      expect(bulkTaskLoadSpy.mock.calls.length).toBeLessThanOrEqual(5);
+      expect(perWorkflowTaskLoadSpy).not.toHaveBeenCalled();
     },
     30_000,
   );
 
   it(
-    'stays meaningfully faster: capped startExecution({ limit: 32 }) over the same 150-task ready burst',
+    'keeps capped startExecution({ limit: 32 }) bounded over the same 150-task ready burst',
     async () => {
-      const uncappedSamples: number[] = [];
-      const cappedSamples: number[] = [];
+      const { orchestrator, persistence } = await buildBurstOrchestrator();
+      const bulkTaskLoadSpy = vi.spyOn(persistence, 'loadTasksForWorkflows');
+      const perWorkflowTaskLoadSpy = vi.spyOn(persistence, 'loadTasks');
 
-      async function measureUncappedSample(): Promise<void> {
-        const orchestrator = await buildBurstOrchestrator();
-        uncappedSamples.push(
-          await measureMaxSyncGapMs(() => {
-            const started = orchestrator.startExecution();
-            expect(started.length).toBe(BURST_TASK_COUNT);
-          }),
-        );
-      }
+      // 32 matches LaunchDispatcher's default maxLeasesPerPoll
+      // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
+      // call topUpReadyLaunches() now makes.
+      const started = orchestrator.startExecution({ limit: 32 });
 
-      async function measureCappedSample(): Promise<void> {
-        const orchestrator = await buildBurstOrchestrator();
-        cappedSamples.push(
-          await measureMaxSyncGapMs(() => {
-            // 32 matches LaunchDispatcher's default maxLeasesPerPoll
-            // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
-            // call topUpReadyLaunches() now makes.
-            const started = orchestrator.startExecution({ limit: 32 });
-            expect(started.length).toBe(32);
-          }),
-        );
-      }
-
-      for (let sample = 0; sample < PAIRED_SAMPLE_COUNT; sample += 1) {
-        if (sample % 2 === 0) {
-          await measureUncappedSample();
-          await measureCappedSample();
-        } else {
-          await measureCappedSample();
-          await measureUncappedSample();
-        }
-      }
-
-      const uncappedMedianGapMs = median(uncappedSamples);
-      const cappedMedianGapMs = median(cappedSamples);
-
-      expect(
-        cappedMedianGapMs,
-        `cappedMedianGapMs=${cappedMedianGapMs}, uncappedMedianGapMs=${uncappedMedianGapMs}, cappedSamples=${cappedSamples.join(
-          ',',
-        )}, uncappedSamples=${uncappedSamples.join(',')} (${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(uncappedMedianGapMs);
+      expect(started.length).toBe(32);
+      expect(bulkTaskLoadSpy.mock.calls.length).toBeLessThanOrEqual(5);
+      expect(perWorkflowTaskLoadSpy).not.toHaveBeenCalled();
     },
     180_000,
   );

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
@@ -34,7 +34,7 @@ describe('orchestrator cold boot against a large persisted DB', () => {
   });
 
   it(
-    'completes syncAllFromDb() + startExecution() within a bounded time for a ~900-task / 300-workflow DB',
+    'boots a ~900-task / 300-workflow DB without per-workflow task reloads',
     async () => {
       dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-cold-boot-'));
       const dbPath = path.join(dbDir, 'invoker.db');
@@ -94,16 +94,17 @@ describe('orchestrator cold boot against a large persisted DB', () => {
 
       const bootAdapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       try {
+        const snapshotSpy = vi.spyOn(bootAdapter, 'loadWorkflowTaskSnapshot');
+        const bulkTaskLoadSpy = vi.spyOn(bootAdapter, 'loadTasksForWorkflows');
+        const perWorkflowTaskLoadSpy = vi.spyOn(bootAdapter, 'loadTasks');
         const orchestrator = new Orchestrator({
           persistence: bootAdapter as any,
           messageBus: new InMemoryBus(),
           maxConcurrency: 200,
         });
 
-        const bootStart = performance.now();
         orchestrator.syncAllFromDb();
         const started = orchestrator.startExecution();
-        const bootMs = performance.now() - bootStart;
 
         expect(started.length).toBe(activeWorkflowCount);
         // Before the refreshFromDb() N+1 fix (see scheduler-domain.ts),
@@ -111,9 +112,11 @@ describe('orchestrator cold boot against a large persisted DB', () => {
         // tasks from the DB once per ready task, so this scaled with the
         // ready-task backlog and could take seconds to minutes on a
         // large, unhealthy DB (confirmed live on the affected production
-        // host, INV-279). It must stay well-bounded regardless of how
-        // large the ready backlog is.
-        expect(bootMs, `bootMs=${bootMs} (${activeWorkflowCount} ready tasks across ${WORKFLOW_COUNT} workflows)`).toBeLessThan(3000);
+        // host, INV-279). Assert the DB access pattern directly instead of
+        // relying on a CI-runner wall-clock threshold.
+        expect(snapshotSpy).toHaveBeenCalledTimes(1);
+        expect(bulkTaskLoadSpy.mock.calls.length).toBeLessThanOrEqual(5);
+        expect(perWorkflowTaskLoadSpy).not.toHaveBeenCalled();
       } finally {
         bootAdapter.close();
       }
