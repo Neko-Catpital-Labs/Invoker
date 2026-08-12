@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+STALE_HEAD_EXIT_CODE = 20
 
 
 class SafePushError(RuntimeError):
@@ -92,14 +93,14 @@ def safe_push(
         if live is not None:
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} exists at {live}; expected it to be missing",
-                exit_code=20,
+                exit_code=STALE_HEAD_EXIT_CODE,
             )
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
-                exit_code=20,
+                exit_code=STALE_HEAD_EXIT_CODE,
             )
         lease = f"refs/heads/{branch_name}:{expected}"
 
@@ -228,6 +229,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
+        if exc.exit_code == STALE_HEAD_EXIT_CODE:
+            return 0
         return exc.exit_code or 1
     except json.JSONDecodeError as exc:
         print(f"pr-worker-safe-push: invalid --json-meta: {exc}", file=sys.stderr)
