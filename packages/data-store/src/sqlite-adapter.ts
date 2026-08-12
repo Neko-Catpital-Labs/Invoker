@@ -1055,6 +1055,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private runTransaction<T>(work: () => T): T {
     this.ensureWritable();
+    if (this.writeTransactionDepth > 0) {
+      return work();
+    }
     this.db.run(this.writeTransactionDepth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT invoker_nested_${this.writeTransactionDepth}`);
     this.writeTransactionDepth += 1;
     try {
@@ -1230,6 +1233,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
     this.taskAttemptRepo.updateTask(taskId, changes);
+  }
+
+  updateTaskLaunchState(taskId: string, changes: TaskStateChanges): void {
+    this.taskAttemptRepo.updateTaskLaunchState(taskId, changes);
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -3721,43 +3728,41 @@ export class SQLiteAdapter implements PersistenceAdapter {
     workflowId: string;
     priority?: TaskLaunchDispatchPriority;
     generation: number;
+    suppressEvent?: boolean;
   }): TaskLaunchDispatch {
     const priority: TaskLaunchDispatchPriority = input.priority ?? 'normal';
     return this.runTransaction(() => {
-      const existing = this.queryOne(
-        `SELECT * FROM task_launch_dispatch
-           WHERE attempt_id = ?
-             AND state IN ('enqueued', 'leased')
-           LIMIT 1`,
-        [input.attemptId],
-      );
-      if (existing) {
-        return this.rowToTaskLaunchDispatch(existing);
-      }
-      this.execRun(
-        `INSERT INTO task_launch_dispatch (
+      const inserted = this.queryOne(
+        `INSERT OR IGNORE INTO task_launch_dispatch (
           task_id, attempt_id, workflow_id, state, priority, generation
-        ) VALUES (?, ?, ?, 'enqueued', ?, ?)`,
+        ) VALUES (?, ?, ?, 'enqueued', ?, ?)
+        RETURNING *`,
         [input.taskId, input.attemptId, input.workflowId, priority, input.generation],
       );
-      const inserted = this.queryOne(
-        `SELECT * FROM task_launch_dispatch
-           WHERE attempt_id = ?
-             AND state IN ('enqueued', 'leased')
-           LIMIT 1`,
-        [input.attemptId],
-      );
       if (!inserted) {
+        const existing = this.queryOne(
+          `SELECT * FROM task_launch_dispatch
+             WHERE attempt_id = ?
+               AND state IN ('enqueued', 'leased')
+             LIMIT 1`,
+          [input.attemptId],
+        );
+        if (existing) {
+          return this.rowToTaskLaunchDispatch(existing);
+        }
         throw new Error('Failed to read back inserted task_launch_dispatch row');
       }
+      this.dirty = true;
       const dispatch = this.rowToTaskLaunchDispatch(inserted);
-      this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
-        dispatchId: dispatch.id,
-        attemptId: input.attemptId,
-        workflowId: input.workflowId,
-        generation: input.generation,
-        priority,
-      });
+      if (!input.suppressEvent) {
+        this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
+          dispatchId: dispatch.id,
+          attemptId: input.attemptId,
+          workflowId: input.workflowId,
+          generation: input.generation,
+          priority,
+        });
+      }
       return dispatch;
     });
   }

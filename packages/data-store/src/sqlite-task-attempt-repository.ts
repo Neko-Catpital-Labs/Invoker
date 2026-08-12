@@ -18,7 +18,7 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
-import { appendJournalEntry } from './sync-journal.js';
+import { appendJournalEntry, appendJournalEntryWithoutReadback } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -558,11 +558,90 @@ export class SqliteTaskAttemptRepository {
       if (!statusChanged || !workflowId) return;
       const afterWorkflow = this.loadWorkflowJournalPayload(workflowId);
       if (!afterWorkflow || beforeWorkflow?.status === afterWorkflow.status) return;
-      appendJournalEntry(this.exec, {
+      appendJournalEntryWithoutReadback(this.exec, {
         entityType: 'workflow',
         entityId: workflowId,
         op: 'upsert',
         payload: afterWorkflow.payload,
+      });
+    });
+  }
+
+  updateTaskLaunchState(taskId: string, changes: TaskStateChanges): void {
+    const unsupportedTopLevel = Object.keys(changes).filter((key) => key !== 'status' && key !== 'execution');
+    if (unsupportedTopLevel.length > 0) {
+      throw new Error(`updateTaskLaunchState received unsupported task fields: ${unsupportedTopLevel.join(', ')}`);
+    }
+
+    const execution = changes.execution as Record<string, unknown> | undefined;
+    const supportedExecutionFields = new Set([
+      'selectedAttemptId',
+      'generation',
+      'startedAt',
+      'lastHeartbeatAt',
+      'phase',
+      'launchStartedAt',
+      'launchCompletedAt',
+    ]);
+    const unsupportedExecution = execution
+      ? Object.keys(execution).filter((key) => !supportedExecutionFields.has(key))
+      : [];
+    if (unsupportedExecution.length > 0) {
+      throw new Error(`updateTaskLaunchState received unsupported execution fields: ${unsupportedExecution.join(', ')}`);
+    }
+
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+
+    if (changes.status !== undefined) {
+      setClauses.push('status = ?');
+      values.push(changes.status);
+    }
+    if (execution) {
+      const execMap: Record<string, string> = {
+        selectedAttemptId: 'selected_attempt_id',
+        generation: 'execution_generation',
+        phase: 'launch_phase',
+      };
+      const execDateMap: Record<string, string> = {
+        startedAt: 'started_at',
+        lastHeartbeatAt: 'last_heartbeat_at',
+        launchStartedAt: 'launch_started_at',
+        launchCompletedAt: 'launch_completed_at',
+      };
+      for (const [key, col] of Object.entries(execMap)) {
+        if (key in execution) {
+          setClauses.push(`${col} = ?`);
+          values.push(execution[key] ?? null);
+        }
+      }
+      for (const [key, col] of Object.entries(execDateMap)) {
+        if (key in execution) {
+          const value = execution[key];
+          setClauses.push(`${col} = ?`);
+          values.push(value instanceof Date ? value.toISOString() : value ?? null);
+        }
+      }
+    }
+
+    if (setClauses.length === 0) return;
+    setClauses.push('task_state_version = task_state_version + 1');
+    values.push(taskId);
+
+    this.exec.runTransaction(() => {
+      const taskPayload = this.exec.queryOne(
+        `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ? RETURNING *`,
+        values,
+      );
+      if (!taskPayload) {
+        throw new Error(`Failed to load task ${taskId} after launch-state update for sync journal`);
+      }
+      this.exec.markDirty();
+      appendJournalEntry(this.exec, {
+        entityType: 'task',
+        entityId: taskId,
+        op: 'upsert',
+        payload: taskPayload,
       });
     });
   }

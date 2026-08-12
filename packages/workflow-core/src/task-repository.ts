@@ -121,6 +121,12 @@ export interface TaskRepository {
   /** Apply a partial update to an existing task. */
   updateTask(taskId: string, changes: TaskStateChanges): void;
 
+  /**
+   * Apply the narrow launch-state update written by drainScheduler after an
+   * attempt has already been claimed.
+   */
+  updateTaskLaunchState?(taskId: string, changes: TaskStateChanges): void;
+
   /** Delete one task and its task-owned rows. */
   deleteTask(taskId: string): void;
 
