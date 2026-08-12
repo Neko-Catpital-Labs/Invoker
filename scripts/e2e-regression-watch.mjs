@@ -55,6 +55,16 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+const PLAYWRIGHT_COMPATIBILITY_SHARDS = [
+  {
+    name: 'launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ].join(' '),
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -337,6 +347,19 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const matrix of PLAYWRIGHT_COMPATIBILITY_SHARDS) {
+      const jobName = renderGithubTemplate(playwrightJob.name ?? 'playwright', matrix).trim();
+      if (!jobName || definitions.has(jobName)) continue;
+      definitions.set(jobName, {
+        jobId: 'playwright',
+        jobName,
+        matrix: { ...matrix },
+        verifyCommand: commandForJob('playwright', playwrightJob, matrix),
       });
     }
   }
