@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -411,6 +411,55 @@ describe('PR maintenance workers', () => {
       subjectType: 'repo',
       subjectId: repoRoot,
     });
+  });
+
+  it('ignores admin-bypass blocked ledger rows with malformed PR numbers', async () => {
+    const repoRoot = makeRepoRoot();
+    const ledgerPath = join(repoRoot, 'mergify-admin-requeue-state.jsonl');
+    writeFileSync(ledgerPath, [
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: '12invalid',
+        headSha: 'bad-trailing',
+        key: 'review-thread',
+        meta: { detail: 'would be the wrong PR' },
+      }),
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: '3.5',
+        headSha: 'bad-fraction',
+        key: 'review-thread',
+        meta: { detail: 'would truncate to the wrong PR' },
+      }),
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: ' 14 ',
+        headSha: 'good',
+        key: 'review-thread',
+        meta: { detail: 'valid blocked PR' },
+      }),
+    ].join('\n'));
+    const store = {
+      getWorkerAction: vi.fn(() => undefined),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => write as WorkerActionRecord),
+    };
+    const worker = createPrAdminBypassLandWorker({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: ledgerPath },
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      store,
+    });
+
+    await worker.tick();
+
+    const prWrites = store.upsertWorkerAction.mock.calls
+      .map((call) => call[0] as WorkerActionWrite)
+      .filter((write) => write.subjectType === 'pr');
+    expect(prWrites.map((write) => write.subjectId)).toEqual(['14', '14']);
+    expect(prWrites.map((write) => write.actionType)).toEqual(['mergify-blocked-pr', 'alert-send']);
   });
 
   it('does not record a decision row when the lock is held', async () => {
