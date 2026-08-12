@@ -54,6 +54,9 @@ except ImportError:
 
 TRUNK = "master"
 
+QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
+    "build-artifacts",
+})
 QUEUE_ONLY_REQUIRED_CHECK_PREFIXES = ("required-fast / ",)
 ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 STALE_QUEUE_EVENT_TTL_SECONDS = 5400
@@ -99,11 +102,11 @@ class StackFacts:
 
 
 def is_queue_only_required_check(name: str) -> bool:
-    # Both required-fast matrices in .github/workflows/ci.yml are gated to
-    # merge-queue heads. Classify their shared emitted-name prefix instead of
-    # duplicating individual matrix entries here, so promoting a new entry in
-    # .mergify.yml cannot silently turn it into a missing PR-head check.
-    return name.startswith(QUEUE_ONLY_REQUIRED_CHECK_PREFIXES)
+    # build-artifacts and both required-fast matrices in .github/workflows/ci.yml
+    # are gated to merge-queue heads. Classify the stable exact-name check plus
+    # the required-fast emitted-name prefix, so promoting a new required-fast
+    # entry in .mergify.yml cannot silently turn it into a missing PR-head check.
+    return name in QUEUE_ONLY_REQUIRED_CHECKS or name.startswith(QUEUE_ONLY_REQUIRED_CHECK_PREFIXES)
 
 
 def queue_event_queued_epoch(event: MergifyQueueEvent) -> int | None:

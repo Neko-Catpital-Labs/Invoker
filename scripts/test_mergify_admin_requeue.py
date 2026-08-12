@@ -564,6 +564,28 @@ Failing checks
         submit.assert_not_called()
         self.assertEqual(result.status, "queue_only_noop")
 
+    def test_build_artifacts_queue_only_repair_empty_job_log_returns_noop(self):
+        latest = MergifyQueueEvent(
+            "m5811",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-03T06:13:00Z",
+            HEAD,
+            (),
+            ("build-artifacts",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5811#issuecomment-1",
+            5854,
+            (("build-artifacts", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/1/job/2",)),),
+        )
+        item = pr(5811, labels={"dequeued"}, checks={}, latest=latest)
+        repairer = self.repairer(object(), self.ledger())
+        with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/build-artifacts.log"):
+            with mock.patch.object(repairer, "job_log_has_evidence", return_value=False):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan") as submit:
+                    result = repairer.repair_check(item, "build-artifacts")
+        submit.assert_not_called()
+        self.assertEqual(result.status, "queue_only_noop")
+
     def test_pr_body_valid_local_repair_returns_noop_without_submitting(self):
         item = pr(5810, checks={"PR Body": check("PR Body", "failure")}, body=PROOF_BODY)
         repairer = self.repairer(object(), self.ledger())

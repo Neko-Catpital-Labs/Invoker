@@ -26,6 +26,7 @@ import mergify_admin_requeue_plan as p
 HEAD = "a" * 40
 REQUIRED = {"build"}
 QUEUE_ONLY_CHECK = "required-fast / Guardrails"
+QUEUE_ONLY_BUILD_ARTIFACTS_CHECK = "build-artifacts"
 NOW = 2_000_000_000
 
 
@@ -137,6 +138,17 @@ class EffectiveBlockers(unittest.TestCase):
             b.kind for b in p.effective_blockers(
                 snapshot,
                 {QUEUE_ONLY_CHECK},
+                trunk="master",
+            )
+        }
+        self.assertNotIn("missing_check", kinds)
+
+    def test_queue_only_build_artifacts_missing_check_is_not_pr_head_blocker(self):
+        snapshot = pr(checks={})
+        kinds = {
+            b.kind for b in p.effective_blockers(
+                snapshot,
+                {QUEUE_ONLY_BUILD_ARTIFACTS_CHECK},
                 trunk="master",
             )
         }
@@ -839,6 +851,33 @@ class PlanStackActions(PlannerTestCase):
             [(action.kind, action.key) for action in actions],
             [("repair_check", QUEUE_ONLY_CHECK)],
         )
+
+    def test_queue_only_build_artifacts_failure_restores_after_noop(self):
+        ledger = self._ledger()
+        ledger.record("queue-only-noop", 1, HEAD, QUEUE_ONLY_BUILD_ARTIFACTS_CHECK, 1)
+        snapshot = pr(
+            checks={},
+            labels=frozenset({"dequeued"}),
+            latest_mergify=event(
+                failing=(QUEUE_ONLY_BUILD_ARTIFACTS_CHECK,),
+                conditions=((QUEUE_ONLY_BUILD_ARTIFACTS_CHECK, "failure"),),
+            ),
+        )
+
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {QUEUE_ONLY_BUILD_ARTIFACTS_CHECK},
+            ledger,
+            now_epoch=NOW,
+            open_pr_numbers={1},
+            open_pr_numbers_by_head={},
+        )
+
+        self.assertEqual(
+            [(action.kind, action.key) for action in plan.actions],
+            [("restore_admin_bypass_label", QUEUE_ONLY_BUILD_ARTIFACTS_CHECK)],
+        )
+        self.assertEqual(plan.queue_only_noop_check, QUEUE_ONLY_BUILD_ARTIFACTS_CHECK)
 
     def test_current_bottom_waits_on_active_queue_only_mergify_repair(self):
         ledger = self._ledger()
