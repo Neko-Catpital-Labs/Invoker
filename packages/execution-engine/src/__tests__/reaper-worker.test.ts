@@ -52,7 +52,7 @@ describe('reaper worker', () => {
     expect(runtime.identity.kind).toBe(REAPER_WORKER_KIND);
   });
 
-  it('calls each of the five checks once per tick and writes one record-keeping entry', async () => {
+  it('calls each cleanup once per tick and writes one record-keeping entry', async () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
     registerReaperWorker(registry);
     expect(registry.get(REAPER_WORKER_KIND)).toBeTruthy();
@@ -66,6 +66,7 @@ describe('reaper worker', () => {
       { ...okResult('local /tmp/invoker-home'), reason: 'reap-worktrees', detail: 'removed 2' },
       { ...okResult('ssh:remote-1 ~/.invoker'), reason: 'reap-worktrees', detail: 'removed 3' },
     ]);
+    const reapTempDirs = vi.fn(async () => ['/tmp/invoker-cli-prompt-old']);
     const enforceRetention = vi.fn(() => 2);
     const trimLogs = vi.fn(() => ['/tmp/invoker-home/invoker.log']);
     const upsertWorkerAction = vi.fn((row: any) => row);
@@ -80,6 +81,7 @@ describe('reaper worker', () => {
       reapOrphans,
       reapCheckouts,
       reapWorktrees,
+      reapTempDirs,
       enforceRetention,
       trimLogs,
     });
@@ -93,6 +95,7 @@ describe('reaper worker', () => {
     });
     expect(reapCheckouts).toHaveBeenCalledTimes(1);
     expect(reapCheckouts.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
+    expect(reapTempDirs).toHaveBeenCalledTimes(1);
     expect(enforceRetention).toHaveBeenCalledTimes(1);
     expect(enforceRetention.mock.calls[0]?.[0]).toBe('/tmp/invoker-home');
     expect(trimLogs).toHaveBeenCalledTimes(1);
@@ -114,10 +117,12 @@ describe('reaper worker', () => {
       attemptCount: 1,
     });
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('checkouts removed 1');
+    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('CLI temp dirs removed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('snapshots pruned 2');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('logs trimmed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('worktrees removed 5');
     expect(upsertWorkerAction.mock.calls[0]?.[0].payload).toMatchObject({
+      tempDirsRemoved: ['/tmp/invoker-cli-prompt-old'],
       worktreesRemoved: 5,
       worktreeResults: [
         { targetKey: 'local /tmp/invoker-home', reason: 'reap-worktrees', detail: 'removed 2' },
@@ -146,6 +151,7 @@ describe('reaper worker', () => {
       reapOrphans: vi.fn(async () => [okResult('local /tmp/invoker-home'), failedResult]),
       reapCheckouts: vi.fn(() => []),
       reapWorktrees: vi.fn(async () => []),
+      reapTempDirs: vi.fn(async () => []),
       enforceRetention: vi.fn(() => 0),
       trimLogs: vi.fn(() => []),
     });
