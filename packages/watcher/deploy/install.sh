@@ -9,12 +9,85 @@
 # else falls back to an @reboot cron keepalive loop.
 set -euo pipefail
 
+systemd_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  value="${value//%/%%}"
+  printf '"%s"' "$value"
+}
+
+systemd_escape_value() {
+  local value="$1"
+  local single_quote="'"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\x22}"
+  value="${value//$single_quote/\\x27}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  value="${value// /\\x20}"
+  value="${value//%/%%}"
+  printf '%s' "$value"
+}
+
+render_systemd_exec_start() {
+  local first=1
+  local arg
+
+  printf 'ExecStart='
+  for arg in "$@"; do
+    if [ "$first" -eq 0 ]; then
+      printf ' '
+    fi
+    systemd_quote "$arg"
+    first=0
+  done
+  printf '\n'
+}
+
+render_systemd_unit() {
+  local work_dir="$1"
+  shift
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      WorkingDirectory=__REPO_ROOT__)
+        printf 'WorkingDirectory='
+        systemd_escape_value "$work_dir"
+        printf '\n'
+        ;;
+      ExecStart=*)
+        render_systemd_exec_start "$@"
+        ;;
+      *)
+        printf '%s\n' "$line"
+        ;;
+    esac
+  done
+}
+
+render_shell_command() {
+  local first=1
+  local arg
+
+  for arg in "$@"; do
+    if [ "$first" -eq 0 ]; then
+      printf ' '
+    fi
+    printf '%q' "$arg"
+    first=0
+  done
+}
+
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || true)"
-NODE_BIN="$(command -v node)"
 SERVICE_SRC="${REPO_ROOT:+$REPO_ROOT/packages/watcher/deploy/watcher.service}"
 WATCHER_BIN="$(command -v invoker-watcher || true)"
-
-if [ -z "$NODE_BIN" ]; then echo "node not found on PATH" >&2; exit 1; fi
+EXEC_START_ARGS=()
 
 if [ -z "$WATCHER_BIN" ]; then
   if [ -z "$REPO_ROOT" ] || [ ! -f "$REPO_ROOT/packages/watcher/package.json" ]; then
@@ -22,13 +95,16 @@ if [ -z "$WATCHER_BIN" ]; then
     echo "Install with: npm i -g @neko-catpital-labs/invoker-watcher" >&2
     exit 1
   fi
+  NODE_BIN="$(command -v node || true)"
+  if [ -z "$NODE_BIN" ]; then echo "node not found on PATH" >&2; exit 1; fi
+
   echo "Building @invoker/watcher (dev fallback)..."
   ( cd "$REPO_ROOT" && pnpm --filter @invoker/watcher build )
-  EXEC_START="$NODE_BIN $REPO_ROOT/packages/watcher/dist/index.js"
+  EXEC_START_ARGS=("$NODE_BIN" "$REPO_ROOT/packages/watcher/dist/index.js")
   WORK_DIR="$REPO_ROOT"
 else
   echo "Using packaged invoker-watcher at $WATCHER_BIN"
-  EXEC_START="$WATCHER_BIN"
+  EXEC_START_ARGS=("$WATCHER_BIN")
   WORK_DIR="${REPO_ROOT:-$HOME}"
 fi
 
@@ -37,10 +113,7 @@ if command -v systemctl >/dev/null 2>&1; then
   UNIT_NAME="invoker-watcher.service"
   mkdir -p "$UNIT_DIR"
   if [ -n "$SERVICE_SRC" ] && [ -f "$SERVICE_SRC" ]; then
-    sed -e "s#__REPO_ROOT__#$WORK_DIR#g" \
-        -e "s#__NODE__#$NODE_BIN#g" \
-        -e "s#ExecStart=.*#ExecStart=$EXEC_START#g" \
-      "$SERVICE_SRC" > "$UNIT_DIR/$UNIT_NAME"
+    render_systemd_unit "$WORK_DIR" "${EXEC_START_ARGS[@]}" < "$SERVICE_SRC" > "$UNIT_DIR/$UNIT_NAME"
   else
     cat > "$UNIT_DIR/$UNIT_NAME" <<EOF
 [Unit]
@@ -50,8 +123,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$WORK_DIR
-ExecStart=$EXEC_START
+WorkingDirectory=$(systemd_escape_value "$WORK_DIR")
+$(render_systemd_exec_start "${EXEC_START_ARGS[@]}")
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
@@ -70,9 +143,11 @@ else
     echo "Cron keepalive needs a monorepo checkout; install systemd or clone the repo." >&2
     exit 1
   fi
-  LINE="@reboot cd $REPO_ROOT && while true; do $EXEC_START >> $HOME/.invoker/watcher.keepalive.log 2>&1; sleep 5; done"
+  WATCHER_COMMAND="$(render_shell_command "${EXEC_START_ARGS[@]}")"
+  LOG_PATH="$HOME/.invoker/watcher.keepalive.log"
+  LINE="@reboot cd $(printf '%q' "$REPO_ROOT") && while true; do $WATCHER_COMMAND >> $(printf '%q' "$LOG_PATH") 2>&1; sleep 5; done"
   ( crontab -l 2>/dev/null | grep -v 'watcher.keepalive.log' || true; echo "$LINE" ) | crontab -
   echo "Installed cron keepalive. Starting now..."
-  ( cd "$REPO_ROOT" && while true; do $EXEC_START >> "$HOME/.invoker/watcher.keepalive.log" 2>&1; sleep 5; done ) &
-  echo "Logs: $HOME/.invoker/watcher.keepalive.log"
+  ( cd "$REPO_ROOT" && while true; do "${EXEC_START_ARGS[@]}" >> "$LOG_PATH" 2>&1; sleep 5; done ) &
+  echo "Logs: $LOG_PATH"
 fi
