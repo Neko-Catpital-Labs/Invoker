@@ -408,7 +408,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: PR Authoring Guardrails
             command: bash scripts/test-suites/required/11-pr-authoring-guardrails.sh
-            runner_label: Runner_2_4_core
+            runner_label: Github_Runner
           - name: Mergify Admin Requeue
             command: bash scripts/test-suites/required/12-mergify-admin-requeue.sh
             runner_label: Runner_2_4_core
