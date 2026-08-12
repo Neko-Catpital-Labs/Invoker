@@ -103,16 +103,18 @@ export function appendJournalEntry(
 
   const inserted = db.queryOne('SELECT last_insert_rowid() AS seq') as { seq?: number } | undefined;
   const seq = Number(inserted?.seq);
-  const row = db.queryOne(
-    `SELECT seq, entity_type, entity_id, op, payload, origin, created_at
-       FROM sync_journal
-      WHERE seq = ?`,
-    [seq],
-  );
-  if (!row) {
-    throw new Error(`Failed to load sync journal entry ${seq} after insert`);
+  if (!Number.isFinite(seq) || seq <= 0) {
+    throw new Error('Failed to read sync journal row id after insert');
   }
-  return mapJournalRow(row);
+  return {
+    seq,
+    entityType,
+    entityId,
+    op: entry.op,
+    payload: entry.payload ?? null,
+    origin,
+    createdAt,
+  };
 }
 
 export function readJournalSince(
