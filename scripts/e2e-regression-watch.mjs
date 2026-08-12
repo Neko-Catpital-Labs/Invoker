@@ -209,6 +209,19 @@ export function getActionableFailures(state) {
     });
 }
 
+export function pruneUnmappedFailures(state, jobDefinitions = buildCiJobDefinitions()) {
+  const normalized = normalizeState(state);
+  let pruned = 0;
+  for (const failure of Object.values(normalized.activeFailures)) {
+    const jobName = typeof failure?.jobName === 'string' ? failure.jobName : '';
+    if (jobName && !jobDefinitions.has(jobName)) {
+      delete normalized.activeFailures[jobName];
+      pruned += 1;
+    }
+  }
+  return pruned;
+}
+
 function shellSingleQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -517,6 +530,9 @@ export async function main() {
     saveState(state);
   }
 
+  const groupsPrunedUnmapped = pruneUnmappedFailures(state, jobDefinitions);
+  if (groupsPrunedUnmapped > 0) saveState(state);
+
   const failures = getActionableFailures(state);
   const toFile = [];
   let groupsSkippedAlreadyAddressed = 0;
@@ -547,6 +563,7 @@ export async function main() {
     groupsFiled: toFile.length,
     groupsSkippedAlreadyAddressed,
     groupsDeferredByCap,
+    groupsPrunedUnmapped,
     dryRun,
   });
 }

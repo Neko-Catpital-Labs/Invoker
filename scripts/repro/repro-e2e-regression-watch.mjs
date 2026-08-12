@@ -17,6 +17,7 @@ import {
   listUnprocessedDefaultBranchRuns,
   liveQueryHasNonTerminalWork,
   loadEmptyState,
+  pruneUnmappedFailures,
   reconcileCiRun,
 } from '../e2e-regression-watch.mjs';
 
@@ -146,6 +147,21 @@ function testWorkflowCommandMapping() {
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
 
+function testUnmappedFailuresArePrunedBeforeFiling() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(350, 'sha-stale-matrix', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 35),
+  ]));
+  const defs = new Map([
+    ['playwright / 9-of-9', { verifyCommand: 'mapped current shard' }],
+  ]);
+
+  assertEqual(getActionableFailures(state).length, 1, 'stale job starts actionable');
+  assertEqual(pruneUnmappedFailures(state, defs), 1, 'one unmapped failure is pruned');
+  assertEqual(getActionableFailures(state).length, 0, 'stale job is no longer actionable');
+  console.log('[repro-e2e-regression-watch] unmapped failure pruning: PASS');
+}
+
 function testPlanVarsAndDryRunRendering() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(400, 'abc123def456abc123def456abc123def456ab1', [
@@ -228,6 +244,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testUnmappedFailuresArePrunedBeforeFiling();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
