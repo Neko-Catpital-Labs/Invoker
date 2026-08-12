@@ -121,7 +121,7 @@ const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
-const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
+const { InvokerTerminal, buildPlanningHarnessChoices } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
 
@@ -310,16 +310,104 @@ describe('Invoker terminal (component)', () => {
       busy: false,
       value: '',
       selectedPresetKey: 'codex',
-      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      presetOptions: [{ key: 'codex', label: 'Codex', tool: 'codex' }],
+      selectedConfirmationMode: 'require' as const,
       draftPlanAvailable: false,
       onValueChange: vi.fn(),
       onSubmit: vi.fn(),
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
+      onConfirmationModeChange: vi.fn(),
       onExpand: vi.fn(),
       ...overrides,
     };
   }
+
+  it('groups flat configured planning presets into harness and model choices', () => {
+    expect(buildPlanningHarnessChoices([
+      { key: 'codex', label: 'Codex', tool: 'codex' },
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+      { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+      { key: 'omp', label: 'OMP', tool: 'omp' },
+    ])).toEqual([
+      {
+        tool: 'codex',
+        label: 'Codex',
+        directPreset: { key: 'codex', label: 'Codex', tool: 'codex' },
+        modelPresets: [],
+      },
+      {
+        tool: 'omp',
+        label: 'OMP',
+        directPreset: { key: 'omp', label: 'OMP', tool: 'omp' },
+        modelPresets: [
+          { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+          { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+        ],
+      },
+    ]);
+  });
+
+  it('renders separate harness and model selectors while emitting configured preset keys', () => {
+    const onPresetChange = vi.fn();
+    render(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'omp+claude',
+        presetOptions: [
+          { key: 'codex', label: 'Codex', tool: 'codex' },
+          { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+          { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+          { key: 'omp', label: 'OMP', tool: 'omp' },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+
+    expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('omp');
+    const modelSelect = screen.getByTestId('invoker-terminal-model');
+    expect(modelSelect).toHaveValue('omp+claude');
+    expect(within(modelSelect).getByRole('option', { name: 'Default' })).toHaveValue('omp');
+    expect(within(modelSelect).getByRole('option', { name: 'Claude' })).toHaveValue('omp+claude');
+    expect(within(modelSelect).getByRole('option', { name: 'Codex' })).toHaveValue('omp+codex');
+
+    fireEvent.change(modelSelect, { target: { value: 'omp+codex' } });
+    expect(onPresetChange).toHaveBeenLastCalledWith('omp+codex');
+  });
+
+  it('hides the model selector for direct harness presets without configured models', () => {
+    render(<InvokerTerminal {...terminalProps()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+
+    expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    expect(screen.queryByTestId('invoker-terminal-model')).not.toBeInTheDocument();
+  });
+
+  it('preserves a still-valid model when switching harnesses', () => {
+    const onPresetChange = vi.fn();
+    render(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'omp+claude',
+        presetOptions: [
+          { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+          { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+          { key: 'cursor+claude', label: 'Claude via Cursor', tool: 'cursor', model: 'claude' },
+          { key: 'cursor+codex', label: 'Codex via Cursor', tool: 'cursor', model: 'codex' },
+          { key: 'codex', label: 'Codex', tool: 'codex' },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'cursor' } });
+    expect(onPresetChange).toHaveBeenLastCalledWith('cursor+claude');
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'codex' } });
+    expect(onPresetChange).toHaveBeenLastCalledWith('codex');
+  });
 
   it('shows the submitted-plan bar running state while the workflow is still running', () => {
     render(<InvokerTerminal
@@ -984,12 +1072,14 @@ describe('Invoker terminal (component)', () => {
       busy: false,
       value: '',
       selectedPresetKey: 'codex',
-      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      presetOptions: [{ key: 'codex', label: 'Codex', tool: 'codex' }],
+      selectedConfirmationMode: 'require' as const,
       draftPlanAvailable: false,
       onValueChange: vi.fn(),
       onSubmit: vi.fn(),
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
+      onConfirmationModeChange: vi.fn(),
       onExpand: vi.fn(),
     };
     const { rerender } = render(<InvokerTerminal {...props} />);
@@ -1067,12 +1157,14 @@ describe('Invoker terminal (component)', () => {
           busy={false}
           value={value}
           selectedPresetKey="codex"
-          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          presetOptions={[{ key: 'codex', label: 'Codex', tool: 'codex' }]}
+          selectedConfirmationMode="require"
           draftPlanAvailable={false}
           onValueChange={setValue}
           onSubmit={vi.fn()}
           onSubmitDraft={vi.fn()}
           onPresetChange={vi.fn()}
+          onConfirmationModeChange={vi.fn()}
           onExpand={vi.fn()}
         />
       );
@@ -1479,7 +1571,9 @@ describe('Invoker terminal (component)', () => {
     render(<App />);
     await openPlanningTerminal();
 
-    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'omp+claude' } });
+    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'omp' } });
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-model')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('invoker-terminal-model'), { target: { value: 'omp+claude' } });
     submitPlanningText('draft a plan');
 
     await waitFor(() => {
