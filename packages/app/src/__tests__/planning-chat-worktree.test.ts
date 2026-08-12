@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const childProcessMocks = vi.hoisted(() => ({
-  execFile: vi.fn((_file, _args, _options, callback) => {
+  execFile: vi.fn((_file, args, options, callback) => {
+    if (args?.[0] === '--version') {
+      callback?.(null, '10.31.0\n', '');
+      return {} as never;
+    }
+    if (args?.[0] === 'install' && options?.cwd && existsSync(options.cwd)) {
+      mkdirSync(join(options.cwd, 'node_modules', '.pnpm'), { recursive: true });
+      writeFileSync(join(options.cwd, 'node_modules', '.modules.yaml'), 'layoutVersion: 5\n', 'utf8');
+    }
     callback?.(null, '', '');
     return {} as never;
   }),
@@ -49,6 +57,24 @@ function createFakePool(overrides: Partial<Record<keyof PlanningRepoPool, unknow
     } as unknown as PlanningRepoPool,
     spies: { ensureCloneThroughRepoQueue, resolveBaseCommit, acquireWorktree, externalWorktreePath, release, softRelease },
   };
+}
+
+function installCalls(): unknown[][] {
+  return childProcessMocks.execFile.mock.calls.filter((call) => {
+    const args = call[1] as string[] | undefined;
+    return args?.[0] === 'install';
+  });
+}
+
+function createDependencyWorktree(root: string, name: string): string {
+  const path = join(root, name);
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8');
+  writeFileSync(join(path, 'package.json'), JSON.stringify({
+    name,
+    packageManager: 'pnpm@10.31.0',
+  }), 'utf8');
+  return path;
 }
 
 describe('resolvePlanningWorktreeBranch', () => {
@@ -112,6 +138,48 @@ describe('provisionPlanningWorktree', () => {
       expect.any(Function),
     );
     expect(spies.softRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a validated dependency snapshot for a second planning worktree with the same lockfile inputs', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'planning-worktree-deps-'));
+    try {
+      const firstWorktree = createDependencyWorktree(tmpDir, 'first');
+      const secondWorktree = createDependencyWorktree(tmpDir, 'second');
+      const cacheRoot = join(tmpDir, 'dependency-cache');
+      const { pool, spies } = createFakePool();
+      spies.acquireWorktree
+        .mockResolvedValueOnce({
+          clonePath: '/clone/path',
+          worktreePath: firstWorktree,
+          branch: 'invoker/planning/session-1',
+          release: spies.release,
+          softRelease: spies.softRelease,
+        })
+        .mockResolvedValueOnce({
+          clonePath: '/clone/path',
+          worktreePath: secondWorktree,
+          branch: 'invoker/planning/session-2',
+          release: spies.release,
+          softRelease: spies.softRelease,
+        });
+
+      await provisionPlanningWorktree(pool, {
+        repoUrl: 'https://example.com/repo.git',
+        baseBranch: 'main',
+        sessionId: 'session-1',
+      }, { cacheRoot });
+      await provisionPlanningWorktree(pool, {
+        repoUrl: 'https://example.com/repo.git',
+        baseBranch: 'main',
+        sessionId: 'session-2',
+      }, { cacheRoot });
+
+      expect(installCalls()).toHaveLength(1);
+      expect(readFileSync(join(secondWorktree, 'node_modules', '.modules.yaml'), 'utf8')).toContain('layoutVersion');
+      expect(spies.softRelease).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
