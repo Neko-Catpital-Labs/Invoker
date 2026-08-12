@@ -54,6 +54,16 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const PLAYWRIGHT_COMPATIBILITY_JOBS = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrixName: 'launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -110,7 +120,15 @@ export function classifyJobConclusion(job) {
   return 'ignored';
 }
 
-export function reconcileCiRun(state, run) {
+function activeFailureNamesClearedByJob(jobName, jobDefinitions = new Map()) {
+  const cleared = [jobName];
+  for (const definition of jobDefinitions.values()) {
+    if (definition?.clearedByJobName === jobName) cleared.push(definition.jobName);
+  }
+  return cleared;
+}
+
+export function reconcileCiRun(state, run, { jobDefinitions = new Map() } = {}) {
   const normalized = normalizeState(state);
   const sha = String(run.headSha ?? '').trim();
   if (!sha) return { state: normalized, processedJobs: 0, brokenJobs: 0, okJobs: 0, ignoredJobs: 0 };
@@ -152,7 +170,9 @@ export function reconcileCiRun(state, run) {
     if (classification === 'ok') {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
-      delete normalized.activeFailures[jobName];
+      for (const activeFailureName of activeFailureNamesClearedByJob(jobName, jobDefinitions)) {
+        delete normalized.activeFailures[activeFailureName];
+      }
       continue;
     }
 
@@ -261,20 +281,28 @@ function withBuildPrefix(command, needsBuild) {
   return needsBuild ? `${BUILD_APP_COMMAND} && ${command}` : command;
 }
 
+function normalizeFileList(value) {
+  return String(value ?? '').trim().replace(/\s+/g, ' ');
+}
+
+function commandForPlaywrightJob(jobId, matrixName, files) {
+  const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
+  return [
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrixName}`)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(normalizeFileList(files))}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+}
+
 function commandForJob(jobId, job, matrix) {
   const needsBuild = jobDownloadsBuildArtifacts(job);
   if (jobId === 'build-artifacts') return BUILD_APP_COMMAND;
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
-    const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
-      'env',
-      `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
-      'INVOKER_PLAYWRIGHT_WORKERS=1',
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
-      `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
-      'bash scripts/test-suites/optional/40-playwright-app.sh',
-    ].join(' ');
+    const command = commandForPlaywrightJob(jobId, matrix.name, matrix.files);
     return withBuildPrefix(command, true);
   }
   if (jobId === 'e2e-proof') {
@@ -326,6 +354,37 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function findPlaywrightOwnerJob(definitions, files) {
+  const required = new Set(files);
+  for (const definition of definitions.values()) {
+    if (definition.jobId !== 'playwright') continue;
+    const listed = new Set(normalizeFileList(definition.matrix?.files).split(/\s+/).filter(Boolean));
+    if ([...required].every((file) => listed.has(file))) return definition;
+  }
+  return null;
+}
+
+function addCompatibilityJobDefinitions(definitions) {
+  for (const compatibilityJob of PLAYWRIGHT_COMPATIBILITY_JOBS) {
+    if (definitions.has(compatibilityJob.jobName)) continue;
+    const owner = findPlaywrightOwnerJob(definitions, compatibilityJob.files);
+    if (!owner) continue;
+    definitions.set(compatibilityJob.jobName, {
+      jobId: 'playwright',
+      jobName: compatibilityJob.jobName,
+      matrix: {
+        name: compatibilityJob.matrixName,
+        files: compatibilityJob.files.join(' '),
+      },
+      verifyCommand: withBuildPrefix(
+        commandForPlaywrightJob('playwright', compatibilityJob.matrixName, compatibilityJob.files.join(' ')),
+        true,
+      ),
+      clearedByJobName: owner.jobName,
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +399,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  addCompatibilityJobDefinitions(definitions);
   return definitions;
 }
 
@@ -507,7 +567,7 @@ export async function main() {
   let jobsIgnored = 0;
   for (const runSummary of runs) {
     const run = getCiRun(runSummary.databaseId);
-    const result = reconcileCiRun(state, run);
+    const result = reconcileCiRun(state, run, { jobDefinitions });
     runsProcessed += 1;
     jobsProcessed += result.processedJobs;
     jobsBroken += result.brokenJobs;

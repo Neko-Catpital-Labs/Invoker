@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -140,10 +141,39 @@ function testWorkflowCommandMapping() {
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
+  const retiredStuckLease = defs.get('playwright / launch-dispatch-stuck-lease');
+  if (!retiredStuckLease.verifyCommand.includes('launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('retired stuck-lease job must verify the cap spec');
+  }
+  if (!retiredStuckLease.verifyCommand.includes('launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('retired stuck-lease job must verify the storm spec');
+  }
+  if (retiredStuckLease.verifyCommand.includes('No local verify command is mapped')) {
+    fail('retired stuck-lease job must not use the fallback verify command');
+  }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
+}
+
+function testRetiredPlaywrightJobClearsWithCurrentOwnerShard() {
+  const state = loadEmptyState();
+  const defs = buildCiJobDefinitions();
+  reconcileCiRun(state, fakeRun(500, 'sha-retired-fail', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 50),
+  ]), { jobDefinitions: defs });
+  if (!state.activeFailures['playwright / launch-dispatch-stuck-lease']) {
+    fail('retired stuck-lease failure was not recorded');
+  }
+
+  reconcileCiRun(state, fakeRun(501, 'sha-current-ok', [
+    fakeJob('playwright / 9-of-9', 'success', 51),
+  ]), { jobDefinitions: defs });
+  if (state.activeFailures['playwright / launch-dispatch-stuck-lease']) {
+    fail('current owner shard success did not clear retired stuck-lease failure');
+  }
+  console.log('[repro-e2e-regression-watch] retired Playwright job clears with owner shard: PASS');
 }
 
 function testPlanVarsAndDryRunRendering() {
@@ -173,6 +203,42 @@ function testPlanVarsAndDryRunRendering() {
     rmSync(outRoot, { recursive: true, force: true });
   }
   console.log('[repro-e2e-regression-watch] plan vars + dry-run rendering: PASS');
+}
+
+function testRetiredPlaywrightJobRendersMappedVerifyCommand() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(425, 'abc425def456abc123def456abc123def456ab2', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 42),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const defs = buildCiJobDefinitions();
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('retired stuck-lease plan vars used fallback verify command');
+  }
+  if (!vars.verify_command.includes('ci-playwright-launch-dispatch-stuck-lease')) {
+    fail('retired stuck-lease plan vars did not use the compatibility run label');
+  }
+
+  const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-retired-render-'));
+  try {
+    const rendered = fileBugfixPlan(failure, {
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      jobDefinitions: defs,
+      outRoot,
+      dryRun: true,
+    });
+    const planText = readFileSync(rendered.planPath, 'utf8');
+    if (planText.includes('No local verify command is mapped')) {
+      fail('retired stuck-lease rendered plan used fallback verify command');
+    }
+    if (!planText.includes('ci-playwright-launch-dispatch-stuck-lease')) {
+      fail('retired stuck-lease rendered plan omitted compatibility run label');
+    }
+  } finally {
+    rmSync(outRoot, { recursive: true, force: true });
+  }
+  console.log('[repro-e2e-regression-watch] retired Playwright job renders mapped verify command: PASS');
 }
 
 function testLiveSubmissionUsesNoTrack() {
@@ -228,7 +294,9 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testRetiredPlaywrightJobClearsWithCurrentOwnerShard();
   testPlanVarsAndDryRunRendering();
+  testRetiredPlaywrightJobRendersMappedVerifyCommand();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
