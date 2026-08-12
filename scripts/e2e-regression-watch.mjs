@@ -54,6 +54,18 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_DEFINITIONS = [
+  {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -328,8 +340,14 @@ function commandForJob(jobId, job, matrix) {
 
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
+  const playwrightFiles = new Set();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
     for (const matrix of expandMatrix(job.strategy?.matrix)) {
+      if (jobId === 'playwright') {
+        for (const file of String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean)) {
+          playwrightFiles.add(file);
+        }
+      }
       const jobName = renderGithubTemplate(job.name ?? jobId, matrix).trim();
       if (!jobName) continue;
       definitions.set(jobName, {
@@ -337,6 +355,19 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const legacyDefinition of LEGACY_PLAYWRIGHT_JOB_DEFINITIONS) {
+      const files = String(legacyDefinition.matrix.files).trim().split(/\s+/).filter(Boolean);
+      if (!files.every((file) => playwrightFiles.has(file))) continue;
+      definitions.set(legacyDefinition.jobName, {
+        jobId: 'playwright',
+        jobName: legacyDefinition.jobName,
+        matrix: { ...legacyDefinition.matrix },
+        verifyCommand: commandForJob('playwright', playwrightJob, legacyDefinition.matrix),
       });
     }
   }
