@@ -140,15 +140,18 @@ function controller(
   register(PR_DUPLICATE_CLOSE_WORKER_KIND, 'Closes duplicate or already-landed pull requests.');
   register(PR_AUTO_LABEL_WORKER_KIND, 'Auto-labels refactor/bugfix/repro/test-only PRs with admin-bypass.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
+  register(REAPER_WORKER_KIND, 'Reaps stale Invoker-managed artifacts.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
 
+  const runtimeDeps = deps();
   return {
     runtimes,
+    logger: runtimeDeps.logger,
     persistence: store,
     controller: createWorkerRuntimeController({
       registry,
-      deps: deps(),
+      deps: runtimeDeps,
       autoStartKinds,
       persistence: store as never,
       canControl: () => true,
@@ -301,6 +304,47 @@ describe('createWorkerRuntimeController', () => {
       desiredEnabled: false,
       autoStarts: false,
     });
+  });
+
+  it('logs persisted worker controls and configured auto-start suppression with their source', async () => {
+    const setup = controller([REAPER_WORKER_KIND], { [REAPER_WORKER_KIND]: false });
+
+    setup.controller.startAutoStartedWorkers();
+    setup.controller.start(REAPER_WORKER_KIND, { source: 'gui-ipc' });
+    await setup.controller.stop(REAPER_WORKER_KIND);
+
+    expect(setup.logger.warn).toHaveBeenCalledWith(
+      '[worker-control] configured auto-start suppressed by persisted desired state',
+      expect.objectContaining({
+        module: 'worker-control',
+        workerKind: REAPER_WORKER_KIND,
+        configuredAutoStart: true,
+        persistedDesiredEnabled: false,
+        persistedUpdatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+    expect(setup.logger.info).toHaveBeenNthCalledWith(
+      1,
+      '[worker-control] persisted desired state change',
+      expect.objectContaining({
+        module: 'worker-control',
+        workerKind: REAPER_WORKER_KIND,
+        source: 'gui-ipc',
+        previousDesiredEnabled: false,
+        desiredEnabled: true,
+      }),
+    );
+    expect(setup.logger.info).toHaveBeenNthCalledWith(
+      2,
+      '[worker-control] persisted desired state change',
+      expect.objectContaining({
+        module: 'worker-control',
+        workerKind: REAPER_WORKER_KIND,
+        source: 'controller-api',
+        previousDesiredEnabled: true,
+        desiredEnabled: false,
+      }),
+    );
   });
 
   it('auto-starts e2e-autofix only when its kind is in autoStartKinds', () => {
