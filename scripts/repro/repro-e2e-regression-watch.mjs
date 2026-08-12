@@ -11,6 +11,7 @@ import {
   buildMarker,
   buildPlanVars,
   classifyJobConclusion,
+  fallbackVerifyCommand,
   fileBugfixPlan,
   getActionableFailures,
   getCiRun,
@@ -18,6 +19,7 @@ import {
   liveQueryHasNonTerminalWork,
   loadEmptyState,
   reconcileCiRun,
+  resolveVerifyCommand,
 } from '../e2e-regression-watch.mjs';
 
 function fail(message) {
@@ -157,6 +159,28 @@ function testWorkflowCommandMapping() {
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
 }
 
+function testFallbackVerifyCommandDefersResolution() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(375, 'abc789def456abc123def456abc123def456ab3', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 37),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', new Map());
+  const expectedFallback = fallbackVerifyCommand('playwright / launch-dispatch-stuck-lease');
+
+  assertEqual(vars.verify_command, expectedFallback, 'unmapped jobs use the deferred fallback command');
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('fallback verify command must not be a permanent sentinel');
+  }
+  if (!vars.verify_command.includes('--exec-verify-command')) {
+    fail('fallback verify command must resolve through the current watcher at execution time');
+  }
+  if (!resolveVerifyCommand('playwright / launch-dispatch-stuck-lease').includes('launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('current watcher mapping must resolve legacy stuck-lease command');
+  }
+  console.log('[repro-e2e-regression-watch] fallback verify command defers resolution: PASS');
+}
+
 function testPlanVarsAndDryRunRendering() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(400, 'abc123def456abc123def456abc123def456ab1', [
@@ -239,6 +263,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testFallbackVerifyCommandDefersResolution();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();

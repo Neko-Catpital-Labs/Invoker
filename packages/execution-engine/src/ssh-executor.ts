@@ -56,6 +56,18 @@ function tailFor(text: string): string {
     : trimmed;
 }
 
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function resolveLegacyCiWatchVerifySentinel(payload: string): string {
+  const match = payload.match(
+    /^bash -lc 'echo "No local verify command is mapped for CI job: ([^"]+)" >&2; exit 1'$/,
+  );
+  if (!match) return payload;
+  return `node scripts/e2e-regression-watch.mjs --exec-verify-command ${shellSingleQuote(match[1])}`;
+}
+
 // Every remote-contact primitive (bootstrap, worktree list/cleanup, record-and-push,
 // etc.) funnels through execRemoteCapture, so logging failures here -- unconditionally,
 // unlike the bench() calls above which are opt-in -- covers all of them without each
@@ -225,9 +237,10 @@ exit "$PAYLOAD_EXIT"
 
 
   private buildPayloadScript(payload: string): string {
+    const executablePayload = resolveLegacyCiWatchVerifySentinel(payload);
     return `#!/usr/bin/env bash
 set -e
-${payload}
+${executablePayload}
 `;
   }
 
