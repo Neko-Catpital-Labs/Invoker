@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,23 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  if (!defs.get('playwright / 1-of-9').verifyCommand.includes('repro-ci-playwright-shard-inventory.mjs')) {
+    fail('playwright shard command must include shard-inventory guard');
+  }
+  const retiredStuckLease = defs.get('playwright / launch-dispatch-stuck-lease');
+  if (!retiredStuckLease.retired) fail('retired stuck-lease job definition must be marked retired');
+  if (retiredStuckLease.verifyCommand.includes('No local verify command is mapped')) {
+    fail('retired stuck-lease job must not use fallback verify command');
+  }
+  if (!retiredStuckLease.verifyCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('retired stuck-lease job command must run the cap spec');
+  }
+  if (!retiredStuckLease.verifyCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('retired stuck-lease job command must run the storm spec');
+  }
+  if (!retiredStuckLease.verifyCommand.includes('repro-ci-playwright-shard-inventory.mjs')) {
+    fail('retired stuck-lease job command must include shard-inventory guard');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -171,6 +189,20 @@ function testPlanVarsAndDryRunRendering() {
     if (!planText.includes('executionAgent: codex')) fail('fix task must request codex (default claude agent hits the broken SSH pool)');
   } finally {
     rmSync(outRoot, { recursive: true, force: true });
+  }
+
+  reconcileCiRun(state, fakeRun(401, 'abc123def456abc123def456abc123def456ab2', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 41),
+  ]));
+  const stuckLeaseFailure = getActionableFailures(state)
+    .find((failure) => failure.jobName === 'playwright / launch-dispatch-stuck-lease');
+  if (!stuckLeaseFailure) fail('retired stuck-lease failure did not remain actionable');
+  const stuckLeaseVars = buildPlanVars(stuckLeaseFailure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (stuckLeaseVars.verify_command.includes('No local verify command is mapped')) {
+    fail('retired stuck-lease plan vars must not use fallback verify command');
+  }
+  if (!stuckLeaseVars.verify_command.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('retired stuck-lease plan vars must include current stuck-lease verifier');
   }
   console.log('[repro-e2e-regression-watch] plan vars + dry-run rendering: PASS');
 }

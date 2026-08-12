@@ -55,6 +55,20 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+const RETIRED_CI_JOB_DEFINITIONS = [
+  {
+    jobId: 'playwright',
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    matrix: {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -267,7 +281,7 @@ function commandForJob(jobId, job, matrix) {
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
     const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
+    const suiteCommand = [
       'env',
       `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
       'INVOKER_PLAYWRIGHT_WORKERS=1',
@@ -275,6 +289,9 @@ function commandForJob(jobId, job, matrix) {
       `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
       'bash scripts/test-suites/optional/40-playwright-app.sh',
     ].join(' ');
+    const command = jobId === 'playwright'
+      ? `node scripts/repro/repro-ci-playwright-shard-inventory.mjs && ${suiteCommand}`
+      : suiteCommand;
     return withBuildPrefix(command, true);
   }
   if (jobId === 'e2e-proof') {
@@ -339,6 +356,16 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         verifyCommand: commandForJob(jobId, job, matrix),
       });
     }
+  }
+  for (const retired of RETIRED_CI_JOB_DEFINITIONS) {
+    if (definitions.has(retired.jobName)) continue;
+    definitions.set(retired.jobName, {
+      jobId: retired.jobId,
+      jobName: retired.jobName,
+      matrix: retired.matrix,
+      retired: true,
+      verifyCommand: commandForJob(retired.jobId, {}, retired.matrix),
+    });
   }
   return definitions;
 }
