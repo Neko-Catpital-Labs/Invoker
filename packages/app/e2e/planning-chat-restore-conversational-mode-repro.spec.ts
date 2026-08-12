@@ -70,6 +70,10 @@ async function closeApp(app: ElectronApplication): Promise<void> {
   const child = app.process();
   let childExited = child.exitCode !== null || child.signalCode !== null;
   const childExitPromise = new Promise<void>((resolve) => {
+    if (childExited) {
+      resolve();
+      return;
+    }
     const markChildExited = () => {
       childExited = true;
       resolve();
@@ -79,13 +83,16 @@ async function closeApp(app: ElectronApplication): Promise<void> {
   });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
   if (timedOut && !childExited) {
     child.kill('SIGTERM');
-    await Promise.race([closePromise, childExitPromise, delay(2_000)]);
-    if (!childExited) child.kill('SIGKILL');
+    await Promise.race([childExitPromise, delay(2_000)]);
+    if (!childExited) {
+      child.kill('SIGKILL');
+      await Promise.race([childExitPromise, delay(2_000)]);
+    }
   }
 }
 
