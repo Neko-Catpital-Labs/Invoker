@@ -212,9 +212,10 @@ export function createMockInvoker(
       },
     })),
     planningChatList: vi.fn(async () => ({ ok: true, sessions: [] })),
-    planningChatSend: vi.fn(async () => ({
+    planningChatSend: vi.fn(async (request?: { turnId?: string }) => ({
       ok: true,
       sessionId: 'session-1',
+      turnId: request?.turnId,
       reply: 'I can help draft that.',
       confirmationMode: 'require',
       draftPlanAvailable: false,
