@@ -88,6 +88,7 @@ def safe_push(
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
     expected = None if expect_missing else validate_expected_head(expected_head or "")
     live = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
+    pushed = local_head(cwd=cwd)
     if expect_missing:
         if live is not None:
             raise SafePushError(
@@ -96,6 +97,8 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:"
     else:
+        if live == pushed:
+            return pushed
         if live != expected:
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
@@ -103,7 +106,6 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:{expected}"
 
-    pushed = local_head(cwd=cwd)
     run_git([
         "push",
         f"--force-with-lease={lease}",
@@ -118,6 +120,15 @@ def safe_push(
             exit_code=22,
         )
     return pushed
+
+
+def normalize_ledger_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    parts = expanded.parts
+    # SSH workers can receive a submitter-local macOS ledger path.
+    if len(parts) >= 4 and parts[0] == "/" and parts[1] == "Users":
+        return Path.home().joinpath(*parts[3:])
+    return expanded
 
 
 def append_tsv_ledger(path: Path, *, kind: str, key: str, marker: str, epoch: int | None = None) -> None:
@@ -198,7 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--tsv-marker": args.tsv_marker,
             })
             append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
+                normalize_ledger_path(Path(args.record_tsv_ledger)),
                 kind=args.tsv_kind,
                 key=args.tsv_key,
                 marker=args.tsv_marker,
@@ -217,7 +228,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
             append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
+                normalize_ledger_path(Path(args.record_json_ledger)),
                 kind=args.json_kind,
                 pr_number=args.json_pr,
                 head_sha=args.json_head_sha,

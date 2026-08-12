@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -89,6 +90,53 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
+
+    def test_retry_after_post_push_failure_records_marker_without_requiring_old_head(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/main")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "8619",
+            "--json-head-sha", self.expected,
+            "--json-key", "UI Vitest",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        row = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(row["kind"], "repair-check-settled")
+        self.assertEqual(row["pr"], 8619)
+        self.assertEqual(row["headSha"], self.expected)
+        self.assertEqual(row["key"], "UI Vitest")
+
+    def test_mac_home_ledger_path_is_rebased_to_worker_home(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        fake_home = self.root / "worker-home"
+        ledger = fake_home / ".invoker" / "mergify-admin-requeue-state.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", "/Users/edbertchan/.invoker/mergify-admin-requeue-state.jsonl",
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "8619",
+            "--json-head-sha", self.expected,
+            "--json-key", "UI Vitest",
+            env={"HOME": str(fake_home)},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        row = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(row["kind"], "repair-check-settled")
+        self.assertEqual(row["pr"], 8619)
+        self.assertEqual(row["headSha"], self.expected)
+        self.assertEqual(row["key"], "UI Vitest")
 
     def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
         self.clone_other()
