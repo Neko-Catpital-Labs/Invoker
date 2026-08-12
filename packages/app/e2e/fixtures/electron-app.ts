@@ -99,7 +99,7 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
   });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
   if (!timedOut) return;
@@ -241,6 +241,8 @@ exit 64
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: standaloneOwnerIdleTimeoutMs,
+        INVOKER_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS:
+          process.env.INVOKER_E2E_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS ?? '30000',
         INVOKER_EMBEDDED_TERMINAL_BACKEND:
           process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
         INVOKER_E2E_MARKER_ROOT: markerRoot,
