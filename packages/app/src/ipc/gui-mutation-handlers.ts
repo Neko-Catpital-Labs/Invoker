@@ -1437,6 +1437,10 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           | null;
       },
     );
+    registerGuiMutationHandler('invoker:get-test-planning-chat-system-prompt', async (sessionIdArg: unknown) => {
+      const session = planningChatSessions.get(String(sessionIdArg));
+      return { systemPrompt: session ? session.conversation.buildCursorPrompt() : null };
+    });
     registerGuiMutationHandler('invoker:seed-main-process-hitch-fixture', async () => {
       const seeded = seedMainProcessHitchFixture(persistence);
       orchestrator.syncAllFromDb();
