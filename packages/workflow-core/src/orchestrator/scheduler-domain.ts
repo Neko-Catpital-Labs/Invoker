@@ -63,7 +63,10 @@ export interface SchedulerDomainHost {
     opts?: Partial<Omit<Attempt, 'id' | 'nodeId' | 'createdAt'>>,
     writeOpts?: { skipWorkflowStatusSync?: boolean },
   ): string;
-  ensureCurrentPendingAttempt(task: TaskState): string;
+  ensureCurrentPendingAttempt(
+    task: TaskState,
+    writeOpts?: { skipWorkflowStatusSync?: boolean; deferTaskSelectionWriteWhenClean?: boolean },
+  ): string;
   loadAttemptById(attemptId: string | undefined): Attempt | undefined;
   isAttemptLeaseActive(attempt: Attempt | undefined, now?: number): boolean;
   countActivePersistedAttempts(now?: number): number;
@@ -125,12 +128,18 @@ function hasPendingLaunchRuntimeState(task: TaskState): boolean {
   );
 }
 
-function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): TaskJob[] {
+function planPendingLaunchQueue(
+  host: SchedulerDomainHost,
+  candidateJobs: TaskJob[],
+  opts?: { alreadyRefreshed?: boolean },
+): TaskJob[] {
   // Refresh once for the whole batch, not once per candidate job below --
   // readiness for every job in this pass is evaluated against the same
   // in-memory snapshot, so a per-job refresh only re-reads data this
   // function already has.
-  host.refreshFromDb();
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
     const task = host.stateGetTask(sourceJob.taskId);
@@ -194,27 +203,33 @@ function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJo
 export function getPendingLaunchQueueSnapshotImpl(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
+  opts?: { alreadyRefreshed?: boolean },
 ): TaskJob[] {
-  return planPendingLaunchQueue(host, candidateJobs);
+  return planPendingLaunchQueue(host, candidateJobs, opts);
 }
 
 function rebuildPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): void {
   const orderedJobs: TaskJob[] = [];
-  for (const job of planPendingLaunchQueue(host, candidateJobs)) {
-    const task = host.stateGetTask(job.taskId);
-    if (!task) continue;
-    const attemptId = host.ensureCurrentPendingAttempt(task);
-    const currentAttempt = host.loadAttemptById(attemptId);
-    if ((currentAttempt?.queuePriority ?? 0) !== job.priority) {
-      host.taskRepository.updateAttempt(attemptId, { queuePriority: job.priority });
+  host.taskRepository.runInTransaction(() => {
+    for (const job of planPendingLaunchQueue(host, candidateJobs)) {
+      const task = host.stateGetTask(job.taskId);
+      if (!task) continue;
+      const attemptId = host.ensureCurrentPendingAttempt(task, {
+        skipWorkflowStatusSync: true,
+        deferTaskSelectionWriteWhenClean: true,
+      });
+      if (job.priority !== 0) {
+        const currentAttempt = host.loadAttemptById(attemptId);
+        host.taskRepository.updateAttempt(attemptId, { queuePriority: job.priority });
+      }
+      orderedJobs.push({
+        taskId: task.id,
+        attemptId,
+        priority: job.priority,
+        ...(job.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+      });
     }
-    orderedJobs.push({
-      taskId: task.id,
-      attemptId,
-      priority: job.priority,
-      ...(job.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
-    });
-  }
+  });
   host.scheduler.replaceQueue(orderedJobs);
 }
 
@@ -257,7 +272,7 @@ export function autoStartReadyTasksImpl(
   }
 
   rebuildPendingLaunchQueue(host, candidateJobs);
-  return drainSchedulerImpl(host);
+  return drainSchedulerImpl(host, { alreadyRefreshed: true });
 }
 
 export function enqueueIfNotScheduledImpl(
@@ -292,7 +307,7 @@ export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomain
     attemptId: task.execution.selectedAttemptId,
     priority: getCandidatePriority(host, task, 0),
   })));
-  started.push(...drainSchedulerImpl(host));
+  started.push(...drainSchedulerImpl(host, { alreadyRefreshed: true }));
   return started;
 }
 
@@ -318,7 +333,7 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
     });
   }
   rebuildPendingLaunchQueue(host, candidateJobs);
-  return drainSchedulerImpl(host);
+  return drainSchedulerImpl(host, { alreadyRefreshed: true });
 }
 
 // Public entry point: always refreshes first, for callers making a single
@@ -382,10 +397,13 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
   return undefined;
 }
 
-export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
-  // Refresh once for the whole drain pass, not once per dequeued job below
-  // (see planPendingLaunchQueue for the same reasoning).
-  host.refreshFromDb();
+export function drainSchedulerImpl(host: SchedulerDomainHost, opts?: { alreadyRefreshed?: boolean }): TaskState[] {
+  // Refresh once for the whole drain pass, not once per dequeued job below.
+  // Internal queue-planning callers can pass the fresh snapshot they already
+  // loaded through this drain to avoid another whole-graph DB reload.
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);
@@ -394,162 +412,172 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     maxConcurrency: host.maxConcurrency,
     availableSlots,
   });
-  let job = availableSlots > 0 ? host.scheduler.takeNext() : null;
-  while (job && availableSlots > 0) {
-    const readiness = getTaskLaunchReadinessCore(host, job.taskId, {
-      bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
-    });
-    host.logger.info('[orchestrator] drainScheduler: dequeued', {
-      taskId: job.taskId,
-      actualStatus: readiness.task?.status ?? 'NOT_FOUND',
-    });
-    if (!readiness.ready) {
-      host.logger.info('[orchestrator] drainScheduler: skipping non-ready task', {
-        taskId: job.taskId,
-        reason: readiness.reason,
+  const pendingDeltas: TaskDelta[] = [];
+  host.taskRepository.runInTransaction(() => {
+    let job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+    while (job && availableSlots > 0) {
+      const readiness = getTaskLaunchReadinessCore(host, job.taskId, {
+        bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
       });
-      job = host.scheduler.takeNext();
-      continue;
-    }
-    const task = readiness.task;
+      host.logger.info('[orchestrator] drainScheduler: dequeued', {
+        taskId: job.taskId,
+        actualStatus: readiness.task?.status ?? 'NOT_FOUND',
+      });
+      if (!readiness.ready) {
+        host.logger.info('[orchestrator] drainScheduler: skipping non-ready task', {
+          taskId: job.taskId,
+          reason: readiness.reason,
+        });
+        job = host.scheduler.takeNext();
+        continue;
+      }
+      const task = readiness.task;
 
-    const now = new Date();
-    let launchTask = task;
-    let attemptId = job.attemptId;
-    let currentAttempt = host.loadAttemptById(attemptId);
-    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
-      attemptId = host.ensureCurrentPendingAttempt(task);
-      launchTask = host.stateGetTask(job.taskId) ?? task;
-      currentAttempt = host.loadAttemptById(attemptId);
-    }
-    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
-      host.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
-        taskId: job.taskId,
-        attemptId,
-        attemptStatus: currentAttempt?.status ?? 'missing',
-      });
-      job = host.scheduler.takeNext();
-      continue;
-    }
-    if (!attemptId) {
-      host.logger.info('[orchestrator] drainScheduler: skipping missing attempt id', {
-        taskId: job.taskId,
-      });
-      job = host.scheduler.takeNext();
-      continue;
-    }
-    const launchAttemptId = attemptId;
-    const selectedTask = host.stateGetTask(job.taskId) ?? task;
-    if (selectedTask.execution.selectedAttemptId !== launchAttemptId) {
-      host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } });
-    }
-    let claimSucceeded = false;
-    const claimPatch = host.deferRunningUntilLaunch
-      ? {
-          status: 'claimed' as const,
-          claimedAt: now,
-          lastHeartbeatAt: now,
-          leaseExpiresAt: nextLeaseExpiry(now),
-        }
-      : {
-          status: 'running' as const,
-          claimedAt: currentAttempt?.claimedAt ?? now,
-          startedAt: now,
-          lastHeartbeatAt: now,
-          leaseExpiresAt: nextLeaseExpiry(now),
-        };
-    claimSucceeded = host.taskRepository.claimAttemptForLaunch?.(launchAttemptId, claimPatch, now)
-      ?? !host.isAttemptLeaseActive(currentAttempt, now.getTime());
-    if (claimSucceeded && !host.taskRepository.claimAttemptForLaunch) {
-      host.taskRepository.updateAttempt(launchAttemptId, claimPatch);
-    }
-    if (!claimSucceeded) {
-      host.logger.info('[orchestrator] drainScheduler: skipping already-claimed attempt', {
-        taskId: job.taskId,
-        attemptId,
-      });
-      job = availableSlots > 0 ? host.scheduler.takeNext() : null;
-      continue;
-    }
-
-    const changes: TaskStateChanges = host.deferRunningUntilLaunch
-      ? {
-          status: 'queued' as TaskStateChanges['status'],
-          execution: {
-            selectedAttemptId: launchAttemptId,
-            generation: host.getExecutionGeneration(task),
+      const now = new Date();
+      let launchTask = task;
+      let attemptId = job.attemptId;
+      let currentAttempt: Attempt | undefined;
+      const hasAtomicClaim = typeof host.taskRepository.claimAttemptForLaunch === 'function';
+      if (!hasAtomicClaim) {
+        currentAttempt = host.loadAttemptById(attemptId);
+      }
+      if (!hasAtomicClaim && !isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
+        attemptId = host.ensureCurrentPendingAttempt(task, { skipWorkflowStatusSync: true });
+        launchTask = host.stateGetTask(job.taskId) ?? task;
+        currentAttempt = host.loadAttemptById(attemptId);
+      }
+      if (!hasAtomicClaim && !isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
+        host.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
+          taskId: job.taskId,
+          attemptId,
+          attemptStatus: currentAttempt?.status ?? 'missing',
+        });
+        job = host.scheduler.takeNext();
+        continue;
+      }
+      if (!attemptId) {
+        host.logger.info('[orchestrator] drainScheduler: skipping missing attempt id', {
+          taskId: job.taskId,
+        });
+        job = host.scheduler.takeNext();
+        continue;
+      }
+      const launchAttemptId = attemptId;
+      const selectedTask = host.stateGetTask(job.taskId) ?? task;
+      if (selectedTask.execution.selectedAttemptId !== launchAttemptId) {
+        host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } }, { skipWorkflowStatusSync: true });
+      }
+      let claimSucceeded = false;
+      const claimPatch = host.deferRunningUntilLaunch
+        ? {
+            status: 'claimed' as const,
+            claimedAt: now,
             lastHeartbeatAt: now,
-            phase: 'launching',
-            launchStartedAt: now,
-            launchCompletedAt: undefined,
-          },
-        }
-      : {
-          status: 'running',
-          execution: {
-            selectedAttemptId: launchAttemptId,
-            generation: host.getExecutionGeneration(task),
+            leaseExpiresAt: nextLeaseExpiry(now),
+          }
+        : {
+            status: 'running' as const,
+            claimedAt: currentAttempt?.claimedAt ?? now,
             startedAt: now,
             lastHeartbeatAt: now,
-            phase: 'launching',
-            launchStartedAt: now,
-            launchCompletedAt: undefined,
-          },
-        };
-    const updated = host.writeAndSync(job.taskId, changes);
-    host.persistence.logEvent?.(
-      job.taskId,
-      host.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
-      changes,
-    );
-    if (
-      typeof host.persistence.enqueueLaunchDispatch === 'function'
-      && task.config.workflowId
-    ) {
-      try {
-        const dispatch = host.persistence.enqueueLaunchDispatch({
-          taskId: job.taskId,
-          attemptId: launchAttemptId,
-          workflowId: task.config.workflowId,
-          generation: host.getExecutionGeneration(task),
-        });
-        host.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
-          ...changes,
-          dispatchId: dispatch.id,
-          attemptId: launchAttemptId,
-          workflowId: task.config.workflowId,
-          generation: host.getExecutionGeneration(task),
-          state: dispatch.state,
-          priority: dispatch.priority,
-        });
-        host.logger.info('[orchestrator] drainScheduler: launch dispatch enqueued', {
-          taskId: job.taskId,
-          attemptId: launchAttemptId,
-          workflowId: task.config.workflowId,
-          generation: host.getExecutionGeneration(task),
-          dispatchId: dispatch.id,
-          state: dispatch.state,
-          priority: dispatch.priority,
-        });
-      } catch (err) {
-        host.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {
-          taskId: job.taskId,
-          attemptId: launchAttemptId,
-          error: err instanceof Error ? err.message : String(err),
-        });
+            leaseExpiresAt: nextLeaseExpiry(now),
+          };
+      claimSucceeded = host.taskRepository.claimAttemptForLaunch?.(launchAttemptId, claimPatch, now)
+        ?? !host.isAttemptLeaseActive(currentAttempt, now.getTime());
+      if (claimSucceeded && !host.taskRepository.claimAttemptForLaunch) {
+        host.taskRepository.updateAttempt(launchAttemptId, claimPatch);
       }
-    }
-    host.messageBus.publish(TASK_DELTA_CHANNEL, host.buildUpdateDelta(task, updated, changes));
-    started.push(updated);
-    host.logger.info('[orchestrator] drainScheduler: started', {
-      taskId: job.taskId,
-      attemptId: launchAttemptId,
-      phase: 'launching',
-      generation: changes.execution?.generation ?? 'unknown',
-    });
+      if (!claimSucceeded) {
+        host.logger.info('[orchestrator] drainScheduler: skipping already-claimed attempt', {
+          taskId: job.taskId,
+          attemptId,
+        });
+        job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+        continue;
+      }
 
-    availableSlots -= 1;
-    job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+      const changes: TaskStateChanges = host.deferRunningUntilLaunch
+        ? {
+            status: 'queued' as TaskStateChanges['status'],
+            execution: {
+              selectedAttemptId: launchAttemptId,
+              generation: host.getExecutionGeneration(task),
+              lastHeartbeatAt: now,
+              phase: 'launching',
+              launchStartedAt: now,
+              launchCompletedAt: undefined,
+            },
+          }
+        : {
+            status: 'running',
+            execution: {
+              selectedAttemptId: launchAttemptId,
+              generation: host.getExecutionGeneration(task),
+              startedAt: now,
+              lastHeartbeatAt: now,
+              phase: 'launching',
+              launchStartedAt: now,
+              launchCompletedAt: undefined,
+            },
+          };
+      const updated = host.writeAndSync(job.taskId, changes, { skipWorkflowStatusSync: true });
+      host.persistence.logEvent?.(
+        job.taskId,
+        host.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
+        changes,
+      );
+      if (
+        typeof host.persistence.enqueueLaunchDispatch === 'function'
+        && task.config.workflowId
+      ) {
+        try {
+          const dispatch = host.persistence.enqueueLaunchDispatch({
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: host.getExecutionGeneration(task),
+          });
+          host.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
+            ...changes,
+            dispatchId: dispatch.id,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: host.getExecutionGeneration(task),
+            state: dispatch.state,
+            priority: dispatch.priority,
+          });
+          host.logger.info('[orchestrator] drainScheduler: launch dispatch enqueued', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: host.getExecutionGeneration(task),
+            dispatchId: dispatch.id,
+            state: dispatch.state,
+            priority: dispatch.priority,
+          });
+        } catch (err) {
+          host.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      pendingDeltas.push(host.buildUpdateDelta(task, updated, changes));
+      started.push(updated);
+      host.logger.info('[orchestrator] drainScheduler: started', {
+        taskId: job.taskId,
+        attemptId: launchAttemptId,
+        phase: 'launching',
+        generation: changes.execution?.generation ?? 'unknown',
+      });
+
+      availableSlots -= 1;
+      job = availableSlots > 0 ? host.scheduler.takeNext() : null;
+    }
+  });
+  for (const delta of pendingDeltas) {
+    host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
   return started;
 }

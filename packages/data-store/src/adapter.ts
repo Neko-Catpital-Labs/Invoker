@@ -355,7 +355,13 @@ export interface PersistenceAdapter {
 
   // Tasks
   saveTask(workflowId: string, task: TaskState): void;
-  updateTask(taskId: string, changes: TaskStateChanges): void;
+  updateTask(taskId: string, changes: TaskStateChanges, opts?: { skipWorkflowStatusSync?: boolean }): void;
+  updateTaskFromKnownState?(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void;
   loadTasks(workflowId: string): TaskState[];
   loadWorkflowTaskSnapshot?(options?: WorkflowReadOptions): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
