@@ -275,6 +275,42 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_in_app_planning_messages_session
         ON in_app_planning_messages(session_id, message_id);
 
+      CREATE TABLE IF NOT EXISTS in_app_planning_turn_activity (
+        session_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        user_message_id INTEGER NOT NULL,
+        assistant_message_id INTEGER,
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'interrupted')),
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        retained_bytes INTEGER NOT NULL DEFAULT 0 CHECK (typeof(retained_bytes) = 'integer' AND retained_bytes >= 0),
+        dropped_bytes INTEGER NOT NULL DEFAULT 0 CHECK (typeof(dropped_bytes) = 'integer' AND dropped_bytes >= 0),
+        truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0, 1)),
+        PRIMARY KEY (session_id, turn_id),
+        FOREIGN KEY (session_id) REFERENCES in_app_planning_sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS in_app_planning_turn_activity_events (
+        session_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL CHECK (typeof(sequence) = 'integer' AND sequence > 0),
+        source TEXT NOT NULL CHECK (source IN ('stdout', 'stderr', 'reasoning')),
+        text TEXT NOT NULL,
+        byte_count INTEGER NOT NULL CHECK (typeof(byte_count) = 'integer' AND byte_count >= 0),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, turn_id, sequence),
+        FOREIGN KEY (session_id, turn_id)
+          REFERENCES in_app_planning_turn_activity(session_id, turn_id)
+          ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_in_app_planning_turn_activity_session
+        ON in_app_planning_turn_activity(session_id, started_at, turn_id);
+
+      CREATE INDEX IF NOT EXISTS idx_in_app_planning_turn_activity_events_turn
+        ON in_app_planning_turn_activity_events(session_id, turn_id, sequence);
+
       CREATE TABLE IF NOT EXISTS workflow_channels (
         workflow_id TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
@@ -676,6 +712,36 @@ export const POST_MIGRATION_STATEMENTS = [
     last_received_seq INTEGER NOT NULL DEFAULT 0 CHECK (typeof(last_received_seq) = 'integer' AND last_received_seq >= 0),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  `CREATE TABLE IF NOT EXISTS in_app_planning_turn_activity (
+    session_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    user_message_id INTEGER NOT NULL,
+    assistant_message_id INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'interrupted')),
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    retained_bytes INTEGER NOT NULL DEFAULT 0 CHECK (typeof(retained_bytes) = 'integer' AND retained_bytes >= 0),
+    dropped_bytes INTEGER NOT NULL DEFAULT 0 CHECK (typeof(dropped_bytes) = 'integer' AND dropped_bytes >= 0),
+    truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0, 1)),
+    PRIMARY KEY (session_id, turn_id),
+    FOREIGN KEY (session_id) REFERENCES in_app_planning_sessions(session_id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS in_app_planning_turn_activity_events (
+    session_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (typeof(sequence) = 'integer' AND sequence > 0),
+    source TEXT NOT NULL CHECK (source IN ('stdout', 'stderr', 'reasoning')),
+    text TEXT NOT NULL,
+    byte_count INTEGER NOT NULL CHECK (typeof(byte_count) = 'integer' AND byte_count >= 0),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, turn_id, sequence),
+    FOREIGN KEY (session_id, turn_id)
+      REFERENCES in_app_planning_turn_activity(session_id, turn_id)
+      ON DELETE CASCADE
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_in_app_planning_turn_activity_session ON in_app_planning_turn_activity(session_id, started_at, turn_id)',
+  'CREATE INDEX IF NOT EXISTS idx_in_app_planning_turn_activity_events_turn ON in_app_planning_turn_activity_events(session_id, turn_id, sequence)',
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */

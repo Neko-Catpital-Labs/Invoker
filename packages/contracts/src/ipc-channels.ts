@@ -466,6 +466,63 @@ export type InAppPlanningSessionStatus =
 
 export type PlanningTerminalMode = 'chat' | 'tmux';
 
+export const IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES = 5 * 1024 * 1024;
+
+export type InAppPlanningTurnActivitySource = 'stdout' | 'stderr' | 'reasoning';
+
+export type InAppPlanningTurnActivityLifecycle =
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'interrupted';
+
+export interface InAppPlanningTurnActivityEvent {
+  sequence: number;
+  source: InAppPlanningTurnActivitySource;
+  text: string;
+  byteCount: number;
+  createdAt: string;
+}
+
+export interface InAppPlanningTurnActivity {
+  sessionId: string;
+  turnId: string;
+  userMessageId: number;
+  assistantMessageId?: number;
+  status: InAppPlanningTurnActivityLifecycle;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  retainedBytes: number;
+  droppedBytes: number;
+  truncated: boolean;
+  events: InAppPlanningTurnActivityEvent[];
+}
+
+export interface InAppPlanningTurnActivityStart {
+  sessionId: string;
+  turnId: string;
+  userMessageId: number;
+  assistantMessageId?: number;
+  startedAt?: string;
+}
+
+export interface InAppPlanningTurnActivityAppend {
+  sessionId: string;
+  turnId: string;
+  source: InAppPlanningTurnActivitySource;
+  text: string;
+  createdAt?: string;
+}
+
+export interface InAppPlanningTurnActivityFinalize {
+  sessionId: string;
+  turnId: string;
+  status: Exclude<InAppPlanningTurnActivityLifecycle, 'running'>;
+  assistantMessageId?: number;
+  completedAt?: string;
+}
+
 export interface InAppPlanningChatLine {
   id: number;
   role: 'user' | 'assistant' | 'system';
@@ -523,6 +580,10 @@ export type InAppPlanningListSessionsResponse = {
 export interface InAppPlanningStreamEvent {
   sessionId: string;
   chunk: string;
+  turnId?: string;
+  source?: InAppPlanningTurnActivitySource;
+  sequence?: number;
+  createdAt?: string;
 }
 
 export interface InAppPlanningChatRequest {

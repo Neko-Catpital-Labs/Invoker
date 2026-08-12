@@ -6,6 +6,7 @@ import { SQLiteAdapter, isLaunchDispatchCandidateStale, runWithFreedStatement, a
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
 import { createAttempt, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import { IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES } from '@invoker/contracts';
 
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;
@@ -491,9 +492,40 @@ describe('SQLiteAdapter', () => {
         'tone',
         'created_at',
       ]);
+      expect(tableColumns(adapter, 'in_app_planning_turn_activity')).toEqual([
+        'session_id',
+        'turn_id',
+        'user_message_id',
+        'assistant_message_id',
+        'status',
+        'started_at',
+        'updated_at',
+        'completed_at',
+        'retained_bytes',
+        'dropped_bytes',
+        'truncated',
+      ]);
+      expect(tableColumns(adapter, 'in_app_planning_turn_activity_events')).toEqual([
+        'session_id',
+        'turn_id',
+        'sequence',
+        'source',
+        'text',
+        'byte_count',
+        'created_at',
+      ]);
       expect(tableIndexes(adapter, 'in_app_planning_sessions')).toContain('idx_in_app_planning_sessions_updated');
       expect(tableIndexes(adapter, 'in_app_planning_messages')).toContain('idx_in_app_planning_messages_session');
+      expect(tableIndexes(adapter, 'in_app_planning_turn_activity')).toContain('idx_in_app_planning_turn_activity_session');
+      expect(tableIndexes(adapter, 'in_app_planning_turn_activity_events')).toContain('idx_in_app_planning_turn_activity_events_turn');
       expect(tableForeignKeys(adapter, 'in_app_planning_messages')).toContain('in_app_planning_sessions.session_id:NO ACTION');
+      expect(tableForeignKeys(adapter, 'in_app_planning_turn_activity')).toContain('in_app_planning_sessions.session_id:CASCADE');
+      expect(tableForeignKeys(adapter, 'in_app_planning_turn_activity_events')).toEqual(
+        expect.arrayContaining([
+          'in_app_planning_turn_activity.session_id:CASCADE',
+          'in_app_planning_turn_activity.turn_id:CASCADE',
+        ]),
+      );
     });
 
     it('round-trips planning sessions across adapter reopen', async () => {
@@ -751,6 +783,303 @@ describe('SQLiteAdapter', () => {
       expect(loaded?.worktreeBranch).toBeUndefined();
     });
 
+    it('does not fabricate activity for restored sessions without activity rows', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-no-activity-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(makePlanningSession('planning-no-activity'));
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadInAppPlanningSession('planning-no-activity')).toBeDefined();
+        expect(reopened.listInAppPlanningTurnActivities('planning-no-activity')).toEqual([]);
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('appends ordered planning turn activity and reloads exact raw text', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-activity-order-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(makePlanningSession('planning-activity-order'));
+        first.startInAppPlanningTurnActivity({
+          sessionId: 'planning-activity-order',
+          turnId: 'turn-1',
+          userMessageId: 2,
+          startedAt: '2026-07-07T00:00:04.000Z',
+        });
+        first.appendInAppPlanningTurnActivity({
+          sessionId: 'planning-activity-order',
+          turnId: 'turn-1',
+          source: 'stdout',
+          text: 'raw stdout\n',
+          createdAt: '2026-07-07T00:00:04.100Z',
+        });
+        first.appendInAppPlanningTurnActivity({
+          sessionId: 'planning-activity-order',
+          turnId: 'turn-1',
+          source: 'stderr',
+          text: 'raw stderr\n',
+          createdAt: '2026-07-07T00:00:04.200Z',
+        });
+        first.appendInAppPlanningTurnActivity({
+          sessionId: 'planning-activity-order',
+          turnId: 'turn-1',
+          source: 'reasoning',
+          text: 'provider reasoning summary\n',
+          createdAt: '2026-07-07T00:00:04.300Z',
+        });
+        first.finalizeInAppPlanningTurnActivity({
+          sessionId: 'planning-activity-order',
+          turnId: 'turn-1',
+          status: 'completed',
+          assistantMessageId: 3,
+          completedAt: '2026-07-07T00:00:05.000Z',
+        });
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const activity = reopened.loadInAppPlanningTurnActivity('planning-activity-order', 'turn-1');
+        expect(activity).toMatchObject({
+          sessionId: 'planning-activity-order',
+          turnId: 'turn-1',
+          userMessageId: 2,
+          assistantMessageId: 3,
+          status: 'completed',
+          startedAt: '2026-07-07T00:00:04.000Z',
+          completedAt: '2026-07-07T00:00:05.000Z',
+          retainedBytes: Buffer.byteLength('raw stdout\nraw stderr\nprovider reasoning summary\n', 'utf8'),
+          droppedBytes: 0,
+          truncated: false,
+        });
+        expect(activity?.events).toEqual([
+          {
+            sequence: 1,
+            source: 'stdout',
+            text: 'raw stdout\n',
+            byteCount: Buffer.byteLength('raw stdout\n', 'utf8'),
+            createdAt: '2026-07-07T00:00:04.100Z',
+          },
+          {
+            sequence: 2,
+            source: 'stderr',
+            text: 'raw stderr\n',
+            byteCount: Buffer.byteLength('raw stderr\n', 'utf8'),
+            createdAt: '2026-07-07T00:00:04.200Z',
+          },
+          {
+            sequence: 3,
+            source: 'reasoning',
+            text: 'provider reasoning summary\n',
+            byteCount: Buffer.byteLength('provider reasoning summary\n', 'utf8'),
+            createdAt: '2026-07-07T00:00:04.300Z',
+          },
+        ]);
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('retains exactly the 5 MiB UTF-8 byte limit at a multibyte boundary', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-activity-boundary'));
+      adapter.startInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-boundary',
+        turnId: 'turn-boundary',
+        userMessageId: 2,
+        startedAt: '2026-07-07T00:00:04.000Z',
+      });
+
+      const exactLimitText = `${'a'.repeat(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES - 4)}💡`;
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-boundary',
+        turnId: 'turn-boundary',
+        source: 'stdout',
+        text: exactLimitText,
+        createdAt: '2026-07-07T00:00:04.100Z',
+      });
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-boundary',
+        turnId: 'turn-boundary',
+        source: 'stderr',
+        text: 'z',
+        createdAt: '2026-07-07T00:00:04.200Z',
+      });
+
+      const activity = adapter.loadInAppPlanningTurnActivity('planning-activity-boundary', 'turn-boundary');
+      expect(Buffer.byteLength(exactLimitText, 'utf8')).toBe(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES);
+      expect(activity?.retainedBytes).toBe(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES);
+      expect(activity?.droppedBytes).toBe(1);
+      expect(activity?.truncated).toBe(true);
+      expect(activity?.events.map((event) => event.text).join('')).toBe(exactLimitText);
+      expect(activity?.events).toHaveLength(1);
+    });
+
+    it('stores a valid UTF-8 prefix and truncation metadata when a multibyte chunk crosses the cap', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-activity-truncate'));
+      adapter.startInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-truncate',
+        turnId: 'turn-truncate',
+        userMessageId: 2,
+        startedAt: '2026-07-07T00:00:04.000Z',
+      });
+
+      const prefix = 'a'.repeat(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES - 4);
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-truncate',
+        turnId: 'turn-truncate',
+        source: 'stdout',
+        text: `${prefix}💡z`,
+        createdAt: '2026-07-07T00:00:04.100Z',
+      });
+
+      const activity = adapter.loadInAppPlanningTurnActivity('planning-activity-truncate', 'turn-truncate');
+      expect(activity?.retainedBytes).toBe(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES);
+      expect(activity?.droppedBytes).toBe(1);
+      expect(activity?.truncated).toBe(true);
+      expect(activity?.events).toHaveLength(1);
+      expect(activity?.events[0]?.text).toBe(`${prefix}💡`);
+      expect(Buffer.byteLength(activity?.events[0]?.text ?? '', 'utf8')).toBe(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES);
+    });
+
+    it('records failed and interrupted turns without requiring an assistant message', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-activity-failed'));
+      adapter.startInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-failed',
+        turnId: 'turn-failed',
+        userMessageId: 2,
+        startedAt: '2026-07-07T00:00:04.000Z',
+      });
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-failed',
+        turnId: 'turn-failed',
+        source: 'stderr',
+        text: 'planner failed before reply\n',
+        createdAt: '2026-07-07T00:00:04.100Z',
+      });
+      adapter.finalizeInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-failed',
+        turnId: 'turn-failed',
+        status: 'failed',
+        completedAt: '2026-07-07T00:00:04.200Z',
+      });
+      adapter.startInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-failed',
+        turnId: 'turn-interrupted',
+        userMessageId: 2,
+        startedAt: '2026-07-07T00:00:05.000Z',
+      });
+      adapter.finalizeInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-failed',
+        turnId: 'turn-interrupted',
+        status: 'interrupted',
+        completedAt: '2026-07-07T00:00:05.200Z',
+      });
+
+      const failedTurn = adapter.loadInAppPlanningTurnActivity('planning-activity-failed', 'turn-failed');
+      expect(failedTurn).toMatchObject({
+        status: 'failed',
+        completedAt: '2026-07-07T00:00:04.200Z',
+        events: [{ text: 'planner failed before reply\n' }],
+      });
+      expect(failedTurn?.assistantMessageId).toBeUndefined();
+      const interruptedTurn = adapter.loadInAppPlanningTurnActivity('planning-activity-failed', 'turn-interrupted');
+      expect(interruptedTurn).toMatchObject({
+        status: 'interrupted',
+        completedAt: '2026-07-07T00:00:05.200Z',
+        events: [],
+      });
+      expect(interruptedTurn?.assistantMessageId).toBeUndefined();
+    });
+
+    it('keeps byte limits and events isolated across turns in one planning session', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-activity-isolation'));
+      for (const turnId of ['turn-a', 'turn-b']) {
+        adapter.startInAppPlanningTurnActivity({
+          sessionId: 'planning-activity-isolation',
+          turnId,
+          userMessageId: 2,
+          startedAt: '2026-07-07T00:00:04.000Z',
+        });
+      }
+
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-isolation',
+        turnId: 'turn-a',
+        source: 'stdout',
+        text: `${'a'.repeat(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES)}drop`,
+        createdAt: '2026-07-07T00:00:04.100Z',
+      });
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-isolation',
+        turnId: 'turn-b',
+        source: 'stdout',
+        text: 'independent turn output',
+        createdAt: '2026-07-07T00:00:04.200Z',
+      });
+
+      const turnA = adapter.loadInAppPlanningTurnActivity('planning-activity-isolation', 'turn-a');
+      const turnB = adapter.loadInAppPlanningTurnActivity('planning-activity-isolation', 'turn-b');
+      expect(turnA?.retainedBytes).toBe(IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES);
+      expect(turnA?.droppedBytes).toBe(Buffer.byteLength('drop', 'utf8'));
+      expect(turnA?.truncated).toBe(true);
+      expect(turnB?.retainedBytes).toBe(Buffer.byteLength('independent turn output', 'utf8'));
+      expect(turnB?.droppedBytes).toBe(0);
+      expect(turnB?.truncated).toBe(false);
+      expect(turnB?.events.map((event) => event.text)).toEqual(['independent turn output']);
+    });
+
+    it('deletes planning activity with its parent session lifetime', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-activity-delete'));
+      adapter.startInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-delete',
+        turnId: 'turn-delete',
+        userMessageId: 2,
+        startedAt: '2026-07-07T00:00:04.000Z',
+      });
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-delete',
+        turnId: 'turn-delete',
+        source: 'stdout',
+        text: 'deleted with session',
+        createdAt: '2026-07-07T00:00:04.100Z',
+      });
+
+      adapter.deleteInAppPlanningSession('planning-activity-delete');
+
+      expect(adapter.loadInAppPlanningTurnActivity('planning-activity-delete', 'turn-delete')).toBeUndefined();
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_turn_activity WHERE session_id = 'planning-activity-delete'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_turn_activity_events WHERE session_id = 'planning-activity-delete'")).toBe(0);
+    });
+
+    it('cascades planning activity rows when the parent session row is deleted', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-activity-cascade', {
+        messages: [],
+      }));
+      adapter.startInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-cascade',
+        turnId: 'turn-cascade',
+        userMessageId: 2,
+        startedAt: '2026-07-07T00:00:04.000Z',
+      });
+      adapter.appendInAppPlanningTurnActivity({
+        sessionId: 'planning-activity-cascade',
+        turnId: 'turn-cascade',
+        source: 'stdout',
+        text: 'cascade me',
+        createdAt: '2026-07-07T00:00:04.100Z',
+      });
+
+      (adapter as any).db.run("DELETE FROM in_app_planning_sessions WHERE session_id = 'planning-activity-cascade'");
+
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_turn_activity WHERE session_id = 'planning-activity-cascade'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_turn_activity_events WHERE session_id = 'planning-activity-cascade'")).toBe(0);
+    });
+
     it('deletes planning sessions and their visible messages', () => {
       adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
 
@@ -758,6 +1087,8 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.loadInAppPlanningSession('planning-1')).toBeUndefined();
       expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_messages WHERE session_id = 'planning-1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_turn_activity WHERE session_id = 'planning-1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_turn_activity_events WHERE session_id = 'planning-1'")).toBe(0);
     });
   });
 

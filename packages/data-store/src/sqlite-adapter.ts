@@ -35,8 +35,25 @@ import type {
   ExternalDependencyChange,
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
-import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import {
+  DISPATCH_LEASE_MS,
+  IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES,
+} from '@invoker/contracts';
+import type {
+  InAppPlanningChatLine,
+  InAppPlanningPlanSummary,
+  InAppPlanningSessionStatus,
+  InAppPlanningTurnActivity,
+  InAppPlanningTurnActivityAppend,
+  InAppPlanningTurnActivityFinalize,
+  InAppPlanningTurnActivityLifecycle,
+  InAppPlanningTurnActivitySource,
+  InAppPlanningTurnActivityStart,
+  PlanningConfirmationMode,
+  PlanningTerminalMode,
+  SearchResultItem,
+  SearchOptions,
+} from '@invoker/contracts';
 import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
@@ -654,6 +671,28 @@ type InAppPlanningMessageRow = {
   created_at?: unknown;
 };
 
+type InAppPlanningTurnActivityRow = {
+  session_id?: unknown;
+  turn_id?: unknown;
+  user_message_id?: unknown;
+  assistant_message_id?: unknown;
+  status?: unknown;
+  started_at?: unknown;
+  updated_at?: unknown;
+  completed_at?: unknown;
+  retained_bytes?: unknown;
+  dropped_bytes?: unknown;
+  truncated?: unknown;
+};
+
+type InAppPlanningTurnActivityEventRow = {
+  sequence?: unknown;
+  source?: unknown;
+  text?: unknown;
+  byte_count?: unknown;
+  created_at?: unknown;
+};
+
 type InAppPlanningMessagePersistState = {
   count: number;
   maxMessageId: number;
@@ -698,6 +737,33 @@ function isInAppPlanningMessageTone(value: unknown): value is InAppPlanningChatL
     || value === 'muted'
     || value === 'error'
     || value === 'success';
+}
+
+function isInAppPlanningTurnActivitySource(value: unknown): value is InAppPlanningTurnActivitySource {
+  return value === 'stdout' || value === 'stderr' || value === 'reasoning';
+}
+
+function isInAppPlanningTurnActivityLifecycle(value: unknown): value is InAppPlanningTurnActivityLifecycle {
+  return value === 'running'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'interrupted';
+}
+
+function utf8PrefixForByteLimit(text: string, maxBytes: number): { text: string; byteCount: number } {
+  if (maxBytes <= 0) return { text: '', byteCount: 0 };
+  const totalBytes = Buffer.byteLength(text, 'utf8');
+  if (totalBytes <= maxBytes) return { text, byteCount: totalBytes };
+
+  let retained = '';
+  let retainedBytes = 0;
+  for (const char of text) {
+    const charBytes = Buffer.byteLength(char, 'utf8');
+    if (retainedBytes + charBytes > maxBytes) break;
+    retained += char;
+    retainedBytes += charBytes;
+  }
+  return { text: retained, byteCount: retainedBytes };
 }
 
 function parseInAppPlanningPlanSummary(value: unknown): InAppPlanningPlanSummary | undefined {
@@ -1452,6 +1518,149 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return row ? this.mapInAppPlanningSessionRow(row as InAppPlanningSessionRow) : undefined;
   }
 
+  startInAppPlanningTurnActivity(activity: InAppPlanningTurnActivityStart): void {
+    const startedAt = activity.startedAt ?? new Date().toISOString();
+    this.execRun(
+      `INSERT INTO in_app_planning_turn_activity (
+        session_id,
+        turn_id,
+        user_message_id,
+        assistant_message_id,
+        status,
+        started_at,
+        updated_at,
+        completed_at,
+        retained_bytes,
+        dropped_bytes,
+        truncated
+      ) VALUES (?, ?, ?, ?, 'running', ?, ?, NULL, 0, 0, 0)`,
+      [
+        activity.sessionId,
+        activity.turnId,
+        activity.userMessageId,
+        activity.assistantMessageId ?? null,
+        startedAt,
+        startedAt,
+      ],
+    );
+  }
+
+  appendInAppPlanningTurnActivity(activity: InAppPlanningTurnActivityAppend): InAppPlanningTurnActivity | undefined {
+    return this.runTransaction(() => {
+      const row = this.queryOne(
+        `SELECT retained_bytes, dropped_bytes
+          FROM in_app_planning_turn_activity
+          WHERE session_id = ? AND turn_id = ?`,
+        [activity.sessionId, activity.turnId],
+      ) as { retained_bytes?: unknown; dropped_bytes?: unknown } | undefined;
+      if (!row) return undefined;
+
+      const retainedBytes = Number(row.retained_bytes ?? 0);
+      const incomingBytes = Buffer.byteLength(activity.text, 'utf8');
+      const remainingBytes = Math.max(0, IN_APP_PLANNING_TURN_ACTIVITY_MAX_BYTES - retainedBytes);
+      const retainedChunk = utf8PrefixForByteLimit(activity.text, remainingBytes);
+      const newlyDroppedBytes = incomingBytes - retainedChunk.byteCount;
+      const createdAt = activity.createdAt ?? new Date().toISOString();
+
+      if (retainedChunk.byteCount > 0 || incomingBytes === 0) {
+        const sequenceRow = this.queryOne(
+          `SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+            FROM in_app_planning_turn_activity_events
+            WHERE session_id = ? AND turn_id = ?`,
+          [activity.sessionId, activity.turnId],
+        ) as { next_sequence?: unknown } | undefined;
+        const sequence = Number(sequenceRow?.next_sequence ?? 1);
+        this.db.run(
+          `INSERT INTO in_app_planning_turn_activity_events (
+            session_id,
+            turn_id,
+            sequence,
+            source,
+            text,
+            byte_count,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            activity.sessionId,
+            activity.turnId,
+            sequence,
+            activity.source,
+            retainedChunk.text,
+            retainedChunk.byteCount,
+            createdAt,
+          ],
+        );
+      }
+
+      this.db.run(
+        `UPDATE in_app_planning_turn_activity
+          SET updated_at = ?,
+              retained_bytes = retained_bytes + ?,
+              dropped_bytes = dropped_bytes + ?,
+              truncated = CASE WHEN truncated = 1 OR ? > 0 THEN 1 ELSE 0 END
+          WHERE session_id = ? AND turn_id = ?`,
+        [
+          createdAt,
+          retainedChunk.byteCount,
+          newlyDroppedBytes,
+          newlyDroppedBytes,
+          activity.sessionId,
+          activity.turnId,
+        ],
+      );
+
+      return this.loadInAppPlanningTurnActivity(activity.sessionId, activity.turnId);
+    });
+  }
+
+  finalizeInAppPlanningTurnActivity(activity: InAppPlanningTurnActivityFinalize): void {
+    const completedAt = activity.completedAt ?? new Date().toISOString();
+    const setClauses = [
+      'status = ?',
+      'updated_at = ?',
+      'completed_at = ?',
+    ];
+    const values: unknown[] = [
+      activity.status,
+      completedAt,
+      completedAt,
+    ];
+    if (Object.hasOwn(activity, 'assistantMessageId')) {
+      setClauses.push('assistant_message_id = ?');
+      values.push(activity.assistantMessageId ?? null);
+    }
+    values.push(activity.sessionId, activity.turnId);
+    this.execRun(
+      `UPDATE in_app_planning_turn_activity
+        SET ${setClauses.join(', ')}
+        WHERE session_id = ? AND turn_id = ?`,
+      values,
+    );
+  }
+
+  loadInAppPlanningTurnActivity(sessionId: string, turnId: string): InAppPlanningTurnActivity | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM in_app_planning_turn_activity WHERE session_id = ? AND turn_id = ?',
+      [sessionId, turnId],
+    ) as InAppPlanningTurnActivityRow | undefined;
+    return row ? this.mapInAppPlanningTurnActivityRow(row) : undefined;
+  }
+
+  listInAppPlanningTurnActivities(sessionId: string): InAppPlanningTurnActivity[] {
+    const rows = this.queryAll(
+      `SELECT * FROM in_app_planning_turn_activity
+        WHERE session_id = ?
+        ORDER BY started_at ASC, turn_id ASC`,
+      [sessionId],
+    ) as InAppPlanningTurnActivityRow[];
+    const activities: InAppPlanningTurnActivity[] = [];
+    for (const row of rows) {
+      const activity = this.mapInAppPlanningTurnActivityRow(row);
+      if (activity) activities.push(activity);
+    }
+    return activities;
+  }
+
   updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void {
     this.ensureWritable();
     const updateSession = (): void => {
@@ -1558,6 +1767,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteInAppPlanningSession(sessionId: string): void {
     this.runTransaction(() => {
+      this.db.run('DELETE FROM in_app_planning_turn_activity_events WHERE session_id = ?', [sessionId]);
+      this.db.run('DELETE FROM in_app_planning_turn_activity WHERE session_id = ?', [sessionId]);
       this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
       this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
       this.inAppPlanningMessagePersistStates.delete(sessionId);
@@ -3101,6 +3312,70 @@ export class SQLiteAdapter implements PersistenceAdapter {
         message.createdAt || fallbackCreatedAt,
       ],
     );
+  }
+
+  private mapInAppPlanningTurnActivityRow(row: InAppPlanningTurnActivityRow): InAppPlanningTurnActivity | undefined {
+    const sessionId = typeof row.session_id === 'string' ? row.session_id : '';
+    const turnId = typeof row.turn_id === 'string' ? row.turn_id : '';
+    const userMessageId = typeof row.user_message_id === 'number' ? row.user_message_id : undefined;
+    const startedAt = typeof row.started_at === 'string' ? row.started_at : '';
+    const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
+    const retainedBytes = typeof row.retained_bytes === 'number' ? row.retained_bytes : undefined;
+    const droppedBytes = typeof row.dropped_bytes === 'number' ? row.dropped_bytes : undefined;
+    if (
+      !sessionId
+      || !turnId
+      || userMessageId === undefined
+      || !isInAppPlanningTurnActivityLifecycle(row.status)
+      || !startedAt
+      || !updatedAt
+      || retainedBytes === undefined
+      || droppedBytes === undefined
+    ) {
+      return undefined;
+    }
+
+    const eventRows = this.queryAll(
+      `SELECT sequence, source, text, byte_count, created_at
+        FROM in_app_planning_turn_activity_events
+        WHERE session_id = ? AND turn_id = ?
+        ORDER BY sequence ASC`,
+      [sessionId, turnId],
+    ) as InAppPlanningTurnActivityEventRow[];
+    const events: InAppPlanningTurnActivity['events'] = [];
+    for (const eventRow of eventRows) {
+      if (
+        typeof eventRow.sequence !== 'number'
+        || !isInAppPlanningTurnActivitySource(eventRow.source)
+        || typeof eventRow.text !== 'string'
+        || typeof eventRow.byte_count !== 'number'
+        || typeof eventRow.created_at !== 'string'
+      ) {
+        return undefined;
+      }
+      events.push({
+        sequence: eventRow.sequence,
+        source: eventRow.source,
+        text: eventRow.text,
+        byteCount: eventRow.byte_count,
+        createdAt: eventRow.created_at,
+      });
+    }
+
+    return {
+      sessionId,
+      turnId,
+      userMessageId,
+      ...(typeof row.assistant_message_id === 'number' ? { assistantMessageId: row.assistant_message_id } : {}),
+      status: row.status,
+      startedAt,
+      updatedAt,
+      ...(typeof row.completed_at === 'string' ? { completedAt: row.completed_at } : {}),
+      retainedBytes,
+      droppedBytes,
+      truncated: row.truncated === 1,
+      events,
+    };
   }
 
   private mapInAppPlanningSessionRow(row: InAppPlanningSessionRow): InAppPlanningSessionRecord | undefined {

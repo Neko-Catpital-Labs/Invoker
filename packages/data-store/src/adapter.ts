@@ -6,7 +6,19 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type {
+  InAppPlanningChatLine,
+  InAppPlanningPlanSummary,
+  InAppPlanningSessionStatus,
+  InAppPlanningTurnActivity,
+  InAppPlanningTurnActivityAppend,
+  InAppPlanningTurnActivityFinalize,
+  InAppPlanningTurnActivityStart,
+  PlanningConfirmationMode,
+  PlanningTerminalMode,
+  SearchResultItem,
+  SearchOptions,
+} from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
@@ -466,6 +478,18 @@ export interface PersistenceAdapter {
   // Agent queries
   /** Read the configured execution agent name for a task (e.g. 'claude', 'codex'). */
   getExecutionAgent?(taskId: string): string | null;
+
+  // In-app planning activity
+  upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void;
+  listInAppPlanningSessions(): InAppPlanningSessionRecord[];
+  loadInAppPlanningSession(sessionId: string): InAppPlanningSessionRecord | undefined;
+  updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void;
+  deleteInAppPlanningSession(sessionId: string): void;
+  startInAppPlanningTurnActivity(activity: InAppPlanningTurnActivityStart): void;
+  appendInAppPlanningTurnActivity(activity: InAppPlanningTurnActivityAppend): InAppPlanningTurnActivity | undefined;
+  finalizeInAppPlanningTurnActivity(activity: InAppPlanningTurnActivityFinalize): void;
+  loadInAppPlanningTurnActivity(sessionId: string, turnId: string): InAppPlanningTurnActivity | undefined;
+  listInAppPlanningTurnActivities(sessionId: string): InAppPlanningTurnActivity[];
 
   // Lifecycle
   close(): void;
