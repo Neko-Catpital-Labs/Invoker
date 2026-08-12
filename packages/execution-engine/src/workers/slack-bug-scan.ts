@@ -20,3 +20,10 @@ export function resolveSlackBugScanMaxPerDay(env: NodeJS.ProcessEnv = process.en
 export function resolveSlackBugScanMaxPerTick(env: NodeJS.ProcessEnv = process.env): number {
   return readPositiveInt(env.INVOKER_SLACK_BUG_SCAN_MAX_PER_TICK, DEFAULT_SLACK_BUG_SCAN_MAX_PER_TICK);
 }
+
+export function resolveSlackBugScanAllowedRepoHosts(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.INVOKER_SLACK_BUG_SCAN_ALLOWED_REPO_HOSTS ?? '')
+    .split(',')
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean);
+}
