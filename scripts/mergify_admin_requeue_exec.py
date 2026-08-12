@@ -194,7 +194,20 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             progressed = True
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
-                            progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
+                            if outcome.status == "queue_only_noop":
+                                # See plan.py's latest_queue_only_noop_check: without this
+                                # record, a queue-only check with an empty job log settles
+                                # here and then goes nowhere -- plan_bottom_progress can
+                                # never see it, so the admin-bypass label never comes back
+                                # and the PR is stuck outside the queue for good.
+                                ledger.record("queue-only-noop", pr.number, pr.head_ref_oid, check_name, now)
+                                logger.trace(
+                                    "admin-bypass-queue-only-noop",
+                                    repo=args.repo,
+                                    pr_number=pr.number,
+                                    check_name=check_name,
+                                )
+                            progressed = outcome.status in {"pushed", "prereq_created", "submitted", "queue_only_noop"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
                     repair_dispatch_failed += 1

@@ -11,6 +11,7 @@ sys.dont_write_bytecode = True
 try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger
+    from .mergify_admin_requeue_plan import is_queue_only_required_check
     from .mergify_admin_requeue_repair_body import (
         create_repair_prerequisite,
         git_lines,
@@ -25,6 +26,7 @@ try:
 except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger
+    from mergify_admin_requeue_plan import is_queue_only_required_check
     from mergify_admin_requeue_repair_body import (
         create_repair_prerequisite,
         git_lines,
@@ -55,6 +57,21 @@ PREREQ_SENTINEL = Path(".invoker-repair-prereq-created")
 # this write, and that's exactly the case the in-flight TTL exists to bound.
 def _record_settle_marker(state_file: Path, pr_number: int, start_head: str, check_name: str) -> None:
     Ledger(state_file).record("repair-check-settled", pr_number, start_head, check_name)
+
+
+# A queue-only required check (see is_queue_only_required_check) never runs on
+# an ordinary PR head, only on the merge-queue draft -- so an agent repair
+# attempt against it settling with no commit isn't "nothing needed fixing", it
+# means the check's failure can't be repaired locally at all. plan.py's
+# plan_bottom_progress reads for this exact ("queue-only-noop", pr, headSha,
+# check) row to know it can restore the admin-bypass label and let Mergify's
+# queue retry the check for real, instead of leaving the PR permanently
+# unlabeled with no path back into the queue.
+def _record_queue_only_noop_if_applicable(
+    state_file: Path, pr_number: int, start_head: str, check_name: str,
+) -> None:
+    if is_queue_only_required_check(check_name):
+        Ledger(state_file).record("queue-only-noop", pr_number, start_head, check_name)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -89,11 +106,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     end_head = git_output(cwd, "rev-parse", "HEAD").strip()
     if end_head == start_head:
+        _record_queue_only_noop_if_applicable(state_file, args.pr, start_head, args.check)
         print("noop: repair task made no commit")
         return 0
 
     end_head = normalize_repair_commit(cwd, start_head, end_head, args.check)
     if end_head == start_head:
+        _record_queue_only_noop_if_applicable(state_file, args.pr, start_head, args.check)
         print("noop: repair diff was empty after normalization")
         return 0
 

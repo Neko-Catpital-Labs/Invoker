@@ -117,6 +117,40 @@ class RepairNormalizeTests(unittest.TestCase):
                     code = normalize.main(self.argv())
         self.assertEqual(code, 0)
         gh_cls.assert_not_called()
+        self.assertEqual(self.queue_only_noop_rows(), [])
+
+    def queue_only_noop_rows(self):
+        if not self.state_file.exists():
+            return []
+        return [line for line in self.state_file.read_text(encoding="utf-8").splitlines() if '"queue-only-noop"' in line]
+
+    def test_no_commit_on_queue_only_check_records_queue_only_noop(self):
+        # Incident 2026-08-12: an async repair for a queue-only required check
+        # (e.g. "required-fast / Guardrails", which only runs on the merge-queue
+        # draft, never the PR head) settling with no commit is the *expected*
+        # outcome, not "nothing needed fixing" -- there's no code to fix. Without
+        # this row, plan.py's latest_queue_only_noop_check never sees it and
+        # restore_admin_bypass_label can never fire; the PR is stuck outside the
+        # queue for good. See test_mergify_admin_requeue.py's
+        # test_run_cycle_records_queue_only_noop_from_empty_job_log_repair for
+        # the synchronous twin of this same gap.
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=HEAD):
+                code = normalize.main(self.argv(**{"--check": "required-fast / Guardrails"}))
+        self.assertEqual(code, 0)
+        rows = self.queue_only_noop_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertIn('"pr": 2647', rows[0])
+        self.assertIn(f'"headSha": "{HEAD}"', rows[0])
+        self.assertIn('"key": "required-fast / Guardrails"', rows[0])
+
+    def test_no_commit_after_normalization_on_queue_only_check_also_records(self):
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=HEAD):
+                    code = normalize.main(self.argv(**{"--check": "required-fast / Vitest Workspace"}))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.queue_only_noop_rows()), 1)
 
     def test_valid_body_ready_for_push_returns_zero(self):
         with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
