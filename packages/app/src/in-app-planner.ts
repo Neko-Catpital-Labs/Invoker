@@ -906,13 +906,15 @@ export async function sendPlanningChatMessage(
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
+        const immediateDraftPlanText = deps.plannerReplyOverride
+          ? extractYamlPlan(reply)
+          : activeSession.conversation.lastTurnDraftPlanText;
         const result = evaluatePlanningTurn({
           userMessage: message,
           messagesBeforeTurn,
           assistantReply: reply,
-          immediateDraftPlanText: deps.plannerReplyOverride
-            ? extractYamlPlan(reply)
-            : activeSession.conversation.lastTurnDraftPlanText,
+          immediateDraftPlanText,
+          requireDraftAuthorization: hasDraftPlan(activeSession) || !immediateDraftPlanText,
         });
         if (result.kind === 'message') {
           activeSession.status = hasDraftPlan(activeSession)
