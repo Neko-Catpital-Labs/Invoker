@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,22 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const retiredLeaseShard = defs.get('playwright / launch-dispatch-stuck-lease');
+  if (retiredLeaseShard.verifyAliasFor !== 'playwright / 9-of-9') {
+    fail('retired launch-dispatch-stuck-lease job must map to the current shard');
+  }
+  if (retiredLeaseShard.verifyCommand.includes('No local verify command is mapped')) {
+    fail('retired launch-dispatch-stuck-lease job must not use fallback verify command');
+  }
+  if (!retiredLeaseShard.verifyCommand.includes('launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('retired launch-dispatch-stuck-lease command must include the cap spec');
+  }
+  if (!retiredLeaseShard.verifyCommand.includes('launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('retired launch-dispatch-stuck-lease command must include the storm spec');
+  }
+  if (retiredLeaseShard.verifyCommand.includes('workers-surface.spec.ts')) {
+    fail('retired launch-dispatch-stuck-lease command must stay scoped to the retired job specs');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -173,6 +190,28 @@ function testPlanVarsAndDryRunRendering() {
     rmSync(outRoot, { recursive: true, force: true });
   }
   console.log('[repro-e2e-regression-watch] plan vars + dry-run rendering: PASS');
+}
+
+function testRetiredPlaywrightJobPlanVarsUseRetiredShard() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(425, 'abc425def456abc123def456abc123def456ab3', [
+    fakeJob('playwright / launch-dispatch-stuck-lease', 'failure', 42),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', buildCiJobDefinitions());
+  if (!vars.verify_command.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-launch-dispatch-stuck-lease'")) {
+    fail('retired Playwright job must recreate the retired job run label');
+  }
+  if (!vars.verify_command.includes('launch-dispatch-stuck-lease-cap.spec.ts')) {
+    fail('retired Playwright job plan vars must include the cap spec');
+  }
+  if (!vars.verify_command.includes('launch-dispatch-stuck-lease-storm.spec.ts')) {
+    fail('retired Playwright job plan vars must include the storm spec');
+  }
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('retired Playwright job plan vars must not use fallback verify command');
+  }
+  console.log('[repro-e2e-regression-watch] retired Playwright job plan vars: PASS');
 }
 
 function testLiveSubmissionUsesNoTrack() {
@@ -229,6 +268,7 @@ function main() {
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
   testPlanVarsAndDryRunRendering();
+  testRetiredPlaywrightJobPlanVarsUseRetiredShard();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
