@@ -119,6 +119,10 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
 }
 
 async function installElectronOrExit() {
+  if (process.env.INVOKER_SKIP_ELECTRON_INSTALL === '1') {
+    return null;
+  }
+
   const electronPackageDir = resolveElectronPackageDir();
   if (!electronPackageDir) {
     console.error('Electron package is not installed. Run pnpm install with network access.');
