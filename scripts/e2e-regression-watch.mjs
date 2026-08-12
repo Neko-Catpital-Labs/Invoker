@@ -340,6 +340,22 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  const legacyLaunchDispatchJobName = 'playwright / launch-dispatch-stuck-lease';
+  if (!definitions.has(legacyLaunchDispatchJobName) && workflow.jobs?.playwright) {
+    const matrix = {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    };
+    definitions.set(legacyLaunchDispatchJobName, {
+      jobId: 'playwright',
+      jobName: legacyLaunchDispatchJobName,
+      matrix,
+      verifyCommand: commandForJob('playwright', workflow.jobs.playwright, matrix),
+    });
+  }
   return definitions;
 }
 
