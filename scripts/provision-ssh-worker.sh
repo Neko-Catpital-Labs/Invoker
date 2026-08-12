@@ -474,6 +474,15 @@ verify_repo_binaries() {
   fi
 }
 
+run_repo_install() {
+  (
+    cd "$REPO_DIR"
+    INVOKER_SKIP_ELECTRON_INSTALL=1 ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
+    node scripts/electron.cjs --install-only
+    node scripts/fix-node-pty-spawn-helper.mjs
+  )
+}
+
 ensure_repo_install() {
   [[ -f "$REPO_DIR/package.json" ]] || die "No package.json found at $REPO_DIR"
   [[ -f "$REPO_DIR/pnpm-lock.yaml" ]] || die "No pnpm-lock.yaml found at $REPO_DIR"
@@ -489,11 +498,11 @@ ensure_repo_install() {
   fi
   if [[ ! -d "$REPO_DIR/node_modules" || "$current_stamp" != "$desired_stamp" ]]; then
     log "Installing repo dependencies in $REPO_DIR"
-    (cd "$REPO_DIR" && pnpm install --frozen-lockfile)
+    run_repo_install
   fi
   verify_repo_binaries || {
     log "Repo verification failed; reinstalling dependencies."
-    (cd "$REPO_DIR" && pnpm install --frozen-lockfile)
+    run_repo_install
     verify_repo_binaries
   }
   mkdir -p "$(dirname "$stamp_path")"
