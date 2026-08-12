@@ -81,6 +81,59 @@ describe('slack-bug-scan worker', () => {
     expect(registry.get(SLACK_BUG_SCAN_WORKER_KIND)).toBeTruthy();
   });
 
+  it('does not create a registered runtime when config is disabled', () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registerSlackBugScanWorker(registry);
+
+    const store = makeStore();
+    const { client } = makeClient([CHANNEL_WITH_REPO], new Map());
+    const classify: SlackBugScanClassifier = vi.fn(async () => ({ isBugComplaint: true }));
+    const draftAndSubmitPlan: SlackBugScanPlanSubmitter = vi.fn(async () => ({ planName: 'P', workflowId: 'wf-1' }));
+
+    expect(() => registry.get(SLACK_BUG_SCAN_WORKER_KIND)!.factory({
+      logger: makeLogger(),
+      store: store as any,
+      submitter: {} as any,
+      slackBugScan: {
+        enabled: false,
+        client,
+        store,
+        classify,
+        draftAndSubmitPlan,
+        intervalMs: 0,
+        tickOnStart: false,
+      },
+    })).toThrow(/slack-bug-scan worker is disabled/);
+  });
+
+  it('creates a registered runtime when config is explicitly enabled', () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registerSlackBugScanWorker(registry);
+
+    const store = makeStore();
+    const { client } = makeClient([CHANNEL_WITH_REPO], new Map());
+    const classify: SlackBugScanClassifier = vi.fn(async () => ({ isBugComplaint: true }));
+    const draftAndSubmitPlan: SlackBugScanPlanSubmitter = vi.fn(async () => ({ planName: 'P', workflowId: 'wf-1' }));
+
+    const runtime = registry.get(SLACK_BUG_SCAN_WORKER_KIND)!.factory({
+      logger: makeLogger(),
+      store: store as any,
+      submitter: {} as any,
+      slackBugScan: {
+        enabled: true,
+        client,
+        store,
+        classify,
+        draftAndSubmitPlan,
+        intervalMs: 0,
+        tickOnStart: false,
+      },
+    });
+
+    expect(runtime.identity.kind).toBe(SLACK_BUG_SCAN_WORKER_KIND);
+    expect(runtime.isRunning()).toBe(false);
+  });
+
   it('skips a channel with no parseable repo url in topic/purpose', async () => {
     const store = makeStore();
     const messages = new Map([[CHANNEL_NO_REPO.id, [bugMessage(1)]]]);
