@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { LocalBus } from '@invoker/transport';
@@ -12,6 +12,13 @@ import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, preparePlanReviewForMcp, res
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
 const fixturePlan = resolve(repoRoot, 'plans/fixtures/hello-world.yaml');
+const tempDirs: string[] = [];
+
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function writeStandalonePlan(dir: string, body: string): string {
   const planPath = join(dir, 'plan.yaml');
@@ -75,6 +82,9 @@ function makeSpawnProcessStub() {
 describe('invoker-cli', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('declares MCP runtime dependencies in the CLI manifest and lockfile', () => {
@@ -139,7 +149,7 @@ describe('invoker-cli', () => {
   });
 
   it('lists every worker toggle at its default state when config is empty', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'invoker-worker-toggles-'));
+    const dir = makeTempDir('invoker-worker-toggles-');
     const saved = process.env.INVOKER_REPO_CONFIG_PATH;
     process.env.INVOKER_REPO_CONFIG_PATH = join(dir, 'config.json');
     const output = captureProcessOutput();
@@ -157,7 +167,7 @@ describe('invoker-cli', () => {
   });
 
   it('enables one worker toggle without touching the others', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'invoker-worker-toggles-'));
+    const dir = makeTempDir('invoker-worker-toggles-');
     const configPath = join(dir, 'config.json');
     const saved = process.env.INVOKER_REPO_CONFIG_PATH;
     process.env.INVOKER_REPO_CONFIG_PATH = configPath;
@@ -224,14 +234,14 @@ describe('invoker-cli', () => {
   });
 
   it('runs the hello-world fixture with an isolated db dir', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-test-db-'));
+    const dbDir = makeTempDir('invoker-cli-test-db-');
     const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('hello-from-invoker-cli');
   });
 
   it('--json emits only a workflow result object on stdout', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-json-db-'));
+    const dbDir = makeTempDir('invoker-cli-json-db-');
     const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json']);
     expect(result.status).toBe(0);
     const json = JSON.parse(result.stdout);
@@ -241,7 +251,7 @@ describe('invoker-cli', () => {
   });
 
   it('invalid YAML exits non-zero with a validation error', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-invalid-'));
+    const dir = makeTempDir('invoker-cli-invalid-');
     const invalidPlan = join(dir, 'invalid.yaml');
     writeFileSync(invalidPlan, 'name: [broken\n', 'utf8');
     const result = await runCli(['run', invalidPlan, '--standalone', '--db-dir', join(dir, 'db')]);
@@ -283,7 +293,7 @@ describe('invoker-cli', () => {
 
   it('--standalone never opens IPC and still runs hello-world', async () => {
     const output = captureProcessOutput();
-    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-standalone-'));
+    const dir = makeTempDir('invoker-cli-standalone-');
     const dbDir = join(dir, 'db');
     const planPath = writeStandalonePlan(dir, `name: Standalone in process
 repoUrl: __REPO_ROOT__
@@ -340,7 +350,7 @@ tasks:
   it('auto mode falls back to standalone when no GUI owner exists', async () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
-    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-auto-'));
+    const dir = makeTempDir('invoker-cli-auto-');
     const dbDir = join(dir, 'db');
     const planPath = writeStandalonePlan(dir, `name: Auto fallback in process
 repoUrl: __REPO_ROOT__
@@ -363,7 +373,7 @@ tasks:
   }, 60_000);
 
   it('standalone prompt-only plans route through the execution engine', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-prompt-'));
+    const dir = makeTempDir('invoker-cli-prompt-');
     const planPath = writeStandalonePlan(dir, `name: Prompt-only standalone
 repoUrl: __REPO_ROOT__
 onFinish: none
@@ -439,7 +449,7 @@ tasks:
   });
 
   it('returns MCP validation errors for broken YAML', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-mcp-invalid-'));
+    const dir = makeTempDir('invoker-cli-mcp-invalid-');
     const invalidPlan = join(dir, 'invalid.yaml');
     writeFileSync(invalidPlan, 'name: [broken\n', 'utf8');
 
@@ -551,7 +561,7 @@ tasks:
   });
   it('rejects --db-dir with --live', async () => {
     const output = captureProcessOutput();
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-live-db-'));
+    const dbDir = makeTempDir('invoker-cli-live-db-');
 
     const code = await main(['run', fixturePlan, '--live', '--db-dir', dbDir]);
 
