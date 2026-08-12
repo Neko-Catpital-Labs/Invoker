@@ -651,6 +651,7 @@ jobs:
             files: >-
               e2e/worker-tab-scroll.spec.ts
               e2e/workflow-delete-latency.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/main-process-hitch-responsiveness.spec.ts
               e2e/dag-click-hitch-responsiveness.spec.ts
               e2e/terminal-upsert-hitch-responsiveness.spec.ts
