@@ -49,7 +49,12 @@ export type PlanningCommandBuilder = (opts: {
   model?: string;
   prompt: string;
 }) => { command: string; args: string[] };
-export type RawPlannerOutputHandler = (chunk: string) => void;
+export type RawPlannerOutputSource = 'stdout' | 'stderr';
+export interface RawPlannerOutputEvent {
+  source: RawPlannerOutputSource;
+  chunk: string;
+}
+export type RawPlannerOutputHandler = (event: RawPlannerOutputEvent) => void;
 
 export function defaultPlanningCommand(
   cursorCommand: string,
@@ -130,7 +135,7 @@ export interface PlanConversationConfig {
   experimentalPlanner?: boolean;
   /** Prefer top-level `workflows:` stack plans for multi-slice reviewable work. */
   preferStackedWorkflows?: boolean;
-  /** Optional callback for raw stdout chunks emitted by the planner subprocess. */
+  /** Optional callback for raw stdout/stderr chunks emitted by the planner subprocess. */
   onRawPlannerOutput?: RawPlannerOutputHandler;
   /** When set, turns call `driver.start`/`driver.append` instead of spawning a fresh CLI with the full history baked into the prompt. */
   harnessSessionDriver?: HarnessSessionDriver;
@@ -471,6 +476,7 @@ export class PlanConversation {
   private draftingPreauthorized: boolean;
   private log: LogFn;
   private onRawPlannerOutput?: RawPlannerOutputHandler;
+  private activeRawPlannerOutput?: RawPlannerOutputHandler;
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
   // Serializes turns on this conversation. Without this, two concurrent
@@ -570,17 +576,19 @@ export class PlanConversation {
    * in flight waits for it to fully finish (including reading back its own
    * per-turn side-channel files) before starting.
    */
-  async sendMessage(userMessage: string): Promise<string> {
+  async sendMessage(userMessage: string, options: { onRawPlannerOutput?: RawPlannerOutputHandler } = {}): Promise<string> {
     if (this.turnInFlight) {
       await new Promise<void>((resolve) => this.turnQueue.push(resolve));
     }
     this.turnInFlight = true;
+    this.activeRawPlannerOutput = options.onRawPlannerOutput;
     // No `await` here on purpose: chaining via .finally() keeps this call's
     // returned promise settling in lockstep with sendMessageLocked's own
     // promise, with no added microtask tick before the planner subprocess is
     // spawned — callers/tests that synchronize on "the process was spawned"
     // via a single microtask wait stay correct.
     return this.sendMessageLocked(userMessage).finally(() => {
+      this.activeRawPlannerOutput = undefined;
       this.turnInFlight = false;
       this.turnQueue.shift()?.();
     });
@@ -956,9 +964,10 @@ export class PlanConversation {
         const chunkStr = chunk.toString();
         stdout += chunkStr;
         stdoutChunks++;
-        if (this.onRawPlannerOutput) {
+        const rawHandler = this.activeRawPlannerOutput ?? this.onRawPlannerOutput;
+        if (rawHandler) {
           try {
-            this.onRawPlannerOutput(chunkStr);
+            rawHandler({ source: 'stdout', chunk: chunkStr });
           } catch (err) {
             this.log('plan-conversation', 'error', `Raw planner output handler failed: ${err}`);
           }
@@ -970,6 +979,14 @@ export class PlanConversation {
         const chunkStr = chunk.toString();
         stderr += chunkStr;
         stderrChunks++;
+        const rawHandler = this.activeRawPlannerOutput ?? this.onRawPlannerOutput;
+        if (rawHandler) {
+          try {
+            rawHandler({ source: 'stderr', chunk: chunkStr });
+          } catch (err) {
+            this.log('plan-conversation', 'error', `Raw planner output handler failed: ${err}`);
+          }
+        }
         this.log('plan-conversation', 'info', `[PERF] cursor_stderr chunk #${stderrChunks}: +${chunkStr.length} bytes (total=${stderr.length}, elapsed=${Date.now() - spawnStart}ms), preview="${chunkStr.slice(0, 200).replace(/\n/g, '\\n')}"`);
       });
 

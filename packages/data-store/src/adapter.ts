@@ -325,6 +325,7 @@ export interface InAppPlanningSessionRecord {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activity?: InAppPlanningTurnActivity[];
   pendingResponse: boolean;
   createdAt: string;
   updatedAt: string;

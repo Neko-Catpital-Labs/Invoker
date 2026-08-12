@@ -552,6 +552,7 @@ export interface InAppPlanningSessionSummary {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activity?: InAppPlanningTurnActivity[];
   createdAt: string;
   updatedAt: string;
 }
@@ -579,8 +580,8 @@ export type InAppPlanningListSessionsResponse = {
 
 export interface InAppPlanningStreamEvent {
   sessionId: string;
-  chunk: string;
   turnId?: string;
+  chunk: string;
   source?: InAppPlanningTurnActivitySource;
   sequence?: number;
   createdAt?: string;
@@ -588,6 +589,7 @@ export interface InAppPlanningStreamEvent {
 
 export interface InAppPlanningChatRequest {
   sessionId?: string;
+  turnId?: string;
   message: string;
   presetKey?: string;
   confirmationMode?: PlanningConfirmationMode;
@@ -597,7 +599,9 @@ export type InAppPlanningChatResponse =
   | {
       ok: true;
       sessionId: string;
+      turnId?: string;
       reply: string;
+      reasoning?: string;
       confirmationMode?: PlanningConfirmationMode;
       draftPlanAvailable: boolean;
       draftPlanSummary?: InAppPlanningPlanSummary;
@@ -606,7 +610,28 @@ export type InAppPlanningChatResponse =
   | {
       ok: false;
       sessionId?: string;
+      turnId?: string;
       error: string;
+    };
+
+export interface InAppPlanningTestActivityEvent {
+  source: InAppPlanningTurnActivitySource;
+  text: string;
+  delayMs?: number;
+}
+
+export type InAppPlanningTestChatResponse =
+  | {
+      planYaml: string;
+      planName: string;
+      reply?: string;
+      delayMs?: number;
+      activity?: InAppPlanningTestActivityEvent[];
+    }
+  | {
+      throwError: string;
+      delayMs?: number;
+      activity?: InAppPlanningTestActivityEvent[];
     };
 
 export interface InAppPlanningSubmitRequest {
@@ -1433,12 +1458,7 @@ export const IpcTestOnlyChannels = {
     response: void;
   },
   'invoker:set-test-planning-chat-response': {} as {
-    request: [
-      response:
-        | { planYaml: string; planName: string; reply?: string; delayMs?: number }
-        | { throwError: string }
-        | null,
-    ];
+    request: [response: InAppPlanningTestChatResponse | null];
     response: void;
   },
   'invoker:get-test-planning-chat-system-prompt': {} as {

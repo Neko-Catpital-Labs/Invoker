@@ -16,6 +16,7 @@ import type {
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
+  InAppPlanningTestChatResponse,
   Logger,
   QueueStatus,
   StartReadyRequest,
@@ -1290,8 +1291,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   // given message. The error variant lets visual-proof specs render the
   // exhausted-retry error path without spawning a real planner subprocess.
   let testPlanningChatResponse:
-    | { planYaml: string; planName: string; reply?: string; delayMs?: number }
-    | { throwError: string }
+    | InAppPlanningTestChatResponse
     | null = null;
 
 
@@ -1330,11 +1330,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
     const plannerReplyOverride = planningChatResponseOverride
       ? async (): Promise<string> => {
-        if ('throwError' in planningChatResponseOverride) {
-          throw new Error(planningChatResponseOverride.throwError);
-        }
         if (planningChatResponseOverride.delayMs) {
           await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
+        }
+        if ('throwError' in planningChatResponseOverride) {
+          throw new Error(planningChatResponseOverride.throwError);
         }
         return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
       }
@@ -1350,6 +1350,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       planningSessionStore: ownerMode ? persistence : undefined,
       logger,
       plannerReplyOverride,
+      testPlanningActivityEvents: planningChatResponseOverride?.activity,
       onRawPlannerOutput: emitPlanningChatStream,
       repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
     });

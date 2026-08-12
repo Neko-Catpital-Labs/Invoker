@@ -28,6 +28,10 @@ import type {
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  InAppPlanningTestActivityEvent,
+  InAppPlanningTurnActivity,
+  InAppPlanningTurnActivityLifecycle,
+  InAppPlanningTurnActivitySource,
   Logger,
   PlanningConfirmationMode,
   PlanningTerminalMode,
@@ -78,6 +82,27 @@ export interface InAppPlanningSessionStore {
   upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void;
   updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void;
   deleteInAppPlanningSession(sessionId: string): void;
+  startInAppPlanningTurnActivity?(activity: {
+    sessionId: string;
+    turnId: string;
+    userMessageId: number;
+    assistantMessageId?: number;
+    startedAt?: string;
+  }): void;
+  appendInAppPlanningTurnActivity?(activity: {
+    sessionId: string;
+    turnId: string;
+    source: InAppPlanningTurnActivitySource;
+    text: string;
+    createdAt?: string;
+  }): InAppPlanningTurnActivity | undefined;
+  finalizeInAppPlanningTurnActivity?(activity: {
+    sessionId: string;
+    turnId: string;
+    status: Exclude<InAppPlanningTurnActivityLifecycle, 'running'>;
+    assistantMessageId?: number;
+    completedAt?: string;
+  }): void;
 }
 
 export interface InAppPlannerDeps {
@@ -89,6 +114,7 @@ export interface InAppPlannerDeps {
   conversationRepo?: ConversationRepository;
   logger?: Logger;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  testPlanningActivityEvents?: InAppPlanningTestActivityEvent[];
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
 }
 
@@ -99,6 +125,7 @@ export interface InAppPlanningChatSession {
   confirmationMode: PlanningConfirmationMode;
   status: InAppPlanningSessionStatus;
   messages: InAppPlanningChatLine[];
+  activity?: InAppPlanningTurnActivity[];
   conversation: PlanConversation;
   repoUrl?: string;
   baseBranch?: string;
@@ -383,17 +410,19 @@ function appendSessionMessage(
   role: InAppPlanningChatLine['role'],
   text: string,
   tone?: InAppPlanningChatLine['tone'],
-): void {
+): InAppPlanningChatLine {
   const createdAt = new Date().toISOString();
-  session.messages.push({
+  const line: InAppPlanningChatLine = {
     id: session.nextMessageId,
     role,
     text,
     tone,
     createdAt,
-  });
+  };
+  session.messages.push(line);
   session.nextMessageId += 1;
   session.updatedAt = createdAt;
+  return line;
 }
 function clearStarterPromptIfUnused(session: InAppPlanningChatSession): void {
   if (
@@ -436,6 +465,7 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activity: session.activity ?? [],
     pendingResponse,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -455,8 +485,10 @@ export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessi
     messages: summary.messages,
     conversation: null as unknown as PlanConversation,
     draftPlanSummary: summary.draftPlanSummary,
+    draftPlanText: summary.draftPlanText,
     submittedWorkflowId: summary.submittedWorkflowId,
     submittedPlanName: summary.submittedPlanName,
+    activity: summary.activity ?? [],
     terminalMode: summary.terminalMode,
     terminalSessionId: summary.terminalSessionId,
     terminalStatus: summary.terminalStatus,
@@ -491,9 +523,122 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activity: session.activity ?? [],
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
+}
+
+const PLANNING_TURN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
+
+function normalizePlanningTurnId(value: unknown): string | { error: string } {
+  if (value === undefined || value === null || value === '') return randomUUID();
+  if (typeof value !== 'string') return { error: 'Planning turn ID must be a string.' };
+  const trimmed = value.trim();
+  if (!PLANNING_TURN_ID_PATTERN.test(trimmed)) {
+    return { error: 'Planning turn ID has an invalid shape.' };
+  }
+  return trimmed;
+}
+
+function updateSessionActivity(session: InAppPlanningChatSession, activity: InAppPlanningTurnActivity): void {
+  const existing = session.activity ?? [];
+  const index = existing.findIndex((entry) => entry.turnId === activity.turnId);
+  session.activity = index >= 0
+    ? [...existing.slice(0, index), activity, ...existing.slice(index + 1)]
+    : [...existing, activity];
+}
+
+function startPlanningTurnActivity(
+  session: InAppPlanningChatSession,
+  store: InAppPlanningSessionStore | undefined,
+  turnId: string,
+  userMessageId: number,
+): InAppPlanningTurnActivity {
+  const startedAt = new Date().toISOString();
+  store?.startInAppPlanningTurnActivity?.({
+    sessionId: session.id,
+    turnId,
+    userMessageId,
+    startedAt,
+  });
+  const activity: InAppPlanningTurnActivity = {
+    sessionId: session.id,
+    turnId,
+    userMessageId,
+    status: 'running',
+    startedAt,
+    updatedAt: startedAt,
+    retainedBytes: 0,
+    droppedBytes: 0,
+    truncated: false,
+    events: [],
+  };
+  updateSessionActivity(session, activity);
+  return activity;
+}
+
+function finalizePlanningTurnActivity(
+  session: InAppPlanningChatSession,
+  store: InAppPlanningSessionStore | undefined,
+  turnId: string,
+  status: Exclude<InAppPlanningTurnActivityLifecycle, 'running'>,
+  assistantMessageId?: number,
+): void {
+  const completedAt = new Date().toISOString();
+  store?.finalizeInAppPlanningTurnActivity?.({
+    sessionId: session.id,
+    turnId,
+    status,
+    ...(assistantMessageId !== undefined ? { assistantMessageId } : {}),
+    completedAt,
+  });
+  const existing = session.activity?.find((entry) => entry.turnId === turnId);
+  if (!existing) return;
+  updateSessionActivity(session, {
+    ...existing,
+    ...(assistantMessageId !== undefined ? { assistantMessageId } : {}),
+    status,
+    completedAt,
+    updatedAt: completedAt,
+  });
+}
+
+function createPlanningActivityAppender(
+  session: InAppPlanningChatSession,
+  store: InAppPlanningSessionStore | undefined,
+  emit: ((event: InAppPlanningStreamEvent) => void) | undefined,
+  turnId: string,
+): (source: InAppPlanningTurnActivitySource, text: string) => void {
+  let nextSequence = 1;
+  return (source, text) => {
+    const sequence = nextSequence;
+    nextSequence += 1;
+    const createdAt = new Date().toISOString();
+    const persisted = store?.appendInAppPlanningTurnActivity?.({
+      sessionId: session.id,
+      turnId,
+      source,
+      text,
+      createdAt,
+    });
+    if (persisted) {
+      updateSessionActivity(session, persisted);
+    }
+    emit?.({ sessionId: session.id, turnId, source, sequence, chunk: text, createdAt });
+  };
+}
+
+async function emitTestPlanningActivityEvents(
+  events: InAppPlanningTestActivityEvent[] | undefined,
+  appendActivity: (source: InAppPlanningTurnActivitySource, text: string) => void,
+): Promise<void> {
+  for (const event of events ?? []) {
+    if (event.delayMs && event.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, event.delayMs));
+    }
+    appendActivity(event.source, event.text);
+  }
 }
 
 function assertPersistablePlanningSession(
@@ -641,7 +786,14 @@ function planConversationConfig(
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
     onRawPlannerOutput: deps.onRawPlannerOutput
-      ? (chunk) => deps.onRawPlannerOutput?.({ sessionId: threadTs, chunk })
+      ? (event) => deps.onRawPlannerOutput?.({
+        sessionId: threadTs,
+        turnId: 'legacy-planning-stream',
+        source: event.source,
+        sequence: 1,
+        chunk: event.chunk,
+        createdAt: new Date().toISOString(),
+      })
       : undefined,
     log: deps.logger
       ? (_source, level, message) => {
@@ -706,6 +858,7 @@ async function createSession(
     confirmationMode,
     status: 'still_discussing',
     messages: [],
+    activity: [],
     conversation: new PlanConversation(planConversationConfig(preset, conversationDeps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
     repoUrl: worktreeBinding?.repoUrl,
     baseBranch: worktreeBinding?.baseBranch,
@@ -834,6 +987,10 @@ export async function sendPlanningChatMessage(
   if (!message) {
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
+  const turnId = normalizePlanningTurnId(rawRequest?.turnId);
+  if (typeof turnId !== 'string') {
+    return { ok: false, sessionId: rawRequest?.sessionId, error: turnId.error };
+  }
 
   const suppliedSessionId = typeof rawRequest?.sessionId === 'string'
     ? rawRequest.sessionId
@@ -875,15 +1032,23 @@ export async function sendPlanningChatMessage(
         role: entry.role,
         content: entry.text,
       }));
-      appendSessionMessage(activeSession, 'user', message);
+      const userMessage = appendSessionMessage(activeSession, 'user', message);
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
       }
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
+      startPlanningTurnActivity(activeSession, deps.planningSessionStore, turnId, userMessage.id);
+      const appendActivity = createPlanningActivityAppender(
+        activeSession,
+        deps.planningSessionStore,
+        deps.onRawPlannerOutput,
+        turnId,
+      );
 
       try {
         const { extractYamlPlan } = await loadPlannerSurfaces();
         const formattedMessage = formatConversationalPlanningMessage(message);
+        await emitTestPlanningActivityEvents(deps.testPlanningActivityEvents, appendActivity);
         if (deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
             await ensurePlanningWorktreeReady(deps.repoPool, {
@@ -898,14 +1063,23 @@ export async function sendPlanningChatMessage(
         }
         const reply = deps.plannerReplyOverride
           ? await deps.plannerReplyOverride(formattedMessage)
-          : await activeSession.conversation.sendMessage(formattedMessage);
+          : await activeSession.conversation.sendMessage(formattedMessage, {
+            onRawPlannerOutput: (event) => appendActivity(event.source, event.chunk),
+          });
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
         }
         const reasoningParts = deps.plannerReplyOverride
-          ? []
+          ? (deps.testPlanningActivityEvents ?? [])
+              .filter((event) => event.source === 'reasoning')
+              .map((event) => event.text)
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
+        if (!deps.plannerReplyOverride) {
+          for (const part of reasoningParts) {
+            appendActivity('reasoning', part);
+          }
+        }
         const result = evaluatePlanningTurn({
           userMessage: message,
           messagesBeforeTurn,
@@ -918,11 +1092,13 @@ export async function sendPlanningChatMessage(
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
             : result.status;
-          appendSessionMessage(activeSession, 'assistant', reply);
+          const assistantMessage = appendSessionMessage(activeSession, 'assistant', reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          finalizePlanningTurnActivity(activeSession, deps.planningSessionStore, turnId, 'completed', assistantMessage.id);
           return {
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
@@ -941,11 +1117,13 @@ export async function sendPlanningChatMessage(
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
             : 'still_discussing';
-          appendSessionMessage(activeSession, 'assistant', review.reply);
+          const assistantMessage = appendSessionMessage(activeSession, 'assistant', review.reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          finalizePlanningTurnActivity(activeSession, deps.planningSessionStore, turnId, 'completed', assistantMessage.id);
           return {
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply: review.reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
@@ -958,11 +1136,13 @@ export async function sendPlanningChatMessage(
         activeSession.draftPlanSummary = review.summary;
         activeSession.draftPlanText = review.planText;
         activeSession.status = 'draft_ready';
-        appendSessionMessage(activeSession, 'assistant', reply);
+        const assistantMessage = appendSessionMessage(activeSession, 'assistant', reply);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        finalizePlanningTurnActivity(activeSession, deps.planningSessionStore, turnId, 'completed', assistantMessage.id);
         return {
           ok: true,
           sessionId: activeSession.id,
+          turnId,
           reply,
           reasoning,
           confirmationMode: activeSession.confirmationMode,
@@ -972,9 +1152,11 @@ export async function sendPlanningChatMessage(
         } as InAppPlanningChatResponse;
       } catch (error) {
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        finalizePlanningTurnActivity(activeSession, deps.planningSessionStore, turnId, 'failed');
         return {
           ok: false,
           sessionId: activeSession.id,
+          turnId,
           error: error instanceof Error ? error.message : String(error),
         };
       }
@@ -985,6 +1167,7 @@ export async function sendPlanningChatMessage(
     return {
       ok: false,
       sessionId,
+      turnId,
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -1316,6 +1499,7 @@ export async function restorePlanningChatSessions(
       confirmationMode: normalizePlanningConfirmationMode(record.confirmationMode, resolveDefaultPlanningConfirmationMode(deps.config)),
       status: record.status,
       messages: [...record.messages],
+      activity: [...(record.activity ?? [])],
       conversation,
       repoUrl: record.repoUrl,
       baseBranch: record.baseBranch,
@@ -1339,6 +1523,11 @@ export async function restorePlanningChatSessions(
 
     let shouldPersist = false;
     if (record.pendingResponse) {
+      for (const activity of record.activity ?? []) {
+        if (activity.status === 'running') {
+          finalizePlanningTurnActivity(session, deps.planningSessionStore, activity.turnId, 'interrupted');
+        }
+      }
       if (record.status !== 'submitted') {
         appendSessionMessage(
           session,

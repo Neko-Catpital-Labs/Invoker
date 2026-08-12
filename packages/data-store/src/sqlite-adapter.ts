@@ -3465,6 +3465,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ...(typeof row.terminal_exit_code === 'number' ? { terminalExitCode: row.terminal_exit_code } : {}),
         terminalOutputSnapshot: typeof row.terminal_output_snapshot === 'string' ? row.terminal_output_snapshot : '',
         ...(typeof row.terminal_updated_at === 'string' ? { terminalUpdatedAt: row.terminal_updated_at } : {}),
+        activity: this.listInAppPlanningTurnActivities(id),
         pendingResponse: row.pending_response === 1,
         createdAt,
         updatedAt,

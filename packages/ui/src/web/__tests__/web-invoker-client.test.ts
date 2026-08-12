@@ -81,7 +81,14 @@ describe('installWebInvoker', () => {
     const cb = vi.fn();
     window.invoker.onPlanningChatStream(cb as never);
     const es = FakeEventSource.instances[0];
-    const payload = { sessionId: 'session-1', chunk: 'raw planner text' };
+    const payload = {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      source: 'stdout',
+      sequence: 1,
+      chunk: 'raw planner text',
+      createdAt: '2026-08-12T00:00:00.000Z',
+    };
     es.fire('invoker:planning-chat-stream', payload);
     expect(cb).toHaveBeenCalledWith(payload);
   });

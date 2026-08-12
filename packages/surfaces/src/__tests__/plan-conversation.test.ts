@@ -692,9 +692,9 @@ describe('PlanConversation', () => {
     expect(secondPrompt).toContain('A REST API');
   });
 
-  it('emits raw stdout chunks in order before the planner closes', async () => {
-    const chunks: string[] = [];
-    const conv = new PlanConversation({ onRawPlannerOutput: (chunk) => chunks.push(chunk) });
+  it('emits raw stdout and stderr chunks in order before the planner closes', async () => {
+    const chunks: Array<{ source: string; chunk: string }> = [];
+    const conv = new PlanConversation({ onRawPlannerOutput: (event) => chunks.push(event) });
     const proc = new EventEmitter() as any;
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
@@ -705,18 +705,23 @@ describe('PlanConversation', () => {
     await Promise.resolve();
 
     proc.stdout.emit('data', Buffer.from('chunk1'));
-    expect(chunks).toEqual(['chunk1']);
+    expect(chunks).toEqual([{ source: 'stdout', chunk: 'chunk1' }]);
 
+    proc.stderr.emit('data', Buffer.from('err1'));
     proc.stdout.emit('data', Buffer.from('chunk2'));
-    expect(chunks).toEqual(['chunk1', 'chunk2']);
+    expect(chunks).toEqual([
+      { source: 'stdout', chunk: 'chunk1' },
+      { source: 'stderr', chunk: 'err1' },
+      { source: 'stdout', chunk: 'chunk2' },
+    ]);
 
     proc.emit('close', 0);
     await expect(promise).resolves.toBe('chunk1chunk2');
   });
 
   it('keeps the final reply and assistant history as the assembled stdout', async () => {
-    const chunks: string[] = [];
-    const conv = new PlanConversation({ onRawPlannerOutput: (chunk) => chunks.push(chunk) });
+    const chunks: Array<{ source: string; chunk: string }> = [];
+    const conv = new PlanConversation({ onRawPlannerOutput: (event) => chunks.push(event) });
     const proc = new EventEmitter() as any;
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
@@ -731,7 +736,10 @@ describe('PlanConversation', () => {
     proc.emit('close', 0);
 
     await expect(promise).resolves.toBe('final reply');
-    expect(chunks).toEqual(['  final ', 'reply  ']);
+    expect(chunks).toEqual([
+      { source: 'stdout', chunk: '  final ' },
+      { source: 'stdout', chunk: 'reply  ' },
+    ]);
     expect(conv.history).toEqual([
       { role: 'user', content: 'Hello' },
       { role: 'assistant', content: 'final reply' },
@@ -785,7 +793,7 @@ describe('PlanConversation', () => {
   });
 
   it('emits partial stdout before planner failure without persisting assistant history', async () => {
-    const chunks: string[] = [];
+    const chunks: Array<{ source: string; chunk: string }> = [];
     const repo = {
       loadConversation: vi.fn(),
       saveConversation: vi.fn(),
@@ -794,7 +802,7 @@ describe('PlanConversation', () => {
     const conv = new PlanConversation({
       threadTs: 'ts-stream-fail',
       conversationRepo: repo as any,
-      onRawPlannerOutput: (chunk) => chunks.push(chunk),
+      onRawPlannerOutput: (event) => chunks.push(event),
     });
     const proc = new EventEmitter() as any;
     proc.stdout = new EventEmitter();
@@ -810,7 +818,10 @@ describe('PlanConversation', () => {
     proc.emit('close', 1);
 
     await expect(promise).rejects.toThrow('agent exited with code 1: partial reply');
-    expect(chunks).toEqual(['partial ', 'reply']);
+    expect(chunks).toEqual([
+      { source: 'stdout', chunk: 'partial ' },
+      { source: 'stdout', chunk: 'reply' },
+    ]);
     expect(conv.history).toEqual([{ role: 'user', content: 'Hello' }]);
     expect(repo.saveConversation).not.toHaveBeenCalled();
   });

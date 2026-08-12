@@ -3037,6 +3037,7 @@ export function App() {
 
     const request = {
       message: input,
+      turnId: crypto.randomUUID(),
       presetKey: selectedPlanningPresetKey || undefined,
       confirmationMode: selectedPlanningConfirmationMode,
       ...(planningSessionId ? { sessionId: planningSessionId } : {}),
