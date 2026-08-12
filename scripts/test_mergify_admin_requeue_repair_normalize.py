@@ -39,6 +39,11 @@ PROOF_TOOLING_POLICY_VALIDATION = {
     "scopeKinds": ["policy"],
 }
 
+PROOF_TOOLING_POLICY_WITH_EXISTING_TEST_PROOF_VALIDATION = {
+    **PROOF_TOOLING_POLICY_VALIDATION,
+    "scopeKinds": ["policy", "product-test"],
+}
+
 MANUAL_SPLIT_VALIDATION = {
     "valid": False,
     "errors": [
@@ -156,6 +161,28 @@ class RepairNormalizeTests(unittest.TestCase):
         self.assertEqual(call_kwargs.args[5], 2647)
         self.assertEqual(call_kwargs.args[6], HEAD)
         self.assertEqual(call_kwargs.args[7], "PR Body")
+        self.assertTrue(normalize.PREREQ_SENTINEL.exists())
+
+    def test_prereq_split_allows_existing_proof_test_scope(self):
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=("commit-a",)) as git_lines:
+            git_lines.side_effect = lambda cwd, *args: ("commit-a",) if args[:1] == ("rev-list",) else ()
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=NEW_HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                        gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nmixed\n"}
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                            return_value=PROOF_TOOLING_POLICY_WITH_EXISTING_TEST_PROOF_VALIDATION,
+                        ):
+                            with mock.patch(
+                                "scripts.mergify_admin_requeue_repair_normalize.create_repair_prerequisite",
+                                return_value={"prNumber": 5801, "branch": "stack/pr-babysit-prereq-2647-c2532d2"},
+                            ) as create_prereq:
+                                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root"):
+                                    code = normalize.main(self.argv())
+        self.addCleanup(lambda: normalize.PREREQ_SENTINEL.unlink(missing_ok=True))
+        self.assertEqual(code, 0)
+        create_prereq.assert_called_once()
         self.assertTrue(normalize.PREREQ_SENTINEL.exists())
 
     def test_invalid_non_trunk_blocks_human_split(self):
