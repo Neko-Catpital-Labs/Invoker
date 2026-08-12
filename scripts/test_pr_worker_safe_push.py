@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -89,6 +90,40 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
+
+    def test_retry_after_successful_push_is_idempotent_when_remote_already_matches_local_head(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        first = self.invoke_helper("--branch", "main", "--expected-head", self.expected)
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+
+        retry = self.invoke_helper("--branch", "main", "--expected-head", self.expected)
+
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        self.assertIn(pushed, retry.stdout)
+
+    @unittest.skipIf(sys.platform == "darwin", "foreign /Users path remapping is only active off macOS")
+    def test_foreign_macos_json_ledger_path_records_under_worker_home(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        home = self.root / "worker-home"
+        ledger = home / ".invoker" / "mergify-admin-requeue-state.jsonl"
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", "/Users/edbertchan/.invoker/mergify-admin-requeue-state.jsonl",
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "8605",
+            "--json-head-sha", self.expected,
+            "--json-key", "build-artifacts",
+            env={"HOME": str(home)},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        self.assertTrue(ledger.exists())
+        self.assertIn('"pr": 8605', ledger.read_text(encoding="utf-8"))
 
     def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
         self.clone_other()

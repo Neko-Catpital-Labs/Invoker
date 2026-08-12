@@ -75,6 +75,26 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def is_ancestor(ancestor: str, descendant: str, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode == 0:
+        return True
+    if completed.returncode == 1:
+        return False
+    details = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    raise SafePushError(
+        f"git merge-base --is-ancestor failed with exit code {completed.returncode}"
+        + (f":\n{details}" if details else ""),
+        exit_code=completed.returncode,
+    )
+
+
 def safe_push(
     *,
     branch: str,
@@ -87,9 +107,12 @@ def safe_push(
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
     expected = None if expect_missing else validate_expected_head(expected_head or "")
+    pushed = local_head(cwd=cwd)
     live = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
     if expect_missing:
         if live is not None:
+            if live == pushed:
+                return pushed
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} exists at {live}; expected it to be missing",
                 exit_code=20,
@@ -97,13 +120,14 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            if live == pushed and expected is not None and is_ancestor(expected, pushed, cwd=cwd):
+                return pushed
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
             )
         lease = f"refs/heads/{branch_name}:{expected}"
 
-    pushed = local_head(cwd=cwd)
     run_git([
         "push",
         f"--force-with-lease={lease}",
@@ -148,6 +172,19 @@ def append_json_ledger(
         row["meta"] = dict(meta)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def worker_local_record_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    parts = expanded.parts
+    if (
+        expanded.is_absolute()
+        and sys.platform != "darwin"
+        and len(parts) >= 4
+        and parts[1] == "Users"
+    ):
+        return Path.home().joinpath(*parts[3:])
+    return expanded
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -198,7 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--tsv-marker": args.tsv_marker,
             })
             append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
+                worker_local_record_path(Path(args.record_tsv_ledger)),
                 kind=args.tsv_kind,
                 key=args.tsv_key,
                 marker=args.tsv_marker,
@@ -217,7 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
             append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
+                worker_local_record_path(Path(args.record_json_ledger)),
                 kind=args.json_kind,
                 pr_number=args.json_pr,
                 head_sha=args.json_head_sha,
