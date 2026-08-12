@@ -19,7 +19,7 @@ import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepositor
 
 import { IpcInvokerClient } from './invoker-client.js';
 import { createInvokerLauncher } from './invoker-launcher.js';
-import { readSlackRuntimeConfig, resolveDefaultHarnessPreset } from './runtime-config.js';
+import { readSlackRuntimeConfig, resolveDefaultHarnessPreset, resolveSlackAdminUserIds } from './runtime-config.js';
 import { createRunWorkflowOp } from './workflow-ops.js';
 import { createCommandHandler } from './command-handler.js';
 import { startEventSubscription } from './event-subscription.js';
@@ -113,6 +113,7 @@ async function main(): Promise<void> {
   const runtimeConfig = readSlackRuntimeConfig();
   const repoUrl = process.env.INVOKER_REPO_URL ?? runtimeConfig.defaultRepoUrl ?? detectRepoUrl(repoRoot, log);
   const defaultHarnessPreset = resolveDefaultHarnessPreset(process.env.INVOKER_SLACK_DEFAULT_PRESET, runtimeConfig.defaultHarnessPreset);
+  const adminUserIds = resolveSlackAdminUserIds(process.env.INVOKER_SLACK_ADMIN_USER_IDS, runtimeConfig.adminUserIds);
 
   const launcher = createInvokerLauncher({
     repoRoot,
@@ -148,6 +149,8 @@ async function main(): Promise<void> {
     repoUrl,
     defaultRepoUrl: repoUrl,
     repoAliases: runtimeConfig.repoAliases,
+    channelRepoBindings: runtimeConfig.channelRepoBindings,
+    adminUserIds,
     runWorkflowOp,
     gatherWorkflowContext,
     onRestartInvoker: async () => {
