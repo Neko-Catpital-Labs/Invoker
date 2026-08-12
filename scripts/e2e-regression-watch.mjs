@@ -326,6 +326,16 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+const LEGACY_PLAYWRIGHT_MATRIX_DEFINITIONS = [
+  {
+    name: 'launch-dispatch-stuck-lease',
+    files: [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ].join(' '),
+  },
+];
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -339,6 +349,17 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         verifyCommand: commandForJob(jobId, job, matrix),
       });
     }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  for (const matrix of LEGACY_PLAYWRIGHT_MATRIX_DEFINITIONS) {
+    const jobName = `playwright / ${matrix.name}`;
+    if (!playwrightJob || definitions.has(jobName)) continue;
+    definitions.set(jobName, {
+      jobId: 'playwright',
+      jobName,
+      matrix,
+      verifyCommand: commandForJob('playwright', playwrightJob, matrix),
+    });
   }
   return definitions;
 }
