@@ -842,7 +842,7 @@ export class Orchestrator {
       });
     }
     this.stateMachine.restoreTask(updated);
-    if (!opts?.skipWorkflowStatusSync && changes.status !== undefined && existing.config.workflowId) {
+    if (!opts?.skipWorkflowStatusSync && changes.status !== undefined && changes.status !== existing.status && existing.config.workflowId) {
       this.touchWorkflow(existing.config.workflowId);
     }
     return updated;
