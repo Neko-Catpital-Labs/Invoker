@@ -186,12 +186,31 @@ export type LocalRequest =
   | { kind: 'agent'; text: string }
   | { kind: 'change'; text: string };
 
+type AlertSurfaceEvent = Extract<SurfaceEvent, { type: 'alert' }>;
+
+function normalizeAlertSurfaceEvent(event: AlertSurfaceEvent): AlertSurfaceEvent {
+  const nested = (event as unknown as { alert?: Partial<AlertSurfaceEvent> }).alert;
+  if (!nested) return event;
+  const severity = nested.severity === 'info' || nested.severity === 'critical'
+    ? nested.severity
+    : 'warning';
+  return {
+    type: 'alert',
+    severity,
+    source: nested.source ?? '',
+    subject: nested.subject ?? '',
+    message: nested.message ?? '',
+    alertKey: nested.alertKey ?? '',
+  };
+}
+
 /**
  * Upper bound on stdout/stderr retained per stream while a local command runs.
  * Bounds process memory against noisy commands; only the tail is kept because
  * `formatLocalCommandResult` shows the last chars anyway.
  */
 const MAX_LOCAL_CAPTURE_CHARS = 65_536;
+const DEFAULT_ALERT_POST_COOLDOWN_MS = 30 * 60 * 1_000;
 
 // Internal marker for the "success with empty stdout" case so the runOneShotPlanner
 // retry wrapper can distinguish transient silent-success from user-actionable
@@ -557,6 +576,8 @@ export class SlackSurface implements Surface {
   private onRestartInvoker?: () => Promise<void>;
   private instanceId: string;
   private harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
+  /** Guard key -> last lobby alert post timestamp, held in-process like watchdog cooldowns. */
+  private alertLastPostAt = new Map<string, number>();
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -662,6 +683,21 @@ export class SlackSurface implements Surface {
   async handleEvent(event: SurfaceEvent): Promise<void> {
     if (event.type === 'workflow_created') {
       await this.createWorkflowChannel(event);
+      return;
+    }
+
+    if (event.type === 'alert') {
+      const alert = normalizeAlertSurfaceEvent(event);
+      const lastPostAt = this.alertLastPostAt.get(alert.alertKey);
+      const now = Date.now();
+      if (lastPostAt !== undefined && now - lastPostAt < DEFAULT_ALERT_POST_COOLDOWN_MS) {
+        this.log('slack', 'info', `[ALERT] Suppressed cooldown duplicate (alertKey=${alert.alertKey})`);
+        return;
+      }
+      const message = formatSurfaceEvent(alert);
+      if (!message) return;
+      const ts = await this.postMessage(message, this.lobbyChannelId);
+      if (ts) this.alertLastPostAt.set(alert.alertKey, now);
       return;
     }
 
