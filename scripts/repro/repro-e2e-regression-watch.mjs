@@ -126,6 +126,9 @@ function testLiveDedupIsJobScoped() {
 function testWorkflowCommandMapping() {
   const defs = buildCiJobDefinitions();
   const expected = [
+    'UI Vitest',
+    'UI Vitest / shard 1',
+    'UI Vitest / shard 6',
     'playwright / 1-of-9',
     'playwright / 9-of-9',
     'required-fast / Vitest Workspace',
@@ -139,6 +142,9 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  if (defs.get('UI Vitest / shard 1').verifyCommand !== 'pnpm --filter @invoker/ui test -- --shard=1/6') {
+    fail('UI Vitest shard command changed unexpectedly');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');

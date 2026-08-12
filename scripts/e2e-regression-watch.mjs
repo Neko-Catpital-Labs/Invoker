@@ -265,6 +265,9 @@ function commandForJob(jobId, job, matrix) {
   const needsBuild = jobDownloadsBuildArtifacts(job);
   if (jobId === 'build-artifacts') return BUILD_APP_COMMAND;
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
+  if (jobId === 'ui-vitest-shards') {
+    return `pnpm --filter @invoker/ui test -- --shard=${matrix.shard}/${matrix.total}`;
+  }
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
     const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
     const command = [

@@ -6,6 +6,7 @@ const FULL_CI_GATE = "${{ github.event_name != 'pull_request' || startsWith(gith
 const NON_PR_GATE = "${{ github.event_name != 'pull_request' }}";
 const ORDINARY_PR_GATE = "${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergify/merge-queue/') }}";
+const ALWAYS_GATE = "${{ always() }}";
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
@@ -43,6 +44,16 @@ assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs'
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
 
+assert(jobs['ui-vitest-shards'], 'Missing ui-vitest-shards job');
+assert(jobs['ui-vitest'], 'Missing ui-vitest aggregate job');
+assert(
+  jobs['ui-vitest'].needs === 'ui-vitest-shards',
+  'ui-vitest aggregate must depend on ui-vitest-shards',
+);
+assert(
+  jobs['ui-vitest'].if === ALWAYS_GATE,
+  'ui-vitest aggregate must use always() so shard failures become a failing required check',
+);
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
@@ -73,7 +84,7 @@ for (const checkName of requiredChecks) {
   assert(jobs[jobName], `Mergify requires missing CI job ${jobName} for ${checkName}`);
   const jobIf = jobs[jobName].if;
   assert(
-    jobIf === undefined || jobIf === FULL_CI_GATE,
+    jobIf === undefined || jobIf === FULL_CI_GATE || jobIf === ALWAYS_GATE,
     `Mergify-required job ${jobName} must run on merge queue refs`,
   );
 }
