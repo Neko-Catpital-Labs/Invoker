@@ -8,19 +8,27 @@
 # letting an approval send unresolved feedback to Mergify.
 # The `fast-lane` label is human-applied only, for low-risk PRs that must
 # bypass the full queue under runner saturation. It still requires build
-# artifacts, PR Body schema, and type-checks, and is listed first so it
-# outranks the default and admin-bypass queues.
+# artifacts, PR Body schema, and type-checks. Inter-queue order is no longer
+# implied by definition order (removed by Mergify 2025-06-30); the top-level
+# priority_rules entry below gives fast-lane PRs global queue priority.
+
+priority_rules:
+  - name: fast-lane PRs jump the queue
+    conditions:
+      - label=fast-lane
+    priority: high
 
 queue_rules:
   - name: fast-lane
     merge_method: squash
     batch_size: 1
-    batch_max_wait_time: 0 s
+    batch_max_wait_time: 0s
     checks_timeout: 30min
     queue_conditions:
       - base=master
       - -draft
       - label=fast-lane
+      - -label=admin-bypass
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
     merge_conditions:
@@ -88,6 +96,7 @@ pull_request_rules:
       - -draft
       - "#approved-reviews-by >= 1"
       - label=ready-to-merge
+      - -label=fast-lane
       - -label=admin-bypass
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
