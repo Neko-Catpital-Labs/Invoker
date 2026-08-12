@@ -20,6 +20,10 @@ class SafePushError(RuntimeError):
         self.exit_code = exit_code
 
 
+class StaleHeadError(SafePushError):
+    pass
+
+
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -90,14 +94,14 @@ def safe_push(
     live = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
     if expect_missing:
         if live is not None:
-            raise SafePushError(
+            raise StaleHeadError(
                 f"stale-head: refs/heads/{branch_name} exists at {live}; expected it to be missing",
                 exit_code=20,
             )
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
-            raise SafePushError(
+            raise StaleHeadError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
             )
@@ -181,6 +185,13 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
         raise SafePushError(f"{label} requires {', '.join(missing)}", exit_code=2)
 
 
+def warn_ledger_failure(path: Path, exc: OSError) -> None:
+    print(
+        f"pr-worker-safe-push: warning: could not record ledger {path}: {exc}",
+        file=sys.stderr,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
@@ -197,12 +208,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--tsv-key": args.tsv_key,
                 "--tsv-marker": args.tsv_marker,
             })
-            append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
-                kind=args.tsv_kind,
-                key=args.tsv_key,
-                marker=args.tsv_marker,
-            )
+            ledger_path = Path(args.record_tsv_ledger).expanduser()
+            try:
+                append_tsv_ledger(
+                    ledger_path,
+                    kind=args.tsv_kind,
+                    key=args.tsv_key,
+                    marker=args.tsv_marker,
+                )
+            except OSError as exc:
+                warn_ledger_failure(ledger_path, exc)
         if args.record_json_ledger:
             require_all("JSONL ledger recording", {
                 "--json-kind": args.json_kind,
@@ -216,15 +231,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not isinstance(decoded, dict):
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
-            append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
-                kind=args.json_kind,
-                pr_number=args.json_pr,
-                head_sha=args.json_head_sha,
-                key=args.json_key,
-                meta=meta,
-            )
+            ledger_path = Path(args.record_json_ledger).expanduser()
+            try:
+                append_json_ledger(
+                    ledger_path,
+                    kind=args.json_kind,
+                    pr_number=args.json_pr,
+                    head_sha=args.json_head_sha,
+                    key=args.json_key,
+                    meta=meta,
+                )
+            except OSError as exc:
+                warn_ledger_failure(ledger_path, exc)
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        return 0
+    except StaleHeadError as exc:
+        print(f"pr-worker-safe-push: {exc}; no push performed", file=sys.stderr)
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
