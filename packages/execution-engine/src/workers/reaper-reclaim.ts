@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import {
   closeSync,
   existsSync,
+  lstatSync,
   openSync,
   readdirSync,
   readSync,
@@ -9,8 +10,9 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { rm as rmAsync } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { hourlySnapshotRetention, pruneHourlySnapshots, type Logger } from '@invoker/contracts';
 
@@ -36,6 +38,7 @@ export const AUTOMATION_CHECKOUT_DIRS = [
 export const AUTOMATION_CHECKOUT_MIN_AGE_HOURS = 48;
 
 export const STALE_WORKTREE_MIN_AGE_HOURS = 48;
+export const STALE_INVOKER_CLI_TEMP_MIN_AGE_HOURS = 48;
 
 export const LOG_TRIM_MAX_BYTES = 100 * 1024 * 1024;
 export const LOG_TRIM_KEEP_BYTES = 20 * 1024 * 1024;
@@ -500,6 +503,61 @@ export function reapStaleAutomationCheckouts(opts: {
     }
   }
   return removed;
+}
+
+export async function reapStaleInvokerCliTempDirs(opts: {
+  tempRoot?: string;
+  userHome?: string;
+  nowMs?: number;
+  minAgeHours?: number;
+  logger?: Logger;
+} = {}): Promise<string[]> {
+  const rawTempRoot = opts.tempRoot ?? tmpdir();
+  if (!rawTempRoot.trim()) return [];
+  const tempRoot = resolve(rawTempRoot);
+  const userHome = resolve(opts.userHome ?? homedir());
+  if (tempRoot === '/' || tempRoot === userHome) return [];
+
+  let entries: string[];
+  try {
+    entries = readdirSync(tempRoot);
+  } catch {
+    return [];
+  }
+
+  const nowMs = opts.nowMs ?? Date.now();
+  const minAgeMs = (opts.minAgeHours ?? STALE_INVOKER_CLI_TEMP_MIN_AGE_HOURS) * 60 * 60 * 1000;
+  const candidates = entries.flatMap((name) => {
+    if (!name.startsWith('invoker-cli-')) return [];
+    const path = join(tempRoot, name);
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || nowMs - stat.mtimeMs < minAgeMs) return [];
+      return [{ path, mtimeMs: stat.mtimeMs }];
+    } catch {
+      return [];
+    }
+  }).sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+  const removed: string[] = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < candidates.length) {
+      const candidate = candidates[cursor++];
+      if (!candidate) return;
+      try {
+        await rmAsync(candidate.path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        removed.push(candidate.path);
+        opts.logger?.info?.(`[reaper] removed stale CLI temp directory ${candidate.path}`, { module: 'reaper' });
+      } catch (err) {
+        opts.logger?.warn?.(`[reaper] failed to remove stale CLI temp directory ${candidate.path}: ${errorDetail(err)}`, {
+          module: 'reaper',
+        });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, worker));
+  return removed.sort();
 }
 
 export function enforceHourlySnapshotRetention(
