@@ -10,11 +10,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || true)"
-NODE_BIN="$(command -v node)"
+NODE_BIN=""
 SERVICE_SRC="${REPO_ROOT:+$REPO_ROOT/packages/watcher/deploy/watcher.service}"
 WATCHER_BIN="$(command -v invoker-watcher || true)"
-
-if [ -z "$NODE_BIN" ]; then echo "node not found on PATH" >&2; exit 1; fi
 
 if [ -z "$WATCHER_BIN" ]; then
   if [ -z "$REPO_ROOT" ] || [ ! -f "$REPO_ROOT/packages/watcher/package.json" ]; then
@@ -22,6 +20,8 @@ if [ -z "$WATCHER_BIN" ]; then
     echo "Install with: npm i -g @neko-catpital-labs/invoker-watcher" >&2
     exit 1
   fi
+  NODE_BIN="$(command -v node || true)"
+  if [ -z "$NODE_BIN" ]; then echo "node not found on PATH" >&2; exit 1; fi
   echo "Building @invoker/watcher (dev fallback)..."
   ( cd "$REPO_ROOT" && pnpm --filter @invoker/watcher build )
   EXEC_START="$NODE_BIN $REPO_ROOT/packages/watcher/dist/index.js"
