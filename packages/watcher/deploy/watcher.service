@@ -1,0 +1,26 @@
+# systemd user unit for the Invoker watcher.
+#
+# Install via packages/watcher/deploy/install.sh, which renders escaped local
+# paths and copies the resulting unit to ~/.config/systemd/user/.
+#
+# The watcher is supervised INDEPENDENTLY of Invoker: Restart=always brings it
+# back if it crashes, and `loginctl enable-linger` keeps it running across
+# reboots and while the user is logged out.
+
+[Unit]
+Description=Invoker watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+# install.sh rewrites ExecStart to `invoker-watcher` when the npm binary is on
+# PATH; the monorepo node entry below is the dev fallback.
+ExecStart=__NODE__ packages/watcher/dist/index.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
