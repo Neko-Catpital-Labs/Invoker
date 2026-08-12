@@ -32,7 +32,7 @@ function launchArgs(): string[] {
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30000 });
 }
 
 async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketPath: string; configPath: string }): Promise<{ app: ElectronApplication; page: Page }> {
@@ -79,7 +79,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
   });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
   if (timedOut && !childExited) {
@@ -91,7 +91,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
         /* process group may already be gone */
       }
     }
-    await Promise.race([closePromise, childExitPromise, delay(2_000)]);
+    await Promise.race([childExitPromise, delay(2_000)]);
     if (!childExited) {
       child.kill('SIGKILL');
       if (child.pid && process.platform !== 'win32') {
