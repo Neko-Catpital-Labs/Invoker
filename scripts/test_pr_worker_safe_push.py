@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
 import tempfile
 import textwrap
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 from scripts import pr_worker_safe_push as safe_push
 
@@ -90,7 +93,7 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
 
-    def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
+    def test_moved_remote_head_exits_zero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
         self.clone_other()
         remote_after_race = self.commit(self.other, "race", "race\n")
         git(self.other, "push", "origin", "HEAD:refs/heads/main")
@@ -106,10 +109,35 @@ class SafePushTests(unittest.TestCase):
             "--tsv-marker", "fp1",
         )
 
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0)
         self.assertIn("stale-head", result.stderr)
+        self.assertIn("skipped", result.stderr)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
+
+    def test_json_ledger_write_failure_warns_without_failing_push(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        stderr = io.StringIO()
+
+        with mock.patch.object(
+            safe_push,
+            "append_json_ledger",
+            side_effect=PermissionError(13, "Permission denied", "/Users/test/.invoker/state.jsonl"),
+        ), redirect_stderr(stderr):
+            result = safe_push.main([
+                "--branch", "main",
+                "--expected-head", self.expected,
+                "--record-json-ledger", "/Users/test/.invoker/state.jsonl",
+                "--json-kind", "repair-bot-thread-settled",
+                "--json-pr", "123",
+                "--json-head-sha", self.expected,
+                "--json-key", "thread",
+                "--cwd", str(self.repo),
+            ])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(self.remote_head(), pushed)
+        self.assertIn("could not record JSONL ledger", stderr.getvalue())
 
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
