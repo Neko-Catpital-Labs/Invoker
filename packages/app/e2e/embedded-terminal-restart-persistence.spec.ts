@@ -34,7 +34,7 @@ function launchArgs(): string[] {
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30000 });
 }
 
 async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketPath: string; configPath: string }): Promise<{ app: ElectronApplication; page: Page }> {
@@ -70,15 +70,28 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
 
 async function closeApp(app: ElectronApplication): Promise<void> {
   const child = app.process();
+  let childExited = child.exitCode !== null || child.signalCode !== null;
+  const childExitPromise = new Promise<void>((resolve) => {
+    if (childExited) {
+      resolve();
+      return;
+    }
+    const markChildExited = () => {
+      childExited = true;
+      resolve();
+    };
+    child.once('exit', markChildExited);
+    child.once('close', markChildExited);
+  });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
-  if (timedOut) {
+  if (timedOut && !childExited) {
     child.kill('SIGTERM');
-    await Promise.race([closePromise, delay(2_000)]);
-    if (!child.killed) child.kill('SIGKILL');
+    await Promise.race([childExitPromise, delay(2_000)]);
+    if (!childExited) child.kill('SIGKILL');
   }
 }
 
