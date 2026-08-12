@@ -11,6 +11,10 @@ export INVOKER_ENABLE_WORKSPACE_CLEANUP=0
 
 BOOTSTRAP_STAMP="$REPO_ROOT/node_modules/.invoker-bootstrap-stamp"
 WORKSPACE_INSTALL_METADATA="$REPO_ROOT/node_modules/.modules.yaml"
+HEADLESS_MODE=0
+if [ "${1:-}" = "--headless" ]; then
+  HEADLESS_MODE=1
+fi
 
 has_bootstrap_artifacts() {
   [ -f "$WORKSPACE_INSTALL_METADATA" ] \
@@ -18,6 +22,12 @@ has_bootstrap_artifacts() {
 }
 
 bootstrap_tools_are_healthy() {
+  # Headless commands with an existing compiled client do not invoke tsup.
+  # Avoid spawning the JS toolchain on every warm-owner CLI submission; the
+  # stale-lockfile check below still forces a reinstall when dependencies move.
+  if [ "$HEADLESS_MODE" = "1" ] && [ -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
+    return 0
+  fi
   "$REPO_ROOT/node_modules/.bin/tsup" --version >/dev/null 2>&1
 }
 
@@ -101,7 +111,7 @@ if [ "$1" = "--headless" ]; then
   # Fast-path config validation in bash so malformed JSON fails immediately
   # without waiting for a dist build.
   _cfg_path="${INVOKER_REPO_CONFIG_PATH:-$HOME/.invoker/config.json}"
-  if [ -f "$_cfg_path" ]; then
+  if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ] && [ -f "$_cfg_path" ]; then
     if ! node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$_cfg_path" 2>/dev/null; then
       echo "Invalid Invoker config JSON at $_cfg_path: malformed JSON" >&2
       exit 1
