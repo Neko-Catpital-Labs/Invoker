@@ -396,7 +396,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: Merge Gate Concurrency Repro
             command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
-            runner_label: Runner_1
+            runner_label: Runner_2_4_core
           - name: Start Running MECE Repros
             command: bash scripts/test-suites/required/18-start-running-mece-repros.sh
             runner_label: Runner_2_4_core
