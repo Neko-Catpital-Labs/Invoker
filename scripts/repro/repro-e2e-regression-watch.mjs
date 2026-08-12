@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -140,10 +141,42 @@ function testWorkflowCommandMapping() {
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
+  const legacyStuckLease = defs.get('playwright / launch-dispatch-stuck-lease');
+  if (legacyStuckLease.canonicalJobName !== 'playwright / 9-of-9') {
+    fail('legacy stuck-lease job must resolve to the current 9-of-9 owner');
+  }
+  if (legacyStuckLease.verifyCommand.includes('No local verify command is mapped')) {
+    fail('legacy stuck-lease job must not use the unmapped fallback command');
+  }
+  if (!legacyStuckLease.verifyCommand.includes(
+    "INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-launch-dispatch-stuck-lease'",
+  )) {
+    fail('legacy stuck-lease job must keep the historical run label');
+  }
+  if (legacyStuckLease.verifyCommand.includes('e2e/workers-surface.spec.ts')) {
+    fail('legacy stuck-lease verify command must stay scoped to the stuck-lease specs');
+  }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
+}
+
+function testLegacyPlaywrightAliasClearsOnCanonicalSuccess() {
+  const state = loadEmptyState();
+  const legacyJob = 'playwright / launch-dispatch-stuck-lease';
+  reconcileCiRun(state, fakeRun(380, 'sha-legacy-bad', [
+    fakeJob(legacyJob, 'failure', 38),
+  ]));
+  let failures = getActionableFailures(state);
+  assertEqual(failures.map((failure) => failure.jobName), [legacyJob], 'legacy stuck-lease job is initially active');
+
+  reconcileCiRun(state, fakeRun(381, 'sha-canonical-ok', [
+    fakeJob('playwright / 9-of-9', 'success', 39),
+  ]), { jobDefinitions: buildCiJobDefinitions() });
+  failures = getActionableFailures(state);
+  assertEqual(failures.length, 0, 'canonical shard success clears legacy stuck-lease failure');
+  console.log('[repro-e2e-regression-watch] legacy playwright alias clears on canonical success: PASS');
 }
 
 function testPlanVarsAndDryRunRendering() {
@@ -228,6 +261,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testLegacyPlaywrightAliasClearsOnCanonicalSuccess();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
