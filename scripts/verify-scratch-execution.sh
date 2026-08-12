@@ -40,14 +40,27 @@ if [[ ! -f "$DB" ]]; then
   ls -la "$TMPDB" >&2 || true
   exit 1
 fi
-if ! command -v sqlite3 >/dev/null 2>&1; then
-  echo "FAIL: sqlite3 CLI is not installed on this machine" >&2
-  exit 1
-fi
+TASK_STATE="$(node - "$DB" <<'EOF'
+const { DatabaseSync } = require('node:sqlite');
 
-STATUS=$(sqlite3 "$DB" "SELECT status FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
-RUNNER_KIND=$(sqlite3 "$DB" "SELECT runner_kind FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
-WORKSPACE_PATH=$(sqlite3 "$DB" "SELECT workspace_path FROM tasks WHERE id LIKE '%/verify-scratch-command' LIMIT 1;")
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const row = db.prepare(`
+  SELECT status, runner_kind, workspace_path
+  FROM tasks
+  WHERE id LIKE '%/verify-scratch-command'
+  LIMIT 1
+`).get();
+db.close();
+
+if (!row) {
+  console.error('FAIL: scratch task row was not persisted');
+  process.exit(1);
+}
+
+process.stdout.write([row.status, row.runner_kind ?? '', row.workspace_path ?? ''].join('\t'));
+EOF
+)"
+IFS=$'\t' read -r STATUS RUNNER_KIND WORKSPACE_PATH <<<"$TASK_STATE"
 
 if [[ "$STATUS" != "completed" ]]; then
   echo "FAIL: expected scratch task to complete, got status='$STATUS'" >&2
