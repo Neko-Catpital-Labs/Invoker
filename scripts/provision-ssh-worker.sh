@@ -14,6 +14,8 @@ INVOKER_HOME="${INVOKER_HOME:-$HOME/.invoker}"
 INVOKER_ENV_FILE="${INVOKER_ENV_FILE:-$INVOKER_HOME/env.sh}"
 INVOKER_NODE_MAJOR="${INVOKER_NODE_MAJOR:-26}"
 INVOKER_PNPM_VERSION="${INVOKER_PNPM_VERSION:-10.31.0}"
+INVOKER_PNPM_INSTALL_ATTEMPTS="${INVOKER_PNPM_INSTALL_ATTEMPTS:-3}"
+INVOKER_PNPM_INSTALL_RETRY_DELAY_SECONDS="${INVOKER_PNPM_INSTALL_RETRY_DELAY_SECONDS:-2}"
 INVOKER_NODE_INSTALL_DIR="${INVOKER_NODE_INSTALL_DIR:-$HOME/.local/node-v$INVOKER_NODE_MAJOR}"
 INVOKER_NPM_GLOBAL_PREFIX="${INVOKER_NPM_GLOBAL_PREFIX:-$HOME/.local/npm-global}"
 INVOKER_AGENT_TOOLS="${INVOKER_AGENT_TOOLS:-codex,claude}"
@@ -43,6 +45,9 @@ Options:
 Environment overrides:
   INVOKER_NODE_MAJOR            Node major version. Default: 26
   INVOKER_PNPM_VERSION         pnpm version. Default: 10.31.0
+  INVOKER_PNPM_INSTALL_ATTEMPTS Maximum frozen-install attempts. Default: 3
+  INVOKER_PNPM_INSTALL_RETRY_DELAY_SECONDS
+                               Base delay between install attempts. Default: 2
   INVOKER_AGENT_TOOLS          Comma-separated list. Default: codex,claude
   INVOKER_GIT_USER_NAME        Git committer name for managed worktrees.
   INVOKER_GIT_USER_EMAIL       Git committer email for managed worktrees.
@@ -474,6 +479,31 @@ verify_repo_binaries() {
   fi
 }
 
+install_repo_dependencies() {
+  if ! [[ "$INVOKER_PNPM_INSTALL_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+    die "INVOKER_PNPM_INSTALL_ATTEMPTS must be a positive integer."
+  fi
+  if ! [[ "$INVOKER_PNPM_INSTALL_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]]; then
+    die "INVOKER_PNPM_INSTALL_RETRY_DELAY_SECONDS must be a non-negative integer."
+  fi
+
+  local attempt delay_seconds
+  for ((attempt = 1; attempt <= INVOKER_PNPM_INSTALL_ATTEMPTS; attempt += 1)); do
+    if (cd "$REPO_DIR" && pnpm install --frozen-lockfile); then
+      return 0
+    fi
+    if [[ "$attempt" -eq "$INVOKER_PNPM_INSTALL_ATTEMPTS" ]]; then
+      die "Repo dependency installation failed after $attempt attempts."
+    fi
+
+    delay_seconds=$((INVOKER_PNPM_INSTALL_RETRY_DELAY_SECONDS * attempt))
+    warn "Repo dependency installation failed on attempt $attempt/$INVOKER_PNPM_INSTALL_ATTEMPTS; retrying in ${delay_seconds}s."
+    if [[ "$delay_seconds" -gt 0 ]]; then
+      sleep "$delay_seconds"
+    fi
+  done
+}
+
 ensure_repo_install() {
   [[ -f "$REPO_DIR/package.json" ]] || die "No package.json found at $REPO_DIR"
   [[ -f "$REPO_DIR/pnpm-lock.yaml" ]] || die "No pnpm-lock.yaml found at $REPO_DIR"
@@ -489,11 +519,11 @@ ensure_repo_install() {
   fi
   if [[ ! -d "$REPO_DIR/node_modules" || "$current_stamp" != "$desired_stamp" ]]; then
     log "Installing repo dependencies in $REPO_DIR"
-    (cd "$REPO_DIR" && pnpm install --frozen-lockfile)
+    install_repo_dependencies
   fi
   verify_repo_binaries || {
     log "Repo verification failed; reinstalling dependencies."
-    (cd "$REPO_DIR" && pnpm install --frozen-lockfile)
+    install_repo_dependencies
     verify_repo_binaries
   }
   mkdir -p "$(dirname "$stamp_path")"
