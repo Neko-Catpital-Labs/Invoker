@@ -25,9 +25,26 @@ set -euo pipefail
 BASE_SHA="${BASE_SHA:-}"
 DEPTH="${FETCH_PR_DIFF_BASE_DEPTH:-1000}"
 
-git fetch --no-tags --depth="$DEPTH" origin "$BASE_REF"
+base_fetch_stderr="$(mktemp "${TMPDIR:-/tmp}/fetch-pr-diff-base-fetch.XXXXXX")"
+trap 'rm -f "$base_fetch_stderr"' EXIT
 
-merge_base="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA" 2>/dev/null || true)"
+merge_base=""
+if git fetch --no-tags --depth="$DEPTH" origin "$BASE_REF" 2>"$base_fetch_stderr"; then
+  if [ -s "$base_fetch_stderr" ]; then
+    cat "$base_fetch_stderr" >&2
+  fi
+else
+  merge_base="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA" 2>/dev/null || true)"
+  if [ -z "$merge_base" ]; then
+    cat "$base_fetch_stderr" >&2
+    exit 1
+  fi
+  echo "Warning: failed to refresh origin/$BASE_REF, but cached origin/$BASE_REF has a merge-base with $HEAD_SHA; using cached base ref for diff metadata." >&2
+fi
+
+if [ -z "$merge_base" ]; then
+  merge_base="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA" 2>/dev/null || true)"
+fi
 if [ -z "$merge_base" ]; then
   # Shallow depth didn't reach a common ancestor -- deepen once and retry.
   git fetch --no-tags --deepen="$DEPTH" origin "$BASE_REF"
