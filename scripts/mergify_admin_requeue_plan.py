@@ -54,11 +54,7 @@ except ImportError:
 
 TRUNK = "master"
 
-QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
-    "required-fast / Guardrails",
-    "required-fast / Vitest Workspace",
-    "required-fast / Submit Workflow Chain",
-})
+QUEUE_ONLY_REQUIRED_CHECK_PREFIXES = ("required-fast / ",)
 ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 STALE_QUEUE_EVENT_TTL_SECONDS = 5400
 REFRESH_STALE_QUEUE_LEDGER_KIND = "refresh-stale-queue"
@@ -103,9 +99,11 @@ class StackFacts:
 
 
 def is_queue_only_required_check(name: str) -> bool:
-    # .github/workflows/ci.yml:306-328 gates these required-fast matrix jobs to
-    # merge-queue heads, so they do not exist on ordinary PR heads.
-    return name in QUEUE_ONLY_REQUIRED_CHECKS
+    # Both required-fast matrices in .github/workflows/ci.yml are gated to
+    # merge-queue heads. Classify their shared emitted-name prefix instead of
+    # duplicating individual matrix entries here, so promoting a new entry in
+    # .mergify.yml cannot silently turn it into a missing PR-head check.
+    return name.startswith(QUEUE_ONLY_REQUIRED_CHECK_PREFIXES)
 
 
 def queue_event_queued_epoch(event: MergifyQueueEvent) -> int | None:
