@@ -20,11 +20,11 @@ The owner boundary covers writes. Normal WAL mode allows the writable owner and 
 
 ### Acceptance Rules
 
-1. **Owner process**: GUI process (main.ts) or standalone headless process (when `INVOKER_HEADLESS_STANDALONE=1`).
+1. **Owner process**: GUI process (main.ts) or standalone headless owner process. A standalone-enabled mutation may become a local writable owner only after it cannot reach a compatible owner and there is no live writable-owner marker.
 2. **GUI viewer** opens the shared database read-only when it exists. `openMainProcessDatabase({ detachedViewer: true })` falls back to process-local placeholder persistence only before `invoker.db` has been created.
 3. **Non-owner processes**: headless CLI invocations (when GUI is running).
 4. **Non-owner processes CANNOT initialize writable persistence**. Attempting to do so throws or delegates.
-5. **All non-owner mutations MUST traverse RPC** (`headless.run`, `headless.resume`, `headless.exec` channels via IpcBus).
+5. **All non-owner mutations MUST traverse RPC** (`headless.run`, `headless.resume`, `headless.exec` channels via IpcBus). `owner-serve` is the local owner bootstrap command and is exempt from delegation so it cannot delegate to itself.
 
 Implementation note: the missing-file placeholder is SQLite ephemeral storage via `SQLiteAdapter.createEphemeral()`. The raw SQLite `:memory:` sentinel is private to the data-store adapter so viewer startup code cannot accidentally create `invoker.db`.
 
@@ -57,27 +57,27 @@ This table lists every mutating command path and how the owner-boundary contract
 | `invoker:replace-task` | main.ts:1257 | N/A (owner) | `orchestrator.replaceTask()` → persistence | |
 | `invoker:delete-workflow` | main.ts:867 | N/A (owner) | `orchestrator.deleteWorkflow()` → persistence | |
 | `invoker:delete-all-workflows` | main.ts:856 | N/A (owner) | `orchestrator.deleteAllWorkflows()` → persistence | |
-| **Headless Commands** (delegate when GUI present, standalone otherwise) |
-| `run` | headless.ts:565 | **Yes** (line 356) | `tryDelegateRun()` → IPC `headless.run` (owner handles) OR standalone opens writable via `initServices({ readOnly: false })` | Delegation timeout = 5s |
-| `resume` | headless.ts:620 | **Yes** (line 361) | `tryDelegateResume()` → IPC `headless.resume` OR standalone writable | |
-| `retry-task` | headless.ts:273 | **Yes** (line 365) | `tryDelegateExec()` → IPC `headless.exec` OR standalone writable | Task-scoped retry uses the default 5s delegation timeout |
-| `recreate` | headless.ts:769 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `recreate-task` | headless.ts:788 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `rebase-retry` / `rebase-recreate` | headless.ts:296 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | Workflow-scoped fresh-base commands delegate with a 60s timeout; task-scoped fresh-base commands stay at 5s |
-| `approve` | headless.ts:666 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `reject` | headless.ts:681 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `input` | headless.ts:688 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `select` | headless.ts:695 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `fix` | headless.ts:722 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `resolve-conflict` | headless.ts:742 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `cancel` | headless.ts:967 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `cancel-workflow` | headless.ts:978 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `delete` | headless.ts:1005 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `delete-all` | headless.ts:434 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `set command` | headless.ts:829 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `set executor` | headless.ts:841 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `set agent` | headless.ts:853 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `set merge-mode` | headless.ts:1011 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | Allowed modes: `manual | automatic | external_review` |
+| **Headless Commands** (owner-first, including when `INVOKER_HEADLESS_STANDALONE=1`; `owner-serve` remains local) |
+| `run` | headless.ts:565 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateRun()` → IPC `headless.run` when a compatible owner is reachable; otherwise local writable fallback only when no live writable-owner marker exists | Delegation timeout = 5s |
+| `resume` | headless.ts:620 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateResume()` → IPC `headless.resume` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `retry-task` | headless.ts:273 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` → IPC `headless.exec` when a compatible owner is reachable; otherwise marker-gated local writable fallback | Task-scoped retry uses the default 5s delegation timeout |
+| `recreate` | headless.ts:769 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `recreate-task` | headless.ts:788 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `rebase-retry` / `rebase-recreate` | headless.ts:296 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | Workflow-scoped fresh-base commands delegate with a 60s timeout; task-scoped fresh-base commands stay at 5s |
+| `approve` | headless.ts:666 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `reject` | headless.ts:681 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `input` | headless.ts:688 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `select` | headless.ts:695 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `fix` | headless.ts:722 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `resolve-conflict` | headless.ts:742 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `cancel` | headless.ts:967 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `cancel-workflow` | headless.ts:978 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `delete` | headless.ts:1005 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `delete-all` | headless.ts:434 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `set command` | headless.ts:829 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `set executor` | headless.ts:841 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `set agent` | headless.ts:853 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | |
+| `set merge-mode` | headless.ts:1011 | **Yes** (`headless-client.ts:827-839`, `main.ts:996-1020`) | `tryDelegateExec()` when a compatible owner is reachable; otherwise marker-gated local writable fallback | Allowed modes: `manual | automatic | external_review` |
 | **Headless Read-Only Commands** | | | | delegate to the owner when present; open `readOnly` only when none |
 | `query workflows` | headless.ts:193 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
 | `query tasks` | headless.ts:206 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
@@ -105,24 +105,25 @@ This table lists every mutating command path and how the owner-boundary contract
 
 | Component | File | Line(s) | Enforcement Mechanism |
 |-----------|------|---------|----------------------|
-| **GUI main process** | packages/app/src/main.ts | 605-613 | `initServices()` opens writable DB (no `readOnly` flag) |
-| **Headless delegation** | packages/app/src/main.ts, packages/app/src/headless-delegation.ts | 346-381, 68-145 | `tryDelegateRun()`, `tryDelegateResume()`, `tryDelegateExec()` send IPC request to owner; `run`, `resume`, and default `exec` delegation use 5s timeout, while workflow-scoped `rebase-retry` / `rebase-recreate` use 60s before standalone fallback |
-| **Headless standalone** | packages/app/src/main.ts | 386 | `initServices({ readOnly: isHeadlessReadOnlyCommand(cliArgs) })` — read-only for query commands, writable for standalone mutating commands (when `INVOKER_HEADLESS_STANDALONE=1` or no GUI) |
+| **GUI main process** | packages/app/src/main.ts | 743-760 | `initServices()` opens writable DB (no `readOnly` flag) |
+| **Headless delegation** | packages/app/src/headless-client.ts, packages/app/src/main.ts, packages/app/src/headless-delegation.ts | 160-188 / 704-765 / 827-839; 925-971 / 996-1020; 68-145 | `tryDelegateRun()`, `tryDelegateResume()`, `tryDelegateExec()` send IPC requests to a compatible owner before writable fallback. Standalone-enabled mutations use the same owner-first rule and fail closed if a live writable-owner marker exists but no compatible owner can be reached. |
+| **Headless standalone** | packages/app/src/headless-client.ts, packages/app/src/main.ts | 827-839; 981-982 / 996-1020 / 1150-1155 | `INVOKER_HEADLESS_STANDALONE=1` permits local writable execution only after existing-owner delegation fails and `hasLiveWritableOwnerMarker()` is false; `owner-serve` stays local and opens the writable owner. |
 | **SQLiteAdapter read-only gate** | packages/persistence/src/sqlite-adapter.ts | 113-117 | `ensureWritable()` throws if `readOnly: true` and a write is attempted |
-| **Delegation handlers (owner)** | packages/app/src/main.ts | 618-674 | `headless.run`, `headless.resume`, `headless.exec` IPC handlers receive delegated commands, execute via owner's writable orchestrator/persistence |
+| **Delegation handlers (owner)** | packages/app/src/main.ts | 1873-1978 | `headless.run`, `headless.resume`, `headless.exec` IPC handlers receive delegated commands, execute via owner's writable orchestrator/persistence |
 
 ### Critical Guarantees
 
-1. **GUI always owns DB**: When GUI is running, `initServices()` (main.ts:605) opens writable persistence. All IPC handlers mutate via this owner instance.
-2. **Headless delegates by default**: When GUI is present, headless commands try delegation first. `run`, `resume`, and most `headless.exec` commands use a 5s timeout; workflow-scoped `rebase-retry` and `rebase-recreate` use 60s. Only if delegation fails (no GUI or timeout) does headless open its own writable DB.
-3. **Read-only commands never write**: `query` subcommands delegate reads to the owner when one is present; otherwise they open `readOnly: true` persistence (main.ts:386).
-4. **Standalone escape hatch**: `INVOKER_HEADLESS_STANDALONE=1` skips delegation, allowing headless to own the DB (main.ts:348-349).
-5. **Delegation timeout prevents deadlock**: IPC delegation is bounded so headless does not hang if GUI is unresponsive. The default is 5s, with a 60s allowance for workflow-scoped `rebase-retry` and `rebase-recreate` command shapes in `headless.exec`.
+1. **GUI always owns DB**: When GUI is running, `initServices()` (main.ts:743) opens writable persistence. All IPC handlers mutate via this owner instance.
+2. **Headless delegates by default**: When GUI or a standalone owner is present, headless mutations try delegation first. `run`, `resume`, and most `headless.exec` commands use a 5s timeout; workflow-scoped `rebase-retry` and `rebase-recreate` use 60s.
+3. **Read-only commands never write**: `query` subcommands delegate reads to the owner when one is present; otherwise they open `readOnly: true` persistence.
+4. **Standalone is owner-first, not a bypass**: `INVOKER_HEADLESS_STANDALONE=1` first routes mutating commands to a compatible reachable owner. Local writable fallback is allowed only when no compatible owner responds and `hasLiveWritableOwnerMarker()` is false. If a live writable-owner marker exists but IPC cannot reach a compatible owner, the command exits non-zero and refuses writable fallback.
+5. **`owner-serve` cannot delegate to itself**: `owner-serve` remains local owner startup. Delegation guards exclude it in both `headless-client.ts` and `main.ts`.
+6. **Delegation timeout prevents deadlock**: IPC delegation is bounded so headless does not hang if the owner is unresponsive. The default is 5s, with a 60s allowance for workflow-scoped `rebase-retry` and `rebase-recreate` command shapes in `headless.exec`.
 
 ### Test Coverage
 
 - **Concurrent write safety**: Run GUI + headless concurrently (`pnpm test packages/app` includes `concurrent-writes.test.ts` if present).
-- **Delegation flow**: Verify `tryDelegateRun()` succeeds when GUI is running, falls back to standalone when GUI is not running.
+- **Delegation flow**: Verify `tryDelegateRun()`, `tryDelegateResume()`, and `tryDelegateExec()` route standalone-enabled mutations to a reachable compatible owner, allow local fallback only without a live owner marker, fail closed when a live marker is present but IPC is unavailable, and leave `owner-serve` local.
 - **Read-only enforcement**: Attempt write on `readOnly: true` adapter, expect throw.
 - **Historical failure-mode repro**: `bash scripts/repro/repro-sqljs-last-writer-wins.sh` demonstrates last-writer-wins when two writable adapters bypass the owner boundary.
 
