@@ -682,6 +682,7 @@ jobs:
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
               e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
               e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
