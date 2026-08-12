@@ -54,6 +54,15 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+const LEGACY_PLAYWRIGHT_JOB_FILES = new Map([
+  [
+    'playwright / launch-dispatch-stuck-lease',
+    [
+      'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+      'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+    ],
+  ],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -261,21 +270,25 @@ function withBuildPrefix(command, needsBuild) {
   return needsBuild ? `${BUILD_APP_COMMAND} && ${command}` : command;
 }
 
+function playwrightCommand(labelPrefix, matrix, files = matrix.files) {
+  const command = [
+    'env',
+    `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
+    'INVOKER_PLAYWRIGHT_WORKERS=1',
+    `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(files ?? '').trim().replace(/\s+/g, ' '))}`,
+    `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    'bash scripts/test-suites/optional/40-playwright-app.sh',
+  ].join(' ');
+  return withBuildPrefix(command, true);
+}
+
 function commandForJob(jobId, job, matrix) {
   const needsBuild = jobDownloadsBuildArtifacts(job);
   if (jobId === 'build-artifacts') return BUILD_APP_COMMAND;
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
     const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
-      'env',
-      `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
-      'INVOKER_PLAYWRIGHT_WORKERS=1',
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
-      `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
-      'bash scripts/test-suites/optional/40-playwright-app.sh',
-    ].join(' ');
-    return withBuildPrefix(command, true);
+    return playwrightCommand(labelPrefix, matrix);
   }
   if (jobId === 'e2e-proof') {
     const command = [
@@ -326,6 +339,27 @@ function commandForJob(jobId, job, matrix) {
   return '';
 }
 
+function registerLegacyPlaywrightJobDefinitions(definitions, workflow) {
+  const playwrightJob = workflow.jobs?.playwright;
+  if (!playwrightJob) return;
+  const matrices = expandMatrix(playwrightJob.strategy?.matrix);
+
+  for (const [legacyJobName, files] of LEGACY_PLAYWRIGHT_JOB_FILES) {
+    if (definitions.has(legacyJobName)) continue;
+    const matchingMatrix = matrices.find((matrix) => {
+      const matrixFiles = new Set(String(matrix.files ?? '').trim().split(/\s+/).filter(Boolean));
+      return files.every((file) => matrixFiles.has(file));
+    });
+    const matrix = matchingMatrix ?? { name: legacyJobName.replace(/^playwright \//, ''), files: files.join(' ') };
+    definitions.set(legacyJobName, {
+      jobId: 'playwright',
+      jobName: legacyJobName,
+      matrix,
+      verifyCommand: playwrightCommand('ci-playwright', matrix, files.join(' ')),
+    });
+  }
+}
+
 export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8'))) {
   const definitions = new Map();
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -340,6 +374,7 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  registerLegacyPlaywrightJobDefinitions(definitions, workflow);
   return definitions;
 }
 
