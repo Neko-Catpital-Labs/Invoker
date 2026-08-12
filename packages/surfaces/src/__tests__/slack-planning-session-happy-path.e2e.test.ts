@@ -72,7 +72,10 @@ vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
       lastTurnReasoning: [] as string[],
       init: vi.fn().mockResolvedValue(undefined),
       getDraftedPlan: () => instance.lastTurnDraftPlanText,
-      runPlanConversion: vi.fn().mockResolvedValue(''),
+      runPlanConversion: vi.fn().mockImplementation(async () => {
+        instance.lastTurnDraftPlanText = nextDraftPlanText;
+        return nextReply;
+      }),
       sendMessage: vi.fn().mockImplementation(async () => {
         instance.lastTurnDraftPlanText = nextDraftPlanText;
         return nextReply;
@@ -136,6 +139,13 @@ function actionHandler(surface: SlackSurface, actionId: string): Function {
   const app = surface.getApp() as any;
   const handler = app._actionHandlers.find((h: MockHandler) => h.pattern === actionId)?.handler;
   if (!handler) throw new Error(`${actionId} action handler not registered`);
+  return handler;
+}
+
+function messageHandler(surface: SlackSurface): Function {
+  const app = surface.getApp() as any;
+  const handler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'message')?.handler;
+  if (!handler) throw new Error('message handler not registered');
   return handler;
 }
 
@@ -215,10 +225,12 @@ describe('slack planning session happy path', () => {
       channelRepoBindings: repos,
     });
     const approve = actionHandler(surface, 'plan_draft_approve');
+    const message = messageHandler(surface);
 
     for (const [channelId, repoUrl] of Object.entries(repos)) {
-      nextReply = 'Draft ready.';
-      nextDraftPlanText = `name: "Channel pinned"
+      nextReply = 'Let me scope that first.';
+      nextDraftPlanText = null;
+      const draftPlanText = `name: "Channel pinned"
 repoUrl: "https://github.com/wrong/root"
 workflows:
   - name: Child workflow
@@ -232,8 +244,17 @@ workflows:
       const threadTs = `${channelId}-thread`;
 
       await mentionHandler(surface)({
-        event: { text: '<@UBOT> draft a channel-pinned plan', ts: threadTs, user: 'U1', channel: channelId },
+        event: { text: '<@UBOT> discuss channel-pinned work', ts: threadTs, user: 'U1', channel: channelId },
         say: vi.fn().mockResolvedValue({ ts: `${threadTs}-card` }),
+      });
+      expect(slackPlanDraftRepo.getReady(channelId, threadTs)).toBeUndefined();
+      expect(onCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'start_plan', repoUrl }));
+
+      nextReply = 'Draft ready.';
+      nextDraftPlanText = draftPlanText;
+      await message({
+        event: { text: '/plan', ts: `${threadTs}-plan`, thread_ts: threadTs, user: 'U1', channel: channelId },
+        say: vi.fn().mockResolvedValue({ ts: `${threadTs}-review` }),
       });
 
       const draft = slackPlanDraftRepo.getReady(channelId, threadTs);
@@ -257,5 +278,10 @@ workflows:
         planText: draft!.planText,
       }));
     }
+
+    expect(onCommand.mock.calls.map(([command]) => (command as any).repoUrl)).toEqual([
+      'https://github.com/Neko-Catpital-Labs/Invoker',
+      'https://github.com/EdbertChan/notarepo',
+    ]);
   });
 });

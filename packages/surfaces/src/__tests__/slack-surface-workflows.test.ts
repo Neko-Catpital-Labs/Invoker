@@ -1158,6 +1158,8 @@ describe('lobby verb routing', () => {
 
       expect(client.conversations.create).toHaveBeenNthCalledWith(1, { name: 'invoker-repo', is_private: false });
       expect(client.conversations.create).toHaveBeenNthCalledWith(2, { name: 'rips-clone-mobile-repo', is_private: false });
+      expect(client.conversations.invite).toHaveBeenNthCalledWith(1, { channel: 'C_INVOKER_REPO', users: 'U_ADMIN' });
+      expect(client.conversations.invite).toHaveBeenNthCalledWith(2, { channel: 'C_RIPS_REPO', users: 'U_ADMIN' });
       expect(setupSay.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('multiple repository URLs');
       expect(workflowChannelRepo.getByChannelId('C_INVOKER_REPO')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
       expect(workflowChannelRepo.getByChannelId('C_RIPS_REPO')?.repoUrl).toBe('https://github.com/EdbertChan/notarepo');
@@ -1205,6 +1207,7 @@ describe('lobby verb routing', () => {
       });
 
       expect(client.conversations.create).not.toHaveBeenCalled();
+      expect(client.conversations.invite).not.toHaveBeenCalled();
       expect(workflowChannelRepo.list()).toHaveLength(0);
       expect(planConversationConfigs).toHaveLength(0);
       expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Permission denied') }));
@@ -1234,7 +1237,75 @@ describe('lobby verb routing', () => {
       });
 
       expect(client.conversations.list).toHaveBeenCalledWith({ types: 'public_channel', limit: 1000 });
+      expect(client.conversations.invite).toHaveBeenCalledWith({ channel: 'C_EXISTING', users: 'U_ADMIN' });
       expect(workflowChannelRepo.getByChannelId('C_EXISTING')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('treats public channel requester invite idempotency errors as successful setup', async () => {
+    const { adapter, workflowChannelRepo, surface } = await persistentLobbySurface({ adminUserIds: ['U_ADMIN'] });
+    const client = (surface.getApp() as any).client;
+    client.conversations.create
+      .mockResolvedValueOnce({ channel: { id: 'C_ALREADY' } })
+      .mockResolvedValueOnce({ channel: { id: 'C_SELF' } });
+    client.conversations.invite
+      .mockRejectedValueOnce({ data: { error: 'already_in_channel' } })
+      .mockRejectedValueOnce({ data: { error: 'cant_invite_self' } });
+
+    try {
+      await surface.start(async () => {});
+      const say = vi.fn().mockResolvedValue({ ts: 'ok' });
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> setup #invoker-repo https://github.com/Neko-Catpital-Labs/Invoker #rips-clone-mobile-repo https://github.com/EdbertChan/notarepo',
+          ts: 'setup-idempotent',
+          user: 'U_ADMIN',
+          channel: 'CLOBBY',
+        },
+        say,
+      });
+
+      expect(client.conversations.invite).toHaveBeenNthCalledWith(1, { channel: 'C_ALREADY', users: 'U_ADMIN' });
+      expect(client.conversations.invite).toHaveBeenNthCalledWith(2, { channel: 'C_SELF', users: 'U_ADMIN' });
+      expect(workflowChannelRepo.getByChannelId('C_ALREADY')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+      expect(workflowChannelRepo.getByChannelId('C_SELF')?.repoUrl).toBe('https://github.com/EdbertChan/notarepo');
+      const text = say.mock.calls.map((call) => call[0].text).join('\n');
+      expect(text).toContain('Configured 2 channel repository defaults');
+      expect(text).not.toContain('could not invite');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('keeps a public channel binding but reports partial success when requester invite fails', async () => {
+    const { adapter, workflowChannelRepo, surface } = await persistentLobbySurface({ adminUserIds: ['U_ADMIN'] });
+    const client = (surface.getApp() as any).client;
+    client.conversations.create.mockResolvedValueOnce({ channel: { id: 'C_BOUND' } });
+    client.conversations.invite.mockRejectedValueOnce({ data: { error: 'missing_scope' } });
+
+    try {
+      await surface.start(async () => {});
+      const say = vi.fn().mockResolvedValue({ ts: 'partial' });
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> map #invoker-repo to https://github.com/Neko-Catpital-Labs/Invoker',
+          ts: 'setup-invite-failed',
+          user: 'U_ADMIN',
+          channel: 'CLOBBY',
+        },
+        say,
+      });
+
+      expect(client.conversations.invite).toHaveBeenCalledWith({ channel: 'C_BOUND', users: 'U_ADMIN' });
+      expect(workflowChannelRepo.getByChannelId('C_BOUND')?.repoUrl).toBe('https://github.com/Neko-Catpital-Labs/Invoker');
+      const text = say.mock.calls.map((call) => call[0].text).join('\n');
+      expect(text).toContain('Configured 1 channel repository default');
+      expect(text).toContain('could not invite you to <#C_BOUND> (missing_scope)');
+      expect(text).toContain('Ask a workspace admin to invite you');
     } finally {
       await surface.stop();
       adapter.close();
