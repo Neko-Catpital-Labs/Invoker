@@ -1,10 +1,18 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
+
+const tempDirs: string[] = [];
+
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function captureProcessOutput() {
   let stdout = '';
@@ -33,6 +41,9 @@ describe('invoker-cli mutations', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
     if (previousInvokerDbDir === undefined) {
       delete process.env.INVOKER_DB_DIR;
     } else {
@@ -204,7 +215,7 @@ describe('invoker-cli mutations', () => {
 
   it('dry-runs retry-tasks from an empty standalone DB directory without an owner', async () => {
     const output = captureProcessOutput();
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-mutations-empty-'));
+    const dbDir = makeTempDir('invoker-cli-mutations-empty-');
     process.env.INVOKER_DB_DIR = dbDir;
     const bus = new LocalBus();
 
