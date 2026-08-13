@@ -35,6 +35,17 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+function assertInstallsLibatomicBeforeSetupNode(jobName) {
+  const job = jobs[jobName];
+  assert(job, `Missing CI job ${jobName}`);
+  const steps = job.steps ?? [];
+  const setupNodeIndex = steps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+  const libatomicIndex = steps.findIndex((step) => String(step.run ?? '').includes('libatomic1'));
+  assert(setupNodeIndex >= 0, `${jobName} must use actions/setup-node`);
+  assert(libatomicIndex >= 0, `${jobName} must install libatomic1 before setting up Node 26`);
+  assert(libatomicIndex < setupNodeIndex, `${jobName} must install libatomic1 before actions/setup-node`);
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -53,6 +64,10 @@ assert(
   dependencyCruiseEntry.runner_label === 'Runner_2_4_core',
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
 );
+assertInstallsLibatomicBeforeSetupNode('build-artifacts');
+assertInstallsLibatomicBeforeSetupNode('quality-required');
+assertInstallsLibatomicBeforeSetupNode('typescript-types');
+assertInstallsLibatomicBeforeSetupNode('ui-vitest');
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
