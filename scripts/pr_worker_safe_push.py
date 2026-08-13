@@ -3,21 +3,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+GITHUB_REMOTE_RE = re.compile(
+    r"(?:^git@github\.com:|^ssh://git@github\.com/|^https://github\.com/)"
+    r"(?P<slug>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
+TERMINAL_PR_STATES = frozenset({"CLOSED", "MERGED"})
 
 
 class SafePushError(RuntimeError):
     def __init__(self, message: str, *, exit_code: int = 1):
         super().__init__(message)
         self.exit_code = exit_code
+
+
+@dataclass(frozen=True)
+class SafePushOutcome:
+    head: str
+    pushed: bool
+    message: str
 
 
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
@@ -66,6 +82,81 @@ def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | 
         if len(parts) >= 2 and parts[1] == ref:
             return parts[0].lower()
     return None
+
+
+def github_repo_slug(remote: str = "origin", *, cwd: Path | str | None = None) -> str | None:
+    env_value = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if GITHUB_REPOSITORY_RE.fullmatch(env_value):
+        return env_value
+
+    candidates = [remote]
+    try:
+        candidates.append(run_git(["remote", "get-url", remote], cwd=cwd))
+    except SafePushError:
+        pass
+    for candidate in candidates:
+        match = GITHUB_REMOTE_RE.fullmatch(candidate.strip())
+        if match:
+            return match.group("slug").removesuffix(".git")
+    return None
+
+
+def github_pr_state(
+    pr_number: int,
+    *,
+    remote: str = "origin",
+    cwd: Path | str | None = None,
+) -> Mapping[str, object] | None:
+    repo = github_repo_slug(remote, cwd=cwd)
+    gh = shutil.which("gh")
+    if not repo or not gh:
+        return None
+    completed = subprocess.run(
+        [
+            gh,
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--json",
+            "state,headRefName,headRefOid",
+        ],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return None
+    try:
+        decoded = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def terminal_pr_noop_message(
+    *,
+    pr_number: int | None,
+    branch: str,
+    remote: str = "origin",
+    cwd: Path | str | None = None,
+) -> str | None:
+    if pr_number is None:
+        return None
+    branch_name = normalize_branch(branch)
+    state = github_pr_state(pr_number, remote=remote, cwd=cwd)
+    if not state or str(state.get("state", "")).upper() not in TERMINAL_PR_STATES:
+        return None
+    head_ref = state.get("headRefName")
+    if isinstance(head_ref, str):
+        try:
+            if normalize_branch(head_ref) != branch_name:
+                return None
+        except SafePushError:
+            return None
+    return f"PR #{pr_number} is {str(state['state']).lower()}; refs/heads/{branch_name} will not be pushed"
 
 
 def local_head(*, cwd: Path | str | None = None) -> str:
@@ -120,7 +211,45 @@ def safe_push(
     return pushed
 
 
+def safe_push_cli(
+    *,
+    branch: str,
+    expected_head: str | None = None,
+    expect_missing: bool = False,
+    remote: str = "origin",
+    cwd: Path | str | None = None,
+    pr_number: int | None = None,
+) -> SafePushOutcome:
+    terminal_message = terminal_pr_noop_message(pr_number=pr_number, branch=branch, remote=remote, cwd=cwd)
+    if terminal_message:
+        expected = local_head(cwd=cwd) if expect_missing else validate_expected_head(expected_head or "")
+        return SafePushOutcome(head=expected, pushed=False, message=terminal_message)
+    pushed = safe_push(
+        branch=branch,
+        expected_head=expected_head,
+        expect_missing=expect_missing,
+        remote=remote,
+        cwd=cwd,
+    )
+    return SafePushOutcome(
+        head=pushed,
+        pushed=True,
+        message=f"pushed refs/heads/{normalize_branch(branch)} to {pushed}",
+    )
+
+
+def resolve_ledger_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    parts = expanded.parts
+    if len(parts) >= 4 and parts[0] == "/" and parts[1] == "Users":
+        foreign_home = Path("/", parts[1], parts[2])
+        if not foreign_home.exists():
+            return Path.home().joinpath(*parts[3:])
+    return expanded
+
+
 def append_tsv_ledger(path: Path, *, kind: str, key: str, marker: str, epoch: int | None = None) -> None:
+    path = resolve_ledger_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(f"{kind}\t{key}\t{marker}\t{epoch if epoch is not None else int(time.time())}\n")
@@ -136,6 +265,7 @@ def append_json_ledger(
     epoch: int | None = None,
     meta: Mapping[str, object] | None = None,
 ) -> None:
+    path = resolve_ledger_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     row: dict[str, object] = {
         "kind": kind,
@@ -184,12 +314,13 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
+        outcome = safe_push_cli(
             branch=args.branch,
             expected_head=args.expected_head,
             expect_missing=args.expect_missing,
             remote=args.remote,
             cwd=Path(args.cwd),
+            pr_number=args.json_pr,
         )
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
@@ -224,7 +355,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        print(f"pr-worker-safe-push: {outcome.message}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)

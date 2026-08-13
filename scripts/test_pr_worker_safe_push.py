@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import pr_worker_safe_push as safe_push
 
@@ -168,6 +170,96 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
+
+    def write_fake_gh(self, *, state: str, head_ref_name: str, head_ref_oid: str | None = None) -> Path:
+        wrapper_dir = self.root / f"fake-gh-{state}-{head_ref_name.replace('/', '-')}"
+        wrapper_dir.mkdir()
+        wrapper = wrapper_dir / "gh"
+        payload = {
+            "state": state,
+            "headRefName": head_ref_name,
+            "headRefOid": head_ref_oid or self.expected,
+        }
+        wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env python3
+                import json
+                print(json.dumps({payload!r}))
+                """
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        return wrapper_dir
+
+    def test_terminal_pr_records_json_ledger_without_pushing_deleted_branch(self) -> None:
+        git(self.repo, "checkout", "-B", "stack/merged")
+        expected = self.commit(self.repo, "merged-head", "merged\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/stack/merged")
+        pushed = self.commit(self.repo, "repair-after-merge", "repair\n")
+        del pushed
+        git(self.repo, "push", "origin", ":refs/heads/stack/merged")
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.write_fake_gh(state="MERGED", head_ref_name="stack/merged", head_ref_oid=expected)
+
+        result = self.invoke_helper(
+            "--branch", "stack/merged",
+            "--expected-head", expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "conflict-repair-settled",
+            "--json-pr", "123",
+            "--json-head-sha", expected,
+            "--json-key", "conflict:123",
+            env={
+                "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+                "GITHUB_REPOSITORY": "owner/repo",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("will not be pushed", result.stdout)
+        self.assertIsNone(safe_push.remote_branch_sha("stack/merged", remote="origin", cwd=self.repo))
+        row = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(row["kind"], "conflict-repair-settled")
+        self.assertEqual(row["pr"], 123)
+        self.assertEqual(row["headSha"], expected)
+
+    def test_terminal_pr_with_mismatched_head_branch_does_not_bypass_stale_head(self) -> None:
+        git(self.repo, "checkout", "-B", "stack/missing")
+        expected = self.commit(self.repo, "missing-head", "missing\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/stack/missing")
+        self.commit(self.repo, "repair-after-close", "repair\n")
+        git(self.repo, "push", "origin", ":refs/heads/stack/missing")
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.write_fake_gh(state="MERGED", head_ref_name="stack/other", head_ref_oid=expected)
+
+        result = self.invoke_helper(
+            "--branch", "stack/missing",
+            "--expected-head", expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "conflict-repair-settled",
+            "--json-pr", "123",
+            "--json-head-sha", expected,
+            "--json-key", "conflict:123",
+            env={
+                "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+                "GITHUB_REPOSITORY": "owner/repo",
+            },
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stale-head", result.stderr)
+        self.assertFalse(ledger.exists())
+
+    def test_foreign_macos_ledger_path_maps_to_worker_home_when_home_is_missing(self) -> None:
+        worker_home = self.root / "worker-home"
+        worker_home.mkdir()
+        with mock.patch.dict(os.environ, {"HOME": str(worker_home)}):
+            with mock.patch.object(Path, "exists", return_value=False):
+                resolved = safe_push.resolve_ledger_path(Path("/Users/alice/.invoker/state.jsonl"))
+
+        self.assertEqual(resolved, worker_home / ".invoker" / "state.jsonl")
 
 
 if __name__ == "__main__":
