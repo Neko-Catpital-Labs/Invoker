@@ -170,14 +170,26 @@ function splitFencedMessageSegments(text: string): MessageSegment[] {
   return segments.length > 0 ? segments : [{ kind: 'prose', text }];
 }
 
-function MessageBody({ text, toneClass }: { text: string; toneClass: string }): JSX.Element {
+function MessageBody({
+  text,
+  toneClass,
+  onCodeDetailsToggle,
+}: {
+  text: string;
+  toneClass: string;
+  onCodeDetailsToggle?: (open: boolean) => void;
+}): JSX.Element {
   const segments = splitFencedMessageSegments(text);
   return (
     <div className={`space-y-3 ${toneClass}`}>
       {segments.map((segment, index) => {
         if (segment.kind === 'code') {
           return (
-            <details key={`code-${index}`} className="rounded-lg border border-border bg-card/80">
+            <details
+              key={`code-${index}`}
+              onToggle={(event) => onCodeDetailsToggle?.(event.currentTarget.open)}
+              className="rounded-lg border border-border bg-card/80"
+            >
               <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
                 {segment.language ? `View ${segment.language.toUpperCase()}` : 'View details'}
               </summary>
@@ -562,6 +574,7 @@ export function InvokerTerminal({
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
   const [showComposerOptions, setShowComposerOptions] = useState(false);
+  const [expandedCodeDetailsCount, setExpandedCodeDetailsCount] = useState(0);
   const inputSequenceRef = useRef(0);
   const latestLineCountRef = useRef(lines.length);
   const perfContextRef = useRef({ activeConversationKey, expanded });
@@ -656,6 +669,10 @@ export function InvokerTerminal({
     if (!transcript) return;
     setShouldFollowTranscript(isTranscriptNearBottom(transcript));
   }, []);
+
+  useEffect(() => {
+    setExpandedCodeDetailsCount(0);
+  }, [activeConversationKey, expanded, lines.length]);
 
   useEffect(() => {
     if (mode === 'chat' && !busy && !readOnly) {
@@ -772,7 +789,13 @@ export function InvokerTerminal({
             <div className="text-[11px] font-medium tracking-wide text-muted-foreground">
               {roleLabel(line.role)}
             </div>
-            <MessageBody text={line.text} toneClass={toneClass} />
+            <MessageBody
+              text={line.text}
+              toneClass={toneClass}
+              onCodeDetailsToggle={(open) => {
+                setExpandedCodeDetailsCount((count) => Math.max(0, count + (open ? 1 : -1)));
+              }}
+            />
           </div>
         );
       })}
@@ -901,7 +924,7 @@ export function InvokerTerminal({
             )}
           </div>
 
-          {draftPlanAvailable && !readOnly && (
+          {draftPlanAvailable && expandedCodeDetailsCount === 0 && !readOnly && (
             <div
               data-testid="invoker-terminal-ready-bar"
               className="sticky bottom-0 z-10 border-t border-border bg-card/80 px-4 py-3.5 text-sm text-foreground backdrop-blur-sm"

@@ -1708,6 +1708,29 @@ describe('Invoker terminal (component)', () => {
     );
   });
 
+  it('hides the draft ready bar while expanded YAML details are open', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.\n\n```yaml\nname: Mock Plan\ntasks: []\n```',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
+      draftPlanText: 'name: Mock Plan\ntasks: []\n',
+    })) as any;
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the full plan');
+
+    await screen.findByTestId('invoker-terminal-ready-bar');
+    fireEvent.click(await screen.findByText('View YAML'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('View YAML'));
+    expect(await screen.findByTestId('invoker-terminal-ready-bar')).toBeInTheDocument();
+  });
+
   it('submits a draft and starts ready work when the user types submit', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
