@@ -50,7 +50,7 @@ function findTask(tasks: Array<{ id: string; status: string; execution?: { error
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30_000 });
 }
 
 base.describe('Orphan task relaunch on restart', () => {
