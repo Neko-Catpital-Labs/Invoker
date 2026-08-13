@@ -164,15 +164,54 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Install Node runtime system dependencies
+        shell: bash
         run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            SUDO=""
-            if command -v sudo >/dev/null 2>&1; then
-              SUDO="sudo"
+          set -euo pipefail
+
+          has_libatomic() {
+            if command -v ldconfig >/dev/null 2>&1; then
+              ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'
+              return
             fi
-            $SUDO apt-get update
-            $SUDO apt-get install -y libatomic1
+            find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
+          }
+
+          if ! command -v apt-get >/dev/null 2>&1 || has_libatomic; then
+            exit 0
           fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y libatomic1
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y libatomic1
+            exit 0
+          fi
+
+          libatomic_dir="${RUNNER_TEMP:-/tmp}/node-runtime-system-deps"
+          rm -rf "$libatomic_dir"
+          mkdir -p "$libatomic_dir/apt-state/lists/partial" "$libatomic_dir/apt-cache/archives/partial"
+          (
+            cd "$libatomic_dir"
+            apt_options=(
+              -o "Dir::State=$libatomic_dir/apt-state"
+              -o "Dir::State::status=/var/lib/dpkg/status"
+              -o "Dir::Cache=$libatomic_dir/apt-cache"
+            )
+            apt-get "${apt_options[@]}" update
+            apt-get "${apt_options[@]}" download libatomic1
+            dpkg-deb -x ./*.deb root
+          )
+          libatomic_path="$(find "$libatomic_dir/root" -type f -name 'libatomic.so.1*' -printf '%h\n' | head -n 1)"
+          if [ -z "$libatomic_path" ]; then
+            echo "libatomic1 package did not contain libatomic.so.1" >&2
+            exit 1
+          fi
+          echo "LD_LIBRARY_PATH=$libatomic_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
