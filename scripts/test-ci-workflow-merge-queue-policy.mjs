@@ -73,6 +73,16 @@ assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
 );
+const uiVitestLibatomicScript = String(uiVitestSteps[uiVitestLibatomicIndex]?.run ?? '');
+assert(
+  uiVitestLibatomicScript.includes('sudo -n true'),
+  'ui-vitest libatomic install must not prompt for a sudo password on self-hosted runners',
+);
+assert(
+  uiVitestLibatomicScript.includes('apt-get download libatomic1')
+    && uiVitestLibatomicScript.includes('LD_LIBRARY_PATH'),
+  'ui-vitest must fall back to a user-space libatomic1 when apt install is unavailable',
+);
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');

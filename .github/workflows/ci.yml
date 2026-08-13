@@ -149,7 +149,7 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Reclaim workspace
@@ -165,13 +165,37 @@ jobs:
 
       - name: Install Node runtime system dependencies
         run: |
+          set -euo pipefail
+
+          if command -v ldconfig >/dev/null 2>&1 && ldconfig -p | grep -q 'libatomic.so.1'; then
+            exit 0
+          fi
+
           if command -v apt-get >/dev/null 2>&1; then
-            SUDO=""
-            if command -v sudo >/dev/null 2>&1; then
-              SUDO="sudo"
+            if [ "$(id -u)" -eq 0 ]; then
+              apt-get update
+              apt-get install -y libatomic1
+            elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y libatomic1
+            else
+              libatomic_root="${RUNNER_TEMP:-/tmp}/libatomic-root"
+              rm -rf "$libatomic_root"
+              mkdir -p "$libatomic_root"
+              download_dir="$(mktemp -d)"
+              (
+                cd "$download_dir"
+                apt-get download libatomic1
+                dpkg-deb -x libatomic1_*.deb "$libatomic_root"
+              )
+              libatomic_so="$(find "$libatomic_root" -name 'libatomic.so.1*' -print -quit)"
+              if [ -z "$libatomic_so" ]; then
+                echo "libatomic1 package did not contain libatomic.so.1" >&2
+                exit 1
+              fi
+              libatomic_dir="$(dirname "$libatomic_so")"
+              echo "LD_LIBRARY_PATH=$libatomic_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
             fi
-            $SUDO apt-get update
-            $SUDO apt-get install -y libatomic1
           fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
