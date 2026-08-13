@@ -1,0 +1,113 @@
+name: "Repair PR #9066 Dependency Cruise Node runner prerequisites"
+description: |
+  Repair the CI prerequisite blocking PR #9066 before editing the proof-only
+  localStorage slice.
+
+  Evidence from GitHub Actions run 31697567303 job 94438748403 shows
+  `quality / Dependency Cruise` failed in `actions/setup-node@v4` on runner
+  `gh-heavy-05`: cached Node 26 could not load `libatomic.so.1`, so
+  `pnpm run check:deps` never executed. Related CI logs on the same runner
+  class show the next setup failure after libatomic is present: `node-pty`
+  cannot build because `make` is unavailable during `pnpm install`.
+
+  The real repair belongs in a prerequisite CI-policy PR against `master`, not
+  inside PR #9066, whose review claim is limited to graph-camera localStorage
+  test-harness isolation.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: fix-node-runner-prerequisites
+    description: |
+      Add self-hosted Node 26 CI prerequisites for Dependency Cruise and sibling jobs.
+      Review claim: Self-hosted CI jobs that configure Node 26 and install the workspace provision Node's native runtime/build prerequisites before `actions/setup-node@v4` or `pnpm install` can fail.
+      Review lane: policy
+      Safety invariant: Only CI runner provisioning and its static policy assertion change; product code and PR #9066's graph-camera localStorage test harness stay untouched.
+      Slice rationale: One tooling-policy prerequisite slice is required because PR #9066 cannot make its own `quality / Dependency Cruise` job reach the check command without first fixing the base CI setup path.
+      Architectural effect: CI setup gains a native prerequisite step before Node setup for affected self-hosted jobs; test behavior and package boundaries do not change.
+      Goal: Make the `quality / Dependency Cruise` CI job reach `pnpm run check:deps` instead of failing while setup-node probes pnpm under Node 26.
+      Motivation: PR #9066 is blocked by infrastructure setup (`libatomic.so.1` missing, then build tooling missing), not by a dependency-cruiser violation.
+      Alternative considerations: Adding this to PR #9066 was rejected because it would mix CI provisioning with a proof-only localStorage test slice; installing only `libatomic1` was rejected because observed sibling logs also fail when `node-pty` cannot find `make`.
+      Implementation details: Update `.github/workflows/ci.yml` so every CI job that can run on self-hosted runners, uses `actions/setup-node@v4`, and later runs `pnpm install --frozen-lockfile` installs the required native packages first. Include `libatomic1` for Node 26 and build tooling needed by `node-pty` (`build-essential` at minimum; preserve any existing repo convention for package names). Update `scripts/test-ci-workflow-merge-queue-policy.mjs` to assert the prerequisite step exists before setup-node for these jobs and checks for both `libatomic1` and build tooling.
+      Non-goals: No product behavior changes, no test weakening, no Node downgrade, no changes to PR #9066's localStorage files, and no PR Body workflow changes in this slice.
+      Layer: app_regression
+      Feature state: active
+      Files: .github/workflows/ci.yml; scripts/test-ci-workflow-merge-queue-policy.mjs
+      Change types:
+      - .github/workflows/ci.yml: modify
+      - scripts/test-ci-workflow-merge-queue-policy.mjs: modify
+      Acceptance criteria:
+      - The updated policy test fails against `origin/master` before the workflow fix with a clear missing native prerequisite message for `quality-required` / Dependency Cruise.
+      - `node scripts/test-ci-workflow-merge-queue-policy.mjs` exits 0 after the workflow fix.
+      - `git diff --check origin/master...HEAD` exits 0.
+    prompt: |
+      Goal: Create the prerequisite CI-policy repair that makes PR #9066's `quality / Dependency Cruise` job reach `pnpm run check:deps` instead of failing during Node 26 setup.
+      Review lane: policy
+      Motivation: GitHub Actions run 31697567303 job 94438748403 failed before Dependency Cruise ran because cached Node 26 on self-hosted runner `gh-heavy-05` could not load `libatomic.so.1`. Related self-hosted logs then fail during `pnpm install` because `node-pty` cannot find `make`.
+      Alternative considerations: Do not add this CI provisioning to PR #9066; that PR is a proof-only graph-camera localStorage slice. Do not install only `libatomic1`; the observed install path also needs build tooling.
+      Implementation details: Assume no prior context. Edit `.github/workflows/ci.yml` and `scripts/test-ci-workflow-merge-queue-policy.mjs` only. Enumerate CI jobs that can run on self-hosted runners, use `actions/setup-node@v4`, and then run `pnpm install --frozen-lockfile`; make those jobs install native Node/runtime build prerequisites before setup-node. Include `libatomic1` and build tooling needed by `node-pty` (`build-essential` at minimum), using the repo's existing shell style and clear failure behavior if apt/sudo is unavailable. Update `scripts/test-ci-workflow-merge-queue-policy.mjs` so it fails on the current missing-prerequisite shape and passes only when the prerequisite step appears before setup-node and includes both runtime and build packages.
+      Non-goals: No product code edits, no test weakening, no PR Body workflow edits, no Node version changes, no unrelated workflow cleanup.
+      Acceptance criteria:
+      - Demonstrate the updated policy assertion fails against `origin/master` before the workflow fix with a clear missing native prerequisite message for the Dependency Cruise path.
+      - Run `node scripts/test-ci-workflow-merge-queue-policy.mjs` after the fix and show it exits 0.
+      - Run `git diff --check origin/master...HEAD` after the fix and show it exits 0.
+    dependencies: []
+
+  - id: verify-node-runner-prerequisite-policy
+    description: |
+      Run the CI-policy check after the prerequisite repair.
+      Review claim: `node scripts/test-ci-workflow-merge-queue-policy.mjs` passes only when the affected CI setup paths carry the native Node prerequisite before setup-node.
+      Review lane: proof
+      Safety invariant: Verification only runs existing/local commands and does not edit files.
+      Slice rationale: One proof task validates the CI-policy assertion after the policy edit.
+      Architectural effect: None; proof only.
+      Goal: Prove the authored CI prerequisite policy is green.
+      Motivation: The original failing check never reached Dependency Cruise, so the setup ordering must be guarded directly.
+      Alternative considerations: Relying on manual log inspection alone was rejected because the workflow ordering can regress without a deterministic assertion.
+      Implementation details: Execute `node scripts/test-ci-workflow-merge-queue-policy.mjs`.
+      Non-goals: No code edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "node scripts/test-ci-workflow-merge-queue-policy.mjs"
+    dependencies:
+      - fix-node-runner-prerequisites
+
+  - id: verify-dependency-cruise-command
+    description: |
+      Run the failed Dependency Cruise command locally after the prerequisite repair.
+      Review claim: `pnpm run check:deps` still exits 0 on the repaired branch.
+      Review lane: proof
+      Safety invariant: Verification only runs the same local dependency-cruise command; it does not edit files or broaden the CI policy change.
+      Slice rationale: One proof task checks the failed job's command after the setup prerequisite is authored.
+      Architectural effect: None; proof only.
+      Goal: Prove the branch's Dependency Cruise command remains green.
+      Motivation: The GitHub job failed before this command ran, so the command should be shown green separately after setup is repaired.
+      Alternative considerations: Treating setup-node success as proof of dependency-cruise success was rejected because it checks a different property.
+      Implementation details: Execute `pnpm run check:deps`.
+      Non-goals: No code edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run check:deps"
+    dependencies:
+      - fix-node-runner-prerequisites
+
+  - id: verify-diff-clean
+    description: |
+      Run the diff whitespace check after the prerequisite repair.
+      Review claim: `git diff --check origin/master...HEAD` exits 0 on the repaired branch.
+      Review lane: proof
+      Safety invariant: Verification only checks the authored diff for whitespace errors.
+      Slice rationale: One proof task checks diff hygiene without mixing it into behavioral proof.
+      Architectural effect: None; proof only.
+      Goal: Prove the repair branch has no whitespace errors in its diff.
+      Motivation: Workflow YAML edits are indentation-sensitive and should pass the repo's diff hygiene check.
+      Alternative considerations: Manual YAML inspection was rejected because `git diff --check` is deterministic.
+      Implementation details: Execute `git diff --check origin/master...HEAD`.
+      Non-goals: No code edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "git diff --check origin/master...HEAD"
+    dependencies:
+      - fix-node-runner-prerequisites
