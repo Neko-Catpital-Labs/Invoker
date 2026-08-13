@@ -40,6 +40,24 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::apt-get is required to install Node runtime and native build dependencies on this runner."
+            exit 1
+          fi
+          sudo_cmd=()
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true; then
+              echo "::error::passwordless sudo is required to install Node runtime and native build dependencies."
+              exit 1
+            fi
+            sudo_cmd=(sudo -n)
+          fi
+          "${sudo_cmd[@]}" apt-get update -qq
+          "${sudo_cmd[@]}" apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -92,6 +110,24 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::apt-get is required to install Node runtime and native build dependencies on this runner."
+            exit 1
+          fi
+          sudo_cmd=()
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true; then
+              echo "::error::passwordless sudo is required to install Node runtime and native build dependencies."
+              exit 1
+            fi
+            sudo_cmd=(sudo -n)
+          fi
+          "${sudo_cmd[@]}" apt-get update -qq
+          "${sudo_cmd[@]}" apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -124,6 +160,24 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::apt-get is required to install Node runtime and native build dependencies on this runner."
+            exit 1
+          fi
+          sudo_cmd=()
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true; then
+              echo "::error::passwordless sudo is required to install Node runtime and native build dependencies."
+              exit 1
+            fi
+            sudo_cmd=(sudo -n)
+          fi
+          "${sudo_cmd[@]}" apt-get update -qq
+          "${sudo_cmd[@]}" apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -162,6 +216,24 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::apt-get is required to install Node runtime and native build dependencies on this runner."
+            exit 1
+          fi
+          sudo_cmd=()
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true; then
+              echo "::error::passwordless sudo is required to install Node runtime and native build dependencies."
+              exit 1
+            fi
+            sudo_cmd=(sudo -n)
+          fi
+          "${sudo_cmd[@]}" apt-get update -qq
+          "${sudo_cmd[@]}" apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -231,6 +303,24 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::apt-get is required to install Node runtime and native build dependencies on this runner."
+            exit 1
+          fi
+          sudo_cmd=()
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true; then
+              echo "::error::passwordless sudo is required to install Node runtime and native build dependencies."
+              exit 1
+            fi
+            sudo_cmd=(sudo -n)
+          fi
+          "${sudo_cmd[@]}" apt-get update -qq
+          "${sudo_cmd[@]}" apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -424,6 +514,24 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::apt-get is required to install Node runtime and native build dependencies on this runner."
+            exit 1
+          fi
+          sudo_cmd=()
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true; then
+              echo "::error::passwordless sudo is required to install Node runtime and native build dependencies."
+              exit 1
+            fi
+            sudo_cmd=(sudo -n)
+          fi
+          "${sudo_cmd[@]}" apt-get update -qq
+          "${sudo_cmd[@]}" apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4

@@ -35,10 +35,45 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+function stepIndex(job, predicate) {
+  const steps = job.steps ?? [];
+  return steps.findIndex(predicate);
+}
+
+function assertNativeNodeDepsBeforeSetup(jobName) {
+  const job = jobs[jobName];
+  assert(job, `Missing CI job ${jobName}`);
+  const setupNodeIndex = stepIndex(job, (step) => step.uses === 'actions/setup-node@v4');
+  assert(setupNodeIndex >= 0, `${jobName} must set up Node`);
+
+  const nativeDepsIndex = stepIndex(job, (step) => {
+    const run = String(step.run ?? '');
+    return run.includes('apt-get install') && run.includes('libatomic1') && run.includes('build-essential');
+  });
+  assert(
+    nativeDepsIndex >= 0,
+    `${jobName} must install libatomic1 and native build tools before Node setup`,
+  );
+  assert(
+    nativeDepsIndex < setupNodeIndex,
+    `${jobName} must install libatomic1 and native build tools before actions/setup-node`,
+  );
+
+  const installDepsIndex = stepIndex(job, (step) => step.name === 'Install dependencies');
+  if (installDepsIndex >= 0) {
+    assert(
+      nativeDepsIndex < installDepsIndex,
+      `${jobName} must install native build tools before pnpm install`,
+    );
+  }
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
 }
+assertNativeNodeDepsBeforeSetup('build-artifacts');
+assertNativeNodeDepsBeforeSetup('required-fast');
 
 assert(jobs['quality-required'], 'Missing quality-required job');
 assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs');
@@ -53,9 +88,14 @@ assert(
   dependencyCruiseEntry.runner_label === 'Runner_2_4_core',
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
 );
+assertNativeNodeDepsBeforeSetup('quality-required');
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
+assertNativeNodeDepsBeforeSetup('quality-extra');
+
+assertNativeNodeDepsBeforeSetup('typescript-types');
+assertNativeNodeDepsBeforeSetup('ui-vitest');
 
 assert(jobs['required-package-builds'], 'Missing required-package-builds job');
 assert(
