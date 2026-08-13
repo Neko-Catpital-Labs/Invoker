@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import re
 import subprocess
@@ -18,6 +19,12 @@ class SafePushError(RuntimeError):
     def __init__(self, message: str, *, exit_code: int = 1):
         super().__init__(message)
         self.exit_code = exit_code
+
+
+@dataclass(frozen=True)
+class SafePushResult:
+    sha: str
+    pushed: bool
 
 
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
@@ -75,14 +82,14 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
-def safe_push(
+def safe_push_result(
     *,
     branch: str,
     expected_head: str | None = None,
     expect_missing: bool = False,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+) -> SafePushResult:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -96,9 +103,11 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:"
     else:
+        if live is None:
+            return SafePushResult(sha=expected, pushed=False)
         if live != expected:
             raise SafePushError(
-                f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
+                f"stale-head: refs/heads/{branch_name} is {live}; expected {expected}",
                 exit_code=20,
             )
         lease = f"refs/heads/{branch_name}:{expected}"
@@ -117,10 +126,36 @@ def safe_push(
             f"post-push verification failed: refs/heads/{branch_name} is {verified or 'missing'}; expected {pushed}",
             exit_code=22,
         )
-    return pushed
+    return SafePushResult(sha=pushed, pushed=True)
+
+
+def safe_push(
+    *,
+    branch: str,
+    expected_head: str | None = None,
+    expect_missing: bool = False,
+    remote: str = "origin",
+    cwd: Path | str | None = None,
+) -> str:
+    return safe_push_result(
+        branch=branch,
+        expected_head=expected_head,
+        expect_missing=expect_missing,
+        remote=remote,
+        cwd=cwd,
+    ).sha
+
+
+def normalize_ledger_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    parts = expanded.parts
+    if len(parts) >= 5 and parts[0] == "/" and parts[1] == "Users" and parts[3] == ".invoker":
+        return Path.home().joinpath(".invoker", *parts[4:])
+    return expanded
 
 
 def append_tsv_ledger(path: Path, *, kind: str, key: str, marker: str, epoch: int | None = None) -> None:
+    path = normalize_ledger_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(f"{kind}\t{key}\t{marker}\t{epoch if epoch is not None else int(time.time())}\n")
@@ -136,6 +171,7 @@ def append_json_ledger(
     epoch: int | None = None,
     meta: Mapping[str, object] | None = None,
 ) -> None:
+    path = normalize_ledger_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     row: dict[str, object] = {
         "kind": kind,
@@ -184,7 +220,7 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
+        result = safe_push_result(
             branch=args.branch,
             expected_head=args.expected_head,
             expect_missing=args.expect_missing,
@@ -224,7 +260,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        branch_name = normalize_branch(args.branch)
+        if result.pushed:
+            print(f"pr-worker-safe-push: pushed refs/heads/{branch_name} to {result.sha}")
+        else:
+            print(f"pr-worker-safe-push: refs/heads/{branch_name} is already missing; no push needed")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)

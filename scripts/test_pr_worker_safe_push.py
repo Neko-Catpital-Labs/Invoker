@@ -111,6 +111,30 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_missing_expected_head_branch_exits_zero_without_recreating_branch_and_records_marker(self) -> None:
+        self.commit(self.repo, "repair")
+        git(self.repo, "push", "origin", "--delete", "main")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already missing; no push needed", result.stdout)
+        self.assertEqual(self.remote_head(), "")
+        self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
+
+    def test_mac_invoker_ledger_path_normalizes_to_current_home(self) -> None:
+        path = safe_push.normalize_ledger_path(Path("/Users/edbertchan/.invoker/mergify-admin-requeue-state.jsonl"))
+
+        self.assertEqual(path, Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl")
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")
