@@ -10,6 +10,7 @@ import {
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
   INFRA_REPAIR_WORKER_KIND,
+  PR_JAILBREAK_LAND_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
@@ -98,6 +99,33 @@ function deps(): WorkerRuntimeDependencies {
 }
 
 type AutoStartConfig = Parameters<typeof autoStartedOwnerWorkerKindsForConfig>[0];
+type AutoStartOptions = Parameters<typeof autoStartedOwnerWorkerKinds>[0];
+
+const AUTO_STARTED_OWNER_WORKER_KIND_CONFIG_CASES = [
+  {},
+  { diskHeadroom: { cleanupEnabled: true } },
+  { diskHeadroom: { cleanupEnabled: false } },
+  { autoApproveAIFixes: true },
+  { autoApproveAIFixes: false },
+  { infraRepair: { enabled: true } },
+  { infraRepair: { enabled: false } },
+  { autofix: { enabled: true } },
+  { autofix: { enabled: false } },
+  { reaper: { enabled: true } },
+  { reaper: { enabled: false } },
+  { workflowResume: { enabled: true } },
+  { workflowResume: { enabled: false } },
+  { requeueEnabled: true },
+  { requeueEnabled: false },
+  { e2eAutoFixEnabled: true },
+  { e2eAutoFixEnabled: false },
+  { prMaintenance: { enabled: true } },
+] satisfies AutoStartConfig[];
+
+const AUTO_STARTED_OWNER_WORKER_KIND_OPTION_CASES = [
+  { prMaintenanceEnabled: true },
+  { prMaintenanceEnabled: false },
+] satisfies AutoStartOptions[];
 
 function expectConfigGate(
   workerKind: string,
@@ -138,6 +166,7 @@ function controller(
   register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
   register(PR_ORPHAN_REPAIR_WORKER_KIND, 'Repairs unmapped broken pull requests.');
   register(PR_DUPLICATE_CLOSE_WORKER_KIND, 'Closes duplicate or already-landed pull requests.');
+  register(PR_JAILBREAK_LAND_WORKER_KIND, 'Force-merges eligible jailbreak PRs via admin bypass.');
   register(PR_AUTO_LABEL_WORKER_KIND, 'Auto-labels refactor/bugfix/repro/test-only PRs with admin-bypass.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(REAPER_WORKER_KIND, 'Reaps stale Invoker-managed artifacts.');
@@ -236,6 +265,15 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
       PR_DUPLICATE_CLOSE_WORKER_KIND,
       PR_AUTO_LABEL_WORKER_KIND,
     ]);
+  });
+
+  it('never auto-starts jailbreak-land for the existing flag cases', () => {
+    for (const config of AUTO_STARTED_OWNER_WORKER_KIND_CONFIG_CASES) {
+      expect(autoStartedOwnerWorkerKindsForConfig(config)).not.toContain(PR_JAILBREAK_LAND_WORKER_KIND);
+    }
+    for (const options of AUTO_STARTED_OWNER_WORKER_KIND_OPTION_CASES) {
+      expect(autoStartedOwnerWorkerKinds(options)).not.toContain(PR_JAILBREAK_LAND_WORKER_KIND);
+    }
   });
 });
 

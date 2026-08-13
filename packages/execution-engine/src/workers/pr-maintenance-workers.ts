@@ -17,6 +17,7 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
 export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const PR_DUPLICATE_CLOSE_WORKER_KIND = 'pr-duplicate-close';
+export const PR_JAILBREAK_LAND_WORKER_KIND = 'pr-jailbreak-land';
 export const PR_AUTO_LABEL_WORKER_KIND = 'pr-auto-label';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_MERGIFY_ADMIN_REQUEUE_LEDGER_RELATIVE_PATH = '.invoker/mergify-admin-requeue-state.jsonl';
@@ -42,6 +43,7 @@ export type PrMaintenanceWorkerKind =
   | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
   | typeof PR_ORPHAN_REPAIR_WORKER_KIND
   | typeof PR_DUPLICATE_CLOSE_WORKER_KIND
+  | typeof PR_JAILBREAK_LAND_WORKER_KIND
   | typeof PR_AUTO_LABEL_WORKER_KIND;
 
 type EnvOverrides = Record<string, string | undefined>;
@@ -66,6 +68,11 @@ const PR_DUPLICATE_CLOSE_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_DUPLICATE_CLOSE_WORKER_KIND,
   scriptRelativePath: 'scripts/cron-pr-duplicate-close.sh',
   note: 'Closes open PRs already landed on master or duplicating another open PR, via one Invoker close task per PR.',
+};
+const PR_JAILBREAK_LAND_ENTRYPOINT: PrMaintenanceEntrypoint = {
+  kind: PR_JAILBREAK_LAND_WORKER_KIND,
+  scriptRelativePath: 'scripts/cron-pr-jailbreak-land.sh',
+  note: 'Force-merges eligible jailbreak PRs via the admin-bypass land script under manual worker scheduling.',
 };
 const PR_AUTO_LABEL_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_AUTO_LABEL_WORKER_KIND,
@@ -139,6 +146,7 @@ export function registerPrMaintenanceWorkers(
   registerPrAdminBypassLandWorker(registry);
   registerPrOrphanRepairWorker(registry);
   registerPrDuplicateCloseWorker(registry);
+  registerPrJailbreakLandWorker(registry);
   registerPrAutoLabelWorker(registry);
   return registry;
 }
@@ -194,6 +202,23 @@ export function registerPrDuplicateCloseWorker(
   return registry;
 }
 
+export function registerPrJailbreakLandWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: PR_JAILBREAK_LAND_WORKER_KIND,
+    note: PR_JAILBREAK_LAND_ENTRYPOINT.note,
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrJailbreakLandWorker({
+        logger: deps.logger,
+        ...deps.prMaintenance,
+        store: deps.store,
+        startDelayMs: 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+      }),
+  });
+  return registry;
+}
+
 export function registerPrAutoLabelWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -221,6 +246,10 @@ export function createPrOrphanRepairWorker(options: PrMaintenanceWorkerOptions):
 
 export function createPrDuplicateCloseWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(PR_DUPLICATE_CLOSE_ENTRYPOINT, options);
+}
+
+export function createPrJailbreakLandWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
+  return createPrMaintenanceWorker(PR_JAILBREAK_LAND_ENTRYPOINT, options);
 }
 
 export function createPrAutoLabelWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {

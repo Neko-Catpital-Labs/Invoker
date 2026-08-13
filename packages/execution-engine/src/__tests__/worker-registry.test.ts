@@ -15,6 +15,7 @@ import {
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_AUTO_LABEL_WORKER_KIND,
   PR_DUPLICATE_CLOSE_WORKER_KIND,
+  PR_JAILBREAK_LAND_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
 } from '../workers/pr-maintenance-workers.js';
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
@@ -82,6 +83,7 @@ describe('worker registry', () => {
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       PR_ORPHAN_REPAIR_WORKER_KIND,
       PR_DUPLICATE_CLOSE_WORKER_KIND,
+      PR_JAILBREAK_LAND_WORKER_KIND,
       PR_AUTO_LABEL_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
       SLACK_BUG_SCAN_WORKER_KIND,
@@ -96,6 +98,8 @@ describe('worker registry', () => {
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_ORPHAN_REPAIR_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_DUPLICATE_CLOSE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_JAILBREAK_LAND_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_AUTO_LABEL_WORKER_KIND)).toBeDefined();
     expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(SLACK_BUG_SCAN_WORKER_KIND)).toBeDefined();
@@ -128,6 +132,8 @@ describe('worker registry', () => {
       .toBe(PR_ORPHAN_REPAIR_WORKER_KIND);
     expect(registry.get(PR_DUPLICATE_CLOSE_WORKER_KIND)?.factory(deps()).identity.kind)
       .toBe(PR_DUPLICATE_CLOSE_WORKER_KIND);
+    expect(registry.get(PR_JAILBREAK_LAND_WORKER_KIND)?.factory(deps()).identity.kind)
+      .toBe(PR_JAILBREAK_LAND_WORKER_KIND);
     expect(registry.get(PR_AUTO_LABEL_WORKER_KIND)?.factory(deps()).identity.kind)
       .toBe(PR_AUTO_LABEL_WORKER_KIND);
   });
