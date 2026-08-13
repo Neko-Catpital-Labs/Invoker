@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,17 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const legacyStuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease')?.verifyCommand ?? '';
+  if (legacyStuckLeaseCommand.includes('No local verify command is mapped')) {
+    fail('legacy stuck-lease playwright job must not use fallback verify command');
+  }
+  if (
+    !legacyStuckLeaseCommand.includes('ci-playwright-launch-dispatch-stuck-lease')
+    || !legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+  ) {
+    fail('legacy stuck-lease playwright job must map to its two spec files');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
