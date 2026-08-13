@@ -1986,6 +1986,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
       return [];
     }
 
+    const orderBy = filters.sortBy === 'asc' ? 'ASC' : 'DESC';
+    if (filters.eventTypes && !filters.taskId && filters.limit !== undefined) {
+      const pageLimit = Math.floor(filters.limit);
+      const merged: TaskEvent[] = [];
+      for (const eventType of filters.eventTypes) {
+        const rows = this.queryAll(
+          `SELECT * FROM events
+           WHERE event_type = ?
+           ORDER BY id ${orderBy}
+           LIMIT ?`,
+          [eventType, pageLimit],
+        );
+        for (const row of rows) {
+          merged.push(this.rowToTaskEvent(row));
+        }
+      }
+      merged.sort((a, b) => (orderBy === 'ASC' ? a.id - b.id : b.id - a.id));
+      return merged.slice(0, pageLimit);
+    }
+
     const where: string[] = [];
     const params: unknown[] = [];
     if (filters.taskId) {
@@ -1997,7 +2017,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       params.push(...filters.eventTypes);
     }
 
-    const orderBy = filters.sortBy === 'asc' ? 'ASC' : 'DESC';
     let limitSql = '';
     if (filters.limit !== undefined) {
       limitSql = ' LIMIT ?';
