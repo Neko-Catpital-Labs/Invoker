@@ -514,10 +514,33 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     return;
   }
 
+  if (subCommand === 'start' || subCommand === 'stop') {
+    const kind = args[1];
+    if (!kind) {
+      throw new Error(`Missing worker kind. Usage: --headless worker ${subCommand} <kind>`);
+    }
+    if (!registry.get(kind)) {
+      const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+      throw new Error(`Unknown worker kind: "${kind}". Use: ${knownKinds}`);
+    }
+    const controller = deps.getWorkerRuntimeController?.();
+    if (!controller) {
+      throw new Error(
+        `Cannot ${subCommand} worker "${kind}": no live owner worker runtime in this process. `
+        + `Run this against a live "owner-serve" process, or use `
+        + `"invoker-cli worker toggles --${subCommand === 'start' ? 'enable' : 'disable'} <id>" `
+        + 'to change the persisted config default instead.',
+      );
+    }
+    const entry = subCommand === 'start' ? controller.start(kind) : await controller.stop(kind);
+    process.stdout.write(`${kind}: ${subCommand === 'start' ? 'started' : 'stopped'} (desiredEnabled=${entry.desiredEnabled})\n`);
+    return;
+  }
+
   const definition = registry.get(subCommand);
   if (!definition) {
     const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
-    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status`);
+    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status, start, stop`);
   }
 
   let lock;
