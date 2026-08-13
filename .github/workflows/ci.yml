@@ -697,12 +697,10 @@ jobs:
             files: >-
               e2e/claude-planning-preset-visual-proof.spec.ts
               e2e/planning-presets-load-failure.spec.ts
-              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/action-graph-visual-proof.spec.ts
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
-              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts
@@ -726,7 +724,6 @@ jobs:
               e2e/orphan-relaunch.spec.ts
               e2e/gap-recovery-bench.spec.ts
               e2e/planning-chat-send-long-deadline.spec.ts
-              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
           - name: 6-of-9
@@ -734,7 +731,6 @@ jobs:
               e2e/embedded-terminal-spawn-failure.spec.ts
               e2e/embedded-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
-              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
@@ -742,7 +738,6 @@ jobs:
             files: >-
               e2e/worker-tab-scroll.spec.ts
               e2e/workflow-delete-latency.spec.ts
-              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/main-process-hitch-responsiveness.spec.ts
               e2e/dag-click-hitch-responsiveness.spec.ts
               e2e/terminal-upsert-hitch-responsiveness.spec.ts
@@ -768,7 +763,6 @@ jobs:
           - name: terminal-garbling
             files: >-
               e2e/planning-terminal-live-model.proof.spec.ts
-              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/planning-surface-navigation-garble-repro.spec.ts
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
               e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
