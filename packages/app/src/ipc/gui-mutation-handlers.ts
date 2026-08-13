@@ -84,7 +84,7 @@ import {
   type ReviewGateCiContext,
 } from '../auto-fix-intents.js';
 import { persistShutdownDiagnostic } from '../shutdown-diagnostic.js';
-import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
+import { createCachedActionGraphSnapshotReader } from '../action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
 import {
   createInAppPlanningChatSessions,
@@ -1206,6 +1206,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const ownerMode = getOwnerMode();
   const planDoctorScriptPath = join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
   const workerRuntimeController = getWorkerRuntimeController();
+  const readActionGraphSnapshot = createCachedActionGraphSnapshotReader({
+    getOrchestrator: () => orchestrator,
+    persistence,
+    invokerConfig,
+  });
   const workflowIdForTaskArg = actions.workflowIdForTaskArg;
   const workflowIdForTargetArg = actions.workflowIdForTargetArg;
   const performDeleteTask = actions.performDeleteTask;
@@ -1954,7 +1959,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         );
       }
     }
-    return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
+    return readActionGraphSnapshot();
   });
 
   ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {
