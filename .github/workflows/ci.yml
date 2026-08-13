@@ -1030,14 +1030,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Node.js runtime dependency
-        if: matrix.name == 'Worktree Provisioning'
-        run: sudo apt-get update && sudo apt-get install -y libatomic1
-
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
       - name: Install Node runtime system dependencies
+        if: matrix.name == 'Worktree Provisioning'
         run: |
           if command -v apt-get >/dev/null 2>&1; then
             SUDO=""
