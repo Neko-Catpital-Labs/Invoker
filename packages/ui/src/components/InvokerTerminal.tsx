@@ -113,6 +113,7 @@ interface InvokerTerminalProps {
   presetOptions: PlanningPresetOptionView[];
   selectedConfirmationMode: PlanningConfirmationMode;
   draftPlanAvailable: boolean;
+  draftReviewOpen?: boolean;
   draftPlanSummary?: {
     name: string;
     taskCount: number;
@@ -535,6 +536,7 @@ export function InvokerTerminal({
   presetOptions,
   selectedConfirmationMode,
   draftPlanAvailable,
+  draftReviewOpen = false,
   draftPlanSummary,
   planningStream,
   readOnly = false,
@@ -901,7 +903,7 @@ export function InvokerTerminal({
             )}
           </div>
 
-          {draftPlanAvailable && !readOnly && (
+          {draftPlanAvailable && !draftReviewOpen && !readOnly && (
             <div
               data-testid="invoker-terminal-ready-bar"
               className="sticky bottom-0 z-10 border-t border-border bg-card/80 px-4 py-3.5 text-sm text-foreground backdrop-blur-sm"
