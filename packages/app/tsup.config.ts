@@ -19,6 +19,7 @@ export default defineConfig({
     '@invoker/runtime-service',
     '@invoker/transport',
     '@invoker/execution-engine',
+    '@invoker/slack-bug-scan',
     '@invoker/planning-core',
     '@invoker/shell',
     'yaml',
