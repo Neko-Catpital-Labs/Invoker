@@ -55,9 +55,9 @@ describe('CodeRabbit PR #3050 — draft state cleared after submit', () => {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'draft the full plan' } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
 
-    await screen.findByTestId('invoker-terminal-ready-bar');
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
-    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('planning-create-workflow'));
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
     });
