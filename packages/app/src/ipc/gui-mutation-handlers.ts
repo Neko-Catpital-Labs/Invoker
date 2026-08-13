@@ -1912,7 +1912,16 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     markDaemonOwnerUnavailable,
     refresh: options?.refresh,
   }));
+  let cachedWorkerStatusSnapshot: { at: number; value: unknown } | null = null;
   ipcMain.handle('invoker:get-worker-status', async () => {
+    const now = Date.now();
+    if (cachedWorkerStatusSnapshot && now - cachedWorkerStatusSnapshot.at >= 0 && now - cachedWorkerStatusSnapshot.at < 1000) {
+      return cachedWorkerStatusSnapshot.value;
+    }
+    const cacheWorkerStatusSnapshot = <T>(value: T): T => {
+      cachedWorkerStatusSnapshot = { at: Date.now(), value };
+      return value;
+    };
     if (!ownerMode) {
       try {
         const delegated = await messageBus.request<{ kind: string }, { workerStatus?: unknown }>(
@@ -1920,7 +1929,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           { kind: 'worker-status' },
         );
         if (delegated && typeof delegated === 'object' && 'workerStatus' in delegated) {
-          return delegated.workerStatus;
+          return cacheWorkerStatusSnapshot(delegated.workerStatus);
         }
       } catch (err) {
         if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
@@ -1931,17 +1940,17 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           { module: 'ipc' },
         );
       }
-      return createLocalWorkerStatusSnapshot({
+      return cacheWorkerStatusSnapshot(createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
         autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-      });
+      }));
     }
-    return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+    return cacheWorkerStatusSnapshot(workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
       registry: createRegisteredWorkerRegistry(),
       persistence,
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-    });
+    }));
   });
 
 
