@@ -53,6 +53,27 @@ assert(
   dependencyCruiseEntry.runner_label === 'Runner_2_4_core',
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
 );
+const qualityRequiredSteps = jobs['quality-required']?.steps ?? [];
+const qualityRequiredNodeSetupIndex = qualityRequiredSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+assert(qualityRequiredNodeSetupIndex >= 0, 'quality-required must configure Node with actions/setup-node@v4');
+const qualityRequiredSystemDepsIndex = qualityRequiredSteps.findIndex((step) => {
+  const run = String(step.run ?? '');
+  return run.includes('install -y libatomic1 build-essential');
+});
+assert(
+  qualityRequiredSystemDepsIndex >= 0 && qualityRequiredSystemDepsIndex < qualityRequiredNodeSetupIndex,
+  'quality-required must install libatomic1 and build-essential before actions/setup-node@v4',
+);
+const qualityRequiredSystemDepsStep = qualityRequiredSteps[qualityRequiredSystemDepsIndex] ?? {};
+const qualityRequiredSystemDepsRun = String(qualityRequiredSystemDepsStep.run ?? '');
+assert(
+  !/\bsudo\s+apt-get\b/.test(qualityRequiredSystemDepsRun),
+  'quality-required system dependency install must not invoke sudo apt-get interactively',
+);
+assert(
+  qualityRequiredSystemDepsRun.includes('sudo -n true') && qualityRequiredSystemDepsRun.includes('sudo -n apt-get'),
+  'quality-required system dependency install must prove passwordless sudo before using sudo apt-get',
+);
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
