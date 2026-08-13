@@ -41,7 +41,17 @@ export const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'close
 export const BROKEN_JOB_CONCLUSIONS = new Set(['failure', 'timed_out', 'action_required']);
 export const IGNORED_JOB_CONCLUSIONS = new Set(['cancelled', 'skipped', 'neutral']);
 export const MARKER_PREFIX = 'invoker-ci-regression-watch: first-bad-sha=';
-export const STATE_SCHEMA_VERSION = 2;
+export const STATE_SCHEMA_VERSION = 4;
+export const DEFAULT_MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = parseNonNegativeInteger(
+  process.env.INVOKER_CI_WATCH_MAX_ATTEMPTS,
+  DEFAULT_MAX_ATTEMPTS,
+);
+export const FLEET_EVENT_THRESHOLD = parsePositiveInteger(
+  process.env.INVOKER_CI_WATCH_FLEET_THRESHOLD,
+  3,
+);
+export const ATTEMPT_BACKOFF_BASE_MS = 30 * 60 * 1000;
 
 const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
   ?? process.env.INVOKER_E2E_WATCH_STATE_DIR
@@ -54,6 +64,19 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/surfaces build',
   'pnpm --filter @invoker/app build',
 ].join(' && ');
+
+const LEGACY_PLAYWRIGHT_JOB_ALIASES = new Map([
+  [
+    'playwright / launch-dispatch-stuck-lease',
+    {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  ],
+]);
 
 // ---------------------------------------------------------------------------
 // Pure logic
@@ -70,6 +93,16 @@ export function slugify(value, maxLength = 72) {
     .replace(/^-+|-+$/g, '')
     .replace(/-{2,}/g, '-');
   return (slug || 'ci-job').slice(0, maxLength).replace(/-+$/g, '') || 'ci-job';
+}
+
+function parseNonNegativeInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 export function buildMarker(sha, jobName) {
@@ -89,15 +122,53 @@ export function loadEmptyState() {
   };
 }
 
+function normalizeActiveFailure(failure, fallbackJobName) {
+  if (!failure || typeof failure !== 'object') return null;
+  const jobName = typeof failure.jobName === 'string' && failure.jobName
+    ? failure.jobName
+    : fallbackJobName;
+  if (typeof jobName !== 'string' || !jobName) return null;
+  return {
+    ...failure,
+    jobName,
+    attempts: Number.isFinite(Number(failure.attempts))
+      ? Math.max(0, Number(failure.attempts))
+      : 0,
+    lastFiledAt: typeof failure.lastFiledAt === 'string' && failure.lastFiledAt
+      ? failure.lastFiledAt
+      : null,
+    needsHuman: Boolean(failure.needsHuman),
+    retired: Boolean(failure.retired),
+  };
+}
+
+function normalizeActiveFailures(activeFailures) {
+  if (!activeFailures || typeof activeFailures !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(activeFailures)
+      .map(([jobName, failure]) => [jobName, normalizeActiveFailure(failure, jobName)])
+      .filter(([, failure]) => failure !== null),
+  );
+}
+
+function normalizeStateForMutation(state) {
+  const normalized = normalizeState(state);
+  if (state && typeof state === 'object') {
+    Object.assign(state, normalized);
+    return state;
+  }
+  return normalized;
+}
+
 export function normalizeState(raw) {
-  if (!raw || typeof raw !== 'object' || raw.schemaVersion !== STATE_SCHEMA_VERSION) {
+  if (!raw || typeof raw !== 'object') {
     return loadEmptyState();
   }
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
     lastProcessedRunId: Number(raw.lastProcessedRunId ?? 0),
     heads: raw.heads && typeof raw.heads === 'object' ? raw.heads : {},
-    activeFailures: raw.activeFailures && typeof raw.activeFailures === 'object' ? raw.activeFailures : {},
+    activeFailures: normalizeActiveFailures(raw.activeFailures),
   };
 }
 
@@ -111,7 +182,7 @@ export function classifyJobConclusion(job) {
 }
 
 export function reconcileCiRun(state, run) {
-  const normalized = normalizeState(state);
+  const normalized = normalizeStateForMutation(state);
   const sha = String(run.headSha ?? '').trim();
   if (!sha) return { state: normalized, processedJobs: 0, brokenJobs: 0, okJobs: 0, ignoredJobs: 0 };
 
@@ -163,6 +234,7 @@ export function reconcileCiRun(state, run) {
       if (existing) {
         normalized.activeFailures[jobName] = {
           ...existing,
+          ...normalizeActiveFailure(existing, jobName),
           lastBadSha: sha,
           lastBadRunId: run.databaseId,
           lastJobDatabaseId: job.databaseId,
@@ -184,6 +256,9 @@ export function reconcileCiRun(state, run) {
           lastJobUrl: job.url ?? '',
           lastObservedAt: baseObservation.observedAt,
           occurrences: 1,
+          attempts: 0,
+          lastFiledAt: null,
+          needsHuman: false,
         };
       }
       continue;
@@ -207,6 +282,265 @@ export function getActionableFailures(state) {
       if (runDelta !== 0) return runDelta;
       return a.jobName.localeCompare(b.jobName);
     });
+}
+
+function isFleetEventFailure(failure) {
+  return Boolean(failure?.isFleetEvent) || failure?.markerJobName === 'fleet';
+}
+
+export function groupFailuresBySha(failures) {
+  const groups = new Map();
+  for (const failure of failures ?? []) {
+    if (isFleetEventFailure(failure)) continue;
+    const sha = typeof failure?.firstBadSha === 'string' ? failure.firstBadSha.trim() : '';
+    if (!sha) continue;
+    const group = groups.get(sha) ?? [];
+    group.push(failure);
+    groups.set(sha, group);
+  }
+  return groups;
+}
+
+export function shouldFileFailure(failure, {
+  nowMs = Date.now(),
+  maxAttempts = MAX_ATTEMPTS,
+  backoffBaseMs = ATTEMPT_BACKOFF_BASE_MS,
+} = {}) {
+  const attempts = Number(failure?.attempts ?? 0);
+  if (attempts >= maxAttempts) {
+    return { action: 'needs-human', attempts };
+  }
+  if (failure?.lastFiledAt) {
+    const lastFiledMs = Date.parse(failure.lastFiledAt);
+    if (Number.isFinite(lastFiledMs)) {
+      const backoffUntilMs = lastFiledMs + (backoffBaseMs * (2 ** attempts));
+      if (nowMs < backoffUntilMs) {
+        return { action: 'backoff', attempts, backoffUntilMs };
+      }
+    }
+  }
+  return { action: 'file', attempts };
+}
+
+export function markFailureNeedsHuman(state, failure) {
+  const normalized = normalizeStateForMutation(state);
+  const jobName = failure.jobName;
+  const existing = normalized.activeFailures[jobName];
+  if (!existing) return normalized;
+  normalized.activeFailures[jobName] = {
+    ...existing,
+    needsHuman: true,
+  };
+  return normalized;
+}
+
+export function markFailureRetired(state, failure, retired = true) {
+  const normalized = normalizeStateForMutation(state);
+  const jobName = failure.jobName;
+  const existing = normalized.activeFailures[jobName];
+  if (!existing) return normalized;
+  normalized.activeFailures[jobName] = {
+    ...existing,
+    retired: Boolean(retired),
+  };
+  return normalized;
+}
+
+export function recordFailureFiled(state, failure, filedAt = new Date()) {
+  const normalized = normalizeStateForMutation(state);
+  const jobName = failure.jobName;
+  const existing = normalized.activeFailures[jobName];
+  if (!existing) return normalized;
+  normalized.activeFailures[jobName] = {
+    ...existing,
+    attempts: Number(existing.attempts ?? 0) + 1,
+    lastFiledAt: filedAt.toISOString(),
+    needsHuman: false,
+    retired: false,
+  };
+  return normalized;
+}
+
+function getVerifyCommandForFailure(failure, jobDefinitions) {
+  if (typeof failure?.verifyCommand === 'string' && failure.verifyCommand.trim()) {
+    return failure.verifyCommand.trim();
+  }
+  const definition = jobDefinitions?.get(failure?.jobName);
+  return definition?.verifyCommand?.trim() ?? '';
+}
+
+function failureIsMapped(failure, jobDefinitions) {
+  return Boolean(getVerifyCommandForFailure(failure, jobDefinitions));
+}
+
+function buildFleetJobName(sha, count) {
+  return `fleet / ${shortSha(sha)} (${count} jobs)`;
+}
+
+function buildFleetFailureDescription(sha, members) {
+  const memberLines = members.map((member) => {
+    const url = typeof member.firstJobUrl === 'string' && member.firstJobUrl
+      ? member.firstJobUrl
+      : '(no first job URL recorded)';
+    return `- ${member.jobName}: ${url}`;
+  });
+  return [
+    `Fleet-correlated CI event: ${members.length} jobs first failed on default-branch push commit ${sha}.`,
+    'Member jobs:',
+    ...memberLines,
+  ].join('\n');
+}
+
+function pickFleetVerifyCommand(members, jobDefinitions) {
+  return members
+    .map((member) => ({
+      jobName: member.jobName,
+      verifyCommand: getVerifyCommandForFailure(member, jobDefinitions),
+    }))
+    .filter((entry) => entry.verifyCommand)
+    .sort((a, b) => {
+      const lengthDelta = a.verifyCommand.length - b.verifyCommand.length;
+      if (lengthDelta !== 0) return lengthDelta;
+      return a.jobName.localeCompare(b.jobName);
+    })
+    .at(0)?.verifyCommand ?? '';
+}
+
+function synthesizeFleetFailure(state, sha, members, jobDefinitions) {
+  const verifyCommand = pickFleetVerifyCommand(members, jobDefinitions);
+  if (!verifyCommand) return null;
+
+  const existing = Object.values(state.activeFailures ?? {})
+    .find((failure) => isFleetEventFailure(failure) && failure.firstBadSha === sha);
+  const sortedMembers = [...members].sort((a, b) => a.jobName.localeCompare(b.jobName));
+  const firstMember = [...members].sort((a, b) => {
+    const runDelta = Number(a.firstBadRunId ?? 0) - Number(b.firstBadRunId ?? 0);
+    if (runDelta !== 0) return runDelta;
+    return a.jobName.localeCompare(b.jobName);
+  }).at(0);
+  const lastMember = [...members].sort((a, b) => {
+    const runDelta = Number(b.lastBadRunId ?? b.firstBadRunId ?? 0) - Number(a.lastBadRunId ?? a.firstBadRunId ?? 0);
+    if (runDelta !== 0) return runDelta;
+    return a.jobName.localeCompare(b.jobName);
+  }).at(0);
+  const jobName = buildFleetJobName(sha, members.length);
+  return {
+    ...(existing ?? {}),
+    jobName,
+    markerJobName: 'fleet',
+    isFleetEvent: true,
+    firstBadSha: sha,
+    firstBadRunId: firstMember?.firstBadRunId ?? '',
+    firstBadRunCreatedAt: firstMember?.firstBadRunCreatedAt ?? '',
+    firstJobDatabaseId: firstMember?.firstJobDatabaseId ?? '',
+    firstJobUrl: firstMember?.firstJobUrl ?? '',
+    lastBadSha: lastMember?.lastBadSha ?? sha,
+    lastBadRunId: lastMember?.lastBadRunId ?? firstMember?.firstBadRunId ?? '',
+    lastJobDatabaseId: lastMember?.lastJobDatabaseId ?? firstMember?.firstJobDatabaseId ?? '',
+    lastJobUrl: lastMember?.lastJobUrl ?? firstMember?.firstJobUrl ?? '',
+    lastObservedAt: lastMember?.lastObservedAt ?? firstMember?.lastObservedAt ?? '',
+    occurrences: members.reduce((sum, member) => sum + Number(member.occurrences ?? 1), 0),
+    attempts: Number(existing?.attempts ?? 0),
+    lastFiledAt: existing?.lastFiledAt ?? null,
+    needsHuman: Boolean(existing?.needsHuman),
+    retired: Boolean(existing?.retired),
+    verifyCommand,
+    description: buildFleetFailureDescription(sha, sortedMembers),
+    memberJobNames: sortedMembers.map((member) => member.jobName),
+  };
+}
+
+function prepareFleetCorrelatedFailures(state, failures, {
+  threshold = FLEET_EVENT_THRESHOLD,
+  jobDefinitions = null,
+} = {}) {
+  const normalized = normalizeStateForMutation(state);
+  const groups = groupFailuresBySha(failures);
+  const correlated = new Set();
+  const fleetFailures = [];
+  const retiredFleetMembers = [];
+  let stateChanged = false;
+  const existingFleetBySha = new Map(
+    Object.values(normalized.activeFailures)
+      .filter((failure) => isFleetEventFailure(failure) && typeof failure.firstBadSha === 'string')
+      .map((failure) => [failure.firstBadSha, failure]),
+  );
+
+  for (const [sha, members] of groups) {
+    if (members.length < threshold && !existingFleetBySha.has(sha)) continue;
+    const fleetFailure = synthesizeFleetFailure(normalized, sha, members, jobDefinitions);
+    if (!fleetFailure) {
+      for (const member of members) {
+        const existing = normalized.activeFailures[member.jobName];
+        if (!existing) continue;
+        normalized.activeFailures[member.jobName] = {
+          ...existing,
+          memberOfFleetEvent: sha,
+          retired: true,
+        };
+        retiredFleetMembers.push(normalized.activeFailures[member.jobName]);
+        correlated.add(member.jobName);
+        stateChanged = true;
+      }
+      continue;
+    }
+
+    const existingFleet = Object.values(normalized.activeFailures)
+      .find((failure) => isFleetEventFailure(failure) && failure.firstBadSha === sha);
+    if (existingFleet?.jobName && existingFleet.jobName !== fleetFailure.jobName) {
+      delete normalized.activeFailures[existingFleet.jobName];
+    }
+    normalized.activeFailures[fleetFailure.jobName] = fleetFailure;
+    fleetFailures.push(fleetFailure);
+    stateChanged = true;
+
+    for (const member of members) {
+      const existing = normalized.activeFailures[member.jobName];
+      if (!existing) continue;
+      normalized.activeFailures[member.jobName] = {
+        ...existing,
+        memberOfFleetEvent: sha,
+      };
+      correlated.add(member.jobName);
+      stateChanged = true;
+    }
+  }
+
+  for (const [sha, existingFleet] of existingFleetBySha) {
+    if (!groups.has(sha) && existingFleet?.jobName && normalized.activeFailures[existingFleet.jobName]) {
+      delete normalized.activeFailures[existingFleet.jobName];
+      stateChanged = true;
+    }
+  }
+
+  const prepared = [
+    ...fleetFailures,
+    ...failures.filter((failure) => {
+      if (isFleetEventFailure(failure)) return false;
+      return !correlated.has(failure.jobName);
+    }),
+  ].sort((a, b) => {
+    const runDelta = Number(a.firstBadRunId ?? 0) - Number(b.firstBadRunId ?? 0);
+    if (runDelta !== 0) return runDelta;
+    return a.jobName.localeCompare(b.jobName);
+  });
+
+  for (const failure of failures) {
+    if (correlated.has(failure.jobName)) continue;
+    const existing = normalized.activeFailures[failure.jobName];
+    if (existing?.memberOfFleetEvent) {
+      const { memberOfFleetEvent, ...withoutFleetMembership } = existing;
+      normalized.activeFailures[failure.jobName] = withoutFleetMembership;
+      stateChanged = true;
+    }
+  }
+
+  return {
+    failures: prepared,
+    groupsCorrelated: fleetFailures.length,
+    retiredFleetMembers,
+    stateChanged,
+  };
 }
 
 function shellSingleQuote(value) {
@@ -340,7 +674,24 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
       });
     }
   }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const [jobName, matrix] of LEGACY_PLAYWRIGHT_JOB_ALIASES) {
+      if (definitions.has(jobName)) continue;
+      definitions.set(jobName, {
+        jobId: 'playwright',
+        jobName,
+        matrix,
+        verifyCommand: commandForJob('playwright', playwrightJob, matrix),
+      });
+    }
+  }
   return definitions;
+}
+
+export function jobNameIsMapped(jobName, jobDefinitions) {
+  const definition = jobDefinitions?.get(jobName);
+  return Boolean(definition?.verifyCommand?.trim());
 }
 
 export function fallbackVerifyCommand(jobName) {
@@ -348,10 +699,19 @@ export function fallbackVerifyCommand(jobName) {
 }
 
 export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefinitions()) {
-  const definition = jobDefinitions.get(failure.jobName);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
-  const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
+  const verifyCommand = getVerifyCommandForFailure(failure, jobDefinitions) || fallbackVerifyCommand(failure.jobName);
+  const markerJobName = failure.markerJobName ?? failure.jobName;
+  const failureDescription = typeof failure.description === 'string' && failure.description.trim()
+    ? failure.description.trim()
+    : [
+      `CI job \`${failure.jobName}\` first failed on default-branch push commit ${failure.firstBadSha}`,
+      `in run ${failure.firstBadRunId ?? ''}. It was most recently still red at ${failure.lastBadSha ?? failure.firstBadSha}`,
+      `in run ${failure.lastBadRunId ?? failure.firstBadRunId ?? ''}.`,
+      '',
+      `First bad job: ${failure.firstJobUrl ?? ''}`,
+    ].join('\n');
   return {
     repo_url: repoUrl,
     base_branch: 'master',
@@ -365,7 +725,8 @@ export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefin
     last_bad_sha: failure.lastBadSha ?? failure.firstBadSha,
     last_bad_run_id: String(failure.lastBadRunId ?? failure.firstBadRunId ?? ''),
     verify_command: verifyCommand,
-    marker: buildMarkerComment(failure.firstBadSha, failure.jobName),
+    marker: buildMarkerComment(failure.firstBadSha, markerJobName),
+    failure_description: failureDescription.split(/\r?\n/).join('\n  '),
   };
 }
 
@@ -427,7 +788,9 @@ function headlessQueryWorkflowsJson() {
 
 export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = headlessQueryWorkflowsJson) {
   const sha = typeof failureOrSha === 'object' ? failureOrSha.firstBadSha : failureOrSha;
-  const job = typeof failureOrSha === 'object' ? failureOrSha.jobName : jobName;
+  const job = typeof failureOrSha === 'object'
+    ? (failureOrSha.markerJobName ?? failureOrSha.jobName)
+    : jobName;
   const marker = buildMarker(sha, job);
   let workflows;
   try {
@@ -462,7 +825,11 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
 
 export function fileBugfixPlan(failure, opts = {}) {
   const repoUrl = opts.repoUrl ?? getRepoUrl();
-  const vars = buildPlanVars(failure, repoUrl, opts.jobDefinitions);
+  const jobDefinitions = opts.jobDefinitions ?? buildCiJobDefinitions();
+  if (!failureIsMapped(failure, jobDefinitions)) {
+    throw new Error(`Cannot file CI regression repair plan for unmapped CI job: ${failure.jobName}`);
+  }
+  const vars = buildPlanVars(failure, repoUrl, jobDefinitions);
   const outDir = join(opts.outRoot ?? join(REPO_ROOT, 'plans', 'rendered'), vars.job_slug);
   const varArgs = Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}=${v}`]);
   const run = opts.runCommand ?? runCommand;
@@ -471,6 +838,76 @@ export function fileBugfixPlan(failure, opts = {}) {
   run('bash', [join(REPO_ROOT, 'skills/plan-to-invoker/scripts/skill-doctor.sh'), planPath]);
   if (!opts.dryRun) run('bash', [join(REPO_ROOT, 'submit-plan.sh'), planPath, '--no-track']);
   return { planPath, vars, submitted: !opts.dryRun };
+}
+
+export function processFailureFilingSweep(state, {
+  failures = getActionableFailures(state),
+  now = new Date(),
+  maxAttempts = MAX_ATTEMPTS,
+  capPerSweep = CAP_PER_SWEEP,
+  jobDefinitions = null,
+  liveQuery = liveQueryHasNonTerminalWork,
+  fileFailure = () => {},
+  save = () => {},
+  onNeedsHuman = () => {},
+  onRetired = () => {},
+  fleetEventThreshold = FLEET_EVENT_THRESHOLD,
+} = {}) {
+  const filedAt = now instanceof Date ? now : new Date(now);
+  const nowMs = filedAt.getTime();
+  const prepared = prepareFleetCorrelatedFailures(state, failures, {
+    threshold: fleetEventThreshold,
+    jobDefinitions,
+  });
+  if (prepared.stateChanged) save(state);
+  for (const retired of prepared.retiredFleetMembers) onRetired(retired);
+  const counts = {
+    groupsFound: failures.length,
+    groupsFiled: 0,
+    groupsSkippedAlreadyAddressed: 0,
+    groupsDeferredByCap: 0,
+    groupsNeedingHuman: 0,
+    groupsInBackoff: 0,
+    groupsRetired: prepared.retiredFleetMembers.length,
+    groupsCorrelated: prepared.groupsCorrelated,
+  };
+
+  for (const failure of prepared.failures) {
+    if (jobDefinitions && !failureIsMapped(failure, jobDefinitions)) {
+      counts.groupsRetired += 1;
+      markFailureRetired(state, failure, true);
+      save(state);
+      onRetired(failure);
+      continue;
+    }
+    const attemptGate = shouldFileFailure(failure, { nowMs, maxAttempts });
+    if (attemptGate.action === 'needs-human') {
+      counts.groupsNeedingHuman += 1;
+      markFailureNeedsHuman(state, failure);
+      save(state);
+      onNeedsHuman(failure, attemptGate);
+      continue;
+    }
+    if (attemptGate.action === 'backoff') {
+      counts.groupsInBackoff += 1;
+      continue;
+    }
+    if (liveQuery(failure)) {
+      counts.groupsSkippedAlreadyAddressed += 1;
+      continue;
+    }
+    if (capPerSweep > 0 && counts.groupsFiled >= capPerSweep) {
+      counts.groupsDeferredByCap += 1;
+      continue;
+    }
+
+    fileFailure(failure);
+    recordFailureFiled(state, failure, filedAt);
+    save(state);
+    counts.groupsFiled += 1;
+  }
+
+  return counts;
 }
 
 export function loadState() {
@@ -518,24 +955,18 @@ export async function main() {
   }
 
   const failures = getActionableFailures(state);
-  const toFile = [];
-  let groupsSkippedAlreadyAddressed = 0;
-  let groupsDeferredByCap = 0;
-  for (const failure of failures) {
-    if (liveQueryHasNonTerminalWork(failure)) {
-      groupsSkippedAlreadyAddressed += 1;
-      continue;
-    }
-    if (CAP_PER_SWEEP <= 0 || toFile.length < CAP_PER_SWEEP) {
-      toFile.push(failure);
-    } else {
-      groupsDeferredByCap += 1;
-    }
-  }
-
-  for (const failure of toFile) {
-    fileBugfixPlan(failure, { repoUrl, jobDefinitions, dryRun });
-  }
+  const filingCounts = processFailureFilingSweep(state, {
+    failures,
+    jobDefinitions,
+    fileFailure: (failure) => fileBugfixPlan(failure, { repoUrl, jobDefinitions, dryRun }),
+    save: saveState,
+    onNeedsHuman: (failure, attemptGate) => {
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
+    },
+    onRetired: (failure) => {
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" has no mapped local verify command; marking retired and skipping filing`);
+    },
+  });
 
   appendSweepLog({
     runsProcessed,
@@ -543,10 +974,7 @@ export async function main() {
     jobsBroken,
     jobsOk,
     jobsIgnored,
-    groupsFound: failures.length,
-    groupsFiled: toFile.length,
-    groupsSkippedAlreadyAddressed,
-    groupsDeferredByCap,
+    ...filingCounts,
     dryRun,
   });
 }

@@ -738,7 +738,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-label', 'Plan graph');
     await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('aria-label', 'Workflows');
     await expect(page.getByTestId('sidebar-attention')).toHaveAttribute('aria-label', 'Needs Attention');
-    await expect(page.getByTestId('sidebar-running')).toBeAttached();
+    await expect(page.getByTestId('sidebar-workers')).toHaveAttribute('aria-label', 'Workers');
+    await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('data-tone', 'neutral');
+    await expect(page.getByTestId('sidebar-running')).toHaveCount(0);
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
@@ -862,7 +864,7 @@ test.describe('Visual proof capture', () => {
     });
   });
 
-  test('planning review incident ad665bff shows the in-app approval banner', async ({ page }) => {
+  test('planning review incident ad665bff shows ask-first YAML review', async ({ page }) => {
     const planYaml = await fs.readFile(
       path.resolve(__dirname, '..', 'src', '__tests__', 'fixtures', 'planning-review-ad665bff.yaml'),
       'utf8',
@@ -885,14 +887,48 @@ test.describe('Visual proof capture', () => {
     if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(750);
     await page.getByRole('button', { name: 'Send' }).click();
 
-    const readyBar = page.getByTestId('invoker-terminal-ready-bar');
-    await expect(readyBar).toBeVisible();
-    await expect(readyBar).toContainText(
-      'Draft ready · Reaper workers for finished e2e and admin-bypass tasks · 3 workflows · 6 tasks',
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await expect(transcript).toContainText('I wrote the 3-slice plan to the draft file.');
+    await expect(transcript.locator('details').last()).toContainText('View YAML');
+    await transcript.locator('details').last().locator('summary').click();
+    await expect(transcript.locator('pre code').last()).toContainText(
+      'name: "Reaper workers for finished e2e and admin-bypass tasks"',
     );
-    await expect(page.getByRole('button', { name: 'Review draft' })).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await captureScreenshot(page, 'planning-review-ad665bff-after');
     if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(1_000);
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
+  test('plan doctor rejection stays out of the review UI', async ({ page }) => {
+    const rejectedReply = [
+      'Draft not shown: the plan doctor rejected it.',
+      '',
+      'Nothing was submitted.',
+      '',
+      '- Task "define-terminal-workflow-cleanup-policy" uses "autoFix", which is no longer supported in plan YAML.',
+    ].join('\n');
+    await page.evaluate(async (replyOnly) => {
+      await window.invoker.setTestPlanningChatResponse({ replyOnly } as never);
+    }, rejectedReply);
+
+    await page.getByTestId('sidebar-home').click();
+    await page.getByRole('button', { name: 'Options' }).click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+    await page.getByTestId('invoker-terminal-input').fill('Draft the approved plan');
+    await page.getByRole('button', { name: 'Send' }).click();
+
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await expect(transcript).toContainText('Draft not shown: the plan doctor rejected it.');
+    await expect(transcript).toContainText('Nothing was submitted.');
+    await expect(transcript).toContainText('uses "autoFix", which is no longer supported');
+    await expect(page.getByRole('button', { name: 'Review draft' })).toHaveCount(0);
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
+
+    await captureScreenshot(page, 'plan-doctor-rejection-no-review');
 
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);
@@ -974,6 +1010,30 @@ test.describe('Visual proof capture', () => {
     await clearSubmittedButton.click();
     await expect.poll(() => confirmDialogMessage).toBe('Clear all submitted planning chats? This cannot be undone.');
     await expect(rows).toHaveCount(2);
+  });
+
+  test('planning chat composer — split harness and model picker', async ({ page }) => {
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+
+    const input = page.getByTestId('invoker-terminal-input');
+    await expect(input).toBeVisible({ timeout: 10000 });
+    await input.fill('Draft a plan for the chat picker visual proof fixture');
+
+    await page.getByRole('button', { name: 'Options' }).click();
+
+    const harnessSelect = page.getByTestId('invoker-terminal-harness');
+    await expect(harnessSelect).toBeVisible({ timeout: 10000 });
+    await expect(harnessSelect.locator('option')).not.toHaveCount(0);
+    await expect.poll(async () => harnessSelect.inputValue()).not.toBe('');
+    await harnessSelect.selectOption('omp');
+    const modelSelect = page.getByTestId('invoker-terminal-model');
+    await expect(modelSelect).toBeVisible({ timeout: 10000 });
+    await expect(modelSelect.locator('option')).not.toHaveCount(0);
+    await expect(page.getByTestId('invoker-terminal-confirmation-mode')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+
+    await captureScreenshot(page, 'planning-chat-composer-combined-agent-picker-before');
   });
 
   test('terminal planning captures long transcript follow surface', async ({ page }) => {
@@ -1899,9 +1959,12 @@ test.describe('Visual proof capture', () => {
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await selectWorkflowNode(page, 'wf-test-1');
     await waitForStableViewportTransform(page, page.getByTestId('workflow-graph-surface').locator('.react-flow__viewport').first());
-    const pendingChip = page.getByTestId('workflow-status-pill-pending');
-    await expect(pendingChip).toBeVisible();
-    await expect(pendingChip).toContainText('pending (1)');
+    const runningWorkflowChip = page
+      .getByTestId('workflow-status-pill-running')
+      .filter({ hasText: 'workflows running (1)' });
+    await expect(runningWorkflowChip).toBeVisible();
+    await expect(page.getByTestId('workflow-status-pill-pending').filter({ hasText: 'pending (0)' })).toBeVisible();
+    await expect(page.getByTestId('queue-chip-queued')).toContainText('Queued (0)');
     await expect(page.getByText('System Log')).toHaveCount(0);
     await captureScreenshot(page, 'status-bar-no-system-log');
     await assertPageScreenshot(page, 'status-bar-no-system-log');

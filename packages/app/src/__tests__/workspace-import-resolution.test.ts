@@ -9,6 +9,11 @@ type AppPackageJson = {
   devDependencies?: Record<string, string>;
 };
 
+interface InvokerImport {
+  specifier: string;
+  typeOnly: boolean;
+}
+
 const require = createRequire(import.meta.url);
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(currentDir, '..', '..');
@@ -18,18 +23,25 @@ const packageJsonPath = join(packageRoot, 'package.json');
 const mainSource = readFileSync(mainSourcePath, 'utf-8');
 const appPackageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as AppPackageJson;
 
-function collectInvokerImports(sourceCode: string): string[] {
+function collectInvokerImports(sourceCode: string): InvokerImport[] {
   const invokerImportPattern = /from\s+['"](@invoker\/[^'"]+)['"]/g;
-  const imports = new Set<string>();
+  const imports = new Map<string, InvokerImport>();
 
   for (const match of sourceCode.matchAll(invokerImportPattern)) {
     const specifier = match[1];
     if (specifier) {
-      imports.add(specifier);
+      const lineStart = sourceCode.lastIndexOf('\n', match.index) + 1;
+      const importPrefix = sourceCode.slice(lineStart, match.index);
+      const typeOnly = /^\s*import\s+type\b/.test(importPrefix);
+      const existing = imports.get(specifier);
+      imports.set(specifier, {
+        specifier,
+        typeOnly: (existing?.typeOnly ?? true) && typeOnly,
+      });
     }
   }
 
-  return [...imports].sort();
+  return [...imports.values()].sort((a, b) => a.specifier.localeCompare(b.specifier));
 }
 
 /** package.json declares the package (`@invoker/cli`), never a subpath export (`@invoker/cli/bundled-skills`). */
@@ -50,14 +62,15 @@ describe('workspace import resolution', () => {
   });
 
   it('declares every @invoker/* import in package.json', () => {
-    for (const specifier of invokerImports) {
+    for (const { specifier } of invokerImports) {
       const packageName = packageNameOf(specifier);
       expect(declaredDependencies.has(packageName), `Missing dependency declaration for ${packageName} (imported as ${specifier})`).toBe(true);
     }
   });
 
-  it('resolves every @invoker/* import from package root', () => {
-    for (const specifier of invokerImports) {
+  it('resolves every runtime @invoker/* import from package root', () => {
+    for (const { specifier, typeOnly } of invokerImports) {
+      if (typeOnly) continue;
       expect(
         () => require.resolve(specifier, { paths: [packageRoot] }),
         `Unresolvable workspace dependency: ${specifier}. Run pnpm install to refresh workspace links.`,

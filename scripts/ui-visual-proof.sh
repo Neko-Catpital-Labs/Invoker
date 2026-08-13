@@ -48,7 +48,7 @@ set -euo pipefail
 #     ├── task-panel.png
 #     └── walkthrough.webm
 
-SPEC="visual-proof.spec.ts"
+SPEC="e2e/visual-proof.spec.ts"
 OUTPUT_DIR="packages/app/e2e/visual-proof"
 RESULTS_DIR="packages/app/e2e/test-results"
 SUBCOMMAND=""

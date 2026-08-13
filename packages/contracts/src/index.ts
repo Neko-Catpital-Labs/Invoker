@@ -15,4 +15,5 @@ export * from './config-diagnostics.ts';
 export * from './remote-target-onboarding.ts';
 export * from './prerequisites.ts';
 export * from './headless-owner-launch.ts';
+export * from './planning-surface.ts';
 export { EXTERNAL_DEPENDENCIES, DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.ts';

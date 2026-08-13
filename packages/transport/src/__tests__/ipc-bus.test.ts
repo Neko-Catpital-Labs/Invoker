@@ -489,6 +489,31 @@ describe('IpcBus', () => {
     expect(winner).toBe(stillPending);
   });
 
+  it('REGRESSION: a slow invoker:planning-chat-submit delegated over headless.gui-mutation does not report failure while the owner is still submitting', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest('headless.gui-mutation', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(client);
+    await client.ready();
+    await sleep(20);
+
+    const pending = client.request('headless.gui-mutation', {
+      channel: 'invoker:planning-chat-submit',
+      args: [{ sessionId: 'session-1' }],
+    });
+
+    const stillPending = Symbol('still-pending');
+    const winner = await Promise.race([pending, sleep(300).then(() => stillPending)]);
+
+    expect(winner).toBe(stillPending);
+  });
+
   it('REGRESSION: a slow invoker:start-ready delegated over headless.gui-mutation is killed by the default deadline instead of getting the long-deadline protection headless.exec gets', async () => {
     const sock = tempSocketPath();
 

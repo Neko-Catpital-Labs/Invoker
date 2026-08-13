@@ -17,8 +17,17 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
-import { buildPlanningHandoffInstructions, isDraftingAuthorized, summarizePlanText } from '@invoker/planning-core';
+import {
+  buildPlanningHandoffInstructions,
+  formatPlanningHostedTurn,
+  isDraftingAuthorized,
+  planningHostContext,
+  summarizePlanText,
+  type PlanningHostSurface,
+} from '@invoker/planning-core';
 import type { LogFn } from '../surface.js';
+import { createPlanningDraftDoctor } from './planning-draft-doctor.js';
+import type { PlanningDraftDoctor, PlanningDraftDoctorResult } from './planning-draft-doctor.js';
 import {
   buildTrackedChangesRevertedNotice,
   buildUnverifiedNotice,
@@ -65,6 +74,7 @@ const EMPTY_PLANNER_STDERR_TAIL_LIMIT = 500;
 
 export const DEFAULT_PLANNER_RETRY_LIMIT = 2;
 export const DEFAULT_PLANNER_RETRY_BASE_DELAY_MS = 500;
+export const DEFAULT_PLAN_DOCTOR_REPAIR_LIMIT = 2;
 
 // Shared with slack-surface.ts so both planner spawn paths surface the same
 // actionable error when the CLI exits 0 but writes nothing to stdout. The
@@ -140,6 +150,7 @@ export interface PlanConversationConfig {
   onHarnessSessionId?: (sessionId: string) => void;
   /** Opt in to a scoping-first planning conversation before YAML drafting. Default: false. */
   conversationalPlanning?: boolean;
+  planningSurface?: PlanningHostSurface;
   /**
    * With `conversationalPlanning`, treat drafting as already authorized from the
    * first turn instead of requiring explicit draft intent in the message text.
@@ -161,6 +172,12 @@ export interface PlanConversationConfig {
    * attempt 2, 1000ms before attempt 3, and so on).
    */
   plannerRetryBaseDelayMs?: number;
+  /** Full skill-doctor script used to gate the exact draft before review. */
+  planDoctorScriptPath?: string;
+  /** Test/host injection for the full draft doctor. Takes precedence over planDoctorScriptPath. */
+  draftDoctor?: PlanningDraftDoctor;
+  /** Maximum planner repair turns after doctor rejection. Default: 2 (3 candidates total). */
+  planDoctorRepairLimit?: number;
 }
 
 // ── Confirmation Detection ──────────────────────────────────
@@ -280,6 +297,7 @@ export interface BuildPlanSystemPromptOptions {
   draftingAuthorized?: boolean;
   preferStackedWorkflows?: boolean;
   planFilePath?: string;
+  planningSurface?: PlanningHostSurface;
 }
 
 function buildDirectPlanSystemPrompt(
@@ -360,17 +378,28 @@ function buildConversationalPlanSystemPrompt(
   options: BuildPlanSystemPromptOptions,
 ): string {
   const draftingAuthorized = options.draftingAuthorized ?? false;
+  if (!options.planningSurface) {
+    throw new Error('Conversational planning requires an explicit planningSurface.');
+  }
+  const hostContext = planningHostContext(options.planningSurface);
   const handoffInstructions = buildPlanningHandoffInstructions({
     planFilePath: options.planFilePath,
-    reviewInstruction: 'After the YAML exists, the hosting surface reads that exact YAML, renders the ordered steps in its review flow, and owns the approval step.',
+    reviewInstruction: options.planningSurface === 'in_app'
+      ? 'After the YAML exists, the in-app planner reads that exact YAML, renders the ordered steps in its review panel, and owns the approval step.'
+      : 'After the YAML exists, the Slack planner reads that exact YAML, renders the ordered steps in its Approve/Cancel review card, and owns the approval step.',
     shortReplyInstruction: 'Then reply in chat with only a one-or-two-sentence summary. Never paste the YAML into chat.',
-    submissionInstruction: 'Only the hosting surface (the Slack orchestrator or the in-app planner) may submit the plan after your draft is approved in its review flow. Never run `invoker-cli`, `invoker_submit_plan`, `scripts/headless-ipc.js`, or any other submission command yourself. This rule overrides the plan-to-invoker skill\'s Harness handoff mode in this session.',
+    submissionInstruction: 'Only the current planning host may submit the plan after the draft is approved in its review flow. Never run `invoker-cli`, `invoker_submit_plan`, `scripts/headless-ipc.js`, or any other submission command yourself. This rule overrides the plan-to-invoker skill\'s Harness handoff mode in this session.',
   });
   const draftingInstructions = draftingAuthorized
     ? `
-The user has explicitly approved drafting. Produce the full Invoker YAML task plan now, using the plan shape from \`skills/plan-to-invoker/SKILL.md\` if you need the exact schema. ${handoffInstructions}`
+The user has explicitly approved drafting. Produce the full Invoker YAML task plan now, using the plan shape from \`skills/plan-to-invoker/SKILL.md\` if you need the exact schema. Never include \`autoFix\` or \`autoFixRetries\` anywhere in plan YAML; retries are configured only in \`~/.invoker/config.json\`. The planning host will run the full plan doctor and will not present the draft until every check passes. ${handoffInstructions}`
     : `
 Drafting is not authorized yet. Do NOT output a \`\`\`yaml code block, do NOT write a draft plan file, and do NOT tell the user the plan can be executed.
+
+Treat this as a conversation before a plan.
+Talk through edge cases, corner cases, architecture, and ambiguity with the human.
+Resolve those points before producing a YAML plan.
+Draft YAML only after the human asks you to draft/proceed.
 
 Before drafting is authorized:
 1. Ask scoping questions first when the request is broad, ambiguous, risky, or missing constraints.
@@ -381,11 +410,15 @@ Before drafting is authorized:
 
   return `You are an assistant for the Invoker orchestrator in conversational planning mode.
 
+${hostContext}
+
 This session is a planning conversation before any task plan exists. Your job is to help scope the work clearly before drafting.
 
 For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase), answer directly without drafting a plan.
 
 For implementation work, prefer a scoping conversation first. Do not rush directly to YAML unless the user has clearly approved drafting a plan.
+
+When YAML is eventually authorized and produced, the hosting surface reads that exact YAML and owns the review and approval step. Only the Slack orchestrator or the in-app planner may submit an approved plan.
 ${draftingInstructions}
 
 When responding in conversational planning mode, be concrete, call out tradeoffs, and keep the next question or draft-authorization request easy to answer.`;
@@ -468,11 +501,14 @@ export class PlanConversation {
   private experimentalPlanner?: boolean;
   private preferStackedWorkflows?: boolean;
   private conversationalPlanning: boolean;
+  private planningSurface?: PlanningHostSurface;
   private draftingPreauthorized: boolean;
   private log: LogFn;
   private onRawPlannerOutput?: RawPlannerOutputHandler;
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
+  private draftDoctor?: PlanningDraftDoctor;
+  private planDoctorRepairLimit: number;
   // Serializes turns on this conversation. Without this, two concurrent
   // sendMessage calls (e.g. two Slack events for the same thread arriving
   // close together) can interleave their per-turn side-channel files
@@ -506,10 +542,17 @@ export class PlanConversation {
     this.experimentalPlanner = config.experimentalPlanner;
     this.preferStackedWorkflows = config.preferStackedWorkflows ?? true;
     this.conversationalPlanning = config.conversationalPlanning ?? false;
+    this.planningSurface = config.planningSurface;
+    if (this.conversationalPlanning && !this.planningSurface) {
+      throw new Error('Conversational planning requires an explicit planningSurface.');
+    }
     this.draftingPreauthorized = config.draftingPreauthorized ?? false;
     this.onRawPlannerOutput = config.onRawPlannerOutput;
     this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
     this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
+    this.draftDoctor = config.draftDoctor
+      ?? (config.planDoctorScriptPath ? createPlanningDraftDoctor(config.planDoctorScriptPath) : undefined);
+    this.planDoctorRepairLimit = Math.max(0, config.planDoctorRepairLimit ?? DEFAULT_PLAN_DOCTOR_REPAIR_LIMIT);
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -620,17 +663,24 @@ export class PlanConversation {
     }
     const fileDraft = this.readPlanDraftFile();
     const inlineDraft = extractYamlPlan(message);
-    const nextDraft = fileDraft && summarizePlanText(fileDraft)
+    let nextDraft = fileDraft && summarizePlanText(fileDraft)
       ? fileDraft
       : inlineDraft;
+    let finalFormatted = formatted;
+    if (nextDraft && this.draftDoctor) {
+      const gated = await this.gateDraftForReview(nextDraft, message, formatted, turn);
+      nextDraft = gated.planText;
+      message = gated.message;
+      finalFormatted = gated.formatted;
+    }
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnPlanIntentSignal = this.mode === 'agent' ? this.readPlanIntentSignalFile() : null;
     if (!nextDraft) {
       message = removeStandaloneSubmitInstruction(message);
     }
-    this._lastTurnReasoning = formatted.reasoning;
-    this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
+    this._lastTurnReasoning = finalFormatted.reasoning;
+    this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${finalFormatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
     this.messages.push({ role: 'assistant', content: message });
     this.saveState();
@@ -638,6 +688,87 @@ export class PlanConversation {
 
     this.log('plan-conversation', 'info', `[PERF] sendMessage: init=${tInit - t0}ms, buildPrompt=${tPrompt - tInit}ms, cursor=${tCursor - tPrompt}ms, saveState=${tSave - tCursor}ms, total=${tSave - t0}ms`);
     return message;
+  }
+
+  private async gateDraftForReview(
+    initialPlanText: string,
+    initialMessage: string,
+    initialFormatted: ReturnType<typeof formatCodexPlannerStdout>,
+    turn: number,
+  ): Promise<{ planText: string | null; message: string; formatted: ReturnType<typeof formatCodexPlannerStdout> }> {
+    let planText = initialPlanText;
+    let message = initialMessage;
+    let formatted = initialFormatted;
+    let lastResult: PlanningDraftDoctorResult = { ok: false, diagnostics: ['skill-doctor did not run'] };
+
+    for (let candidateNumber = 1; candidateNumber <= this.planDoctorRepairLimit + 1; candidateNumber += 1) {
+      try {
+        lastResult = await this.draftDoctor!(planText);
+      } catch (error) {
+        lastResult = {
+          ok: false,
+          infrastructureError: true,
+          diagnostics: [`skill-doctor could not run: ${error instanceof Error ? error.message : String(error)}`],
+        };
+      }
+      if (lastResult.ok) {
+        this.log('plan-conversation', 'info', `[PLAN_DOCTOR] Candidate ${candidateNumber} passed (turn=${turn})`);
+        return { planText, message, formatted };
+      }
+
+      this.log(
+        'plan-conversation',
+        'warn',
+        `[PLAN_DOCTOR] Candidate ${candidateNumber} rejected (turn=${turn}, infrastructure=${lastResult.infrastructureError === true}): ${lastResult.diagnostics.join(' | ')}`,
+      );
+      this.resetPlanDraftFile();
+      if (lastResult.infrastructureError || candidateNumber > this.planDoctorRepairLimit) break;
+
+      const repairPrompt = this.buildDoctorRepairPrompt(planText, lastResult.diagnostics, candidateNumber);
+      const repairResponse = await this.spawnPlanner(repairPrompt, turn);
+      formatted = formatCodexPlannerStdout(repairResponse);
+      message = formatted.message;
+      const fileDraft = this.readPlanDraftFile();
+      const inlineDraft = extractYamlPlan(message);
+      const repairedDraft = fileDraft && summarizePlanText(fileDraft) ? fileDraft : inlineDraft;
+      if (!repairedDraft) {
+        lastResult = { ok: false, diagnostics: ['Planner repair turn did not produce a complete YAML candidate.'] };
+        break;
+      }
+      planText = repairedDraft;
+    }
+
+    this.resetPlanDraftFile();
+    const heading = lastResult.infrastructureError
+      ? 'Draft not shown: plan validation is unavailable.'
+      : 'Draft not shown: the plan doctor rejected it.';
+    const diagnostics = lastResult.diagnostics.slice(0, 8).map((line) => `- ${line}`).join('\n');
+    return {
+      planText: null,
+      message: `${heading}\n\nNothing was submitted.\n\n${diagnostics}`,
+      formatted,
+    };
+  }
+
+  private buildDoctorRepairPrompt(planText: string, diagnostics: string[], repairNumber: number): string {
+    const path = this.planDraftFilePath();
+    const destination = path
+      ? `Write the complete corrected YAML to \`${path}\` and reply with only a one-or-two-sentence summary.`
+      : 'Return the complete corrected YAML in a ```yaml fenced block.';
+    return [
+      `The host rejected candidate ${repairNumber}; it cannot be shown or submitted.`,
+      'Repair the YAML itself. Do not remove requirements merely to silence the doctor.',
+      'Correct every doctor diagnostic below; the host will run the full doctor again against the replacement.',
+      destination,
+      '',
+      'Doctor diagnostics:',
+      ...diagnostics.slice(0, 40).map((line) => `- ${line}`),
+      '',
+      'Rejected candidate:',
+      '```yaml',
+      planText.trim(),
+      '```',
+    ].join('\n');
   }
 
   async runPlanConversion(): Promise<string> {
@@ -692,12 +823,12 @@ export class PlanConversation {
 
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
-    // Gate the file draft the same way sendMessage does: a truncated or
-    // incomplete draft file (parses but cannot be summarized) must not shadow
-    // a valid inline plan — that would post a draft with no Approve button.
+    // Only sendMessage may promote a candidate after its configured doctor
+    // passes. Re-reading the sidecar here would bypass that review gate.
+    if (this.draftDoctor) return this._lastTurnDraftPlanText ?? this.lastKnownGoodPlanText;
     const fileDraft = this.readPlanDraftFile();
     if (fileDraft && summarizePlanText(fileDraft)) return fileDraft;
-    return this.extractLastPlanFromMessages() ?? this.lastKnownGoodPlanText;
+    return this._lastTurnDraftPlanText ?? this.extractLastPlanFromMessages() ?? this.lastKnownGoodPlanText;
   }
 
   // The planner writes the full YAML plan here so its chat reply can stay a
@@ -798,7 +929,10 @@ export class PlanConversation {
   /** Latest message only when resuming a continuity-supporting session; otherwise the full history prompt. */
   private buildTurnPrompt(): string {
     if (this.harnessSessionDriver?.supportsSessionContinuity && this._harnessSessionId) {
-      return this.messages[this.messages.length - 1]?.content ?? '';
+      const latestMessage = this.messages[this.messages.length - 1]?.content ?? '';
+      return this.conversationalPlanning && this.planningSurface
+        ? formatPlanningHostedTurn(this.planningSurface, latestMessage)
+        : latestMessage;
     }
     return this.buildCursorPrompt();
   }
@@ -815,6 +949,7 @@ export class PlanConversation {
             && (this.draftingPreauthorized || isDraftingAuthorizedForPrompt(this.messages)),
           preferStackedWorkflows: this.preferStackedWorkflows,
           planFilePath: this.planDraftFilePath() ?? undefined,
+          planningSurface: this.planningSurface,
         })
       : buildAgentSystemPrompt(this.planIntentSignalFilePath() ?? undefined);
     const parts: string[] = [systemPrompt];
@@ -1070,20 +1205,6 @@ function validateExtractedPlanTasks(tasks: unknown, ownerLabel: string): boolean
   return true;
 }
 
-function stripPlannerOnlyFields(plan: Record<string, any>): void {
-  delete plan.autoFix;
-  delete plan.autoFixRetries;
-  for (const task of Array.isArray(plan.tasks) ? plan.tasks : []) {
-    if (!isExtractedPlanRecord(task)) continue;
-    delete task.autoFix;
-    delete task.autoFixRetries;
-  }
-  for (const workflow of Array.isArray(plan.workflows) ? plan.workflows : []) {
-    if (!isExtractedPlanRecord(workflow)) continue;
-    stripPlannerOnlyFields(workflow);
-  }
-}
-
 // ── YAML Extraction ─────────────────────────────────────────
 
 /**
@@ -1140,7 +1261,6 @@ export function extractYamlPlan(text: string): string | null {
       return null;
     }
 
-    stripPlannerOnlyFields(plan);
     return stringifyYaml(plan);
   } catch (err) {
     console.warn(`extractYamlPlan: YAML parse error: ${err instanceof Error ? err.message : String(err)}`);

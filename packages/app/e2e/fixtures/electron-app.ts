@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 import { killOwnedProcessGroup } from './process-group.js';
+import { cleanupStandaloneOwnersForTestDir } from './headless-client.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -99,7 +100,7 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
   });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
   if (!timedOut) return;
@@ -241,6 +242,8 @@ exit 64
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: standaloneOwnerIdleTimeoutMs,
+        INVOKER_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS:
+          process.env.INVOKER_E2E_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS ?? '30000',
         INVOKER_EMBEDDED_TERMINAL_BACKEND:
           process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
         INVOKER_E2E_MARKER_ROOT: markerRoot,
@@ -268,8 +271,12 @@ exit 64
         PATH: pathEnv,
       },
     });
-    await use(app);
-    await closeElectronApp(app);
+    try {
+      await use(app);
+    } finally {
+      await closeElectronApp(app);
+      await cleanupStandaloneOwnersForTestDir(testDir);
+    }
   },
 
   page: async ({ electronApp, guiOwnerMode }, use) => {

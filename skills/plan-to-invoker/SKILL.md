@@ -71,6 +71,8 @@ Use this mode when invoked by the installed command or MCP prompt.
 
 ## Intended flow (do not skip steps)
 
+**Current auto-fix schema:** Never emit `autoFix` or `autoFixRetries` at the plan, workflow, or task level. Those YAML fields are obsolete. Auto-fix retries are configured only with `autoFixRetries` in `~/.invoker/config.json`. A draft containing either YAML field must be corrected and re-run through `skill-doctor.sh`; do not present or submit it.
+
 1. Discuss scope/risk with the user; before authoring YAML, propose each
    `Safety invariant:` and ask the user to confirm or correct it. If the work
    has no repo URL, do not silently pick or invent one — force an explicit

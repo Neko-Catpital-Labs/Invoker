@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SQLiteAdapter, type WorkflowSaveInput } from '@invoker/data-store';
@@ -7,6 +7,14 @@ import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
+
+const tempDirs: string[] = [];
+
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function captureProcessOutput() {
   let stdout = '';
@@ -75,6 +83,9 @@ describe('invoker-cli query', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
     if (previousInvokerDbDir === undefined) {
       delete process.env.INVOKER_DB_DIR;
     } else {
@@ -107,7 +118,7 @@ describe('invoker-cli query', () => {
   });
 
   it('uses INVOKER_DB_DIR for standalone read-only workflow queries', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-query-env-'));
+    const dbDir = makeTempDir('invoker-cli-query-env-');
     await seedDb(dbDir);
     process.env.INVOKER_DB_DIR = dbDir;
     const output = captureProcessOutput();
@@ -127,7 +138,7 @@ describe('invoker-cli query', () => {
   });
 
   it('applies --status and --workflow filters for standalone task queries', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-query-filter-'));
+    const dbDir = makeTempDir('invoker-cli-query-filter-');
     await seedDb(dbDir);
     process.env.INVOKER_DB_DIR = dbDir;
     const output = captureProcessOutput();
@@ -150,7 +161,7 @@ describe('invoker-cli query', () => {
   });
 
   it('prints only parseable JSON on stdout for empty standalone databases', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-query-empty-'));
+    const dbDir = makeTempDir('invoker-cli-query-empty-');
     process.env.INVOKER_DB_DIR = dbDir;
     const output = captureProcessOutput();
     const bus = new LocalBus();

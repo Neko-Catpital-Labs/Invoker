@@ -584,6 +584,17 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
+  for (const field of ['autoFix', 'autoFixRetries']) {
+    if (Object.prototype.hasOwnProperty.call(raw, field)) {
+      errors.push({
+        errorType: 'unsupported_field',
+        field,
+        message: `Plan-level "${field}" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+        value: raw[field],
+      });
+    }
+  }
+
   // Validate description required when onFinish is pull_request or merge
   const onFinish = raw.onFinish ?? 'pull_request';
   if ((onFinish === 'pull_request' || onFinish === 'merge') &&
@@ -729,6 +740,18 @@ function validatePlan(yamlContent, repoRoot) {
     }
 
     // Validate obsolete executor routing fields.
+    for (const field of ['autoFix', 'autoFixRetries']) {
+      if (Object.prototype.hasOwnProperty.call(task, field)) {
+        errors.push({
+          errorType: 'unsupported_field',
+          field,
+          taskId,
+          message: `Task "${taskId}" uses "${field}", which is no longer supported in plan YAML. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+          value: task[field],
+        });
+      }
+    }
+
     if (task.runnerKind !== undefined) {
       errors.push({
         errorType: 'unsupported_field',

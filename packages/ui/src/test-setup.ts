@@ -2,6 +2,7 @@
 process.env.TZ = 'UTC';
 
 import '@testing-library/jest-dom/vitest';
+import { beforeEach } from 'vitest';
 
 if (typeof globalThis.ResizeObserver === 'undefined') {
   class ResizeObserverPolyfill {
@@ -41,7 +42,16 @@ if (typeof window !== 'undefined') {
     configurable: true,
     value: createMemoryStorage(),
   });
+  Object.defineProperty(window, 'sessionStorage', {
+    configurable: true,
+    value: createMemoryStorage(),
+  });
 }
+
+beforeEach(() => {
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+});
 
 if (typeof HTMLCanvasElement !== 'undefined') {
   const context = {

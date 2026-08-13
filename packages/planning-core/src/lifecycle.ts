@@ -1,3 +1,5 @@
+import { isExactPlanningSubmitCommand } from './planning-surface.js';
+
 export type PlanningRole = 'user' | 'assistant' | 'system';
 
 export interface PlanningMessage {
@@ -10,6 +12,7 @@ function normalized(text: string): string {
 }
 
 export function hasExplicitDraftIntent(message: string): boolean {
+  if (isExactPlanningSubmitCommand(message)) return true;
   const value = message.trim().toLowerCase().replace(/\s+/g, ' ');
   return [
     /^draft$/,

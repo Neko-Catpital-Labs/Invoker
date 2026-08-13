@@ -44,9 +44,9 @@ import type { AgentRegistry } from '@invoker/execution-engine';
 import {
   decideWorktreeBinding,
   evaluatePlanningTurn,
+  formatPlanningHostedTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
-  preparePlanningReview,
   submitPlanningReview,
   summarizePlanText,
   type PlanningMessage,
@@ -90,6 +90,8 @@ export interface InAppPlannerDeps {
   logger?: Logger;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
+  /** Canonical full skill-doctor script. Kept separate from target worktrees. */
+  planDoctorScriptPath?: string;
 }
 
 export interface InAppPlanningChatSession {
@@ -356,10 +358,10 @@ function titleFromMessage(message: string): string {
   return firstLine.length > 56 ? `${firstLine.slice(0, 53).trimEnd()}…` : firstLine;
 }
 function normalizePlanningConfirmationMode(
-  value: string | null | undefined,
-  fallback: PlanningConfirmationMode = 'require',
+  _value: string | null | undefined,
+  _fallback: PlanningConfirmationMode = 'require',
 ): PlanningConfirmationMode {
-  return value === 'auto_submit' || value === 'require' ? value : fallback;
+  return 'require';
 }
 
 function resolveDefaultPlanningConfirmationMode(config: InvokerConfig): PlanningConfirmationMode {
@@ -409,6 +411,12 @@ function clearStarterPromptIfUnused(session: InAppPlanningChatSession): void {
 
 function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary' | 'draftPlanText'>): boolean {
   return Boolean(session.draftPlanText || session.draftPlanSummary);
+}
+
+function looksLikeRepositoryLocator(message: string): boolean {
+  const value = message.trim();
+  return /^(?:https?:\/\/)?github\.com\/[^/\s]+\/[^/\s]+\/?$/i.test(value)
+    || /^git@github\.com:[^/\s]+\/[^/\s]+(?:\.git)?$/i.test(value);
 }
 
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
@@ -587,19 +595,6 @@ function saveOverrideConversation(
   );
 }
 
-function formatConversationalPlanningMessage(message: string): string {
-  return [
-    message,
-    '',
-    'In-app planning chat rule:',
-    '- Treat this as a conversation before a plan.',
-    '- Talk through edge cases, corner cases, architecture, and ambiguity with the human.',
-    '- Resolve those points before producing a YAML plan.',
-    '- If anything important is unclear, ask concise questions instead of drafting.',
-    '- Draft YAML only after the human asks you to draft/proceed, or after the conversation has already resolved the important choices.',
-  ].join('\n');
-}
-
 export function hasExplicitDraftIntent(message: string): boolean {
   return hasCoreExplicitDraftIntent(message);
 }
@@ -614,7 +609,7 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput'> & { mcpConfigPath?: string },
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput' | 'planDoctorScriptPath'> & { mcpConfigPath?: string },
   threadTs: string,
   selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
   options: { conversationalPlanning?: boolean; draftingPreauthorized?: boolean } = {},
@@ -630,6 +625,7 @@ function planConversationConfig(
     repoUrl: deps.config.defaultRepoUrl,
     experimentalPlanner: deps.config.experimentalPlanner,
     conversationalPlanning: options.conversationalPlanning ?? false,
+    planningSurface: options.conversationalPlanning ? 'in_app' : undefined,
     draftingPreauthorized: options.draftingPreauthorized ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
@@ -640,6 +636,7 @@ function planConversationConfig(
     }),
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
+    planDoctorScriptPath: deps.planDoctorScriptPath,
     onRawPlannerOutput: deps.onRawPlannerOutput
       ? (chunk) => deps.onRawPlannerOutput?.({ sessionId: threadTs, chunk })
       : undefined,
@@ -696,7 +693,12 @@ async function createSession(
     };
   }
   const conversationDeps = worktreeBinding
-    ? { ...deps, workingDir: worktreeBinding.worktreePath, mcpConfigPath: planningMcpConfigPath(worktreeBinding.worktreePath) }
+    ? {
+        ...deps,
+        planDoctorScriptPath: deps.planDoctorScriptPath,
+        workingDir: worktreeBinding.worktreePath,
+        mcpConfigPath: planningMcpConfigPath(worktreeBinding.worktreePath),
+      }
     : deps;
 
   const session: InAppPlanningChatSession = {
@@ -764,7 +766,7 @@ export async function planFromGoal(
     const { PlanConversation, extractYamlPlan, selectHarnessSessionDriver } = await loadPlannerSurfaces();
     const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver, { conversationalPlanning: true, draftingPreauthorized: true }));
     const plannerOutput = await conversation.sendMessage(goal);
-    const planText = extractYamlPlan(plannerOutput);
+    const planText = conversation.lastTurnDraftPlanText ?? extractYamlPlan(plannerOutput);
     if (!planText) {
       return { ok: false, error: 'Planner did not return a valid YAML plan.' };
     }
@@ -883,7 +885,7 @@ export async function sendPlanningChatMessage(
 
       try {
         const { extractYamlPlan } = await loadPlannerSurfaces();
-        const formattedMessage = formatConversationalPlanningMessage(message);
+        const hostedMessage = formatPlanningHostedTurn('in_app', message);
         if (deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
             await ensurePlanningWorktreeReady(deps.repoPool, {
@@ -897,27 +899,31 @@ export async function sendPlanningChatMessage(
           }
         }
         const reply = deps.plannerReplyOverride
-          ? await deps.plannerReplyOverride(formattedMessage)
-          : await activeSession.conversation.sendMessage(formattedMessage);
+          ? await deps.plannerReplyOverride(hostedMessage)
+          : await activeSession.conversation.sendMessage(message);
         if (deps.plannerReplyOverride) {
-          saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
+          saveOverrideConversation(deps.conversationRepo, activeSession.id, message, reply);
         }
         const reasoningParts = deps.plannerReplyOverride
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
+        const immediateDraftPlanText = deps.plannerReplyOverride
+          ? extractYamlPlan(reply)
+          : activeSession.conversation.lastTurnDraftPlanText;
         const result = evaluatePlanningTurn({
           userMessage: message,
           messagesBeforeTurn,
           assistantReply: reply,
-          immediateDraftPlanText: deps.plannerReplyOverride
-            ? extractYamlPlan(reply)
-            : activeSession.conversation.lastTurnDraftPlanText,
+          immediateDraftPlanText,
+          requireDraftAuthorization: true,
+          hasExistingDraft: hasDraftPlan(activeSession),
         });
-        if (result.kind === 'message') {
+        const draftingAuthorized = result.draftingAuthorized || looksLikeRepositoryLocator(message);
+        if (result.kind === 'message' || !draftingAuthorized) {
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
-            : result.status;
+            : reply.includes('?') ? 'waiting_for_answer' : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
@@ -932,31 +938,8 @@ export async function sendPlanningChatMessage(
           } as InAppPlanningChatResponse;
         }
 
-        const review = preparePlanningReview({
-          plannerOutput: reply,
-          extractDraftPlanText: () => result.planText,
-          confirmationMode: activeSession.confirmationMode,
-        });
-        if ('kind' in review) {
-          activeSession.status = hasDraftPlan(activeSession)
-            ? 'draft_ready'
-            : 'still_discussing';
-          appendSessionMessage(activeSession, 'assistant', review.reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
-            ok: true,
-            sessionId: activeSession.id,
-            reply: review.reply,
-            reasoning,
-            confirmationMode: activeSession.confirmationMode,
-            draftPlanAvailable: hasDraftPlan(activeSession),
-            draftPlanSummary: activeSession.draftPlanSummary,
-            draftPlanText: activeSession.draftPlanText,
-          } as InAppPlanningChatResponse;
-        }
-
-        activeSession.draftPlanSummary = review.summary;
-        activeSession.draftPlanText = review.planText;
+        activeSession.draftPlanSummary = result.summary;
+        activeSession.draftPlanText = result.planText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -967,8 +950,8 @@ export async function sendPlanningChatMessage(
           reasoning,
           confirmationMode: activeSession.confirmationMode,
           draftPlanAvailable: true,
-          draftPlanSummary: review.summary,
-          draftPlanText: review.planText,
+          draftPlanSummary: result.summary,
+          draftPlanText: result.planText,
         } as InAppPlanningChatResponse;
       } catch (error) {
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -1115,6 +1098,8 @@ export async function rebindPlanningChatRepo(
     sessions: InAppPlanningChatSessions;
     planningSessionStore?: InAppPlanningSessionStore;
     repoPool?: PlanningRepoPool;
+    workingDir?: string;
+    planDoctorScriptPath?: string;
   },
 ): Promise<InAppPlanningRebindRepoResponse> {
   const rawRequest = request as Partial<InAppPlanningRebindRepoRequest> | null | undefined;
@@ -1179,6 +1164,7 @@ export async function rebindPlanningChatRepo(
     const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
     const conversationDeps = {
       ...deps,
+      planDoctorScriptPath: deps.planDoctorScriptPath,
       workingDir: provisioned.worktreePath,
       mcpConfigPath: planningMcpConfigPath(provisioned.worktreePath),
     };
@@ -1302,7 +1288,12 @@ export async function restorePlanningChatSessions(
       }
     }
     const conversationDeps = restoredWorktreePath
-      ? { ...deps, workingDir: restoredWorktreePath, mcpConfigPath: planningMcpConfigPath(restoredWorktreePath) }
+      ? {
+          ...deps,
+          planDoctorScriptPath: deps.planDoctorScriptPath,
+          workingDir: restoredWorktreePath,
+          mcpConfigPath: planningMcpConfigPath(restoredWorktreePath),
+        }
       : deps;
 
     const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver, { conversationalPlanning: true }));

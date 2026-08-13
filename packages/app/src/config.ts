@@ -69,6 +69,13 @@ export interface PrMaintenanceConfig {
   shell?: string;
 }
 
+export interface SlackBugScanConfig {
+  enabled?: boolean;
+  intervalMs?: number;
+  maxAutoSubmissionsPerDay?: number;
+  maxAutoSubmissionsPerTick?: number;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -247,6 +254,10 @@ export interface InvokerConfig {
   slackRepos?: Record<string, string>;
   /** Repo URL used for Slack planning when the message carries no `[repo:]` tag. */
   defaultRepoUrl?: string;
+  /** Slack user IDs allowed to run Slack administrative actions. */
+  slackAdminUserIds?: string[];
+  /** Stable Slack channel ID → default repository URL for channel-scoped planning. */
+  slackChannelRepos?: Record<string, string>;
   /** Maximum number of tasks that can run concurrently. Default: 6. */
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
@@ -426,6 +437,7 @@ export interface InvokerConfig {
   diskHeadroom?: {
     cleanupEnabled?: boolean;
   };
+  slackBugScan?: SlackBugScanConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },

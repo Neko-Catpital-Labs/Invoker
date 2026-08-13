@@ -13,6 +13,7 @@ import type {
   TaskState,
   TaskDelta,
   TaskStateChanges,
+  ExternalGatePolicy,
   WorkflowDerivedStatus,
   WorkflowRollup,
 } from '@invoker/workflow-graph';
@@ -1043,6 +1044,10 @@ export const IpcChannels = {
   },
   'invoker:detach-workflow': {} as {
     request: [workflowId: string, upstreamWorkflowId: string];
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:attach-workflow': {} as {
+    request: [workflowId: string, upstreamWorkflowId: string, opts?: { taskId?: string; gatePolicy?: ExternalGatePolicy; force?: boolean }];
     response: WorkflowMutationAcceptedResult;
   },
   'invoker:load-workflow': {} as {

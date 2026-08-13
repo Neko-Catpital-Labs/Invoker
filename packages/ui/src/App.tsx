@@ -11,10 +11,16 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import { resolvePlanningSubmitAction } from '@invoker/contracts/planning-surface';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
+import {
+  persistRendererRecoveryState,
+  readRendererRecoveryState,
+  type RendererRecoveryViewMode,
+} from './lib/renderer-recovery-state.js';
 
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
@@ -52,6 +58,7 @@ import { Trash2 } from 'lucide-react';
 import { Button } from './components/primitives/index.js';
 import { ChevronDownIcon, PlayIcon } from './components/icons/index.js';
 import { CommandPalette, COMMAND_PALETTE_MAX_ROWS } from './components/CommandPalette.js';
+import { AttachWorkflowPicker } from './components/AttachWorkflowPicker.js';
 import {
   getAttentionTaskEntries,
   getRunningTaskEntries,
@@ -706,6 +713,7 @@ interface WorkflowContextMenuProps {
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
   onDetachWorkflow: (workflowId: string) => void;
+  onAttachWorkflow: (workflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
   /** True when this workflow has exactly one upstream dependency that can be detached from the UI. */
   canDetach: boolean;
@@ -744,6 +752,7 @@ function WorkflowContextMenu({
   onCancelWorkflow,
   onDeleteWorkflow,
   onDetachWorkflow,
+  onAttachWorkflow,
   onCopyWorkflowId,
   canDetach,
   onClose,
@@ -836,6 +845,7 @@ function WorkflowContextMenu({
           ...(canDetach
             ? [{ id: 'detach-workflow', label: 'Detach Upstream Workflow', className: dangerButtonClass, action: () => runAction(onDetachWorkflow) }]
             : []),
+          { id: 'attach-workflow', label: 'Attach to...', className: buttonClass, action: () => runAction(onAttachWorkflow) },
           { id: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, action: () => runAction(onDeleteWorkflow) },
         ]),
   ];
@@ -1043,7 +1053,8 @@ export function App() {
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const loadedTasks = useMemo(() => [...tasks.values()], [tasks]);
-  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
+  const initialRendererRecoveryState = useMemo(readRendererRecoveryState, []);
+  const [viewMode, setViewMode] = useState<RendererRecoveryViewMode>(initialRendererRecoveryState.viewMode);
   const {
     graph: actionGraph,
     error: actionGraphError,
@@ -1081,13 +1092,13 @@ export function App() {
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const suppressDagSurfaceDismissRef = useRef(false);
   const contextMenuTaskRef = useRef<TaskState | null>(null);
-  const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
+  const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>(initialRendererRecoveryState.sidebarSurface);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialRendererRecoveryState.selectedTaskId);
   const selectedTaskIdRef = useRef<string | null>(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(initialRendererRecoveryState.selectedWorkflowId);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
@@ -1104,7 +1115,7 @@ export function App() {
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(1);
   const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
-  const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean; defaultConfirmationMode?: PlanningConfirmationMode }>>([]);
+  const [planningPresetOptions, setPlanningPresetOptions] = useState<PlanningPresetOption[]>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [selectedPlanningConfirmationMode, setSelectedPlanningConfirmationMode] = useState<PlanningConfirmationMode>('require');
   const [keptPlanningDraftSessionIds, setKeptPlanningDraftSessionIds] = useState<Set<string>>(new Set());
@@ -1167,7 +1178,7 @@ export function App() {
   const [setupPending, setSetupPending] = useState(false);
   const [setupResult, setSetupResult] = useState<InvokerSetupResult | null>(null);
   const [updateCliError, setUpdateCliError] = useState<string | null>(null);
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(initialRendererRecoveryState.inspectorCollapsed);
   const [inspectorManualOpen, setInspectorManualOpen] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 1600 : window.innerWidth));
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
@@ -1175,6 +1186,7 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const [attachPickerWorkflowId, setAttachPickerWorkflowId] = useState<string | null>(null);
   const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
   const [startReadyMenuOpen, setStartReadyMenuOpen] = useState(false);
   const [startReadyBusy, setStartReadyBusy] = useState(false);
@@ -1204,6 +1216,16 @@ export function App() {
   const planningTypingSequenceRef = useRef(0);
   const planningTypingFrameIdsRef = useRef<Set<number>>(new Set());
   const systemSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    persistRendererRecoveryState({
+      sidebarSurface,
+      viewMode,
+      selectedTaskId,
+      selectedWorkflowId,
+      inspectorCollapsed,
+    });
+  }, [inspectorCollapsed, selectedTaskId, selectedWorkflowId, sidebarSurface, viewMode]);
 
   const cancelPendingSystemSetupAutoOpen = useCallback(() => {
     if (systemSetupAutoOpenTimerRef.current !== null) {
@@ -1262,17 +1284,19 @@ export function App() {
           ? options.map((option) => ({
               key: option.key,
               label: option.label,
+              tool: option.tool,
+              model: option.model,
               isDefault: option.isDefault,
               defaultConfirmationMode: option.defaultConfirmationMode,
             }))
-          : [{ key: 'codex', label: 'Codex', isDefault: true, defaultConfirmationMode: 'require' as const }];
+          : [{ key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' as const }];
         setPlanningPresetOptions(resolved);
         setSelectedPlanningPresetKey(resolved.find((option) => option.isDefault)?.key ?? resolved[0]?.key ?? 'codex');
         setSelectedPlanningConfirmationMode(resolved.find((option) => option.isDefault)?.defaultConfirmationMode ?? resolved[0]?.defaultConfirmationMode ?? 'require');
       })
       .catch((err) => {
         console.error('Failed to load planning presets', err);
-        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', isDefault: true, defaultConfirmationMode: 'require' }]);
+        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' }]);
         setSelectedPlanningPresetKey('codex');
         setSelectedPlanningConfirmationMode('require');
       });
@@ -2633,6 +2657,35 @@ export function App() {
     }
   }, [workflows, refreshTaskGraph]);
 
+  const handleAttachWorkflow = useCallback((workflowId: string) => {
+    setWorkflowContextMenu(null);
+    setAttachPickerWorkflowId(workflowId);
+  }, []);
+
+  const handleAttachWorkflowSelect = useCallback(async (upstreamWorkflowId: string) => {
+    const workflowId = attachPickerWorkflowId;
+    setAttachPickerWorkflowId(null);
+    if (!workflowId) return;
+    const workflow = workflows.get(workflowId);
+    const downstreamName = workflow?.name ?? workflowId;
+    const upstreamName = workflows.get(upstreamWorkflowId)?.name ?? upstreamWorkflowId;
+    const confirmed = window.confirm(
+      `Attach "${downstreamName}" to upstream "${upstreamName}"?\n\n` +
+      `This adds a dependency so "${downstreamName}" waits on "${upstreamName}"'s merge. ` +
+      `Tasks that already ran ahead of this gate are left untouched.`,
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.attachWorkflow(workflowId, upstreamWorkflowId);
+      setDetachNotice(
+        `Attached "${downstreamName}" to upstream "${upstreamName}". The dependency was added.`,
+      );
+      refreshTaskGraph();
+    } catch (err) {
+      notifyMutationError('Attach Workflow failed:', err);
+    }
+  }, [workflows, refreshTaskGraph, attachPickerWorkflowId]);
+
   useEffect(() => {
     if (!detachNotice) return;
     const timer = setTimeout(() => setDetachNotice(null), 6000);
@@ -3017,10 +3070,12 @@ export function App() {
       return;
     }
 
-    if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
-      if (activePlanningSession.draftPlanAvailable || activePlanningSession.status === 'draft_ready') {
-        await handlePlanningSubmitDraft();
-      }
+    const planningSubmitAction = resolvePlanningSubmitAction(
+      input,
+      activePlanningSession.draftPlanAvailable || activePlanningSession.status === 'draft_ready',
+    );
+    if (planningSubmitAction === 'submit_ready') {
+      await handlePlanningSubmitDraft();
       return;
     }
 
@@ -3088,9 +3143,6 @@ export function App() {
         if (result.draftPlanAvailable) {
           setReviewDraftSessionId(result.sessionId);
           setPlanningContextCollapsed(false);
-          if ((result.confirmationMode ?? 'require') === 'auto_submit') {
-            void handlePlanningSubmitDraft(result.sessionId);
-          }
         }
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
@@ -4552,9 +4604,9 @@ export function App() {
     return (
       <aside
         data-testid="planning-context-panel"
-        className={`${planningContextCollapsed ? 'w-16' : 'w-72'} shrink-0 border-l border-border bg-card/60 transition-all duration-150`}
+        className={`${planningContextCollapsed ? 'w-16' : 'w-72'} flex h-full min-h-0 shrink-0 flex-col border-l border-border bg-card/60 transition-all duration-150`}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2.5">
           {!planningContextCollapsed && (
             <h2 className="text-sm font-semibold text-foreground">{reviewingDraft ? 'Review draft' : 'Current plan'}</h2>
           )}
@@ -4570,7 +4622,7 @@ export function App() {
         </div>
         {!planningContextCollapsed && (
           reviewingDraft ? (
-            <div className="space-y-4 p-4 text-sm">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 text-sm">
               <p data-testid="planning-draft-locked-note" className="text-xs text-muted-foreground">
                 This draft is locked — critique in chat, or ask Invoker to re-draft, to change it.
               </p>
@@ -4631,7 +4683,7 @@ export function App() {
               </button>
             </div>
           ) : (
-            <div className="space-y-4 p-4 text-sm">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 text-sm">
               <div>
                 <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Goal</div>
                 <p className="mt-1 text-foreground">
@@ -4959,6 +5011,17 @@ export function App() {
           setShowSystemSetup(true);
         }}
         planningSessionCount={planningSessions.length}
+      />
+      <AttachWorkflowPicker
+        open={attachPickerWorkflowId !== null}
+        downstreamName={
+          attachPickerWorkflowId ? (workflows.get(attachPickerWorkflowId)?.name ?? attachPickerWorkflowId) : ''
+        }
+        entries={Array.from(workflows.values())
+          .filter((candidate) => candidate.id !== attachPickerWorkflowId)
+          .map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+        onSelect={(upstreamWorkflowId) => void handleAttachWorkflowSelect(upstreamWorkflowId)}
+        onClose={() => setAttachPickerWorkflowId(null)}
       />
 
       {showSystemBanner && (
@@ -5344,6 +5407,7 @@ export function App() {
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
           onDetachWorkflow={(workflowId) => void handleDetachWorkflow(workflowId)}
+          onAttachWorkflow={(workflowId) => void handleAttachWorkflow(workflowId)}
           canDetach={(workflows.get(workflowContextMenu.workflowId)?.externalDependencies?.length ?? 0) === 1}
           onCopyWorkflowId={handleCopyWorkflowId}
           onClose={closeContextMenu}

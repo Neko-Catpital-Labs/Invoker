@@ -1,0 +1,144 @@
+name: "Reap terminal e2e and admin-bypass workflows"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+tasks:
+  - id: define-terminal-workflow-cleanup-policy
+    description: |
+      Review claim: A single shared policy identifies cleanup-owned workflows and distinguishes reapable, retained-terminal, and in-flight statuses without changing runtime behavior yet.
+      Review lane: policy
+      Safety invariant: Only the exact admin-bypass workflow name and the established e2e workflow-name prefix can match; failed workflows are explicitly retained and are never inferred to be in-flight merely because they are not reapable.
+      Slice rationale: The classification contract lands before either worker so both consumers use one reviewed source of truth instead of duplicating string and status rules.
+      Architectural effect: Workflow ownership and terminal-status decisions move from implicit conventions into a shared domain policy consumed by worker processes.
+      Layer: domain
+      Feature state: dormant
+      Goal: Define the centralized workflow-category and lifecycle-status policy for e2e and admin-bypass automation.
+      Motivation: Cleanup and duplicate-submission guards need consistent answers while preserving failed workflows for retry.
+      Alternative considerations: A workflows-table source column would be more durable but requires a schema migration and changes to every creation path; scattered worker-local matchers would be faster but would drift. Use the approved shared-rules approach without a schema change.
+      Implementation details: Add a shared module near the worker tooling with named rules for e2e workflows whose names start with "CI regression: " and admin-bypass workflows whose name equals "Admin-bypass accountability babysit loop". Export explicit predicates or constants for reapable statuses completed, closed, and stale; retained terminal status failed; and genuinely in-flight statuses based on the repository's canonical workflow status model. Add focused boundary tests.
+      Non-goals: Do not migrate the database, add a workflow source column, delete anything, schedule workers, or change unrelated workflow status semantics.
+      Files: A new shared policy module adjacent to the existing e2e and PR-maintenance worker tooling; its focused test file; existing canonical workflow status types only if an import/export adjustment is required.
+      Change types: Domain policy and focused unit proof.
+      Acceptance criteria: The two approved name rules are represented once; completed, closed, and stale are the only reapable statuses; failed is retained and is not reported as in-flight; near-miss names and every non-reapable status are covered by deterministic tests; the focused repository-supported test command exits 0.
+    prompt: |
+      Assume no prior conversation context. Implement the shared policy foundation for terminal workflow cleanup in the Invoker repository.
+
+      Review claim: A single shared policy identifies cleanup-owned workflows and distinguishes reapable, retained-terminal, and in-flight statuses without changing runtime behavior yet.
+      Review lane: policy
+      Safety invariant: Match only workflow names beginning exactly with "CI regression: " or equal exactly to "Admin-bypass accountability babysit loop". Treat only completed, closed, and stale as reapable. Retain failed for retry, and do not implement in-flight as a simple negation of reapable.
+      Slice rationale: Both later workers must depend on one policy contract so their classification and lifecycle behavior cannot drift.
+      Architectural effect: Introduce a domain-policy dependency that centralizes workflow ownership and lifecycle decisions for automation workers.
+      Layer: domain
+      Feature state: dormant
+      Goal: Create the shared rules module and focused tests.
+      Motivation: The existing categories are naming conventions rather than database fields, and failed workflows must remain available for retry.
+      Alternative considerations: Do not add a database source column in this change. Do not duplicate matchers inside individual workers.
+      Implementation details: Locate the existing e2e-autofix, e2e regression watch, PR-maintenance, and workflow-status modules. Choose a shared module location and module format compatible with all intended consumers. Export named category rules plus explicit lifecycle helpers/constants. Base in-flight decisions on the canonical status taxonomy and preserve failed as terminal-but-retained. Add deterministic boundary tests for exact/prefix matches, near misses, all three reapable statuses, failed, and representative active or approval statuses. Run the smallest repository-supported focused test command and record its real output in the task result.
+      Non-goals: No worker scheduling, deletions, schema migration, or broad status refactor.
+      Files: New shared worker-policy module and focused tests; canonical status type/export file only if required for a clean dependency.
+      Change types: Add shared policy and unit tests.
+      Acceptance criteria: Tests demonstrate the literal matching and status properties above and the focused command exits 0. If repository facts differ from the names described here, stop and report the mismatch instead of broadening match rules.
+    dependencies: []
+    autoFix: true
+
+  - id: implement-terminal-workflow-reaper
+    description: |
+      Review claim: A standalone scheduled reaper removes workspaces and then hard-deletes only allowlisted workflows in completed, closed, or stale states.
+      Review lane: cleanup
+      Safety invariant: The reaper cannot act unless both the shared category rule and shared reapable-status rule match; it snapshots every task workspace path before database deletion, treats an already-absent workspace as clean, and preserves the workflow record for retry when workspace removal fails materially.
+      Slice rationale: Cleanup ownership is isolated from producer workers so e2e and admin-bypass automation share one clock, lock, audit trail, and failure policy.
+      Architectural effect: Terminal workflow cleanup becomes an independently scheduled owner that reads workflow/task state, delegates safe worktree removal to existing cleanup semantics, and invokes the existing workflow deletion cascade only after disk cleanup succeeds.
+      Layer: owner_delegation
+      Feature state: active
+      Goal: Add and register a non-overlapping terminal-workflow reaper for the two approved workflow categories.
+      Motivation: Finished automation workflows currently retain task rows and disk workspaces, while failed workflows need to remain available for retry.
+      Alternative considerations: Attaching cleanup to each producer worker would duplicate policy and couple cleanup availability to producer health. Extending the existing disk-only reaper would blur unrelated cleanup responsibilities and reuse a name with different semantics.
+      Implementation details: Add a distinctly named worker rather than repurposing the existing disk reaper. On each configured tick, take the repository's standard worker lock, query candidate workflows and their task workspace_path values, re-check category and status immediately before mutation, remove registered worktrees with the established git worktree remove --force plus safe missing-registration fallback behavior, then call SQLiteAdapter.deleteWorkflow() for the workflow cascade/tombstone. Make per-workflow failures observable and allow later candidates to continue. Register lifecycle shutdown and a default five-minute interval using existing worker conventions and an override consistent with neighboring workers.
+      Non-goals: Do not delete failed, running, review-ready, approval-waiting, blocked, or needs-input workflows; do not perform general log/temp/checkout cleanup; do not alter deleteWorkflow cascade semantics.
+      Files: New terminal-workflow reaper worker; existing worker registration/bootstrap and package command surfaces; packages/data-store/src/sqlite-adapter.ts usage; packages/execution-engine/src/repo-pool.ts cleanup semantics or the smallest reusable extraction needed; focused worker and cleanup tests.
+      Change types: Worker runtime, safe cleanup integration, registration, and focused regression proof.
+      Acceptance criteria: Deterministic tests prove eligible workflows have all task workspaces removed before deleteWorkflow is invoked; completed, closed, and stale match; failed and active/approval statuses do not; nonmatching names do not; overlapping ticks do not overlap; one candidate failure does not abort later candidates; missing workspaces are idempotent; focused tests and typechecks exit 0.
+    prompt: |
+      Assume no prior conversation context. Implement a standalone terminal-workflow reaper in Invoker after the shared cleanup policy task has landed.
+
+      Review claim: A standalone scheduled reaper removes workspaces and then hard-deletes only allowlisted workflows in completed, closed, or stale states.
+      Review lane: cleanup
+      Safety invariant: Require both a shared category match and a shared reapable-status match at mutation time. Read all workspace_path values before deleting rows. Delete the workflow record only after every material workspace cleanup succeeds; keep the record and log actionable context if cleanup fails. Never delete failed workflows.
+      Slice rationale: This worker owns cross-category cleanup once, independently of the e2e and admin-bypass producer loops.
+      Architectural effect: Add a scheduled cleanup owner that composes existing persistence deletion and worktree-removal behavior rather than reimplementing either responsibility.
+      Layer: owner_delegation
+      Feature state: active
+      Goal: Implement, register, and prove the cleanup worker.
+      Motivation: Completed automation should release database and disk resources without destroying retryable failures or human-waiting work.
+      Alternative considerations: Do not attach duplicate cleanup callbacks to producer workers. Do not extend or rename the existing disk-only reaper. Prefer reuse or a minimal extraction of the established repo-pool cleanup primitive over copied shell logic.
+      Implementation details: Locate the actual worker bootstrap/registration conventions, SQLiteAdapter.deleteWorkflow(), task workspace_path query path, and repo-pool worktree cleanup implementation. Create a uniquely named worker with the same lock, backoff, logging, interval override, and shutdown behavior used by neighboring durable workers. Default the reaper interval to five minutes. For each candidate, snapshot task workspace paths, re-check the shared policy, safely remove each workspace using git worktree remove --force with the existing fallback for unregistered paths, and only then invoke deleteWorkflow. Continue processing independent candidates after a logged per-workflow failure. Add focused tests with temporary repositories/directories and mocked or test-store persistence only where necessary to assert actual ordering and negative cases. Run focused repository-supported tests and relevant typechecks; include their real output in the task result.
+      Non-goals: No schema change, broad repository garbage collection, failed-workflow deletion, worker UI, or changes to unrelated lifecycle states.
+      Files: New worker and tests; worker bootstrap/registration and package script/config surfaces; packages/data-store/src/sqlite-adapter.ts; packages/execution-engine/src/repo-pool.ts only for a minimal reusable cleanup seam if required.
+      Change types: Add scheduled cleanup behavior and focused tests; minimal refactor only when required for safe primitive reuse.
+      Acceptance criteria: A focused test observes workspace cleanup before database deletion for an eligible workflow; separate tests show completed/closed/stale deletion and failed/active/nonmatching retention; locking prevents overlap; missing workspace cleanup is idempotent; material cleanup failure retains the workflow; all invoked test/typecheck commands exit 0.
+    dependencies:
+      - define-terminal-workflow-cleanup-policy
+    autoFix: true
+
+  - id: implement-admin-bypass-accountability-worker
+    description: |
+      Review claim: A dedicated worker evaluates admin-bypass accountability every five minutes and submits the existing babysit-loop workflow only when no instance is genuinely in flight.
+      Review lane: behavior
+      Safety invariant: The worker uses the exact shared admin-bypass name rule and canonical in-flight predicate under the existing shared-lock pattern, so concurrent ticks cannot create overlapping active loops; failed prior workflows remain stored but do not permanently block a later retry.
+      Slice rationale: Submission cadence and duplicate suppression are one producer behavior and belong together after the shared lifecycle policy and cleanup owner exist.
+      Architectural effect: Ownership of the previously manual/orphaned accountability submission moves into a durable scheduled worker that delegates actual submission to the existing shell script.
+      Layer: owner_delegation
+      Feature state: active
+      Goal: Run the admin-bypass accountability submission path every five minutes without duplicate active workflows.
+      Motivation: The existing submission script needs a durable worker home, and timer overlap must not create competing babysit workflows.
+      Alternative considerations: Cron would lack the existing worker lock/backoff/decision-ledger integration. Treating every retained record as active would cause a failed workflow to suppress all future retries. Rewriting submission logic inside the worker would duplicate the existing script.
+      Implementation details: Model the worker lifecycle on pr-maintenance-workers.ts, including shared locking, backoff, structured decisions, shutdown, and configuration conventions. Every five minutes, query workflows matching the exact admin-bypass accountability name and skip only when a genuinely in-flight instance exists. Otherwise invoke scripts/submit-admin-bypass-accountability-loop.sh, capture its result, and avoid overlapping subprocesses. Register the worker in the normal startup and command surfaces. Add focused clock, locking, status, and invocation tests.
+      Non-goals: Do not run this path from cron, delete failed workflows, change the accountability workflow contents, broaden matching beyond the exact name, or create a second submission implementation.
+      Files: New admin-bypass accountability worker and tests; scripts/submit-admin-bypass-accountability-loop.sh as a delegated executable; pr-maintenance-workers.ts and worker bootstrap/registration/package command surfaces for established patterns.
+      Change types: Scheduled producer behavior, duplicate-run guard, registration, and focused proof.
+      Acceptance criteria: Fake-clock tests prove a five-minute cadence; an active matching workflow suppresses submission; completed, closed, stale, or failed historical workflows do not suppress a new submission; exact-name near misses do not affect the guard; concurrent ticks invoke at most one subprocess; focused tests and typechecks exit 0.
+    prompt: |
+      Assume no prior conversation context. Implement the dedicated admin-bypass accountability worker after the shared policy and cleanup worker tasks have landed.
+
+      Review claim: A dedicated worker evaluates admin-bypass accountability every five minutes and submits the existing babysit-loop workflow only when no instance is genuinely in flight.
+      Review lane: behavior
+      Safety invariant: Use the exact shared admin-bypass category rule, the canonical in-flight predicate, and the established shared-lock pattern so only one active babysit loop can be submitted. Failed is terminal-but-retained and must not permanently block retry.
+      Slice rationale: The cadence, deduplication query, and script invocation jointly define one producer-loop behavior.
+      Architectural effect: Move accountability submission ownership into a durable worker while keeping the existing shell script as the single submission implementation.
+      Layer: owner_delegation
+      Feature state: active
+      Goal: Schedule guarded accountability submissions at a five-minute interval.
+      Motivation: The existing script has no durable scheduler and unguarded timer execution could create overlapping workflows.
+      Alternative considerations: Do not create cron configuration. Do not duplicate the shell script's submission logic. Do not use "not reapable" as the definition of in flight because failed must remain retryable.
+      Implementation details: Locate pr-maintenance-workers.ts, the worker bootstrap/registration path, the shared decision-ledger/lock/backoff helpers, the workflow query API, and scripts/submit-admin-bypass-accountability-loop.sh. Implement a worker following those conventions with a default interval of exactly five minutes and a configuration override consistent with neighboring workers. Under the lock, query exact-name matches and skip only for canonical in-flight statuses; otherwise run the existing script as a child process, capture exit/error details, and prevent overlap across ticks. Add deterministic fake-clock and concurrency tests plus status-table cases, then run the smallest repository-supported focused tests and relevant typechecks. Record real command output in the task result.
+      Non-goals: No cron, cleanup logic, schema migration, workflow prompt rewrite, or GitHub-label behavior changes.
+      Files: New worker and focused tests; existing PR-maintenance worker helpers and bootstrap/registration/package command surfaces; scripts/submit-admin-bypass-accountability-loop.sh only if a minimal testability seam is required without changing its behavior.
+      Change types: Add scheduled worker behavior, registration, duplicate guard, and tests.
+      Acceptance criteria: Tests observe one submission on an eligible tick, none when an exact-name workflow is active, a later submission after completed/closed/stale/failed history, no overlap under concurrent ticks, and an exact five-minute default cadence; all invoked focused test/typecheck commands exit 0.
+    dependencies:
+      - implement-terminal-workflow-reaper
+    autoFix: true
+
+description: |
+  Standalone workflow waiver: The in-app planner stages one reviewable workflow document, and these three ordered tasks share one worker-policy contract and one registration surface. Keeping them in one workflow preserves dependency order and avoids publishing dormant policy without either consumer; each task still has one local review claim and its own focused proof.
+
+  Before this change, e2e and admin-bypass ownership is inferred independently, terminal automation records and workspaces have no dedicated lifecycle owner, and the admin-bypass accountability script has no durable scheduler. After this change, a shared policy feeds a standalone terminal-workflow reaper and a five-minute guarded accountability producer. The tradeoff is continued reliance on approved name conventions instead of a schema-level source field; the policy module makes that reliance explicit and testable. Because this is Invoker-on-Invoker implementation work, keep external review and publish the resulting ready commit stack through Mergify Stacks after the in-app review and execution flow authorizes it.
+
+  ```mermaid
+  flowchart LR
+    E2E[e2e autofix producer] --> DB[(workflow and task rows)]
+    Manual[manual accountability script] --> DB
+    DB --> Disk[retained task workspaces]
+  ```
+
+  ```mermaid
+  flowchart LR
+    Policy[shared category and lifecycle policy] --> Reaper[terminal workflow reaper]
+    Policy --> Admin[5 minute accountability worker]
+    Admin --> Script[existing submission script]
+    Script --> DB[(workflow and task rows)]
+    DB --> Reaper
+    Reaper --> Worktree[existing safe worktree cleanup]
+    Reaper --> Delete[existing deleteWorkflow cascade]
+  ```
+visualProof: false

@@ -19,11 +19,13 @@ import type { TaskState } from '@invoker/workflow-core';
  * persistence layer production uses, not an in-memory mock) and written to
  * a real on-disk file. Boot is measured through the same two calls
  * main.ts's real startup path makes: Orchestrator.syncAllFromDb() (the
- * "orchestrator.restore.full-snapshot" phase) followed by
- * Orchestrator.startExecution() (the first LaunchDispatcher poll tick).
+ * "orchestrator.restore.full-snapshot" phase) followed by a bounded
+ * Orchestrator.startExecution() call (matching LaunchDispatcher's first
+ * poll tick).
  */
 
 const WORKFLOW_COUNT = 300;
+const FIRST_LAUNCH_BATCH_LIMIT = 32;
 
 describe('orchestrator cold boot against a large persisted DB', () => {
   let dbDir: string | undefined;
@@ -34,7 +36,7 @@ describe('orchestrator cold boot against a large persisted DB', () => {
   });
 
   it(
-    'completes syncAllFromDb() + startExecution() within a bounded time for a ~900-task / 300-workflow DB',
+    'completes syncAllFromDb() + a bounded first startExecution() within a bounded time for a ~900-task / 300-workflow DB',
     async () => {
       dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-cold-boot-'));
       const dbPath = path.join(dbDir, 'invoker.db');
@@ -102,10 +104,11 @@ describe('orchestrator cold boot against a large persisted DB', () => {
 
         const bootStart = performance.now();
         orchestrator.syncAllFromDb();
-        const started = orchestrator.startExecution();
+        const started = orchestrator.startExecution({ limit: FIRST_LAUNCH_BATCH_LIMIT });
         const bootMs = performance.now() - bootStart;
 
-        expect(started.length).toBe(activeWorkflowCount);
+        expect(started.length).toBe(FIRST_LAUNCH_BATCH_LIMIT);
+        expect(orchestrator.getExecutableReadyTasks()).toHaveLength(activeWorkflowCount - FIRST_LAUNCH_BATCH_LIMIT);
         // Before the refreshFromDb() N+1 fix (see scheduler-domain.ts),
         // getTaskLaunchReadinessImpl() reloaded every active workflow's
         // tasks from the DB once per ready task, so this scaled with the

@@ -1,12 +1,10 @@
 import { existsSync, writeFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import type { AcquiredWorktree, RepoPool } from '@invoker/execution-engine';
-
-const execFileAsync = promisify(execFile);
-
-const PLANNING_WORKTREE_INSTALL_TIMEOUT_MS = 120_000;
+import {
+  preparePlanningWorktreeDependencies,
+  type PlanningDependencyPreparationOptions,
+} from './planning-chat-dependency-cache.js';
 
 export type PlanningRepoPool = Pick<
   RepoPool,
@@ -34,21 +32,6 @@ export interface PlanningWorktreeState {
   baseCommit: string;
   sessionId: string;
   worktreePath?: string;
-}
-
-async function runBestEffortInstall(worktreePath: string): Promise<void> {
-  try {
-    await execFileAsync('pnpm', ['install', '--frozen-lockfile', '--ignore-scripts'], {
-      cwd: worktreePath,
-      timeout: PLANNING_WORKTREE_INSTALL_TIMEOUT_MS,
-    });
-  } catch (error) {
-    console.warn(
-      `[planning-chat-worktree] pnpm install --frozen-lockfile --ignore-scripts failed in ${worktreePath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
 }
 
 export function planningMcpConfigPath(worktreePath: string): string {
@@ -82,9 +65,10 @@ async function acquireProvisionAndSoftRelease(
   branch: string,
   baseCommit: string,
   sessionId: string,
+  dependencyOptions?: PlanningDependencyPreparationOptions,
 ): Promise<AcquiredWorktree> {
   const acquired = await pool.acquireWorktree(repoUrl, branch, baseCommit, sessionId);
-  await runBestEffortInstall(acquired.worktreePath);
+  await preparePlanningWorktreeDependencies(acquired.worktreePath, dependencyOptions);
   writePlanningMcpConfig(acquired.worktreePath, sessionId);
   acquired.softRelease();
   return acquired;
@@ -93,18 +77,20 @@ async function acquireProvisionAndSoftRelease(
 export async function provisionPlanningWorktree(
   pool: PlanningRepoPool,
   binding: PlanningWorktreeBinding,
+  dependencyOptions?: PlanningDependencyPreparationOptions,
 ): Promise<ProvisionedPlanningWorktree> {
   const { repoUrl, baseBranch, sessionId } = binding;
   await pool.ensureCloneThroughRepoQueue(repoUrl);
   const baseCommit = await pool.resolveBaseCommit(repoUrl, baseBranch);
   const branch = resolvePlanningWorktreeBranch(sessionId);
-  const acquired = await acquireProvisionAndSoftRelease(pool, repoUrl, branch, baseCommit, sessionId);
+  const acquired = await acquireProvisionAndSoftRelease(pool, repoUrl, branch, baseCommit, sessionId, dependencyOptions);
   return { worktreePath: acquired.worktreePath, baseCommit, branch };
 }
 
 export async function ensurePlanningWorktreeReady(
   pool: PlanningRepoPool,
   state: PlanningWorktreeState,
+  dependencyOptions?: PlanningDependencyPreparationOptions,
 ): Promise<{ worktreePath: string; recreated: boolean }> {
   const branch = resolvePlanningWorktreeBranch(state.sessionId);
   const expectedPath = pool.externalWorktreePath(state.repoUrl, branch);
@@ -112,7 +98,7 @@ export async function ensurePlanningWorktreeReady(
     return { worktreePath: expectedPath, recreated: false };
   }
   await pool.ensureCloneThroughRepoQueue(state.repoUrl);
-  const acquired = await acquireProvisionAndSoftRelease(pool, state.repoUrl, branch, state.baseCommit, state.sessionId);
+  const acquired = await acquireProvisionAndSoftRelease(pool, state.repoUrl, branch, state.baseCommit, state.sessionId, dependencyOptions);
   return { worktreePath: acquired.worktreePath, recreated: true };
 }
 

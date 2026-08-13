@@ -53,6 +53,17 @@ exec /usr/bin/env node "$@"
 EOF
 chmod +x "$TMP/bin/node"
 
+# Incident 2026-08-12: resolve_workflow_for_pr defaults to a live Invoker
+# owner over IPC, which this hermetic repro never provides. Mock it to report
+# a genuine miss (no local workflow), same as repro-babysit-pr-body-human-split.sh.
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+
 BODY_PATH="$TMP/body.md"
 cat > "$BODY_PATH" <<'EOF'
 ## Summary
@@ -217,6 +228,30 @@ export ORIGINAL_HEAD
 git clone "$REMOTE" "$WORK_ROOT" >/dev/null
 ( cd "$WORK_ROOT" && git config user.email repro@example.test && git config user.name 'Repro Bot' )
 write_state
+
+# Incident 2026-08-12: submit_async_repair_plan's default path shells out to a
+# live Invoker owner over IPC, which this hermetic repro never provides. Mock
+# it (same pattern as repro-babysit-pr-body-human-split.sh) and simulate the
+# real async plan: the repair agent (the claude wrapper above) makes no
+# commit, then the real normalize step decides noop vs. human-split-invalid
+# from the PR's still-unchanged body -- deliberately not decided any earlier
+# than this, so a real agent always gets a genuine chance to fix it first.
+cat > "$TMP/bin/submit-async.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="\${1:?plan path required}"
+test -f "\$plan_path"
+cd "$WORK_ROOT"
+git fetch origin stack/5804 >/dev/null
+git checkout stack/5804 >/dev/null 2>&1
+"$TMP/bin/claude"
+python3 "$ROOT/scripts/mergify_admin_requeue_repair_normalize.py" \\
+  --repo fake/repo --pr 5804 --check "PR Body" \\
+  --start-head "$ORIGINAL_HEAD" --base stack/base --trunk master \\
+  --state-file "$LEDGER_PATH"
+EOF
+chmod +x "$TMP/bin/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async.sh"
 
 if ! out1="$(run_worker)"; then
   fail 'tick 1: worker failed' "$out1"

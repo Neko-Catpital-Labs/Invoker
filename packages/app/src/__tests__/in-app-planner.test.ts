@@ -1041,7 +1041,7 @@ tasks:
     });
   });
 
-  it('submits planner drafts after stripping legacy auto-fix fields', async () => {
+  it('does not stage or submit planner drafts rejected for legacy auto-fix fields', async () => {
     const legacyPlan = `Here is the plan.
 
 \`\`\`yaml
@@ -1065,8 +1065,11 @@ tasks:
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
+      planDoctorScriptPath: join(process.cwd(), '../../skills/plan-to-invoker/scripts/skill-doctor.sh'),
     });
     if (!sent.ok) throw new Error(sent.error);
+    expect(sent.draftPlanAvailable).toBe(false);
+    expect(sent.reply).toContain('Draft not shown: the plan doctor rejected it.');
     const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
 
     await expect(submitPlanningChatDraft({
@@ -1074,12 +1077,8 @@ tasks:
     }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toEqual({ ok: true, planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
-
-    const submittedPlan = loadGeneratedPlan.mock.calls[0]?.[0] as string;
-    expect(submittedPlan).toContain('id: make-selected-lists-scroll');
-    expect(submittedPlan).not.toContain('autoFix');
-    expect(submittedPlan).not.toContain('autoFixRetries');
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
   it('submits stacked drafts as stacked workflows', async () => {

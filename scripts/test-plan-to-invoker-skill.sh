@@ -137,6 +137,9 @@ done
 
 # SKILL.md — focused runtime verification + Invoker headless as complementary lane
 must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must document the full flow"
+must_contain "$SKILL_MD" 'Never emit `autoFix` or `autoFixRetries`' "SKILL must forbid obsolete auto-fix YAML fields"
+must_contain "$SKILL_MD" 'configured only with `autoFixRetries` in `~/.invoker/config.json`' "SKILL must direct auto-fix retries to user configuration"
+must_contain "$SKILL_MD" 'must be corrected and re-run through `skill-doctor.sh`; do not present or submit it' "SKILL must require doctor success before review"
 must_contain "$SKILL_MD" "Runtime verification (Phase 1b)" "SKILL must require runtime behavioral verification"
 must_contain "$SKILL_MD" "Invoker headless" "SKILL must mention Invoker headless as a verification lane"
 must_contain "$SKILL_MD" "cheapest deterministic command" "SKILL must prefer focused behavioral proof"

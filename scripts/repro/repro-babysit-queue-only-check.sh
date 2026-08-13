@@ -56,6 +56,17 @@ exit 1
 EOF
 chmod +x "$TMP/bin/claude"
 
+# resolve_workflow_for_pr defaults to a live Invoker owner over IPC when this
+# is unset; mock it to report a genuine miss (no local workflow), so this
+# repro is fully hermetic instead of depending on real local Invoker state.
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+
 REMOTE="$TMP/origin.git"
 SEED="$TMP/seed"
 WORK_ROOT="$WORK_PARENT/5811"
@@ -164,6 +175,35 @@ git clone "$REMOTE" "$WORK_ROOT" >/dev/null
 ( cd "$WORK_ROOT" && git config user.email repro@example.test && git config user.name 'Repro Bot' )
 write_state
 : > "$CALLS_PATH"
+
+# Incident 2026-08-12: submit_async_repair_plan's default path shells out to a
+# live Invoker owner over IPC (scripts/headless-ipc.js), which this hermetic
+# repro never provides -- every tick just crashed with "No request handler
+# registered for channel: headless.run". Mock the submit command (same
+# pattern as repro-babysit-pr-body-human-split.sh) and simulate exactly what
+# the real async task does for this scenario: the repair agent recognizes the
+# job log as known infra noise (see the fake claude wrapper above) and makes
+# no commit, then the real normalize step runs against the PR's actual head.
+cat > "$TMP/bin/submit-async.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="\${1:?plan path required}"
+plan_name="\${2:?plan name required}"
+test -f "\$plan_path"
+case "\$plan_name" in
+  admin-bypass-repair-check-pr-5811-required-fast-guardrails-*) ;;
+  *) echo "unexpected plan name: \$plan_name" >&2; exit 2 ;;
+esac
+cd "$WORK_ROOT"
+git fetch origin stack/5811 >/dev/null
+git checkout stack/5811 >/dev/null 2>&1
+python3 "$ROOT/scripts/mergify_admin_requeue_repair_normalize.py" \\
+  --repo fake/repo --pr 5811 --check "required-fast / Guardrails" \\
+  --start-head "$ORIGINAL_HEAD" --base master --trunk master \\
+  --state-file "$LEDGER_PATH"
+EOF
+chmod +x "$TMP/bin/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async.sh"
 
 if ! out1a="$(run_worker)"; then
   fail 'tick 1a: worker failed' "$out1a"

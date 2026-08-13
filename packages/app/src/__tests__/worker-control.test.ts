@@ -10,6 +10,7 @@ import {
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
   INFRA_REPAIR_WORKER_KIND,
+  PR_JAILBREAK_LAND_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
@@ -98,6 +99,33 @@ function deps(): WorkerRuntimeDependencies {
 }
 
 type AutoStartConfig = Parameters<typeof autoStartedOwnerWorkerKindsForConfig>[0];
+type AutoStartOptions = Parameters<typeof autoStartedOwnerWorkerKinds>[0];
+
+const AUTO_STARTED_OWNER_WORKER_KIND_CONFIG_CASES = [
+  {},
+  { diskHeadroom: { cleanupEnabled: true } },
+  { diskHeadroom: { cleanupEnabled: false } },
+  { autoApproveAIFixes: true },
+  { autoApproveAIFixes: false },
+  { infraRepair: { enabled: true } },
+  { infraRepair: { enabled: false } },
+  { autofix: { enabled: true } },
+  { autofix: { enabled: false } },
+  { reaper: { enabled: true } },
+  { reaper: { enabled: false } },
+  { workflowResume: { enabled: true } },
+  { workflowResume: { enabled: false } },
+  { requeueEnabled: true },
+  { requeueEnabled: false },
+  { e2eAutoFixEnabled: true },
+  { e2eAutoFixEnabled: false },
+  { prMaintenance: { enabled: true } },
+] satisfies AutoStartConfig[];
+
+const AUTO_STARTED_OWNER_WORKER_KIND_OPTION_CASES = [
+  { prMaintenanceEnabled: true },
+  { prMaintenanceEnabled: false },
+] satisfies AutoStartOptions[];
 
 function expectConfigGate(
   workerKind: string,
@@ -138,17 +166,21 @@ function controller(
   register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
   register(PR_ORPHAN_REPAIR_WORKER_KIND, 'Repairs unmapped broken pull requests.');
   register(PR_DUPLICATE_CLOSE_WORKER_KIND, 'Closes duplicate or already-landed pull requests.');
+  register(PR_JAILBREAK_LAND_WORKER_KIND, 'Force-merges eligible jailbreak PRs via admin bypass.');
   register(PR_AUTO_LABEL_WORKER_KIND, 'Auto-labels refactor/bugfix/repro/test-only PRs with admin-bypass.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
+  register(REAPER_WORKER_KIND, 'Reaps stale Invoker-managed artifacts.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
 
+  const runtimeDeps = deps();
   return {
     runtimes,
+    logger: runtimeDeps.logger,
     persistence: store,
     controller: createWorkerRuntimeController({
       registry,
-      deps: deps(),
+      deps: runtimeDeps,
       autoStartKinds,
       persistence: store as never,
       canControl: () => true,
@@ -234,6 +266,15 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
       PR_AUTO_LABEL_WORKER_KIND,
     ]);
   });
+
+  it('never auto-starts jailbreak-land for the existing flag cases', () => {
+    for (const config of AUTO_STARTED_OWNER_WORKER_KIND_CONFIG_CASES) {
+      expect(autoStartedOwnerWorkerKindsForConfig(config)).not.toContain(PR_JAILBREAK_LAND_WORKER_KIND);
+    }
+    for (const options of AUTO_STARTED_OWNER_WORKER_KIND_OPTION_CASES) {
+      expect(autoStartedOwnerWorkerKinds(options)).not.toContain(PR_JAILBREAK_LAND_WORKER_KIND);
+    }
+  });
 });
 
 describe('createWorkerRuntimeController', () => {
@@ -301,6 +342,47 @@ describe('createWorkerRuntimeController', () => {
       desiredEnabled: false,
       autoStarts: false,
     });
+  });
+
+  it('logs persisted worker controls and configured auto-start suppression with their source', async () => {
+    const setup = controller([REAPER_WORKER_KIND], { [REAPER_WORKER_KIND]: false });
+
+    setup.controller.startAutoStartedWorkers();
+    setup.controller.start(REAPER_WORKER_KIND, { source: 'gui-ipc' });
+    await setup.controller.stop(REAPER_WORKER_KIND);
+
+    expect(setup.logger.warn).toHaveBeenCalledWith(
+      '[worker-control] configured auto-start suppressed by persisted desired state',
+      expect.objectContaining({
+        module: 'worker-control',
+        workerKind: REAPER_WORKER_KIND,
+        configuredAutoStart: true,
+        persistedDesiredEnabled: false,
+        persistedUpdatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+    expect(setup.logger.info).toHaveBeenNthCalledWith(
+      1,
+      '[worker-control] persisted desired state change',
+      expect.objectContaining({
+        module: 'worker-control',
+        workerKind: REAPER_WORKER_KIND,
+        source: 'gui-ipc',
+        previousDesiredEnabled: false,
+        desiredEnabled: true,
+      }),
+    );
+    expect(setup.logger.info).toHaveBeenNthCalledWith(
+      2,
+      '[worker-control] persisted desired state change',
+      expect.objectContaining({
+        module: 'worker-control',
+        workerKind: REAPER_WORKER_KIND,
+        source: 'controller-api',
+        previousDesiredEnabled: true,
+        desiredEnabled: false,
+      }),
+    );
   });
 
   it('auto-starts e2e-autofix only when its kind is in autoStartKinds', () => {

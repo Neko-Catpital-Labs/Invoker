@@ -208,6 +208,8 @@ export interface SessionManagerConfig {
   plannerRetryBaseDelayMs?: number;
   /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
   conversationalPlanning?: boolean;
+  /** Canonical full skill-doctor script used before exposing review drafts. */
+  planDoctorScriptPath?: string;
   /** Fired whenever a session establishes or updates its harness session id, so callers can persist it. */
   onHarnessSessionId?: (id: SessionIdentifier, sessionId: string) => void;
 }
@@ -261,6 +263,7 @@ export class SessionManager {
   private readonly plannerRetryLimit?: number;
   private readonly plannerRetryBaseDelayMs?: number;
   private readonly conversationalPlanning: boolean;
+  private readonly planDoctorScriptPath?: string;
   private readonly onHarnessSessionId?: (id: SessionIdentifier, sessionId: string) => void;
 
   constructor(config: SessionManagerConfig) {
@@ -280,6 +283,7 @@ export class SessionManager {
     this.plannerRetryLimit = config.plannerRetryLimit;
     this.plannerRetryBaseDelayMs = config.plannerRetryBaseDelayMs;
     this.conversationalPlanning = config.conversationalPlanning ?? false;
+    this.planDoctorScriptPath = config.planDoctorScriptPath;
     this.onHarnessSessionId = config.onHarnessSessionId;
   }
 
@@ -374,6 +378,8 @@ export class SessionManager {
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
         conversationalPlanning: this.conversationalPlanning,
+        planningSurface: 'slack',
+        planDoctorScriptPath: this.planDoctorScriptPath,
         harnessSessionDriver: opts?.harnessSessionDriver,
         harnessSessionId: opts?.harnessSessionId,
         onHarnessSessionId: this.onHarnessSessionId ? (sessionId) => this.onHarnessSessionId!(id, sessionId) : undefined,
@@ -412,6 +418,8 @@ export class SessionManager {
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
         conversationalPlanning: this.conversationalPlanning,
+        planningSurface: 'slack',
+        planDoctorScriptPath: this.planDoctorScriptPath,
         harnessSessionDriver: opts?.harnessSessionDriver,
         harnessSessionId: opts?.harnessSessionId,
         onHarnessSessionId: this.onHarnessSessionId ? (sessionId) => this.onHarnessSessionId!(id, sessionId) : undefined,

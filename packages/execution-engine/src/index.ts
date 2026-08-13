@@ -76,6 +76,8 @@ export * from './workers/e2e-autofix-worker.js';
 export * from './workers/reaper-worker.js';
 export * from './workers/requeue-worker.js';
 export * from './workers/workflow-resume-worker.js';
+export * from './workers/slack-bug-scan-worker.js';
+export * from './workers/slack-bug-scan-scanner.js';
 export * from './reconcile-terminal-worker-actions.js';
 export * from './requeue-attempt-ledger.js';
 export * from './auto-fix-gating.js';

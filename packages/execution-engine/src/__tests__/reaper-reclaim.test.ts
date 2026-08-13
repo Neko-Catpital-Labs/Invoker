@@ -1,7 +1,4 @@
 import {
-  execFileSync,
-} from 'node:child_process';
-import {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -23,26 +20,18 @@ import {
   DELETING_ORPHAN_MIN_AGE_MINUTES,
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
+  reapStaleInvokerCliTempDirs,
   reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
   reapStaleWorktrees,
+  STALE_WORKTREE_GIT_TIMEOUT_MS,
   STALE_WORKTREE_MIN_AGE_HOURS,
   trimOversizedLogs,
 } from '../workers/reaper-reclaim.js';
 
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
-  return {
-    ...actual,
-    execFileSync: vi.fn(),
-  };
-});
-
 const tempDirs: string[] = [];
-const mockedExecFileSync = vi.mocked(execFileSync);
 
 afterEach(() => {
-  mockedExecFileSync.mockReset();
   vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -138,19 +127,20 @@ describe('reapDeletingOrphans', () => {
 });
 
 describe('reapStaleWorktrees', () => {
-  it('leaves worktree entries younger than forty-eight hours untouched', () => {
+  it('leaves worktree entries younger than forty-eight hours untouched', async () => {
     const { root, home } = makeHome();
     mkdirSync(join(home, 'repos', 'repoabc123456'), { recursive: true });
     mkdirSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'), { recursive: true });
+    const runLocalGit = vi.fn(async () => {});
 
-    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+    const removed = await reapLocalStaleWorktrees({ invokerHome: home, userHome: root, runLocalGit });
 
     expect(removed).toEqual([]);
     expect(existsSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'))).toBe(true);
-    expect(mockedExecFileSync).not.toHaveBeenCalled();
+    expect(runLocalGit).not.toHaveBeenCalled();
   });
 
-  it('removes stale entries with git worktree remove and prunes once per repo group', () => {
+  it('removes stale entries with git worktree remove and prunes once per repo group', async () => {
     const { root, home } = makeHome();
     const repoHash = 'repoabc123456';
     const oldA = join(home, 'worktrees', repoHash, 'old-a');
@@ -160,18 +150,20 @@ describe('reapStaleWorktrees', () => {
     mkdirSync(oldB, { recursive: true });
     backdate(oldA, (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
     backdate(oldB, (STALE_WORKTREE_MIN_AGE_HOURS + 2) * 60 * 60 * 1000);
-    mockedExecFileSync.mockImplementation((_cmd, args) => {
-      const argv = args as string[];
+    const runLocalGit = vi.fn(async (argv: string[]) => {
       if (argv[3] === 'remove') rmSync(argv[5]!, { recursive: true, force: true });
-      return Buffer.from('');
     });
 
-    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+    const removed = await reapLocalStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit,
+    });
 
     expect(removed.sort()).toEqual([oldA, oldB].sort());
     expect(existsSync(oldA)).toBe(false);
     expect(existsSync(oldB)).toBe(false);
-    const calls = mockedExecFileSync.mock.calls.map((call) => call[1] as string[]);
+    const calls = runLocalGit.mock.calls.map((call) => call[0]);
     expect(calls.filter((args) => args[3] === 'remove')).toHaveLength(2);
     expect(calls.filter((args) => args[3] === 'prune')).toHaveLength(1);
     expect(calls.find((args) => args[3] === 'prune')).toEqual([
@@ -180,26 +172,30 @@ describe('reapStaleWorktrees', () => {
       'worktree',
       'prune',
     ]);
+    expect(runLocalGit.mock.calls.every((call) => call[1] === STALE_WORKTREE_GIT_TIMEOUT_MS))
+      .toBe(true);
   });
 
-  it('falls back to rm -rf when git worktree remove fails', () => {
+  it('falls back to rm -rf when git worktree remove fails', async () => {
     const { root, home } = makeHome();
     const repoHash = 'repoabc123456';
     const old = join(home, 'worktrees', repoHash, 'old-fallback');
     mkdirSync(join(home, 'repos', repoHash), { recursive: true });
     mkdirSync(old, { recursive: true });
     backdate(old, (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
-    mockedExecFileSync.mockImplementation((_cmd, args) => {
-      const argv = args as string[];
+    const runLocalGit = vi.fn(async (argv: string[]) => {
       if (argv[3] === 'remove') throw new Error('worktree metadata missing');
-      return Buffer.from('');
     });
 
-    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+    const removed = await reapLocalStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit,
+    });
 
     expect(removed).toEqual([old]);
     expect(existsSync(old)).toBe(false);
-    const calls = mockedExecFileSync.mock.calls.map((call) => call[1] as string[]);
+    const calls = runLocalGit.mock.calls.map((call) => call[0]);
     expect(calls.filter((args) => args[3] === 'remove')).toHaveLength(1);
     expect(calls.filter((args) => args[3] === 'prune')).toHaveLength(1);
   });
@@ -269,6 +265,37 @@ describe('reapStaleAutomationCheckouts', () => {
   it('returns nothing when the locations are absent', () => {
     const { root, home } = makeHome();
     expect(reapStaleAutomationCheckouts({ invokerHome: home, userHome: root })).toEqual([]);
+  });
+});
+
+describe('reapStaleInvokerCliTempDirs', () => {
+  it('removes stale CLI test directories while preserving fresh and unrelated temp entries', async () => {
+    const { root } = makeHome();
+    const tempRoot = join(root, 'tmp');
+    const stale = join(tempRoot, 'invoker-cli-prompt-stale');
+    const fresh = join(tempRoot, 'invoker-cli-prompt-fresh');
+    const unrelated = join(tempRoot, 'other-tool-stale');
+    mkdirSync(stale, { recursive: true });
+    mkdirSync(fresh, { recursive: true });
+    mkdirSync(unrelated, { recursive: true });
+    backdate(stale, 49 * 60 * 60 * 1000);
+    backdate(unrelated, 49 * 60 * 60 * 1000);
+
+    const removed = await reapStaleInvokerCliTempDirs({ tempRoot, userHome: join(root, 'user') });
+
+    expect(removed).toEqual([stale]);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+  });
+
+  it('refuses unsafe temp roots', async () => {
+    const { root } = makeHome();
+    const userHome = join(root, 'user');
+    mkdirSync(userHome, { recursive: true });
+
+    await expect(reapStaleInvokerCliTempDirs({ tempRoot: '/', userHome })).resolves.toEqual([]);
+    await expect(reapStaleInvokerCliTempDirs({ tempRoot: userHome, userHome })).resolves.toEqual([]);
   });
 });
 

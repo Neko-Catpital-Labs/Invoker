@@ -77,9 +77,6 @@ jobs:
           - name: Dependency Cruise
             command: pnpm run check:deps
             runner_label: Runner_2_4_core
-          - name: TypeScript Types
-            command: pnpm run check:types
-            runner_label: Github_Runner
 
     name: quality / ${{ matrix.name }}
 
@@ -110,15 +107,10 @@ jobs:
       - name: Run quality check
         run: ${{ matrix.command }}
 
-  # UI component suite (@invoker/ui vitest, ~2-3m). Runs on every PR for early
-  # feedback AND on merge-queue refs, where `.mergify.yml` requires it — this is
-  # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
-  # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
-  # Vitest Workspace is red on master (worker-registry + SSH executor drift).
-  ui-vitest:
-    name: UI Vitest
+  typescript-types:
+    name: quality / TypeScript Types
     runs-on:
-      labels: Runner_Vitest
+      labels: Runner_2_4_core
     timeout-minutes: 5
 
     steps:
@@ -145,8 +137,87 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run TypeScript type check
+        run: pnpm run check:types
+
+  # UI component suite (@invoker/ui vitest, ~2-3m). Runs on every PR for early
+  # feedback AND on merge-queue refs, where `.mergify.yml` requires it — this is
+  # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
+  # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
+  # Vitest Workspace is red on master (worker-registry + SSH executor drift).
+  ui-vitest:
+    name: UI Vitest
+    runs-on:
+      labels: Runner_Vitest
+    timeout-minutes: 10
+
+    steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Run UI vitest
         run: pnpm --filter @invoker/ui test
+
+  required-package-builds:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: quality / Required Package Builds
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run required package builds
+        run: pnpm run check:required-builds
 
   quality-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
@@ -157,12 +228,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Required Package Builds
-            command: pnpm run check:required-builds
-            runner_label: Runner_2_4_core
-          - name: Large File Guardrail
-            command: pnpm run check:large-files
-            runner_label: Runner_1
           - name: Release Version Sync
             command: pnpm run check:versions
             runner_label: Runner_2_4_core
@@ -192,6 +257,33 @@ jobs:
 
       - name: Run quality check
         run: ${{ matrix.command }}
+
+  quality-large-file-guardrail:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: quality / Large File Guardrail
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Run large file guardrail
+        run: pnpm run check:large-files
 
   e2e-proof:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
@@ -307,7 +399,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -322,10 +414,14 @@ jobs:
               bash scripts/test-suites/required/10-dag-background-click-noop-guard.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
+              bash scripts/test-suites/required/51-verify-scratch-execution.sh
+            runner_label: Runner_2_4_core
           - name: Vitest Workspace
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
+            runner_label: Runner_2_4_core
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
+            runner_label: Github_Runner
     name: required-fast / ${{ matrix.name }}
 
     steps:
@@ -395,7 +491,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: Merge Gate Concurrency Repro
             command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
-            runner_label: Runner_1
+            runner_label: Runner_2_4_core
           - name: Start Running MECE Repros
             command: bash scripts/test-suites/required/18-start-running-mece-repros.sh
             runner_label: Runner_2_4_core
@@ -407,7 +503,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: PR Authoring Guardrails
             command: bash scripts/test-suites/required/11-pr-authoring-guardrails.sh
-            runner_label: Runner_2_4_core
+            runner_label: Github_Runner
           - name: Mergify Admin Requeue
             command: bash scripts/test-suites/required/12-mergify-admin-requeue.sh
             runner_label: Runner_2_4_core
@@ -415,6 +511,9 @@ jobs:
     name: required-fast / ${{ matrix.name }}
 
     steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -422,6 +521,9 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install system libraries for Node
+        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -614,6 +716,7 @@ jobs:
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
+              e2e/planning-review-scroll.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts
@@ -622,6 +725,7 @@ jobs:
               e2e/pending-review-gate-target-repo.proof.spec.ts
               e2e/workflow-status-composition.spec.ts
               e2e/queue-running-vs-queued.spec.ts
+              e2e/attach-workflow.spec.ts
           - name: 4-of-9
             files: >-
               e2e/startup-window-liveness.spec.ts
@@ -630,6 +734,7 @@ jobs:
               e2e/edit-task-prompt.spec.ts
               e2e/fix-with-claude.spec.ts
               e2e/fix-with-agent-transition.spec.ts
+              e2e/renderer-state-restoration.spec.ts
           - name: 5-of-9
             files: >-
               e2e/autofix-worker-ui.spec.ts
@@ -638,6 +743,7 @@ jobs:
               e2e/planning-chat-send-long-deadline.spec.ts
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
+              e2e/renderer-memory-pressure-recovery.spec.ts
           - name: 6-of-9
             files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
@@ -670,6 +776,8 @@ jobs:
               e2e/start-ready-daemon-owner.spec.ts
               e2e/ui-delta-timeline.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/rebase-recreate-ui-drift-repro.spec.ts
+              e2e/rebase-recreate-ui-never-recovers.spec.ts
           - name: terminal-garbling
             files: >-
               e2e/planning-terminal-live-model.proof.spec.ts
@@ -677,6 +785,9 @@ jobs:
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
               e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
               e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
+          - name: planning-chat-restore
+            files: >-
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
@@ -826,6 +937,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
+    env:
+      electron_config_cache: /tmp/invoker-electron-cache
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -920,13 +1033,31 @@ jobs:
     name: optional / ${{ matrix.name }}
 
     steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Install Node.js runtime dependency
+        if: matrix.name == 'Worktree Provisioning'
+        run: sudo apt-get update && sudo apt-get install -y libatomic1
+
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -955,8 +1086,7 @@ jobs:
   docker:
     if: ${{ github.event_name != 'pull_request' }}
     needs: build-artifacts
-    runs-on:
-      labels: Runner_2_4_core
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     timeout-minutes: 60
     name: docker / comprehensive
 

@@ -36,6 +36,7 @@ import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
+import type { WorkerRuntimeController } from './worker-control.js';
 
 
 export interface HeadlessDeps {
@@ -87,6 +88,15 @@ export interface HeadlessDeps {
   ownerTaskRunnerProvider?: () => TaskRunner | null;
   /** Main process dist directory (`__dirname` of main.js); used to locate the built web UI. */
   appRootDir?: string;
+  /**
+   * Accessor for the owner's live `WorkerRuntimeController`, used by
+   * `--headless worker start/stop <kind>` to control an already-running
+   * persistent worker in this process. A getter (not the controller itself)
+   * because it is constructed after `headlessDeps`; `null` when there is no
+   * live owner worker runtime in this process (e.g. a bare CLI command that
+   * only delegated here to run one command and exit).
+   */
+  getWorkerRuntimeController?: () => WorkerRuntimeController | null;
 }
 
 export const RESET = '\x1b[0m';
@@ -458,11 +468,11 @@ export async function preemptWorkflowExecution(workflowId: string, deps: Headles
   if (deps.preemptWorkflowExecution) {
     return deps.preemptWorkflowExecution(workflowId);
   }
-  if (typeof deps.commandService.cancelWorkflow !== 'function') {
+  if (typeof deps.commandService.preemptWorkflow !== 'function') {
     return { cancelled: [], runningCancelled: [] };
   }
-  const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
-  const result = await deps.commandService.cancelWorkflow(envelope);
+  const envelope = makeEnvelope('preempt-workflow', 'headless', 'workflow', { workflowId });
+  const result = await deps.commandService.preemptWorkflow(envelope);
   if (!result.ok) {
     if (preemptSkipCodes.has(result.error.code)) return { cancelled: [], runningCancelled: [] };
     if (isRaceLostForeignKeyConstraintFailure(result.error.message, workflowId, deps)) {
