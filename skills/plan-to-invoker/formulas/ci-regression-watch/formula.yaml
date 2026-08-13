@@ -16,19 +16,19 @@ vars:
     description: "Current target branch for the repair PR."
   sha:
     required: true
-    example: "abc123def456abc123def456abc123def456ab1"
+    example: "e73ee55abc123def456abc123def456abc123def"
     description: "Default-branch commit where this CI job first failed."
   short_sha:
     required: true
-    example: "abc123d"
+    example: "e73ee55"
     description: "Short SHA used in ids."
   job_name:
     required: true
-    example: "playwright / 1-of-9"
+    example: "UI Vitest"
     description: "Exact GitHub Actions job name."
   job_slug:
     required: true
-    example: "abc123d-playwright-1-of-9"
+    example: "e73ee55-ui-vitest"
     description: "Kebab-case plan/task id suffix."
   run_id:
     required: true
@@ -52,15 +52,15 @@ vars:
     description: "Most recent run id where the job was still broken."
   verify_command:
     required: true
-    example: "bash scripts/test-suites/required/10-vitest-workspace.sh"
+    example: "pnpm --filter @invoker/ui test"
     description: "Local command that should fail before and pass after the fix."
   marker:
     required: true
-    example: "<!-- invoker-ci-regression-watch: first-bad-sha=abc123def456abc123def456abc123def456ab1; job=playwright / 1-of-9 -->"
+    example: "<!-- invoker-ci-regression-watch: first-bad-sha=e73ee55abc123def456abc123def456abc123def; job=UI Vitest -->"
     description: "Exact dedup marker embedded in the workflow description."
   failure_description:
     required: true
-    example: "CI job `playwright / 1-of-9` first failed on default-branch push commit abc123def456abc123def456abc123def456ab1"
+    example: "CI job `UI Vitest` first failed on default-branch push commit e73ee55abc123def456abc123def456abc123def"
     description: "Indented workflow description body for the failing CI job or fleet event."
 workflows:
   - ci-regression-watch.workflow.yaml
