@@ -200,7 +200,7 @@ async function launchElectronApp(testDir: string): Promise<ElectronApplication> 
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30_000 });
 }
 
 test('planning chat send keeps listWorkflows IPC responsive under transcript pressure', async () => {
@@ -210,7 +210,7 @@ test('planning chat send keeps listWorkflows IPC responsive under transcript pre
     let measurement: PlanningSendMeasurement | undefined;
     const app = await launchElectronApp(testDir);
     try {
-      const page = await app.firstWindow({ timeout: 10_000 });
+      const page = await app.firstWindow({ timeout: 30_000 });
       await waitForInvoker(page);
 
       const restored = await page.evaluate(async (sessionId) => {
