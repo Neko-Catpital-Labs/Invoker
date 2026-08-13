@@ -9,9 +9,12 @@ const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergi
 const MERGE_QUEUE_HEAD_GATE = "${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const HEAD_REF_EXPRESSION = '${{ github.head_ref }}';
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
+const NODE_RUNTIME_SYSTEM_DEPS_STEP_NAME = 'Install Node runtime system dependencies';
+const NODE_RUNTIME_SYSTEM_DEPS_COMMAND = 'bash scripts/ci/install-node-runtime-system-deps.sh';
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
+const nodeRuntimeSystemDepsScript = readFileSync('scripts/ci/install-node-runtime-system-deps.sh', 'utf8');
 const closeCleanupPath = '.github/workflows/merge-queue-close-cleanup.yml';
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const jobs = workflow.jobs ?? {};
@@ -53,6 +56,33 @@ assert(
   dependencyCruiseEntry.runner_label === 'Runner_2_4_core',
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
 );
+
+assert(
+  nodeRuntimeSystemDepsScript.includes('libatomic1'),
+  'Node runtime system dependency installer must install libatomic1 for Node 26',
+);
+assert(
+  nodeRuntimeSystemDepsScript.includes('sudo -n true'),
+  'Node runtime system dependency installer must avoid interactive sudo prompts',
+);
+
+for (const [jobName, job] of Object.entries(jobs)) {
+  const steps = job.steps ?? [];
+  for (const [stepIndex, step] of steps.entries()) {
+    if (step.uses !== 'actions/setup-node@v4') {
+      continue;
+    }
+    const previousStep = steps[stepIndex - 1];
+    assert(
+      previousStep?.name === NODE_RUNTIME_SYSTEM_DEPS_STEP_NAME,
+      `${jobName} must install Node runtime system dependencies before actions/setup-node@v4`,
+    );
+    assert(
+      previousStep.run === NODE_RUNTIME_SYSTEM_DEPS_COMMAND,
+      `${jobName} must use the shared Node runtime system dependency installer`,
+    );
+  }
+}
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
