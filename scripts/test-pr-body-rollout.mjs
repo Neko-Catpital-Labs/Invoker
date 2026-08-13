@@ -35,6 +35,43 @@ assert.deepEqual(evaluateRollout({ author: 'EdbertChan', enforceAll: 'false', en
 });
 
 const prBodyWorkflow = readFileSync(new URL('../.github/workflows/pr-body.yml', import.meta.url), 'utf8');
+const installPnpmIndex = prBodyWorkflow.indexOf('uses: pnpm/action-setup@v4');
+const installLibatomicIndex = prBodyWorkflow.indexOf('- name: Install Node.js runtime dependency');
+const setupNodeIndex = prBodyWorkflow.indexOf('uses: actions/setup-node@v4');
+
+assert.notEqual(installPnpmIndex, -1, 'PR Body must install pnpm before Node setup');
+assert.notEqual(installLibatomicIndex, -1, 'PR Body must install Node 26 libatomic runtime dependency');
+assert.notEqual(setupNodeIndex, -1, 'PR Body must configure Node after pre-Node prerequisites');
+assert.ok(
+  installPnpmIndex < installLibatomicIndex && installLibatomicIndex < setupNodeIndex,
+  'PR Body must install libatomic1 after pnpm setup and before actions/setup-node can probe the pnpm cache',
+);
+
+const libatomicStep = prBodyWorkflow.slice(installLibatomicIndex, setupNodeIndex);
+assert.match(
+  libatomicStep,
+  /command -v apt-get/,
+  'PR Body must install libatomic1 through apt when apt is available',
+);
+assert.match(
+  libatomicStep,
+  /sudo -n true/,
+  'PR Body must probe for passwordless sudo noninteractively before using sudo',
+);
+assert.match(
+  libatomicStep,
+  /apt_get=\(sudo apt-get\)/,
+  'PR Body must only use sudo for apt after the noninteractive sudo probe',
+);
+assert.ok(
+  libatomicStep.indexOf('sudo -n true') < libatomicStep.indexOf('apt_get=(sudo apt-get)'),
+  'PR Body must not construct the sudo apt command before the noninteractive sudo probe succeeds',
+);
+assert.match(
+  libatomicStep,
+  /if ! sudo -n true[\s\S]*if ldconfig -p[\s\S]*grep -q 'libatomic\\\.so\\\.1'; then\s+exit 0[\s\S]*requires passwordless sudo/,
+  'PR Body must still pass without sudo when libatomic.so.1 is already present, and otherwise fail clearly',
+);
 assert.match(
   prBodyWorkflow,
   /NODE_VERSION:\s*'24'/,
