@@ -21,6 +21,7 @@ export default defineConfig({
     '@invoker/execution-engine',
     '@invoker/planning-core',
     '@invoker/shell',
+    '@invoker/slack-bug-scan',
     'yaml',
   ],
   clean: true,
