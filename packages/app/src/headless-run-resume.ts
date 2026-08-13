@@ -299,6 +299,11 @@ export async function headlessRun(
   process.stdout.write(`${BOLD}Loading plan: ${plan.name}${RESET}\n`);
   process.stdout.write(`Tasks: ${plan.tasks.length}\n\n`);
 
+  const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
+  orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+  const currentWorkflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
+  if (currentWorkflowId) process.stdout.write(`Workflow ID: ${currentWorkflowId}\n`);
+
   const taskHandles: TaskHandleMap = new Map();
   const taskExecutor = createTrackedHeadlessExecutor(deps, taskHandles);
   wireHeadlessApproveHook(deps, taskExecutor);
@@ -320,11 +325,6 @@ export async function headlessRun(
     },
     apiServerDeps,
   );
-
-  const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
-  orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-  const currentWorkflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
-  if (currentWorkflowId) process.stdout.write(`Workflow ID: ${currentWorkflowId}\n`);
 
   const started = orchestrator.startExecution();
 
