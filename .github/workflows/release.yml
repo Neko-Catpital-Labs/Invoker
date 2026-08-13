@@ -57,6 +57,7 @@ jobs:
             release/*.zip
             release/invoker-cli-*
             release/invoker-slack-*
+            release/invoker-watcher-*
             release/SHA256SUMS
 
       - name: Install pnpm
@@ -104,3 +105,4 @@ jobs:
           publish_if_missing packages/npm-cli
           publish_if_missing packages/npm-ui
           publish_if_missing packages/npm-slack
+          publish_if_missing packages/npm-watcher
