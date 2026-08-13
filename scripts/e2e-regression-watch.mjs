@@ -65,6 +65,19 @@ const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/app build',
 ].join(' && ');
 
+const LEGACY_PLAYWRIGHT_JOB_ALIASES = new Map([
+  [
+    'playwright / launch-dispatch-stuck-lease',
+    {
+      name: 'launch-dispatch-stuck-lease',
+      files: [
+        'e2e/launch-dispatch-stuck-lease-cap.spec.ts',
+        'e2e/launch-dispatch-stuck-lease-storm.spec.ts',
+      ].join(' '),
+    },
+  ],
+]);
+
 // ---------------------------------------------------------------------------
 // Pure logic
 // ---------------------------------------------------------------------------
@@ -658,6 +671,18 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
         jobName,
         matrix,
         verifyCommand: commandForJob(jobId, job, matrix),
+      });
+    }
+  }
+  const playwrightJob = workflow.jobs?.playwright;
+  if (playwrightJob) {
+    for (const [jobName, matrix] of LEGACY_PLAYWRIGHT_JOB_ALIASES) {
+      if (definitions.has(jobName)) continue;
+      definitions.set(jobName, {
+        jobId: 'playwright',
+        jobName,
+        matrix,
+        verifyCommand: commandForJob('playwright', playwrightJob, matrix),
       });
     }
   }
