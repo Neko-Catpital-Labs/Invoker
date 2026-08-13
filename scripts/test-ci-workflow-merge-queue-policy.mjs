@@ -9,6 +9,7 @@ const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergi
 const MERGE_QUEUE_HEAD_GATE = "${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const HEAD_REF_EXPRESSION = '${{ github.head_ref }}';
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
+const PR_FACING_NODE_26_JOBS = ['quality-required', 'typescript-types', 'ui-vitest'];
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
@@ -35,9 +36,26 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+function assertLibatomicInstallBeforeSetupNode(jobName) {
+  const steps = jobs[jobName]?.steps ?? [];
+  const setupNodeIndex = steps.findIndex((step) => String(step.uses ?? '').startsWith('actions/setup-node@'));
+  const libatomicInstallIndex = steps.findIndex((step) => String(step.run ?? '').includes('libatomic1'));
+
+  assert(setupNodeIndex !== -1, `${jobName} must set up Node.js`);
+  assert(libatomicInstallIndex !== -1, `${jobName} must install libatomic1 before setting up Node.js 26`);
+  assert(
+    libatomicInstallIndex < setupNodeIndex,
+    `${jobName} must install libatomic1 before invoking actions/setup-node`,
+  );
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
+}
+
+for (const jobName of PR_FACING_NODE_26_JOBS) {
+  assertLibatomicInstallBeforeSetupNode(jobName);
 }
 
 assert(jobs['quality-required'], 'Missing quality-required job');
