@@ -100,6 +100,20 @@ jobs:
         if: steps.targets.outputs.enabled == 'true'
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        if: steps.targets.outputs.enabled == 'true'
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO=sudo
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          else
+            echo "apt-get not found; skipping Node runtime system dependencies."
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         if: steps.targets.outputs.enabled == 'true'
         uses: actions/setup-node@v4

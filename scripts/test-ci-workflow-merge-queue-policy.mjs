@@ -75,6 +75,20 @@ assert(
   prBodyWorkflow.concurrency['cancel-in-progress'] === PR_BODY_MERGE_QUEUE_CANCEL_GATE,
   'PR Body workflow must not cancel in-progress merge-queue runs',
 );
+const prBodyValidateSteps = prBodyWorkflow.jobs?.validate?.steps ?? [];
+const prBodySetupNodeIndex = prBodyValidateSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+const prBodyLibatomicInstallIndex = prBodyValidateSteps.findIndex((step) =>
+  String(step.run ?? '').includes('apt-get install -y libatomic1'),
+);
+assert(prBodySetupNodeIndex !== -1, 'PR Body validate job must set up Node with actions/setup-node@v4');
+assert(
+  prBodyLibatomicInstallIndex !== -1,
+  'PR Body validate job must install libatomic1 before setting up Node',
+);
+assert(
+  prBodyLibatomicInstallIndex < prBodySetupNodeIndex,
+  'PR Body validate job must install libatomic1 before actions/setup-node@v4',
+);
 
 assert(
   existsSync(closeCleanupPath),
