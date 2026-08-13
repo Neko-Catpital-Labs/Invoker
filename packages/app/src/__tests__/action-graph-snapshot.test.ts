@@ -97,7 +97,7 @@ describe('buildCurrentActionGraphSnapshot', () => {
     expect(reloaded.execution.error).toBeUndefined();
   });
 
-  it.fails('reuses a fresh action graph snapshot for refocus-burst reads', async () => {
+  it('reuses a fresh action graph snapshot for refocus-burst reads', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({

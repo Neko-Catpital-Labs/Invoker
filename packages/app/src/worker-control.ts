@@ -171,6 +171,7 @@ const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
 const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
 /** Bounded wait for quit / stopAll so in-flight ticks cannot hang process exit. */
 export const STOP_ALL_SETTLE_TIMEOUT_MS = 5_000;
+const WORKER_STATUS_SNAPSHOT_CACHE_MS = 1000;
 
 function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
@@ -299,6 +300,11 @@ export function createWorkerRuntimeController(options: {
 }): WorkerRuntimeController {
   const handles = new Map<string, RuntimeHandle>();
   const stoppedAtByKind = new Map<string, string>();
+  let cachedSnapshot: { at: number; value: WorkerStatusSnapshot } | null = null;
+
+  const invalidateSnapshot = (): void => {
+    cachedSnapshot = null;
+  };
 
   const requireDefinition = (kind: string) => {
     const definition = options.registry.get(kind);
@@ -391,6 +397,7 @@ export function createWorkerRuntimeController(options: {
       if (optionsArg?.persistDesiredState !== false) {
         persistDesiredState(kind, true, optionsArg?.source ?? 'controller-api');
       }
+      invalidateSnapshot();
 
       const existing = handles.get(kind);
       if (existing) {
@@ -408,16 +415,19 @@ export function createWorkerRuntimeController(options: {
         startedAt: new Date().toISOString(),
       });
       stoppedAtByKind.delete(kind);
+      invalidateSnapshot();
       return rowForKind(kind);
     },
     async stop(kind: string, optionsArg?: { source?: string }): Promise<WorkerStatusEntry> {
       requireDefinition(kind);
       persistDesiredState(kind, false, optionsArg?.source ?? 'controller-api');
+      invalidateSnapshot();
       const handle = handles.get(kind);
       if (!handle) {
         return rowForKind(kind);
       }
       await stopHandle(kind, handle);
+      invalidateSnapshot();
       return rowForKind(kind);
     },
 
@@ -426,13 +436,20 @@ export function createWorkerRuntimeController(options: {
         stopHandle(kind, handle, STOP_ALL_SETTLE_TIMEOUT_MS).catch(() => undefined),
       );
       await Promise.all(stopping);
+      invalidateSnapshot();
     },
 
     snapshot(): WorkerStatusSnapshot {
-      return {
+      const now = Date.now();
+      if (cachedSnapshot && now - cachedSnapshot.at >= 0 && now - cachedSnapshot.at < WORKER_STATUS_SNAPSHOT_CACHE_MS) {
+        return cachedSnapshot.value;
+      }
+      const value = {
         generatedAt: new Date().toISOString(),
         workers: options.registry.list().map((definition) => rowForKind(definition.kind)),
       };
+      cachedSnapshot = { at: now, value };
+      return value;
     },
   };
 }
