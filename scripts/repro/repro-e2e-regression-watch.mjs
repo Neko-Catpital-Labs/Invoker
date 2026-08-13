@@ -410,10 +410,14 @@ function testFleetCorrelationScenario() {
 }
 
 function testRetiredJobScenario() {
-  const retiredKey = 'playwright / launch-dispatch-stuck-lease';
+  const retiredKey = 'playwright / retired-example';
   const defs = buildCiJobDefinitions();
   if (jobNameIsMapped(retiredKey, defs)) {
     fail(`${retiredKey} should be absent from current ci.yml`);
+  }
+  const legacyStuckLeaseKey = 'playwright / launch-dispatch-stuck-lease';
+  if (!jobNameIsMapped(legacyStuckLeaseKey, defs)) {
+    fail(`${legacyStuckLeaseKey} should stay mapped to its focused local verifier`);
   }
 
   const state = stateWithFailure(fakeFailure({
