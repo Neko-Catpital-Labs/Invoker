@@ -17,7 +17,7 @@ permissions:
   pull-requests: read
 
 env:
-  NODE_VERSION: '26'
+  NODE_VERSION: '24'
   PR_BODY_ENFORCE_ALL: ${{ vars.PR_BODY_ENFORCE_ALL || 'false' }}
   PR_BODY_ENFORCED_AUTHORS: ${{ vars.PR_BODY_ENFORCED_AUTHORS || 'EdbertChan' }}
 
