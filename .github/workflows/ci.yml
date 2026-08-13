@@ -705,13 +705,11 @@ jobs:
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
-              e2e/planning-review-scroll.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts
               e2e/restart-failed-task.spec.ts
               e2e/ui-graph-drag-performance.spec.ts
-              e2e/pending-review-gate-target-repo.proof.spec.ts
               e2e/workflow-status-composition.spec.ts
               e2e/queue-running-vs-queued.spec.ts
               e2e/attach-workflow.spec.ts
@@ -723,7 +721,6 @@ jobs:
               e2e/edit-task-prompt.spec.ts
               e2e/fix-with-claude.spec.ts
               e2e/fix-with-agent-transition.spec.ts
-              e2e/renderer-state-restoration.spec.ts
           - name: 5-of-9
             files: >-
               e2e/autofix-worker-ui.spec.ts
@@ -732,7 +729,6 @@ jobs:
               e2e/planning-chat-send-long-deadline.spec.ts
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
-              e2e/renderer-memory-pressure-recovery.spec.ts
           - name: 6-of-9
             files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
@@ -765,8 +761,6 @@ jobs:
               e2e/start-ready-daemon-owner.spec.ts
               e2e/ui-delta-timeline.spec.ts
               e2e/workers-surface.spec.ts
-              e2e/rebase-recreate-ui-drift-repro.spec.ts
-              e2e/rebase-recreate-ui-never-recovers.spec.ts
           - name: terminal-garbling
             files: >-
               e2e/planning-terminal-live-model.proof.spec.ts
@@ -774,9 +768,15 @@ jobs:
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
               e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
               e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
+              e2e/rebase-recreate-ui-never-recovers.spec.ts
           - name: planning-chat-restore
             files: >-
               e2e/planning-chat-restore-conversational-mode-repro.spec.ts
+              e2e/planning-review-scroll.spec.ts
+              e2e/pending-review-gate-target-repo.proof.spec.ts
+              e2e/renderer-state-restoration.spec.ts
+              e2e/renderer-memory-pressure-recovery.spec.ts
+              e2e/rebase-recreate-ui-drift-repro.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
