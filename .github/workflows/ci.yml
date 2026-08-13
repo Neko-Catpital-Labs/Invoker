@@ -173,7 +173,7 @@ jobs:
             .node-version
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm --filter @invoker/ui... install --frozen-lockfile --ignore-scripts --prod=false
 
       - name: Run UI vitest
         run: pnpm --filter @invoker/ui test

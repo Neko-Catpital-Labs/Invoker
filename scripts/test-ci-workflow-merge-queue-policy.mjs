@@ -63,6 +63,14 @@ assert(
   'required-package-builds must run on ordinary PRs and skip merge queue refs',
 );
 
+assert(jobs['ui-vitest'], 'Missing ui-vitest job');
+const uiVitestInstallStep = jobs['ui-vitest'].steps?.find((step) => step.name === 'Install dependencies');
+assert(uiVitestInstallStep, 'ui-vitest must install dependencies before running tests');
+assert(
+  uiVitestInstallStep.run === 'pnpm --filter @invoker/ui... install --frozen-lockfile --ignore-scripts --prod=false',
+  'ui-vitest must install only UI dependencies without lifecycle scripts so native desktop postinstalls cannot block UI tests',
+);
+
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
 
