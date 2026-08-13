@@ -923,6 +923,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
+    env:
+      electron_config_cache: /tmp/invoker-electron-cache
     timeout-minutes: 60
     strategy:
       fail-fast: false
