@@ -151,7 +151,7 @@ describe('main-process read hot-path cost guards', () => {
     queryAll.mockRestore();
   });
 
-  it.fails('reuses worker-status action and recovery reads during poll bursts', () => {
+  it('reuses worker-status action and recovery reads during poll bursts', () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
     registry.register({
       kind: AUTO_FIX_WORKER_KIND,
