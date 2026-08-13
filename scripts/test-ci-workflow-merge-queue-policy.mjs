@@ -35,9 +35,36 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+function isSelfHostedRunsOn(runsOn) {
+  if (Array.isArray(runsOn)) {
+    return runsOn.includes('self-hosted');
+  }
+  if (typeof runsOn === 'string') {
+    return runsOn !== 'ubuntu-latest';
+  }
+  return Boolean(runsOn?.labels);
+}
+
+function stepInstallsLibatomic(step) {
+  return String(step?.run ?? '').includes('libatomic1');
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
+}
+
+for (const [jobName, job] of Object.entries(jobs)) {
+  const steps = job.steps ?? [];
+  const setupNodeIndex = steps.findIndex((step) => step?.uses === 'actions/setup-node@v4');
+  if (setupNodeIndex === -1 || !isSelfHostedRunsOn(job['runs-on'])) {
+    continue;
+  }
+
+  assert(
+    steps.slice(0, setupNodeIndex).some(stepInstallsLibatomic),
+    `${jobName} must install libatomic1 before actions/setup-node@v4 on self-hosted runners`,
+  );
 }
 
 assert(jobs['quality-required'], 'Missing quality-required job');

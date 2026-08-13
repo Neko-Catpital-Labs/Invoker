@@ -40,6 +40,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -92,6 +103,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -124,6 +146,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -163,6 +196,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -192,6 +236,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -232,6 +287,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -261,6 +327,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -295,6 +372,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -425,6 +513,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -511,8 +610,16 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Install system libraries for Node
-        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -575,6 +682,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -635,6 +753,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -789,6 +918,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -870,6 +1010,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -947,6 +1098,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -1087,6 +1249,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime system dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y libatomic1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
