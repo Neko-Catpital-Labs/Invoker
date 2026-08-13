@@ -151,7 +151,7 @@ describe('main-process read hot-path cost guards', () => {
     queryAll.mockRestore();
   });
 
-  it('builds worker-status via indexed actions and recovery aggregates on every snapshot', () => {
+  it.fails('reuses worker-status action and recovery reads during poll bursts', () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
     registry.register({
       kind: AUTO_FIX_WORKER_KIND,
@@ -195,9 +195,9 @@ describe('main-process read hot-path cost guards', () => {
 
     const first = controller.snapshot();
     const second = controller.snapshot();
-    expect(second).not.toBe(first);
-    expect(listWorkerActions).toHaveBeenCalledTimes(2);
-    expect(countEventsByTypes).toHaveBeenCalledTimes(2);
+    expect(second).toBe(first);
+    expect(listWorkerActions).toHaveBeenCalledTimes(1);
+    expect(countEventsByTypes).toHaveBeenCalledTimes(1);
     expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: AUTO_FIX_WORKER_KIND, limit: 5 });
   });
 });

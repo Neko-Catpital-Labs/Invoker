@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator, type Attempt, type TaskState } from '@invoker/workflow-core';
-import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
+import {
+  buildCurrentActionGraphSnapshot,
+  createCachedActionGraphSnapshotReader,
+} from '../action-graph-snapshot.js';
 import type { InvokerConfig } from '../config.js';
 
 describe('buildCurrentActionGraphSnapshot', () => {
@@ -92,5 +95,51 @@ describe('buildCurrentActionGraphSnapshot', () => {
     const reloaded = adapter.loadTask(taskId)!;
     expect(reloaded.execution.selectedAttemptId).toBe(failed.id);
     expect(reloaded.execution.error).toBeUndefined();
+  });
+
+  it.fails('reuses a fresh action graph snapshot for refocus-burst reads', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-cache',
+      name: 'Cached action graph',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-cache', {
+      id: 'wf-cache/task',
+      description: 'Cached task',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      config: { workflowId: 'wf-cache' },
+      execution: { exitCode: 0, completedAt: new Date('2026-07-01T00:00:01.000Z') },
+      taskStateVersion: 1,
+    });
+
+    const orchestrator = new Orchestrator({
+      persistence: adapter as any,
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 1,
+    });
+    const loadSnapshot = vi.spyOn(adapter, 'loadWorkflowTaskSnapshot');
+    let now = 1000;
+    const read = createCachedActionGraphSnapshotReader({
+      getOrchestrator: () => orchestrator,
+      persistence: adapter,
+      invokerConfig: {},
+      ttlMs: 1000,
+      now: () => now,
+    });
+
+    const first = read();
+    const second = read();
+    expect(second).toBe(first);
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+
+    now += 1001;
+    const third = read();
+    expect(third).not.toBe(first);
+    expect(loadSnapshot).toHaveBeenCalledTimes(2);
   });
 });
