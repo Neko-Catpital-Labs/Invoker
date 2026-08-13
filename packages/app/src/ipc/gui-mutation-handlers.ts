@@ -84,7 +84,7 @@ import {
   type ReviewGateCiContext,
 } from '../auto-fix-intents.js';
 import { persistShutdownDiagnostic } from '../shutdown-diagnostic.js';
-import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
+import { createCachedActionGraphSnapshotReader } from '../action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
 import {
   createInAppPlanningChatSessions,
@@ -1206,6 +1206,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const ownerMode = getOwnerMode();
   const planDoctorScriptPath = join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
   const workerRuntimeController = getWorkerRuntimeController();
+  const readActionGraphSnapshot = createCachedActionGraphSnapshotReader({
+    getOrchestrator: () => orchestrator,
+    persistence,
+    invokerConfig,
+  });
   const workflowIdForTaskArg = actions.workflowIdForTaskArg;
   const workflowIdForTargetArg = actions.workflowIdForTargetArg;
   const performDeleteTask = actions.performDeleteTask;
@@ -1907,7 +1912,16 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     markDaemonOwnerUnavailable,
     refresh: options?.refresh,
   }));
+  let cachedWorkerStatusSnapshot: { at: number; value: unknown } | null = null;
   ipcMain.handle('invoker:get-worker-status', async () => {
+    const now = Date.now();
+    if (cachedWorkerStatusSnapshot && now - cachedWorkerStatusSnapshot.at >= 0 && now - cachedWorkerStatusSnapshot.at < 1000) {
+      return cachedWorkerStatusSnapshot.value;
+    }
+    const cacheWorkerStatusSnapshot = <T>(value: T): T => {
+      cachedWorkerStatusSnapshot = { at: Date.now(), value };
+      return value;
+    };
     if (!ownerMode) {
       try {
         const delegated = await messageBus.request<{ kind: string }, { workerStatus?: unknown }>(
@@ -1915,7 +1929,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           { kind: 'worker-status' },
         );
         if (delegated && typeof delegated === 'object' && 'workerStatus' in delegated) {
-          return delegated.workerStatus;
+          return cacheWorkerStatusSnapshot(delegated.workerStatus);
         }
       } catch (err) {
         if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
@@ -1926,17 +1940,17 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           { module: 'ipc' },
         );
       }
-      return createLocalWorkerStatusSnapshot({
+      return cacheWorkerStatusSnapshot(createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
         autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-      });
+      }));
     }
-    return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+    return cacheWorkerStatusSnapshot(workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
       registry: createRegisteredWorkerRegistry(),
       persistence,
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-    });
+    }));
   });
 
 
@@ -1954,7 +1968,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         );
       }
     }
-    return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
+    return readActionGraphSnapshot();
   });
 
   ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {
