@@ -41,7 +41,6 @@ import type { WorkerRuntimeController } from './worker-control.js';
 import type { TaskHandleMap } from './execution/task-runner-wiring.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 
-
 export interface HeadlessDeps {
   logger: Logger;
   orchestrator: Orchestrator;
