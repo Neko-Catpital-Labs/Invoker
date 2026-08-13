@@ -145,10 +145,7 @@ invoker_e2e_ssh_cleanup_keys() {
 # Print the repo-owned SSH provision command used by managed remote worktrees.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_provision_command() {
-  (
-    cd "$INVOKER_E2E_REPO_ROOT"
-    bash scripts/provision-ssh-worker.sh print-provision-command
-  )
+  printf 'bash scripts/provision-ssh-worker.sh bootstrap-host --skip-agent-tools && . "${INVOKER_ENV_FILE:-$HOME/.invoker/env.sh}" && npm_config_ignore_scripts=true pnpm install --frozen-lockfile --ignore-scripts\n'
 }
 
 invoker_e2e_ssh_config_provision_command() {
