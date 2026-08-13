@@ -53,23 +53,38 @@ dest.write_text(nl.join(out) + (nl if text.endswith('\n') else ''), encoding='ut
 echo "==> submit-plan (headless run) $PLAN_SRC (repoUrl -> file:// checkout)"
 ./submit-plan.sh "$PLAN_TMP"
 
-# Assert the routed task completed through the configured worktree pool member if sqlite3 is available.
 DB="$TMPDB/invoker.db"
-if [[ -f "$DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
-  STATUS=$(sqlite3 "$DB" "SELECT status FROM tasks WHERE id LIKE '%/verify-routing-command' LIMIT 1;")
-  RUNNER_KIND=$(sqlite3 "$DB" "SELECT runner_kind FROM tasks WHERE id LIKE '%/verify-routing-command' LIMIT 1;")
-  POOL_ID=$(sqlite3 "$DB" "SELECT pool_id FROM tasks WHERE id LIKE '%/verify-routing-command' LIMIT 1;")
-  if [[ "$STATUS" != "completed" ]]; then
-    echo "FAIL: expected routed task to complete, got status='$STATUS'" >&2
-    exit 1
-  fi
-  if [[ "$POOL_ID" != "dummy-target" ]]; then
-    echo "FAIL: expected routed task pool_id=dummy-target, got '$POOL_ID'" >&2
-    exit 1
-  fi
-  if [[ "$RUNNER_KIND" != "worktree" ]]; then
-    echo "FAIL: expected persisted pool-routed task runner_kind=worktree, got '$RUNNER_KIND'" >&2
-    exit 1
-  fi
-  echo "PASS: routed task completed with pool_id=$POOL_ID runner_kind=$RUNNER_KIND"
+if [[ ! -f "$DB" ]]; then
+  echo "FAIL: expected invoker.db at $DB, but it does not exist" >&2
+  echo "==> Contents of $TMPDB:" >&2
+  ls -la "$TMPDB" >&2 || true
+  exit 1
 fi
+node --input-type=module - "$DB" <<'EOF'
+import { DatabaseSync } from 'node:sqlite';
+
+const [, , dbPath] = process.argv;
+const db = new DatabaseSync(dbPath, { readOnly: true });
+const row = db
+  .prepare("SELECT status, runner_kind AS runnerKind, pool_id AS poolId FROM tasks WHERE id LIKE '%/verify-routing-command' LIMIT 1;")
+  .get();
+db.close();
+
+if (!row) {
+  console.error('FAIL: expected persisted routed task row, got none');
+  process.exit(1);
+}
+if (row.status !== 'completed') {
+  console.error(`FAIL: expected routed task to complete, got status='${row.status ?? ''}'`);
+  process.exit(1);
+}
+if (row.poolId !== 'dummy-target') {
+  console.error(`FAIL: expected routed task pool_id=dummy-target, got '${row.poolId ?? ''}'`);
+  process.exit(1);
+}
+if (row.runnerKind !== 'worktree') {
+  console.error(`FAIL: expected persisted pool-routed task runner_kind=worktree, got '${row.runnerKind ?? ''}'`);
+  process.exit(1);
+}
+EOF
+echo "PASS: routed task completed with pool_id=dummy-target runner_kind=worktree"
