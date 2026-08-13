@@ -107,8 +107,7 @@ jobs:
 
   typescript-types:
     name: quality / TypeScript Types
-    runs-on:
-      labels: Runner_2_4_core
+    runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
