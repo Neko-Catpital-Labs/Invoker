@@ -58,5 +58,9 @@ vars:
     required: true
     example: "<!-- invoker-ci-regression-watch: first-bad-sha=abc123def456abc123def456abc123def456ab1; job=playwright / 1-of-9 -->"
     description: "Exact dedup marker embedded in the workflow description."
+  failure_description:
+    required: true
+    example: "CI job `playwright / 1-of-9` first failed on default-branch push commit abc123def456abc123def456abc123def456ab1"
+    description: "Indented workflow description body for the failing CI job or fleet event."
 workflows:
   - ci-regression-watch.workflow.yaml

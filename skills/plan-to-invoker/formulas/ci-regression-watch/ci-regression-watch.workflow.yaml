@@ -2,11 +2,7 @@ name: "CI regression: {{job_slug}}"
 description: |
   {{marker}}
 
-  CI job `{{job_name}}` first failed on default-branch push commit {{sha}}
-  in run {{run_id}}. It was most recently still red at {{last_bad_sha}}
-  in run {{last_bad_run_id}}.
-
-  First bad job: {{job_url}}
+  {{failure_description}}
 onFinish: pull_request
 mergeMode: external_review
 baseBranch: {{base_branch}}
