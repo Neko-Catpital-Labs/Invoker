@@ -15,6 +15,7 @@ const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 
 const closeCleanupPath = '.github/workflows/merge-queue-close-cleanup.yml';
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const jobs = workflow.jobs ?? {};
+const NATIVE_BUILD_PACKAGES = ['make', 'g++', 'python3', 'unzip'];
 
 function assert(condition, message) {
   if (!condition) {
@@ -33,6 +34,12 @@ function jobForCheck(checkName) {
     return 'optional-other';
   }
   return checkName.split(' / ')[0];
+}
+
+function installsNativeBuildTools(step) {
+  const run = String(step?.run ?? '');
+  return run.includes('apt-get install')
+    && NATIVE_BUILD_PACKAGES.every((pkg) => run.includes(pkg));
 }
 
 for (const jobName of FULL_CI_JOBS) {
@@ -104,6 +111,19 @@ for (const [jobName, sourceWorkflow] of [
     cleanupJob.concurrency?.group === `${sourceWorkflow.name}-merge-queue-${HEAD_REF_EXPRESSION}`,
     `${jobName} must reuse ${sourceWorkflow.name}'s merge-queue concurrency group`,
   );
+}
+
+for (const [jobName, job] of Object.entries(jobs)) {
+  const steps = job?.steps ?? [];
+  for (const [stepIndex, step] of steps.entries()) {
+    if (step?.run !== 'pnpm install --frozen-lockfile') {
+      continue;
+    }
+    assert(
+      steps.slice(0, stepIndex).some(installsNativeBuildTools),
+      `${jobName} must install native build tools before pnpm install --frozen-lockfile; node-pty can rebuild under Node 26 on a cold or broken cache`,
+    );
+  }
 }
 
 const mergeConditions = (mergify.queue_rules ?? []).flatMap((rule) => rule.merge_conditions ?? []);
