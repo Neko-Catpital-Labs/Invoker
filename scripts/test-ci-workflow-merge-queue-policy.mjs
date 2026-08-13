@@ -63,6 +63,17 @@ assert(
   'required-package-builds must run on ordinary PRs and skip merge queue refs',
 );
 
+const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
+const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
+const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
+  (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
+);
+assert(
+  uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
+  'ui-vitest must install libatomic1 before actions/setup-node@v4',
+);
+
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
 
