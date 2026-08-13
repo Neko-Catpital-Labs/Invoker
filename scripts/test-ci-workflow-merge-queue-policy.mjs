@@ -57,6 +57,12 @@ assert(
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
 
+assert(jobs['typescript-types'], 'Missing typescript-types job');
+assert(
+  jobs['typescript-types']['runs-on'] === 'ubuntu-latest',
+  'TypeScript Types must use GitHub-hosted capacity so self-hosted workspace pressure cannot fail before tsc runs',
+);
+
 assert(jobs['required-package-builds'], 'Missing required-package-builds job');
 assert(
   jobs['required-package-builds'].if === ORDINARY_PR_GATE,
