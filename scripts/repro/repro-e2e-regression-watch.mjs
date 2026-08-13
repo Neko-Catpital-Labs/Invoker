@@ -84,6 +84,12 @@ function stateWithFailure(failure) {
   return state;
 }
 
+function stateWithFailures(failures) {
+  const state = loadEmptyState();
+  for (const failure of failures) state.activeFailures[failure.jobName] = failure;
+  return state;
+}
+
 function testJobClassification() {
   assertEqual(classifyJobConclusion(fakeJob('A', 'success')), 'ok', 'success is ok');
   assertEqual(classifyJobConclusion(fakeJob('A', 'failure')), 'broken', 'failure is broken');
@@ -310,6 +316,87 @@ function testAttemptLedgerScenario() {
   console.log('[repro-e2e-regression-watch] attempt-ledger scenario: PASS');
 }
 
+function testFleetCorrelationScenario() {
+  const sha = '631a0d08c7072e9544813fc1b93fb616586ce441';
+  const jobs = [
+    'build-artifacts',
+    'quality / Dependency Cruise',
+    'quality / TypeScript Types',
+    'quality / Required Package Builds',
+    'required-fast / Vitest Workspace',
+    'required-fast / Guardrails',
+    'required-fast / PR Babysit Harness',
+    'ssh / shard-30',
+    'ssh / shard-31',
+    'docker / comprehensive',
+    'e2e-proof / shard 0',
+  ];
+  const failures = jobs.map((jobName, index) => fakeFailure({
+    jobName,
+    firstBadSha: sha,
+    firstBadRunId: 6310,
+    firstJobDatabaseId: 63100 + index,
+    firstJobUrl: `https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/6310/job/${63100 + index}`,
+    lastBadSha: sha,
+    lastBadRunId: 6310,
+  }));
+  const jobDefinitions = buildCiJobDefinitions();
+  const historicalState = stateWithFailures(failures);
+  const fleetState = stateWithFailures(failures.map((failure) => ({ ...failure })));
+  const historicalFilings = [];
+  const fleetFilings = [];
+
+  processFailureFilingSweep(historicalState, {
+    fleetEventThreshold: 99,
+    jobDefinitions,
+    liveQuery: () => false,
+    fileFailure: (failure) => {
+      historicalFilings.push(failure.jobName);
+    },
+  });
+  const counts = processFailureFilingSweep(fleetState, {
+    jobDefinitions,
+    liveQuery: (failure) => {
+      const marker = buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName);
+      if (marker !== buildMarker(sha, 'fleet')) fail(`fleet sweep used wrong marker: ${marker}`);
+      return false;
+    },
+    fileFailure: (failure) => {
+      fleetFilings.push(failure);
+    },
+  });
+
+  assertEqual(historicalFilings.length, 11, 'historical 631a0d0 wave would file eleven isolated jobs');
+  assertEqual(fleetFilings.length, 1, '631a0d0 wave files one fleet plan');
+  assertEqual(fleetFilings[0].jobName, 'fleet / 631a0d0 (11 jobs)', 'fleet filing has expected synthetic job name');
+  assertEqual(counts.groupsCorrelated, 1, 'fleet sweep counts one correlated group');
+  for (const jobName of jobs) {
+    if (!fleetFilings[0].description.includes(jobName)) fail(`fleet description omitted ${jobName}`);
+    assertEqual(fleetState.activeFailures[jobName].memberOfFleetEvent, sha, `${jobName} memberOfFleetEvent`);
+  }
+  if (!fleetFilings[0].verifyCommand || fleetFilings[0].verifyCommand.includes('No local verify command is mapped')) {
+    fail('fleet verify_command must be a real mapped command');
+  }
+
+  const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-fleet-render-'));
+  try {
+    const rendered = fileBugfixPlan(fleetFilings[0], {
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      jobDefinitions,
+      outRoot,
+      dryRun: true,
+    });
+    const planText = readFileSync(rendered.planPath, 'utf8');
+    if (!planText.includes(buildMarker(sha, 'fleet'))) fail('rendered fleet plan omitted fleet marker');
+    for (const jobName of jobs) {
+      if (!planText.includes(jobName)) fail(`rendered fleet plan omitted ${jobName}`);
+    }
+  } finally {
+    rmSync(outRoot, { recursive: true, force: true });
+  }
+  console.log('[repro-e2e-regression-watch] fleet-correlation scenario: PASS');
+}
+
 function testRetiredJobScenario() {
   const retiredKey = 'playwright / launch-dispatch-stuck-lease';
   const defs = buildCiJobDefinitions();
@@ -402,6 +489,7 @@ function main() {
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testAttemptLedgerScenario();
+  testFleetCorrelationScenario();
   testRetiredJobScenario();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');

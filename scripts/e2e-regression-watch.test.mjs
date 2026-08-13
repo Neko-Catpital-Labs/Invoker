@@ -4,6 +4,7 @@ import {
   buildCiJobDefinitions,
   buildMarker,
   fileBugfixPlan,
+  groupFailuresBySha,
   jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
@@ -36,6 +37,19 @@ function stateWithFailure(failure = makeFailure()) {
   const state = loadEmptyState();
   state.activeFailures[failure.jobName] = failure;
   return state;
+}
+
+function stateWithFailures(failures) {
+  const state = loadEmptyState();
+  for (const failure of failures) state.activeFailures[failure.jobName] = failure;
+  return state;
+}
+
+function jobDefinitionsFor(jobNames) {
+  return new Map(jobNames.map((jobName, index) => [
+    jobName,
+    { verifyCommand: `bash scripts/verify-${index + 1}.sh` },
+  ]));
 }
 
 describe('liveQueryHasNonTerminalWork', () => {
@@ -88,6 +102,223 @@ describe('liveQueryHasNonTerminalWork', () => {
       const result = liveQueryHasNonTerminalWork({ firstBadSha: 'abc1234', jobName: 'build' }, undefined, queryFn);
       assert.equal(result, true);
     });
+  });
+});
+
+describe('fleet SHA correlation', () => {
+  it('groups active failures by first bad SHA', () => {
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const failures = [
+      makeFailure({ jobName: 'required-fast / Vitest Workspace', firstBadSha: sha }),
+      makeFailure({ jobName: 'quality / Dependency Cruise', firstBadSha: sha }),
+      makeFailure({ jobName: 'docker / comprehensive', firstBadSha: 'def456def456def456def456def456def456def4' }),
+    ];
+
+    const groups = groupFailuresBySha(failures);
+    assert.equal(groups.get(sha).length, 2);
+    assert.equal(groups.get('def456def456def456def456def456def456def4').length, 1);
+  });
+
+  it('files one consolidated plan for three same-SHA failures and names every member', () => {
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const jobs = [
+      'required-fast / Vitest Workspace',
+      'quality / Dependency Cruise',
+      'docker / comprehensive',
+    ];
+    const state = stateWithFailures(jobs.map((jobName, index) => makeFailure({
+      jobName,
+      firstBadSha: sha,
+      firstBadRunId: 100 + index,
+      firstJobDatabaseId: 200 + index,
+      firstJobUrl: `https://example.test/job/${200 + index}`,
+    })));
+    const filed = [];
+    const liveMarkers = [];
+
+    const counts = processFailureFilingSweep(state, {
+      jobDefinitions: jobDefinitionsFor(jobs),
+      liveQuery: (failure) => {
+        liveMarkers.push(buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName));
+        return false;
+      },
+      fileFailure: (failure) => filed.push(failure),
+    });
+
+    assert.equal(filed.length, 1);
+    assert.equal(filed[0].jobName, 'fleet / abc123d (3 jobs)');
+    assert.equal(filed[0].markerJobName, 'fleet');
+    assert.ok(filed[0].verifyCommand.startsWith('bash scripts/verify-'));
+    assert.equal(filed[0].description.includes('No local verify command is mapped'), false);
+    for (const jobName of jobs) {
+      assert.match(filed[0].description, new RegExp(jobName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.equal(state.activeFailures[jobName].memberOfFleetEvent, sha);
+    }
+    assert.deepEqual(liveMarkers, [buildMarker(sha, 'fleet')]);
+    assert.equal(counts.groupsCorrelated, 1);
+    assert.equal(counts.groupsFiled, 1);
+    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].attempts, 1);
+  });
+
+  it('keeps two same-SHA failures on the per-job path', () => {
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const jobs = [
+      'required-fast / Vitest Workspace',
+      'quality / Dependency Cruise',
+    ];
+    const state = stateWithFailures(jobs.map((jobName) => makeFailure({ jobName, firstBadSha: sha })));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      jobDefinitions: jobDefinitionsFor(jobs),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+    });
+
+    assert.deepEqual(filed.sort(), [...jobs].sort());
+    assert.equal(counts.groupsCorrelated, 0);
+    assert.equal(counts.groupsFiled, 2);
+    assert.equal(state.activeFailures[jobs[0]].memberOfFleetEvent, undefined);
+  });
+
+  it('applies marker dedup and attempt cap to the fleet key', () => {
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const jobs = [
+      'required-fast / Vitest Workspace',
+      'quality / Dependency Cruise',
+      'docker / comprehensive',
+    ];
+    const state = stateWithFailures(jobs.map((jobName) => makeFailure({ jobName, firstBadSha: sha })));
+    const jobDefinitions = jobDefinitionsFor(jobs);
+    let filed = 0;
+
+    const dedupCounts = processFailureFilingSweep(state, {
+      jobDefinitions,
+      liveQuery: (failure) => buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName) === buildMarker(sha, 'fleet'),
+      fileFailure: () => {
+        filed += 1;
+      },
+    });
+
+    assert.equal(filed, 0);
+    assert.equal(dedupCounts.groupsSkippedAlreadyAddressed, 1);
+    assert.equal(state.activeFailures[jobs[0]].memberOfFleetEvent, sha);
+
+    const filedCounts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      maxAttempts: 1,
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: () => {
+        filed += 1;
+      },
+    });
+    assert.equal(filedCounts.groupsFiled, 1);
+    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].attempts, 1);
+
+    let liveQueryCalled = false;
+    const cappedCounts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T03:00:00Z'),
+      maxAttempts: 1,
+      jobDefinitions,
+      liveQuery: () => {
+        liveQueryCalled = true;
+        return false;
+      },
+      fileFailure: () => {
+        filed += 1;
+      },
+    });
+
+    assert.equal(liveQueryCalled, false, 'attempt cap should skip before live workflow dedup');
+    assert.equal(cappedCounts.groupsNeedingHuman, 1);
+    assert.equal(filed, 1);
+    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].needsHuman, true);
+  });
+
+  it('keeps remaining members under an existing fleet key after the active count drops below threshold', () => {
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const jobs = [
+      'required-fast / Vitest Workspace',
+      'quality / Dependency Cruise',
+      'docker / comprehensive',
+    ];
+    const state = stateWithFailures(jobs.map((jobName) => makeFailure({ jobName, firstBadSha: sha })));
+    const jobDefinitions = jobDefinitionsFor(jobs);
+
+    processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: () => {},
+    });
+    delete state.activeFailures['docker / comprehensive'];
+
+    const filed = [];
+    const liveMarkers = [];
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T02:00:00Z'),
+      jobDefinitions,
+      liveQuery: (failure) => {
+        liveMarkers.push(buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName));
+        return true;
+      },
+      fileFailure: (failure) => filed.push(failure.jobName),
+    });
+
+    assert.deepEqual(filed, []);
+    assert.deepEqual(liveMarkers, [buildMarker(sha, 'fleet')]);
+    assert.equal(counts.groupsCorrelated, 1);
+    assert.equal(state.activeFailures['required-fast / Vitest Workspace'].memberOfFleetEvent, sha);
+    assert.equal(state.activeFailures['quality / Dependency Cruise'].memberOfFleetEvent, sha);
+  });
+
+  it('backtests the 631a0d0 fleet wave to one consolidated filing instead of eleven', () => {
+    const sha = '631a0d08c7072e9544813fc1b93fb616586ce441';
+    const jobs = [
+      'build-artifacts',
+      'quality / Dependency Cruise',
+      'quality / TypeScript Types',
+      'quality / Required Package Builds',
+      'required-fast / Vitest Workspace',
+      'required-fast / Guardrails',
+      'required-fast / PR Babysit Harness',
+      'ssh / shard-30',
+      'ssh / shard-31',
+      'docker / comprehensive',
+      'e2e-proof / shard 0',
+    ];
+    const failures = jobs.map((jobName, index) => makeFailure({
+      jobName,
+      firstBadSha: sha,
+      firstBadRunId: 6310,
+      firstJobDatabaseId: 63100 + index,
+      firstJobUrl: `https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/6310/job/${63100 + index}`,
+    }));
+    const jobDefinitions = buildCiJobDefinitions();
+    const historicalState = stateWithFailures(failures);
+    const correlatedState = stateWithFailures(failures.map((failure) => ({ ...failure })));
+    const historicalFilings = [];
+    const fleetFilings = [];
+
+    processFailureFilingSweep(historicalState, {
+      fleetEventThreshold: 99,
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: (failure) => historicalFilings.push(failure.jobName),
+    });
+    const counts = processFailureFilingSweep(correlatedState, {
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: (failure) => fleetFilings.push(failure),
+    });
+
+    assert.equal(historicalFilings.length, 11);
+    assert.equal(fleetFilings.length, 1);
+    assert.equal(fleetFilings[0].jobName, 'fleet / 631a0d0 (11 jobs)');
+    for (const jobName of jobs) assert.match(fleetFilings[0].description, new RegExp(jobName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.equal(counts.groupsCorrelated, 1);
+    assert.equal(counts.groupsFiled, 1);
   });
 });
 
