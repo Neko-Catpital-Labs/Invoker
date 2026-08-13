@@ -74,6 +74,28 @@ class SafePushTests(unittest.TestCase):
             env=merged_env,
         )
 
+    def fake_gh_env(self, pr_json: str) -> dict[str, str]:
+        wrapper_dir = self.root / "fake-gh-bin"
+        wrapper_dir.mkdir(exist_ok=True)
+        wrapper = wrapper_dir / "gh"
+        wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                if [ "${{1:-}}" = "pr" ] && [ "${{2:-}}" = "view" ]; then
+                  printf '%s\\n' {pr_json!r}
+                  exit 0
+                fi
+                printf 'unexpected gh invocation: %s\\n' "$*" >&2
+                exit 1
+                """
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        return {"PATH": f"{wrapper_dir}:{os.environ['PATH']}"}
+
     def test_matching_expected_sha_pushes_and_records_attempt_marker(self) -> None:
         pushed = self.commit(self.repo, "repair")
         ledger = self.root / "ledger.tsv"
@@ -168,6 +190,51 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
+
+    def test_merged_pr_is_successful_noop_and_records_no_json_marker(self) -> None:
+        ledger = self.root / "ledger.jsonl"
+        pr_json = '{"state":"MERGED","headRefName":"main","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--repo", "owner/repo",
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "conflict-repair-settled",
+            "--json-pr", "8531",
+            "--json-head-sha", self.expected,
+            "--json-key", "conflict:8531",
+            env=self.fake_gh_env(pr_json),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PR #8531 is MERGED", result.stdout)
+        self.assertEqual(self.remote_head(), self.expected)
+        self.assertFalse(ledger.exists())
+
+    def test_open_pr_with_moved_github_head_fails_before_push_and_records_no_json_marker(self) -> None:
+        ledger = self.root / "ledger.jsonl"
+        moved = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        pr_json = f'{{"state":"OPEN","headRefName":"main","headRefOid":"{moved}"}}'
+        repaired = self.commit(self.repo, "repair")
+        del repaired
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--repo", "owner/repo",
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "conflict-repair-settled",
+            "--json-pr", "8531",
+            "--json-head-sha", self.expected,
+            "--json-key", "conflict:8531",
+            env=self.fake_gh_env(pr_json),
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn(f"PR #8531 head is {moved}", result.stderr)
+        self.assertEqual(self.remote_head(), self.expected)
+        self.assertFalse(ledger.exists())
 
 
 if __name__ == "__main__":
