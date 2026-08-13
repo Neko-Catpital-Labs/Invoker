@@ -80,9 +80,10 @@ def safe_push(
     branch: str,
     expected_head: str | None = None,
     expect_missing: bool = False,
+    allow_stale_skip: bool = False,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+) -> str | None:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -97,6 +98,8 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            if allow_stale_skip:
+                return None
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
@@ -188,9 +191,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             branch=args.branch,
             expected_head=args.expected_head,
             expect_missing=args.expect_missing,
+            allow_stale_skip=True,
             remote=args.remote,
             cwd=Path(args.cwd),
         )
+        if pushed is None:
+            branch_name = normalize_branch(args.branch)
+            live = remote_branch_sha(branch_name, remote=args.remote, cwd=Path(args.cwd))
+            expected = validate_expected_head(args.expected_head or "")
+            print(
+                f"pr-worker-safe-push: stale-head skip: refs/heads/{branch_name} "
+                f"is {live or 'missing'}; expected {expected}"
+            )
+            return 0
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
