@@ -164,15 +164,26 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Install Node runtime system dependencies
+        shell: bash
         run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            SUDO=""
-            if command -v sudo >/dev/null 2>&1; then
-              SUDO="sudo"
-            fi
-            $SUDO apt-get update
-            $SUDO apt-get install -y libatomic1
+          if ! command -v apt-get >/dev/null 2>&1; then
+            exit 0
           fi
+
+          apt_get=(apt-get)
+          if [ "$(id -u)" -ne 0 ]; then
+            if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+              apt_get=(sudo -n apt-get)
+            elif ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'; then
+              exit 0
+            else
+              echo "::error::libatomic1 is required for Node ${NODE_VERSION}, but apt-get needs root or passwordless sudo."
+              exit 1
+            fi
+          fi
+
+          "${apt_get[@]}" update
+          "${apt_get[@]}" install -y libatomic1
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4

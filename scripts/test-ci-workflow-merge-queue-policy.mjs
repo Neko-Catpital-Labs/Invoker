@@ -67,11 +67,21 @@ const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
 const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
-  (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
+  (step) => String(step.run ?? '').includes('install -y libatomic1'),
 );
 assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
+);
+const uiVitestLibatomicStep = uiVitestSteps[uiVitestLibatomicIndex] ?? {};
+const uiVitestLibatomicRun = String(uiVitestLibatomicStep.run ?? '');
+assert(
+  !/\bsudo\s+apt-get\b/.test(uiVitestLibatomicRun),
+  'ui-vitest libatomic install must not invoke sudo apt-get interactively',
+);
+assert(
+  uiVitestLibatomicRun.includes('sudo -n true') && uiVitestLibatomicRun.includes('sudo -n apt-get'),
+  'ui-vitest libatomic install must prove passwordless sudo before using sudo apt-get',
 );
 
 assert(jobs.docker, 'Missing docker job');
