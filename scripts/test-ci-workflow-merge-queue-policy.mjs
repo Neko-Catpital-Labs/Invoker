@@ -73,6 +73,13 @@ assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
 );
+const uiVitestSystemDependencyStep = String(uiVitestSteps[uiVitestLibatomicIndex]?.run ?? '');
+for (const packageName of ['make', 'g++', 'python3']) {
+  assert(
+    uiVitestSystemDependencyStep.includes(packageName),
+    `ui-vitest must install ${packageName} before dependency install so node-gyp can rebuild node-pty`,
+  );
+}
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
