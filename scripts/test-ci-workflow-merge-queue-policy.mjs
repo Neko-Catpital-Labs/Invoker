@@ -54,6 +54,13 @@ assert(
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
 );
 
+const uiVitestInstallStep = jobs['ui-vitest']?.steps?.find((step) => step.name === 'Install dependencies');
+assert(uiVitestInstallStep, 'UI Vitest must install dependencies before running @invoker/ui tests');
+assert(
+  uiVitestInstallStep.run === 'pnpm install --frozen-lockfile --ignore-scripts',
+  'UI Vitest must install with --ignore-scripts because @invoker/ui tests do not need Electron/node-pty native postinstall scripts',
+);
+
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
 
