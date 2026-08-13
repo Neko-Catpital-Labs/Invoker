@@ -631,6 +631,7 @@ jobs:
               e2e/edit-task-prompt.spec.ts
               e2e/fix-with-claude.spec.ts
               e2e/fix-with-agent-transition.spec.ts
+              e2e/planning-chat-restore-conversational-mode-repro.spec.ts
           - name: 5-of-9
             files: >-
               e2e/autofix-worker-ui.spec.ts
