@@ -17,6 +17,8 @@ import {
   listUnprocessedDefaultBranchRuns,
   liveQueryHasNonTerminalWork,
   loadEmptyState,
+  normalizeState,
+  processFailureFilingSweep,
   reconcileCiRun,
 } from '../e2e-regression-watch.mjs';
 
@@ -52,6 +54,33 @@ function fakeRun(id, sha, jobs) {
     createdAt: `2026-07-31T00:${id}:00Z`,
     jobs,
   };
+}
+
+function fakeFailure(overrides = {}) {
+  return {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
+    firstBadRunId: 500,
+    firstBadRunCreatedAt: '2026-08-12T00:00:00Z',
+    firstJobDatabaseId: 501,
+    firstJobUrl: 'https://example.test/job/501',
+    lastBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
+    lastBadRunId: 500,
+    lastJobDatabaseId: 501,
+    lastJobUrl: 'https://example.test/job/501',
+    lastObservedAt: '2026-08-12T00:00:00Z',
+    occurrences: 1,
+    attempts: 0,
+    lastFiledAt: null,
+    needsHuman: false,
+    ...overrides,
+  };
+}
+
+function stateWithFailure(failure) {
+  const state = loadEmptyState();
+  state.activeFailures[failure.jobName] = failure;
+  return state;
 }
 
 function testJobClassification() {
@@ -199,6 +228,86 @@ function testLiveSubmissionUsesNoTrack() {
   console.log('[repro-e2e-regression-watch] live submission uses --no-track: PASS');
 }
 
+function testAttemptLedgerScenario() {
+  const cappedState = stateWithFailure(fakeFailure({ attempts: 3 }));
+  let cappedFilings = 0;
+  const cappedCounts = processFailureFilingSweep(cappedState, {
+    now: new Date('2026-08-12T01:00:00Z'),
+    maxAttempts: 3,
+    liveQuery: () => false,
+    fileFailure: () => {
+      cappedFilings += 1;
+    },
+  });
+  assertEqual(cappedFilings, 0, 'cap reached does not file');
+  assertEqual(cappedCounts.groupsNeedingHuman, 1, 'cap reached is counted for human review');
+  assertEqual(cappedState.activeFailures['playwright / launch-dispatch-stuck-lease'].needsHuman, true, 'cap reached marks needsHuman');
+
+  const backoffState = stateWithFailure(fakeFailure({
+    attempts: 1,
+    lastFiledAt: '2026-08-12T00:00:00.000Z',
+  }));
+  let backoffFilings = 0;
+  const backoffCounts = processFailureFilingSweep(backoffState, {
+    now: new Date('2026-08-12T00:59:59Z'),
+    maxAttempts: 3,
+    liveQuery: () => false,
+    fileFailure: () => {
+      backoffFilings += 1;
+    },
+  });
+  assertEqual(backoffFilings, 0, 'inside backoff does not file');
+  assertEqual(backoffCounts.groupsInBackoff, 1, 'inside backoff is counted');
+
+  const readyState = stateWithFailure(fakeFailure({
+    attempts: 1,
+    lastFiledAt: '2026-08-12T00:00:00.000Z',
+  }));
+  let readyFilings = 0;
+  const readyNow = new Date('2026-08-12T01:00:00Z');
+  processFailureFilingSweep(readyState, {
+    now: readyNow,
+    maxAttempts: 3,
+    liveQuery: () => false,
+    fileFailure: () => {
+      readyFilings += 1;
+    },
+  });
+  assertEqual(readyFilings, 1, 'past backoff files');
+  assertEqual(readyState.activeFailures['playwright / launch-dispatch-stuck-lease'].attempts, 2, 'past backoff increments attempts');
+  assertEqual(readyState.activeFailures['playwright / launch-dispatch-stuck-lease'].lastFiledAt, readyNow.toISOString(), 'past backoff records lastFiledAt');
+
+  const migrated = normalizeState({
+    schemaVersion: 2,
+    activeFailures: {
+      'required-fast / Vitest Workspace': {
+        jobName: 'required-fast / Vitest Workspace',
+        firstBadSha: 'legacy-sha',
+      },
+    },
+  });
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].attempts, 0, 'legacy migration defaults attempts');
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].lastFiledAt, null, 'legacy migration defaults lastFiledAt');
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].needsHuman, false, 'legacy migration defaults needsHuman');
+
+  const backtestState = stateWithFailure(fakeFailure());
+  const startMs = Date.parse('2026-08-12T00:00:00Z');
+  let backtestFilings = 0;
+  for (let sweep = 0; sweep < 64; sweep += 1) {
+    processFailureFilingSweep(backtestState, {
+      now: new Date(startMs + (sweep * 15 * 60 * 1000)),
+      maxAttempts: 3,
+      liveQuery: () => false,
+      fileFailure: () => {
+        backtestFilings += 1;
+      },
+    });
+  }
+  assertEqual(backtestFilings, 3, '64 terminal sweeps file at most three plans');
+  assertEqual(backtestState.activeFailures['playwright / launch-dispatch-stuck-lease'].needsHuman, true, '64 terminal sweeps flag needsHuman');
+  console.log('[repro-e2e-regression-watch] attempt-ledger scenario: PASS');
+}
+
 function testLiveGithubSmokeIfRequested() {
   if (process.env.INVOKER_E2E_REGRESSION_WATCH_LIVE !== '1') {
     console.log('[repro-e2e-regression-watch] live GitHub smoke: SKIP');
@@ -230,6 +339,7 @@ function main() {
   testWorkflowCommandMapping();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
+  testAttemptLedgerScenario();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
 }

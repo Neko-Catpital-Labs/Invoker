@@ -41,7 +41,13 @@ export const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'close
 export const BROKEN_JOB_CONCLUSIONS = new Set(['failure', 'timed_out', 'action_required']);
 export const IGNORED_JOB_CONCLUSIONS = new Set(['cancelled', 'skipped', 'neutral']);
 export const MARKER_PREFIX = 'invoker-ci-regression-watch: first-bad-sha=';
-export const STATE_SCHEMA_VERSION = 2;
+export const STATE_SCHEMA_VERSION = 3;
+export const DEFAULT_MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = parseNonNegativeInteger(
+  process.env.INVOKER_CI_WATCH_MAX_ATTEMPTS,
+  DEFAULT_MAX_ATTEMPTS,
+);
+export const ATTEMPT_BACKOFF_BASE_MS = 30 * 60 * 1000;
 
 const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
   ?? process.env.INVOKER_E2E_WATCH_STATE_DIR
@@ -72,6 +78,11 @@ export function slugify(value, maxLength = 72) {
   return (slug || 'ci-job').slice(0, maxLength).replace(/-+$/g, '') || 'ci-job';
 }
 
+function parseNonNegativeInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
 export function buildMarker(sha, jobName) {
   return `${MARKER_PREFIX}${sha}; job=${jobName}`;
 }
@@ -89,15 +100,52 @@ export function loadEmptyState() {
   };
 }
 
+function normalizeActiveFailure(failure, fallbackJobName) {
+  if (!failure || typeof failure !== 'object') return null;
+  const jobName = typeof failure.jobName === 'string' && failure.jobName
+    ? failure.jobName
+    : fallbackJobName;
+  if (typeof jobName !== 'string' || !jobName) return null;
+  return {
+    ...failure,
+    jobName,
+    attempts: Number.isFinite(Number(failure.attempts))
+      ? Math.max(0, Number(failure.attempts))
+      : 0,
+    lastFiledAt: typeof failure.lastFiledAt === 'string' && failure.lastFiledAt
+      ? failure.lastFiledAt
+      : null,
+    needsHuman: Boolean(failure.needsHuman),
+  };
+}
+
+function normalizeActiveFailures(activeFailures) {
+  if (!activeFailures || typeof activeFailures !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(activeFailures)
+      .map(([jobName, failure]) => [jobName, normalizeActiveFailure(failure, jobName)])
+      .filter(([, failure]) => failure !== null),
+  );
+}
+
+function normalizeStateForMutation(state) {
+  const normalized = normalizeState(state);
+  if (state && typeof state === 'object') {
+    Object.assign(state, normalized);
+    return state;
+  }
+  return normalized;
+}
+
 export function normalizeState(raw) {
-  if (!raw || typeof raw !== 'object' || raw.schemaVersion !== STATE_SCHEMA_VERSION) {
+  if (!raw || typeof raw !== 'object') {
     return loadEmptyState();
   }
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
     lastProcessedRunId: Number(raw.lastProcessedRunId ?? 0),
     heads: raw.heads && typeof raw.heads === 'object' ? raw.heads : {},
-    activeFailures: raw.activeFailures && typeof raw.activeFailures === 'object' ? raw.activeFailures : {},
+    activeFailures: normalizeActiveFailures(raw.activeFailures),
   };
 }
 
@@ -111,7 +159,7 @@ export function classifyJobConclusion(job) {
 }
 
 export function reconcileCiRun(state, run) {
-  const normalized = normalizeState(state);
+  const normalized = normalizeStateForMutation(state);
   const sha = String(run.headSha ?? '').trim();
   if (!sha) return { state: normalized, processedJobs: 0, brokenJobs: 0, okJobs: 0, ignoredJobs: 0 };
 
@@ -163,6 +211,7 @@ export function reconcileCiRun(state, run) {
       if (existing) {
         normalized.activeFailures[jobName] = {
           ...existing,
+          ...normalizeActiveFailure(existing, jobName),
           lastBadSha: sha,
           lastBadRunId: run.databaseId,
           lastJobDatabaseId: job.databaseId,
@@ -184,6 +233,9 @@ export function reconcileCiRun(state, run) {
           lastJobUrl: job.url ?? '',
           lastObservedAt: baseObservation.observedAt,
           occurrences: 1,
+          attempts: 0,
+          lastFiledAt: null,
+          needsHuman: false,
         };
       }
       continue;
@@ -207,6 +259,53 @@ export function getActionableFailures(state) {
       if (runDelta !== 0) return runDelta;
       return a.jobName.localeCompare(b.jobName);
     });
+}
+
+export function shouldFileFailure(failure, {
+  nowMs = Date.now(),
+  maxAttempts = MAX_ATTEMPTS,
+  backoffBaseMs = ATTEMPT_BACKOFF_BASE_MS,
+} = {}) {
+  const attempts = Number(failure?.attempts ?? 0);
+  if (attempts >= maxAttempts) {
+    return { action: 'needs-human', attempts };
+  }
+  if (failure?.lastFiledAt) {
+    const lastFiledMs = Date.parse(failure.lastFiledAt);
+    if (Number.isFinite(lastFiledMs)) {
+      const backoffUntilMs = lastFiledMs + (backoffBaseMs * (2 ** attempts));
+      if (nowMs < backoffUntilMs) {
+        return { action: 'backoff', attempts, backoffUntilMs };
+      }
+    }
+  }
+  return { action: 'file', attempts };
+}
+
+export function markFailureNeedsHuman(state, failure) {
+  const normalized = normalizeStateForMutation(state);
+  const jobName = failure.jobName;
+  const existing = normalized.activeFailures[jobName];
+  if (!existing) return normalized;
+  normalized.activeFailures[jobName] = {
+    ...existing,
+    needsHuman: true,
+  };
+  return normalized;
+}
+
+export function recordFailureFiled(state, failure, filedAt = new Date()) {
+  const normalized = normalizeStateForMutation(state);
+  const jobName = failure.jobName;
+  const existing = normalized.activeFailures[jobName];
+  if (!existing) return normalized;
+  normalized.activeFailures[jobName] = {
+    ...existing,
+    attempts: Number(existing.attempts ?? 0) + 1,
+    lastFiledAt: filedAt.toISOString(),
+    needsHuman: false,
+  };
+  return normalized;
 }
 
 function shellSingleQuote(value) {
@@ -473,6 +572,58 @@ export function fileBugfixPlan(failure, opts = {}) {
   return { planPath, vars, submitted: !opts.dryRun };
 }
 
+export function processFailureFilingSweep(state, {
+  failures = getActionableFailures(state),
+  now = new Date(),
+  maxAttempts = MAX_ATTEMPTS,
+  capPerSweep = CAP_PER_SWEEP,
+  liveQuery = liveQueryHasNonTerminalWork,
+  fileFailure = () => {},
+  save = () => {},
+  onNeedsHuman = () => {},
+} = {}) {
+  const filedAt = now instanceof Date ? now : new Date(now);
+  const nowMs = filedAt.getTime();
+  const counts = {
+    groupsFound: failures.length,
+    groupsFiled: 0,
+    groupsSkippedAlreadyAddressed: 0,
+    groupsDeferredByCap: 0,
+    groupsNeedingHuman: 0,
+    groupsInBackoff: 0,
+  };
+
+  for (const failure of failures) {
+    const attemptGate = shouldFileFailure(failure, { nowMs, maxAttempts });
+    if (attemptGate.action === 'needs-human') {
+      counts.groupsNeedingHuman += 1;
+      markFailureNeedsHuman(state, failure);
+      save(state);
+      onNeedsHuman(failure, attemptGate);
+      continue;
+    }
+    if (attemptGate.action === 'backoff') {
+      counts.groupsInBackoff += 1;
+      continue;
+    }
+    if (liveQuery(failure)) {
+      counts.groupsSkippedAlreadyAddressed += 1;
+      continue;
+    }
+    if (capPerSweep > 0 && counts.groupsFiled >= capPerSweep) {
+      counts.groupsDeferredByCap += 1;
+      continue;
+    }
+
+    fileFailure(failure);
+    recordFailureFiled(state, failure, filedAt);
+    save(state);
+    counts.groupsFiled += 1;
+  }
+
+  return counts;
+}
+
 export function loadState() {
   if (!existsSync(STATE_FILE)) return loadEmptyState();
   return normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
@@ -518,24 +669,14 @@ export async function main() {
   }
 
   const failures = getActionableFailures(state);
-  const toFile = [];
-  let groupsSkippedAlreadyAddressed = 0;
-  let groupsDeferredByCap = 0;
-  for (const failure of failures) {
-    if (liveQueryHasNonTerminalWork(failure)) {
-      groupsSkippedAlreadyAddressed += 1;
-      continue;
-    }
-    if (CAP_PER_SWEEP <= 0 || toFile.length < CAP_PER_SWEEP) {
-      toFile.push(failure);
-    } else {
-      groupsDeferredByCap += 1;
-    }
-  }
-
-  for (const failure of toFile) {
-    fileBugfixPlan(failure, { repoUrl, jobDefinitions, dryRun });
-  }
+  const filingCounts = processFailureFilingSweep(state, {
+    failures,
+    fileFailure: (failure) => fileBugfixPlan(failure, { repoUrl, jobDefinitions, dryRun }),
+    save: saveState,
+    onNeedsHuman: (failure, attemptGate) => {
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
+    },
+  });
 
   appendSweepLog({
     runsProcessed,
@@ -543,10 +684,7 @@ export async function main() {
     jobsBroken,
     jobsOk,
     jobsIgnored,
-    groupsFound: failures.length,
-    groupsFiled: toFile.length,
-    groupsSkippedAlreadyAddressed,
-    groupsDeferredByCap,
+    ...filingCounts,
     dryRun,
   });
 }
