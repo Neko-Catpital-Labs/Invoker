@@ -96,6 +96,12 @@ jobs:
           TARGET_AUTHORS: ${{ steps.targets.outputs.authors }}
         run: echo "PR body validation is not enforced for ${TARGET_AUTHORS} yet."
 
+      - name: Install Node.js runtime prerequisites
+        if: steps.targets.outputs.enabled == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libatomic1
+
       - name: Install pnpm
         if: steps.targets.outputs.enabled == 'true'
         uses: pnpm/action-setup@v4

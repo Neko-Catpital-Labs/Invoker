@@ -46,6 +46,37 @@ assert.doesNotMatch(
   'PR Body must not fail before validation on a stale trusted-base lockfile',
 );
 
+const prBodyWorkflowSteps = prBodyWorkflow.match(/^      - name: .*(?:\n(?!      - name: ).*)*/gm) || [];
+const findWorkflowStepIndex = (predicate) => prBodyWorkflowSteps.findIndex((step) => predicate(step));
+const enabledOnlyCondition = "steps.targets.outputs.enabled == 'true'";
+const resolveTargetsStepIndex = findWorkflowStepIndex((step) => step.includes('name: Resolve PR Body targets'));
+const setupNodeStepIndex = findWorkflowStepIndex((step) => step.includes('uses: actions/setup-node@v4'));
+const libatomicStepIndex = findWorkflowStepIndex((step) => step.includes('name: Install Node.js runtime prerequisites'));
+
+assert.notEqual(resolveTargetsStepIndex, -1, 'PR Body must resolve rollout targets before runtime setup');
+assert.notEqual(setupNodeStepIndex, -1, 'PR Body must select a Node.js runtime with actions/setup-node');
+assert.notEqual(libatomicStepIndex, -1, 'PR Body must install libatomic1 before selecting Node.js 26');
+assert.ok(
+  libatomicStepIndex > resolveTargetsStepIndex,
+  'PR Body must install Node.js runtime prerequisites after resolving rollout targets',
+);
+assert.ok(
+  libatomicStepIndex < setupNodeStepIndex,
+  'PR Body must install libatomic1 before actions/setup-node selects Node.js 26',
+);
+
+const libatomicStep = prBodyWorkflowSteps[libatomicStepIndex];
+assert.match(
+  libatomicStep,
+  new RegExp(`^        if: ${enabledOnlyCondition.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+  'PR Body libatomic prerequisite install must use the same enabled-only gate as Node setup',
+);
+assert.match(
+  libatomicStep,
+  /^        run: \|\n          sudo apt-get update\n          sudo apt-get install -y libatomic1$/m,
+  'PR Body libatomic prerequisite install must update apt and install libatomic1',
+);
+
 const outputDir = mkdtempSync(join(tmpdir(), 'pr-body-rollout-'));
 const outputFile = join(outputDir, 'github-output');
 try {
