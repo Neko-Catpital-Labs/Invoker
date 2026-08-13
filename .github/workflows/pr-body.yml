@@ -106,6 +106,38 @@ jobs:
         if: steps.targets.outputs.enabled == 'true'
         uses: pnpm/action-setup@v4
 
+      - name: Install Node.js runtime dependency
+        if: steps.targets.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'; then
+            exit 0
+          fi
+
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::libatomic.so.1 is required for Node.js ${NODE_VERSION}, but apt-get is not available to install libatomic1."
+            exit 1
+          fi
+
+          apt_get=(apt-get)
+          if [[ "${EUID}" -ne 0 ]]; then
+            if ! sudo -n true 2>/dev/null; then
+              if ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'; then
+                exit 0
+              fi
+
+              echo "::error::libatomic.so.1 is required for Node.js ${NODE_VERSION}, but installing libatomic1 requires passwordless sudo on this runner."
+              exit 1
+            fi
+
+            apt_get=(sudo apt-get)
+          fi
+
+          "${apt_get[@]}" update
+          "${apt_get[@]}" install -y --no-install-recommends libatomic1
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         if: steps.targets.outputs.enabled == 'true'
         uses: actions/setup-node@v4
