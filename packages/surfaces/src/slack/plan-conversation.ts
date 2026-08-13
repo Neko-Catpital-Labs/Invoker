@@ -396,6 +396,11 @@ The user has explicitly approved drafting. Produce the full Invoker YAML task pl
     : `
 Drafting is not authorized yet. Do NOT output a \`\`\`yaml code block, do NOT write a draft plan file, and do NOT tell the user the plan can be executed.
 
+Treat this as a conversation before a plan.
+Talk through edge cases, corner cases, architecture, and ambiguity with the human.
+Resolve those points before producing a YAML plan.
+Draft YAML only after the human asks you to draft/proceed.
+
 Before drafting is authorized:
 1. Ask scoping questions first when the request is broad, ambiguous, risky, or missing constraints.
 2. Discuss relevant edge cases, corner cases, architecture choices, ambiguity, and likely historic reasons for the current code shape.
@@ -412,6 +417,8 @@ This session is a planning conversation before any task plan exists. Your job is
 For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase), answer directly without drafting a plan.
 
 For implementation work, prefer a scoping conversation first. Do not rush directly to YAML unless the user has clearly approved drafting a plan.
+
+When YAML is eventually authorized and produced, the hosting surface reads that exact YAML and owns the review and approval step. Only the Slack orchestrator or the in-app planner may submit an approved plan.
 ${draftingInstructions}
 
 When responding in conversational planning mode, be concrete, call out tradeoffs, and keep the next question or draft-authorization request easy to answer.`;

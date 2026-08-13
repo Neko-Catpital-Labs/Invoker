@@ -47,7 +47,6 @@ import {
   formatPlanningHostedTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
-  preparePlanningReview,
   submitPlanningReview,
   summarizePlanText,
   type PlanningMessage,
@@ -412,6 +411,12 @@ function clearStarterPromptIfUnused(session: InAppPlanningChatSession): void {
 
 function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary' | 'draftPlanText'>): boolean {
   return Boolean(session.draftPlanText || session.draftPlanSummary);
+}
+
+function looksLikeRepositoryLocator(message: string): boolean {
+  const value = message.trim();
+  return /^(?:https?:\/\/)?github\.com\/[^/\s]+\/[^/\s]+\/?$/i.test(value)
+    || /^git@github\.com:[^/\s]+\/[^/\s]+(?:\.git)?$/i.test(value);
 }
 
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
@@ -911,13 +916,14 @@ export async function sendPlanningChatMessage(
           messagesBeforeTurn,
           assistantReply: reply,
           immediateDraftPlanText,
-          requireDraftAuthorization: hasDraftPlan(activeSession) || !immediateDraftPlanText,
+          requireDraftAuthorization: true,
           hasExistingDraft: hasDraftPlan(activeSession),
         });
-        if (result.kind === 'message') {
+        const draftingAuthorized = result.draftingAuthorized || looksLikeRepositoryLocator(message);
+        if (result.kind === 'message' || !draftingAuthorized) {
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
-            : result.status;
+            : reply.includes('?') ? 'waiting_for_answer' : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
@@ -932,31 +938,8 @@ export async function sendPlanningChatMessage(
           } as InAppPlanningChatResponse;
         }
 
-        const review = preparePlanningReview({
-          plannerOutput: reply,
-          extractDraftPlanText: () => result.planText,
-          confirmationMode: activeSession.confirmationMode,
-        });
-        if ('kind' in review) {
-          activeSession.status = hasDraftPlan(activeSession)
-            ? 'draft_ready'
-            : 'still_discussing';
-          appendSessionMessage(activeSession, 'assistant', review.reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
-            ok: true,
-            sessionId: activeSession.id,
-            reply: review.reply,
-            reasoning,
-            confirmationMode: activeSession.confirmationMode,
-            draftPlanAvailable: hasDraftPlan(activeSession),
-            draftPlanSummary: activeSession.draftPlanSummary,
-            draftPlanText: activeSession.draftPlanText,
-          } as InAppPlanningChatResponse;
-        }
-
-        activeSession.draftPlanSummary = review.summary;
-        activeSession.draftPlanText = review.planText;
+        activeSession.draftPlanSummary = result.summary;
+        activeSession.draftPlanText = result.planText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -967,8 +950,8 @@ export async function sendPlanningChatMessage(
           reasoning,
           confirmationMode: activeSession.confirmationMode,
           draftPlanAvailable: true,
-          draftPlanSummary: review.summary,
-          draftPlanText: review.planText,
+          draftPlanSummary: result.summary,
+          draftPlanText: result.planText,
         } as InAppPlanningChatResponse;
       } catch (error) {
         persistPlanningSession(activeSession, deps.planningSessionStore, false);

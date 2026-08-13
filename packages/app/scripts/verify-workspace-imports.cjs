@@ -19,10 +19,15 @@ const declaredDependencies = new Set([
 
 const invokerImportPattern = /from\s+['"](@invoker\/[^'"]+)['"]/g;
 const imports = new Set();
+const typeOnlyImports = new Map();
 
 for (const match of mainSource.matchAll(invokerImportPattern)) {
   if (match[1]) {
     imports.add(match[1]);
+    const lineStart = mainSource.lastIndexOf('\n', match.index) + 1;
+    const importPrefix = mainSource.slice(lineStart, match.index);
+    const typeOnly = /^\s*import\s+type\b/.test(importPrefix);
+    typeOnlyImports.set(match[1], (typeOnlyImports.get(match[1]) ?? true) && typeOnly);
   }
 }
 
@@ -33,11 +38,13 @@ for (const specifier of imports) {
     throw new Error(`Missing package.json dependency for ${packageName} imported in src/main.ts`);
   }
 
-  try {
-    requireFromScript.resolve(specifier, { paths: [packageRoot] });
-  } catch {
-    throw new Error(
-      `Unresolvable workspace dependency ${specifier}. Run "pnpm install" at repo root to refresh workspace links.`,
-    );
+  if (!typeOnlyImports.get(specifier)) {
+    try {
+      requireFromScript.resolve(specifier, { paths: [packageRoot] });
+    } catch {
+      throw new Error(
+        `Unresolvable workspace dependency ${specifier}. Run "pnpm install" at repo root to refresh workspace links.`,
+      );
+    }
   }
 }

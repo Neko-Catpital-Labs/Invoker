@@ -28,6 +28,7 @@ const payload = JSON.stringify(Array.from({ length: 3000 }, (_, i) => ({
   description: 'synthetic workflow row ' + i + ' padded-padded-padded-padded-padded-padded-padded-padded',
   status: 'completed',
 })));
+process.stdout.cork();
 process.stdout.write(payload);
 process.exit(0);
 `;
