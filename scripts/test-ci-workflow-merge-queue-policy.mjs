@@ -22,6 +22,10 @@ function assert(condition, message) {
   }
 }
 
+function stepIndex(job, stepName) {
+  return (job.steps ?? []).findIndex((step) => step?.name === stepName);
+}
+
 function jobForCheck(checkName) {
   if (checkName === 'PR Body' || checkName.startsWith('quality / ')) {
     return null;
@@ -61,6 +65,16 @@ assert(jobs['required-package-builds'], 'Missing required-package-builds job');
 assert(
   jobs['required-package-builds'].if === ORDINARY_PR_GATE,
   'required-package-builds must run on ordinary PRs and skip merge queue refs',
+);
+
+assert(jobs['optional-other'], 'Missing optional-other job');
+const optionalReclaimIndex = stepIndex(jobs['optional-other'], 'Reclaim workspace');
+const optionalCheckoutIndex = stepIndex(jobs['optional-other'], 'Checkout');
+assert(optionalReclaimIndex >= 0, 'optional-other must reclaim self-hosted workspace ownership before checkout');
+assert(optionalCheckoutIndex >= 0, 'optional-other must check out the repository');
+assert(
+  optionalReclaimIndex < optionalCheckoutIndex,
+  'optional-other must reclaim self-hosted workspace ownership before checkout',
 );
 
 assert(jobs.docker, 'Missing docker job');
