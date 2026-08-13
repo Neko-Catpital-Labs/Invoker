@@ -200,7 +200,7 @@ function planPendingLaunchQueue(
 export function getPendingLaunchQueueSnapshotImpl(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
-  opts?: { alreadyRefreshed?: boolean },
+  opts?: LaunchReadinessOptions,
 ): TaskJob[] {
   return planPendingLaunchQueue(host, candidateJobs, opts);
 }
@@ -396,7 +396,9 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
 export function drainSchedulerImpl(host: SchedulerDomainHost, opts?: LaunchReadinessOptions): TaskState[] {
   // Refresh once for the whole drain pass, not once per dequeued job below
   // (see planPendingLaunchQueue for the same reasoning).
-  host.refreshFromDb();
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);

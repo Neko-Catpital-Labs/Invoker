@@ -6206,6 +6206,41 @@ describe('Orchestrator', () => {
       // draining, so refreshFromDb() stays both constant and minimal.
       expect(refreshCount).toBeLessThanOrEqual(3);
     });
+
+    it('bounded startExecution reuses the initial refresh for queue planning and drain', () => {
+      const persistence = new CountingPersistence();
+      const bus = new InMemoryBus();
+      const o = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 100,
+      });
+
+      const workflowCount = 6;
+      for (let i = 0; i < workflowCount; i++) {
+        o.loadPlan({
+          name: `bounded-scaling-wf-${i}`,
+          tasks: [{ id: 't1', prompt: 'go' }],
+        });
+      }
+
+      let refreshCount = 0;
+      const origRefresh = (Orchestrator.prototype as any).refreshFromDb;
+      (Orchestrator.prototype as any).refreshFromDb = function (...args: unknown[]) {
+        refreshCount += 1;
+        return origRefresh.apply(this, args);
+      };
+      let started: TaskState[];
+      try {
+        started = o.startExecution({ limit: 2 });
+      } finally {
+        (Orchestrator.prototype as any).refreshFromDb = origRefresh;
+      }
+
+      expect(started.length).toBe(2);
+      expect(persistence.transactionCalls).toBe(1);
+      expect(refreshCount).toBe(1);
+    });
   });
 
   // ── retryWorkflow ────────────────────────────────────────
