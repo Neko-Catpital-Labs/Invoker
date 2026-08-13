@@ -1,0 +1,103 @@
+name: "Repair PR 8993 review unit split"
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+tasks:
+  - id: repair-pr-8993-review-unit-split
+    description: |
+      Repair existing pull request #8993 after the PR Body check exposed a review-unit split violation.
+
+      Review claim:
+      - Restructure the published headless worker start/stop stack so PR #8993 is a pure proof slice and the controller accessor/wiring lands in the follow-up behavior/routing slice.
+      Review lane:
+      - proof
+      Safety invariant:
+      - PR #8993 should keep only regression proof for the current `worker start`/`worker stop` rejection, while product wiring is moved to the follow-up slice that changes behavior.
+      Slice rationale:
+      - The current branch mixes `packages/app/src/headless-shared.ts` activation-surface changes with `packages/app/src/main.ts` routing changes, so the PR body validator cannot accept one review unit.
+      Architectural effect:
+      - The proof slice remains test-only; the later behavior slice owns runtime dependency access and dispatch changes.
+      Goal:
+      - Make PR #8993 pass `PR Body` without hiding the review-unit split.
+      Motivation:
+      - The failed CI log shows missing schema sections first, but local validation with a canonical body then reports mixed review units.
+      Alternative considerations:
+      - Option A (chosen): split proof from product wiring so each PR declares one review lane and one review unit.
+      - Option B: relabel the current mixed diff with a broader body, which the validator rejects and would weaken review boundaries.
+      Implementation details:
+      - Work against PR #8993 in Neko-Catpital-Labs/Invoker.
+      - Base branch: master.
+      - Head branch: stack/EdbertChan/pr/headless-worker-start-stop-wiring/headless-worker-start-stop-wiring-2a-prove-start--ad4fa05f.
+      - Current observed head: 7a12104860061960a38b659446499e8bb1929f16.
+      - The failing check is `PR Body` at https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/31679188222/job/94380485370.
+      - Reproduce the hidden split by drafting a canonical body and running `node scripts/validate-pr-body-local.mjs --body-file <body> --base master`; the observed errors are mixed review-unit text plus `Review Unit "activation-surface" cannot ship with routing files`.
+      - Narrow PR #8993 so it contains the regression proof in `packages/app/src/__tests__/headless-worker.test.ts` and no product wiring changes from `packages/app/src/headless-shared.ts` or `packages/app/src/main.ts`.
+      - Keep or adjust the tests so they still prove `runHeadless(["worker", "stop", E2E_AUTOFIX_WORKER_KIND], deps)` and `runHeadless(["worker", "start", E2E_AUTOFIX_WORKER_KIND], deps)` reject with `Unknown worker kind: "stop"` and `"start"` before invoking the fake controller.
+      - Update PR #8993's body to the canonical schema with `Review Lane` set to `proof` and `Review Unit` set to `proof`.
+      - Put the removed `getWorkerRuntimeController` dependency accessor and `main.ts` wiring into the follow-up behavior/routing slice that actually makes start/stop reachable. If that follow-up PR already exists in the stack, update it; otherwise create the next stacked branch/PR above #8993.
+      - After modifying stack branches, use the repo's make-pr flow and Mergify stack publication path appropriate for Invoker-on-Invoker work.
+      Non-goals:
+      - Do not make `worker start` or `worker stop` succeed in PR #8993.
+      - Do not weaken `scripts/validate-pr-body.mjs` or review-unit rules.
+      - Do not bundle proof, runtime wiring, and dispatch behavior back into one PR.
+      Files:
+      - packages/app/src/__tests__/headless-worker.test.ts
+      - packages/app/src/headless-shared.ts
+      - packages/app/src/main.ts
+      Change types:
+      - packages/app/src/__tests__/headless-worker.test.ts: modify
+      - packages/app/src/headless-shared.ts: modify
+      - packages/app/src/main.ts: modify
+      Acceptance criteria:
+      - PR #8993 has a canonical body containing `## Summary`, visible review metadata, `## Non-goals`, collapsed `## Test Plan`, and collapsed `## Revert Plan`.
+      - `node scripts/validate-pr-body-local.mjs --body-file <pr-8993-body> --base master` passes for PR #8993's repaired branch.
+      - A focused headless worker test command passes for PR #8993's repaired branch.
+      - The product wiring removed from PR #8993 is present in the follow-up behavior/routing slice or explicitly reported as already present there.
+    prompt: |
+      Assume no prior context. You must repair existing PR #8993 in Neko-Catpital-Labs/Invoker by editing the stack branches that currently touch packages/app/src/__tests__/headless-worker.test.ts, packages/app/src/headless-shared.ts, and packages/app/src/main.ts:
+      https://github.com/Neko-Catpital-Labs/Invoker/pull/8993
+
+      Review claim:
+      - Restructure the published headless worker start/stop stack so PR #8993 is a pure proof slice and the controller accessor/wiring lands in the follow-up behavior/routing slice.
+      Review lane:
+      - proof
+      Safety invariant:
+      - PR #8993 should keep only regression proof for the current `worker start`/`worker stop` rejection, while product wiring is moved to the follow-up slice that changes behavior.
+      Slice rationale:
+      - The current branch mixes `packages/app/src/headless-shared.ts` activation-surface changes with `packages/app/src/main.ts` routing changes, so the PR body validator cannot accept one review unit.
+      Architectural effect:
+      - The proof slice remains test-only; the later behavior slice owns runtime dependency access and dispatch changes.
+      Goal:
+      - Make PR #8993 pass `PR Body` without hiding the review-unit split.
+      Motivation:
+      - The failed CI log shows missing schema sections first, but local validation with a canonical body then reports mixed review units.
+      Alternative considerations:
+      - Option A (chosen): split proof from product wiring so each PR declares one review lane and one review unit.
+      - Option B: relabel the current mixed diff with a broader body, which the validator rejects and would weaken review boundaries.
+      Implementation details:
+      - You must fetch and check out branch `stack/EdbertChan/pr/headless-worker-start-stop-wiring/headless-worker-start-stop-wiring-2a-prove-start--ad4fa05f` from origin.
+      - You must confirm the starting head is `7a12104860061960a38b659446499e8bb1929f16` or record the new live head before proceeding.
+      - You must narrow PR #8993 to proof: remove the branch's product wiring changes in packages/app/src/headless-shared.ts and packages/app/src/main.ts.
+      - You must keep or adjust packages/app/src/__tests__/headless-worker.test.ts so it proves both `worker stop <kind>` and `worker start <kind>` reject as unknown worker kinds before calling a fake worker runtime controller.
+      - You must draft a canonical PR body for #8993 with `Review Lane` = `proof` and `Review Unit` = `proof`. Include collapsed `## Test Plan` and `## Revert Plan`.
+      - You must validate #8993's repaired branch with `node scripts/validate-pr-body-local.mjs --body-file <pr-8993-body> --base master`.
+      - You must run the focused headless worker test command and include the exact command in the body.
+      - You must commit and push the repaired #8993 branch only after validation passes.
+      - You must move the removed `getWorkerRuntimeController` dependency accessor and packages/app/src/main.ts owner wiring into the follow-up behavior/routing slice that will actually route worker start/stop. If that follow-up PR already exists, update it; otherwise create the next stacked branch/PR above #8993 using the repo make-pr/Mergify Stacks workflow.
+      - You must not weaken scripts/validate-pr-body.mjs or any review-unit rules.
+      Non-goals:
+      - Do not make `worker start` or `worker stop` succeed in PR #8993.
+      - Do not bundle proof, runtime wiring, and dispatch behavior back into one PR.
+      Files:
+      - packages/app/src/__tests__/headless-worker.test.ts
+      - packages/app/src/headless-shared.ts
+      - packages/app/src/main.ts
+      Change types:
+      - packages/app/src/__tests__/headless-worker.test.ts: modify
+      - packages/app/src/headless-shared.ts: modify
+      - packages/app/src/main.ts: modify
+      Acceptance criteria:
+      - Verify PR #8993 has a canonical PR body and passes `node scripts/validate-pr-body-local.mjs --body-file <pr-8993-body> --base master`.
+      - Verify the focused headless worker test command passes on PR #8993's repaired branch.
+      - Ensure the removed product wiring is either moved to the follow-up behavior/routing slice or reported as already present there.
+    dependencies: []
