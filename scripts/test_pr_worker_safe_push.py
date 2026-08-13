@@ -169,6 +169,49 @@ class SafePushTests(unittest.TestCase):
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
 
+    def test_deleted_merged_branch_settles_without_recreating_it(self) -> None:
+        git(self.repo, "push", "origin", f"{self.expected}:refs/pull/123/head")
+        git(self.remote, "config", "receive.denyDeleteCurrent", "ignore")
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "123",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), "")
+        self.assertIn("already absent", result.stdout)
+        self.assertEqual(len(ledger.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_deleted_branch_with_moved_pull_ref_is_stale(self) -> None:
+        moved = self.commit(self.repo, "moved", "moved\n")
+        git(self.repo, "push", "origin", f"{moved}:refs/pull/123/head")
+        git(self.remote, "config", "receive.denyDeleteCurrent", "ignore")
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "123",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
