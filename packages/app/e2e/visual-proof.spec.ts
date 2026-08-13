@@ -835,9 +835,8 @@ test.describe('Visual proof capture', () => {
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('invoker-terminal-expanded')).toHaveCount(0);
 
-    await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
-    await page.getByRole('button', { name: 'Review draft' }).click();
     await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Terminal Planned Flow');
     // planning-draft-locked-note is a net-new element; this spec also runs
     // against the pre-change base branch for before/after visual proof, where
@@ -970,9 +969,8 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Draft a plan to submit');
     await page.getByRole('button', { name: 'Send' }).click();
-    await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
-    await page.getByRole('button', { name: 'Review draft' }).click();
     await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await page.getByTestId('planning-create-workflow').click();
     await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
 
@@ -1283,8 +1281,8 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Draft a YAML plan for the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();
-    await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
-    await page.getByRole('button', { name: 'Review draft' }).click();
+    await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await page.getByTestId('planning-create-workflow').click();
 
     const transcript = page.getByTestId('invoker-terminal-transcript');
