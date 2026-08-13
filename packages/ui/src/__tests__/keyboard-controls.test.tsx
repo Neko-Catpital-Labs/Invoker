@@ -588,7 +588,6 @@ describe('Sidebar keyboard navigation (component)', () => {
 describe('Graph camera controls (component)', () => {
   let mock: MockInvoker;
   let localStorageSetItemMock: Mock;
-  let localStorageDescriptor: PropertyDescriptor | undefined;
   /** Active getBoundingClientRect spy, restored after each test. */
   let rectSpy: ReturnType<typeof vi.spyOn> | null = null;
 
@@ -608,7 +607,6 @@ describe('Graph camera controls (component)', () => {
     // App's theme hook touches localStorage; keep a shim so F1 can assert it
     // does not perform storage writes after the initial render settles.
     const store = new Map<string, string>();
-    localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     localStorageSetItemMock = vi.fn((k: string, v: string) => { store.set(k, String(v)); });
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
@@ -633,12 +631,7 @@ describe('Graph camera controls (component)', () => {
     rectSpy?.mockRestore();
     rectSpy = null;
     mock.cleanup();
-    if (localStorageDescriptor) {
-      Object.defineProperty(globalThis, 'localStorage', localStorageDescriptor);
-    } else {
-      delete (globalThis as { localStorage?: unknown }).localStorage;
-    }
-    localStorageDescriptor = undefined;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 
   /**
