@@ -41,7 +41,7 @@ export const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'close
 export const BROKEN_JOB_CONCLUSIONS = new Set(['failure', 'timed_out', 'action_required']);
 export const IGNORED_JOB_CONCLUSIONS = new Set(['cancelled', 'skipped', 'neutral']);
 export const MARKER_PREFIX = 'invoker-ci-regression-watch: first-bad-sha=';
-export const STATE_SCHEMA_VERSION = 3;
+export const STATE_SCHEMA_VERSION = 4;
 export const DEFAULT_MAX_ATTEMPTS = 3;
 export const MAX_ATTEMPTS = parseNonNegativeInteger(
   process.env.INVOKER_CI_WATCH_MAX_ATTEMPTS,
@@ -116,6 +116,7 @@ function normalizeActiveFailure(failure, fallbackJobName) {
       ? failure.lastFiledAt
       : null,
     needsHuman: Boolean(failure.needsHuman),
+    retired: Boolean(failure.retired),
   };
 }
 
@@ -294,6 +295,18 @@ export function markFailureNeedsHuman(state, failure) {
   return normalized;
 }
 
+export function markFailureRetired(state, failure, retired = true) {
+  const normalized = normalizeStateForMutation(state);
+  const jobName = failure.jobName;
+  const existing = normalized.activeFailures[jobName];
+  if (!existing) return normalized;
+  normalized.activeFailures[jobName] = {
+    ...existing,
+    retired: Boolean(retired),
+  };
+  return normalized;
+}
+
 export function recordFailureFiled(state, failure, filedAt = new Date()) {
   const normalized = normalizeStateForMutation(state);
   const jobName = failure.jobName;
@@ -304,6 +317,7 @@ export function recordFailureFiled(state, failure, filedAt = new Date()) {
     attempts: Number(existing.attempts ?? 0) + 1,
     lastFiledAt: filedAt.toISOString(),
     needsHuman: false,
+    retired: false,
   };
   return normalized;
 }
@@ -442,6 +456,11 @@ export function buildCiJobDefinitions(workflow = parseYaml(readFileSync(WORKFLOW
   return definitions;
 }
 
+export function jobNameIsMapped(jobName, jobDefinitions) {
+  const definition = jobDefinitions?.get(jobName);
+  return Boolean(definition?.verifyCommand?.trim());
+}
+
 export function fallbackVerifyCommand(jobName) {
   return `bash -lc ${shellSingleQuote(`echo "No local verify command is mapped for CI job: ${jobName}" >&2; exit 1`)}`;
 }
@@ -561,7 +580,11 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
 
 export function fileBugfixPlan(failure, opts = {}) {
   const repoUrl = opts.repoUrl ?? getRepoUrl();
-  const vars = buildPlanVars(failure, repoUrl, opts.jobDefinitions);
+  const jobDefinitions = opts.jobDefinitions ?? buildCiJobDefinitions();
+  if (!jobNameIsMapped(failure.jobName, jobDefinitions)) {
+    throw new Error(`Cannot file CI regression repair plan for unmapped CI job: ${failure.jobName}`);
+  }
+  const vars = buildPlanVars(failure, repoUrl, jobDefinitions);
   const outDir = join(opts.outRoot ?? join(REPO_ROOT, 'plans', 'rendered'), vars.job_slug);
   const varArgs = Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}=${v}`]);
   const run = opts.runCommand ?? runCommand;
@@ -577,10 +600,12 @@ export function processFailureFilingSweep(state, {
   now = new Date(),
   maxAttempts = MAX_ATTEMPTS,
   capPerSweep = CAP_PER_SWEEP,
+  jobDefinitions = null,
   liveQuery = liveQueryHasNonTerminalWork,
   fileFailure = () => {},
   save = () => {},
   onNeedsHuman = () => {},
+  onRetired = () => {},
 } = {}) {
   const filedAt = now instanceof Date ? now : new Date(now);
   const nowMs = filedAt.getTime();
@@ -591,9 +616,17 @@ export function processFailureFilingSweep(state, {
     groupsDeferredByCap: 0,
     groupsNeedingHuman: 0,
     groupsInBackoff: 0,
+    groupsRetired: 0,
   };
 
   for (const failure of failures) {
+    if (jobDefinitions && !jobNameIsMapped(failure.jobName, jobDefinitions)) {
+      counts.groupsRetired += 1;
+      markFailureRetired(state, failure, true);
+      save(state);
+      onRetired(failure);
+      continue;
+    }
     const attemptGate = shouldFileFailure(failure, { nowMs, maxAttempts });
     if (attemptGate.action === 'needs-human') {
       counts.groupsNeedingHuman += 1;
@@ -671,10 +704,14 @@ export async function main() {
   const failures = getActionableFailures(state);
   const filingCounts = processFailureFilingSweep(state, {
     failures,
+    jobDefinitions,
     fileFailure: (failure) => fileBugfixPlan(failure, { repoUrl, jobDefinitions, dryRun }),
     save: saveState,
     onNeedsHuman: (failure, attemptGate) => {
       console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
+    },
+    onRetired: (failure) => {
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" has no mapped local verify command; marking retired and skipping filing`);
     },
   });
 

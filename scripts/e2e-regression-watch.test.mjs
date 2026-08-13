@@ -1,7 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildCiJobDefinitions,
   buildMarker,
+  fileBugfixPlan,
+  jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
   normalizeState,
@@ -172,11 +175,12 @@ describe('attempt ledger filing gate', () => {
       },
     });
 
-    assert.equal(migrated.schemaVersion, 3);
+    assert.equal(migrated.schemaVersion, 4);
     assert.equal(migrated.lastProcessedRunId, 123);
     assert.equal(migrated.activeFailures.build.attempts, 0);
     assert.equal(migrated.activeFailures.build.lastFiledAt, null);
     assert.equal(migrated.activeFailures.build.needsHuman, false);
+    assert.equal(migrated.activeFailures.build.retired, false);
   });
 
   it('backtests the 2026-08-12 terminal-workflow loop to at most three filings', () => {
@@ -207,5 +211,116 @@ describe('attempt ledger filing gate', () => {
     assert.equal(state.activeFailures[key].attempts, 3);
     assert.equal(state.activeFailures[key].needsHuman, true);
     assert.ok(humanSweeps > 0);
+  });
+});
+
+describe('retired CI job filing gate', () => {
+  it('skips an unmapped job, marks it retired, counts it, and never files', () => {
+    const key = 'playwright / launch-dispatch-stuck-lease';
+    const state = stateWithFailure(makeFailure({ jobName: key }));
+    const jobDefinitions = new Map([
+      ['playwright / 9-of-9', { verifyCommand: 'bash scripts/test-suites/optional/40-playwright-app.sh' }],
+    ]);
+    let filed = 0;
+    let liveQueryCalled = false;
+    const retired = [];
+
+    const counts = processFailureFilingSweep(state, {
+      jobDefinitions,
+      liveQuery: () => {
+        liveQueryCalled = true;
+        return false;
+      },
+      fileFailure: () => {
+        filed += 1;
+      },
+      onRetired: (failure) => {
+        retired.push(failure.jobName);
+      },
+    });
+
+    assert.equal(jobNameIsMapped(key, jobDefinitions), false);
+    assert.equal(filed, 0);
+    assert.equal(liveQueryCalled, false, 'retired gate should skip before live workflow dedup');
+    assert.deepEqual(retired, [key]);
+    assert.equal(counts.groupsRetired, 1);
+    assert.equal(counts.groupsFiled, 0);
+    assert.equal(state.activeFailures[key].retired, true);
+    assert.equal(state.activeFailures[key].attempts, 0);
+  });
+
+  it('treats a live job without a verify command as unmapped', () => {
+    const jobDefinitions = new Map([
+      ['required-fast / Missing Command', { verifyCommand: '' }],
+    ]);
+
+    assert.equal(jobNameIsMapped('required-fast / Missing Command', jobDefinitions), false);
+  });
+
+  it('fileBugfixPlan throws before rendering for an unmapped job', () => {
+    const failure = makeFailure({ jobName: 'playwright / launch-dispatch-stuck-lease' });
+    const calls = [];
+
+    assert.throws(
+      () => fileBugfixPlan(failure, {
+        repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+        jobDefinitions: new Map(),
+        runCommand: (cmd, args) => calls.push([cmd, args]),
+      }),
+      /unmapped CI job/,
+    );
+    assert.deepEqual(calls, []);
+  });
+
+  it('mapped live job files exactly as before', () => {
+    const key = 'required-fast / Vitest Workspace';
+    const state = stateWithFailure(makeFailure({ jobName: key }));
+    const jobDefinitions = new Map([
+      [key, { verifyCommand: 'bash scripts/test-suites/required/10-vitest-workspace.sh' }],
+    ]);
+    const filed = [];
+    const now = new Date('2026-08-12T01:00:00Z');
+
+    const counts = processFailureFilingSweep(state, {
+      now,
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: (failure) => {
+        filed.push(failure.jobName);
+      },
+    });
+
+    assert.deepEqual(filed, [key]);
+    assert.equal(counts.groupsRetired, 0);
+    assert.equal(counts.groupsFiled, 1);
+    assert.equal(state.activeFailures[key].attempts, 1);
+    assert.equal(state.activeFailures[key].lastFiledAt, now.toISOString());
+    assert.equal(state.activeFailures[key].retired, false);
+  });
+
+  it('backtests the real 2026-08-12 retired playwright key against current ci.yml', () => {
+    const key = 'playwright / launch-dispatch-stuck-lease';
+    const state = stateWithFailure(makeFailure({
+      jobName: key,
+      attempts: 64,
+      lastFiledAt: '2026-08-12T23:45:00.000Z',
+    }));
+    const jobDefinitions = buildCiJobDefinitions();
+    let filed = 0;
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-13T00:00:00Z'),
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: () => {
+        filed += 1;
+      },
+    });
+
+    assert.equal(jobNameIsMapped(key, jobDefinitions), false);
+    assert.equal(filed, 0);
+    assert.equal(counts.groupsRetired, 1);
+    assert.equal(counts.groupsFiled, 0);
+    assert.equal(state.activeFailures[key].retired, true);
   });
 });
