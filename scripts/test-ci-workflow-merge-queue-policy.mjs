@@ -35,6 +35,23 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+assert(jobs['ui-vitest'], 'Missing ui-vitest job');
+const uiVitestSteps = jobs['ui-vitest'].steps ?? [];
+const uiVitestLibatomicIndex = uiVitestSteps.findIndex((step) => String(step.run ?? '').includes('libatomic1'));
+const uiVitestSetupNodeIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+assert(
+  uiVitestLibatomicIndex !== -1,
+  'ui-vitest must install libatomic1 before actions/setup-node@v4 so Node can load during setup-node cache probing',
+);
+assert(
+  uiVitestSetupNodeIndex !== -1,
+  'ui-vitest must use actions/setup-node@v4 after installing libatomic1',
+);
+assert(
+  uiVitestLibatomicIndex < uiVitestSetupNodeIndex,
+  'ui-vitest must install libatomic1 before actions/setup-node@v4 so Node can load during setup-node cache probing',
+);
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
