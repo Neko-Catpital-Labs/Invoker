@@ -20,6 +20,10 @@ class SafePushError(RuntimeError):
         self.exit_code = exit_code
 
 
+class MissingRemoteHeadError(SafePushError):
+    """The guarded branch disappeared before the push could run."""
+
+
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -75,6 +79,23 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def pull_request_state(pr_number: int, *, cwd: Path | str | None = None) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["gh", "pr", "view", str(pr_number), "--json", "state", "--jq", ".state"],
+            cwd=str(cwd) if cwd is not None else None,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    state = completed.stdout.strip().upper()
+    return state or None
+
+
 def safe_push(
     *,
     branch: str,
@@ -96,9 +117,14 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:"
     else:
+        if live is None:
+            raise MissingRemoteHeadError(
+                f"stale-head: refs/heads/{branch_name} is missing; expected {expected}",
+                exit_code=20,
+            )
         if live != expected:
             raise SafePushError(
-                f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
+                f"stale-head: refs/heads/{branch_name} is {live}; expected {expected}",
                 exit_code=20,
             )
         lease = f"refs/heads/{branch_name}:{expected}"
@@ -184,13 +210,25 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
-            branch=args.branch,
-            expected_head=args.expected_head,
-            expect_missing=args.expect_missing,
-            remote=args.remote,
-            cwd=Path(args.cwd),
-        )
+        closed_pr_state = None
+        try:
+            pushed = safe_push(
+                branch=args.branch,
+                expected_head=args.expected_head,
+                expect_missing=args.expect_missing,
+                remote=args.remote,
+                cwd=Path(args.cwd),
+            )
+        except MissingRemoteHeadError:
+            if args.json_pr is None:
+                raise
+            # A merged/closed PR commonly has its head branch deleted before a
+            # queued repair reaches this task. Settling that terminal race is
+            # safe because no push occurs; open or unqueryable PRs still fail.
+            closed_pr_state = pull_request_state(args.json_pr, cwd=Path(args.cwd))
+            if closed_pr_state not in {"CLOSED", "MERGED"}:
+                raise
+            pushed = None
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
@@ -224,7 +262,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        if pushed is None:
+            print(
+                f"pr-worker-safe-push: no-op for closed PR #{args.json_pr} ({closed_pr_state}); "
+                f"refs/heads/{normalize_branch(args.branch)} is already missing"
+            )
+        else:
+            print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)

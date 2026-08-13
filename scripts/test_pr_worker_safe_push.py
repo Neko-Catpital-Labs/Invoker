@@ -74,6 +74,23 @@ class SafePushTests(unittest.TestCase):
             env=merged_env,
         )
 
+    def fake_gh(self, state: str) -> Path:
+        wrapper_dir = self.root / f"gh-{state.lower()}"
+        wrapper_dir.mkdir()
+        wrapper = wrapper_dir / "gh"
+        wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                printf '%s\\n' {state!r}
+                """
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        return wrapper_dir
+
     def test_matching_expected_sha_pushes_and_records_attempt_marker(self) -> None:
         pushed = self.commit(self.repo, "repair")
         ledger = self.root / "ledger.tsv"
@@ -109,6 +126,46 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stale-head", result.stderr)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
+        self.assertFalse(ledger.exists())
+
+    def test_missing_head_of_closed_pr_settles_without_recreating_branch(self) -> None:
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.fake_gh("CLOSED")
+
+        result = self.invoke_helper(
+            "--branch", "deleted-pr",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "conflict-repair-settled",
+            "--json-pr", "8678",
+            "--json-head-sha", self.expected,
+            "--json-key", "conflict:8678",
+            env={"PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("closed PR #8678", result.stdout)
+        self.assertEqual(self.remote_head("deleted-pr"), "")
+        self.assertTrue(ledger.exists())
+
+    def test_missing_head_of_open_pr_still_fails_closed(self) -> None:
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.fake_gh("OPEN")
+
+        result = self.invoke_helper(
+            "--branch", "deleted-pr",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "conflict-repair-settled",
+            "--json-pr", "8678",
+            "--json-head-sha", self.expected,
+            "--json-key", "conflict:8678",
+            env={"PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(self.remote_head("deleted-pr"), "")
         self.assertFalse(ledger.exists())
 
     def test_push_lease_failure_records_no_attempt(self) -> None:
