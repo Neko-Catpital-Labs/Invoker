@@ -894,7 +894,10 @@ test.describe('Visual proof capture', () => {
     await expect(transcript.locator('pre code').last()).toContainText(
       'name: "Reaper workers for finished e2e and admin-bypass tasks"',
     );
-    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText(
+      'Draft ready · Reaper workers for finished e2e and admin-bypass tasks · 3 workflows · 6 tasks',
+    );
     await captureScreenshot(page, 'planning-review-ad665bff-after');
     if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(1_000);
 

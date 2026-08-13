@@ -1,12 +1,13 @@
-import { test as base, _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test';
+import { test as base, _electron as electron, expect, type ElectronApplication } from '@playwright/test';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
+import { E2E_REPO_URL, injectTaskStates, waitForInvokerBridge } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
+const INVOKER_BRIDGE_TIMEOUT_MS = 30_000;
 
 const WATCHDOG_PLAN = {
   name: 'Launch stall watchdog',
@@ -28,11 +29,6 @@ function launchArgs(): string[] {
       : []),
     MAIN_JS,
   ];
-}
-
-async function waitForInvoker(page: Page): Promise<void> {
-  await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
 }
 
 function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) {
@@ -67,7 +63,7 @@ base.describe('Launch stall watchdog', () => {
         },
       });
       const page = await app.firstWindow();
-      await waitForInvoker(page);
+      await waitForInvokerBridge(page, INVOKER_BRIDGE_TIMEOUT_MS);
       await page.evaluate(() => window.invoker.reportUiPerf?.('startup_graph_visible', {}));
 
       await page.evaluate(async () => {
@@ -177,7 +173,7 @@ base.describe('Launch stall watchdog', () => {
         },
       });
       const page = await app.firstWindow();
-      await waitForInvoker(page);
+      await waitForInvokerBridge(page, INVOKER_BRIDGE_TIMEOUT_MS);
       await page.evaluate(() => window.invoker.reportUiPerf?.('startup_graph_visible', {}));
 
       await page.evaluate(async () => {

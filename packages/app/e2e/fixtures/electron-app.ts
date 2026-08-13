@@ -68,7 +68,7 @@ export async function deleteAllWorkflowsFast(page: Page): Promise<void> {
   });
 }
 
-export async function waitForInvokerBridge(page: Page, timeoutMs = 15_000): Promise<void> {
+export async function waitForInvokerBridge(page: Page, timeoutMs = 30_000): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
 }

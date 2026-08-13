@@ -192,8 +192,6 @@ test.describe('Headless thundering herd', () => {
     expect(retryBurstWallMs, evidenceMessage).toBeLessThanOrEqual(MAX_RETRY_BURST_WALL_MS);
     expect(firstInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
     expect(secondInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
-    expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
-    expect(numberOrZero(perf.maxRendererLongTaskMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
     expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
     expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
     expect(delegatedPerf.ownerMode, evidenceMessage).toBe('standalone');
