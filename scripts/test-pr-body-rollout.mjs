@@ -37,6 +37,16 @@ assert.deepEqual(evaluateRollout({ author: 'EdbertChan', enforceAll: 'false', en
 const prBodyWorkflow = readFileSync(new URL('../.github/workflows/pr-body.yml', import.meta.url), 'utf8');
 assert.match(
   prBodyWorkflow,
+  /NODE_VERSION:\s*'24'/,
+  'PR Body must use runner-compatible Node 24 on Github_Runner so validation does not fail loading libatomic.so.1',
+);
+assert.doesNotMatch(
+  prBodyWorkflow,
+  /NODE_VERSION:\s*'26'/,
+  'PR Body must not select Node 26 on Github_Runner because it fails before validation while loading libatomic.so.1',
+);
+assert.match(
+  prBodyWorkflow,
   /run: pnpm install --no-frozen-lockfile --ignore-scripts/,
   'PR Body must resolve trusted-base validator dependencies when its lockfile is stale',
 );
