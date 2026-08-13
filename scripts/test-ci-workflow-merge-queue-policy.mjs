@@ -65,6 +65,13 @@ const requiredChecks = new Set(
     .map((condition) => condition.slice('check-success = '.length)),
 );
 
+const uiVitestInstallStep = jobs['ui-vitest']?.steps?.find((step) => step?.name === 'Install dependencies');
+assert(uiVitestInstallStep, 'ui-vitest must install dependencies before running tests');
+assert(
+  String(uiVitestInstallStep.run ?? '').includes('--ignore-scripts'),
+  'ui-vitest must skip dependency lifecycle scripts so UI tests do not require native Electron/node-pty build prerequisites',
+);
+
 for (const checkName of requiredChecks) {
   const jobName = jobForCheck(checkName);
   if (!jobName) {
