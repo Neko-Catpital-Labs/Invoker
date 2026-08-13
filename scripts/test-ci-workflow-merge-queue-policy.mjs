@@ -9,6 +9,7 @@ const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergi
 const MERGE_QUEUE_HEAD_GATE = "${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const HEAD_REF_EXPRESSION = '${{ github.head_ref }}';
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
+const REQUIRED_NATIVE_NODE_PACKAGES = ['libatomic1', 'build-essential'];
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
@@ -35,6 +36,31 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+function canRunOnSelfHostedRunner(job) {
+  const runsOn = job['runs-on'];
+  if (Array.isArray(runsOn)) {
+    return runsOn.some((label) => label === 'self-hosted' || String(label).startsWith('Runner_'));
+  }
+  if (typeof runsOn === 'string') {
+    return runsOn === 'self-hosted' || runsOn.startsWith('Runner_') || runsOn === 'Github_Runner';
+  }
+  return typeof runsOn?.labels === 'string' && runsOn.labels !== 'ubuntu-latest';
+}
+
+function stepRunIncludesPackage(step, packageName) {
+  return new RegExp(`(^|[\\s"'=])${packageName}($|[\\s"'])`).test(String(step?.run ?? ''));
+}
+
+function matrixPathForNativePrerequisite(jobName, job) {
+  const matrixEntries = job.strategy?.matrix?.include;
+  if (!Array.isArray(matrixEntries) || matrixEntries.length === 0) {
+    return jobName;
+  }
+  return matrixEntries
+    .map((entry) => `${jobName} / ${entry.name ?? 'matrix entry'}`)
+    .join(', ');
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -52,6 +78,40 @@ assert(dependencyCruiseEntry, 'quality-required matrix must include Dependency C
 assert(
   dependencyCruiseEntry.runner_label === 'Runner_2_4_core',
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
+);
+
+const nativePrerequisiteFailures = [];
+for (const [jobName, job] of Object.entries(jobs)) {
+  if (!canRunOnSelfHostedRunner(job)) {
+    continue;
+  }
+  const steps = job.steps ?? [];
+  const setupNodeIndex = steps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+  const frozenInstallIndex = steps.findIndex((step) => String(step.run ?? '').includes('pnpm install --frozen-lockfile'));
+  if (setupNodeIndex === -1 || frozenInstallIndex <= setupNodeIndex) {
+    continue;
+  }
+  const prerequisiteIndex = steps.findIndex((step) => step.name === 'Install native Node prerequisites');
+  const packageFailures = REQUIRED_NATIVE_NODE_PACKAGES.filter((packageName) => (
+    prerequisiteIndex === -1 || !stepRunIncludesPackage(steps[prerequisiteIndex], packageName)
+  ));
+  if (prerequisiteIndex === -1) {
+    nativePrerequisiteFailures.push(
+      `${matrixPathForNativePrerequisite(jobName, job)} is missing native Node prerequisites before actions/setup-node@v4`,
+    );
+  } else if (prerequisiteIndex > setupNodeIndex) {
+    nativePrerequisiteFailures.push(
+      `${matrixPathForNativePrerequisite(jobName, job)} must install native Node prerequisites before actions/setup-node@v4`,
+    );
+  } else if (packageFailures.length > 0) {
+    nativePrerequisiteFailures.push(
+      `${matrixPathForNativePrerequisite(jobName, job)} native Node prerequisites must include ${packageFailures.join(', ')}`,
+    );
+  }
+}
+assert(
+  nativePrerequisiteFailures.length === 0,
+  `Missing native Node prerequisites for self-hosted Node 26 pnpm install jobs:\n${nativePrerequisiteFailures.join('\n')}`,
 );
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');

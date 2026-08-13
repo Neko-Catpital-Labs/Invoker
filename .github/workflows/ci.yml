@@ -40,6 +40,23 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -92,6 +109,23 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -124,6 +158,23 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -162,6 +213,23 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -232,6 +300,23 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -295,6 +380,23 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -425,6 +527,23 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -511,8 +630,22 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Install system libraries for Node
-        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -575,6 +708,23 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -635,6 +785,23 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -789,6 +956,23 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -870,6 +1054,23 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -947,6 +1148,23 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -1030,23 +1248,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Node.js runtime dependency
-        if: matrix.name == 'Worktree Provisioning'
-        run: sudo apt-get update && sudo apt-get install -y libatomic1
-
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Install Node runtime system dependencies
+      - name: Install native Node prerequisites
         run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            SUDO=""
-            if command -v sudo >/dev/null 2>&1; then
-              SUDO="sudo"
-            fi
-            $SUDO apt-get update
-            $SUDO apt-get install -y libatomic1
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
           fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -1087,6 +1307,23 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install native Node prerequisites
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "apt-get is required to install native Node prerequisites on self-hosted runners." >&2
+            exit 1
+          fi
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "sudo is required to install native Node prerequisites on non-root self-hosted runners." >&2
+              exit 1
+            fi
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libatomic1 build-essential python3
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
