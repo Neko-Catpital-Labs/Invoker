@@ -4591,12 +4591,12 @@ export function App() {
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
   const submittedPlanningSessionCount = planningSessions.filter((session) => session.status === 'submitted').length;
+  const activeDraftReviewOpen = reviewDraftSessionId === activePlanningSession.id && Boolean(draftPlanSummary);
   const connectedAgentLabels = (systemDiagnostics?.tools ?? [])
     .filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed)
     .map((tool) => tool.name.replace(/\s+CLI$/i, ''));
 
   const renderPlanningContextPanel = (): JSX.Element => {
-    const reviewingDraft = reviewDraftSessionId === activePlanningSession.id && Boolean(draftPlanSummary);
     const draftTaskGroups = draftPlanSummary?.taskGroups ?? (
       draftPlanSummary ? [{ workflow: null, tasks: draftPlanSummary.steps }] : []
     );
@@ -4608,7 +4608,7 @@ export function App() {
       >
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2.5">
           {!planningContextCollapsed && (
-            <h2 className="text-sm font-semibold text-foreground">{reviewingDraft ? 'Review draft' : 'Current plan'}</h2>
+            <h2 className="text-sm font-semibold text-foreground">{activeDraftReviewOpen ? 'Review draft' : 'Current plan'}</h2>
           )}
           <button
             type="button"
@@ -4621,7 +4621,7 @@ export function App() {
           </button>
         </div>
         {!planningContextCollapsed && (
-          reviewingDraft ? (
+          activeDraftReviewOpen ? (
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 text-sm">
               <p data-testid="planning-draft-locked-note" className="text-xs text-muted-foreground">
                 This draft is locked — critique in chat, or ask Invoker to re-draft, to change it.
@@ -4840,6 +4840,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             selectedConfirmationMode={selectedPlanningConfirmationMode}
             draftPlanAvailable={draftPlanAvailable}
+            draftReviewOpen={activeDraftReviewOpen}
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
             readOnly={activePlanningReadOnly}

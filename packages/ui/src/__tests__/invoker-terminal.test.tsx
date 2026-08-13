@@ -1721,9 +1721,8 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('draft the full plan');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft ready · Mock Plan · 2 tasks');
-    });
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
 
     expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
     expect(mock.api.startReady).not.toHaveBeenCalled();
@@ -1773,12 +1772,9 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('draft the Workers Surface plan');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft ready · Workers Surface · 2 workflows · 4 tasks');
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
     await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('draft-task-group')).toHaveLength(2);
     fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     await waitFor(() => {
@@ -1814,10 +1810,9 @@ describe('Invoker terminal (component)', () => {
     await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
-    await screen.findByTestId('invoker-terminal-ready-bar');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
-    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     expect(screen.getByTestId('planning-create-workflow')).toBeInTheDocument();
     expect(mock.api.refreshTaskGraph).not.toHaveBeenCalled();
@@ -1875,9 +1870,9 @@ describe('Invoker terminal (component)', () => {
     await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
-    await screen.findByTestId('invoker-terminal-ready-bar');
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
-    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('planning-create-workflow'));
     await waitFor(() => expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' }));
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
