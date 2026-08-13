@@ -35,6 +35,18 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+function stepIndex(job, stepName) {
+  return (job.steps ?? []).findIndex((step) => step.name === stepName);
+}
+
+function assertStepBefore(job, firstStepName, secondStepName, jobName) {
+  const firstIndex = stepIndex(job, firstStepName);
+  const secondIndex = stepIndex(job, secondStepName);
+  assert(firstIndex >= 0, `${jobName} must include "${firstStepName}"`);
+  assert(secondIndex >= 0, `${jobName} must include "${secondStepName}"`);
+  assert(firstIndex < secondIndex, `${jobName} must run "${firstStepName}" before "${secondStepName}"`);
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -78,6 +90,29 @@ const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
 assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
+);
+
+assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
+assert(jobs['required-fast-extra'].if === FULL_CI_GATE, 'required-fast-extra must run only for full CI events');
+assertStepBefore(
+  jobs['required-fast-extra'],
+  'Install system libraries for Node',
+  'Use Node.js ${{ env.NODE_VERSION }}',
+  'required-fast-extra',
+);
+const requiredFastExtraNodeLibraryStep = jobs['required-fast-extra'].steps.find(
+  (step) => step.name === 'Install system libraries for Node',
+);
+assert(
+  String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('libatomic1'),
+  'required-fast-extra must install libatomic1 before setup-node so Node 26 can start on self-hosted runners',
+);
+const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
+const mergeGateConcurrencyEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Merge Gate Concurrency Repro');
+assert(mergeGateConcurrencyEntry, 'required-fast-extra matrix must include Merge Gate Concurrency Repro');
+assert(
+  mergeGateConcurrencyEntry.runner_label === 'Runner_2_4_core',
+  'Merge Gate Concurrency Repro must run on the core runner, not the smaller Runner_1 host that missed Node runtime libraries',
 );
 
 assert(jobs.docker, 'Missing docker job');
