@@ -22,6 +22,10 @@ function assert(condition, message) {
   }
 }
 
+function stepNames(jobName) {
+  return (jobs[jobName]?.steps ?? []).map((step) => String(step.name ?? ''));
+}
+
 function jobForCheck(checkName) {
   if (checkName === 'PR Body' || checkName.startsWith('quality / ')) {
     return null;
@@ -113,6 +117,12 @@ assert(mergeGateConcurrencyEntry, 'required-fast-extra matrix must include Merge
 assert(
   mergeGateConcurrencyEntry.runner_label === 'Runner_2_4_core',
   'Merge Gate Concurrency Repro must run on the core runner, not the smaller Runner_1 host that missed Node runtime libraries',
+);
+
+const optionalOtherSteps = stepNames('optional-other');
+assert(
+  optionalOtherSteps[0] === 'Reclaim workspace' && optionalOtherSteps[1] === 'Checkout',
+  'optional-other must reclaim the self-hosted runner workspace before checkout',
 );
 
 assert(jobs.docker, 'Missing docker job');
