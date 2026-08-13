@@ -35,10 +35,22 @@ function jobForCheck(checkName) {
   return checkName.split(' / ')[0];
 }
 
+function assertNodeRuntimePrereqBeforeSetup(jobName) {
+  const steps = jobs[jobName]?.steps ?? [];
+  const prereqIndex = steps.findIndex(
+    (step) => step.name === 'Install system libraries for Node' && String(step.run ?? '').includes('libatomic1'),
+  );
+  const setupIndex = steps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+  assert(setupIndex >= 0, `${jobName} must set up Node.js`);
+  assert(prereqIndex >= 0, `${jobName} must install libatomic1 before setting up Node.js`);
+  assert(prereqIndex < setupIndex, `${jobName} must install libatomic1 before actions/setup-node`);
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
 }
+assertNodeRuntimePrereqBeforeSetup('build-artifacts');
 
 assert(jobs['quality-required'], 'Missing quality-required job');
 assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs');
@@ -53,15 +65,19 @@ assert(
   dependencyCruiseEntry.runner_label === 'Runner_2_4_core',
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
 );
+assertNodeRuntimePrereqBeforeSetup('quality-required');
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
+assertNodeRuntimePrereqBeforeSetup('quality-extra');
 
 assert(jobs['required-package-builds'], 'Missing required-package-builds job');
 assert(
   jobs['required-package-builds'].if === ORDINARY_PR_GATE,
   'required-package-builds must run on ordinary PRs and skip merge queue refs',
 );
+assertNodeRuntimePrereqBeforeSetup('typescript-types');
+assertNodeRuntimePrereqBeforeSetup('ui-vitest');
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
