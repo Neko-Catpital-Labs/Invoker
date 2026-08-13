@@ -58,6 +58,18 @@ class RebaseOntoBaseTests(unittest.TestCase):
 
         self.assertFalse(repair_body.needs_rebase_onto_base(self.repo, "master", head))
 
+    def test_normalize_empty_descendant_commit_returns_to_start_head(self) -> None:
+        start_head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "commit", "--allow-empty", "-m", "workflow result wrapper")
+        empty_head = git(self.repo, "rev-parse", "HEAD")
+
+        normalized = repair_body.normalize_repair_commit(
+            self.repo, start_head, empty_head, "PR Body",
+        )
+
+        self.assertEqual(normalized, start_head)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), start_head)
+
     def test_duplicate_pre_squash_commit_needs_rebase(self) -> None:
         # Mirrors PR #7727's real shape: a branch carries a commit whose content
         # was already squash-merged into master under a different SHA, so the
