@@ -8,6 +8,7 @@ const MAX_UI_VITEST_TIMEOUT_MINUTES = 10;
 const BUDGETED_JOBS = new Map([
   ['quality-required', MAX_PR_FACING_TIMEOUT_MINUTES],
   ['quality-extra', MAX_PR_FACING_TIMEOUT_MINUTES],
+  ['ui-vitest-shard', MAX_UI_VITEST_TIMEOUT_MINUTES],
   ['ui-vitest', MAX_UI_VITEST_TIMEOUT_MINUTES],
 ]);
 

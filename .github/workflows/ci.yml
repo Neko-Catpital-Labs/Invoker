@@ -145,11 +145,21 @@ jobs:
   # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
   # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
   # Vitest Workspace is red on master (worker-registry + SSH executor drift).
-  ui-vitest:
-    name: UI Vitest
+  ui-vitest-shard:
+    name: UI Vitest / ${{ matrix.name }}
     runs-on:
       labels: Runner_Vitest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 1-of-3
+            shard: 1/3
+          - name: 2-of-3
+            shard: 2/3
+          - name: 3-of-3
+            shard: 3/3
 
     steps:
       - name: Reclaim workspace
@@ -176,7 +186,23 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run UI vitest
-        run: pnpm --filter @invoker/ui test
+        run: pnpm --filter @invoker/ui test -- --shard=${{ matrix.shard }}
+
+  ui-vitest:
+    name: UI Vitest
+    needs: ui-vitest-shard
+    runs-on:
+      labels: Runner_2_4_core
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify UI vitest shards
+        run: |
+          if [ "${{ needs.ui-vitest-shard.result }}" != "success" ]; then
+            echo "UI Vitest shard result: ${{ needs.ui-vitest-shard.result }}"
+            exit 1
+          fi
+          echo "UI Vitest shards passed."
 
   required-package-builds:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
