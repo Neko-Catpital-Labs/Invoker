@@ -15,6 +15,7 @@ import {
   getActionableFailures,
   getCiRun,
   listUnprocessedDefaultBranchRuns,
+  jobNameIsMapped,
   liveQueryHasNonTerminalWork,
   loadEmptyState,
   normalizeState,
@@ -289,6 +290,7 @@ function testAttemptLedgerScenario() {
   assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].attempts, 0, 'legacy migration defaults attempts');
   assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].lastFiledAt, null, 'legacy migration defaults lastFiledAt');
   assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].needsHuman, false, 'legacy migration defaults needsHuman');
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].retired, false, 'legacy migration defaults retired');
 
   const backtestState = stateWithFailure(fakeFailure());
   const startMs = Date.parse('2026-08-12T00:00:00Z');
@@ -306,6 +308,66 @@ function testAttemptLedgerScenario() {
   assertEqual(backtestFilings, 3, '64 terminal sweeps file at most three plans');
   assertEqual(backtestState.activeFailures['playwright / launch-dispatch-stuck-lease'].needsHuman, true, '64 terminal sweeps flag needsHuman');
   console.log('[repro-e2e-regression-watch] attempt-ledger scenario: PASS');
+}
+
+function testRetiredJobScenario() {
+  const retiredKey = 'playwright / launch-dispatch-stuck-lease';
+  const defs = buildCiJobDefinitions();
+  if (jobNameIsMapped(retiredKey, defs)) {
+    fail(`${retiredKey} should be absent from current ci.yml`);
+  }
+
+  const state = stateWithFailure(fakeFailure({
+    jobName: retiredKey,
+    attempts: 64,
+    lastFiledAt: '2026-08-12T23:45:00.000Z',
+  }));
+  let filed = 0;
+  let liveQueryCalled = false;
+  const retiredKeys = [];
+  const counts = processFailureFilingSweep(state, {
+    now: new Date('2026-08-13T00:00:00Z'),
+    jobDefinitions: defs,
+    liveQuery: () => {
+      liveQueryCalled = true;
+      return false;
+    },
+    fileFailure: () => {
+      filed += 1;
+    },
+    onRetired: (failure) => {
+      retiredKeys.push(failure.jobName);
+    },
+  });
+
+  assertEqual(filed, 0, 'retired job does not file');
+  assertEqual(liveQueryCalled, false, 'retired job skips before live dedup');
+  assertEqual(retiredKeys, [retiredKey], 'retired callback names the skipped key');
+  assertEqual(counts.groupsRetired, 1, 'retired job is counted');
+  assertEqual(counts.groupsFiled, 0, 'retired job yields zero filings');
+  assertEqual(state.activeFailures[retiredKey].retired, true, 'retired job is persisted with retired=true');
+
+  assertEqual(
+    jobNameIsMapped('required-fast / Vitest Workspace', defs),
+    true,
+    'mapped live job remains fileable',
+  );
+
+  const calls = [];
+  try {
+    fileBugfixPlan(state.activeFailures[retiredKey], {
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      jobDefinitions: defs,
+      runCommand: (cmd, args) => calls.push([cmd, args]),
+    });
+    fail('fileBugfixPlan should throw for retired job');
+  } catch (err) {
+    if (!String(err?.message ?? err).includes('unmapped CI job')) {
+      throw err;
+    }
+  }
+  assertEqual(calls, [], 'retired job throws before render/submit commands');
+  console.log('[repro-e2e-regression-watch] retired-job scenario: PASS');
 }
 
 function testLiveGithubSmokeIfRequested() {
@@ -340,6 +402,7 @@ function main() {
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testAttemptLedgerScenario();
+  testRetiredJobScenario();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
 }
