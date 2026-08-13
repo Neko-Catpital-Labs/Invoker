@@ -588,6 +588,7 @@ describe('Sidebar keyboard navigation (component)', () => {
 describe('Graph camera controls (component)', () => {
   let mock: MockInvoker;
   let localStorageSetItemMock: Mock;
+  let previousLocalStorageDescriptor: PropertyDescriptor | undefined;
   /** Active getBoundingClientRect spy, restored after each test. */
   let rectSpy: ReturnType<typeof vi.spyOn> | null = null;
 
@@ -603,20 +604,33 @@ describe('Graph camera controls (component)', () => {
     makeUITask({ id: 'wf-c/t', description: 'Gamma Task', workflowId: 'wf-c', command: 'echo c' }),
   ];
 
+  function createLocalStorageShim(): Storage {
+    const store = new Map<string, string>();
+    return {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => { store.set(k, String(v)); },
+      removeItem: (k: string) => { store.delete(k); },
+      clear: () => { store.clear(); },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      get length() { return store.size; },
+    };
+  }
+
   beforeEach(() => {
     // App's theme hook touches localStorage; keep a shim so F1 can assert it
     // does not perform storage writes after the initial render settles.
-    const store = new Map<string, string>();
-    localStorageSetItemMock = vi.fn((k: string, v: string) => { store.set(k, String(v)); });
+    previousLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    const storage = createLocalStorageShim();
+    localStorageSetItemMock = vi.fn(storage.setItem.bind(storage));
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       value: {
-        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        getItem: storage.getItem.bind(storage),
         setItem: localStorageSetItemMock,
-        removeItem: (k: string) => { store.delete(k); },
-        clear: () => { store.clear(); },
-        key: (i: number) => [...store.keys()][i] ?? null,
-        get length() { return store.size; },
+        removeItem: storage.removeItem.bind(storage),
+        clear: storage.clear.bind(storage),
+        key: storage.key.bind(storage),
+        get length() { return storage.length; },
       },
     });
     mock = createMockInvoker();
@@ -631,7 +645,15 @@ describe('Graph camera controls (component)', () => {
     rectSpy?.mockRestore();
     rectSpy = null;
     mock.cleanup();
-    delete (globalThis as { localStorage?: unknown }).localStorage;
+    if (previousLocalStorageDescriptor) {
+      Object.defineProperty(globalThis, 'localStorage', previousLocalStorageDescriptor);
+    } else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: createLocalStorageShim(),
+      });
+    }
+    previousLocalStorageDescriptor = undefined;
   });
 
   /**
