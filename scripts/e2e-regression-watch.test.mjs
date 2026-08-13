@@ -447,7 +447,7 @@ describe('attempt ledger filing gate', () => {
 
 describe('retired CI job filing gate', () => {
   it('skips an unmapped job, marks it retired, counts it, and never files', () => {
-    const key = 'playwright / launch-dispatch-stuck-lease';
+    const key = 'playwright / retired-example';
     const state = stateWithFailure(makeFailure({ jobName: key }));
     const jobDefinitions = new Map([
       ['playwright / 9-of-9', { verifyCommand: 'bash scripts/test-suites/optional/40-playwright-app.sh' }],
@@ -489,7 +489,7 @@ describe('retired CI job filing gate', () => {
   });
 
   it('fileBugfixPlan throws before rendering for an unmapped job', () => {
-    const failure = makeFailure({ jobName: 'playwright / launch-dispatch-stuck-lease' });
+    const failure = makeFailure({ jobName: 'playwright / retired-example' });
     const calls = [];
 
     assert.throws(
@@ -529,7 +529,7 @@ describe('retired CI job filing gate', () => {
     assert.equal(state.activeFailures[key].retired, false);
   });
 
-  it('backtests the real 2026-08-12 retired playwright key against current ci.yml', () => {
+  it('backtests the legacy 2026-08-12 stuck-lease playwright key against current ci.yml', () => {
     const key = 'playwright / launch-dispatch-stuck-lease';
     const state = stateWithFailure(makeFailure({
       jobName: key,
@@ -548,10 +548,12 @@ describe('retired CI job filing gate', () => {
       },
     });
 
-    assert.equal(jobNameIsMapped(key, jobDefinitions), false);
+    assert.equal(jobNameIsMapped(key, jobDefinitions), true);
     assert.equal(filed, 0);
-    assert.equal(counts.groupsRetired, 1);
+    assert.equal(counts.groupsRetired, 0);
     assert.equal(counts.groupsFiled, 0);
-    assert.equal(state.activeFailures[key].retired, true);
+    assert.equal(counts.groupsNeedingHuman, 1);
+    assert.equal(state.activeFailures[key].retired, false);
+    assert.equal(state.activeFailures[key].needsHuman, true);
   });
 });
