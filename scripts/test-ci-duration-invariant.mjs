@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import YAML from 'yaml';
 
 const MAX_PR_FACING_TIMEOUT_MINUTES = 5;
-const MAX_UI_VITEST_TIMEOUT_MINUTES = 10;
+const MAX_UI_VITEST_TIMEOUT_MINUTES = 15;
 
 const BUDGETED_JOBS = new Map([
   ['quality-required', MAX_PR_FACING_TIMEOUT_MINUTES],

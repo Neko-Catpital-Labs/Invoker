@@ -140,7 +140,7 @@ jobs:
       - name: Run TypeScript type check
         run: pnpm run check:types
 
-  # UI component suite (@invoker/ui vitest, ~2-3m). Runs on every PR for early
+  # UI component suite (@invoker/ui vitest, ~10-14m on Runner_Vitest). Runs on every PR for early
   # feedback AND on merge-queue refs, where `.mergify.yml` requires it — this is
   # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
   # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
@@ -149,7 +149,7 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Reclaim workspace
