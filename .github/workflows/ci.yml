@@ -67,7 +67,8 @@ jobs:
           if-no-files-found: error
 
   quality-required:
-    runs-on: ${{ matrix.runner_label }}
+    runs-on:
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 5
     strategy:
       fail-fast: false
@@ -75,7 +76,7 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
-            runner_label: ubuntu-latest
+            runner_label: Runner_2_4_core
 
     name: quality / ${{ matrix.name }}
 
