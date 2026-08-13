@@ -590,6 +590,7 @@ describe('Graph camera controls (component)', () => {
   let localStorageSetItemMock: Mock;
   /** Active getBoundingClientRect spy, restored after each test. */
   let rectSpy: ReturnType<typeof vi.spyOn> | null = null;
+  const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 
   const threeWorkflows: WorkflowMeta[] = [
     { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
@@ -631,7 +632,11 @@ describe('Graph camera controls (component)', () => {
     rectSpy?.mockRestore();
     rectSpy = null;
     mock.cleanup();
-    delete (globalThis as { localStorage?: unknown }).localStorage;
+    if (originalLocalStorageDescriptor) {
+      Object.defineProperty(globalThis, 'localStorage', originalLocalStorageDescriptor);
+    } else {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
   });
 
   /**

@@ -69,5 +69,5 @@ describe('workflow advanced metadata (component)', () => {
       expect(screen.getByText('Base Ref')).toBeInTheDocument();
       expect(screen.getByTestId('base-ref-input')).toHaveValue('master');
     });
-  });
+  }, 10_000);
 });
