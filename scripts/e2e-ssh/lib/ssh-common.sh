@@ -219,7 +219,7 @@ invoker_e2e_ssh_init() {
 # SshExecutor uses a non-login shell and sources remoteInvokerHome/env.sh.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
-  local pnpm_bin node_bin pnpm_dir node_dir
+  local pnpm_bin node_bin pnpm_dir node_dir electron_cache
   pnpm_bin="$(command -v pnpm || true)"
   node_bin="$(command -v node || true)"
   if [ -z "$pnpm_bin" ] || [ -z "$node_bin" ]; then
@@ -238,6 +238,16 @@ invoker_e2e_ssh_install_login_path() {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
       printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
+  fi
+  electron_cache="${electron_config_cache:-}"
+  if [ -n "$electron_cache" ]; then
+    mkdir -p "$electron_cache"
+    if ! grep -Fq "# invoker-e2e-ssh-electron-cache ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
+      {
+        printf '%s\n' "# invoker-e2e-ssh-electron-cache ${_INVOKER_E2E_SSH_TAG}"
+        printf 'export electron_config_cache=%q\n' "$electron_cache"
+      } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
+    fi
   fi
 
   # Verify via non-login bash — matches the executor sourcing remoteInvokerHome/env.sh explicitly.
