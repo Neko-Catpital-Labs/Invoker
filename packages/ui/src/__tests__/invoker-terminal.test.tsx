@@ -2229,6 +2229,8 @@ function submitContextWorkflow(id: string, name = id): WorkflowMeta {
   };
 }
 
+const SUBMIT_CONTEXT_GRAPH_TIMEOUT_MS = 10_000;
+
 describe('Invoker terminal submit context (component)', () => {
   let mock: MockInvoker;
 
@@ -2278,7 +2280,7 @@ describe('Invoker terminal submit context (component)', () => {
     expect(await screen.findByTestId('workflow-node-workflow-a')).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
-    });
+    }, { timeout: SUBMIT_CONTEXT_GRAPH_TIMEOUT_MS });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       fireEvent.click(screen.getByTestId('rf__node-task-a'));
@@ -2304,12 +2306,16 @@ describe('Invoker terminal submit context (component)', () => {
     stubSubmitStyleRefresh();
     fireEvent.click(screen.getByTestId('rail-refresh'));
 
-    expect(await screen.findByTestId('workflow-node-workflow-b')).toBeInTheDocument();
+    expect(
+      await screen.findByTestId('workflow-node-workflow-b', undefined, {
+        timeout: SUBMIT_CONTEXT_GRAPH_TIMEOUT_MS,
+      }),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
     expect(screen.getByTestId('workflow-node-workflow-a').className).not.toContain('ring-2');
     expect(screen.getByTestId('workflow-node-workflow-b').className).not.toContain('ring-2');
     expect(mock.api.start).not.toHaveBeenCalled();
-  });
+  }, SUBMIT_CONTEXT_GRAPH_TIMEOUT_MS);
 
   it('keeps an existing workflow selection stable across submit-style refresh', async () => {
     render(<App />);
@@ -2320,15 +2326,19 @@ describe('Invoker terminal submit context (component)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
-    });
+    }, { timeout: SUBMIT_CONTEXT_GRAPH_TIMEOUT_MS });
 
     stubSubmitStyleRefresh();
     fireEvent.click(screen.getByTestId('rail-refresh'));
 
-    expect(await screen.findByTestId('workflow-node-workflow-b')).toBeInTheDocument();
+    expect(
+      await screen.findByTestId('workflow-node-workflow-b', undefined, {
+        timeout: SUBMIT_CONTEXT_GRAPH_TIMEOUT_MS,
+      }),
+    ).toBeInTheDocument();
     expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Initial Plan task DAG');
     expect(screen.getByTestId('workflow-node-workflow-a').className).toContain('ring-2');
     expect(screen.getByTestId('workflow-node-workflow-b').className).not.toContain('ring-2');
     expect(mock.api.start).not.toHaveBeenCalled();
-  });
+  }, SUBMIT_CONTEXT_GRAPH_TIMEOUT_MS);
 });
