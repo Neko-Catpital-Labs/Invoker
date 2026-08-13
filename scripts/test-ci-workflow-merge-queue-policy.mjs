@@ -22,6 +22,27 @@ function assert(condition, message) {
   }
 }
 
+function assertInstallsLibatomicBeforeSetupNode(jobName) {
+  const job = jobs[jobName];
+  assert(job, `Missing CI job ${jobName}`);
+
+  const steps = job.steps ?? [];
+  const setupNodeIndex = steps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+  assert(setupNodeIndex >= 0, `${jobName} must set up Node`);
+
+  const installIndex = steps.findIndex((step, index) => {
+    if (index >= setupNodeIndex) {
+      return false;
+    }
+    const stepText = `${step.name ?? ''}\n${step.run ?? ''}`;
+    return stepText.includes('libatomic1') && stepText.includes('apt-get');
+  });
+  assert(
+    installIndex >= 0,
+    `${jobName} must install libatomic1 before actions/setup-node@v4 for Node 26 on core runners`,
+  );
+}
+
 function jobForCheck(checkName) {
   if (checkName === 'PR Body' || checkName.startsWith('quality / ')) {
     return null;
@@ -53,6 +74,19 @@ assert(
   dependencyCruiseEntry.runner_label === 'Runner_2_4_core',
   'Dependency Cruise must run on the self-hosted core runner so runner setup reaches the check command',
 );
+
+for (const jobName of [
+  'build-artifacts',
+  'quality-required',
+  'typescript-types',
+  'quality-extra',
+  'required-fast',
+  'required-fast-extra',
+  'scheduled-repros',
+  'optional-other',
+]) {
+  assertInstallsLibatomicBeforeSetupNode(jobName);
+}
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
