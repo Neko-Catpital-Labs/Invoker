@@ -604,21 +604,9 @@ describe('Graph camera controls (component)', () => {
   ];
 
   beforeEach(() => {
-    // App's theme hook touches localStorage; keep a shim so F1 can assert it
-    // does not perform storage writes after the initial render settles.
-    const store = new Map<string, string>();
-    localStorageSetItemMock = vi.fn((k: string, v: string) => { store.set(k, String(v)); });
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: {
-        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-        setItem: localStorageSetItemMock,
-        removeItem: (k: string) => { store.delete(k); },
-        clear: () => { store.clear(); },
-        key: (i: number) => [...store.keys()][i] ?? null,
-        get length() { return store.size; },
-      },
-    });
+    // App's theme hook touches localStorage; spy so F1 can assert it does not
+    // perform storage writes after the initial render settles.
+    localStorageSetItemMock = vi.spyOn(window.localStorage, 'setItem');
     mock = createMockInvoker();
     mock.install();
     fitViewMock.mockClear();
@@ -631,7 +619,7 @@ describe('Graph camera controls (component)', () => {
     rectSpy?.mockRestore();
     rectSpy = null;
     mock.cleanup();
-    delete (globalThis as { localStorage?: unknown }).localStorage;
+    localStorageSetItemMock.mockRestore();
   });
 
   /**
