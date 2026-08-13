@@ -63,6 +63,24 @@ assert(
   'required-package-builds must run on ordinary PRs and skip merge queue refs',
 );
 
+assert(jobs['ui-vitest'], 'Missing UI Vitest job');
+const uiVitestSteps = jobs['ui-vitest'].steps ?? [];
+const uiVitestNativeToolsStepIndex = uiVitestSteps.findIndex((step) => step.name === 'Install native build tools');
+const uiVitestInstallStepIndex = uiVitestSteps.findIndex((step) => step.name === 'Install dependencies');
+assert(uiVitestNativeToolsStepIndex !== -1, 'UI Vitest must install native build tools for node-pty on Node 26');
+assert(uiVitestInstallStepIndex !== -1, 'UI Vitest must install dependencies');
+assert(
+  uiVitestNativeToolsStepIndex < uiVitestInstallStepIndex,
+  'UI Vitest must install native build tools before pnpm install',
+);
+const uiVitestNativeToolsCommand = String(uiVitestSteps[uiVitestNativeToolsStepIndex].run ?? '');
+for (const toolPackage of ['make', 'g++', 'python3']) {
+  assert(
+    uiVitestNativeToolsCommand.includes(toolPackage),
+    `UI Vitest native build tools step must install ${toolPackage}`,
+  );
+}
+
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
 
