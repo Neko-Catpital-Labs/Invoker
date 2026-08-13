@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -73,6 +74,24 @@ class SafePushTests(unittest.TestCase):
             capture_output=True,
             env=merged_env,
         )
+
+    def write_fake_gh(self, state: str, merged_at: str = "") -> Path:
+        wrapper_dir = self.root / f"gh-{state.lower()}"
+        wrapper_dir.mkdir()
+        wrapper = wrapper_dir / "gh"
+        payload = json.dumps({"state": state, "mergedAt": merged_at})
+        wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                printf '%s\\n' {payload!r}
+                """
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        return wrapper_dir
 
     def test_matching_expected_sha_pushes_and_records_attempt_marker(self) -> None:
         pushed = self.commit(self.repo, "repair")
@@ -168,6 +187,65 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
+
+    def test_missing_branch_for_already_merged_pr_records_settled_noop(self) -> None:
+        git(self.repo, "checkout", "-B", "stack/merged")
+        expected = self.commit(self.repo, "merged-pr", "merged\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/stack/merged")
+        git(self.repo, "push", "origin", ":refs/heads/stack/merged")
+        pushed = self.commit(self.repo, "local-repair", "repair\n")
+        del pushed
+        ledger = self.root / "ledger.jsonl"
+        fake_gh = self.write_fake_gh("MERGED", "2026-08-13T06:24:05Z")
+
+        result = self.invoke_helper(
+            "--branch", "stack/merged",
+            "--expected-head", expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "123",
+            "--json-head-sha", expected,
+            "--json-key", "UI Vitest",
+            env={"PATH": f"{fake_gh}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already merged", result.stdout)
+        self.assertEqual(self.remote_head("stack/merged"), "")
+        rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "repair-check-settled")
+        self.assertEqual(rows[0]["pr"], 123)
+        self.assertEqual(rows[0]["headSha"], expected)
+
+    def test_missing_branch_for_unmerged_pr_still_fails_stale(self) -> None:
+        git(self.repo, "checkout", "-B", "stack/closed")
+        expected = self.commit(self.repo, "closed-pr", "closed\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/stack/closed")
+        git(self.repo, "push", "origin", ":refs/heads/stack/closed")
+        ledger = self.root / "ledger.jsonl"
+        fake_gh = self.write_fake_gh("CLOSED")
+
+        result = self.invoke_helper(
+            "--branch", "stack/closed",
+            "--expected-head", expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "123",
+            "--json-head-sha", expected,
+            "--json-key", "UI Vitest",
+            env={"PATH": f"{fake_gh}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head", result.stderr)
+        self.assertFalse(ledger.exists())
+
+    def test_portable_ledger_path_remaps_other_user_invoker_home(self) -> None:
+        expected = Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"
+        actual = safe_push.portable_ledger_path(Path("/Users/edbertchan/.invoker/mergify-admin-requeue-state.jsonl"))
+
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

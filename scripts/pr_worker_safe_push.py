@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -150,6 +151,35 @@ def append_json_ledger(
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def portable_ledger_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    parts = expanded.parts
+    if len(parts) >= 5 and parts[0] == "/" and parts[1] in {"Users", "home"} and parts[3] == ".invoker":
+        supplied_home = Path(parts[0]).joinpath(*parts[1:3])
+        current_home = Path.home()
+        if supplied_home != current_home and (not supplied_home.exists() or not os.access(supplied_home, os.W_OK)):
+            return current_home.joinpath(".invoker", *parts[4:])
+    return expanded
+
+
+def pr_is_merged(pr_number: int) -> bool:
+    completed = subprocess.run(
+        ["gh", "pr", "view", str(pr_number), "--json", "state,mergedAt"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return False
+    try:
+        decoded = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(decoded, Mapping):
+        return False
+    return decoded.get("state") == "MERGED" or bool(decoded.get("mergedAt"))
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Safely update a PR worker-owned branch only when its remote head matches the captured SHA.",
@@ -181,6 +211,42 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
         raise SafePushError(f"{label} requires {', '.join(missing)}", exit_code=2)
 
 
+def record_ledgers(args: argparse.Namespace) -> None:
+    if args.record_tsv_ledger:
+        require_all("TSV ledger recording", {
+            "--tsv-kind": args.tsv_kind,
+            "--tsv-key": args.tsv_key,
+            "--tsv-marker": args.tsv_marker,
+        })
+        append_tsv_ledger(
+            portable_ledger_path(Path(args.record_tsv_ledger)),
+            kind=args.tsv_kind,
+            key=args.tsv_key,
+            marker=args.tsv_marker,
+        )
+    if args.record_json_ledger:
+        require_all("JSONL ledger recording", {
+            "--json-kind": args.json_kind,
+            "--json-pr": args.json_pr,
+            "--json-head-sha": args.json_head_sha,
+            "--json-key": args.json_key,
+        })
+        meta = None
+        if args.json_meta:
+            decoded = json.loads(args.json_meta)
+            if not isinstance(decoded, dict):
+                raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
+            meta = decoded
+        append_json_ledger(
+            portable_ledger_path(Path(args.record_json_ledger)),
+            kind=args.json_kind,
+            pr_number=args.json_pr,
+            head_sha=args.json_head_sha,
+            key=args.json_key,
+            meta=meta,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
@@ -191,42 +257,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             remote=args.remote,
             cwd=Path(args.cwd),
         )
-        if args.record_tsv_ledger:
-            require_all("TSV ledger recording", {
-                "--tsv-kind": args.tsv_kind,
-                "--tsv-key": args.tsv_key,
-                "--tsv-marker": args.tsv_marker,
-            })
-            append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
-                kind=args.tsv_kind,
-                key=args.tsv_key,
-                marker=args.tsv_marker,
-            )
-        if args.record_json_ledger:
-            require_all("JSONL ledger recording", {
-                "--json-kind": args.json_kind,
-                "--json-pr": args.json_pr,
-                "--json-head-sha": args.json_head_sha,
-                "--json-key": args.json_key,
-            })
-            meta = None
-            if args.json_meta:
-                decoded = json.loads(args.json_meta)
-                if not isinstance(decoded, dict):
-                    raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
-                meta = decoded
-            append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
-                kind=args.json_kind,
-                pr_number=args.json_pr,
-                head_sha=args.json_head_sha,
-                key=args.json_key,
-                meta=meta,
-            )
+        record_ledgers(args)
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
         return 0
     except SafePushError as exc:
+        if exc.exit_code == 20 and args.json_pr is not None and pr_is_merged(args.json_pr):
+            try:
+                record_ledgers(args)
+            except json.JSONDecodeError as json_exc:
+                print(f"pr-worker-safe-push: invalid --json-meta: {json_exc}", file=sys.stderr)
+                return 2
+            except SafePushError as ledger_exc:
+                print(f"pr-worker-safe-push: {ledger_exc}", file=sys.stderr)
+                return ledger_exc.exit_code or 1
+            print(
+                f"pr-worker-safe-push: PR #{args.json_pr} is already merged; "
+                f"skipped pushing refs/heads/{normalize_branch(args.branch)}"
+            )
+            return 0
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return exc.exit_code or 1
     except json.JSONDecodeError as exc:
