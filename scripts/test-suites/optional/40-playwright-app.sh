@@ -47,7 +47,15 @@ mkdir -p "$ARTIFACT_ROOT"
 export INVOKER_E2E_BARE_REPO="${INVOKER_E2E_BARE_REPO:-/tmp/invoker-e2e-repo-${RUN_LABEL}.git}"
 export INVOKER_PLAYWRIGHT_JSON_OUTPUT="${INVOKER_PLAYWRIGHT_JSON_OUTPUT:-$ARTIFACT_ROOT/results.json}"
 
-exec pnpm --filter @invoker/app exec xvfb-run --auto-servernum playwright test \
+DISPLAY_WRAPPER=()
+if command -v xvfb-run >/dev/null 2>&1; then
+  DISPLAY_WRAPPER=( xvfb-run --auto-servernum )
+elif [ "$(uname -s)" = 'Linux' ]; then
+  echo 'xvfb-run is required to run Electron Playwright tests on Linux.' >&2
+  exit 127
+fi
+
+exec pnpm --filter @invoker/app exec "${DISPLAY_WRAPPER[@]}" playwright test \
   --output "$ARTIFACT_ROOT/test-results" \
   "${PLAYWRIGHT_ARGS[@]}" \
   "$@"

@@ -18,7 +18,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
-import { killOwnedProcessGroup } from './process-group.js';
+import { killOwnedProcessGroup, readProcessGroupId } from './process-group.js';
 import { cleanupStandaloneOwnersForTestDir } from './headless-client.js';
 
 export type ElectronFixtures = {
@@ -83,8 +83,20 @@ export async function waitForRuntimeMode(page: Page, mode: RuntimeMode, timeoutM
     .toBe(mode);
 }
 
+function killCapturedProcessGroup(processGroupId: number, signal: NodeJS.Signals): 'group-killed' | 'kill-failed' {
+  try {
+    process.kill(-processGroupId, signal);
+    return 'group-killed';
+  } catch {
+    return 'kill-failed';
+  }
+}
+
 export async function closeElectronApp(app: ElectronApplication): Promise<void> {
   const child = app.process();
+  const ownedProcessGroupId = child.pid && process.platform !== 'win32' && readProcessGroupId(child.pid) === child.pid
+    ? child.pid
+    : null;
   let childExited = child.exitCode !== null || child.signalCode !== null;
   const childExitPromise = new Promise<void>((resolve) => {
     if (childExited) {
@@ -98,7 +110,10 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
     child.once('exit', markChildExited);
     child.once('close', markChildExited);
   });
-  const closePromise = app.close().catch(() => undefined);
+  let closeFinished = false;
+  const closePromise = app.close().catch(() => undefined).then(() => {
+    closeFinished = true;
+  });
   const timedOut = await Promise.race([
     Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
@@ -107,14 +122,18 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
 
   if (!childExited) {
     child.kill('SIGTERM');
-    if (child.pid && process.platform !== 'win32') {
-      const groupKill = killOwnedProcessGroup(child.pid, 'SIGTERM');
-      if (groupKill !== 'group-killed') {
-        console.warn(`[electron-app fixture] group kill for pid ${child.pid} not sent (${groupKill}); killed the child alone`);
-      }
-    }
-    await Promise.race([closePromise, childExitPromise, delay(2_000)]);
-    if (!childExited) child.kill('SIGKILL');
+  }
+  const groupKill = ownedProcessGroupId === null
+    ? (!childExited && child.pid ? killOwnedProcessGroup(child.pid, 'SIGTERM') : 'skipped-unknown-pgid')
+    : killCapturedProcessGroup(ownedProcessGroupId, 'SIGTERM');
+  if (groupKill !== 'group-killed' && (!childExited || ownedProcessGroupId !== null)) {
+    console.warn(`[electron-app fixture] group kill for pid ${child.pid ?? 'unknown'} not sent (${groupKill}); killed the child alone`);
+  }
+  await Promise.race([closePromise, delay(2_000)]);
+  if (!childExited) child.kill('SIGKILL');
+  if (!closeFinished && ownedProcessGroupId !== null) {
+    killCapturedProcessGroup(ownedProcessGroupId, 'SIGKILL');
+    await Promise.race([closePromise, delay(1_000)]);
   }
 }
 

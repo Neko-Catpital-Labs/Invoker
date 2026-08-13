@@ -2,9 +2,9 @@ import { test as base, _electron as electron, expect, type ElectronApplication, 
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
+import { closeElectronApp as closeApp } from './fixtures/electron-app.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 
@@ -64,45 +64,6 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
   const page = await app.firstWindow();
   await waitForInvoker(page);
   return { app, page };
-}
-
-async function closeApp(app: ElectronApplication): Promise<void> {
-  const child = app.process();
-  let childExited = child.exitCode !== null || child.signalCode !== null;
-  const childExitPromise = new Promise<void>((resolve) => {
-    const markChildExited = () => {
-      childExited = true;
-      resolve();
-    };
-    child.once('exit', markChildExited);
-    child.once('close', markChildExited);
-  });
-  const closePromise = app.close().catch(() => undefined);
-  const timedOut = await Promise.race([
-    Promise.all([closePromise, childExitPromise]).then(() => false),
-    delay(5_000).then(() => true),
-  ]);
-  if (timedOut && !childExited) {
-    child.kill('SIGTERM');
-    if (child.pid && process.platform !== 'win32') {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        /* process group may already be gone */
-      }
-    }
-    await Promise.race([childExitPromise, delay(2_000)]);
-    if (!childExited) {
-      child.kill('SIGKILL');
-      if (child.pid && process.platform !== 'win32') {
-        try {
-          process.kill(-child.pid, 'SIGKILL');
-        } catch {
-          /* process group may already be gone */
-        }
-      }
-    }
-  }
 }
 
 async function openPlanningTerminal(page: Page): Promise<void> {

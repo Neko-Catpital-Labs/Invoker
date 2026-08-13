@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
+import { closeElectronApp as closeApp, E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
@@ -66,33 +66,6 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
   const page = await app.firstWindow();
   await waitForInvoker(page);
   return { app, page };
-}
-
-async function closeApp(app: ElectronApplication): Promise<void> {
-  const child = app.process();
-  let childExited = child.exitCode !== null || child.signalCode !== null;
-  const childExitPromise = new Promise<void>((resolve) => {
-    if (childExited) {
-      resolve();
-      return;
-    }
-    const markChildExited = () => {
-      childExited = true;
-      resolve();
-    };
-    child.once('exit', markChildExited);
-    child.once('close', markChildExited);
-  });
-  const closePromise = app.close().catch(() => undefined);
-  const timedOut = await Promise.race([
-    Promise.all([closePromise, childExitPromise]).then(() => false),
-    delay(5_000).then(() => true),
-  ]);
-  if (timedOut && !childExited) {
-    child.kill('SIGTERM');
-    await Promise.race([childExitPromise, delay(2_000)]);
-    if (!childExited) child.kill('SIGKILL');
-  }
 }
 
 async function loadPlan(page: Page): Promise<void> {
