@@ -52,6 +52,18 @@ export const FLEET_EVENT_THRESHOLD = parsePositiveInteger(
   3,
 );
 export const ATTEMPT_BACKOFF_BASE_MS = 30 * 60 * 1000;
+/**
+ * How long a job's attempt/backoff/occurrence history survives after CI
+ * reports it green, before a later red observation is treated as a brand
+ * new regression. Without this, one green run on a flaky job (one that
+ * flaps pass/fail on the same underlying defect) wipes `attempts` back to
+ * 0, handing it a fresh attempt budget every flap and defeating the cap
+ * in `shouldFileFailure`.
+ */
+export const RECOVERY_COOLDOWN_MS = parseNonNegativeInteger(
+  process.env.INVOKER_CI_WATCH_RECOVERY_COOLDOWN_MS,
+  24 * 60 * 60 * 1000,
+);
 
 const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
   ?? process.env.INVOKER_E2E_WATCH_STATE_DIR
@@ -223,7 +235,27 @@ export function reconcileCiRun(state, run) {
     if (classification === 'ok') {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
-      delete normalized.activeFailures[jobName];
+      const existing = normalized.activeFailures[jobName];
+      const lastFiledMs = existing?.lastFiledAt ? new Date(existing.lastFiledAt).getTime() : NaN;
+      const observedAtMs = baseObservation.observedAt ? new Date(baseObservation.observedAt).getTime() : NaN;
+      const withinRecoveryCooldown = existing
+        && Number.isFinite(lastFiledMs)
+        && Number.isFinite(observedAtMs)
+        && (observedAtMs - lastFiledMs) < RECOVERY_COOLDOWN_MS;
+      // A flaky job can report green once and then red again shortly after
+      // on the same underlying defect. Keep attempts/occurrences/lastFiledAt
+      // through the cooldown so that flap resumes the existing backoff
+      // instead of starting over; getActionableFailures excludes it via
+      // lastObservedState while it reads as currently green.
+      if (withinRecoveryCooldown) {
+        normalized.activeFailures[jobName] = {
+          ...existing,
+          ...normalizeActiveFailure(existing, jobName),
+          lastObservedState: 'ok',
+        };
+      } else {
+        delete normalized.activeFailures[jobName];
+      }
       continue;
     }
 
@@ -241,6 +273,7 @@ export function reconcileCiRun(state, run) {
           lastJobUrl: job.url ?? '',
           lastObservedAt: baseObservation.observedAt,
           occurrences: Number(existing.occurrences ?? 1) + 1,
+          lastObservedState: 'broken',
         };
       } else {
         normalized.activeFailures[jobName] = {
@@ -259,6 +292,7 @@ export function reconcileCiRun(state, run) {
           attempts: 0,
           lastFiledAt: null,
           needsHuman: false,
+          lastObservedState: 'broken',
         };
       }
       continue;
@@ -277,6 +311,10 @@ export function getActionableFailures(state) {
   const normalized = normalizeState(state);
   return Object.values(normalized.activeFailures)
     .filter((failure) => failure && typeof failure.jobName === 'string' && typeof failure.firstBadSha === 'string')
+    // Retained during the post-recovery cooldown (see reconcileCiRun) purely
+    // to preserve attempt/backoff history for a possible flap back to red;
+    // CI currently reports it passing, so it is not actionable right now.
+    .filter((failure) => failure.lastObservedState !== 'ok')
     .sort((a, b) => {
       const runDelta = Number(a.firstBadRunId ?? 0) - Number(b.firstBadRunId ?? 0);
       if (runDelta !== 0) return runDelta;

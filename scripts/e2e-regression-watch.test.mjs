@@ -4,12 +4,15 @@ import {
   buildCiJobDefinitions,
   buildMarker,
   fileBugfixPlan,
+  getActionableFailures,
   groupFailuresBySha,
   jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
   normalizeState,
   processFailureFilingSweep,
+  reconcileCiRun,
+  RECOVERY_COOLDOWN_MS,
 } from './e2e-regression-watch.mjs';
 
 function makeFailure(overrides = {}) {
@@ -555,5 +558,108 @@ describe('retired CI job filing gate', () => {
     assert.equal(counts.groupsNeedingHuman, 1);
     assert.equal(state.activeFailures[key].retired, false);
     assert.equal(state.activeFailures[key].needsHuman, true);
+  });
+});
+
+function makeRun({ headSha, jobName, conclusion, databaseId, jobDatabaseId, createdAt }) {
+  return {
+    headSha,
+    headBranch: 'master',
+    databaseId,
+    createdAt,
+    jobs: [
+      {
+        name: jobName,
+        status: 'completed',
+        conclusion,
+        databaseId: jobDatabaseId,
+        url: `https://example.test/job/${jobDatabaseId}`,
+        completedAt: createdAt,
+      },
+    ],
+  };
+}
+
+describe('reconcileCiRun flaky-job flap handling', () => {
+  const jobName = 'playwright / launch-dispatch-stuck-lease';
+  const sha = 'a5d6b3e626ace9e963e924c0de9410dc0302de9e';
+
+  it('reproduces the bug: a single green run used to wipe attempts/occurrences before a flap back to red', () => {
+    // This is the historical (pre-fix) behavior this test guards against: a
+    // job filed twice (attempts: 2) goes green once -- CI flakiness, not a
+    // real fix -- then red again 10 minutes later. The watcher must not
+    // hand it a brand-new 3-attempt budget for what is still the same
+    // unresolved regression.
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      firstBadSha: sha,
+      lastBadSha: sha,
+      occurrences: 40,
+      attempts: 2,
+      lastFiledAt: '2026-08-13T20:00:00.000Z',
+    }));
+
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'success',
+      databaseId: 101, jobDatabaseId: 201, createdAt: '2026-08-13T20:05:00.000Z',
+    }));
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'failure',
+      databaseId: 102, jobDatabaseId: 202, createdAt: '2026-08-13T20:15:00.000Z',
+    }));
+
+    const failure = state.activeFailures[jobName];
+    assert.ok(failure, 'failure record must survive the flap, not disappear');
+    assert.equal(failure.attempts, 2, 'attempts must be preserved across a same-defect flap');
+    assert.equal(failure.occurrences, 41, 'occurrences should accumulate, not reset to 1');
+  });
+
+  it('does not re-file work for a job currently reporting green during its recovery cooldown', () => {
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      firstBadSha: sha,
+      lastBadSha: sha,
+      attempts: 1,
+      lastFiledAt: '2026-08-13T20:00:00.000Z',
+    }));
+
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'success',
+      databaseId: 101, jobDatabaseId: 201, createdAt: '2026-08-13T20:05:00.000Z',
+    }));
+
+    assert.ok(state.activeFailures[jobName], 'record kept for cooldown bookkeeping');
+    assert.deepEqual(
+      getActionableFailures(state).map((f) => f.jobName),
+      [],
+      'a job CI currently reports green must not be filed again while its record is retained',
+    );
+  });
+
+  it('still clears attempts/occurrences once the job has stayed green past the recovery cooldown', () => {
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      firstBadSha: sha,
+      lastBadSha: sha,
+      occurrences: 40,
+      attempts: 2,
+      lastFiledAt: '2026-08-13T20:00:00.000Z',
+    }));
+
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'success',
+      databaseId: 101, jobDatabaseId: 201,
+      createdAt: new Date(new Date('2026-08-13T20:00:00.000Z').getTime() + RECOVERY_COOLDOWN_MS + 1000).toISOString(),
+    }));
+
+    assert.equal(state.activeFailures[jobName], undefined, 'a durably green job should still clear its history');
+
+    reconcileCiRun(state, makeRun({
+      headSha: 'f'.repeat(40), jobName, conclusion: 'failure',
+      databaseId: 103, jobDatabaseId: 203, createdAt: '2026-08-20T00:00:00.000Z',
+    }));
+
+    assert.equal(state.activeFailures[jobName].attempts, 0, 'a genuinely new regression starts with a fresh budget');
+    assert.equal(state.activeFailures[jobName].occurrences, 1);
   });
 });
