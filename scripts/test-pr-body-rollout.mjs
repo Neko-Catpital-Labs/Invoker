@@ -112,14 +112,14 @@ assert.ok(
   'PR Body must install libatomic1 before actions/setup-node selects Node.js 26',
 );
 
-const libatomicStep = prBodyWorkflowSteps[libatomicStepIndex];
+const libatomicPrerequisitesStep = prBodyWorkflowSteps[libatomicStepIndex];
 assert.match(
-  libatomicStep,
+  libatomicPrerequisitesStep,
   new RegExp(`^        if: ${enabledOnlyCondition.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
   'PR Body libatomic prerequisite install must use the same enabled-only gate as Node setup',
 );
 assert.match(
-  libatomicStep,
+  libatomicPrerequisitesStep,
   /^        run: \|\n          sudo apt-get update\n          sudo apt-get install -y libatomic1$/m,
   'PR Body libatomic prerequisite install must update apt and install libatomic1',
 );
