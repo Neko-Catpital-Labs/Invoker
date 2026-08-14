@@ -236,17 +236,15 @@ describe('Slack plan submission restart repro contracts', () => {
     const draft = slackPlanDrafts.getReady('C_LOBBY', 'incident-thread');
     expect(draft).toBeTruthy();
     expect(draft?.planText.trim()).toContain('name: Proof plan');
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({
-      thread_ts: 'incident-thread',
-      blocks: expect.arrayContaining([
-        expect.objectContaining({
-          elements: expect.arrayContaining([
-            expect.objectContaining({ action_id: 'plan_draft_approve', text: expect.objectContaining({ text: 'Approve' }) }),
-            expect.objectContaining({ action_id: 'plan_draft_cancel', text: expect.objectContaining({ text: 'Cancel' }) }),
-          ]),
-        }),
-      ]),
-    }));
+    const reviewCardCall = say.mock.calls.find(([msg]) => msg?.thread_ts === 'incident-thread'
+      && JSON.stringify(msg?.blocks ?? []).includes('plan_draft_approve'));
+    expect(reviewCardCall).toBeDefined();
+    const [reviewCardMessage] = reviewCardCall ?? [];
+    const actionElements = reviewCardMessage?.blocks?.flatMap((block) => block.elements ?? []) ?? [];
+    expect(actionElements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action_id: 'plan_draft_approve', text: expect.objectContaining({ text: 'Approve' }) }),
+      expect.objectContaining({ action_id: 'plan_draft_cancel', text: expect.objectContaining({ text: 'Cancel' }) }),
+    ]));
   });
 
   it('treats untagged thread replies as passive context that never reaches the planner', async () => {
