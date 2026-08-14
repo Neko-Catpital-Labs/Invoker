@@ -71,4 +71,19 @@ describe('FailureClassifier predicates', () => {
     expect(FailureClassifier.isCancellation('boom')).toBe(false);
     expect(FailureClassifier.isCancellation(undefined)).toBe(false);
   });
+
+  it('isUsageLimit matches both real agent-quota failure shapes seen in production', () => {
+    // Live incident text captured from a real failed task's execution.error.
+    expect(FailureClassifier.isUsageLimit(
+      '[Fix with Agent failed] SSH remote script failed (exit=1, phase=remote_agent_fix)\n'
+      + "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to "
+      + 'purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
+    )).toBe(true);
+    // Distinct phrasing this repo's own codex-driver tests already model.
+    expect(FailureClassifier.isUsageLimit(
+      'codex fix exited with code 1: [assistant] Model refused: usage limit reached',
+    )).toBe(true);
+    expect(FailureClassifier.isUsageLimit('AssertionError: expected 1 to be 2')).toBe(false);
+    expect(FailureClassifier.isUsageLimit(undefined)).toBe(false);
+  });
 });

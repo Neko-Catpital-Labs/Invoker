@@ -75,4 +75,15 @@ export class FailureClassifier {
     return errorText.startsWith('Cancelled by user') || errorText.startsWith('Cancelled:')
       || errorText.startsWith('Terminated by user') || errorText.startsWith('Terminated:');
   }
+
+  /**
+   * True when the failure is the agent provider refusing to run because its
+   * usage/rate quota is exhausted, not a defect in the task itself. Retrying
+   * immediately cannot succeed until the quota resets, so callers should
+   * back off globally rather than spend a per-task auto-fix attempt on it.
+   */
+  static isUsageLimit(errorText: unknown): boolean {
+    if (typeof errorText !== 'string') return false;
+    return /usage limit|rate limit/i.test(errorText);
+  }
 }
