@@ -1677,7 +1677,7 @@ export class SlackSurface implements Surface {
   private planDraftBlocks(
     summary: PlanSummary,
     draft: SlackPlanDraft,
-    state: 'plain' | 'ready' | 'kept',
+    state: 'ready' | 'kept',
   ): unknown[] {
     const text = [`*${summary.name}*`, ...formatPlanSummaryLines(summary)].join('\n');
     const actionButtons = state === 'ready'
@@ -1696,23 +1696,21 @@ export class SlackSurface implements Surface {
             value: `${draft.draftId}:${draft.version}`,
           },
         ]
-      : state === 'kept'
-        ? [
-            {
-              type: 'button',
-              action_id: 'plan_draft_approve',
-              style: 'primary',
-              text: { type: 'plain_text', text: 'Approve' },
-              value: `${draft.draftId}:${draft.version}`,
-            },
-            {
-              type: 'button',
-              action_id: 'plan_draft_discard',
-              text: { type: 'plain_text', text: 'Discard draft' },
-              value: `${draft.draftId}:${draft.version}`,
-            },
-          ]
-        : [];
+      : [
+          {
+            type: 'button',
+            action_id: 'plan_draft_approve',
+            style: 'primary',
+            text: { type: 'plain_text', text: 'Approve' },
+            value: `${draft.draftId}:${draft.version}`,
+          },
+          {
+            type: 'button',
+            action_id: 'plan_draft_discard',
+            text: { type: 'plain_text', text: 'Discard draft' },
+            value: `${draft.draftId}:${draft.version}`,
+          },
+        ];
     return [
       { type: 'section', text: { type: 'mrkdwn', text } },
       ...(actionButtons.length > 0 ? [{
@@ -1728,13 +1726,7 @@ export class SlackSurface implements Surface {
     say: SayFn,
   ): Promise<void> {
     if (!this.slackPlanDraftRepo) return;
-    const posted = await this.sayWithRateLimitRetry(say, {
-      text: `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}\nPreparing YAML attachment…`,
-      thread_ts: draft.threadTs,
-      blocks: this.planDraftBlocks(summary, draft, 'plain'),
-    });
-    if (!posted?.ts) throw new PlanDraftPostingError('Slack did not return a timestamp for the plan review message.');
-    this.slackPlanDraftRepo.bindMessage(draft, posted.ts);
+    let fileId: string | undefined;
     try {
       const upload = await this.app.client.files.uploadV2({
         channel_id: draft.channelId,
@@ -1745,25 +1737,22 @@ export class SlackSurface implements Surface {
           title: `${summary.name}.yaml`,
         }],
       }) as unknown as { files?: Array<{ files?: Array<{ id?: string }> }> };
-      const fileId = upload.files?.[0]?.files?.[0]?.id;
+      fileId = upload.files?.[0]?.files?.[0]?.id;
       if (!fileId) throw new Error('Slack did not return an uploaded YAML file id.');
-      this.slackPlanDraftRepo.bindAttachment(draft, fileId);
-      this.slackPlanDraftRepo.markReady(draft);
-      await this.replacePlanDraftMessage(
-        this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft,
-        `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}`,
-        this.planDraftBlocks(summary, draft, 'ready'),
-      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.app.client.chat.update({
-        channel: draft.channelId,
-        ts: posted.ts,
-        text: `Plan review could not attach YAML: ${message}`,
-        blocks: [],
-      });
       throw new PlanDraftPostingError(message, { cause: error });
     }
+    this.slackPlanDraftRepo.bindAttachment(draft, fileId);
+
+    const posted = await this.sayWithRateLimitRetry(say, {
+      text: `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}`,
+      thread_ts: draft.threadTs,
+      blocks: this.planDraftBlocks(summary, draft, 'ready'),
+    });
+    if (!posted?.ts) throw new PlanDraftPostingError('Slack did not return a timestamp for the plan review message.');
+    this.slackPlanDraftRepo.bindMessage(draft, posted.ts);
+    this.slackPlanDraftRepo.markReady(draft);
   }
 
   private buildConfirmBlocks(prompt: string, confirmKey: string): unknown[] {

@@ -183,8 +183,7 @@ describe('plan draft staging with the real files.uploadV2 response shape', () =>
       say,
     });
 
-    const app = surface.getApp() as any;
-    const readyCard = app.client.chat.update.mock.calls.find(([msg]: [any]) =>
+    const readyCard = say.mock.calls.find(([msg]: [any]) =>
       JSON.stringify(msg?.blocks ?? []).includes('plan_draft_approve'));
     expect(readyCard).toBeDefined();
   });
