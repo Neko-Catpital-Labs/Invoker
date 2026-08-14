@@ -89,6 +89,26 @@ const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
 const STATE_FILE = join(STATE_DIR, 'state.json');
 const SWEEP_LOG_FILE = join(STATE_DIR, 'sweep-log.jsonl');
 const WORKFLOW_PATH = join(REPO_ROOT, '.github', 'workflows', WORKFLOW_FILE);
+/**
+ * Shared fleet-wide auto-fix pause flag, same file and format written by
+ * packages/execution-engine/src/auto-fix-circuit-breaker.ts. One usage-limit
+ * failure anywhere in Invoker (not just here) pauses this watcher's filing
+ * too, since a filed repair here dispatches the same rate-limited agent.
+ */
+const AUTO_FIX_PAUSE_FILE = process.env.INVOKER_AUTO_FIX_PAUSE_FILE
+  ?? join(homedir(), '.invoker', 'auto-fix-pause.json');
+
+export function isAutoFixCircuitBreakerPaused(nowMs = Date.now(), path = AUTO_FIX_PAUSE_FILE) {
+  if (!existsSync(path)) return false;
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    if (!raw?.pausedUntil) return false;
+    const untilMs = new Date(raw.pausedUntil).getTime();
+    return Number.isFinite(untilMs) && nowMs < untilMs;
+  } catch {
+    return false;
+  }
+}
 const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/ui build',
   'pnpm --filter @invoker/surfaces build',
@@ -908,9 +928,26 @@ export function processFailureFilingSweep(state, {
   onNeedsHuman = () => {},
   onRetired = () => {},
   fleetEventThreshold = FLEET_EVENT_THRESHOLD,
+  isPaused = isAutoFixCircuitBreakerPaused,
 } = {}) {
   const filedAt = now instanceof Date ? now : new Date(now);
   const nowMs = filedAt.getTime();
+
+  if (isPaused(nowMs)) {
+    return {
+      groupsFound: failures.length,
+      groupsFiled: 0,
+      groupsSkippedAlreadyAddressed: 0,
+      groupsDeferredByCap: 0,
+      groupsNeedingHuman: 0,
+      groupsInBackoff: 0,
+      groupsRetired: 0,
+      groupsRetiredStale: 0,
+      groupsCorrelated: 0,
+      pausedByCircuitBreaker: true,
+    };
+  }
+
   const prepared = prepareFleetCorrelatedFailures(state, failures, {
     threshold: fleetEventThreshold,
     jobDefinitions,
@@ -1035,6 +1072,10 @@ export async function main() {
       console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" ${detail}; marking retired and skipping filing`);
     },
   });
+
+  if (filingCounts.pausedByCircuitBreaker) {
+    console.error('ci-regression-watch: auto-fix circuit breaker is paused; skipped filing this sweep');
+  }
 
   appendSweepLog({
     runsProcessed,
