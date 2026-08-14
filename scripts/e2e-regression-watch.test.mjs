@@ -329,6 +329,73 @@ describe('fleet SHA correlation', () => {
     assert.equal(counts.groupsCorrelated, 1);
     assert.equal(counts.groupsFiled, 1);
   });
+
+  it('reproduces the bug: an orphaned fleet key is left un-retired forever when its last unmapped member goes silent', () => {
+    const sha1 = 'e73ee551a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7';
+    const sha2 = 'f00df00d1122334455667788990011223344f00d';
+    const jobA = 'quality / Dependency Cruise';
+    const jobB = 'required-fast / Vitest Workspace';
+
+    const state = stateWithFailures([
+      makeFailure({
+        jobName: jobA, firstBadSha: sha1, firstBadRunId: 100,
+        firstJobDatabaseId: 200, firstJobUrl: 'https://example.test/job/200',
+      }),
+      makeFailure({
+        jobName: jobB, firstBadSha: sha1, firstBadRunId: 101,
+        firstJobDatabaseId: 201, firstJobUrl: 'https://example.test/job/201',
+      }),
+    ]);
+
+    // Sweep 1: correlates jobA + jobB into one fleet entry under sha1. This
+    // is the pre-existing fleet-level entry the bug later orphans.
+    processFailureFilingSweep(state, {
+      jobDefinitions: jobDefinitionsFor([jobA, jobB]),
+      fleetEventThreshold: 2,
+      now: new Date('2026-08-12T00:00:00Z'),
+      liveQuery: () => false,
+      fileFailure: () => {},
+    });
+    const fleetKey = Object.keys(state.activeFailures).find((key) => key.startsWith('fleet /'));
+    assert.ok(fleetKey, 'expected a fleet entry to be synthesized');
+
+    // jobB recovers. Its own individual activeFailures entry never had its
+    // own lastFiledAt stamped (only the fleet-level object did, via
+    // recordFailureFiled), so withinRecoveryCooldown reads false
+    // immediately -- no artificial 24h time jump is needed to make
+    // reconcileCiRun delete it outright.
+    reconcileCiRun(state, makeRun({
+      headSha: sha1, jobName: jobB, conclusion: 'success',
+      databaseId: 102, jobDatabaseId: 202, createdAt: '2026-08-12T01:00:00Z',
+    }));
+    assert.equal(state.activeFailures[jobB], undefined);
+
+    // jobB re-fails on a brand-new commit. This creates a fresh, standalone
+    // activeFailures entry for jobB keyed to sha2 -- unrelated to the old
+    // fleet entry still sitting under sha1.
+    reconcileCiRun(state, makeRun({
+      headSha: sha2, jobName: jobB, conclusion: 'failure',
+      databaseId: 103, jobDatabaseId: 203, createdAt: '2026-08-12T02:00:00Z',
+    }));
+
+    // Sweep 2: jobA is now unmapped (simulating a rename/removal from CI).
+    // The old fleet entry's group now contains only jobA, which can't
+    // synthesize a valid fleet failure (no verify command) -- this is the
+    // sweep where the bug fires.
+    const filed = [];
+    processFailureFilingSweep(state, {
+      jobDefinitions: jobDefinitionsFor([jobB]),
+      fleetEventThreshold: 2,
+      now: new Date('2026-08-12T03:00:00Z'),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure),
+    });
+
+    assert.equal(state.activeFailures[fleetKey].retired, true);
+    assert.equal(state.activeFailures[jobA].retired, true);
+    assert.deepEqual(filed.map((failure) => failure.jobName), [jobB]);
+    assert.equal(filed[0].firstBadSha, sha2);
+  });
 });
 
 describe('attempt ledger filing gate', () => {
