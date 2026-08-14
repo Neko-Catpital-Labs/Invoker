@@ -64,6 +64,24 @@ export const RECOVERY_COOLDOWN_MS = parseNonNegativeInteger(
   process.env.INVOKER_CI_WATCH_RECOVERY_COOLDOWN_MS,
   24 * 60 * 60 * 1000,
 );
+/**
+ * A job CI hasn't reported on (green or red) in this long is presumed
+ * renamed, removed, or otherwise no longer produced by the current
+ * workflow -- most concretely, a job kept "mapped" only by a
+ * LEGACY_PLAYWRIGHT_JOB_ALIASES-style compatibility shim after a shard
+ * rename. Such a job can never again resolve itself via a real 'ok'
+ * observation in reconcileCiRun, so the filing sweep retires it instead of
+ * re-filing repairs against it forever.
+ */
+export const STALE_OBSERVATION_MS = parseNonNegativeInteger(
+  process.env.INVOKER_CI_WATCH_STALE_OBSERVATION_MS,
+  3 * 24 * 60 * 60 * 1000,
+);
+
+export function isObservationStale(failure, nowMs, staleMs = STALE_OBSERVATION_MS) {
+  const observedMs = failure?.lastObservedAt ? new Date(failure.lastObservedAt).getTime() : NaN;
+  return Number.isFinite(observedMs) && (nowMs - observedMs) > staleMs;
+}
 
 const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
   ?? process.env.INVOKER_E2E_WATCH_STATE_DIR
@@ -907,6 +925,7 @@ export function processFailureFilingSweep(state, {
     groupsNeedingHuman: 0,
     groupsInBackoff: 0,
     groupsRetired: prepared.retiredFleetMembers.length,
+    groupsRetiredStale: 0,
     groupsCorrelated: prepared.groupsCorrelated,
   };
 
@@ -915,7 +934,15 @@ export function processFailureFilingSweep(state, {
       counts.groupsRetired += 1;
       markFailureRetired(state, failure, true);
       save(state);
-      onRetired(failure);
+      onRetired(failure, 'unmapped');
+      continue;
+    }
+    if (isObservationStale(failure, nowMs)) {
+      counts.groupsRetired += 1;
+      counts.groupsRetiredStale += 1;
+      markFailureRetired(state, failure, true);
+      save(state);
+      onRetired(failure, 'stale-observation');
       continue;
     }
     const attemptGate = shouldFileFailure(failure, { nowMs, maxAttempts });
@@ -1001,8 +1028,11 @@ export async function main() {
     onNeedsHuman: (failure, attemptGate) => {
       console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
     },
-    onRetired: (failure) => {
-      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" has no mapped local verify command; marking retired and skipping filing`);
+    onRetired: (failure, reason) => {
+      const detail = reason === 'stale-observation'
+        ? `CI has not reported this job in either direction for over ${Math.round(STALE_OBSERVATION_MS / 86_400_000)}d (last observed ${failure.lastObservedAt}); presumed renamed or removed`
+        : 'has no mapped local verify command';
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" ${detail}; marking retired and skipping filing`);
     },
   });
 
