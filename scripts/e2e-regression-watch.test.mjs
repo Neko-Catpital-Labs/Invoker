@@ -1,11 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   buildCiJobDefinitions,
   buildMarker,
   fileBugfixPlan,
   getActionableFailures,
   groupFailuresBySha,
+  isAutoFixCircuitBreakerPaused,
   isObservationStale,
   jobNameIsMapped,
   loadEmptyState,
@@ -731,4 +735,63 @@ describe('stale-observation retirement', () => {
     assert.equal(counts.groupsRetiredStale, 0);
     assert.equal(state.activeFailures[jobName].retired, false);
   });
+});
+
+describe('auto-fix circuit breaker (shared with execution-engine)', () => {
+  let dir;
+  let breakerPath;
+
+  function withDir(fn) {
+    dir = mkdtempSync(join(tmpdir(), 'invoker-watch-breaker-'));
+    breakerPath = join(dir, 'auto-fix-pause.json');
+    try {
+      return fn();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('isAutoFixCircuitBreakerPaused reads the same pause-file format execution-engine writes', () => withDir(() => {
+    writeFileSync(breakerPath, JSON.stringify({
+      pausedUntil: '2026-08-14T12:00:00.000Z',
+      reason: 'usage-limit',
+      triggeredAt: '2026-08-14T06:00:00.000Z',
+    }));
+    assert.equal(isAutoFixCircuitBreakerPaused(new Date('2026-08-14T08:00:00.000Z').getTime(), breakerPath), true);
+    assert.equal(isAutoFixCircuitBreakerPaused(new Date('2026-08-15T00:00:00.000Z').getTime(), breakerPath), false);
+  }));
+
+  it('reproduces the bug: without a pause check, the sweep files new repair work while the fleet is out of quota', () => withDir(() => {
+    const jobName = 'required-fast / Vitest Workspace';
+    const state = stateWithFailure(makeFailure({ jobName }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T08:00:00.000Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+      isPaused: () => true,
+    });
+
+    assert.deepEqual(filed, [], 'must not file while the shared circuit breaker is paused');
+    assert.equal(counts.pausedByCircuitBreaker, true);
+  }));
+
+  it('resumes filing once the breaker is no longer paused', () => withDir(() => {
+    const jobName = 'required-fast / Vitest Workspace';
+    const state = stateWithFailure(makeFailure({ jobName }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T08:00:00.000Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+      isPaused: () => false,
+    });
+
+    assert.deepEqual(filed, [jobName]);
+    assert.equal(counts.pausedByCircuitBreaker, undefined);
+  }));
 });
