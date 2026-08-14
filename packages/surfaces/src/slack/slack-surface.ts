@@ -1744,6 +1744,11 @@ export class SlackSurface implements Surface {
       throw new PlanDraftPostingError(message, { cause: error });
     }
     this.slackPlanDraftRepo.bindAttachment(draft, fileId);
+    // files.uploadV2 resolving doesn't guarantee the file's share message has
+    // landed in the channel yet -- Slack attaches it to the thread slightly
+    // asynchronously. Confirm it's visible before posting the button message,
+    // so the file reliably appears above the Approve/Cancel card, not below it.
+    await this.waitForFileMessage(draft.channelId, draft.threadTs, fileId);
 
     const posted = await this.sayWithRateLimitRetry(say, {
       text: `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}`,
@@ -1753,6 +1758,26 @@ export class SlackSurface implements Surface {
     if (!posted?.ts) throw new PlanDraftPostingError('Slack did not return a timestamp for the plan review message.');
     this.slackPlanDraftRepo.bindMessage(draft, posted.ts);
     this.slackPlanDraftRepo.markReady(draft);
+  }
+
+  private async waitForFileMessage(channelId: string, threadTs: string, fileId: string): Promise<void> {
+    const maxAttempts = 6;
+    const delayMs = 300;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const replies = await this.app.client.conversations.replies({
+          channel: channelId,
+          ts: threadTs,
+          limit: 20,
+        }) as unknown as { messages?: Array<{ files?: Array<{ id?: string }> }> };
+        if (replies.messages?.some((message) => message.files?.some((file) => file.id === fileId))) {
+          return;
+        }
+      } catch {
+        return;
+      }
+      await this.sleep(delayMs);
+    }
   }
 
   private buildConfirmBlocks(prompt: string, confirmKey: string): unknown[] {

@@ -61,6 +61,9 @@ vi.mock('@slack/bolt', () => {
         add: vi.fn().mockResolvedValue({}),
         remove: vi.fn().mockResolvedValue({}),
       },
+      conversations: {
+        replies: vi.fn().mockResolvedValue({ messages: [{ files: [{ id: 'F-REAL-UPLOAD' }] }] }),
+      },
     };
   }
   return { App: MockApp };
@@ -183,6 +186,27 @@ describe('plan draft staging with the real files.uploadV2 response shape', () =>
       say,
     });
 
+    const readyCard = say.mock.calls.find(([msg]: [any]) =>
+      JSON.stringify(msg?.blocks ?? []).includes('plan_draft_approve'));
+    expect(readyCard).toBeDefined();
+  });
+
+  it('waits for the uploaded file to actually land before posting the Approve/Cancel card', async () => {
+    const { surface } = await buildSurface();
+    const app = surface.getApp() as any;
+    app.client.conversations.replies
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [{ files: [{ id: 'F-REAL-UPLOAD' }] }] });
+    const say = vi.fn().mockResolvedValue({ ts: 'card-ts' });
+    nextReply = 'Draft ready.';
+    nextDraftPlanText = VALID_PLAN_YAML;
+
+    await mentionHandler(surface)({
+      event: { text: '<@UBOT> audit the coderabbit findings', ts: 'thread-wait-for-file', user: 'U1' },
+      say,
+    });
+
+    expect(app.client.conversations.replies).toHaveBeenCalledTimes(2);
     const readyCard = say.mock.calls.find(([msg]: [any]) =>
       JSON.stringify(msg?.blocks ?? []).includes('plan_draft_approve'));
     expect(readyCard).toBeDefined();
