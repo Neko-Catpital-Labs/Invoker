@@ -22,6 +22,10 @@ function assert(condition, message) {
   }
 }
 
+function stepNames(jobName) {
+  return (jobs[jobName]?.steps ?? []).map((step) => String(step.name ?? ''));
+}
+
 function jobForCheck(checkName) {
   if (checkName === 'PR Body' || checkName.startsWith('quality / ')) {
     return null;
@@ -78,6 +82,12 @@ const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
 assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
+);
+
+const optionalOtherSteps = stepNames('optional-other');
+assert(
+  optionalOtherSteps[0] === 'Reclaim workspace' && optionalOtherSteps[1] === 'Checkout',
+  'optional-other must reclaim the self-hosted runner workspace before checkout',
 );
 
 assert(jobs.docker, 'Missing docker job');
