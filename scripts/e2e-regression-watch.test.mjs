@@ -6,6 +6,7 @@ import {
   fileBugfixPlan,
   getActionableFailures,
   groupFailuresBySha,
+  isObservationStale,
   jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
@@ -13,6 +14,7 @@ import {
   processFailureFilingSweep,
   reconcileCiRun,
   RECOVERY_COOLDOWN_MS,
+  STALE_OBSERVATION_MS,
 } from './e2e-regression-watch.mjs';
 
 function makeFailure(overrides = {}) {
@@ -661,5 +663,72 @@ describe('reconcileCiRun flaky-job flap handling', () => {
 
     assert.equal(state.activeFailures[jobName].attempts, 0, 'a genuinely new regression starts with a fresh budget');
     assert.equal(state.activeFailures[jobName].occurrences, 1);
+  });
+});
+
+describe('stale-observation retirement', () => {
+  const jobName = 'playwright / launch-dispatch-stuck-lease';
+
+  it('isObservationStale is false just inside the window and true just past it', () => {
+    const lastObservedAt = '2026-08-06T01:21:00.000Z';
+    const lastObservedMs = new Date(lastObservedAt).getTime();
+    assert.equal(
+      isObservationStale({ lastObservedAt }, lastObservedMs + STALE_OBSERVATION_MS - 1),
+      false,
+    );
+    assert.equal(
+      isObservationStale({ lastObservedAt }, lastObservedMs + STALE_OBSERVATION_MS + 1),
+      true,
+    );
+  });
+
+  it('reproduces the bug: a job kept "mapped" by a legacy alias, but never re-observed by CI, gets filed forever', () => {
+    // Models LEGACY_PLAYWRIGHT_JOB_ALIASES: jobDefinitions has a real,
+    // permanent entry for a job CI stopped producing after a shard rename
+    // (the incident: no run reported this job, green or red, for 8+ days,
+    // yet the watcher kept dispatching real "diagnose and fix" agents).
+    const jobDefinitions = jobDefinitionsFor([jobName]);
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      occurrences: 66,
+      attempts: 2,
+      lastFiledAt: '2026-08-14T00:20:38.634Z',
+      lastObservedAt: '2026-08-06T01:21:00.000Z',
+    }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T01:00:00.000Z'),
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+    });
+
+    assert.deepEqual(filed, [], 'a job CI has not reported on in either direction must not be re-filed');
+    assert.equal(counts.groupsRetiredStale, 1);
+    assert.equal(counts.groupsFiled, 0);
+    assert.equal(state.activeFailures[jobName].retired, true);
+  });
+
+  it('still files normally for a mapped job CI observed recently', () => {
+    const jobDefinitions = jobDefinitionsFor([jobName]);
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      attempts: 0,
+      lastFiledAt: null,
+      lastObservedAt: '2026-08-13T23:00:00.000Z',
+    }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T01:00:00.000Z'),
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+    });
+
+    assert.deepEqual(filed, [jobName]);
+    assert.equal(counts.groupsRetiredStale, 0);
+    assert.equal(state.activeFailures[jobName].retired, false);
   });
 });
