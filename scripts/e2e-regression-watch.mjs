@@ -546,6 +546,16 @@ function prepareFleetCorrelatedFailures(state, failures, {
     if (members.length < threshold && !existingFleetBySha.has(sha)) continue;
     const fleetFailure = synthesizeFleetFailure(normalized, sha, members, jobDefinitions);
     if (!fleetFailure) {
+      if (existingFleetBySha.has(sha)) {
+        const existingFleetEntry = existingFleetBySha.get(sha);
+        if (normalized.activeFailures[existingFleetEntry.jobName]) {
+          normalized.activeFailures[existingFleetEntry.jobName] = {
+            ...normalized.activeFailures[existingFleetEntry.jobName],
+            retired: true,
+          };
+          stateChanged = true;
+        }
+      }
       for (const member of members) {
         const existing = normalized.activeFailures[member.jobName];
         if (!existing) continue;
