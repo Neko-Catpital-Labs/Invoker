@@ -111,6 +111,48 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_deleted_remote_with_unrelated_noop_handoff_succeeds_without_push_or_marker(self) -> None:
+        git(self.repo, "checkout", "--orphan", "worker-base")
+        (self.repo / "file.txt").unlink()
+        (self.repo / "worker.txt").write_text("worker base\n", encoding="utf-8")
+        git(self.repo, "add", "--all")
+        git(self.repo, "commit", "-m", "unrelated worker base")
+        git(self.repo, "push", "origin", "--delete", "main")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("nothing to push", result.stdout)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
+
+    def test_deleted_remote_with_real_repair_still_fails_stale(self) -> None:
+        self.commit(self.repo, "repair")
+        git(self.repo, "push", "origin", "--delete", "main")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")

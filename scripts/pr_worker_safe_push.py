@@ -75,6 +75,24 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def is_ancestor(ancestor: str, descendant: str, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode in {0, 1}:
+        return completed.returncode == 0
+    details = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    raise SafePushError(
+        f"git merge-base --is-ancestor {ancestor} {descendant} failed with exit code {completed.returncode}"
+        + (f":\n{details}" if details else ""),
+        exit_code=completed.returncode,
+    )
+
+
 def safe_push(
     *,
     branch: str,
@@ -82,7 +100,7 @@ def safe_push(
     expect_missing: bool = False,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+) -> str | None:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -97,6 +115,10 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            if live is None:
+                pushed = local_head(cwd=cwd)
+                if not is_ancestor(expected, pushed, cwd=cwd):
+                    return None
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
@@ -191,6 +213,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             remote=args.remote,
             cwd=Path(args.cwd),
         )
+        if pushed is None:
+            print(
+                f"pr-worker-safe-push: nothing to push for refs/heads/{normalize_branch(args.branch)}; "
+                "remote branch is missing and local HEAD is not based on the captured head"
+            )
+            return 0
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
