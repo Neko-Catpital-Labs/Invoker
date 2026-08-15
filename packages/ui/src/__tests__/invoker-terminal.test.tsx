@@ -2276,7 +2276,7 @@ describe('Invoker terminal submit context (component)', () => {
     });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      fireEvent.click(screen.getByTestId('rf__node-task-a'));
+      fireEvent.click(await screen.findByTestId('rf__node-task-a'));
       await waitFor(() => {
         expect(
           screen

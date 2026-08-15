@@ -35,6 +35,38 @@ describe('Task interaction (component)', () => {
     mock.cleanup();
   });
 
+  it('renders the selected-workflow shell before its body and mounts the body after 1,000 ms', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    act(() => mock.setTasks([alpha, beta], workflows));
+    await screen.findByTestId('rf__node-wf-a');
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+
+      const miniDag = screen.getByTestId('selected-workflow-mini-dag');
+      expect(miniDag).toHaveTextContent('Workflow A');
+      expect(miniDag).toHaveTextContent('Loading graph…');
+      expect(screen.queryByTestId('rf__node-task-alpha')).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(999);
+      });
+      expect(miniDag).toHaveTextContent('Loading graph…');
+      expect(screen.queryByTestId('rf__node-task-alpha')).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      expect(screen.getByTestId('rf__node-task-beta')).toBeInTheDocument();
+      expect(miniDag).not.toHaveTextContent('Loading graph…');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('selecting a workflow shows mini DAG and inspector content', async () => {
     render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
