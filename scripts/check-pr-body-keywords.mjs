@@ -3,14 +3,19 @@
 // scan, run BEFORE drafting is considered done, not discovered by trial and
 // error against the full validator. Calls the same exported validators the
 // real check uses (validateSingleReviewUnitFocus, validateReviewUnitFocus)
-// instead of re-deriving the product-vs-non-product unit distinction, so
-// this can never drift out of sync with what CI actually enforces.
+// against the same three sections the real validator scans (Summary, Review
+// Claim, Slice Rationale), via getMarkdownSection/getReviewMetadata, instead
+// of the whole body — scanning the whole body flags Test Plan/Safety
+// Invariant/Non-goals prose the real check never looks at, producing false
+// failures that don't reproduce against CI.
 import { readFileSync } from 'node:fs';
 import {
   validateSingleReviewUnitFocus,
   validateReviewUnitFocus,
+  getMarkdownSection,
   VALID_REVIEW_UNITS,
 } from './review-unit-rules.mjs';
+import { getReviewMetadata } from './validate-pr-body.mjs';
 
 function parseArgs(argv) {
   const args = { bodyFile: null, declaredUnit: null };
@@ -33,10 +38,12 @@ function main() {
     process.exit(2);
   }
 
-  const text = readFileSync(bodyFile, 'utf8');
+  const text = readFileSync(bodyFile, 'utf8').trim();
+  const { reviewClaim, sliceRationale } = getReviewMetadata(text);
+  const texts = [getMarkdownSection(text, '## Summary'), reviewClaim, sliceRationale];
   const errors = [...new Set([
-    ...validateSingleReviewUnitFocus({ texts: [text], context: 'PR body' }),
-    ...validateReviewUnitFocus({ declaredReviewUnit: declaredUnit, texts: [text], context: 'PR body' }),
+    ...validateSingleReviewUnitFocus({ texts, context: 'PR body' }),
+    ...validateReviewUnitFocus({ declaredReviewUnit: declaredUnit, texts, context: 'PR body' }),
   ])];
 
   if (errors.length === 0) {

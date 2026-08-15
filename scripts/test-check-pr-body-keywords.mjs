@@ -47,7 +47,25 @@ try {
   );
   assert.equal(nonProductMix.exitCode, 0, 'a non-product-unit keyword (tooling-policy) must not be flagged as a conflict');
 
-  console.log('PASS: check-pr-body-keywords.mjs matches the real validator on all 3 cases');
+  // Reproduces the exact false-positive hit while drafting a real PR body:
+  // the real validator only scans Summary/Review Claim/Slice Rationale, but
+  // this tool used to scan the whole file, so a Test Plan command mentioning
+  // "delete" (a cleanup-unit keyword) wrongly flagged an activation-surface PR.
+  const testPlanOnly = run(
+    '## Summary\nAdds a headless CLI flag.\n\n'
+      + '## Review Claim\nApproving one new flag.\n\n'
+      + '## Slice Rationale\nStands alone.\n\n'
+      + '## Test Plan\n<details>\n<summary>Test Plan</summary>\n\n'
+      + "- [ ] `node scripts/test-delete-all.mjs`\n\n</details>\n",
+    'activation-surface',
+  );
+  assert.equal(
+    testPlanOnly.exitCode,
+    0,
+    'a conflicting keyword inside Test Plan (unscanned by the real validator) must not be flagged',
+  );
+
+  console.log('PASS: check-pr-body-keywords.mjs matches the real validator on all 4 cases');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
