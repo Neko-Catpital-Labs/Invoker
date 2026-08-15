@@ -1726,6 +1726,12 @@ export function App() {
     if (!activeWorkflowId) return EMPTY_SELECTED_WORKFLOW_TASKS;
     return tasksByWorkflow.get(activeWorkflowId) ?? EMPTY_SELECTED_WORKFLOW_TASKS;
   }, [selectedWorkflow, selectedWorkflowId, tasksByWorkflow]);
+  const selectedMergeTaskStateVersion = useMemo(() => {
+    for (const task of miniDagTasks.values()) {
+      if (task.config.isMergeNode) return task.taskStateVersion;
+    }
+    return null;
+  }, [miniDagTasks]);
   useEffect(() => {
     if (selectedWorkflow && miniDagTasks.size > 0) {
       lastGoodSelectedWorkflowGraphRef.current = {
@@ -1826,7 +1832,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedWorkflow?.id, selectedWorkflow?.onFinish]);
+  }, [selectedMergeTaskStateVersion, selectedWorkflow?.id, selectedWorkflow?.onFinish]);
 
   useEffect(() => {
     if (!selectedWorkflowId) {
