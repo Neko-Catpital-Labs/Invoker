@@ -56,6 +56,11 @@ for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
 }
 
+assert(
+  jobs['build-artifacts']['runs-on'] === 'ubuntu-latest',
+  'build-artifacts must use fresh GitHub-hosted capacity so stale Git ref locks cannot block checkout',
+);
+
 assert(jobs['quality-required'], 'Missing quality-required job');
 assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs');
 assert(
