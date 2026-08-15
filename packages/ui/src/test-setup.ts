@@ -2,7 +2,12 @@
 process.env.TZ = 'UTC';
 
 import '@testing-library/jest-dom/vitest';
+import { configure } from '@testing-library/react';
 import { beforeEach } from 'vitest';
+
+// Selected-workflow graph bodies intentionally mount after 1,000 ms. Give
+// async DOM queries a bounded margin beyond that product timing contract.
+configure({ asyncUtilTimeout: 2_000 });
 
 if (typeof globalThis.ResizeObserver === 'undefined') {
   class ResizeObserverPolyfill {

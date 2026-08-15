@@ -253,7 +253,7 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
     const panel = await screen.findByTestId('selected-workflow-mini-dag');
 
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.contextMenu(await screen.findByTestId('rf__node-task-alpha'));
 
     const menu = await screen.findByRole('menu');
     expect(panel).toBeInTheDocument();
