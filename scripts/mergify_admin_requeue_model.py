@@ -173,6 +173,36 @@ class Ledger:
                 latest_epoch = epoch
         return latest_row
 
+    def count_by_unit(self, kind: str, pr: int, key: str) -> int:
+        # Same as count(), but persistent across a commit change: a
+        # successful repair attempt pushes a new commit as a normal side
+        # effect, and that must not silently reset the retry cap for this
+        # (pr, kind, key) unit of work. Used for the retry-cap/backoff
+        # decision; count()/latest() stay head_sha-scoped for repair_in_flight,
+        # which genuinely needs "is *this* submission still running".
+        return sum(
+            1 for row in self.rows
+            if row.get("kind") == kind
+            and int(row.get("pr", -1)) == pr
+            and row.get("key") == key
+        )
+
+    def latest_by_unit(self, kind: str, pr: int, key: str) -> dict[str, object] | None:
+        latest_row: dict[str, object] | None = None
+        latest_epoch = float("-inf")
+        for row in self.rows:
+            if row.get("kind") != kind:
+                continue
+            if int(row.get("pr", -1)) != pr:
+                continue
+            if row.get("key") != key:
+                continue
+            epoch = int(row.get("epoch", 0) or 0)
+            if latest_row is None or epoch >= latest_epoch:
+                latest_row = row
+                latest_epoch = epoch
+        return latest_row
+
     def has_different_head(self, kind: str, pr: int, current_head: str, key: str) -> bool:
         for row in self.rows:
             if row.get("kind") != kind:

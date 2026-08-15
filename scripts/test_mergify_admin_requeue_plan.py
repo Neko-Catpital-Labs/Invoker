@@ -1022,10 +1022,11 @@ class RepairAttemptResetsOnNewHeadSha(PlannerTestCase):
         snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")}, head_ref_oid="d" * 40)
         facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
         action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
-        # This should be capped: 3 real prior attempts already exist on this
-        # same underlying check. It currently is NOT -- this assertion pins
-        # down the bug's actual (wrong) behavior on purpose, not endorses it.
-        self.assertEqual(action.kind, "repair_check")
+        # Fixed: 3 real prior attempts on this check, across 3 different
+        # head_shas, now correctly caps the 4th instead of resubmitting --
+        # the count persists via Ledger.count_by_unit() instead of resetting
+        # on every new commit.
+        self.assertEqual(action.kind, "comment_blocked")
 
 
 class PlanStackExecution(PlannerTestCase):

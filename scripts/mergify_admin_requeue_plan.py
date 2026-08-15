@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Collection, Literal, Mapping
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 try:
     from .mergify_admin_requeue_model import (
@@ -271,6 +276,65 @@ def repair_attempt_count_excluding_infra_crash(
     return count, crashed_on_infra
 
 
+# The retry-cap decision for (pr, kind, key), shared with the JS
+# CI-regression watcher (scripts/retry-ledger.mjs) instead of re-deriving
+# the same "should we try again?" logic in Python a second time -- see that
+# module's header for why. Unlike repair_attempt_count_excluding_infra_crash,
+# the count here is persistent across a head_sha change: a successful repair
+# attempt pushes a new commit as its normal side effect, and that must not
+# silently reset the cap for this (pr, kind, key) unit of work.
+#
+# backoff_base_ms defaults to 0 (no cooldown between attempts): this module
+# already has its own real "don't resubmit while outstanding" gate
+# (repair_in_flight, a TTL keyed on the current head_sha, checked separately
+# by every caller below), so a second, independent cooldown layer isn't part
+# of what this bug needs fixing. 0 makes the shared decision a pure
+# persistent-count cap check here, matching this module's original timing
+# behavior exactly -- only the count's persistence changes.
+def retry_decision(
+    ledger: Ledger,
+    pr_number: int,
+    head_sha: str,
+    submit_kind: str,
+    key: str,
+    plan_name: str,
+    now: int,
+    max_attempts: int,
+    backoff_base_ms: int = 0,
+) -> dict:
+    count = ledger.count_by_unit(submit_kind, pr_number, key)
+    crashed_on_infra = repair_crash_reason(ledger, pr_number, head_sha, submit_kind, key, plan_name) is not None
+    if crashed_on_infra:
+        count -= 1
+        # The crashed attempt never gave the coding agent a chance to run --
+        # same reasoning that already bypasses repair_in_flight's TTL for
+        # this case (see repair_attempt_count_excluding_infra_crash above).
+        # Skip backoff entirely instead of computing it from the crashed
+        # attempt's own timestamp, which would otherwise defer a
+        # resubmission that should happen immediately.
+        if count >= max_attempts:
+            return {"action": "needs-human", "attempts": count, "crashed_on_infra": True}
+        return {"action": "file", "attempts": count, "crashed_on_infra": True}
+    latest = ledger.latest_by_unit(submit_kind, pr_number, key)
+    payload = json.dumps({
+        "attempts": count,
+        "lastAttemptAt": (
+            datetime.fromtimestamp(int(latest["epoch"]), tz=timezone.utc).isoformat()
+            if latest else None
+        ),
+        "nowMs": now * 1000,
+        "maxAttempts": max_attempts,
+        "backoffBaseMs": backoff_base_ms,
+    })
+    result = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "retry-ledger.mjs"), "decide", "--json", payload],
+        capture_output=True, text=True, check=True,
+    )
+    decision = json.loads(result.stdout)
+    decision["crashed_on_infra"] = False
+    return decision
+
+
 # An async repair submission (repairer.py's ledger.record(submit_kind, ...), written
 # only after a successful `headless_mutation run` submission) is "in flight" until a
 # same-kind "-settled" row lands with an equal-or-later epoch. The submitted plan's
@@ -354,13 +418,15 @@ def mergify_failed_check_actions(
         if name in suppressed:
             continue
         detail = f"Mergify queue check failed: {name}"
-        count, crashed_on_infra = repair_attempt_count_excluding_infra_crash(
+        decision = retry_decision(
             ledger, pr.number, pr.head_ref_oid, "repair-check", name,
-            repair_check_plan_name(pr.number, name, pr.head_ref_oid),
+            repair_check_plan_name(pr.number, name, pr.head_ref_oid), now, max_repair_attempts,
         )
-        if count >= max_repair_attempts:
+        if decision["action"] == "needs-human":
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, detail), detail),)
-        if not crashed_on_infra and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
+        if decision["action"] == "backoff":
+            continue
+        if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
             continue
         return (Action("repair_check", pr.number, name, detail),)
     return ()
@@ -814,13 +880,15 @@ def plan_direct_repairs(
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
-                count, crashed_on_infra = repair_attempt_count_excluding_infra_crash(
+                decision = retry_decision(
                     ledger, pr.number, pr.head_ref_oid, "conflict-repair", key,
-                    repair_conflict_plan_name(pr.number, pr.head_ref_oid),
+                    repair_conflict_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
                 )
-                if count >= max_repair_attempts:
+                if decision["action"] == "needs-human":
                     return cap_action(pr, blocker, blocker.detail)
-                if not crashed_on_infra and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
+                if decision["action"] == "backoff":
+                    continue
+                if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
                     continue
                 return Action("repair_conflict", pr.number, key, blocker.detail)
             if blocker.kind == "failed_check":
@@ -829,13 +897,15 @@ def plan_direct_repairs(
                         pr, facts.trunk, ledger, max_repair_attempts,
                         "structural stale base is blocking its failing check(s), not a code problem",
                     )
-                count, crashed_on_infra = repair_attempt_count_excluding_infra_crash(
+                decision = retry_decision(
                     ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
-                    repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid),
+                    repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid), now, max_repair_attempts,
                 )
-                if count >= max_repair_attempts:
+                if decision["action"] == "needs-human":
                     return cap_action(pr, blocker, blocker.detail)
-                if not crashed_on_infra and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
+                if decision["action"] == "backoff":
+                    continue
+                if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
                     continue
                 return Action("repair_check", pr.number, blocker.key, blocker.detail)
     return None
@@ -858,13 +928,15 @@ def plan_bot_thread_repairs(
                 continue
             if ledger.has_different_head("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key):
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
-            count, crashed_on_infra = repair_attempt_count_excluding_infra_crash(
+            decision = retry_decision(
                 ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key,
-                repair_bot_thread_plan_name(pr.number, pr.head_ref_oid),
+                repair_bot_thread_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
             )
-            if count >= max_repair_attempts:
+            if decision["action"] == "needs-human":
                 return cap_action(pr, blocker, blocker.detail)
-            if not crashed_on_infra and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
+            if decision["action"] == "backoff":
+                continue
+            if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
                 continue
             return Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail)
     return None
@@ -942,7 +1014,15 @@ def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
 
 
 def plan_rebase_onto_base(pr: PrSnapshot, trunk: str, ledger: Ledger, max_attempts: int, reason: str) -> Action:
-    rebase_attempts = ledger.count("rebase-onto-base-conflict", pr.number, pr.head_ref_oid, trunk)
+    # Persistent count (count_by_unit), not the head_sha-scoped count() --
+    # a rebase attempt changes head_sha by definition, so the head_sha-scoped
+    # count could never accumulate past 1 no matter how many times it
+    # genuinely re-hit a conflict. This call site has no backoff/cooldown
+    # concept and never has (a flat cap only, unlike the shared retry_decision
+    # used elsewhere in this module) -- kept that way here deliberately,
+    # since introducing a wait would change this function's return type from
+    # always-an-Action to optionally-None, out of scope for this fix.
+    rebase_attempts = ledger.count_by_unit("rebase-onto-base-conflict", pr.number, trunk)
     if rebase_attempts >= max_attempts:
         return cap_action(
             pr,
