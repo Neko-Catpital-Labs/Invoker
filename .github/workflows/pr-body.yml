@@ -149,6 +149,10 @@ jobs:
             exit 1
           fi
 
+          if [[ -d "${RUNNER_TOOL_CACHE}" && -w "${RUNNER_TOOL_CACHE}" ]]; then
+            exit 0
+          fi
+
           if ! sudo -n true 2>/dev/null; then
             echo "::error::Making RUNNER_TOOL_CACHE writable requires passwordless sudo on this runner."
             exit 1

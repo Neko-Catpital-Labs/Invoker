@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 
 import { strict as assert } from 'node:assert';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -162,6 +171,51 @@ assert.doesNotMatch(
   /\/home\/runner(?:\/|['"])/,
   'PR Body tool-cache ownership repair must not hard-code a runner path',
 );
+
+const toolCacheRunMarker = '        run: |\n';
+const toolCacheRunIndex = toolCacheStep.indexOf(toolCacheRunMarker);
+assert.notEqual(toolCacheRunIndex, -1, 'PR Body tool-cache ownership repair must have an executable shell body');
+const toolCacheScript = toolCacheStep.slice(toolCacheRunIndex + toolCacheRunMarker.length).replace(/^ {10}/gm, '');
+
+const toolCacheExecutionDir = mkdtempSync(join(tmpdir(), 'pr-body-tool-cache-'));
+try {
+  const binDir = join(toolCacheExecutionDir, 'bin');
+  const cacheDir = join(toolCacheExecutionDir, 'writable cache');
+  const nonWritableCacheDir = join(toolCacheExecutionDir, 'non-writable cache');
+  const sudoLog = join(toolCacheExecutionDir, 'sudo.log');
+  mkdirSync(binDir);
+  mkdirSync(cacheDir);
+  mkdirSync(nonWritableCacheDir);
+  chmodSync(nonWritableCacheDir, 0o555);
+
+  const sudoPath = join(binDir, 'sudo');
+  writeFileSync(sudoPath, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "${SUDO_LOG}"\nexit 1\n');
+  chmodSync(sudoPath, 0o755);
+
+  const runToolCacheStep = (runnerToolCache) => spawnSync('bash', ['-c', toolCacheScript], {
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RUNNER_TOOL_CACHE: runnerToolCache,
+      SUDO_LOG: sudoLog,
+    },
+    encoding: 'utf8',
+  });
+
+  const writableResult = runToolCacheStep(cacheDir);
+  assert.equal(writableResult.status, 0, writableResult.stderr);
+  assert.equal(existsSync(sudoLog), false, 'PR Body must not invoke sudo when RUNNER_TOOL_CACHE is already writable');
+
+  const repairFailureResult = runToolCacheStep(nonWritableCacheDir);
+  assert.equal(repairFailureResult.status, 1, 'PR Body must fail when a non-writable cache cannot be repaired');
+  assert.match(
+    repairFailureResult.stdout,
+    /::error::Making RUNNER_TOOL_CACHE writable requires passwordless sudo on this runner\./,
+    'PR Body must explain clearly when cache repair cannot proceed without passwordless sudo',
+  );
+} finally {
+  rmSync(toolCacheExecutionDir, { recursive: true, force: true });
+}
 
 const outputDir = mkdtempSync(join(tmpdir(), 'pr-body-rollout-'));
 const outputFile = join(outputDir, 'github-output');
