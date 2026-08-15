@@ -9,7 +9,7 @@ import {
 const rootPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.match(
   rootPackage.scripts.test,
-  /node scripts\/test-review-unit-classification\.mjs && (?:node scripts\/test-create-pr-stack-workflow\.mjs && )?bash scripts\/workspace-test\.sh/,
+  /node scripts\/test-review-unit-classification\.mjs && (?:node (?:--test )?scripts\/[\w.-]+\.m?js && )*bash scripts\/workspace-test\.sh/,
   'root test must run review-unit classification before the workspace test contract',
 );
 

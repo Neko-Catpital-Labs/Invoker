@@ -51,6 +51,9 @@ When asked what happened, why it happened, or to investigate/diagnose/debug a pr
 - Assertion mismatch: do not claim the proof shows one thing when the output only demonstrates a weaker or different fact.
 - Visual mismatch: do not rely on DOM, file, or path checks instead of opening the exact screenshot or video and stating what you saw.
 - Live-state mismatch: do not use remembered counts or statuses as current evidence for running, merged, queued, or failed work.
+- Intent from one data point: do not assert malicious intent (e.g. "someone snuck this in") from a suspicious name plus a single supporting fact. Ask before accusing — a workflow literally named `jailbreak-admin-bypass-land` turned out to be a deliberately built feature; the user had to correct it directly.
+- Log-line misattribution: do not assume a single log line's meaning without checking what code actually emits it. "Confirmed... a severe crash loop" was delivered from counting `"module":"startup"` lines, without checking that the same banner prints on every CLI invocation, not only on an owner restart — self-caught, but only after the user had already acted on the claim.
+- Single-machine absence as proof: do not conclude "never pushed" or "doesn't exist" from one machine's local git/file state. Check the actual remote (`gh api`, `git ls-remote`) independently before asserting something is missing — a commit that looked stranded on one host was already sitting on GitHub, just not yet fetched elsewhere.
 
 ## Where this is enforced mechanically
 
