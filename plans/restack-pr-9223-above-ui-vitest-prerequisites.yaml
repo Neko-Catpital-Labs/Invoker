@@ -1,0 +1,138 @@
+name: "Restack PR 9223 above UI Vitest prerequisites"
+description: |
+  Recreate PR #9223's Node tool-cache subtree repair as the same two-file
+  workflow-policy review unit above the existing UI test-timing and CI-budget
+  prerequisite stack. The source behavior remains unchanged; only its stack
+  ancestry changes so unrelated UI stabilization is reviewed separately.
+
+  This workflow deliberately leaves PR #9223 untouched. After the replacement
+  branch is review-ready, publishing or closing GitHub PRs remains a separate
+  Mergify Stacks action.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: stack/EdbertChan/plan/pr-9202-prerequisite-2-right-size-ui-vitest-ci-budget/pr-9202-prerequisite-2-right-size-ui-vitest-ci--aade7d69
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: reapply-pr-9223-node-cache-subtree
+    description: |
+      Reapply commit 008b21d10f7968d47acc51d245afdb4d21a52b6c as an unchanged policy slice above the UI Vitest prerequisite stack.
+      Review claim: PR #9223's Node tool-cache subtree ownership repair is preserved exactly while its stack ancestry moves above the UI timing and CI-budget prerequisites.
+      Review lane: policy
+      Safety invariant: The review diff contains only `.github/workflows/pr-body.yml` and `scripts/test-pr-body-rollout.mjs`; UI timing, CI budget, native bootstrap, and product behavior remain isolated outside this slice.
+      Slice rationale: PR #9223 is already one coherent workflow-policy unit, while its failing UI check is caused by unrelated deferred-render timing and an undersized CI budget handled by the prerequisite stack.
+      Architectural effect: Stack ancestry changes; the PR Body workflow continues to reclaim only the Node subtree and its existing focused repro remains the proof surface.
+      Goal: Produce a replacement review branch containing PR #9223's original two-file change on top of the configured base branch.
+      Motivation: Run 31878919615 job 94998629730 showed widespread unrelated graph-node polling failures before the 10-minute job timeout, so adding UI fixes to PR #9223 would mix review units.
+      Alternative considerations: Editing PR #9223 in place with UI tests or `.github/workflows/ci.yml` was rejected because those changes have independent review claims and already exist as prerequisite PRs #9226 and #9227.
+      Implementation details: Assume no prior context. Fetch the source branch if needed, inspect commit 008b21d10f7968d47acc51d245afdb4d21a52b6c and its parent, then reapply exactly its changes to `.github/workflows/pr-body.yml` and `scripts/test-pr-body-rollout.mjs` on the current base. Preserve every base-branch change. Do not edit, push, close, or retarget PR #9223.
+      Non-goals: No UI source/test edits, no `.github/workflows/ci.yml` edits, no runner reassignment, no native-toolchain work, and no GitHub PR mutation.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - .github/workflows/pr-body.yml
+      - scripts/test-pr-body-rollout.mjs
+      Change types:
+      - .github/workflows/pr-body.yml: config-only
+      - scripts/test-pr-body-rollout.mjs: test-only
+      Acceptance criteria:
+      - The two files match the semantic patch introduced by commit 008b21d10f7968d47acc51d245afdb4d21a52b6c.
+      - `node scripts/test-pr-body-rollout.mjs` exits 0.
+      - No file outside the declared two-file scope differs from the configured base branch.
+    prompt: |
+      Goal: Reapply PR #9223's Node tool-cache subtree repair unchanged above the configured UI Vitest prerequisite base.
+      Review claim: Preserve the exact workflow-policy behavior from commit 008b21d10f7968d47acc51d245afdb4d21a52b6c while changing only stack ancestry.
+      Review lane: policy
+      Safety invariant: The resulting review diff may contain only `.github/workflows/pr-body.yml` and `scripts/test-pr-body-rollout.mjs`; all UI, CI-budget, runner-bootstrap, and product changes stay in prerequisite PRs.
+      Slice rationale: The cache repair and its focused repro are one review unit; the failed UI check belongs to separate prerequisites #9226 and #9227.
+      Architectural effect: Only stack ancestry changes. PR Body still recursively reclaims `${RUNNER_TOOL_CACHE}/node`, and its focused repro still proves a non-writable nested Node cache is repaired.
+      Motivation: The target PR's UI job failed on unrelated deferred graph rendering and exhausted its 10-minute CI budget.
+      Alternative considerations: Do not copy UI tests or `.github/workflows/ci.yml` into this slice, and do not weaken or skip UI Vitest.
+      Implementation details: Assume no prior context. Fetch the source branch `stack/EdbertChan/plan/repair-pr-9185-trusted-pr-body-prerequisite/repair-pr-9185-trusted-pr-body-prerequisite--849849b3` if commit 008b21d10f7968d47acc51d245afdb4d21a52b6c is unavailable. Inspect that commit and reapply exactly its two-file patch on the current base. Resolve only genuine context drift while retaining identical behavior and assertions. Commit the result locally for workflow handoff. Do not push, close, or modify PR #9223.
+      Non-goals: No UI source/test edits, no CI workflow edit, no runner/native-toolchain change, no cleanup, and no remote PR mutation.
+      Files:
+      - .github/workflows/pr-body.yml
+      - scripts/test-pr-body-rollout.mjs
+      Change types:
+      - .github/workflows/pr-body.yml: config-only
+      - scripts/test-pr-body-rollout.mjs: test-only
+      Acceptance criteria:
+      - `node scripts/test-pr-body-rollout.mjs` exits 0.
+      - The branch differs from its configured base only in the two declared files.
+      - The implementation task completes with a local commit and no push.
+    dependencies: []
+
+  - id: verify-pr-9223-focused-repro
+    description: |
+      Run the existing deterministic PR Body rollout repro.
+      Review claim: The restacked Node subtree repair satisfies its original focused regression contract.
+      Review lane: proof
+      Safety invariant: The verification command and assertions are unchanged from PR #9223.
+      Slice rationale: The focused repro directly proves the policy behavior without coupling it to unrelated UI execution.
+      Architectural effect: None; this task only executes the existing proof surface.
+      Goal: Confirm the restacked cache repair passes its deterministic regression test.
+      Motivation: A successful restack must preserve the original behavior, not merely apply without conflicts.
+      Alternative considerations: A text-only diff inspection was rejected because it does not execute the permission repro.
+      Implementation details: Execute `node scripts/test-pr-body-rollout.mjs` and require exit code 0.
+      Non-goals: No file edits, test weakening, or remote mutations.
+      Layer: e2e_regression
+      Feature state: active
+      Files: none
+      Change types:
+      - none
+      Acceptance criteria:
+      - `node scripts/test-pr-body-rollout.mjs` exits 0 and prints `OK: PR body rollout checks passed`.
+    command: node scripts/test-pr-body-rollout.mjs
+    dependencies:
+      - reapply-pr-9223-node-cache-subtree
+
+  - id: verify-pr-9223-review-scope
+    description: |
+      Prove the replacement branch contains no files outside PR #9223's original review unit.
+      Review claim: The restacked diff is limited to the two declared PR Body policy files.
+      Review lane: proof
+      Safety invariant: UI timing, CI budget, and native bootstrap remain inherited from the base rather than repeated in this diff.
+      Slice rationale: An explicit diff-scope gate prevents the restack from silently absorbing unrelated prerequisite changes.
+      Architectural effect: None; this task inspects the review boundary only.
+      Goal: Reject any replacement diff that contains undeclared files or whitespace errors.
+      Motivation: The restructuring exists specifically to keep unrelated fixes out of PR #9223's review unit.
+      Alternative considerations: Relying on a human file-list check was rejected because Git can enforce this boundary deterministically.
+      Implementation details: Compare HEAD to the configured prerequisite branch and fail on whitespace errors or any changed path outside the two declared files.
+      Non-goals: No file edits, rebases, pushes, or GitHub PR mutations.
+      Layer: e2e_regression
+      Feature state: active
+      Files: none
+      Change types:
+      - none
+      Acceptance criteria:
+      - `git diff --check` exits 0.
+      - The exclusion-path diff is empty and exits 0.
+    command: "git diff --check origin/stack/EdbertChan/plan/pr-9202-prerequisite-2-right-size-ui-vitest-ci-budget/pr-9202-prerequisite-2-right-size-ui-vitest-ci--aade7d69...HEAD && git diff --quiet origin/stack/EdbertChan/plan/pr-9202-prerequisite-2-right-size-ui-vitest-ci-budget/pr-9202-prerequisite-2-right-size-ui-vitest-ci--aade7d69...HEAD -- . ':(exclude).github/workflows/pr-body.yml' ':(exclude)scripts/test-pr-body-rollout.mjs'"
+    dependencies:
+      - reapply-pr-9223-node-cache-subtree
+
+  - id: verify-restacked-ui-vitest
+    description: |
+      Run the full unchanged UI package suite on the combined prerequisite ancestry.
+      Review claim: The replacement branch preserves the full UI Vitest gate after inheriting the separated timing and budget prerequisites.
+      Review lane: proof
+      Safety invariant: The complete package test command runs with no filters, skips, snapshots, or product changes in this slice.
+      Slice rationale: This terminal integration proof checks the exact gate that failed on PR #9223 while keeping its fixes out of the target review diff.
+      Architectural effect: None; this task executes the inherited UI test contract.
+      Goal: Confirm the combined stack passes the full UI package suite.
+      Motivation: PR #9223's failed check was UI Vitest, so focused PR Body proof alone is insufficient for the replacement stack.
+      Alternative considerations: Re-running only previously failing files was rejected because CI runs the complete package suite.
+      Implementation details: Execute the repository-supported UI test wrapper under CI mode with the dot reporter and require exit code 0.
+      Non-goals: No test filtering, timeout changes, snapshots, file edits, or remote mutations.
+      Layer: e2e_regression
+      Feature state: active
+      Files: none
+      Change types:
+      - none
+      Acceptance criteria:
+      - `CI=true pnpm --filter @invoker/ui test -- --reporter=dot` exits 0.
+    command: CI=true pnpm --filter @invoker/ui test -- --reporter=dot
+    dependencies:
+      - reapply-pr-9223-node-cache-subtree
+      - verify-pr-9223-focused-repro
+      - verify-pr-9223-review-scope
