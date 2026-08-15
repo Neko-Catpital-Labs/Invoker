@@ -150,7 +150,17 @@ assert.match(
 assert.match(
   toolCacheStep,
   /sudo -n chown "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}"/,
-  'PR Body tool-cache ownership repair must assign only the resolved cache directory to the runner account',
+  'PR Body tool-cache ownership repair must assign the resolved cache directory to the runner account',
+);
+assert.match(
+  toolCacheStep,
+  /\[\[ -e "\$\{RUNNER_TOOL_CACHE\}\/node" \|\| -L "\$\{RUNNER_TOOL_CACHE\}\/node" \]\][\s\S]*sudo -n chown -R -h -P "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}\/node"/,
+  'PR Body tool-cache ownership repair must recursively assign the existing Node cache subtree without following symlinks',
+);
+assert.doesNotMatch(
+  toolCacheStep,
+  /chown[^\n]*-R[^\n]*-- "\$\{RUNNER_TOOL_CACHE\}"(?:\s|$)/,
+  'PR Body tool-cache ownership repair must not recursively assign the whole runner tool cache',
 );
 assert.match(
   toolCacheStep,
@@ -161,6 +171,24 @@ assert.doesNotMatch(
   toolCacheStep,
   /\/home\/runner(?:\/|['"])/,
   'PR Body tool-cache ownership repair must not hard-code a runner path',
+);
+
+const toolCachePermissionsRepro = spawnSync('bash', [
+  'scripts/repro-pr-body-tool-cache-permissions.sh',
+], {
+  cwd: new URL('..', import.meta.url),
+  encoding: 'utf8',
+});
+assert.equal(toolCachePermissionsRepro.status, 0, toolCachePermissionsRepro.stderr);
+assert.match(
+  toolCachePermissionsRepro.stdout,
+  /REPRODUCED: shallow root-only repair cannot create node\/24\.19\.0/,
+  'PR Body focused checks must reproduce the shallow ownership-repair denial',
+);
+assert.match(
+  toolCachePermissionsRepro.stdout,
+  /CORRECTED: nested Node cache repair can create node\/24\.19\.0/,
+  'PR Body focused checks must prove the nested ownership repair succeeds',
 );
 
 const outputDir = mkdtempSync(join(tmpdir(), 'pr-body-rollout-'));
