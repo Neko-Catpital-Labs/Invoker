@@ -53,7 +53,6 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: paths.dbDir,
       INVOKER_IPC_SOCKET: paths.ipcSocketPath,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_EMBEDDED_TERMINAL_BACKEND: 'bash',
       INVOKER_REPO_CONFIG_PATH: paths.configPath,
