@@ -102,8 +102,9 @@ assert(
 const uiVitestNodePrerequisiteStep = uiVitestSteps[uiVitestLibatomicIndex];
 assert(
   String(uiVitestNodePrerequisiteStep?.run ?? '').includes('make')
-    && String(uiVitestNodePrerequisiteStep?.run ?? '').includes('g++'),
-  'ui-vitest must install make and g++ so pnpm can build native dependencies on self-hosted runners',
+    && String(uiVitestNodePrerequisiteStep?.run ?? '').includes('g++')
+    && String(uiVitestNodePrerequisiteStep?.run ?? '').includes('unzip'),
+  'ui-vitest must install make, g++, and unzip so pnpm can install native dependencies on self-hosted runners',
 );
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
