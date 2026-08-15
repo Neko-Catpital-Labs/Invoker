@@ -95,6 +95,10 @@ assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
 );
+assert(
+  String(uiVitestSteps[uiVitestLibatomicIndex]?.run ?? '').includes('build-essential'),
+  'ui-vitest must install build-essential so pnpm can compile native dependencies',
+);
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
 assert(jobs['required-fast-extra'].if === FULL_CI_GATE, 'required-fast-extra must run only for full CI events');
