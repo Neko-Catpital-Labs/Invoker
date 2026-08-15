@@ -1003,6 +1003,31 @@ class InfraCrashDoesNotCountAgainstCap(PlannerTestCase):
         self.assertIsNone(action)
 
 
+class RepairAttemptResetsOnNewHeadSha(PlannerTestCase):
+    """A repair attempt that successfully pushes a commit changes head_sha as
+    a normal side effect. Ledger.count() filters on head_sha, so the retry
+    cap never accumulates for a check that keeps almost-but-not-quite getting
+    fixed -- only for a PR that's completely frozen on one sha. Reproduces
+    the live incident: PR 9067's ui-vitest check refiled repeatedly across
+    several different head_shas in one day, never once approaching
+    max_repair_attempts=3."""
+
+    def test_plan_direct_repairs_never_caps_across_head_sha_changes(self):
+        ledger = self._ledger()
+        heads = [HEAD, "b" * 40, "c" * 40]
+        for head in heads:
+            ledger.record("repair-check", 1, head, "build", epoch=NOW - 100)
+        # current head is a 4th, brand-new sha -- exactly what a real push
+        # produces as the side effect of the 3 prior repair attempts above.
+        snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")}, head_ref_oid="d" * 40)
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        # This should be capped: 3 real prior attempts already exist on this
+        # same underlying check. It currently is NOT -- this assertion pins
+        # down the bug's actual (wrong) behavior on purpose, not endorses it.
+        self.assertEqual(action.kind, "repair_check")
+
+
 class PlanStackExecution(PlannerTestCase):
     def test_open_prerequisite_forces_wait_plan(self):
         ledger = self._ledger()
