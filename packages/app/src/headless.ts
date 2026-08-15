@@ -106,6 +106,7 @@ import {
   headlessCancelWorkflow,
   headlessDeleteWorkflow,
   headlessDeleteTask,
+  headlessCloseTask,
   headlessDetachWorkflow,
   headlessAttachWorkflow,
   headlessOpenTerminal,
@@ -378,6 +379,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'delete-task':
       await headlessDeleteTask(args[1], deps);
+      break;
+    case 'close-task':
+      await headlessCloseTask(args[1], deps);
       break;
     case 'delete':
       await headlessDeleteWorkflow(args[1], deps);

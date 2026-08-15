@@ -75,6 +75,7 @@ ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
   cancel-workflow <workflowId>                        Cancel all active tasks in a workflow
   delete-task <taskId>                                 Delete one task and retarget dependents
+  close-task <taskId>                                  Close one failed/completed/review_ready task, no cascade
   delete <workflowId>                                  Delete a single workflow
   delete-all                                           Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
