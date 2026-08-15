@@ -14,6 +14,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { shouldRetry, isStale } from './retry-ledger.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(__filename));
@@ -79,8 +80,7 @@ export const STALE_OBSERVATION_MS = parseNonNegativeInteger(
 );
 
 export function isObservationStale(failure, nowMs, staleMs = STALE_OBSERVATION_MS) {
-  const observedMs = failure?.lastObservedAt ? new Date(failure.lastObservedAt).getTime() : NaN;
-  return Number.isFinite(observedMs) && (nowMs - observedMs) > staleMs;
+  return isStale({ lastObservedAt: failure?.lastObservedAt, nowMs, staleMs });
 }
 
 const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
@@ -382,20 +382,13 @@ export function shouldFileFailure(failure, {
   maxAttempts = MAX_ATTEMPTS,
   backoffBaseMs = ATTEMPT_BACKOFF_BASE_MS,
 } = {}) {
-  const attempts = Number(failure?.attempts ?? 0);
-  if (attempts >= maxAttempts) {
-    return { action: 'needs-human', attempts };
-  }
-  if (failure?.lastFiledAt) {
-    const lastFiledMs = Date.parse(failure.lastFiledAt);
-    if (Number.isFinite(lastFiledMs)) {
-      const backoffUntilMs = lastFiledMs + (backoffBaseMs * (2 ** attempts));
-      if (nowMs < backoffUntilMs) {
-        return { action: 'backoff', attempts, backoffUntilMs };
-      }
-    }
-  }
-  return { action: 'file', attempts };
+  return shouldRetry({
+    attempts: failure?.attempts,
+    lastAttemptAt: failure?.lastFiledAt,
+    nowMs,
+    maxAttempts,
+    backoffBaseMs,
+  });
 }
 
 export function markFailureNeedsHuman(state, failure) {
