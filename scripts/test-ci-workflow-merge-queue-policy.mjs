@@ -112,6 +112,10 @@ const requiredFastExtraNodeLibraryStep = jobs['required-fast-extra'].steps.find(
   (step) => step.name === 'Install system libraries for Node',
 );
 assert(
+  requiredFastExtraNodeLibraryStep?.if === "matrix.runner_label != 'Github_Runner'",
+  'required-fast-extra must not request sudo package installation on Github_Runner hosts',
+);
+assert(
   String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('libatomic1'),
   'required-fast-extra must install libatomic1 before setup-node so Node 26 can start on self-hosted runners',
 );
