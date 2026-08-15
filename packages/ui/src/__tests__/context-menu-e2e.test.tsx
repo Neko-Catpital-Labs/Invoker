@@ -91,10 +91,9 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
 
   async function openTaskContextMenu(taskId = 'task-alpha') {
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    await waitFor(() => {
-      expect(screen.getByTestId(`rf__node-${taskId}`)).toBeInTheDocument();
-    });
-    fireEvent.contextMenu(screen.getByTestId(`rf__node-${taskId}`));
+    const taskNode = await screen.findByTestId(`rf__node-${taskId}`);
+    expect(taskNode).toBeInTheDocument();
+    fireEvent.contextMenu(taskNode);
     const menu = await screen.findByRole('menu');
     await waitFor(() => expect(menu).toHaveFocus());
     return menu;
@@ -159,10 +158,9 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
   it('task context menu still works in mini DAG', async () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const taskNode = await screen.findByTestId('rf__node-task-alpha');
+    expect(taskNode).toBeInTheDocument();
+    fireEvent.contextMenu(taskNode);
     await waitFor(() => {
       expect(screen.getByText('Open Terminal')).toBeInTheDocument();
       expect(screen.getByText('Restart Task')).toBeInTheDocument();
@@ -180,11 +178,10 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
   it('task context menu calls recreateDownstream for workflow-owned tasks', async () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
+    const taskNode = await screen.findByTestId('rf__node-task-alpha');
+    expect(taskNode).toBeInTheDocument();
 
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.contextMenu(taskNode);
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Recreate Downstream'));
 
@@ -204,11 +201,10 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
 
     await setup([runningTask]);
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-running')).toBeInTheDocument();
-    });
+    const taskNode = await screen.findByTestId('rf__node-task-running');
+    expect(taskNode).toBeInTheDocument();
 
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-running'));
+    fireEvent.contextMenu(taskNode);
     fireEvent.click(await screen.findByText('More'));
     const recreateDownstream = await screen.findByRole('menuitem', { name: 'Recreate Downstream' });
 
@@ -220,11 +216,10 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
   it('task context menu keeps Recreate from Task routed to recreateTask', async () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
+    const taskNode = await screen.findByTestId('rf__node-task-alpha');
+    expect(taskNode).toBeInTheDocument();
 
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.contextMenu(taskNode);
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Recreate from Task'));
 
@@ -236,11 +231,10 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
   it('task context menu deletes task', async () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
+    const taskNode = await screen.findByTestId('rf__node-task-alpha');
+    expect(taskNode).toBeInTheDocument();
 
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.contextMenu(taskNode);
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Delete Task'));
 
@@ -253,7 +247,7 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
     const panel = await screen.findByTestId('selected-workflow-mini-dag');
 
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.contextMenu(await screen.findByTestId('rf__node-task-alpha'));
 
     const menu = await screen.findByRole('menu');
     expect(panel).toBeInTheDocument();
