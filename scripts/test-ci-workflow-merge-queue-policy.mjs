@@ -92,13 +92,32 @@ assert(
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
-const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
-  (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
+const uiVitestDependencyInstallIndex = uiVitestSteps.findIndex(
+  (step) => String(step.run ?? '').trim() === 'pnpm install --frozen-lockfile',
+);
+assert(uiVitestDependencyInstallIndex >= 0, 'ui-vitest must install dependencies with the frozen lockfile');
+const uiVitestSystemDependencyIndex = uiVitestSteps.findIndex(
+  (step) => step.name === 'Install Node runtime system dependencies',
 );
 assert(
-  uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
-  'ui-vitest must install libatomic1 before actions/setup-node@v4',
+  uiVitestSystemDependencyIndex >= 0 && uiVitestSystemDependencyIndex < uiVitestNodeSetupIndex,
+  'ui-vitest must install Node system dependencies before actions/setup-node@v4',
 );
+assert(
+  uiVitestSystemDependencyIndex < uiVitestDependencyInstallIndex,
+  'ui-vitest must install Node system dependencies before pnpm install --frozen-lockfile',
+);
+const uiVitestSystemDependencyRun = String(uiVitestSteps[uiVitestSystemDependencyIndex]?.run ?? '');
+const uiVitestAptInstallLine = uiVitestSystemDependencyRun
+  .split('\n')
+  .find((line) => line.includes('apt-get install'));
+const uiVitestAptPackages = new Set(uiVitestAptInstallLine?.trim().split(/\s+/) ?? []);
+for (const requiredPackage of ['libatomic1', 'make', 'g++', 'python3']) {
+  assert(
+    uiVitestAptPackages.has(requiredPackage),
+    `ui-vitest system dependency step must install ${requiredPackage}`,
+  );
+}
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
 assert(jobs['required-fast-extra'].if === FULL_CI_GATE, 'required-fast-extra must run only for full CI events');
