@@ -114,6 +114,13 @@ assert(
     && uiVitestLibatomicScript.includes('GITHUB_ENV'),
   'ui-vitest libatomic install must provide a no-root LD_LIBRARY_PATH fallback',
 );
+assert(
+  uiVitestLibatomicScript.includes('command -v unzip')
+    && uiVitestLibatomicScript.includes('download libatomic1 unzip')
+    && uiVitestLibatomicScript.includes('for package_file in ./*.deb')
+    && uiVitestLibatomicScript.includes('GITHUB_PATH'),
+  'ui-vitest must provision unzip for the Electron fallback, including without root',
+);
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
 assert(jobs['required-fast-extra'].if === FULL_CI_GATE, 'required-fast-extra must run only for full CI events');

@@ -173,24 +173,24 @@ jobs:
             find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
           }
 
-          if has_libatomic; then
+          if has_libatomic && command -v unzip >/dev/null 2>&1; then
             exit 0
           fi
 
           if ! command -v apt-get >/dev/null 2>&1; then
-            echo "::error::libatomic1 is required for Node ${NODE_VERSION}, but apt-get is unavailable."
+            echo "::error::libatomic1 and unzip are required for Node ${NODE_VERSION} and Electron, but apt-get is unavailable."
             exit 1
           fi
 
           if [ "$(id -u)" -eq 0 ]; then
             apt-get update
-            apt-get install -y libatomic1
+            apt-get install -y libatomic1 unzip
             exit 0
           fi
 
           if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
             sudo -n apt-get update
-            sudo -n apt-get install -y libatomic1
+            sudo -n apt-get install -y libatomic1 unzip
             exit 0
           fi
 
@@ -204,16 +204,25 @@ jobs:
               -o "Dir::Cache=$libatomic_dir/apt-cache"
             )
             apt-get "${apt_options[@]}" update
-            apt-get "${apt_options[@]}" download libatomic1
-            dpkg-deb -x ./*.deb root
+            apt-get "${apt_options[@]}" download libatomic1 unzip
+            for package_file in ./*.deb; do
+              dpkg-deb -x "$package_file" root
+            done
           )
           libatomic_file="$(find "$libatomic_dir/root" -type f -name 'libatomic.so.1*' -print -quit)"
+          unzip_file="$(find "$libatomic_dir/root" -type f -path '*/usr/bin/unzip' -print -quit)"
           if [ -z "$libatomic_file" ]; then
             echo "::error::Downloaded libatomic1 package did not contain libatomic.so.1."
             exit 1
           fi
+          if [ -z "$unzip_file" ]; then
+            echo "::error::Downloaded unzip package did not contain the unzip executable."
+            exit 1
+          fi
           libatomic_path="${libatomic_file%/*}"
+          unzip_path="${unzip_file%/*}"
           echo "LD_LIBRARY_PATH=$libatomic_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "$unzip_path" >> "$GITHUB_PATH"
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
