@@ -53,9 +53,10 @@ const tasks = [
 async function renderKeyboardFixture(mock: MockInvoker) {
   mock.setTasks(tasks, workflows);
   render(<App />);
-    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+  fireEvent.click(await screen.findByTestId('sidebar-planning'));
   await screen.findByTestId('workflow-node-wf-a');
   await screen.findByTestId('selected-workflow-mini-dag');
+  await screen.findByTestId('rf__node-wf-a/task-a');
 }
 
 function key(keyName: string, init: Partial<KeyboardEvent> = {}) {
@@ -753,7 +754,7 @@ describe('Graph camera controls (component)', () => {
   it('clicking a task node selects it and centers the camera', async () => {
     await renderAndSettle();
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-a/task-b'));
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/task-b'));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');

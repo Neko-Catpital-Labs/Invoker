@@ -1216,10 +1216,9 @@ describe('Invoker terminal (component)', () => {
     });
     fireEvent.click(screen.getByTestId('workflow-node-wf-chat-0'));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-wf-chat-0/message-00')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByTestId('rf__node-wf-chat-0/message-00'));
+    const promptTaskNode = await screen.findByTestId('rf__node-wf-chat-0/message-00');
+    expect(promptTaskNode).toBeInTheDocument();
+    fireEvent.click(promptTaskNode);
 
     await waitFor(() => {
       expect(screen.getByTestId('prompt-command-display')).toBeInTheDocument();
@@ -2276,7 +2275,7 @@ describe('Invoker terminal submit context (component)', () => {
     });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      fireEvent.click(screen.getByTestId('rf__node-task-a'));
+      fireEvent.click(await screen.findByTestId('rf__node-task-a'));
       await waitFor(() => {
         expect(
           screen
