@@ -159,6 +159,47 @@ stack's chain at the conflicting PR (its children can't land either), record
 it as blocked, and continue with the other independent stacks. Report all
 blocked PRs clearly at the end rather than silently dropping them.
 
+## Step 5a: Rule out a stale mergeability check before giving up
+
+`CONFLICTING` can mean two different things, and only one of them needs a
+human:
+
+1. **Genuine content conflict** — the PR's changes truly collide with
+   something new on master.
+2. **Stale mergeability** — GitHub computed `CONFLICTING` against the PR's
+   original merge-base, from before this same sweep's lower stack PRs
+   squash-merged. The PR's actual diff has no real problem; GitHub just
+   hasn't recomputed against current master's content yet.
+
+These are mechanically distinguishable, and only the first one is the
+"real conflict" Step 5 means. Before recording a `CONFLICTING` PR as
+blocked, check which case it is, in a disposable worktree outside the
+human's main checkout — never touch their primary working tree's branch or
+uncommitted state to do this:
+
+```bash
+git fetch origin master
+git worktree add /tmp/<scratch-dir>/pr-<n> origin/<pr-head-branch>
+cd /tmp/<scratch-dir>/pr-<n>
+git checkout -b fix/pr-<n>-rebase
+git rebase origin/master
+```
+
+- **Rebase applies clean** (no conflict markers, `git status` clean) — this
+  was stale mergeability, not a real conflict. Force-push the rebased
+  branch back to the PR's head with `--force-with-lease` pinned to the
+  known old SHA, wait for GitHub to recompute (`sleep 5`), confirm
+  `mergeable` now reads `MERGEABLE`, then continue this PR (and its
+  children) through Step 4 as normal.
+- **Rebase stops with conflict markers** — this is Step 5's real-conflict
+  case. Run `git rebase --abort`, remove the scratch worktree, and follow
+  Step 5 as written: stop the chain, record as blocked, move on. Do not
+  attempt to resolve the markers by picking a side — that part of Step 5
+  still applies.
+
+Remove the scratch worktree (`git worktree remove --force`) once the PR's
+fate — merged or genuinely blocked — is decided.
+
 ## Step 6: Prove the final state
 
 Before reporting results, re-query every PR number touched — do not trust
