@@ -185,6 +185,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
 
     const startedAt = Date.now();
     const app = await launchElectronApp(testDir, {
+      INVOKER_E2E_ENABLE_SYNC_BOOTSTRAP: '1',
       INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
     });
     try {

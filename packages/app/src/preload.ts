@@ -17,7 +17,7 @@ import type { InvokerAPI } from '@invoker/contracts';
 
 const api: Record<string, unknown> = {};
 const bootstrapStartedAt = Date.now();
-const bootstrapState = process.env.NODE_ENV === 'test'
+const bootstrapState = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_ENABLE_SYNC_BOOTSTRAP !== '1'
   ? undefined
   : ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') as
     | { tasks?: unknown[]; workflows?: unknown[]; runtimeStatus?: unknown; appStartedAtEpochMs?: number }
