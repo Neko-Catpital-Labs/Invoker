@@ -155,7 +155,7 @@ jobs:
           fi
 
           if ! sudo -n mkdir -p -- "${RUNNER_TOOL_CACHE}" ||
-            ! sudo -n chown "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}"; then
+            ! sudo -n chown -R "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}"; then
             echo "::error::Could not assign RUNNER_TOOL_CACHE to the current runner account."
             exit 1
           fi
