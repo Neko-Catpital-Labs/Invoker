@@ -112,6 +112,12 @@ assert(
   'required-fast-extra must install libatomic1 before setup-node so Node 26 can start on self-hosted runners',
 );
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
+const prAuthoringGuardrailsEntry = requiredFastExtraEntries.find((entry) => entry.name === 'PR Authoring Guardrails');
+assert(prAuthoringGuardrailsEntry, 'required-fast-extra matrix must include PR Authoring Guardrails');
+assert(
+  prAuthoringGuardrailsEntry.runner_label === 'ubuntu-latest',
+  'PR Authoring Guardrails must use an actual GitHub-hosted runner with passwordless package provisioning and build tools',
+);
 const mergeGateConcurrencyEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Merge Gate Concurrency Repro');
 assert(mergeGateConcurrencyEntry, 'required-fast-extra matrix must include Merge Gate Concurrency Repro');
 assert(
