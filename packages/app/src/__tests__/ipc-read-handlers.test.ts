@@ -26,6 +26,41 @@ function expectReadContextWriteToolsAreAbsent(): void {
 
 
 describe('registerReadOnlyIpcHandlers', () => {
+  it('invalidates the workflow-list cache when the task graph sequence advances', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    let streamSequence = 0;
+    let workflows: Array<{ id: string }> = [];
+    const listWorkflows = vi.fn(() => workflows);
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: { listWorkflows } as never,
+      getOrchestrator: () => ({}) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => true,
+      getMessageBus: () => ({ request: vi.fn() }),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => streamSequence,
+    });
+
+    await expect(handlers.get('invoker:list-workflows')?.({})).resolves.toEqual([]);
+    workflows = [{ id: 'wf-new' }];
+    await expect(handlers.get('invoker:list-workflows')?.({})).resolves.toEqual([]);
+    expect(listWorkflows).toHaveBeenCalledTimes(1);
+
+    streamSequence += 1;
+    await expect(handlers.get('invoker:list-workflows')?.({})).resolves.toEqual([{ id: 'wf-new' }]);
+    expect(listWorkflows).toHaveBeenCalledTimes(2);
+  });
+
   it('get-tasks returns a snapshot', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const ipcMain = {

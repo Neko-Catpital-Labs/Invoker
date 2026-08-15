@@ -109,15 +109,21 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     return local();
   }
 
-  let cachedWorkflowList: { at: number; value: unknown } | null = null;
+  let cachedWorkflowList: { at: number; streamSequence: number; value: unknown } | null = null;
   ipcMain.handle('invoker:list-workflows', () =>
     delegatedRead('workflows', {}, 'workflows', () => {
       const now = Date.now();
-      if (cachedWorkflowList && now - cachedWorkflowList.at >= 0 && now - cachedWorkflowList.at < 1000) {
+      const streamSequence = getTaskDeltaStreamSequence();
+      if (
+        cachedWorkflowList
+        && cachedWorkflowList.streamSequence === streamSequence
+        && now - cachedWorkflowList.at >= 0
+        && now - cachedWorkflowList.at < 1000
+      ) {
         return cachedWorkflowList.value;
       }
       const value = persistence.listWorkflows();
-      cachedWorkflowList = { at: now, value };
+      cachedWorkflowList = { at: now, streamSequence, value };
       return value;
     }));
   ipcMain.handle('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
