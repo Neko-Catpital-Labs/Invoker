@@ -3,6 +3,12 @@ description: |
   {{marker}}
 
   {{failure_description}}
+
+  Standalone workflow waiver: The fix, its deterministic proof, the
+  transcript-based reflection, and the final fail-fast gate all belong to one
+  CI incident and must share a branch and ordered task history. Splitting the
+  reflection into another workflow would prevent it from inspecting the
+  repair transcripts and placing any accepted skill edit on the repair PR.
 onFinish: pull_request
 mergeMode: external_review
 baseBranch: {{base_branch}}
@@ -158,6 +164,9 @@ tasks:
       existing skill or check catching it first. If there's a real, durable
       lesson here (not a one-off), it should change a skill so the same class
       of bug is easier to catch next time.
+      Alternative considerations: Skipping reflection was rejected because it
+      would discard durable lessons, while silently auto-applying broad skill
+      edits was rejected because those changes still require human review.
       Implementation details:
       1. Read `skills/reflect/SKILL.md` in this repo and follow its process
          (locate the transcript for this workflow's tasks, run the token/cost
@@ -190,3 +199,42 @@ tasks:
       or second-guess the fix/verify tasks above this one in the chain.
     dependencies:
       - verify-ci-{{job_slug}}
+
+  - id: verify-reflect-ci-{{job_slug}}
+    description: |
+      Fail fast unless both the workflow policy and repaired CI job pass after
+      reflection.
+      Review claim: The completed repair workflow remains atomic and the
+      repaired CI job still passes after the reflect task.
+      Review lane: proof
+      Safety invariant: This task is read-only and reruns the existing proof;
+      it cannot weaken or replace either verification command.
+      Slice rationale: A terminal command task makes the workflow's policy and
+      job verification deterministic after the AI-driven reflect task.
+      Architectural effect: None; this task only gates workflow completion on
+      two existing checks.
+      Goal: Prove the rendered workflow and repaired CI job both pass.
+      Motivation: Without a fail-fast terminal gate, one successful command
+      could hide a failure in the other after reflection.
+      Alternative considerations: Combining checks without bash pipefail was
+      rejected because shell failure handling would be ambiguous.
+      Implementation details: Run the atomicity linter first, then the same CI
+      verification command used by the earlier proof task under strict bash
+      error handling.
+      Non-goals: No product edits, no skill edits, and no test weakening.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - None; this command task is read-only.
+      Change types:
+      - None; deterministic verification only.
+      Acceptance criteria:
+      - The atomicity linter and `{{verify_command}}` both exit 0.
+    command: |
+      bash -lc 'exec bash -se' <<'INVOKER_REFLECT_VERIFY'
+      set -euo pipefail
+      bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh --warn-delegation skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml
+      {{verify_command}}
+      INVOKER_REFLECT_VERIFY
+    dependencies:
+      - reflect-ci-{{job_slug}}
