@@ -1,57 +1,26 @@
-import { test, expect, waitForStableUI, E2E_REPO_URL } from './fixtures/electron-app.js';
+import { test, expect, loadPlan, waitForStableUI, E2E_REPO_URL } from './fixtures/electron-app.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { stringify as yamlStringify } from 'yaml';
-
-function yamlPlan(plan: Record<string, unknown>): string {
-  return yamlStringify(plan);
-}
 
 const OUT_DIR = path.resolve(__dirname, '..', 'e2e-scratch', 'attach-workflow');
 
 test('attach removes the Detached badge from a workflow node', async ({ page }) => {
   await fs.mkdir(OUT_DIR, { recursive: true });
 
-  const upstreamIdsBefore = await page.evaluate(async () => {
-    const workflows = await window.invoker.listWorkflows();
-    return workflows.map((w: { id: string }) => w.id);
-  });
-  await page.evaluate((p) => window.invoker.loadPlan(p), yamlPlan({
+  const upstreamId = await loadPlan(page, {
     name: 'e2e-attach-upstream',
     repoUrl: E2E_REPO_URL,
     onFinish: 'none',
     tasks: [{ id: 'up', description: 'upstream', command: 'echo up' }],
-  }));
-  const upstreamId: string = await page.waitForFunction(
-    (knownIds) => window.invoker.listWorkflows().then((workflows: { id: string }[]) => {
-      const created = workflows.find((w) => !knownIds.includes(w.id));
-      return created?.id ?? null;
-    }),
-    upstreamIdsBefore,
-    { timeout: 10000 },
-  ).then((handle) => handle.jsonValue());
-  expect(upstreamId).toBeTruthy();
-
-  const downstreamIdsBefore = await page.evaluate(async () => {
-    const workflows = await window.invoker.listWorkflows();
-    return workflows.map((w: { id: string }) => w.id);
   });
-  await page.evaluate((p) => window.invoker.loadPlan(p), yamlPlan({
+
+  const downstreamId = await loadPlan(page, {
     name: 'e2e-attach-downstream',
     repoUrl: E2E_REPO_URL,
     onFinish: 'none',
     externalDependencies: [{ workflowId: upstreamId, gatePolicy: 'completed' }],
     tasks: [{ id: 'down', description: 'downstream', command: 'echo down' }],
-  }));
-  const downstreamId: string = await page.waitForFunction(
-    (knownIds) => window.invoker.listWorkflows().then((workflows: { id: string }[]) => {
-      const created = workflows.find((w) => !knownIds.includes(w.id));
-      return created?.id ?? null;
-    }),
-    downstreamIdsBefore,
-    { timeout: 10000 },
-  ).then((handle) => handle.jsonValue());
-  expect(downstreamId).toBeTruthy();
+  });
 
   await page.getByTestId('sidebar-planning').click();
   await page.getByRole('button', { name: 'Refresh' }).click();
