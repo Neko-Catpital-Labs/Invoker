@@ -301,6 +301,48 @@ export function cancelTaskImpl(
   return { cancelled, runningCancelled, toCancelIds };
 }
 
+const CLOSABLE_STATUSES: Partial<Record<TaskStatus, true>> = {
+  failed: true,
+  completed: true,
+  review_ready: true,
+};
+
+/**
+ * Close a single idle task in a terminal-ish status (`failed` / `completed` /
+ * `review_ready`) without touching any other task.
+ *
+ * Unlike `cancelTaskImpl`, this never cascades to dependents and never
+ * inspects the DAG — it is a narrow bookkeeping transition for a stale-task
+ * sweep, not a cancellation. Dependents, ancestors, and the parent
+ * workflow's own status are left exactly as they were (beyond the routine
+ * `checkWorkflowCompletion` recheck every task write triggers).
+ */
+export function closeIdleTaskImpl(host: CancellationHost, taskId: string): TaskState {
+  host.refreshFromDb();
+
+  const task = host.stateGetTask(taskId);
+  if (!task) throw new OrchestratorError('TASK_NOT_FOUND', `Task "${taskId}" not found`);
+
+  if (!CLOSABLE_STATUSES[task.status]) {
+    throw new OrchestratorError(
+      'TASK_NOT_CLOSABLE',
+      `Task "${taskId}" is "${task.status}"; only failed, completed, or review_ready tasks can be closed`,
+    );
+  }
+
+  const changes: TaskStateChanges = {
+    status: 'closed',
+    execution: { completedAt: task.execution.completedAt ?? new Date() },
+  };
+  const updated = host.writeAndSync(taskId, changes);
+  const delta: TaskDelta = host.buildUpdateDelta(task, updated, changes);
+  host.persistence.logEvent?.(taskId, 'task.closed_idle', changes);
+  host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+  host.checkWorkflowCompletion(task.config.workflowId);
+  return updated;
+}
+
 /**
  * Cancel all active tasks in a workflow.
  * Terminal tasks (completed/stale) are preserved as-is.
