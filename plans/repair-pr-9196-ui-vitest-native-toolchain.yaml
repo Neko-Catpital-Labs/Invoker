@@ -1,0 +1,67 @@
+name: "Repair PR 9196 prerequisite: UI Vitest native toolchain"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+description: |
+  Land the shared UI Vitest runner prerequisite separately from PR #9196.
+  The PR changes only a transient-GitHub repro, while its failed UI Vitest job
+  never reached Vitest: node-pty had no Linux x64 prebuild, fell back to
+  node-gyp, and the self-hosted runner had no make executable.
+
+  Reuse the already-authored two-file CI-policy repair and verify it inside
+  the implementation task, where repository dependencies are available. This
+  avoids repeating the prior workflow's dependency-free command task, which
+  failed with ERR_MODULE_NOT_FOUND for yaml instead of testing the repair.
+
+tasks:
+  - id: apply-ui-vitest-native-toolchain-prerequisite
+    description: |
+      Apply and verify the shared UI Vitest native-toolchain prerequisite.
+      Review claim: UI Vitest installs libatomic1, make, g++, and python3 before pnpm may invoke node-gyp for node-pty, and a focused policy assertion protects that ordering.
+      Review lane: policy
+      Safety invariant: PR #9196 remains untouched; UI Vitest's Runner_Vitest assignment, Node 26 selection, frozen-lockfile install, test command, and every other CI job remain unchanged.
+      Slice rationale: The runner prerequisite and its directly affected workflow-policy assertion form one CI-policy unit, separate from #9196's repro-only review claim.
+      Architectural effect: UI Vitest runner preparation explicitly owns the native compiler prerequisites needed by dependency installation; product control flow and public interfaces do not change.
+      Goal: Allow UI Vitest dependency installation to compile node-pty when its Linux x64 prebuild is unavailable.
+      Motivation: Run 31873841596 job 94986453548 found Python 3.12.3 but failed with `Error: not found: make` before Vitest started.
+      Alternative considerations: Re-running cannot add a missing executable; changing Node, node-pty, lifecycle scripts, runner assignment, or PR #9196 would broaden or misplace the repair.
+      Implementation details: Fetch the existing authored repair from origin, verify exact commit 844c27c00dc9eb209ed2d969c09efc4d42a23f90, cherry-pick it onto current master, inspect the resulting two-file diff, and run the focused policy proof in this same dependency-ready task.
+      Repro waiver: The missing executable is self-hosted runner state and cannot be faithfully removed on this workstation; the linked CI log directly records the absent node-pty prebuild followed by node-gyp's `Error: not found: make`.
+      Non-goals: No edits to PR #9196, product or UI behavior, dependency versions, Node version, runner assignment, lifecycle policy, timeout, or unrelated CI jobs.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - .github/workflows/ci.yml
+      - scripts/test-ci-workflow-merge-queue-policy.mjs
+      Change types:
+      - .github/workflows/ci.yml: config-only
+      - scripts/test-ci-workflow-merge-queue-policy.mjs: test-only
+      Acceptance criteria:
+      - Exact commit 844c27c00dc9eb209ed2d969c09efc4d42a23f90 applies on current master as one two-file policy change.
+      - `node scripts/test-ci-workflow-merge-queue-policy.mjs` exits 0 after dependencies are available.
+      - `git diff --check HEAD^ HEAD` exits 0.
+      - UI Vitest still uses Runner_Vitest, Node 26, `pnpm install --frozen-lockfile`, and `pnpm --filter @invoker/ui test`.
+    prompt: |
+      Assume no prior context.
+      Review claim: UI Vitest installs libatomic1, make, g++, and python3 before pnpm may invoke node-gyp for node-pty, and a focused policy assertion protects that ordering.
+      Review lane: policy
+      Safety invariant: PR #9196 remains untouched; preserve UI Vitest's Runner_Vitest assignment, Node 26 selection, frozen-lockfile install, test command, and every other CI job.
+      Slice rationale: Keep this shared runner prerequisite and its directly affected policy assertion together, independent of PR #9196's repro-only change.
+      Architectural effect: Make UI Vitest runner preparation own the native compiler prerequisites for dependency installation; do not alter product architecture.
+      Goal: Land and verify the already-authored shared UI Vitest repair on current master.
+      Motivation: https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/31873841596/job/94986453548 records node-pty's missing Linux x64 prebuild, node-gyp finding Python 3.12.3, and then `Error: not found: make`; Vitest never starts.
+      Alternative considerations: Do not rerun blindly, change Node or node-pty, suppress dependency scripts, move runners, skip checks, weaken assertions, or edit PR #9196.
+      Implementation details: Fetch `origin experiment/wf-1786785044125-2/apply-ui-vitest-native-build-tools/g0.t0.a-a47902b4d-bf5a53ba`, verify it contains exact commit 844c27c00dc9eb209ed2d969c09efc4d42a23f90, and cherry-pick that exact commit onto current master. Confirm the commit changes only `.github/workflows/ci.yml` and `scripts/test-ci-workflow-merge-queue-policy.mjs`. If `node scripts/test-ci-workflow-merge-queue-policy.mjs` cannot resolve `yaml`, first run `pnpm install --frozen-lockfile --ignore-scripts`; then run the policy test and require exit 0. Run `git diff --check HEAD^ HEAD` and require exit 0. Record the external-runner repro waiver from the linked job in the final task summary. Do not recreate or broaden the patch.
+      Non-goals: No product/UI edits, version changes, runner-label changes, lifecycle changes, timeout changes, unrelated workflow edits, or mutation of PR #9196.
+      Files:
+      - .github/workflows/ci.yml
+      - scripts/test-ci-workflow-merge-queue-policy.mjs
+      Change types:
+      - .github/workflows/ci.yml: config-only
+      - scripts/test-ci-workflow-merge-queue-policy.mjs: test-only
+      Acceptance criteria:
+      - Exact commit 844c27c00dc9eb209ed2d969c09efc4d42a23f90 applies as a two-file policy repair on current master.
+      - `node scripts/test-ci-workflow-merge-queue-policy.mjs` exits 0.
+      - `git diff --check HEAD^ HEAD` exits 0.
+      - UI Vitest remains on Runner_Vitest with Node 26, frozen-lockfile installation, and `pnpm --filter @invoker/ui test`.
+    dependencies: []
