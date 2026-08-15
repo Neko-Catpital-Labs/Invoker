@@ -17,6 +17,7 @@ except ImportError:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_LEDGER_RELATIVE_PATH = Path(".invoker/mergify-admin-requeue-state.jsonl")
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -57,6 +58,12 @@ def _indent_block(text: str, spaces: int) -> str:
 
 def _repo_url(repo: str) -> str:
     return f"https://github.com/{repo}.git"
+
+
+def _portable_state_file(state_file: Path) -> str:
+    if state_file.expanduser() == Path.home() / DEFAULT_LEDGER_RELATIVE_PATH:
+        return f"~/{DEFAULT_LEDGER_RELATIVE_PATH.as_posix()}"
+    return str(state_file)
 
 
 @dataclass(frozen=True)
@@ -114,7 +121,7 @@ def _safe_push_task_yaml(
         f"{skip_guard}"
         "python3 scripts/pr_worker_safe_push.py \\\n"
         f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd . \\\n"
-        f"  --record-json-ledger {_shlex(str(state_file))} \\\n"
+        f"  --record-json-ledger {_shlex(_portable_state_file(state_file))} \\\n"
         f"  --json-kind {_shlex(json_kind)} --json-pr {_shlex(str(pr_number))} \\\n"
         f"  --json-head-sha {_shlex(start_head)} --json-key {_shlex(json_key)}\n"
     )

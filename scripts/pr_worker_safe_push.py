@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+DEFAULT_JSON_LEDGER_RELATIVE_PATH = Path(".invoker/mergify-admin-requeue-state.jsonl")
 
 
 class SafePushError(RuntimeError):
@@ -73,6 +74,64 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     if not SHA_RE.fullmatch(head):
         raise SafePushError(f"local HEAD is not a 40-character SHA: {head!r}", exit_code=2)
     return head
+
+
+def terminal_pr_state_if_unchanged(
+    *,
+    pr_number: int,
+    branch: str,
+    expected_head: str,
+    cwd: Path | str | None = None,
+) -> str | None:
+    completed = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "state,headRefName,headRefOid",
+        ],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        details = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        raise SafePushError(
+            f"could not verify terminal state for PR #{pr_number}"
+            + (f":\n{details}" if details else ""),
+            exit_code=completed.returncode,
+        )
+    try:
+        detail = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise SafePushError(f"invalid GitHub response for PR #{pr_number}: {exc}", exit_code=2) from exc
+    if not isinstance(detail, dict):
+        raise SafePushError(f"invalid GitHub response for PR #{pr_number}: expected an object", exit_code=2)
+
+    state = str(detail.get("state") or "").upper()
+    if state == "OPEN":
+        return None
+    if state not in {"CLOSED", "MERGED"}:
+        raise SafePushError(f"invalid GitHub state for PR #{pr_number}: {state or 'missing'}", exit_code=2)
+
+    branch_name = normalize_branch(branch)
+    live_branch = str(detail.get("headRefName") or "")
+    if live_branch != branch_name:
+        raise SafePushError(
+            f"stale-head: PR #{pr_number} head branch is {live_branch or 'missing'}; expected {branch_name}",
+            exit_code=20,
+        )
+    expected = validate_expected_head(expected_head)
+    live_head = str(detail.get("headRefOid") or "").lower()
+    if live_head != expected:
+        raise SafePushError(
+            f"stale-head: PR #{pr_number} head is {live_head or 'missing'}; expected {expected}",
+            exit_code=20,
+        )
+    return state
 
 
 def safe_push(
@@ -150,6 +209,19 @@ def append_json_ledger(
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def resolve_json_ledger_path(path: str, *, home: Path | None = None) -> Path:
+    expanded = Path(path).expanduser()
+    parts = expanded.parts
+    is_foreign_home_default = (
+        len(parts) >= 4
+        and parts[-2:] == DEFAULT_JSON_LEDGER_RELATIVE_PATH.parts
+        and parts[1] in {"Users", "home"}
+    )
+    if is_foreign_home_default:
+        return (home or Path.home()) / DEFAULT_JSON_LEDGER_RELATIVE_PATH
+    return expanded
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Safely update a PR worker-owned branch only when its remote head matches the captured SHA.",
@@ -184,13 +256,27 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
-            branch=args.branch,
-            expected_head=args.expected_head,
-            expect_missing=args.expect_missing,
-            remote=args.remote,
-            cwd=Path(args.cwd),
-        )
+        cwd = Path(args.cwd)
+        terminal_state = None
+        if args.expected_head is not None and args.json_pr is not None:
+            live = remote_branch_sha(args.branch, remote=args.remote, cwd=cwd)
+            if live is None:
+                terminal_state = terminal_pr_state_if_unchanged(
+                    pr_number=args.json_pr,
+                    branch=args.branch,
+                    expected_head=args.expected_head,
+                    cwd=cwd,
+                )
+        if terminal_state is None:
+            pushed = safe_push(
+                branch=args.branch,
+                expected_head=args.expected_head,
+                expect_missing=args.expect_missing,
+                remote=args.remote,
+                cwd=cwd,
+            )
+        else:
+            pushed = validate_expected_head(args.expected_head)
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
@@ -217,14 +303,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
             append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
+                resolve_json_ledger_path(args.record_json_ledger),
                 kind=args.json_kind,
                 pr_number=args.json_pr,
                 head_sha=args.json_head_sha,
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        if terminal_state is None:
+            print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        else:
+            print(
+                f"pr-worker-safe-push: PR #{args.json_pr} is {terminal_state} at {pushed}; "
+                f"refs/heads/{normalize_branch(args.branch)} is absent, nothing to push"
+            )
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)

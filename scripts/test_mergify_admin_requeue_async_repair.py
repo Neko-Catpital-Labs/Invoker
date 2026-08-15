@@ -46,6 +46,12 @@ def pr(**kw):
 
 
 class AsyncRepairPlanTests(unittest.TestCase):
+    def test_default_ledger_path_is_portable_across_workers(self):
+        self.assertEqual(
+            async_repair._portable_state_file(Path.home() / ".invoker/mergify-admin-requeue-state.jsonl"),
+            "~/.invoker/mergify-admin-requeue-state.jsonl",
+        )
+
     def test_all_three_plan_kinds_produce_parseable_yaml_with_expected_task_ids(self):
         checks_plan = async_repair.build_repair_check_plan(
             pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
