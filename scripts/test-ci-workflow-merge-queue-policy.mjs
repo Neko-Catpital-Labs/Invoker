@@ -160,6 +160,33 @@ assert(
   'PR Body workflow must not cancel in-progress merge-queue runs',
 );
 
+const prBodyValidateSteps = prBodyWorkflow.jobs?.validate?.steps ?? [];
+const prBodyReclaimStep = prBodyValidateSteps[0];
+assert(
+  prBodyReclaimStep?.name === 'Reclaim runner paths'
+    && prBodyReclaimStep.shell === 'bash'
+    && prBodyValidateSteps[1]?.name === 'Checkout trusted base',
+  'PR Body validate must start with a bash runner-path reclaim step followed by trusted-base checkout',
+);
+const prBodyReclaimCommand = String(prBodyReclaimStep?.run ?? '');
+assert(
+  prBodyReclaimCommand.includes('set -euo pipefail')
+    && prBodyReclaimCommand.includes('owner="$(id -u):$(id -g)"')
+    && /sudo chown -R "\$\{owner\}" "\$GITHUB_WORKSPACE"/.test(prBodyReclaimCommand),
+  'PR Body runner reclaim must fail on errors and recursively repair GITHUB_WORKSPACE for the current user',
+);
+assert(
+  /if \[\[ -d "\$RUNNER_TOOL_CACHE" \]\]; then\s+sudo chown "\$\{owner\}" "\$RUNNER_TOOL_CACHE"\s+fi/.test(prBodyReclaimCommand)
+    && /if \[\[ -d "\$RUNNER_TOOL_CACHE\/node" \]\]; then\s+sudo chown -R "\$\{owner\}" "\$RUNNER_TOOL_CACHE\/node"\s+fi/.test(prBodyReclaimCommand)
+    && !/chown -R [^\n]*"\$RUNNER_TOOL_CACHE"(?:\s|$)/.test(prBodyReclaimCommand),
+  'PR Body runner reclaim must repair the optional tool-cache parent and existing Node directory without recursively chowning the entire cache',
+);
+const prBodySetupNodeIndex = prBodyValidateSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+assert(
+  prBodySetupNodeIndex > 0,
+  'PR Body runner reclaim must run before actions/setup-node@v4',
+);
+
 assert(
   existsSync(closeCleanupPath),
   'Merge-queue close cleanup workflow must cancel runs left behind by closed wrapper PRs',
