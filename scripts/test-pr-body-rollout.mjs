@@ -149,8 +149,8 @@ assert.match(
 );
 assert.match(
   toolCacheStep,
-  /sudo -n chown "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}"/,
-  'PR Body tool-cache ownership repair must assign only the resolved cache directory to the runner account',
+  /sudo -n chown (?:-R|--recursive) "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}"/,
+  'PR Body tool-cache ownership repair must recursively assign only the resolved cache directory to the runner account',
 );
 assert.match(
   toolCacheStep,
