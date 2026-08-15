@@ -218,8 +218,7 @@ jobs:
 
   quality-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
@@ -227,7 +226,6 @@ jobs:
         include:
           - name: Release Version Sync
             command: pnpm run check:versions
-            runner_label: Runner_2_4_core
 
     name: quality / ${{ matrix.name }}
 
@@ -477,8 +475,7 @@ jobs:
   required-fast-extra:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -486,7 +483,7 @@ jobs:
         include:
           - name: Branch Carry Forward
             command: bash scripts/test-suites/required/16-branch-carry-forward.sh
-            runner_label: Runner_2_4_core
+            runner_label: ubuntu-latest
           - name: Merge Gate Concurrency Repro
             command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
             runner_label: Runner_2_4_core
@@ -1014,8 +1011,7 @@ jobs:
   optional-other:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1023,7 +1019,7 @@ jobs:
         include:
           - name: Worktree Provisioning
             command: bash scripts/test-suites/optional/60-worktree-provisioning.sh
-            runner_label: Runner_2_4_core
+            runner_label: ubuntu-latest
           - name: Visual Proof Validate
             command: bash scripts/test-suites/optional/70-ui-visual-proof-validate.sh
             runner_label: Runner_1
