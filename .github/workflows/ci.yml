@@ -162,7 +162,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Install Node runtime system dependencies
+      - name: Install Node runtime and native build dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -175,16 +175,19 @@ jobs:
             find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
           }
 
-          has_build_tools() {
-            command -v make >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1
-          }
+          missing_native_tools=()
+          for tool in make g++ python3; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing_native_tools+=("$tool")
+            fi
+          done
 
-          if has_libatomic && has_build_tools; then
+          if has_libatomic && [ "${#missing_native_tools[@]}" -eq 0 ]; then
             exit 0
           fi
 
           if ! command -v apt-get >/dev/null 2>&1; then
-            echo "::error::libatomic1, make, g++, and python3 are required for Node ${NODE_VERSION}, but apt-get is unavailable."
+            echo "::error::UI Vitest requires libatomic1, make, g++, and python3, but apt-get is unavailable."
             exit 1
           fi
 
@@ -200,8 +203,8 @@ jobs:
             exit 0
           fi
 
-          if ! has_build_tools; then
-            echo "::error::make, g++, and python3 are required for Node ${NODE_VERSION} but cannot be installed without sudo."
+          if [ "${#missing_native_tools[@]}" -gt 0 ]; then
+            echo "::error::UI Vitest requires ${missing_native_tools[*]}; run as root or provide passwordless sudo for apt-get."
             exit 1
           fi
 

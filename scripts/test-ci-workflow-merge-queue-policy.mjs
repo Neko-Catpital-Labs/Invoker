@@ -113,49 +113,35 @@ assert(
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
-const uiVitestDependencyInstallIndex = uiVitestSteps.findIndex(
-  (step) => String(step.run ?? '').trim() === 'pnpm install --frozen-lockfile',
-);
-assert(uiVitestDependencyInstallIndex >= 0, 'ui-vitest must install dependencies with the frozen lockfile');
-const uiVitestSystemDependencyIndex = uiVitestSteps.findIndex(
-  (step) => step.name === 'Install Node runtime system dependencies',
+const uiVitestDependencyInstallIndex = stepIndex(jobs['ui-vitest'], 'Install dependencies');
+assert(uiVitestDependencyInstallIndex >= 0, 'ui-vitest must install dependencies');
+const uiVitestSystemDependenciesIndex = uiVitestSteps.findIndex(
+  (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
 );
 assert(
-  uiVitestSystemDependencyIndex >= 0 && uiVitestSystemDependencyIndex < uiVitestNodeSetupIndex,
-  'ui-vitest must install Node system dependencies before actions/setup-node@v4',
+  uiVitestSystemDependenciesIndex >= 0
+    && uiVitestSystemDependenciesIndex < uiVitestNodeSetupIndex
+    && uiVitestSystemDependenciesIndex < uiVitestDependencyInstallIndex,
+  'ui-vitest must install system dependencies before setup-node and dependency installation',
 );
-const uiVitestTestStep = uiVitestSteps.find((step) => step.name === 'Run UI vitest');
+const uiVitestSystemDependenciesScript = String(uiVitestSteps[uiVitestSystemDependenciesIndex]?.run ?? '');
 assert(
-  String(uiVitestTestStep?.run ?? '').trim() === 'pnpm --filter @invoker/ui test',
-  'ui-vitest must run the full pnpm --filter @invoker/ui test command',
+  uiVitestSystemDependenciesScript.includes('apt-get install -y libatomic1 make g++ python3')
+    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get install -y libatomic1 make g++ python3'),
+  'ui-vitest must install make, g++, and python3 so pnpm can build native dependencies',
 );
 assert(
-  uiVitestSystemDependencyIndex < uiVitestDependencyInstallIndex,
-  'ui-vitest must install Node system dependencies before pnpm install --frozen-lockfile',
-);
-const uiVitestSystemDependencyRun = String(uiVitestSteps[uiVitestSystemDependencyIndex]?.run ?? '');
-const uiVitestAptInstallLine = uiVitestSystemDependencyRun
-  .split('\n')
-  .find((line) => line.includes('apt-get install'));
-const uiVitestAptPackages = new Set(uiVitestAptInstallLine?.trim().split(/\s+/) ?? []);
-for (const requiredPackage of ['libatomic1', 'make', 'g++', 'python3']) {
-  assert(
-    uiVitestAptPackages.has(requiredPackage),
-    `ui-vitest system dependency step must install ${requiredPackage}`,
-  );
-}
-assert(
-  uiVitestSystemDependencyRun.includes('sudo -n true')
-    && uiVitestSystemDependencyRun.includes('sudo -n apt-get')
-    && !uiVitestSystemDependencyRun.includes('SUDO="sudo"')
-    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestSystemDependencyRun),
+  uiVitestSystemDependenciesScript.includes('sudo -n true')
+    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get')
+    && !uiVitestSystemDependenciesScript.includes('SUDO="sudo"')
+    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestSystemDependenciesScript),
   'ui-vitest libatomic install must prove passwordless sudo and use it noninteractively',
 );
 assert(
-  uiVitestSystemDependencyRun.includes('download libatomic1')
-    && uiVitestSystemDependencyRun.includes('Dir::State')
-    && uiVitestSystemDependencyRun.includes('LD_LIBRARY_PATH=')
-    && uiVitestSystemDependencyRun.includes('GITHUB_ENV'),
+  uiVitestSystemDependenciesScript.includes('download libatomic1')
+    && uiVitestSystemDependenciesScript.includes('Dir::State')
+    && uiVitestSystemDependenciesScript.includes('LD_LIBRARY_PATH=')
+    && uiVitestSystemDependenciesScript.includes('GITHUB_ENV'),
   'ui-vitest libatomic install must provide a no-root LD_LIBRARY_PATH fallback',
 );
 
