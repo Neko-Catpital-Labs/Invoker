@@ -1,0 +1,101 @@
+name: Restructure PR 9216 behind UI Vitest prerequisites
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+description: >-
+  Publish the already-authored UI bootstrap and deferred-graph repairs as focused
+  prerequisite slices, then restack PR #9216 above them without mixing those
+  repairs into its PR-body runner change.
+reviewGate:
+  safetyInvariant: >-
+    PR #9216 retains only its original PR-body runner policy change while the UI
+    native-toolchain and deferred-graph repairs ship as independently reviewable
+    prerequisite PRs; no PR is merged by this workflow.
+  artifacts:
+    - id: ui-native-toolchain
+      path: .github/workflows/ci.yml
+      role: focused prerequisite that installs the native tools required by Node 26 dependencies
+      mustContain: make g++
+    - id: deferred-graph-readiness
+      path: packages/ui
+      role: focused prerequisite that restores deterministic deferred mini-DAG rendering tests
+      dependsOn: [ui-native-toolchain]
+    - id: pr-9216-pr-body-runner
+      path: .github/workflows/pr-body.yml
+      role: existing PR #9216 change, restacked above both prerequisites
+      mustContain: ubuntu-latest
+      dependsOn: [deferred-graph-readiness]
+tasks:
+  - id: restructure-pr-9216-stack
+    type: prompt
+    description: Transplant the prerequisite repairs and restack the existing PR
+    prompt: |
+      Restructure existing PR #9216 so `.github/workflows/pr-body.yml` and `scripts/test-ci-workflow-merge-queue-policy.mjs` must remain its only review-unit files, and verify the prerequisite stack before publication.
+
+      Context
+      - PR: https://github.com/Neko-Catpital-Labs/Invoker/pull/9216
+      - Existing PR head branch:
+        stack/EdbertChan/plan/repair-pr-9198-pr-body-runner-prerequisite/repair-pr-9198-pr-body-runner-prerequisite--88e0c726
+      - Original PR head SHA: 8ee1677e53fa677eb5602a8e88afe0e2cd4e9f0c
+      - Base branch: master
+      - The original PR changes only `.github/workflows/pr-body.yml` and the
+        corresponding PR Body assertion in
+        `scripts/test-ci-workflow-merge-queue-policy.mjs`.
+      - UI Vitest failed before tests because Node 26 had no node-pty prebuild and
+        the self-hosted runner lacked `make`. The focused native-toolchain repair
+        already exists as commit 41dc7ae74 and installs `make` and `g++`, with a
+        policy repro in `scripts/test-ci-workflow-merge-queue-policy.mjs`.
+      - With that repair applied, the exact UI command reaches Vitest and exposes
+        the independent deferred mini-DAG readiness failures. The focused repair
+        exists in the stack ending at c6d5cdb73, with verification commit
+        b4e4cec9f. A remote source branch containing the authored stack is
+        `origin/plan/pr-9219-base-repair-1-deterministic-deferred-graph-tests`.
+      - Those existing commits currently descend from 8ee1677. They must be
+        transplanted onto master so the prerequisite repairs are below #9216,
+        rather than bundled above or inside it.
+
+      Required outcome
+      1. Fetch current remote state and inspect every named SHA before changing
+         branches or PR metadata. Abort safely if the original #9216 patch no
+         longer matches the two-file PR-body claim or if the live PR has been
+         replaced by unrelated work.
+      2. Reuse the existing authored diffs. Transplant the native-toolchain repair
+         onto current master as the first focused prerequisite slice. Transplant
+         the deferred-graph implementation and its verification above that as the
+         next focused slice. Do not carry the original #9216 commit beneath them.
+      3. Publish or update these prerequisite branches as a Mergify-managed stack.
+         Reuse an existing matching PR when one exists; do not create duplicate
+         PRs for the same branch and patch. Keep the native-toolchain and
+         deferred-graph concerns in separate reviewable PRs/stack units.
+      4. Reapply the exact original #9216 PR-body runner patch above the
+         prerequisite stack and update the existing #9216 head branch/PR so it is
+         the top stack unit. Preserve its title and original PR-body purpose.
+         Against its immediate base, #9216 must contain only its original
+         `.github/workflows/pr-body.yml` change and corresponding PR Body policy
+         assertion. Do not add native-toolchain or deferred-graph changes to the
+         #9216 review unit.
+      5. Use the repository's normal Mergify stack publication workflow and
+         upstream-first branch handling. Do not merge, queue, or land any PR.
+
+      Proof required before reporting completion
+      - On the composed prerequisite head, run:
+        `node scripts/test-ci-workflow-merge-queue-policy.mjs`
+      - On the composed prerequisite head, run the exact failed check command:
+        `pnpm --filter @invoker/ui test`
+      - Compare #9216's immediate-base diff to the original patch at 8ee1677 and
+        prove it remains the focused two-file PR-body change.
+      - Query the live PRs after publication and report their PR numbers, exact
+        head SHAs, base branches, and stack order.
+      - If either local proof fails, stop without claiming success and leave a
+        precise diagnosis. Never weaken or skip tests to manufacture a green run.
+
+      Non-goals
+      - Do not merge or queue any PR.
+      - Do not fold the prerequisite repairs into #9216.
+      - Do not rewrite unrelated files or opportunistically refactor code.
+      - Do not create replacement product behavior beyond the already-authored
+        native-toolchain and deferred-graph repairs.
+    timeout: 3600
+    outputs:
+      - type: text
+        path: .invoker/restructure-pr-9216-report.md
