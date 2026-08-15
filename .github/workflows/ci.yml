@@ -24,8 +24,7 @@ jobs:
   # Ordinary PRs keep only cheap quality checks so stacked PR pushes do not fan out heavy jobs.
   build-artifacts:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
-    runs-on:
-      labels: Runner_2_4_core
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
