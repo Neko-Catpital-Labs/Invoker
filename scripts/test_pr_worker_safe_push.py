@@ -111,6 +111,48 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_deleted_merged_pr_branch_is_a_verified_noop(self) -> None:
+        git(self.repo, "push", "origin", f"{self.expected}:refs/pull/9148/head")
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        self.commit(self.repo, "unrelated worker commit")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-bot-thread-settled",
+            "--json-pr", "9148",
+            "--json-head-sha", self.expected,
+            "--json-key", "thread-id",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipped missing refs/heads/main", result.stdout)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
+
+    def test_deleted_branch_with_moved_pr_head_is_stale(self) -> None:
+        moved = self.commit(self.repo, "moved PR head")
+        git(self.repo, "push", "origin", f"{moved}:refs/pull/9148/head")
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-bot-thread-settled",
+            "--json-pr", "9148",
+            "--json-head-sha", self.expected,
+            "--json-key", "thread-id",
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")

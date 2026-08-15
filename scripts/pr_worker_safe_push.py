@@ -56,8 +56,7 @@ def validate_expected_head(expected_head: str) -> str:
     return value.lower()
 
 
-def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
-    ref = f"refs/heads/{normalize_branch(branch)}"
+def remote_ref_sha(ref: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
     out = run_git(["ls-remote", remote, ref], cwd=cwd)
     if not out:
         return None
@@ -66,6 +65,16 @@ def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | 
         if len(parts) >= 2 and parts[1] == ref:
             return parts[0].lower()
     return None
+
+
+def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
+    return remote_ref_sha(f"refs/heads/{normalize_branch(branch)}", remote=remote, cwd=cwd)
+
+
+def remote_pull_head_sha(pr_number: int, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
+    if pr_number <= 0:
+        raise SafePushError(f"PR number must be positive, got {pr_number}", exit_code=2)
+    return remote_ref_sha(f"refs/pull/{pr_number}/head", remote=remote, cwd=cwd)
 
 
 def local_head(*, cwd: Path | str | None = None) -> str:
@@ -80,9 +89,10 @@ def safe_push(
     branch: str,
     expected_head: str | None = None,
     expect_missing: bool = False,
+    pr_number: int | None = None,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+) -> str | None:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -96,6 +106,15 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:"
     else:
+        if live is None and pr_number is not None:
+            pull_head = remote_pull_head_sha(pr_number, remote=remote, cwd=cwd)
+            if pull_head == expected:
+                return None
+            raise SafePushError(
+                f"stale-head: refs/heads/{branch_name} is missing and refs/pull/{pr_number}/head "
+                f"is {pull_head or 'missing'}; expected {expected}",
+                exit_code=20,
+            )
         if live != expected:
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
@@ -168,7 +187,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
     parser.add_argument("--record-json-ledger", help="Append a JSONL marker after successful push verification.")
     parser.add_argument("--json-kind", help="JSONL ledger kind.")
-    parser.add_argument("--json-pr", type=int, help="JSONL PR number.")
+    parser.add_argument(
+        "--json-pr",
+        type=int,
+        help="JSONL PR number; also verifies a deleted source branch against refs/pull/<number>/head.",
+    )
     parser.add_argument("--json-head-sha", help="JSONL head SHA.")
     parser.add_argument("--json-key", help="JSONL ledger key.")
     parser.add_argument("--json-meta", help="Optional JSON object stored as JSONL ledger meta.")
@@ -188,10 +211,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             branch=args.branch,
             expected_head=args.expected_head,
             expect_missing=args.expect_missing,
+            pr_number=args.json_pr,
             remote=args.remote,
             cwd=Path(args.cwd),
         )
-        if args.record_tsv_ledger:
+        if pushed is not None and args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
                 "--tsv-key": args.tsv_key,
@@ -203,7 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.tsv_key,
                 marker=args.tsv_marker,
             )
-        if args.record_json_ledger:
+        if pushed is not None and args.record_json_ledger:
             require_all("JSONL ledger recording", {
                 "--json-kind": args.json_kind,
                 "--json-pr": args.json_pr,
@@ -224,7 +248,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        if pushed is None:
+            print(
+                f"pr-worker-safe-push: skipped missing refs/heads/{normalize_branch(args.branch)}; "
+                f"PR #{args.json_pr} remains at {validate_expected_head(args.expected_head or '')}"
+            )
+        else:
+            print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
