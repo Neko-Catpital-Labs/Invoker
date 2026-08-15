@@ -122,5 +122,44 @@ class RebaseOntoBaseTests(unittest.TestCase):
         self.assertEqual(status, "")
 
 
+class NormalizeRepairCommitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name)
+        git(self.repo, "init")
+        git(self.repo, "config", "user.email", "worker@example.invalid")
+        git(self.repo, "config", "user.name", "Worker Test")
+        (self.repo / "shared.txt").write_text("shared\n", encoding="utf-8")
+        git(self.repo, "add", "shared.txt")
+        git(self.repo, "commit", "-m", "start")
+        self.start_head = git(self.repo, "rev-parse", "HEAD")
+
+    def test_empty_descendant_repair_is_normalized_to_start_head(self) -> None:
+        git(self.repo, "commit", "--allow-empty", "-m", "empty repair")
+        end_head = git(self.repo, "rev-parse", "HEAD")
+
+        normalized_head = repair_body.normalize_repair_commit(
+            self.repo, self.start_head, end_head, "UI Vitest",
+        )
+
+        self.assertEqual(normalized_head, self.start_head)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.start_head)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_nonempty_descendant_repair_keeps_end_head(self) -> None:
+        (self.repo / "repair.txt").write_text("repair\n", encoding="utf-8")
+        git(self.repo, "add", "repair.txt")
+        git(self.repo, "commit", "-m", "real repair")
+        end_head = git(self.repo, "rev-parse", "HEAD")
+
+        normalized_head = repair_body.normalize_repair_commit(
+            self.repo, self.start_head, end_head, "UI Vitest",
+        )
+
+        self.assertEqual(normalized_head, end_head)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), end_head)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

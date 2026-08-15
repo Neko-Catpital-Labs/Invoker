@@ -83,12 +83,13 @@ def rebase_onto_base(cwd: Path, base_ref: str, branch: str, expected_head: str) 
 
 
 def normalize_repair_commit(cwd: Path, start_head: str, end_head: str, check_name: str) -> str:
+    diff = git_output(cwd, "diff", "--binary", start_head, end_head)
+    if not diff.strip():
+        hard_reset_work_root(cwd, start_head)
+        return start_head
     if is_ancestor(cwd, start_head, end_head):
         return end_head
-    diff = git_output(cwd, "diff", "--binary", start_head, end_head)
     hard_reset_work_root(cwd, start_head)
-    if not diff.strip():
-        return start_head
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(diff)
         patch_path = Path(handle.name)
