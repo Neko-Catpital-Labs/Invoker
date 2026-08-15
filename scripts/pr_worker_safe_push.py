@@ -20,6 +20,11 @@ class SafePushError(RuntimeError):
         self.exit_code = exit_code
 
 
+class StaleHeadError(SafePushError):
+    def __init__(self, message: str):
+        super().__init__(message, exit_code=20)
+
+
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -97,9 +102,8 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
-            raise SafePushError(
+            raise StaleHeadError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
-                exit_code=20,
             )
         lease = f"refs/heads/{branch_name}:{expected}"
 
@@ -225,6 +229,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 meta=meta,
             )
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        return 0
+    except StaleHeadError as exc:
+        print(f"pr-worker-safe-push: skipped: {exc}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
