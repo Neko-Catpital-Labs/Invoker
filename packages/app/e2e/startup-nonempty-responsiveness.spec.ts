@@ -228,6 +228,9 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
           && entry.payload?.metric === 'startup_graph_visible'
           && entry.payload?.nodeCount === tasksPerWorkflow,
       )?.payload;
+      const preloadBootstrap = startupEntries.find(
+        (entry) => entry.source === 'ui-perf' && entry.payload?.metric === 'preload_bootstrap_sync',
+      )?.payload;
       const backgroundHydration = startupEntries.find(
         (entry) =>
           entry.source === 'startup-phase'
@@ -239,7 +242,11 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
           .map((entry) => entry.phase)
           .filter(Boolean),
       );
-      const graphVisibleAfterWindowMs = Number(graphVisible?.processElapsedMs) - Number(windowShow?.elapsedMs);
+      // NODE_ENV=test intentionally skips the synchronous preload bootstrap,
+      // so renderer metrics do not carry its processElapsedMs anchor. Both
+      // activity entries are persisted by the main process, making their ISO
+      // timestamps the shared clock for this window-to-graph measurement.
+      const graphVisibleAfterWindowMs = Date.parse(String(graphVisible?.ts)) - Date.parse(String(windowShow?.ts));
       const startupEvidence = {
         workflowCount,
         tasksPerWorkflow,
@@ -258,6 +265,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       expect(windowShow, startupEvidenceMessage).toBeTruthy();
       expect(graphVisible, startupEvidenceMessage).toBeTruthy();
       expect(taskGraphVisible, startupEvidenceMessage).toBeTruthy();
+      expect(preloadBootstrap, startupEvidenceMessage).toBeTruthy();
       expect(backgroundHydration, startupEvidenceMessage).toBeUndefined();
       expect(graphVisibleAfterWindowMs, startupEvidenceMessage).toBeLessThanOrEqual(STARTUP_GRAPH_VISIBLE_AFTER_WINDOW_BUDGET_MS);
       expect(Number(graphVisible?.nodeCount), startupEvidenceMessage).toBe(workflowCount);
@@ -274,8 +282,10 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
         'sqlite.tasks.query',
         'sqlite.workflow-rollups.compute',
         'sqlite.tasks.deserialize-reconcile',
-        'bootstrap-ipc.serialize-return',
       ]));
+      expect([...phaseNames], startupEvidenceMessage).not.toContain('bootstrap-ipc.serialize-return');
+      expect(Number(preloadBootstrap?.taskCount), startupEvidenceMessage).toBe(0);
+      expect(Number(preloadBootstrap?.workflowCount), startupEvidenceMessage).toBe(0);
 
       expect(result.taskCount, startupEvidenceMessage).toBe(expectedTaskCount);
       expect(result.perf.dbPollCreated, startupEvidenceMessage).toBe(0);
