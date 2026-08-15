@@ -133,6 +133,12 @@ assert(
   branchCarryForwardEntry.runner_label === 'ubuntu-latest',
   'Branch Carry Forward must use GitHub-hosted capacity with non-interactive system package installation',
 );
+const prAuthoringGuardrailsEntry = requiredFastExtraEntries.find((entry) => entry.name === 'PR Authoring Guardrails');
+assert(prAuthoringGuardrailsEntry, 'required-fast-extra matrix must include PR Authoring Guardrails');
+assert(
+  prAuthoringGuardrailsEntry.runner_label === 'ubuntu-latest',
+  'PR Authoring Guardrails must use GitHub-hosted capacity with non-interactive system package installation',
+);
 const mergeGateConcurrencyEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Merge Gate Concurrency Repro');
 assert(mergeGateConcurrencyEntry, 'required-fast-extra matrix must include Merge Gate Concurrency Repro');
 assert(
