@@ -20,6 +20,8 @@ export HOME="$TMP/home"
 WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
 mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
+REAL_NODE="$(command -v node)"
+export REAL_NODE
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
@@ -51,7 +53,7 @@ if [[ "$#" -ge 1 && "$1" == *"/scripts/validate-pr-body-local.mjs" ]]; then
 JSON
   exit 0
 fi
-exec /usr/bin/env node "$@"
+exec "$REAL_NODE" "$@"
 EOF
 chmod +x "$TMP/bin/node"
 
