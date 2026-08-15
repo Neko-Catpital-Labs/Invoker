@@ -144,18 +144,23 @@ assert.match(
 );
 assert.match(
   toolCacheStep,
-  /sudo -n mkdir -p -- "\$\{RUNNER_TOOL_CACHE\}"/,
-  'PR Body tool-cache ownership repair must create the resolved cache directory with passwordless sudo',
+  /sudo -n mkdir -p -- "\$\{RUNNER_TOOL_CACHE\}\/node"/,
+  'PR Body tool-cache ownership repair must create the nested Node.js cache directory with passwordless sudo',
 );
 assert.match(
   toolCacheStep,
-  /sudo -n chown "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}"/,
-  'PR Body tool-cache ownership repair must assign only the resolved cache directory to the runner account',
+  /sudo -n chown -R "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}\/node"/,
+  'PR Body tool-cache ownership repair must recursively assign the nested Node.js cache to the runner account',
 );
 assert.match(
   toolCacheStep,
-  /\[\[ ! -d "\$\{RUNNER_TOOL_CACHE\}" \|\| ! -w "\$\{RUNNER_TOOL_CACHE\}" \]\][\s\S]*::error::RUNNER_TOOL_CACHE is not writable[\s\S]*exit 1/,
-  'PR Body tool-cache ownership repair must fail clearly unless the resolved cache directory is writable',
+  /\[\[ ! -d "\$\{RUNNER_TOOL_CACHE\}\/node" \|\| ! -w "\$\{RUNNER_TOOL_CACHE\}\/node" \]\][\s\S]*::error::Node\.js tool cache is not writable[\s\S]*exit 1/,
+  'PR Body tool-cache ownership repair must fail clearly unless the nested Node.js cache directory is writable',
+);
+assert.doesNotMatch(
+  toolCacheStep,
+  /chown -R[^\n]*-- "\$\{RUNNER_TOOL_CACHE\}"/,
+  'PR Body tool-cache ownership repair must not recursively change ownership of the entire runner tool cache',
 );
 assert.doesNotMatch(
   toolCacheStep,
