@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -75,6 +77,41 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def is_ancestor(ancestor: str, descendant: str, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode in {0, 1}:
+        return completed.returncode == 0
+    details = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    raise SafePushError(
+        f"git merge-base --is-ancestor failed with exit code {completed.returncode}"
+        + (f":\n{details}" if details else ""),
+        exit_code=completed.returncode,
+    )
+
+
+def is_verified_prior_push(live: str | None, local: str, *, cwd: Path | str | None = None) -> bool:
+    if live is None:
+        return False
+    known_live = subprocess.run(
+        ["git", "cat-file", "-e", f"{live}^{{commit}}"],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if known_live.returncode != 0 or not is_ancestor(live, local, cwd=cwd):
+        return False
+    live_tree = run_git(["rev-parse", f"{live}^{{tree}}"], cwd=cwd)
+    local_tree = run_git(["rev-parse", f"{local}^{{tree}}"], cwd=cwd)
+    return live_tree == local_tree
+
+
 def safe_push(
     *,
     branch: str,
@@ -88,8 +125,11 @@ def safe_push(
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
     expected = None if expect_missing else validate_expected_head(expected_head or "")
     live = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
+    pushed = local_head(cwd=cwd)
     if expect_missing:
         if live is not None:
+            if is_verified_prior_push(live, pushed, cwd=cwd):
+                return live
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} exists at {live}; expected it to be missing",
                 exit_code=20,
@@ -97,13 +137,14 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            if is_verified_prior_push(live, pushed, cwd=cwd):
+                return live or pushed
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
             )
         lease = f"refs/heads/{branch_name}:{expected}"
 
-    pushed = local_head(cwd=cwd)
     run_git([
         "push",
         f"--force-with-lease={lease}",
@@ -118,6 +159,32 @@ def safe_push(
             exit_code=22,
         )
     return pushed
+
+
+def resolve_ledger_path(value: str, *, env: Mapping[str, str] | None = None) -> Path:
+    path = Path(value).expanduser()
+    runtime_env = os.environ if env is None else env
+    runtime_home = runtime_env.get("INVOKER_HOME", "").strip()
+    if not runtime_home or not path.is_absolute() or ".invoker" not in path.parts:
+        return path
+    invoker_index = path.parts.index(".invoker")
+    relative_parts = path.parts[invoker_index + 1:]
+    if ".." in relative_parts:
+        return path
+    return Path(runtime_home).expanduser().joinpath(*relative_parts)
+
+
+def prepare_ledger_path(path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            with path.open("a", encoding="utf-8"):
+                pass
+        else:
+            with tempfile.NamedTemporaryFile(dir=path.parent):
+                pass
+    except OSError as exc:
+        raise SafePushError(f"cannot write ledger {path}: {exc}", exit_code=2) from exc
 
 
 def append_tsv_ledger(path: Path, *, kind: str, key: str, marker: str, epoch: int | None = None) -> None:
@@ -184,25 +251,18 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
-            branch=args.branch,
-            expected_head=args.expected_head,
-            expect_missing=args.expect_missing,
-            remote=args.remote,
-            cwd=Path(args.cwd),
-        )
+        tsv_path = None
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
                 "--tsv-key": args.tsv_key,
                 "--tsv-marker": args.tsv_marker,
             })
-            append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
-                kind=args.tsv_kind,
-                key=args.tsv_key,
-                marker=args.tsv_marker,
-            )
+            tsv_path = resolve_ledger_path(args.record_tsv_ledger)
+            prepare_ledger_path(tsv_path)
+
+        json_path = None
+        meta = None
         if args.record_json_ledger:
             require_all("JSONL ledger recording", {
                 "--json-kind": args.json_kind,
@@ -210,14 +270,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--json-head-sha": args.json_head_sha,
                 "--json-key": args.json_key,
             })
-            meta = None
             if args.json_meta:
                 decoded = json.loads(args.json_meta)
                 if not isinstance(decoded, dict):
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
+            json_path = resolve_ledger_path(args.record_json_ledger)
+            prepare_ledger_path(json_path)
+
+        pushed = safe_push(
+            branch=args.branch,
+            expected_head=args.expected_head,
+            expect_missing=args.expect_missing,
+            remote=args.remote,
+            cwd=Path(args.cwd),
+        )
+        if tsv_path is not None:
+            append_tsv_ledger(
+                tsv_path,
+                kind=args.tsv_kind,
+                key=args.tsv_key,
+                marker=args.tsv_marker,
+            )
+        if json_path is not None:
             append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
+                json_path,
                 kind=args.json_kind,
                 pr_number=args.json_pr,
                 head_sha=args.json_head_sha,

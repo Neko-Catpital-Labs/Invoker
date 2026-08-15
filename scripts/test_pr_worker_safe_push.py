@@ -111,6 +111,79 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_retry_after_verified_push_records_ledger_without_rewriting_remote(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        safe_push.safe_push(branch="main", expected_head=self.expected, cwd=self.repo)
+        git(self.repo, "commit", "--allow-empty", "-m", "invoker task result")
+        retry_head = git(self.repo, "rev-parse", "HEAD")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        self.assertNotEqual(self.remote_head(), retry_head)
+        self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
+
+    def test_divergent_same_tree_remote_is_not_treated_as_prior_push(self) -> None:
+        self.clone_other()
+        git(self.other, "commit", "--allow-empty", "-m", "foreign empty commit")
+        remote_after_race = git(self.other, "rev-parse", "HEAD")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        git(self.repo, "commit", "--allow-empty", "-m", "local empty repair")
+        git(self.repo, "fetch", "origin", "main")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+        )
+
+        self.assertEqual(result.returncode, 20, result.stderr)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(self.remote_head(), remote_after_race)
+
+    def test_foreign_invoker_ledger_path_uses_runtime_invoker_home(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        runtime_home = self.root / "worker-invoker"
+        foreign_ledger = Path("/Users/controller/.invoker/ledger.jsonl")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(foreign_ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9202",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env={"INVOKER_HOME": str(runtime_home)},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        row = (runtime_home / "ledger.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"kind": "repair-check-settled"', row)
+
+    def test_invalid_ledger_arguments_do_not_push(self) -> None:
+        self.commit(self.repo, "repair")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(self.root / "ledger.jsonl"),
+            "--json-kind", "repair-check-settled",
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(self.remote_head(), self.expected)
+        self.assertFalse((self.root / "ledger.jsonl").exists())
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")
