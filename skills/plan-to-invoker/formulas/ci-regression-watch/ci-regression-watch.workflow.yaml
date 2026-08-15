@@ -3,6 +3,12 @@ description: |
   {{marker}}
 
   {{failure_description}}
+
+  Standalone workflow waiver: The fix, its deterministic proof, the
+  transcript-based reflection, and the final fail-fast gate all belong to one
+  CI incident and must share a branch and ordered task history. Splitting the
+  reflection into another workflow would prevent it from inspecting the
+  repair transcripts and placing any accepted skill edit on the repair PR.
 onFinish: pull_request
 mergeMode: external_review
 baseBranch: {{base_branch}}
@@ -111,20 +117,20 @@ tasks:
       Goal: Reduce the odds that the same class of regression escapes again.
       Motivation: CI job `{{job_name}}` first failed at {{sha}} and reached
       this repair without an existing skill or check catching it first.
-      Alternative considerations: Silently auto-applying skill edits was
-      rejected -- skill edits affect every future session and must go through
-      the same review as any other change.
+      Alternative considerations: Silently auto-applying skill edits was not
+      chosen because skill edits affect every future session and must go
+      through the same review as any other change.
       Implementation details: Follow this repo's `skills/reflect/SKILL.md`
       process against the transcript(s) for the `fix-ci-{{job_slug}}` and
       `verify-ci-{{job_slug}}` tasks in this workflow: locate the transcript,
-      run the cost audit, spawn the parallel review lenses, synthesize into
-      Accepted / Backlog / Rejected. Since no interactive human is present to
+      run the cost audit, spawn the parallel review lenses, and synthesize the
+      skill's three outcome buckets. Since no interactive human is present to
       approve mid-run, do not apply anything at that step; instead, for
       Accepted findings that map to a concrete skill edit, make that edit as
       a normal file change in this task's own branch, so it surfaces in this
       PR's diff for the human reviewer -- the PR review *is* the approval
-      gate reflect normally asks for interactively. Backlog and Rejected
-      findings go in the task summary as prose, not as file changes.
+      gate reflect normally asks for interactively. Non-accepted findings go
+      in the task summary as prose, not as file changes.
       If a finding is best fixed in the shared skills repo
       (https://github.com/EdbertChan/catstack, deployed to all pool
       machines) rather than this repo, clone it to a scratch dir, make the
@@ -149,6 +155,7 @@ tasks:
       - Any catstack PR opened is linked by URL in the task summary, or the
         summary states why one was not opened.
     prompt: |
+      Assume no prior context beyond this prompt and the checked-out repo.
       Goal: Run this repo's `/reflect` process against the repair you (or a
       prior task) just completed for CI job `{{job_name}}` (first observed
       failing at {{sha}}), and turn any durable learning into a reviewable
@@ -158,13 +165,16 @@ tasks:
       existing skill or check catching it first. If there's a real, durable
       lesson here (not a one-off), it should change a skill so the same class
       of bug is easier to catch next time.
+      Alternative considerations: Omitting reflection would discard durable
+      lessons, while silently auto-applying broad skill edits would bypass the
+      required human review.
       Implementation details:
       1. Read `skills/reflect/SKILL.md` in this repo and follow its process
          (locate the transcript for this workflow's tasks, run the token/cost
-         audit script, spawn the lens reviewers, synthesize into Accepted /
-         Backlog / Rejected).
+         audit script, spawn the lens reviewers, and synthesize the skill's
+         three outcome buckets).
       2. There is no interactive human to approve mid-run. Do NOT use that as
-         license to skip the approval step or auto-apply broadly -- instead,
+         license to bypass the approval step or auto-apply broadly -- instead,
          for each Accepted finding that maps to a concrete skill edit, make
          that edit as a normal, reviewable file change on this task's own
          branch. It will appear in this PR's diff, and the PR's existing
@@ -177,16 +187,57 @@ tasks:
          summary. If any step (clone/push/PR) fails on permissions, say so
          plainly in the summary -- do not treat that as a task failure, and
          do not attempt to work around a permission denial.
-      4. Backlog and Rejected findings go in the summary as prose only, never
-         as file changes.
+      4. Non-accepted findings go in the summary as prose only, never as file
+         changes.
       5. If /reflect finds nothing durable and skill-worthy about this
          specific repair, make no file changes and say so plainly.
       Acceptance criteria: Task summary states explicitly what was found
       (or that nothing durable was found), and every skill file changed is
       part of this task's own commit(s) -- nothing is applied outside this
       PR's review.
+      Pass condition: The summary records the outcome and all accepted edits
+      are committed on this branch for external review.
       Non-goals: Do not edit this workflow's own rendering formula from
       inside the task it produced. Do not touch product code. Do not retry
       or second-guess the fix/verify tasks above this one in the chain.
     dependencies:
       - verify-ci-{{job_slug}}
+
+  - id: verify-reflect-ci-{{job_slug}}
+    description: |
+      Fail fast unless both the workflow policy and repaired CI job pass after
+      reflection.
+      Review claim: The completed repair workflow remains atomic and the
+      repaired CI job still passes after the reflect task.
+      Review lane: proof
+      Safety invariant: This task is read-only and reruns the existing proof;
+      it cannot weaken or replace either verification command.
+      Slice rationale: A terminal command task makes the workflow's policy and
+      job verification deterministic after the AI-driven reflect task.
+      Architectural effect: None; this task only gates workflow completion on
+      two existing checks.
+      Goal: Prove the rendered workflow and repaired CI job both pass.
+      Motivation: Without a fail-fast terminal gate, one successful command
+      could hide a failure in the other after reflection.
+      Alternative considerations: Combining checks without bash pipefail was
+      rejected because shell failure handling would be ambiguous.
+      Implementation details: Run the atomicity linter first, then the same CI
+      verification command used by the earlier proof task under strict bash
+      error handling.
+      Non-goals: No product edits, no skill edits, and no test weakening.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - None; this command task is read-only.
+      Change types:
+      - None; deterministic verification only.
+      Acceptance criteria:
+      - The atomicity linter and `{{verify_command}}` both exit 0.
+    command: |
+      bash -lc 'exec bash -se' <<'INVOKER_REFLECT_VERIFY'
+      set -euo pipefail
+      bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh --warn-delegation skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml
+      {{verify_command}}
+      INVOKER_REFLECT_VERIFY
+    dependencies:
+      - reflect-ci-{{job_slug}}
