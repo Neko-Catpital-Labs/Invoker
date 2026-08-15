@@ -714,13 +714,6 @@ async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
-}
-
 interface InitServicesOptions {
   readOnly?: boolean;
   /**

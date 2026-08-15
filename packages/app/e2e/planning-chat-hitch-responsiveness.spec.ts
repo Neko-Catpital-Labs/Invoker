@@ -185,7 +185,6 @@ async function launchElectronApp(testDir: string): Promise<ElectronApplication> 
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: testDir,
       INVOKER_IPC_SOCKET: ipcSocketPath,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_REPO_CONFIG_PATH: configPath,
       INVOKER_E2E_MARKER_ROOT: markerRoot,

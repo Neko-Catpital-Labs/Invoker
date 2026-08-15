@@ -154,13 +154,6 @@ async function dispatchHeadlessRunnableTasks(
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
-}
-
 // ── Set Router ──────────────────────────────────────────────
 
 async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
@@ -387,7 +380,6 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessDeleteWorkflow(args[1], deps);
       break;
     case 'delete-all':
-      assertDeleteAllEnabled();
       {
         const { snapshotPath } = await sharedDeleteAllWorkflows({
           logger: deps.logger,
