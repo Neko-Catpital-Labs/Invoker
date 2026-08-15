@@ -47,28 +47,28 @@ assert.ok(
   'PR Body must install libatomic1 after pnpm setup and before actions/setup-node can probe the pnpm cache',
 );
 
-const libatomicStep = prBodyWorkflow.slice(installLibatomicIndex, setupNodeIndex);
+const libatomicDependencyStep = prBodyWorkflow.slice(installLibatomicIndex, setupNodeIndex);
 assert.match(
-  libatomicStep,
+  libatomicDependencyStep,
   /command -v apt-get/,
   'PR Body must install libatomic1 through apt when apt is available',
 );
 assert.match(
-  libatomicStep,
+  libatomicDependencyStep,
   /sudo -n true/,
   'PR Body must probe for passwordless sudo noninteractively before using sudo',
 );
 assert.match(
-  libatomicStep,
+  libatomicDependencyStep,
   /apt_get=\(sudo apt-get\)/,
   'PR Body must only use sudo for apt after the noninteractive sudo probe',
 );
 assert.ok(
-  libatomicStep.indexOf('sudo -n true') < libatomicStep.indexOf('apt_get=(sudo apt-get)'),
+  libatomicDependencyStep.indexOf('sudo -n true') < libatomicDependencyStep.indexOf('apt_get=(sudo apt-get)'),
   'PR Body must not construct the sudo apt command before the noninteractive sudo probe succeeds',
 );
 assert.match(
-  libatomicStep,
+  libatomicDependencyStep,
   /if ! sudo -n true[\s\S]*if ldconfig -p[\s\S]*grep -q 'libatomic\\\.so\\\.1'; then\s+exit 0[\s\S]*requires passwordless sudo/,
   'PR Body must still pass without sudo when libatomic.so.1 is already present, and otherwise fail clearly',
 );
@@ -99,6 +99,7 @@ const enabledOnlyCondition = "steps.targets.outputs.enabled == 'true'";
 const resolveTargetsStepIndex = findWorkflowStepIndex((step) => step.includes('name: Resolve PR Body targets'));
 const setupNodeStepIndex = findWorkflowStepIndex((step) => step.includes('uses: actions/setup-node@v4'));
 const libatomicStepIndex = findWorkflowStepIndex((step) => step.includes('name: Install Node.js runtime prerequisites'));
+const toolCacheStepIndex = findWorkflowStepIndex((step) => step.includes('name: Reclaim Node.js tool cache'));
 
 assert.notEqual(resolveTargetsStepIndex, -1, 'PR Body must resolve rollout targets before runtime setup');
 assert.notEqual(setupNodeStepIndex, -1, 'PR Body must select a Node.js runtime with actions/setup-node');
@@ -111,6 +112,12 @@ assert.ok(
   libatomicStepIndex < setupNodeStepIndex,
   'PR Body must install libatomic1 before actions/setup-node selects Node.js 26',
 );
+assert.notEqual(toolCacheStepIndex, -1, 'PR Body must reclaim RUNNER_TOOL_CACHE before Node setup');
+assert.equal(
+  toolCacheStepIndex + 1,
+  setupNodeStepIndex,
+  'PR Body must reclaim RUNNER_TOOL_CACHE immediately before actions/setup-node',
+);
 
 const libatomicPrerequisitesStep = prBodyWorkflowSteps[libatomicStepIndex];
 assert.match(
@@ -122,6 +129,38 @@ assert.match(
   libatomicPrerequisitesStep,
   /^        run: \|\n          sudo apt-get update\n          sudo apt-get install -y libatomic1$/m,
   'PR Body libatomic prerequisite install must update apt and install libatomic1',
+);
+
+const toolCacheStep = prBodyWorkflowSteps[toolCacheStepIndex];
+assert.match(
+  toolCacheStep,
+  new RegExp(`^        if: ${enabledOnlyCondition.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+  'PR Body tool-cache ownership repair must use the same enabled-only gate as Node setup',
+);
+assert.match(
+  toolCacheStep,
+  /RUNNER_TOOL_CACHE/,
+  'PR Body tool-cache ownership repair must use the runner-provided RUNNER_TOOL_CACHE path',
+);
+assert.match(
+  toolCacheStep,
+  /sudo -n mkdir -p -- "\$\{RUNNER_TOOL_CACHE\}"/,
+  'PR Body tool-cache ownership repair must create the resolved cache directory with passwordless sudo',
+);
+assert.match(
+  toolCacheStep,
+  /sudo -n chown "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}"/,
+  'PR Body tool-cache ownership repair must assign only the resolved cache directory to the runner account',
+);
+assert.match(
+  toolCacheStep,
+  /\[\[ ! -d "\$\{RUNNER_TOOL_CACHE\}" \|\| ! -w "\$\{RUNNER_TOOL_CACHE\}" \]\][\s\S]*::error::RUNNER_TOOL_CACHE is not writable[\s\S]*exit 1/,
+  'PR Body tool-cache ownership repair must fail clearly unless the resolved cache directory is writable',
+);
+assert.doesNotMatch(
+  toolCacheStep,
+  /\/home\/runner(?:\/|['"])/,
+  'PR Body tool-cache ownership repair must not hard-code a runner path',
 );
 
 const outputDir = mkdtempSync(join(tmpdir(), 'pr-body-rollout-'));
