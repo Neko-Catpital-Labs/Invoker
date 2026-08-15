@@ -73,7 +73,6 @@ invoker_e2e_init() {
   export INVOKER_HEADLESS_STANDALONE=1
   # Safety rail in app/headless: delete-all requires explicit opt-in.
   # E2E suites use isolated temp DB dirs, so enabling here is safe.
-  export INVOKER_ALLOW_DELETE_ALL=1
   # E2E tests run multiple standalone processes against the same DB (e.g.
   # submit-plan in background + cancel command). The writer lock would block
   # the second process. In production, IPC delegation handles this.
