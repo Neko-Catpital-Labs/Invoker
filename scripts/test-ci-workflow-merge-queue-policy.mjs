@@ -111,6 +111,21 @@ assert(
     && String(uiVitestNodePrerequisiteStep?.run ?? '').includes('g++'),
   'ui-vitest must install make and g++ so pnpm can build native dependencies on self-hosted runners',
 );
+const uiVitestLibatomicScript = String(uiVitestSteps[uiVitestLibatomicIndex]?.run ?? '');
+assert(
+  uiVitestLibatomicScript.includes('sudo -n true')
+    && uiVitestLibatomicScript.includes('sudo -n apt-get')
+    && !uiVitestLibatomicScript.includes('SUDO="sudo"')
+    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestLibatomicScript),
+  'ui-vitest libatomic install must prove passwordless sudo and use it noninteractively',
+);
+assert(
+  uiVitestLibatomicScript.includes('download libatomic1')
+    && uiVitestLibatomicScript.includes('Dir::State')
+    && uiVitestLibatomicScript.includes('LD_LIBRARY_PATH=')
+    && uiVitestLibatomicScript.includes('GITHUB_ENV'),
+  'ui-vitest libatomic install must provide a no-root LD_LIBRARY_PATH fallback',
+);
 
 const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
 const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
