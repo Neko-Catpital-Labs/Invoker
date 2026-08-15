@@ -97,6 +97,27 @@ must_contain "genuine content conflict" \
 must_contain "re-query every PR number touched" \
   "admin-bypass-sweep must require re-querying final PR state before reporting"
 
+# Rule out stale mergeability (false-positive CONFLICTING from an un-rebased
+# stack branch) before accepting Step 5's real-conflict verdict.
+must_contain "## Step 5a: Rule out a stale mergeability check before giving up" \
+  "admin-bypass-sweep must have a Step 5a stale-mergeability recheck section"
+must_appear_before "## Step 5: Never guess at real conflicts" \
+  "## Step 5a: Rule out a stale mergeability check before giving up" \
+  "admin-bypass-sweep must place Step 5a after Step 5"
+must_appear_before "## Step 5a: Rule out a stale mergeability check before giving up" \
+  "## Step 6: Prove the final state" \
+  "admin-bypass-sweep must place Step 5a before Step 6"
+must_contain "git rebase origin/master" \
+  "admin-bypass-sweep's Step 5a must rebase the PR branch in a scratch worktree to test for a real conflict"
+must_contain "Rebase applies clean" \
+  "admin-bypass-sweep's Step 5a must define the clean-rebase (stale mergeability) case"
+must_contain "Rebase stops with conflict markers" \
+  "admin-bypass-sweep's Step 5a must define the conflict-markers (genuine conflict) case"
+must_contain "attempt to resolve the markers by picking a side" \
+  "admin-bypass-sweep's Step 5a must still forbid picking a side on a genuine conflict"
+must_contain "never touch their primary working tree's branch or" \
+  "admin-bypass-sweep's Step 5a must require a disposable worktree, not the human's main checkout"
+
 # Cross-reference to the separate, deterministic worker path, and that
 # satisfying one authorization path is not sufficient for the other.
 must_contain "scripts/jailbreak-admin-bypass-land.mjs" \
