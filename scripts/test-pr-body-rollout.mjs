@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { strict as assert } from 'node:assert';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -144,18 +144,23 @@ assert.match(
 );
 assert.match(
   toolCacheStep,
-  /sudo -n mkdir -p -- "\$\{RUNNER_TOOL_CACHE\}"/,
-  'PR Body tool-cache ownership repair must create the resolved cache directory with passwordless sudo',
+  /node_tool_cache="\$\{RUNNER_TOOL_CACHE\}\/node"/,
+  'PR Body tool-cache ownership repair must resolve only the Node subtree beneath RUNNER_TOOL_CACHE',
 );
 assert.match(
   toolCacheStep,
-  /sudo -n chown "\$\(id -u\):\$\(id -g\)" -- "\$\{RUNNER_TOOL_CACHE\}"/,
-  'PR Body tool-cache ownership repair must assign only the resolved cache directory to the runner account',
+  /sudo -n mkdir -p -- "\$\{node_tool_cache\}"/,
+  'PR Body tool-cache ownership repair must create the Node subtree with passwordless sudo',
+);
+assert.deepEqual(
+  toolCacheStep.match(/^.*sudo -n chown.*$/gm),
+  ['            ! sudo -n chown -R "$(id -u):$(id -g)" -- "${node_tool_cache}"; then'],
+  'PR Body tool-cache ownership repair must recursively assign only the Node subtree and its descendants',
 );
 assert.match(
   toolCacheStep,
-  /\[\[ ! -d "\$\{RUNNER_TOOL_CACHE\}" \|\| ! -w "\$\{RUNNER_TOOL_CACHE\}" \]\][\s\S]*::error::RUNNER_TOOL_CACHE is not writable[\s\S]*exit 1/,
-  'PR Body tool-cache ownership repair must fail clearly unless the resolved cache directory is writable',
+  /\[\[ ! -d "\$\{node_tool_cache\}" \|\| ! -w "\$\{node_tool_cache\}" \]\][\s\S]*::error::RUNNER_TOOL_CACHE Node\.js subtree is not writable[\s\S]*exit 1/,
+  'PR Body tool-cache ownership repair must fail clearly unless the Node subtree is writable',
 );
 assert.doesNotMatch(
   toolCacheStep,
@@ -211,6 +216,46 @@ try {
   assert.equal(JSON.parse(result.stdout).enabled, true);
 } finally {
   rmSync(spacedPathDir, { recursive: true, force: true });
+}
+
+const nestedCacheDir = mkdtempSync(join(tmpdir(), 'pr-body-node-cache-'));
+try {
+  const nodeCacheDir = join(nestedCacheDir, 'node');
+  const versionDir = join(nodeCacheDir, '24.19.0');
+  mkdirSync(nodeCacheDir);
+  chmodSync(nestedCacheDir, 0o700);
+  chmodSync(nodeCacheDir, 0o555);
+
+  const rootOnlyAttempt = spawnSync(process.execPath, [
+    '-e',
+    "require('node:fs').mkdirSync(process.argv[1])",
+    versionDir,
+  ], { encoding: 'utf8' });
+  assert.notEqual(
+    rootOnlyAttempt.status,
+    0,
+    'A writable RUNNER_TOOL_CACHE root must not hide a non-writable Node subtree',
+  );
+  assert.match(
+    rootOnlyAttempt.stderr,
+    /EACCES/,
+    'The root-only ownership assumption must reproduce setup-node\'s nested EACCES failure',
+  );
+
+  chmodSync(nodeCacheDir, 0o755);
+  const targetedRepairAttempt = spawnSync(process.execPath, [
+    '-e',
+    "require('node:fs').mkdirSync(process.argv[1])",
+    versionDir,
+  ], { encoding: 'utf8' });
+  assert.equal(
+    targetedRepairAttempt.status,
+    0,
+    `Repairing only the Node subtree must permit version-directory creation without sudo:\n${targetedRepairAttempt.stderr}`,
+  );
+} finally {
+  chmodSync(nestedCacheDir, 0o700);
+  rmSync(nestedCacheDir, { recursive: true, force: true });
 }
 
 console.log('OK: PR body rollout checks passed');
