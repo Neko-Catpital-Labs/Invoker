@@ -111,6 +111,11 @@ assert(
   String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('libatomic1'),
   'required-fast-extra must install libatomic1 before setup-node so Node 26 can start on self-hosted runners',
 );
+assert(
+  String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('make')
+    && String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('g++'),
+  'required-fast-extra must install make and g++ so pnpm can build native dependencies on self-hosted runners',
+);
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
 const mergeGateConcurrencyEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Merge Gate Concurrency Repro');
 assert(mergeGateConcurrencyEntry, 'required-fast-extra matrix must include Merge Gate Concurrency Repro');
