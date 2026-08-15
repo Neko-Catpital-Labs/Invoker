@@ -107,32 +107,35 @@ assert(
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
-const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
+const uiVitestDependencyInstallIndex = stepIndex(jobs['ui-vitest'], 'Install dependencies');
+assert(uiVitestDependencyInstallIndex >= 0, 'ui-vitest must install dependencies');
+const uiVitestSystemDependenciesIndex = uiVitestSteps.findIndex(
   (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
 );
 assert(
-  uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
-  'ui-vitest must install libatomic1 before actions/setup-node@v4',
+  uiVitestSystemDependenciesIndex >= 0
+    && uiVitestSystemDependenciesIndex < uiVitestNodeSetupIndex
+    && uiVitestSystemDependenciesIndex < uiVitestDependencyInstallIndex,
+  'ui-vitest must install system dependencies before setup-node and dependency installation',
 );
-const uiVitestNodePrerequisiteStep = uiVitestSteps[uiVitestLibatomicIndex];
+const uiVitestSystemDependenciesScript = String(uiVitestSteps[uiVitestSystemDependenciesIndex]?.run ?? '');
 assert(
-  String(uiVitestNodePrerequisiteStep?.run ?? '').includes('make')
-    && String(uiVitestNodePrerequisiteStep?.run ?? '').includes('g++'),
-  'ui-vitest must install make and g++ so pnpm can build native dependencies on self-hosted runners',
+  uiVitestSystemDependenciesScript.includes('apt-get install -y libatomic1 make g++ python3')
+    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get install -y libatomic1 make g++ python3'),
+  'ui-vitest must install make, g++, and python3 so pnpm can build native dependencies',
 );
-const uiVitestLibatomicScript = String(uiVitestSteps[uiVitestLibatomicIndex]?.run ?? '');
 assert(
-  uiVitestLibatomicScript.includes('sudo -n true')
-    && uiVitestLibatomicScript.includes('sudo -n apt-get')
-    && !uiVitestLibatomicScript.includes('SUDO="sudo"')
-    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestLibatomicScript),
+  uiVitestSystemDependenciesScript.includes('sudo -n true')
+    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get')
+    && !uiVitestSystemDependenciesScript.includes('SUDO="sudo"')
+    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestSystemDependenciesScript),
   'ui-vitest libatomic install must prove passwordless sudo and use it noninteractively',
 );
 assert(
-  uiVitestLibatomicScript.includes('download libatomic1')
-    && uiVitestLibatomicScript.includes('Dir::State')
-    && uiVitestLibatomicScript.includes('LD_LIBRARY_PATH=')
-    && uiVitestLibatomicScript.includes('GITHUB_ENV'),
+  uiVitestSystemDependenciesScript.includes('download libatomic1')
+    && uiVitestSystemDependenciesScript.includes('Dir::State')
+    && uiVitestSystemDependenciesScript.includes('LD_LIBRARY_PATH=')
+    && uiVitestSystemDependenciesScript.includes('GITHUB_ENV'),
   'ui-vitest libatomic install must provide a no-root LD_LIBRARY_PATH fallback',
 );
 
