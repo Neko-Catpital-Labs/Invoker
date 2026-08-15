@@ -20,6 +20,10 @@ class SafePushError(RuntimeError):
         self.exit_code = exit_code
 
 
+class StaleHeadError(SafePushError):
+    """The guarded ref changed, so the requested push was safely skipped."""
+
+
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -97,7 +101,7 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
-            raise SafePushError(
+            raise StaleHeadError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
             )
@@ -225,6 +229,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 meta=meta,
             )
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        return 0
+    except StaleHeadError as exc:
+        # A stale lease is the safe, expected outcome when the PR changes or
+        # closes while this task is queued. Nothing was pushed, so do not
+        # write any success ledger marker or fail the enclosing workflow.
+        print(f"pr-worker-safe-push: stale-head-skip: {exc}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
