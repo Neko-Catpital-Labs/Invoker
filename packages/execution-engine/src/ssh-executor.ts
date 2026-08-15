@@ -713,6 +713,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       repoHash: h,
       baseRef,
       invokerHome,
+      requiredCommit: request.inputs.upstreamBase?.commitHash?.trim() || undefined,
     });
     bench('SshExecutor.startManagedWorkspace.bootstrapCloneFetch.before', { baseRef });
     const bootstrapOut = await this.execRemoteCapture(script1, 'bootstrap_clone_fetch');
