@@ -150,6 +150,10 @@ assert(
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
 
+assert(
+  prBodyWorkflow.jobs.validate['runs-on'] === 'ubuntu-latest',
+  'PR Body validation must use fresh GitHub-hosted capacity so self-hosted runner state cannot block validation',
+);
 assert(prBodyWorkflow.concurrency, 'PR Body workflow must declare concurrency');
 assert(
   String(prBodyWorkflow.concurrency.group ?? '').includes("startsWith(github.head_ref, 'mergify/merge-queue/')"),
