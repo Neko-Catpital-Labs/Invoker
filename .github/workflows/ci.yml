@@ -1081,7 +1081,7 @@ jobs:
             runner_label: ubuntu-latest
           - name: Visual Proof Validate
             command: bash scripts/test-suites/optional/70-ui-visual-proof-validate.sh
-            runner_label: Runner_1
+            runner_label: ubuntu-latest
 
     name: optional / ${{ matrix.name }}
 

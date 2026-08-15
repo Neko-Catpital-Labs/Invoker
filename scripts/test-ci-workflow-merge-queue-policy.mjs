@@ -225,6 +225,12 @@ assert(
   worktreeProvisioningEntry.runner_label === 'ubuntu-latest',
   'Worktree Provisioning must use GitHub-hosted capacity with non-interactive system package installation',
 );
+const visualProofValidateEntry = optionalOtherEntries.find((entry) => entry.name === 'Visual Proof Validate');
+assert(visualProofValidateEntry, 'optional-other matrix must include Visual Proof Validate');
+assert(
+  visualProofValidateEntry.runner_label === 'ubuntu-latest',
+  'Visual Proof Validate must use fresh GitHub-hosted capacity so managed-runner state cannot block the suite',
+);
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
