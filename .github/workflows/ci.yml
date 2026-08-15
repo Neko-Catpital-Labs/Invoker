@@ -161,15 +161,27 @@ jobs:
 
       - name: Install Node runtime system dependencies
         run: |
+          MISSING_PACKAGES=()
           if ! ldconfig -p 2>/dev/null | grep -Fq 'libatomic.so.1'; then
-            if command -v apt-get >/dev/null 2>&1; then
-              SUDO=""
-              if command -v sudo >/dev/null 2>&1; then
-                SUDO="sudo"
-              fi
-              $SUDO apt-get update
-              $SUDO apt-get install -y libatomic1 make g++
+            MISSING_PACKAGES+=(libatomic1)
+          fi
+          if ! command -v make >/dev/null 2>&1; then
+            MISSING_PACKAGES+=(make)
+          fi
+          if ! command -v g++ >/dev/null 2>&1; then
+            MISSING_PACKAGES+=(g++)
+          fi
+          if (( ${#MISSING_PACKAGES[@]} > 0 )); then
+            if ! command -v apt-get >/dev/null 2>&1; then
+              echo "::error::Missing required packages: ${MISSING_PACKAGES[*]}; apt-get is unavailable."
+              exit 1
             fi
+            SUDO=""
+            if command -v sudo >/dev/null 2>&1; then
+              SUDO="sudo"
+            fi
+            $SUDO apt-get update
+            $SUDO apt-get install -y "${MISSING_PACKAGES[@]}"
           fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
