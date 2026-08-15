@@ -77,7 +77,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-task <taskId>                                 Delete one task and retarget dependents
   close-task <taskId>                                  Close one failed/completed/review_ready task, no cascade
   delete <workflowId>                                  Delete a single workflow
-  delete-all                                           Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
+  delete-all                                           Delete all workflows
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
   worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)
