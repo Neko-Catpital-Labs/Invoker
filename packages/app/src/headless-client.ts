@@ -117,13 +117,6 @@ export function isSharedMutationOwnerTimeoutError(error: unknown): error is Shar
   return error instanceof SharedMutationOwnerTimeoutError;
 }
 
-export class OwnerBuildMismatchError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'OwnerBuildMismatchError';
-  }
-}
-
 const STALE_OWNER_NO_TRACK_TASK_COMMANDS = new Set([
   'retry-task',
   'recreate-task',
@@ -543,7 +536,7 @@ export interface HeadlessClientDeps {
   runElectronHeadless: (args: string[]) => Promise<number>;
 }
 
-export async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void> {
+async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
   const startedAt = Date.now();
@@ -558,12 +551,6 @@ export async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promis
     while (Date.now() < deadline) {
       attempts += 1;
       const owner = await discoverOwner(bus, 1500);
-      if (owner?.buildMismatchReason) {
-        delegationClientLog(
-          `bootstrap build mismatch attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}: ${owner.buildMismatchReason}`,
-        );
-        throw new OwnerBuildMismatchError(owner.buildMismatchReason);
-      }
       if (isStandaloneCapable(owner)) {
         delegationClientLog(
           `bootstrap owner ready attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}`,
