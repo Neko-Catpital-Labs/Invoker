@@ -149,19 +149,21 @@ jobs:
             exit 1
           fi
 
+          node_tool_cache="${RUNNER_TOOL_CACHE}/node"
+
           if ! sudo -n true 2>/dev/null; then
-            echo "::error::Making RUNNER_TOOL_CACHE writable requires passwordless sudo on this runner."
+            echo "::error::Making the RUNNER_TOOL_CACHE Node.js subtree writable requires passwordless sudo on this runner."
             exit 1
           fi
 
-          if ! sudo -n mkdir -p -- "${RUNNER_TOOL_CACHE}" ||
-            ! sudo -n chown "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}"; then
-            echo "::error::Could not assign RUNNER_TOOL_CACHE to the current runner account."
+          if ! sudo -n mkdir -p -- "${node_tool_cache}" ||
+            ! sudo -n chown -R "$(id -u):$(id -g)" -- "${node_tool_cache}"; then
+            echo "::error::Could not assign the RUNNER_TOOL_CACHE Node.js subtree to the current runner account."
             exit 1
           fi
 
-          if [[ ! -d "${RUNNER_TOOL_CACHE}" || ! -w "${RUNNER_TOOL_CACHE}" ]]; then
-            echo "::error::RUNNER_TOOL_CACHE is not writable by the current runner account."
+          if [[ ! -d "${node_tool_cache}" || ! -w "${node_tool_cache}" ]]; then
+            echo "::error::RUNNER_TOOL_CACHE Node.js subtree is not writable by the current runner account."
             exit 1
           fi
 
