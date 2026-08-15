@@ -55,6 +55,10 @@ function usage() {
   ].join('\n');
 }
 
+function isFiniteNonNegativeNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   if (command !== 'decide') {
@@ -67,6 +71,18 @@ export async function main(argv = process.argv.slice(2)) {
     input = JSON.parse(readJsonArg(rest));
   } catch (err) {
     console.error(`retry-ledger: invalid JSON input: ${err.message}\n\n${usage()}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (
+    input === null
+    || typeof input !== 'object'
+    || Array.isArray(input)
+    || !isFiniteNonNegativeNumber(input.attempts)
+    || !isFiniteNonNegativeNumber(input.maxAttempts)
+    || !isFiniteNonNegativeNumber(input.backoffBaseMs)
+  ) {
+    console.error(`retry-ledger: invalid decision input\n\n${usage()}`);
     process.exitCode = 1;
     return;
   }

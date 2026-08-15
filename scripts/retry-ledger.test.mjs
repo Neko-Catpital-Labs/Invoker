@@ -82,6 +82,26 @@ describe('CLI (e2e, real subprocess)', () => {
     assert.deepEqual(JSON.parse(result.stdout), { action: 'file', attempts: 0 });
   });
 
+  for (const [description, input] of [
+    ['null input', null],
+    ['missing attempts', { maxAttempts: 3, backoffBaseMs: 1_800_000 }],
+    ['missing maxAttempts', { attempts: 0, backoffBaseMs: 1_800_000 }],
+    ['missing backoffBaseMs', { attempts: 0, maxAttempts: 3 }],
+    ['negative attempts', { attempts: -1, maxAttempts: 3, backoffBaseMs: 1_800_000 }],
+  ]) {
+    it(`rejects ${description} with the formatted input error`, () => {
+      const result = spawnSync(
+        process.execPath,
+        [SCRIPT_PATH, 'decide', '--json', JSON.stringify(input)],
+        { encoding: 'utf8' },
+      );
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /retry-ledger: invalid decision input/);
+      assert.match(result.stderr, /Usage:/);
+    });
+  }
+
   it('exits non-zero with usage text on an unknown command', () => {
     const result = spawnSync(process.execPath, [SCRIPT_PATH, 'bogus'], { encoding: 'utf8' });
     assert.notEqual(result.status, 0);
