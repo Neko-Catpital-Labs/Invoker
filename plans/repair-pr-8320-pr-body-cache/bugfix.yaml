@@ -1,0 +1,78 @@
+name: "Repair PR #8320: reclaim the nested Node tool cache"
+description: |
+  Repair the trusted-base PR Body workflow that checks PR #8320. The current
+  ownership step changes only RUNNER_TOOL_CACHE itself, then declares success
+  because that directory is writable. On a reused self-hosted runner, the
+  existing RUNNER_TOOL_CACHE/node child can remain root-owned, so setup-node
+  still receives EACCES while creating node/24.19.0.
+
+  This is a prerequisite CI-policy PR because pull_request_target checks out
+  master; an edit bundled into PR #8320 cannot affect that PR's own PR Body
+  run. Keep the entity-research files and PR #8320's branch untouched.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: fix-pr-body-node-cache-ownership
+    description: |
+      Repair and cover the nested Node-cache ownership failure.
+      Review claim: PR Body recursively assigns only RUNNER_TOOL_CACHE/node to the runner account before setup-node, including stale root-owned descendants.
+      Review lane: policy
+      Safety invariant: PR-body target resolution, rollout gating, validation semantics, selected Node version, and directories outside RUNNER_TOOL_CACHE/node remain unchanged; the workflow still fails clearly if that Node subtree cannot be made writable.
+      Slice rationale: This base-branch CI prerequisite stands alone because pull_request_target cannot consume workflow edits from PR #8320; the directly affected repro stays with the policy fix.
+      Architectural effect: Ownership repair moves from the tool-cache root to the complete Node-specific subtree immediately before setup-node; no product or public interface changes.
+      Goal: Make setup-node able to create a version directory when a reused runner has a writable cache root but a stale root-owned node subtree.
+      Motivation: PR #8320's required PR Body check fails before body validation, so unrelated entity-research work cannot reach its actual gate.
+      Alternative considerations: Changing PR #8320 in place was rejected because pull_request_target runs the workflow from master. Chowning the whole tool cache was rejected because only the Node subtree is implicated. Checking only the root directory was rejected because it reproduced the false-success state.
+      Implementation details: First update scripts/test-pr-body-rollout.mjs with a filesystem repro that models a writable cache root and non-writable node child and observe the new assertion fail against the current workflow. Then update .github/workflows/pr-body.yml so the reclaim step creates RUNNER_TOOL_CACHE/node, runs recursive chown only within that subtree, and verifies the subtree itself is writable before setup-node. Keep passwordless-sudo and empty-path failures explicit. Update the workflow-policy assertions to require recursive chown of the Node subtree and to prove the recursive operation stops below the RUNNER_TOOL_CACHE root.
+      Non-goals: Do not edit PR #8320's entity-research files, change runners, change Node or pnpm versions, weaken PR-body validation, alter rollout authors, or touch other workflows.
+      Layer: app_regression
+      Feature state: active
+      Files: .github/workflows/pr-body.yml; scripts/test-pr-body-rollout.mjs
+      Change types:
+      - .github/workflows/pr-body.yml: modify the trusted-base Node cache ownership policy
+      - scripts/test-pr-body-rollout.mjs: update the reproducible nested-permission regression coverage
+      Acceptance criteria:
+      - Before the workflow fix, the added repro demonstrates that a writable RUNNER_TOOL_CACHE does not imply RUNNER_TOOL_CACHE/node accepts creation of a version directory.
+      - The reclaim step uses RUNNER_TOOL_CACHE/node without hard-coding a runner path and recursively assigns only that subtree to the current uid/gid.
+      - The step exits non-zero with a clear error if RUNNER_TOOL_CACHE is unset, passwordless sudo is unavailable, or the Node subtree remains non-writable.
+      - `node scripts/test-pr-body-rollout.mjs` exits 0 after the workflow and repro updates.
+      - `git diff --check` exits 0.
+    prompt: |
+      Goal: Repair the PR Body setup-node EACCES caused by stale root-owned descendants under RUNNER_TOOL_CACHE/node, and add a deterministic local repro.
+      Review claim: PR Body recursively assigns only RUNNER_TOOL_CACHE/node to the runner account before setup-node, including stale root-owned descendants.
+      Review lane: policy
+      Safety invariant: PR-body target resolution, rollout gating, validation semantics, selected Node version, and directories outside RUNNER_TOOL_CACHE/node remain unchanged; the workflow still fails clearly if that Node subtree cannot be made writable.
+      Slice rationale: This must be a standalone prerequisite from master because PR Body uses pull_request_target and checks out the trusted base, so PR #8320 cannot fix its own workflow.
+      Architectural effect: Ownership repair targets the complete Node-specific cache subtree instead of only its parent cache root; no product or public interface changes.
+      Motivation: PR #8320 currently fails during setup-node before PR-body validation starts.
+      Alternative considerations: Do not edit the entity-research PR. Do not chown all of RUNNER_TOOL_CACHE. Do not retain a root-only writability check that misses a stale nested node directory.
+      Implementation details: In scripts/test-pr-body-rollout.mjs, add the smallest filesystem repro for a writable cache root with a non-writable node child and add static policy assertions for the intended workflow scope. Run it and observe failure before changing the workflow. In .github/workflows/pr-body.yml, create RUNNER_TOOL_CACHE/node with passwordless sudo, recursively chown that Node subtree to the current uid/gid, verify that subtree is writable, and preserve the existing enabled-target gate and clear failure paths. Then rerun the focused test and git diff check.
+      Non-goals: No entity-research edits, runner reassignment, runtime-version changes, validation-rule changes, rollout changes, unrelated cleanup, or other workflow edits.
+      Assume no prior context. You are repairing the trusted-base prerequisite for GitHub PR #8320 in Neko-Catpital-Labs/Invoker. Work from master and keep the implementation to the two listed files.
+      Acceptance criteria:
+      - Record the focused test failing after adding the repro but before the workflow fix.
+      - `node scripts/test-pr-body-rollout.mjs` exits 0 after the fix.
+      - `git diff --check` exits 0.
+    dependencies: []
+
+  - id: verify-pr-body-node-cache-ownership
+    description: |
+      Run the focused regression test after the prerequisite fix.
+      Review claim: The focused test proves the workflow repairs a stale non-writable Node subtree rather than merely checking its writable parent.
+      Review lane: proof
+      Safety invariant: Verification reads the committed workflow and uses temporary filesystem state only; it does not mutate runner caches or repository state.
+      Slice rationale: This terminal proof reruns the directly affected test independently of the implementation task.
+      Architectural effect: None; this task adds no code or product behavior.
+      Goal: Deterministically verify the exact permission state reported by setup-node.
+      Motivation: The previous static root-directory assertion passed while setup-node still failed inside node/24.19.0.
+      Alternative considerations: A grep-only check and a manual CI retry were rejected because neither proves nested-directory behavior locally.
+      Implementation details: Execute the focused PR Body rollout test and require its real exit code.
+      Non-goals: No edits, broad test suite, UI proof, push, or PR #8320 mutation.
+      Layer: e2e_regression
+      Feature state: active
+    command: "node scripts/test-pr-body-rollout.mjs"
+    dependencies:
+      - fix-pr-body-node-cache-ownership
