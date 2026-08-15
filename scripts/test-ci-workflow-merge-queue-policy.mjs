@@ -112,7 +112,7 @@ const uiVitestAptInstallLine = uiVitestSystemDependencyRun
   .split('\n')
   .find((line) => line.includes('apt-get install'));
 const uiVitestAptPackages = new Set(uiVitestAptInstallLine?.trim().split(/\s+/) ?? []);
-for (const requiredPackage of ['libatomic1', 'make', 'g++', 'python3']) {
+for (const requiredPackage of ['libatomic1', 'make', 'g++', 'python3', 'unzip']) {
   assert(
     uiVitestAptPackages.has(requiredPackage),
     `ui-vitest system dependency step must install ${requiredPackage}`,
