@@ -168,7 +168,7 @@ jobs:
               SUDO="sudo"
             fi
             $SUDO apt-get update
-            $SUDO apt-get install -y libatomic1
+            $SUDO apt-get install -y libatomic1 make g++
           fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
