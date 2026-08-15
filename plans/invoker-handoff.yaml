@@ -1,81 +1,86 @@
-name: "Continue babysit worker landing loop"
+name: "Repair UI Vitest native build prerequisites"
 description: |
-  Continue the babysit worker landing loop from `pr/babysit-prereq-split` on a
-  DigitalOcean Invoker runner.
+  Repair the shared UI Vitest runner prerequisite independently of PR #9185.
 
-  The current branch already removed the generic retry cap block for #5803 and
-  taught the worker to surface split-only PR Body failures as human-only
-  blockers. The next task is to keep following LOOP.md against the live PR set
-  until the worker either lands each worker-fixable target or records an exact
-  human-only stop reason.
+  UI Vitest's dependency install falls back from a missing node-pty Linux x64
+  prebuild to node-gyp. The affected Runner_Vitest host has Python, but not
+  make, so the job exits before Vitest starts. The existing workflow-policy
+  test checks libatomic1 ordering but does not protect the native build tools.
+
+  Safety invariant: PR #9185 remains untouched and scoped to PR Authoring
+  Guardrails; UI Vitest's runner label, Node version, dependency command, test
+  command, and every other CI job remain unchanged. Only UI Vitest's existing
+  system-dependency step and its directly affected policy assertion change.
 onFinish: pull_request
 mergeMode: external_review
-repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
-baseBranch: pr/babysit-prereq-split
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
 
 tasks:
-  - id: continue-babysit-worker-loop
+  - id: provision-ui-vitest-native-build-tools
     description: |
-      Continue the babysit worker loop against the live `admin-bypass` / `dequeued` PR set.
-      Review claim: The worker keeps making forward progress on real stuck babysit PRs by fixing worker-owned failures and surfacing exact human-only blockers instead of generic capped retries.
-      Review lane: behavior
-      Safety invariant: The task uses worker actions only for target PRs; it does not manually requeue, relabel, merge, split, rebase, or force-push the real PR branches.
-      Slice rationale: One behavior slice: continue the existing worker loop from the pushed branch, using the current worker evidence and deterministic repro surface.
-      Architectural effect: None; this continues the existing worker + repro loop without introducing a new subsystem.
-      Goal: Make the babysit worker land worker-fixable real targets or stop once with an explicit human-only reason.
-      Motivation: Real `admin-bypass` / `dequeued` PRs are still stuck; the worker must own the fix path instead of requiring manual cleanup.
-      Alternative considerations: Manual PR edits, queue commands, stack surgery, or force-pushes were rejected because they hide worker defects instead of fixing them.
-      Implementation details: Regenerate the live target set with `bash ./loop-driver.sh --skip-battle`. Gather evidence from the ledger, `gh pr view`, repair transcripts, and existing repros. If the target is worker-fixable, edit only the worker/repro files needed for that case, rerun `bash ./loop-driver.sh`, then rerun the real worker on that PR. If the target is human-only, make the worker post the exact reason once and stop retrying.
-      Non-goals: No manual real-PR cleanup, no unrelated refactors, no metadata-only PR edits, no queue-rule changes outside what the worker itself needs.
-      Layer: app_bridge
-      Feature state: active
-      Files: battle-loop.sh; loop-driver.sh; scripts/mergify_admin_requeue_exec.py; scripts/mergify_admin_requeue_plan.py; scripts/mergify_admin_requeue_repairer.py; scripts/mergify_admin_requeue_loader.py; scripts/mergify_admin_requeue_snapshot.py; scripts/test-suites/required/12-mergify-admin-requeue.sh; scripts/test_mergify_admin_requeue.py; scripts/test_mergify_admin_requeue_plan.py
-      Change types:
-      - battle-loop.sh: modify
-      - loop-driver.sh: modify
-      - scripts/mergify_admin_requeue_exec.py: modify
-      - scripts/mergify_admin_requeue_plan.py: modify
-      - scripts/mergify_admin_requeue_repairer.py: modify
-      - scripts/mergify_admin_requeue_loader.py: modify
-      - scripts/mergify_admin_requeue_snapshot.py: modify
-      - scripts/test-suites/required/12-mergify-admin-requeue.sh: modify
-      - scripts/test_mergify_admin_requeue.py: modify
-      - scripts/test_mergify_admin_requeue_plan.py: modify
-      Acceptance criteria:
-      - `bash ./loop-driver.sh` exits 0 after each worker fix.
-      - The task reruns the real worker after each worker fix instead of stopping at local green.
-      - The final report names each touched real PR and shows whether the worker landed it or surfaced a human-only blocker.
-    prompt: |
-      Goal: Continue the babysit worker landing loop from `pr/babysit-prereq-split` until the worker lands each worker-fixable real target or posts one exact human-only blocker and stops retrying.
-      Review lane: behavior
-      Motivation: Real `admin-bypass` / `dequeued` PRs are still stuck; the worker must own the recovery path instead of relying on manual cleanup.
-      Alternative considerations: Do not manually edit, queue, relabel, rebase, split, merge, or force-push the target PRs. Fix worker logic and rerun the worker instead.
-      Implementation details: Follow LOOP.md exactly. Start by running `bash ./loop-driver.sh --skip-battle` to regenerate the live target set and ledger fail summary. Pick the highest-signal worker-owned target from that live set. Gather evidence from the ledger, `gh pr view`, repair transcripts, and existing repros before touching code. If the target is worker-fixable, edit only the worker/repro files needed for that case, rerun `bash ./loop-driver.sh`, then rerun the real worker on that PR. If the target is human-only, make the worker post the exact reason once and stop retrying. Commit only when local loop evidence is green for the fix you made.
-      Non-goals: No unrelated refactors, no queue policy rewrites outside the current failure, no manual real-PR cleanup.
-      Assume no prior context. You are given only this task.
-      Acceptance criteria:
-      - `bash ./loop-driver.sh` exits 0 after each worker-owned fix.
-      - The real worker is rerun after each worker-owned fix.
-      - The final result shows worker-caused progress on the real target set, not manual PR edits.
-    poolId: remote_digital_ocean_1
-    dependencies: []
-
-  - id: verify-babysit-worker-loop
-    description: |
-      Run the local loop verifier after the implementation work.
-      Review claim: `bash ./loop-driver.sh` stays green only when the local worker loop and repro surface still hold.
-      Review lane: proof
-      Safety invariant: This task only runs the existing loop verifier.
-      Slice rationale: One proof slice: rerun the same local loop checker after implementation.
-      Architectural effect: None.
-      Goal: Prove the updated worker loop still passes its deterministic local verification.
-      Motivation: The loop checker guards the worker and repro contract while the real PR work continues.
-      Alternative considerations: Manual inspection was rejected as non-deterministic.
-      Implementation details: Execute `bash ./loop-driver.sh` from the repo root.
-      Non-goals: No code edits in this task.
+      Add the missing UI Vitest native build prerequisites and their focused regression assertion.
+      Review claim: UI Vitest installs libatomic1, make, and g++ before pnpm may invoke node-gyp for node-pty.
+      Review lane: policy
+      Safety invariant: PR #9185 remains untouched; UI Vitest's Runner_Vitest assignment, Node 26 selection, frozen-lockfile install, test command, and every other CI job stay unchanged.
+      Slice rationale: The existing UI Vitest system-dependency step and the exact workflow-policy assertion that protects it are one CI-policy unit, separate from #9185's hosted-capacity claim.
+      Architectural effect: UI Vitest runner preparation explicitly owns the native compiler prerequisites needed by dependency installation; product control flow and public interfaces do not change.
+      Goal: Allow UI Vitest dependency installation to compile node-pty when its Linux x64 prebuild is unavailable.
+      Motivation: GitHub job 94987863334 never reached Vitest because node-pty fell back to node-gyp and node-gyp reported `Error: not found: make`.
+      Alternative considerations: Re-running cannot add a missing executable; changing Node, node-pty, lifecycle scripts, or runner assignment would broaden the repair and obscure the missing prerequisite.
+      Implementation details: First strengthen the UI Vitest section of scripts/test-ci-workflow-merge-queue-policy.mjs to require libatomic1, make, and g++ in the named pre-Node system-dependency step and confirm that assertion fails against the unmodified workflow. Then add make and g++ to that existing apt install line in .github/workflows/ci.yml and rerun the same policy test.
+      Non-goals: No edits to PR #9185, product or UI behavior, dependency versions, Node version, runner assignment, lifecycle policy, or unrelated CI jobs.
       Layer: e2e_regression
       Feature state: active
-    command: "bash ./loop-driver.sh"
-    poolId: remote_digital_ocean_1
+      Files:
+      - .github/workflows/ci.yml
+      - scripts/test-ci-workflow-merge-queue-policy.mjs
+      Change types:
+      - .github/workflows/ci.yml: modify
+      - scripts/test-ci-workflow-merge-queue-policy.mjs: modify
+      Acceptance criteria:
+      - Before the workflow edit, the strengthened policy assertion exits nonzero because UI Vitest lacks make and g++.
+      - `node scripts/test-ci-workflow-merge-queue-policy.mjs` exits 0 after the workflow edit.
+      - The final assertion requires libatomic1, make, and g++ before actions/setup-node and pnpm install.
+      - UI Vitest still uses Runner_Vitest, Node 26, `pnpm install --frozen-lockfile`, and `pnpm --filter @invoker/ui test`.
+    prompt: |
+      Review claim: UI Vitest installs libatomic1, make, and g++ before pnpm may invoke node-gyp for node-pty.
+      Review lane: policy
+      Safety invariant: PR #9185 remains untouched; UI Vitest's Runner_Vitest assignment, Node 26 selection, frozen-lockfile install, test command, and every other CI job stay unchanged.
+      Slice rationale: Keep UI Vitest runner provisioning and its directly affected policy assertion together as one CI-policy unit, independent of PR #9185's PR Authoring Guardrails change.
+      Architectural effect: Make UI Vitest runner preparation own the native compiler prerequisites needed by dependency installation; do not change product control flow or public interfaces.
+      Goal: Fix the shared UI Vitest failure seen in https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/31874407167/job/94987863334.
+      Motivation: The job log says node-pty's prebuilds/linux-x64 directory does not exist, node-gyp finds Python, and then exits with `Error: not found: make`; Vitest never starts.
+      Alternative considerations: Do not change Node, node-pty, lifecycle scripts, or the runner assignment, and do not fold this repair into PR #9185.
+      Implementation details: Assume no prior context. Work from current master. First edit only scripts/test-ci-workflow-merge-queue-policy.mjs so its UI Vitest policy requires the named `Install Node runtime system dependencies` step to appear before actions/setup-node and pnpm install and to install libatomic1, make, and g++. Run `node scripts/test-ci-workflow-merge-queue-policy.mjs` and record the expected failure caused by the unchanged workflow. Then edit only .github/workflows/ci.yml to add make and g++ to UI Vitest's existing apt install command. Rerun the same policy test and require exit 0. Keep the assertion focused on package tokens in the apt install command, not incidental substring matches elsewhere in the shell step.
+      Non-goals: No edits to PR #9185, product/UI code, dependency versions, runner labels, Node versions, test commands, or unrelated workflow jobs.
+      Files:
+      - .github/workflows/ci.yml
+      - scripts/test-ci-workflow-merge-queue-policy.mjs
+      Change types:
+      - .github/workflows/ci.yml: modify
+      - scripts/test-ci-workflow-merge-queue-policy.mjs: modify
+      Acceptance criteria:
+      - The strengthened policy test fails before the workflow edit because make and g++ are absent.
+      - `node scripts/test-ci-workflow-merge-queue-policy.mjs` exits 0 after the workflow edit.
+      - UI Vitest remains on Runner_Vitest with Node 26, frozen-lockfile dependency installation, and `pnpm --filter @invoker/ui test`.
+    dependencies: []
+
+  - id: verify-ui-vitest-native-build-tools
+    description: |
+      Run the focused workflow-policy regression check after the repair.
+      Review claim: The workflow-policy test passes only when UI Vitest provisions its required runtime and native build packages before dependency installation.
+      Review lane: proof
+      Safety invariant: Verification reads the committed workflow and test without modifying repository state.
+      Slice rationale: A terminal deterministic check gives the implementation slice one explicit pass/fail proof surface.
+      Architectural effect: None; this task executes existing repository policy code only.
+      Goal: Prove the repaired workflow retains the complete UI Vitest prerequisite contract.
+      Motivation: The prior test passed while make and g++ were absent, so the strengthened assertion must be exercised after implementation.
+      Alternative considerations: A grep-only check was rejected because it would not parse the workflow structure or enforce step ordering.
+      Implementation details: Execute `node scripts/test-ci-workflow-merge-queue-policy.mjs` from the repository root and require exit 0.
+      Non-goals: No file edits, CI submission, PR #9185 mutation, or broad test-suite execution.
+      Layer: e2e_regression
+      Feature state: active
+    command: "node scripts/test-ci-workflow-merge-queue-policy.mjs"
     dependencies:
-      - continue-babysit-worker-loop
+      - provision-ui-vitest-native-build-tools
