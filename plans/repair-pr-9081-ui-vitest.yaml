@@ -1,0 +1,77 @@
+name: "Repair PR 9081 UI Vitest native install"
+description: |
+  Follow up merged PR #9081 with the missing native build prerequisites for
+  the UI Vitest job. Node 26 has no matching node-pty prebuild, so node-gyp
+  falls back to compilation and currently stops at `not found: make` before
+  the UI suite can run.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: fix-ui-vitest-native-toolchain
+    description: |
+      Provision the native toolchain required by node-pty in the UI Vitest job and pin the setup contract with the existing workflow policy test.
+      Review claim: UI Vitest installs make, g++, and Python before pnpm installs Node 26 dependencies, allowing node-gyp to compile node-pty when no prebuild exists.
+      Review lane: policy
+      Safety invariant: Only the UI Vitest runner prerequisite step and its deterministic policy assertion change; other jobs, package scripts, tests, and product behavior remain unchanged.
+      Slice rationale: The prerequisite and its ordering assertion form one CI-policy claim and must land together so the runner contract cannot regress silently.
+      Architectural effect: The UI Vitest setup phase gains an explicit native-build prerequisite before dependency installation; application control flow and dependency direction do not change.
+      Goal: Make the UI Vitest dependency-install phase reach the test command under Node 26.
+      Motivation: Runs 31770676222 and 31828467673 show node-pty falling back to node-gyp under Node 26 and failing with `Error: not found: make` before UI Vitest starts.
+      Alternative considerations: Adding only libatomic1 was insufficient; skipping package build scripts or weakening the UI check was rejected because node-pty remains an approved required native dependency.
+      Implementation details: Extend the existing UI Vitest system-dependency apt install with make, g++, and python3 before actions/setup-node and pnpm install. Update the existing CI workflow policy test to require all three packages in that ordered step.
+      Non-goals: No runner-label changes, package dependency changes, UI test edits, timeout changes, product code changes, or unrelated CI cleanup.
+      Layer: app_regression
+      Feature state: active
+      Files: .github/workflows/ci.yml; scripts/test-ci-workflow-merge-queue-policy.mjs
+      Change types:
+      - .github/workflows/ci.yml: modify
+      - scripts/test-ci-workflow-merge-queue-policy.mjs: modify
+      Acceptance criteria:
+      - The UI Vitest prerequisite step installs libatomic1, make, g++, and python3 before actions/setup-node and pnpm install.
+      - `node scripts/test-ci-workflow-merge-queue-policy.mjs` exits 0 and fails if any native prerequisite is removed or moved too late.
+      - `git diff --check` exits 0.
+    prompt: |
+      Goal: Repair the UI Vitest dependency-install failure on Node 26 by provisioning the native toolchain node-gyp needs for node-pty.
+      Review claim: UI Vitest installs make, g++, and Python before pnpm installs Node 26 dependencies, allowing node-gyp to compile node-pty when no prebuild exists.
+      Review lane: policy
+      Safety invariant: Only the UI Vitest runner prerequisite step and its deterministic policy assertion change; other jobs, package scripts, tests, and product behavior remain unchanged.
+      Slice rationale: Keep the prerequisite and its ordering assertion together as one CI-policy change.
+      Architectural effect: The UI Vitest setup phase gains an explicit native-build prerequisite before dependency installation; no application architecture changes.
+      Motivation: GitHub Actions runs 31770676222 and 31828467673 both show node-pty selecting node-gyp under Node 26 and failing with `Error: not found: make` before tests start.
+      Alternative considerations: Do not skip dependency build scripts, remove node-pty, weaken UI Vitest, change runner labels, or broaden the edit to other jobs. The prior libatomic-only fix did not provide the compiler toolchain.
+      Implementation details: In `.github/workflows/ci.yml`, extend the existing UI Vitest system dependency install to include `make g++ python3` alongside `libatomic1`, before actions/setup-node and `pnpm install --frozen-lockfile`. In `scripts/test-ci-workflow-merge-queue-policy.mjs`, assert that this same ordered step installs each required package.
+      Non-goals: No timeout changes, package updates, UI test changes, product changes, or unrelated cleanup.
+      Layer: app_regression
+      Feature state: active
+      Files: .github/workflows/ci.yml; scripts/test-ci-workflow-merge-queue-policy.mjs
+      Change types:
+      - .github/workflows/ci.yml: modify
+      - scripts/test-ci-workflow-merge-queue-policy.mjs: modify
+      Assume no prior context. Diagnose against the cited job evidence, make only the two scoped edits, and commit the result locally.
+      Acceptance criteria:
+      - The UI Vitest prerequisite step installs libatomic1, make, g++, and python3 before actions/setup-node and pnpm install.
+      - `node scripts/test-ci-workflow-merge-queue-policy.mjs` exits 0 and detects removal or late installation of any prerequisite.
+      - `git diff --check` exits 0.
+    dependencies: []
+
+  - id: verify-ui-vitest-native-toolchain
+    description: |
+      Run the CI workflow policy regression after the implementation task.
+      Review claim: The policy check passes only when UI Vitest provisions all Node 26 native build prerequisites before dependency installation.
+      Review lane: proof
+      Safety invariant: This task is read-only and executes the checked-in deterministic policy verifier without editing repository state.
+      Slice rationale: One terminal proof task verifies the implementation slice's exact ordering contract.
+      Architectural effect: None; this task only observes the workflow definition.
+      Goal: Prove the repaired workflow encodes the native toolchain prerequisite.
+      Motivation: A parser-based regression test is repeatable locally and catches future prerequisite removal before CI reaches a self-hosted runner.
+      Alternative considerations: Grep-only inspection and manual workflow review were rejected because the existing parser verifies YAML structure and step order.
+      Implementation details: Execute `node scripts/test-ci-workflow-merge-queue-policy.mjs` from the repository root.
+      Non-goals: No code edits, live queue operations, or PR publication in this task.
+      Layer: e2e_regression
+      Feature state: active
+    command: node scripts/test-ci-workflow-merge-queue-policy.mjs
+    dependencies:
+      - fix-ui-vitest-native-toolchain
