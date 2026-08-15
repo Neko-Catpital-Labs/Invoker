@@ -393,8 +393,7 @@ jobs:
   required-fast:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -414,7 +413,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: Vitest Workspace
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
-            runner_label: Runner_2_4_core
+            runner_label: ubuntu-latest
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
             runner_label: Github_Runner

@@ -100,6 +100,19 @@ assert(
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
 );
 
+assert(jobs['required-fast'], 'Missing required-fast job');
+assert(
+  jobs['required-fast']['runs-on'] === '${{ matrix.runner_label }}',
+  'required-fast must pass matrix runner labels directly so Vitest Workspace can use ubuntu-latest',
+);
+const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
+const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
+assert(vitestWorkspaceEntry, 'required-fast matrix must include Vitest Workspace');
+assert(
+  vitestWorkspaceEntry.runner_label === 'ubuntu-latest',
+  'Vitest Workspace must use GitHub-hosted capacity with native build tools available during pnpm install',
+);
+
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
 assert(jobs['required-fast-extra'].if === FULL_CI_GATE, 'required-fast-extra must run only for full CI events');
 assertStepBefore(
