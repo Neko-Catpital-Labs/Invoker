@@ -396,13 +396,6 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   installPackagedSkills: (mode?: BundledSkillsInstallMode) => ReturnType<typeof installBundledSkills>;
 }
 
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
-}
-
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
@@ -1642,7 +1635,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
 
   registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
     logger.info('delete-all-workflows', { module: 'ipc' });
-    assertDeleteAllEnabled();
     await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: getTaskExecutor() ?? undefined });
     taskHandles.clear();
     rendererTaskFeed.resetSnapshotState();
@@ -1651,7 +1643,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
 
   registerGuiMutationHandler('invoker:delete-all-workflows-bulk', async () => {
     logger.info('delete-all-workflows-bulk', { module: 'ipc' });
-    assertDeleteAllEnabled();
     await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: getTaskExecutor() ?? undefined });
     taskHandles.clear();
     rendererTaskFeed.resetSnapshotState();

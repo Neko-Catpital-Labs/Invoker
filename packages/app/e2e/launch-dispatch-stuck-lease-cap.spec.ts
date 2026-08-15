@@ -69,7 +69,6 @@ base.describe('Launch-dispatch stuck-lease retry cap', () => {
           INVOKER_GUI_OWNER_MODE: 'gui',
           INVOKER_DB_DIR: testDir,
           INVOKER_IPC_SOCKET: ipcSocketPath,
-          INVOKER_ALLOW_DELETE_ALL: '1',
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_STARTUP_POLL_DELAY_MS: '0',
           INVOKER_USER_DATA_DIR: electronUserDataDir,
