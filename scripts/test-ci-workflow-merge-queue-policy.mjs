@@ -9,6 +9,16 @@ const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergi
 const MERGE_QUEUE_HEAD_GATE = "${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const HEAD_REF_EXPRESSION = '${{ github.head_ref }}';
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
+const UI_VITEST_LIBATOMIC_INSTALL = `if ! ldconfig -p 2>/dev/null | grep -Fq 'libatomic.so.1'; then
+  if command -v apt-get >/dev/null 2>&1; then
+    SUDO=""
+    if command -v sudo >/dev/null 2>&1; then
+      SUDO="sudo"
+    fi
+    $SUDO apt-get update
+    $SUDO apt-get install -y libatomic1 make g++ python3
+  fi
+fi`;
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
@@ -95,6 +105,12 @@ assert(
   'required-package-builds must run on ordinary PRs and skip merge queue refs',
 );
 
+assert(jobs['ui-vitest'], 'Missing ui-vitest job');
+assert(jobs['ui-vitest']['timeout-minutes'] === 15, 'ui-vitest must have a 15-minute timeout');
+assert(
+  jobs['ui-vitest']['runs-on']?.labels === 'Runner_Vitest',
+  'ui-vitest must keep the Runner_Vitest runner label',
+);
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
@@ -108,6 +124,15 @@ const uiVitestSystemDependencyIndex = uiVitestSteps.findIndex(
 assert(
   uiVitestSystemDependencyIndex >= 0 && uiVitestSystemDependencyIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install Node system dependencies before actions/setup-node@v4',
+);
+assert(
+  String(uiVitestSteps[uiVitestSystemDependencyIndex].run ?? '').trim() === UI_VITEST_LIBATOMIC_INSTALL,
+  'ui-vitest must mutate the package index and install libatomic1 only when libatomic.so.1 is unavailable',
+);
+const uiVitestTestStep = uiVitestSteps.find((step) => step.name === 'Run UI vitest');
+assert(
+  String(uiVitestTestStep?.run ?? '').trim() === 'pnpm --filter @invoker/ui test',
+  'ui-vitest must run the full pnpm --filter @invoker/ui test command',
 );
 assert(
   uiVitestSystemDependencyIndex < uiVitestDependencyInstallIndex,

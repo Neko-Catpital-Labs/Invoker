@@ -145,7 +145,7 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Reclaim workspace
@@ -161,13 +161,15 @@ jobs:
 
       - name: Install Node runtime system dependencies
         run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            SUDO=""
-            if command -v sudo >/dev/null 2>&1; then
-              SUDO="sudo"
+          if ! ldconfig -p 2>/dev/null | grep -Fq 'libatomic.so.1'; then
+            if command -v apt-get >/dev/null 2>&1; then
+              SUDO=""
+              if command -v sudo >/dev/null 2>&1; then
+                SUDO="sudo"
+              fi
+              $SUDO apt-get update
+              $SUDO apt-get install -y libatomic1 make g++ python3
             fi
-            $SUDO apt-get update
-            $SUDO apt-get install -y libatomic1 make g++ python3
           fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
