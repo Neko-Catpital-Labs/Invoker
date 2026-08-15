@@ -56,8 +56,7 @@ def validate_expected_head(expected_head: str) -> str:
     return value.lower()
 
 
-def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
-    ref = f"refs/heads/{normalize_branch(branch)}"
+def remote_ref_sha(ref: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
     out = run_git(["ls-remote", remote, ref], cwd=cwd)
     if not out:
         return None
@@ -66,6 +65,10 @@ def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | 
         if len(parts) >= 2 and parts[1] == ref:
             return parts[0].lower()
     return None
+
+
+def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
+    return remote_ref_sha(f"refs/heads/{normalize_branch(branch)}", remote=remote, cwd=cwd)
 
 
 def local_head(*, cwd: Path | str | None = None) -> str:
@@ -80,6 +83,7 @@ def safe_push(
     branch: str,
     expected_head: str | None = None,
     expect_missing: bool = False,
+    pr_number: int | None = None,
     remote: str = "origin",
     cwd: Path | str | None = None,
 ) -> str:
@@ -96,12 +100,22 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:"
     else:
-        if live != expected:
+        if live is None and pr_number is not None:
+            pull_ref = f"refs/pull/{pr_number}/head"
+            pull_head = remote_ref_sha(pull_ref, remote=remote, cwd=cwd)
+            if pull_head != expected:
+                raise SafePushError(
+                    f"stale-head: {pull_ref} is {pull_head or 'missing'}; expected {expected}",
+                    exit_code=20,
+                )
+            lease = f"refs/heads/{branch_name}:"
+        elif live != expected:
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
             )
-        lease = f"refs/heads/{branch_name}:{expected}"
+        else:
+            lease = f"refs/heads/{branch_name}:{expected}"
 
     pushed = local_head(cwd=cwd)
     run_git([
@@ -188,6 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             branch=args.branch,
             expected_head=args.expected_head,
             expect_missing=args.expect_missing,
+            pr_number=args.json_pr,
             remote=args.remote,
             cwd=Path(args.cwd),
         )

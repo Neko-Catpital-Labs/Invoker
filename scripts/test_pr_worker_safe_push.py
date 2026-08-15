@@ -111,6 +111,49 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_missing_branch_pushes_when_pull_ref_still_matches_expected_head(self) -> None:
+        git(self.root, "--git-dir", str(self.remote), "update-ref", "refs/pull/9172/head", self.expected)
+        git(self.root, "--git-dir", str(self.remote), "update-ref", "-d", "refs/heads/main")
+        pushed = self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-bot-thread-settled",
+            "--json-pr", "9172",
+            "--json-head-sha", self.expected,
+            "--json-key", "thread-1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        self.assertIn('"pr": 9172', ledger.read_text(encoding="utf-8"))
+
+    def test_missing_branch_refuses_push_when_pull_ref_moved(self) -> None:
+        moved = self.commit(self.repo, "race", "race\n")
+        git(self.repo, "push", "origin", f"{moved}:refs/pull/9172/head")
+        git(self.repo, "reset", "--hard", self.expected)
+        git(self.root, "--git-dir", str(self.remote), "update-ref", "-d", "refs/heads/main")
+        self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-bot-thread-settled",
+            "--json-pr", "9172",
+            "--json-head-sha", self.expected,
+            "--json-key", "thread-1",
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn(f"refs/pull/9172/head is {moved}; expected {self.expected}", result.stderr)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")
