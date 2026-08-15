@@ -61,6 +61,15 @@ assert(
   jobs['build-artifacts']['runs-on'] === 'ubuntu-latest',
   'build-artifacts must use fresh GitHub-hosted capacity so stale Git ref locks cannot block checkout',
 );
+assertStepBefore(jobs['build-artifacts'], 'Install native build tools', 'Install dependencies', 'build-artifacts');
+const buildArtifactsNativeBuildStep = jobs['build-artifacts'].steps.find(
+  (step) => step.name === 'Install native build tools',
+);
+assert(
+  String(buildArtifactsNativeBuildStep?.run ?? '').includes('make')
+    && String(buildArtifactsNativeBuildStep?.run ?? '').includes('g++'),
+  'build-artifacts must install make and g++ so pnpm can build native dependencies on self-hosted runners',
+);
 
 assert(jobs['quality-required'], 'Missing quality-required job');
 assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs');
