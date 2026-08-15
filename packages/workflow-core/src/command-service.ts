@@ -424,6 +424,16 @@ export class CommandService {
     );
   }
 
+  async closeIdleTask(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState>> {
+    return this.executeCommand<TaskState>(
+      'CLOSE_IDLE_TASK_FAILED',
+      () => this.orchestrator.closeIdleTask(envelope.payload.taskId),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async cancelWorkflow(
     envelope: CommandEnvelope<{ workflowId: string }>,
   ): Promise<CommandResult<CancelResult>> {
