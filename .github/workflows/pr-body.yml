@@ -154,14 +154,14 @@ jobs:
             exit 1
           fi
 
-          if ! sudo -n mkdir -p -- "${RUNNER_TOOL_CACHE}" ||
-            ! sudo -n chown "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}"; then
-            echo "::error::Could not assign RUNNER_TOOL_CACHE to the current runner account."
+          if ! sudo -n mkdir -p -- "${RUNNER_TOOL_CACHE}/node" ||
+            ! sudo -n chown -R "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}/node"; then
+            echo "::error::Could not assign the Node.js tool cache to the current runner account."
             exit 1
           fi
 
-          if [[ ! -d "${RUNNER_TOOL_CACHE}" || ! -w "${RUNNER_TOOL_CACHE}" ]]; then
-            echo "::error::RUNNER_TOOL_CACHE is not writable by the current runner account."
+          if [[ ! -d "${RUNNER_TOOL_CACHE}/node" || ! -w "${RUNNER_TOOL_CACHE}/node" ]]; then
+            echo "::error::Node.js tool cache is not writable by the current runner account."
             exit 1
           fi
 
