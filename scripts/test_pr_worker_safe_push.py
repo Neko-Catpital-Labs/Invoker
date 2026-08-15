@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -62,6 +63,16 @@ class SafePushTests(unittest.TestCase):
     def remote_head(self, branch: str = "main") -> str:
         return safe_push.remote_branch_sha(branch, remote="origin", cwd=self.repo) or ""
 
+    def test_foreign_default_ledger_path_maps_to_worker_home(self) -> None:
+        worker_home = self.root / "worker-home"
+
+        resolved = safe_push.resolve_json_ledger_path(
+            "/Users/controller/.invoker/mergify-admin-requeue-state.jsonl",
+            home=worker_home,
+        )
+
+        self.assertEqual(resolved, worker_home / ".invoker/mergify-admin-requeue-state.jsonl")
+
     def invoke_helper(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         command = ["python3", str(Path(__file__).with_name("pr_worker_safe_push.py")), *args]
         merged_env = {**os.environ, **(env or {})}
@@ -73,6 +84,27 @@ class SafePushTests(unittest.TestCase):
             capture_output=True,
             env=merged_env,
         )
+
+    def fake_gh(self, *, state: str, head: str, branch: str = "main") -> Path:
+        wrapper_dir = self.root / "gh-bin"
+        wrapper_dir.mkdir(exist_ok=True)
+        wrapper = wrapper_dir / "gh"
+        wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env python3
+                import json
+                print(json.dumps({{
+                    "state": {state!r},
+                    "headRefName": {branch!r},
+                    "headRefOid": {head!r},
+                }}))
+                """
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        return wrapper_dir
 
     def test_matching_expected_sha_pushes_and_records_attempt_marker(self) -> None:
         pushed = self.commit(self.repo, "repair")
@@ -168,6 +200,52 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
+
+    def test_deleted_branch_of_merged_unchanged_pr_settles_without_recreating_branch(self) -> None:
+        self.commit(self.repo, "repair")
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.fake_gh(state="MERGED", head=self.expected)
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9179",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env={"PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PR #9179 is MERGED", result.stdout)
+        self.assertEqual(self.remote_head(), "")
+        row = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(row["kind"], "repair-check-settled")
+        self.assertEqual(row["headSha"], self.expected)
+
+    def test_deleted_branch_of_terminal_pr_with_moved_head_fails_closed(self) -> None:
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        moved = "f" * 40
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.fake_gh(state="MERGED", head=moved)
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9179",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env={"PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
 
 
 if __name__ == "__main__":
