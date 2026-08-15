@@ -135,6 +135,18 @@ export interface GitMirrorCloneOpts {
  * unresolvable after retries.
  *
  * Exits 128 if base ref and fallback both missing.
+ *
+ * This shared/reused clone (one per repo hash, fetched once at task start,
+ * never recreated) has repeatedly produced "downstream task can't resolve
+ * a commit" incidents since the design was introduced: 2026-04-07
+ * (4df97a3d0c, fetch failures silently swallowed from day one), 2026-04-08
+ * (ed5f9d0552, made visible via warnings but kept non-blocking), 2026-04-17
+ * (56eb3e872c, a different symptom of the same drifted mirror), 2026-07-30
+ * (#6836, a wrong-ref-selected-for-push variant), 2026-08-15 (this
+ * `requiredCommit` retry, the first fix that actually verifies and retries
+ * instead of trusting or warning). If a new instance of this symptom shows
+ * up, it is very likely the same architectural hazard again -- check here
+ * first before re-deriving the history from `git log`.
  */
 export function buildMirrorCloneScript(opts: GitMirrorCloneOpts): string {
   const repoB64 = base64Encode(opts.repoUrl);
