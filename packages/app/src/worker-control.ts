@@ -17,6 +17,7 @@ import {
   AUTO_APPROVE_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
+  IDLE_TASK_CLEANUP_WORKER_KIND,
   INFRA_REPAIR_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_AUTO_LABEL_WORKER_KIND,
@@ -60,6 +61,7 @@ type AutoStartedOwnerWorkerKindOptions = {
   reaperEnabled?: boolean;
   workflowResumeEnabled?: boolean;
   requeueEnabled?: boolean;
+  staleTaskCleanupEnabled?: boolean;
 };
 
 type AutoStartedOwnerWorkerKindConfig = {
@@ -73,6 +75,7 @@ type AutoStartedOwnerWorkerKindConfig = {
   reaper?: { enabled?: boolean };
   workflowResume?: { enabled?: boolean };
   requeueEnabled?: boolean;
+  staleTaskCleanup?: { enabled?: boolean };
 };
 
 /**
@@ -93,6 +96,7 @@ export function autoStartedOwnerWorkerKinds(
     options.workflowResumeEnabled,
     options.requeueEnabled,
     options.slackBugScanEnabled,
+    options.staleTaskCleanupEnabled,
   ].some((value) => value !== undefined);
   if (options.prMaintenanceEnabled && !hasWorkerGateOverrides) {
     workerKinds.push(PR_ADMIN_BYPASS_LAND_WORKER_KIND, INFRA_REPAIR_WORKER_KIND);
@@ -125,6 +129,9 @@ export function autoStartedOwnerWorkerKinds(
   if (options.slackBugScanEnabled) {
     workerKinds.push(...SLACK_BUG_SCAN_AUTO_STARTED_WORKER_KINDS);
   }
+  if (options.staleTaskCleanupEnabled) {
+    workerKinds.push(IDLE_TASK_CLEANUP_WORKER_KIND);
+  }
   return workerKinds;
 }
 
@@ -142,6 +149,7 @@ export function autoStartedOwnerWorkerKindsForConfig(
     workflowResumeEnabled: Boolean(config?.workflowResume?.enabled),
     requeueEnabled: Boolean(config?.requeueEnabled),
     slackBugScanEnabled: Boolean(config?.slackBugScan?.enabled),
+    staleTaskCleanupEnabled: Boolean(config?.staleTaskCleanup?.enabled),
   });
   return config?.e2eAutoFixEnabled
     ? [...workerKinds, E2E_AUTOFIX_WORKER_KIND]

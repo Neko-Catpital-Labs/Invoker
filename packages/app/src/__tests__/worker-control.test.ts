@@ -9,6 +9,7 @@ import {
   PR_ORPHAN_REPAIR_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
+  IDLE_TASK_CLEANUP_WORKER_KIND,
   INFRA_REPAIR_WORKER_KIND,
   PR_JAILBREAK_LAND_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
@@ -214,6 +215,14 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
       INFRA_REPAIR_WORKER_KIND,
       { infraRepair: { enabled: true } },
       { infraRepair: { enabled: false } },
+    );
+  });
+
+  it('includes idle-task-cleanup only when staleTaskCleanup.enabled is true', () => {
+    expectConfigGate(
+      IDLE_TASK_CLEANUP_WORKER_KIND,
+      { staleTaskCleanup: { enabled: true } },
+      { staleTaskCleanup: { enabled: false } },
     );
   });
 

@@ -103,6 +103,8 @@ import {
   reconcileTerminalWorkerActionsOnStartup,
   SPAWN_REPAIR_WORKFLOW_CHANNEL,
   submitRepairWorkflowFromCiFailure,
+  createPrMaintenanceGitHub,
+  spawnPrMaintenanceCommand,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -418,6 +420,15 @@ function buildRegisteredOwnerWorkerDeps(
       enabled: resolveAutoApproveAIFixes(invokerConfig),
     },
     slackBugScan: buildSlackBugScanWorkerConfig(planningCommandBuilder, executionAgentRegistry),
+    idleTaskCleanup: {
+      github: createPrMaintenanceGitHub({
+        run: spawnPrMaintenanceCommand,
+        repo: process.env.INVOKER_GITHUB_TARGET_REPO?.trim() || 'Neko-Catpital-Labs/Invoker',
+        author: process.env.INVOKER_PR_CRON_AUTHOR?.trim() || 'EdbertChan',
+        logger,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      }),
+    },
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {

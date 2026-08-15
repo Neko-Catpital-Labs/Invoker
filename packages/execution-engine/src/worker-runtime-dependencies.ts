@@ -30,6 +30,11 @@ import type {
   WorkflowResumeWorkerStore,
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
+import type {
+  IdleTaskCleanupWorkerConfig,
+  IdleTaskCleanupWorkerStore,
+  IdleTaskCleanupWorkerSubmitter,
+} from './workers/idle-task-cleanup-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -39,14 +44,16 @@ export interface WorkerRuntimeDependencies {
     & AutoApproveWorkerStore
     & InfraRepairWorkerStore
     & WorkflowResumeWorkerStore
-    & DiskHeadroomWorkerStore;
+    & DiskHeadroomWorkerStore
+    & IdleTaskCleanupWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & ReviewGateCiRepairSubmitter
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
     & InfraRepairWorkerSubmitter
-    & WorkflowResumeWorkerSubmitter;
+    & WorkflowResumeWorkerSubmitter
+    & IdleTaskCleanupWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
@@ -72,4 +79,6 @@ export interface WorkerRuntimeDependencies {
   /** e2e auto-fix/default-branch CI watcher configuration. */
   e2eAutoFix?: E2eAutoFixWorkerConfig;
   slackBugScan?: SlackBugScanWorkerConfig;
+  /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
+  idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
 }
