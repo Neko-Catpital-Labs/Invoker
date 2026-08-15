@@ -72,6 +72,10 @@ assert(
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
+assert(
+  jobs['quality-extra']['runs-on'] === 'ubuntu-latest',
+  'Release Version Sync must use fresh GitHub-hosted capacity so stale workspace ownership cannot block checkout',
+);
 
 assert(jobs['typescript-types'], 'Missing typescript-types job');
 assert(
@@ -117,6 +121,12 @@ assert(
   'required-fast-extra must install make and g++ so pnpm can build native dependencies on self-hosted runners',
 );
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
+const branchCarryForwardEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Branch Carry Forward');
+assert(branchCarryForwardEntry, 'required-fast-extra matrix must include Branch Carry Forward');
+assert(
+  branchCarryForwardEntry.runner_label === 'ubuntu-latest',
+  'Branch Carry Forward must use GitHub-hosted capacity with non-interactive system package installation',
+);
 const mergeGateConcurrencyEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Merge Gate Concurrency Repro');
 assert(mergeGateConcurrencyEntry, 'required-fast-extra matrix must include Merge Gate Concurrency Repro');
 assert(
@@ -128,6 +138,13 @@ const optionalOtherSteps = stepNames('optional-other');
 assert(
   optionalOtherSteps[0] === 'Reclaim workspace' && optionalOtherSteps[1] === 'Checkout',
   'optional-other must reclaim the self-hosted runner workspace before checkout',
+);
+const optionalOtherEntries = jobs['optional-other'].strategy?.matrix?.include ?? [];
+const worktreeProvisioningEntry = optionalOtherEntries.find((entry) => entry.name === 'Worktree Provisioning');
+assert(worktreeProvisioningEntry, 'optional-other matrix must include Worktree Provisioning');
+assert(
+  worktreeProvisioningEntry.runner_label === 'ubuntu-latest',
+  'Worktree Provisioning must use GitHub-hosted capacity with non-interactive system package installation',
 );
 
 assert(jobs.docker, 'Missing docker job');
