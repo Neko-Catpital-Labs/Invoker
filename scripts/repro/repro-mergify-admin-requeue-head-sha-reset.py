@@ -153,14 +153,12 @@ class HeadShaResetThrash(unittest.TestCase):
         for head_sha in HEAD_SHAS[:3]:
             self.assertEqual(self.fresh_ledger().count("repair-check", PR, head_sha, CHECK), 1)
 
-        # This is the bug, pinned down deliberately: on the 4th head_sha, with
-        # 3 real prior attempts already on record, the planner still says
-        # "repair_check" (file a 4th) instead of "comment_blocked" (cap it).
-        # scripts/mergify_admin_requeue_plan.py's Ledger.count() filters on the
-        # CURRENT head_sha, so it can never see the 3 prior rows recorded
-        # under 3 different head_shas.
+        # Fixed: on the 4th head_sha, with 3 real prior attempts already on
+        # record, the planner now correctly caps it instead of filing a 4th.
+        # retry_decision() counts via Ledger.count_by_unit(), which persists
+        # across the head_sha change instead of resetting on every new commit.
         actions = self.planner_actions(HEAD_SHAS[3], NOW + 10)
-        self.assertEqual([(a.kind, a.key) for a in actions], [("repair_check", CHECK)])
+        self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
 
 if __name__ == "__main__":
