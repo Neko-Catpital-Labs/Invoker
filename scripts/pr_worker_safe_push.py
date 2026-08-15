@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -88,6 +89,14 @@ def safe_push(
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
     expected = None if expect_missing else validate_expected_head(expected_head or "")
     live = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
+    pushed = local_head(cwd=cwd)
+
+    # A prior invocation may have completed the push but failed while recording
+    # its marker. Treat the exact desired remote commit as an idempotent retry;
+    # no lease is bypassed and no remote state changes in this path.
+    if live == pushed:
+        return pushed
+
     if expect_missing:
         if live is not None:
             raise SafePushError(
@@ -103,7 +112,6 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:{expected}"
 
-    pushed = local_head(cwd=cwd)
     run_git([
         "push",
         f"--force-with-lease={lease}",
@@ -118,6 +126,44 @@ def safe_push(
             exit_code=22,
         )
     return pushed
+
+
+def resolve_ledger_path(value: str) -> Path:
+    """Map a controller home path to the current worker's home."""
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        return path
+
+    home = Path.home()
+    try:
+        path.relative_to(home)
+        return path
+    except ValueError:
+        pass
+
+    parts = path.parts
+    invoker_index = parts.index(".invoker") if ".invoker" in parts else -1
+    prefix = parts[:invoker_index]
+    is_foreign_home = (
+        len(prefix) == 3 and prefix[0] == "/" and prefix[1] in {"Users", "home"}
+    ) or prefix == ("/", "root")
+    if invoker_index >= 0 and is_foreign_home:
+        return home.joinpath(*parts[invoker_index:])
+    return path
+
+
+def prepare_ledger_path(path: Path) -> None:
+    """Fail before pushing when a ledger destination cannot be written."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            with path.open("a", encoding="utf-8"):
+                pass
+        else:
+            with tempfile.NamedTemporaryFile(dir=path.parent):
+                pass
+    except OSError as exc:
+        raise SafePushError(f"cannot write ledger {path}: {exc}") from exc
 
 
 def append_tsv_ledger(path: Path, *, kind: str, key: str, marker: str, epoch: int | None = None) -> None:
@@ -184,25 +230,18 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
-            branch=args.branch,
-            expected_head=args.expected_head,
-            expect_missing=args.expect_missing,
-            remote=args.remote,
-            cwd=Path(args.cwd),
-        )
+        tsv_path = None
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
                 "--tsv-key": args.tsv_key,
                 "--tsv-marker": args.tsv_marker,
             })
-            append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
-                kind=args.tsv_kind,
-                key=args.tsv_key,
-                marker=args.tsv_marker,
-            )
+            tsv_path = resolve_ledger_path(args.record_tsv_ledger)
+            prepare_ledger_path(tsv_path)
+
+        json_path = None
+        meta = None
         if args.record_json_ledger:
             require_all("JSONL ledger recording", {
                 "--json-kind": args.json_kind,
@@ -210,14 +249,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--json-head-sha": args.json_head_sha,
                 "--json-key": args.json_key,
             })
-            meta = None
             if args.json_meta:
                 decoded = json.loads(args.json_meta)
                 if not isinstance(decoded, dict):
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
+            json_path = resolve_ledger_path(args.record_json_ledger)
+            prepare_ledger_path(json_path)
+
+        pushed = safe_push(
+            branch=args.branch,
+            expected_head=args.expected_head,
+            expect_missing=args.expect_missing,
+            remote=args.remote,
+            cwd=Path(args.cwd),
+        )
+        if tsv_path is not None:
+            append_tsv_ledger(
+                tsv_path,
+                kind=args.tsv_kind,
+                key=args.tsv_key,
+                marker=args.tsv_marker,
+            )
+        if json_path is not None:
             append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
+                json_path,
                 kind=args.json_kind,
                 pr_number=args.json_pr,
                 head_sha=args.json_head_sha,

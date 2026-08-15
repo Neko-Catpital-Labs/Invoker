@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -152,6 +153,47 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("git push", result.stderr)
         self.assertFalse(ledger.exists())
+
+    def test_already_applied_push_retries_with_foreign_home_ledger_path(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        first = self.invoke_helper("--branch", "main", "--expected-head", self.expected)
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        worker_home = self.root / "worker-home"
+        ledger = worker_home / ".invoker" / "ledger.jsonl"
+        retry = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", "/Users/controller/.invoker/ledger.jsonl",
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "8320",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env={"HOME": str(worker_home)},
+        )
+
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        self.assertEqual(json.loads(ledger.read_text(encoding="utf-8"))["pr"], 8320)
+
+    def test_unwritable_ledger_destination_fails_before_push(self) -> None:
+        self.commit(self.repo, "repair")
+        not_a_directory = self.root / "not-a-directory"
+        not_a_directory.write_text("file\n", encoding="utf-8")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(not_a_directory / "ledger.jsonl"),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "8320",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot write ledger", result.stderr)
+        self.assertEqual(self.remote_head(), self.expected)
 
     def test_new_prerequisite_branch_succeeds_only_when_remote_branch_is_absent(self) -> None:
         git(self.repo, "checkout", "-B", "stack/prereq")
