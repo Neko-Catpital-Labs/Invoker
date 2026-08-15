@@ -90,7 +90,7 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
 
-    def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
+    def test_moved_remote_head_is_successful_noop_and_records_no_attempt(self) -> None:
         self.clone_other()
         remote_after_race = self.commit(self.other, "race", "race\n")
         git(self.other, "push", "origin", "HEAD:refs/heads/main")
@@ -106,9 +106,40 @@ class SafePushTests(unittest.TestCase):
             "--tsv-marker", "fp1",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipped: stale-head", result.stdout)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
+        self.assertFalse(ledger.exists())
+
+    def test_library_moved_remote_head_still_raises(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "repair")
+
+        with self.assertRaisesRegex(safe_push.SafePushError, "stale-head") as raised:
+            safe_push.safe_push(branch="main", expected_head=self.expected, cwd=self.repo)
+
+        self.assertEqual(raised.exception.exit_code, 20)
+        self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
+
+    def test_deleted_remote_head_is_successful_noop_and_records_no_attempt(self) -> None:
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipped: stale-head", result.stdout)
+        self.assertEqual(self.remote_head(), "")
         self.assertFalse(ledger.exists())
 
     def test_push_lease_failure_records_no_attempt(self) -> None:
