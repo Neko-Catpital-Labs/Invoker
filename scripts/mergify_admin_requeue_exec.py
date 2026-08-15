@@ -17,6 +17,7 @@ try:
     from .mergify_admin_requeue_snapshot import GhClient
     from .mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_repairer_plan_rows,
         settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
@@ -31,6 +32,7 @@ except ImportError:
     from mergify_admin_requeue_snapshot import GhClient
     from mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_repairer_plan_rows,
         settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
@@ -126,6 +128,12 @@ def run_cycle(args: argparse.Namespace) -> bool:
             logger.trace("admin-bypass-fastpath-settled", count=fastpath_settled)
     except Exception as exc:
         logger.trace("admin-bypass-fastpath-settle-failed", error=str(exc))
+    try:
+        repairer_plan_settled = settle_repairer_plan_rows(ledger, now)
+        if repairer_plan_settled:
+            logger.trace("admin-bypass-repairer-plan-settled", count=repairer_plan_settled)
+    except Exception as exc:
+        logger.trace("admin-bypass-repairer-plan-settle-failed", error=str(exc))
     pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
     logger.trace(
         "admin-bypass-scan-loaded",
