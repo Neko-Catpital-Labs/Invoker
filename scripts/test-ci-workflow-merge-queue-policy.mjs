@@ -99,6 +99,12 @@ assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
 );
+const uiVitestNodeLibraryStep = uiVitestSteps[uiVitestLibatomicIndex];
+assert(
+  String(uiVitestNodeLibraryStep?.run ?? '').includes('make')
+    && String(uiVitestNodeLibraryStep?.run ?? '').includes('g++'),
+  'ui-vitest must install make and g++ so pnpm can build native dependencies on self-hosted runners',
+);
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
 assert(jobs['required-fast-extra'].if === FULL_CI_GATE, 'required-fast-extra must run only for full CI events');
