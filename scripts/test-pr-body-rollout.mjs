@@ -98,19 +98,28 @@ const findWorkflowStepIndex = (predicate) => prBodyWorkflowSteps.findIndex((step
 const enabledOnlyCondition = "steps.targets.outputs.enabled == 'true'";
 const resolveTargetsStepIndex = findWorkflowStepIndex((step) => step.includes('name: Resolve PR Body targets'));
 const setupNodeStepIndex = findWorkflowStepIndex((step) => step.includes('uses: actions/setup-node@v4'));
-const libatomicStepIndex = findWorkflowStepIndex((step) => step.includes('name: Install Node.js runtime prerequisites'));
+const obsoleteLibatomicStepIndex = findWorkflowStepIndex((step) => step.includes('name: Install Node.js runtime prerequisites'));
+const libatomicStepIndexes = prBodyWorkflowSteps
+  .map((step, index) => step.includes('name: Install Node.js runtime dependency') ? index : -1)
+  .filter((index) => index !== -1);
 const toolCacheStepIndex = findWorkflowStepIndex((step) => step.includes('name: Reclaim Node.js tool cache'));
 
 assert.notEqual(resolveTargetsStepIndex, -1, 'PR Body must resolve rollout targets before runtime setup');
 assert.notEqual(setupNodeStepIndex, -1, 'PR Body must select a Node.js runtime with actions/setup-node');
-assert.notEqual(libatomicStepIndex, -1, 'PR Body must install libatomic1 before selecting Node.js 26');
+assert.equal(
+  obsoleteLibatomicStepIndex,
+  -1,
+  'PR Body must not include the obsolete Install Node.js runtime prerequisites raw-sudo step',
+);
+assert.equal(libatomicStepIndexes.length, 1, 'PR Body must retain exactly one guarded Node.js runtime dependency step');
+const [libatomicStepIndex] = libatomicStepIndexes;
 assert.ok(
   libatomicStepIndex > resolveTargetsStepIndex,
-  'PR Body must install Node.js runtime prerequisites after resolving rollout targets',
+  'PR Body must install the Node.js runtime dependency after resolving rollout targets',
 );
 assert.ok(
   libatomicStepIndex < setupNodeStepIndex,
-  'PR Body must install libatomic1 before actions/setup-node selects Node.js 26',
+  'PR Body must install the single guarded libatomic1 dependency before actions/setup-node',
 );
 assert.notEqual(toolCacheStepIndex, -1, 'PR Body must reclaim RUNNER_TOOL_CACHE before Node setup');
 assert.equal(
@@ -119,16 +128,11 @@ assert.equal(
   'PR Body must reclaim RUNNER_TOOL_CACHE immediately before actions/setup-node',
 );
 
-const libatomicPrerequisitesStep = prBodyWorkflowSteps[libatomicStepIndex];
+const guardedLibatomicStep = prBodyWorkflowSteps[libatomicStepIndex];
 assert.match(
-  libatomicPrerequisitesStep,
+  guardedLibatomicStep,
   new RegExp(`^        if: ${enabledOnlyCondition.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
-  'PR Body libatomic prerequisite install must use the same enabled-only gate as Node setup',
-);
-assert.match(
-  libatomicPrerequisitesStep,
-  /^        run: \|\n          sudo apt-get update\n          sudo apt-get install -y libatomic1$/m,
-  'PR Body libatomic prerequisite install must update apt and install libatomic1',
+  'PR Body guarded libatomic dependency install must use the same enabled-only gate as Node setup',
 );
 
 const toolCacheStep = prBodyWorkflowSteps[toolCacheStepIndex];
