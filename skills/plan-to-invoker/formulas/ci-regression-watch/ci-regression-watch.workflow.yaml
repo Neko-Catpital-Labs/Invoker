@@ -3,6 +3,10 @@ description: |
   {{marker}}
 
   {{failure_description}}
+
+  Standalone workflow waiver: The reflection task must inspect this repair's
+  verified task transcripts, so it stays in the same externally reviewed
+  workflow and remains downstream of verification.
 onFinish: pull_request
 mergeMode: external_review
 baseBranch: {{base_branch}}
@@ -97,7 +101,7 @@ tasks:
       Review claim: Any skill edit in this task's diff is traceable to a
       specific, cited finding from this repair's own transcript, not a
       speculative rewrite.
-      Review lane: proof
+      Review lane: docs
       Safety invariant: This task never merges or applies skill edits on its
       own authority. Every edit lands only as a commit on this same PR branch,
       subject to the same external human review as the fix itself. If
@@ -123,8 +127,8 @@ tasks:
       Accepted findings that map to a concrete skill edit, make that edit as
       a normal file change in this task's own branch, so it surfaces in this
       PR's diff for the human reviewer -- the PR review *is* the approval
-      gate reflect normally asks for interactively. Backlog and Rejected
-      findings go in the task summary as prose, not as file changes.
+      gate reflect normally asks for interactively.
+      Do not apply Backlog/Rejected findings; summarize them as prose.
       If a finding is best fixed in the shared skills repo
       (https://github.com/EdbertChan/catstack, deployed to all pool
       machines) rather than this repo, clone it to a scratch dir, make the
@@ -144,7 +148,7 @@ tasks:
       - Unknown at filing time; determined during the reflect pass.
       Acceptance criteria:
       - The task summary states, explicitly, either "no durable finding" or
-        lists each Accepted finding with the file(s) it changed.
+        records each Accepted finding with the file(s) it changed.
       - Any skill file changed in this repo is included in this PR's diff.
       - Any catstack PR opened is linked by URL in the task summary, or the
         summary states why one was not opened.
@@ -153,19 +157,31 @@ tasks:
       prior task) just completed for CI job `{{job_name}}` (first observed
       failing at {{sha}}), and turn any durable learning into a reviewable
       skill edit -- never an auto-applied one.
-      Review lane: proof
+      Review claim: Any drafted skill edit is traceable to a specific, cited
+      finding from this repair's own transcript.
+      Review lane: docs
+      Safety invariant: Never merge or apply a skill edit on this task's own
+      authority. Keep every edit as a draft under external human review; if
+      there is no durable finding, make no changes.
+      Slice rationale: Keep reflection in its own post-verification task so
+      its draft is reviewable independently while retaining transcript access.
+      Architectural effect: Product architecture remains unchanged; this task
+      may only draft skill guidance for external review.
       Motivation: This regression reached a filed repair workflow without an
       existing skill or check catching it first. If there's a real, durable
       lesson here (not a one-off), it should change a skill so the same class
       of bug is easier to catch next time.
+      Alternative considerations: Removing reflection would lose the durable
+      learning step, while auto-applying or auto-merging its edits would bypass
+      external review; both alternatives are rejected.
       Implementation details:
+      Assume no prior context beyond this workflow and its task transcripts.
       1. Read `skills/reflect/SKILL.md` in this repo and follow its process
          (locate the transcript for this workflow's tasks, run the token/cost
-         audit script, spawn the lens reviewers, synthesize into Accepted /
-         Backlog / Rejected).
-      2. There is no interactive human to approve mid-run. Do NOT use that as
-         license to skip the approval step or auto-apply broadly -- instead,
-         for each Accepted finding that maps to a concrete skill edit, make
+         audit script, spawn the lens reviewers, and synthesize the findings).
+         Do not apply Backlog/Rejected findings; summarize them as prose.
+      2. Treat this PR's existing external human review as the approval gate.
+         For each Accepted finding that maps to a concrete skill edit, make
          that edit as a normal, reviewable file change on this task's own
          branch. It will appear in this PR's diff, and the PR's existing
          external human review (`mergeMode: external_review`) is the approval
@@ -177,14 +193,16 @@ tasks:
          summary. If any step (clone/push/PR) fails on permissions, say so
          plainly in the summary -- do not treat that as a task failure, and
          do not attempt to work around a permission denial.
-      4. Backlog and Rejected findings go in the summary as prose only, never
-         as file changes.
+      4. Do not apply Backlog/Rejected findings; record them as summary prose.
       5. If /reflect finds nothing durable and skill-worthy about this
          specific repair, make no file changes and say so plainly.
       Acceptance criteria: Task summary states explicitly what was found
       (or that nothing durable was found), and every skill file changed is
       part of this task's own commit(s) -- nothing is applied outside this
       PR's review.
+      Pass condition: Exit 0 only when the summary says "no durable finding"
+      or records every Accepted finding and its draft file or external PR; all
+      drafts remain subject to external review and none are auto-merged.
       Non-goals: Do not edit this workflow's own rendering formula from
       inside the task it produced. Do not touch product code. Do not retry
       or second-guess the fix/verify tasks above this one in the chain.
