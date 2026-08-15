@@ -98,19 +98,32 @@ assert(
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
-const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
-  (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
+const uiVitestDependencyInstallIndex = uiVitestSteps.findIndex(
+  (step) => String(step.run ?? '').trim() === 'pnpm install --frozen-lockfile',
+);
+assert(uiVitestDependencyInstallIndex >= 0, 'ui-vitest must install dependencies with the frozen lockfile');
+const uiVitestSystemDependencyIndex = uiVitestSteps.findIndex(
+  (step) => step.name === 'Install Node runtime system dependencies',
 );
 assert(
-  uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
-  'ui-vitest must install libatomic1 before actions/setup-node@v4',
+  uiVitestSystemDependencyIndex >= 0 && uiVitestSystemDependencyIndex < uiVitestNodeSetupIndex,
+  'ui-vitest must install Node system dependencies before actions/setup-node@v4',
 );
-const uiVitestNodePrerequisiteStep = uiVitestSteps[uiVitestLibatomicIndex];
 assert(
-  String(uiVitestNodePrerequisiteStep?.run ?? '').includes('make')
-    && String(uiVitestNodePrerequisiteStep?.run ?? '').includes('g++'),
-  'ui-vitest must install make and g++ so pnpm can build native dependencies on self-hosted runners',
+  uiVitestSystemDependencyIndex < uiVitestDependencyInstallIndex,
+  'ui-vitest must install Node system dependencies before pnpm install --frozen-lockfile',
 );
+const uiVitestSystemDependencyRun = String(uiVitestSteps[uiVitestSystemDependencyIndex]?.run ?? '');
+const uiVitestAptInstallLine = uiVitestSystemDependencyRun
+  .split('\n')
+  .find((line) => line.includes('apt-get install'));
+const uiVitestAptPackages = new Set(uiVitestAptInstallLine?.trim().split(/\s+/) ?? []);
+for (const requiredPackage of ['libatomic1', 'make', 'g++', 'python3']) {
+  assert(
+    uiVitestAptPackages.has(requiredPackage),
+    `ui-vitest system dependency step must install ${requiredPackage}`,
+  );
+}
 
 const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
 const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
