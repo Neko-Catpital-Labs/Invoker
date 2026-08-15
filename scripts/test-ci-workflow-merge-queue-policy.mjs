@@ -92,12 +92,19 @@ assert(
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
-const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
-  (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
+const uiVitestNodeLibraryIndex = uiVitestSteps.findIndex(
+  (step) => step.name === 'Install Node runtime system dependencies',
 );
 assert(
-  uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
-  'ui-vitest must install libatomic1 before actions/setup-node@v4',
+  uiVitestNodeLibraryIndex >= 0 && uiVitestNodeLibraryIndex < uiVitestNodeSetupIndex,
+  'ui-vitest must install Node runtime system dependencies before actions/setup-node@v4',
+);
+const uiVitestNodeLibraryStep = uiVitestSteps[uiVitestNodeLibraryIndex];
+assert(
+  String(uiVitestNodeLibraryStep?.run ?? '').includes('libatomic1')
+    && String(uiVitestNodeLibraryStep?.run ?? '').includes('make')
+    && String(uiVitestNodeLibraryStep?.run ?? '').includes('g++'),
+  'ui-vitest must install libatomic1, make, and g++ before setup-node so pnpm can build native dependencies',
 );
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
