@@ -138,6 +138,33 @@ jobs:
           "${apt_get[@]}" update
           "${apt_get[@]}" install -y --no-install-recommends libatomic1
 
+      - name: Reclaim Node.js tool cache
+        if: steps.targets.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${RUNNER_TOOL_CACHE:-}" ]]; then
+            echo "::error::RUNNER_TOOL_CACHE is not set; cannot prepare the Node.js tool cache."
+            exit 1
+          fi
+
+          if ! sudo -n true 2>/dev/null; then
+            echo "::error::Making RUNNER_TOOL_CACHE writable requires passwordless sudo on this runner."
+            exit 1
+          fi
+
+          if ! sudo -n mkdir -p -- "${RUNNER_TOOL_CACHE}" ||
+            ! sudo -n chown "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}"; then
+            echo "::error::Could not assign RUNNER_TOOL_CACHE to the current runner account."
+            exit 1
+          fi
+
+          if [[ ! -d "${RUNNER_TOOL_CACHE}" || ! -w "${RUNNER_TOOL_CACHE}" ]]; then
+            echo "::error::RUNNER_TOOL_CACHE is not writable by the current runner account."
+            exit 1
+          fi
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         if: steps.targets.outputs.enabled == 'true'
         uses: actions/setup-node@v4
