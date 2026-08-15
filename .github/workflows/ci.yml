@@ -414,7 +414,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: Vitest Workspace
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
-            runner_label: Runner_2_4_core
+            runner_label: ubuntu-latest
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
             runner_label: Github_Runner

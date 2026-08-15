@@ -1039,7 +1039,7 @@ type SelectedWorkflowGraphSnapshot = {
 };
 
 const EMPTY_SELECTED_WORKFLOW_TASKS = new Map<string, TaskState>();
-const SELECTED_WORKFLOW_GRAPH_BODY_DELAY_MS = 1000;
+const SELECTED_WORKFLOW_GRAPH_BODY_DELAY_MS = 250;
 
 export function App() {
   const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);

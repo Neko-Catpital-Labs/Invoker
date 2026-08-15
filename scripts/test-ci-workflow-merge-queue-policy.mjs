@@ -13,6 +13,7 @@ const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggrega
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
 const closeCleanupPath = '.github/workflows/merge-queue-close-cleanup.yml';
+const vitestWorkspaceSuite = readFileSync('scripts/test-suites/required/10-vitest-workspace.sh', 'utf8');
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const jobs = workflow.jobs ?? {};
 
@@ -98,6 +99,30 @@ const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
 assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
+);
+
+const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
+const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
+assert(vitestWorkspaceEntry, 'required-fast matrix must include Vitest Workspace');
+assert(
+  vitestWorkspaceEntry.runner_label === 'ubuntu-latest',
+  'Vitest Workspace must use fresh GitHub-hosted capacity so runner disk and toolchain state cannot block the suite',
+);
+assert(
+  !vitestWorkspaceSuite.includes('pnpm test'),
+  'Vitest Workspace must not inherit unrelated root test-chain checks through pnpm test',
+);
+const planToInvokerCheckIndex = vitestWorkspaceSuite.indexOf('scripts/test-plan-to-invoker-skill.sh');
+const workspaceTestIndex = vitestWorkspaceSuite.indexOf('scripts/workspace-test.sh');
+assert(planToInvokerCheckIndex >= 0, 'Vitest Workspace must run the plan-to-invoker skill check');
+assert(workspaceTestIndex >= 0, 'Vitest Workspace must run workspace package tests');
+assert(
+  planToInvokerCheckIndex < workspaceTestIndex,
+  'Vitest Workspace must run the plan-to-invoker check before workspace package tests',
+);
+assert(
+  vitestWorkspaceSuite.includes('INVOKER_WORKSPACE_TEST_CONCURRENCY=1'),
+  'Vitest Workspace must run packages serially so local and CI probes use the same resource profile',
 );
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');

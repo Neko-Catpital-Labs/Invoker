@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { SlackSurface } from '../slack/slack-surface.js';
 import { redactAbsolutePaths, sanitizeSlashCommands, sanitizeSlackOutbound, splitForSlack } from '../slack/slack-message-helpers.js';
 import type { SurfaceCommand } from '../surface.js';
@@ -265,7 +266,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       expect(draft).toBeTruthy();
       expect(receivedCommands).toHaveLength(0);
 
-      // Approving the PlanDraft card emits start_plan with the exact drafted YAML.
+      // Approving the PlanDraft card emits start_plan with the thread repository normalized into the YAML.
       await approveHandler({
         action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
         body: { channel: { id: 'C-test' }, message: { thread_ts: '1111.001' }, user: { id: 'U123' } },
@@ -274,7 +275,11 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       });
       expect(receivedCommands).toHaveLength(1);
       expect(receivedCommands[0]).toEqual(expect.objectContaining({ type: 'start_plan' }));
-      expect((receivedCommands[0] as { planText: string }).planText.trim()).toBe(planText.trim());
+      expect(parseYaml((receivedCommands[0] as { planText: string }).planText)).toEqual({
+        name: 'Debug Issue',
+        tasks: [{ id: 't1', description: 'Run the debugger', dependencies: [] }],
+        repoUrl: 'https://github.com/example/repo.git',
+      });
 
       await adapter.close();
     });

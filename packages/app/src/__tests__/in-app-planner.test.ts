@@ -54,6 +54,11 @@ tasks:
     dependencies: [first]
     command: echo second`;
 
+const DOCTORED_VALID_PLAN_TEXT = VALID_PLAN_TEXT.replace(
+  '    dependencies: [first]',
+  '    dependencies:\n      - first',
+);
+
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 function planningSession(
@@ -343,10 +348,10 @@ describe('planning chat', () => {
 
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
     const prompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
-    expect(prompt).toContain('Treat this as a conversation before a plan.');
-    expect(prompt).toContain('Talk through edge cases, corner cases, architecture, and ambiguity with the human.');
-    expect(prompt).toContain('Resolve those points before producing a YAML plan.');
-    expect(prompt).toContain('Draft YAML only after the human asks you to draft/proceed');
+    expect(prompt).toContain('This session is a planning conversation before any task plan exists.');
+    expect(prompt).toContain('Discuss relevant edge cases, corner cases, architecture choices, ambiguity');
+    expect(prompt).toContain('Drafting is not authorized yet.');
+    expect(prompt).toContain('only draft YAML when the user has explicitly approved drafting');
   });
 
   it('reuses an existing session and keeps its original preset', async () => {
@@ -431,7 +436,7 @@ describe('planning chat', () => {
     expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN);
   });
 
-  it('keeps unauthorized YAML from becoming draft-ready and refuses submit', async () => {
+  it('stages a valid initial draft without submitting it until the host acts', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
     const loadGeneratedPlan = vi.fn().mockResolvedValue({
@@ -452,22 +457,25 @@ describe('planning chat', () => {
     expect(result).toMatchObject({
       ok: true,
       reply: VALID_PLAN,
-      draftPlanAvailable: false,
+      draftPlanAvailable: true,
+      draftPlanText: DOCTORED_VALID_PLAN_TEXT,
     });
     if (!result.ok) throw new Error(result.error);
-    expect(sessions.get(result.sessionId)?.status).toBe('still_discussing');
-    expect(sessions.get(result.sessionId)?.draftPlanText).toBeUndefined();
+    expect(sessions.get(result.sessionId)?.status).toBe('draft_ready');
+    expect(sessions.get(result.sessionId)?.draftPlanText).toBe(DOCTORED_VALID_PLAN_TEXT);
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
 
     await expect(submitPlanningChatDraft({
       sessionId: result.sessionId,
     }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
-    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+    })).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+    expect(loadGeneratedPlan).toHaveBeenCalledWith(DOCTORED_VALID_PLAN_TEXT);
+    expect(sessions.get(result.sessionId)?.status).toBe('submitted');
   });
 
-  it('does not search an earlier draft when submitting after a summary-only turn', async () => {
+  it('retains the staged draft when a later turn only summarizes it', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'in-app-draft-'));
     try {
       const sessions = createInAppPlanningChatSessions();
@@ -504,7 +512,11 @@ describe('planning chat', () => {
         planningCommandBuilder,
         workingDir,
       });
-      expect(draftedBeforeAuthorization).toMatchObject({ ok: true, draftPlanAvailable: false });
+      expect(draftedBeforeAuthorization).toMatchObject({
+        ok: true,
+        draftPlanAvailable: true,
+        draftPlanText: VALID_PLAN_TEXT,
+      });
 
       await sendPlanningChatMessage({
         sessionId: session.id,
@@ -517,7 +529,8 @@ describe('planning chat', () => {
         workingDir,
       });
 
-      expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
+      expect(sessions.get(session.id)?.draftPlanText).toBe(VALID_PLAN_TEXT);
+      expect(sessions.get(session.id)?.status).toBe('draft_ready');
 
       const loadGeneratedPlan = vi.fn().mockResolvedValue({
         planName: 'Mock Plan',
@@ -526,9 +539,9 @@ describe('planning chat', () => {
       await expect(submitPlanningChatDraft({ sessionId: session.id }, {
         sessions,
         loadGeneratedPlan,
-      })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
-      expect(loadGeneratedPlan).not.toHaveBeenCalled();
-      expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
+      })).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(VALID_PLAN_TEXT);
+      expect(sessions.get(session.id)?.status).toBe('submitted');
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
@@ -592,7 +605,7 @@ describe('planning chat', () => {
     expect(sessions.get(scoped.sessionId)?.status).toBe('draft_ready');
   });
 
-  it('does not treat a standalone short confirmation as draft authorization', async () => {
+  it('stages a complete initial draft even when a standalone confirmation is not authorization', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
 
@@ -606,9 +619,14 @@ describe('planning chat', () => {
       planningCommandBuilder,
     });
 
-    expect(result).toMatchObject({ ok: true, draftPlanAvailable: false });
+    expect(result).toMatchObject({
+      ok: true,
+      draftPlanAvailable: true,
+      draftPlanText: DOCTORED_VALID_PLAN_TEXT,
+    });
     if (!result.ok) throw new Error(result.error);
-    expect(sessions.get(result.sessionId)?.draftPlanText).toBeUndefined();
+    expect(sessions.get(result.sessionId)?.status).toBe('draft_ready');
+    expect(sessions.get(result.sessionId)?.draftPlanText).toBe(DOCTORED_VALID_PLAN_TEXT);
   });
 
   it('keeps the retained draft when an ordinary critique reply coincidentally contains a fenced YAML plan', async () => {

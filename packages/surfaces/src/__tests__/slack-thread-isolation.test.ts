@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { SlackSurface } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
@@ -667,7 +668,7 @@ describe('E2E: Full Slack flow without real APIs', () => {
     expect(draft).toBeTruthy();
     expect(receivedCommands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
 
-    // Step 3: Approve the PlanDraft card → start_plan with the raw plan text.
+    // Step 3: Approve the PlanDraft card → start_plan with the thread repository normalized into the plan.
     say.mockClear();
     await getActionHandler(surface, 'plan_draft_approve')({
       action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
@@ -676,8 +677,11 @@ describe('E2E: Full Slack flow without real APIs', () => {
       respond: vi.fn().mockResolvedValue(undefined),
     });
     expect(receivedCommands).toHaveLength(1);
-    expect(receivedCommands[0]).toEqual(
-      expect.objectContaining({ type: 'start_plan', planText: expectedPlanText.trim() }),
-    );
+    expect(receivedCommands[0]).toEqual(expect.objectContaining({ type: 'start_plan' }));
+    expect(parseYaml((receivedCommands[0] as { planText: string }).planText)).toEqual({
+      name: 'Add REST API',
+      tasks: [{ id: 'implement', description: 'Implement the REST API endpoints', dependencies: [] }],
+      repoUrl: 'https://github.com/example/repo.git',
+    });
   });
 });

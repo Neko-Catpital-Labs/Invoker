@@ -56,6 +56,7 @@ async function renderKeyboardFixture(mock: MockInvoker) {
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
   await screen.findByTestId('workflow-node-wf-a');
   await screen.findByTestId('selected-workflow-mini-dag');
+  await screen.findByTestId('rf__node-wf-a/task-a');
 }
 
 function key(keyName: string, init: Partial<KeyboardEvent> = {}) {

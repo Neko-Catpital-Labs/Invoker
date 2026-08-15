@@ -6202,9 +6202,9 @@ describe('Orchestrator', () => {
       // ready task inside planPendingLaunchQueue()'s map and once more per
       // dequeued job inside drainSchedulerImpl()'s while loop, on top of
       // the single refresh startExecution() already does at its own top.
-      // The queued launch pass now reuses the queue-planning snapshot for
-      // draining, so refreshFromDb() stays both constant and minimal.
-      expect(refreshCount).toBeLessThanOrEqual(3);
+      // Queue planning and draining reuse startExecution()'s snapshot, so
+      // the entire transaction performs exactly one refresh.
+      expect(refreshCount).toBe(1);
     });
   });
 

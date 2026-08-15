@@ -128,7 +128,7 @@ function hasPendingLaunchRuntimeState(task: TaskState): boolean {
 function planPendingLaunchQueue(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
-  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+  opts?: LaunchReadinessOptions,
 ): TaskJob[] {
   // Refresh once for the whole batch, not once per candidate job below --
   // readiness for every job in this pass is evaluated against the same
@@ -396,7 +396,9 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
 export function drainSchedulerImpl(host: SchedulerDomainHost, opts?: LaunchReadinessOptions): TaskState[] {
   // Refresh once for the whole drain pass, not once per dequeued job below
   // (see planPendingLaunchQueue for the same reasoning).
-  host.refreshFromDb();
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);

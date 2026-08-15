@@ -258,7 +258,12 @@ export interface ExecutionResourceLeaseReleaseRow {
 export type TaskLaunchReadiness =
   | { ready: true; task: TaskState }
   | { ready: false; reason: string; task?: TaskState };
-export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean; activePersistedAttempts?: number };
+export type LaunchReadinessOptions = {
+  bypassLocalDependencyReadiness?: boolean;
+  activePersistedAttempts?: number;
+  /** Internal batch hint: every readiness check in this pass shares the caller's fresh snapshot. */
+  alreadyRefreshed?: boolean;
+};
 export type StartExecutionOptions = { limit?: number };
 
 export interface OrchestratorPersistence {
@@ -1612,6 +1617,7 @@ export class Orchestrator {
 
     return this.taskRepository.runInTransaction(() => this.autoStartReadyTasks(readyTaskIds, 0, {
       activePersistedAttempts: activeAttempts,
+      alreadyRefreshed: true,
     }));
   }
 

@@ -2274,6 +2274,7 @@ describe('Invoker terminal submit context (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
     });
+    await screen.findByTestId('rf__node-task-a');
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       fireEvent.click(screen.getByTestId('rf__node-task-a'));
