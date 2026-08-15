@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -74,6 +75,18 @@ class SafePushTests(unittest.TestCase):
             env=merged_env,
         )
 
+    def install_fake_gh(self, payload: dict[str, str]) -> Path:
+        wrapper_dir = self.root / "gh-bin"
+        wrapper_dir.mkdir(exist_ok=True)
+        wrapper = wrapper_dir / "gh"
+        wrapper.write_text(
+            "#!/usr/bin/env python3\n"
+            f"print({json.dumps(json.dumps(payload))})\n",
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        return wrapper_dir
+
     def test_matching_expected_sha_pushes_and_records_attempt_marker(self) -> None:
         pushed = self.commit(self.repo, "repair")
         ledger = self.root / "ledger.tsv"
@@ -109,6 +122,88 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stale-head", result.stderr)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
+        self.assertFalse(ledger.exists())
+
+    def test_merged_pr_at_expected_head_is_a_successful_noop(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "obsolete repair")
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.install_fake_gh({
+            "state": "MERGED",
+            "headRefName": "main",
+            "headRefOid": self.expected,
+        })
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9172",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env={"PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PR #9172 is MERGED", result.stdout)
+        self.assertEqual(self.remote_head(), remote_after_race)
+        self.assertFalse(ledger.exists())
+
+    def test_open_pr_at_expected_head_still_pushes_and_records_json_ledger(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.install_fake_gh({
+            "state": "OPEN",
+            "headRefName": "main",
+            "headRefOid": self.expected,
+        })
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9172",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env={"PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+        row = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(row["kind"], "repair-check-settled")
+        self.assertEqual(row["pr"], 9172)
+
+    def test_terminal_pr_with_moved_head_still_fails_closed(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "obsolete repair")
+        ledger = self.root / "ledger.jsonl"
+        wrapper_dir = self.install_fake_gh({
+            "state": "MERGED",
+            "headRefName": "main",
+            "headRefOid": remote_after_race,
+        })
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9172",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env={"PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head: PR #9172 head", result.stderr)
+        self.assertEqual(self.remote_head(), remote_after_race)
         self.assertFalse(ledger.exists())
 
     def test_push_lease_failure_records_no_attempt(self) -> None:

@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -18,6 +19,13 @@ class SafePushError(RuntimeError):
     def __init__(self, message: str, *, exit_code: int = 1):
         super().__init__(message)
         self.exit_code = exit_code
+
+
+@dataclass(frozen=True)
+class PullRequestSnapshot:
+    state: str
+    branch: str
+    head_sha: str
 
 
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
@@ -54,6 +62,63 @@ def validate_expected_head(expected_head: str) -> str:
     if not SHA_RE.fullmatch(value):
         raise SafePushError(f"expected head must be a 40-character SHA, got {expected_head!r}", exit_code=2)
     return value.lower()
+
+
+def pull_request_snapshot(pr_number: int, *, cwd: Path | str | None = None) -> PullRequestSnapshot:
+    completed = subprocess.run(
+        ["gh", "pr", "view", str(pr_number), "--json", "state,headRefName,headRefOid"],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        details = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        raise SafePushError(
+            f"could not verify PR #{pr_number} before push"
+            + (f":\n{details}" if details else ""),
+            exit_code=completed.returncode,
+        )
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise SafePushError(f"could not verify PR #{pr_number}: invalid gh JSON: {exc}", exit_code=2) from exc
+    if not isinstance(value, dict):
+        raise SafePushError(f"could not verify PR #{pr_number}: gh returned no PR object", exit_code=2)
+
+    state = str(value.get("state") or "").upper()
+    branch = str(value.get("headRefName") or "")
+    head_sha = str(value.get("headRefOid") or "").lower()
+    if state not in {"OPEN", "CLOSED", "MERGED"}:
+        raise SafePushError(f"could not verify PR #{pr_number}: unexpected state {state or 'missing'}", exit_code=2)
+    if not branch:
+        raise SafePushError(f"could not verify PR #{pr_number}: head branch is missing", exit_code=2)
+    if not SHA_RE.fullmatch(head_sha):
+        raise SafePushError(f"could not verify PR #{pr_number}: invalid head SHA {head_sha!r}", exit_code=2)
+    return PullRequestSnapshot(state=state, branch=branch, head_sha=head_sha)
+
+
+def terminal_pr_state(
+    pr_number: int,
+    *,
+    branch: str,
+    expected_head: str,
+    cwd: Path | str | None = None,
+) -> str | None:
+    expected = validate_expected_head(expected_head)
+    branch_name = normalize_branch(branch)
+    snapshot = pull_request_snapshot(pr_number, cwd=cwd)
+    if snapshot.branch != branch_name:
+        raise SafePushError(
+            f"stale-head: PR #{pr_number} head branch is {snapshot.branch}; expected {branch_name}",
+            exit_code=20,
+        )
+    if snapshot.head_sha != expected:
+        raise SafePushError(
+            f"stale-head: PR #{pr_number} head is {snapshot.head_sha}; expected {expected}",
+            exit_code=20,
+        )
+    return None if snapshot.state == "OPEN" else snapshot.state
 
 
 def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
@@ -184,6 +249,21 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
+        terminal_state = None
+        if args.json_pr is not None and args.expected_head is not None:
+            terminal_state = terminal_pr_state(
+                args.json_pr,
+                branch=args.branch,
+                expected_head=args.expected_head,
+                cwd=Path(args.cwd),
+            )
+        if terminal_state is not None:
+            print(
+                f"pr-worker-safe-push: no-op: PR #{args.json_pr} is {terminal_state} at the expected head; "
+                f"refs/heads/{normalize_branch(args.branch)} left unchanged"
+            )
+            return 0
+
         pushed = safe_push(
             branch=args.branch,
             expected_head=args.expected_head,
