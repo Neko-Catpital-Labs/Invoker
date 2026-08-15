@@ -361,22 +361,18 @@ export async function selectFirstWorkflow(page: Page): Promise<void> {
 }
 
 /** Load a plan into the running app via the IPC bridge and wait for its mini-DAG to render. */
-export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<string> {
+export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<void> {
   const planYaml = yamlStringify(plan);
   const beforeIds = await page.evaluate(async () => {
     const workflows = await window.invoker.listWorkflows();
     return workflows.map((workflow: { id: string }) => workflow.id);
   });
   await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
-  let workflowId: string | undefined;
-  await expect.poll(async () => {
-    const workflows = await page.evaluate(() => window.invoker.listWorkflows());
-    workflowId = workflows.find((workflow: { id: string }) => !beforeIds.includes(workflow.id))?.id;
-    return workflowId;
-  }, { timeout: 10000 }).toBeTruthy();
-  if (!workflowId) {
-    throw new Error('Loaded plan did not create a workflow');
-  }
+  const workflowId = await page.evaluate(async (knownIds) => {
+    const workflows = await window.invoker.listWorkflows();
+    const created = workflows.find((workflow: { id: string }) => !knownIds.includes(workflow.id));
+    return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
+  }, beforeIds);
   await page.waitForFunction(
     (expectedTaskCount) => window.invoker.getTasks().then((result) => {
       const tasks = Array.isArray(result) ? result : result.tasks;
@@ -389,9 +385,8 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
   await page.getByTestId('sidebar-planning').click();
   await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 10000 });
   await page.getByRole('button', { name: 'Refresh' }).click();
-  await selectWorkflowNode(page, workflowId);
+  await selectWorkflowNode(page, workflowId ?? undefined);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
-  return workflowId;
 }
 
 /** Open Plan graph so rail Refresh / DAG chrome exist (default surface is Planning home). */

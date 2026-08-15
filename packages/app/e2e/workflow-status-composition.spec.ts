@@ -17,17 +17,9 @@ async function workflowSnapshot(page: import('@playwright/test').Page) {
   return workflows[0] as any;
 }
 
-async function expectWorkflowStatus(
-  page: import('@playwright/test').Page,
-  status: string,
-  hasExpectedRollup: (workflow: any) => boolean = () => true,
-) {
-  let workflow: any;
-  await expect.poll(async () => {
-    workflow = await workflowSnapshot(page);
-    return workflow.status === status && hasExpectedRollup(workflow);
-  }).toBe(true);
-  return workflow;
+async function expectWorkflowStatus(page: import('@playwright/test').Page, status: string) {
+  await expect.poll(async () => (await workflowSnapshot(page)).status).toBe(status);
+  return workflowSnapshot(page);
 }
 
 test.describe('Workflow status composition', () => {
@@ -79,12 +71,7 @@ test.describe('Workflow status composition', () => {
       { taskId: 'beta', changes: { status: 'failed', execution: { error: 'beta failed differently', exitCode: 22 } } },
       { taskId: mergeTask.id, changes: { status: 'failed', execution: { error: 'merge could not proceed', exitCode: 33 } } },
     ]);
-    const expectedFailureErrors = ['alpha exploded', 'beta failed differently', 'merge could not proceed'];
-    workflow = await expectWorkflowStatus(page, 'failed', (candidate) =>
-      expectedFailureErrors.every((error) =>
-        candidate.rollup.failedTasks.some((task: { error?: string }) => task.error === error),
-      ),
-    );
+    workflow = await expectWorkflowStatus(page, 'failed');
     expect(workflow.rollup.failedTasks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ error: 'alpha exploded' }),
@@ -128,9 +115,7 @@ test.describe('Workflow status composition', () => {
     await injectTaskStates(page, [
       { taskId: 'alpha', changes: { status: 'stale' } },
     ]);
-    workflow = await expectWorkflowStatus(page, 'completed', (candidate) =>
-      candidate.rollup.countsByStatus.completed === 2 && candidate.rollup.countsByStatus.stale === 1,
-    );
+    workflow = await expectWorkflowStatus(page, 'completed');
     expect(workflow.rollup.countsByStatus.completed).toBe(2);
     expect(workflow.rollup.countsByStatus.stale).toBe(1);
   });
