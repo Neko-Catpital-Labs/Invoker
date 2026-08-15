@@ -1,0 +1,106 @@
+name: "Restack PR 9213 after CI prerequisites"
+description: |
+  PR #9213 changes only the CI-repair formula, but its merge-queue run failed
+  while the shared build-artifacts runner compiled node-pty without make.
+  PR #9209 already contains the isolated native-toolchain fix and its focused
+  policy repro, stacked above the UI Vitest bootstrap prerequisite in PR #9231.
+
+  This workflow preserves PR #9213's existing formula patch exactly and changes
+  only its ancestry so the feature follows those independently reviewed CI
+  prerequisites. Editing shared CI policy into PR #9213 or duplicating PR #9209
+  would mix review claims.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: stack/EdbertChan/plan/ci-regression-691e466-build-artifacts/ci-regression-691e466-build-artifacts-1-provision--16e74a99
+featureBranch: stack/EdbertChan/reflect-ci-repair-task/add-reflect-draft-skill-update-task-ci-regression--87bfc1ae
+
+tasks:
+  - id: restack-reflect-repair-formula
+    description: |
+      Reapply PR #9213's existing formula commit on top of the CI prerequisite stack.
+      Review claim: PR #9213 retains its exact reflect-task formula change while depending on the already-isolated CI prerequisite PRs #9231 and #9209.
+      Review lane: docs
+      Safety invariant: The formula file content remains byte-for-byte identical to commit 11f7c651308761724e4a3507db9b23948470e9bb; no shared CI workflow or product file changes in this slice.
+      Slice rationale: This is one dependency-ordering slice; the UI bootstrap and build-artifacts fixes remain independently reviewable in their existing prerequisite PRs.
+      Architectural effect: Only Git ancestry changes, from master -> PR #9213 to master -> PR #9231 -> PR #9209 -> PR #9213; formula control flow and public behavior are unchanged.
+      Goal: Restack the existing PR #9213 patch above the prerequisite branch without changing its contents.
+      Motivation: The failed build-artifacts check originates in shared runner provisioning, not in PR #9213's formula change.
+      Alternative considerations: Adding CI provisioning to PR #9213 and duplicating PR #9209 were rejected because either option mixes or duplicates review claims.
+      Implementation details: Fetch commit 11f7c651308761724e4a3507db9b23948470e9bb and cherry-pick only that commit onto the configured base branch; preserve the resulting formula file exactly.
+      Non-goals: No CI workflow edits, product edits, formula redesign, optional cleanup, or changes to the existing prerequisite patches.
+      Layer: docs
+      Feature state: active
+      Files:
+      - skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml
+      Change types:
+      - skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml: modify
+      Acceptance criteria:
+      - The only diff from the configured prerequisite base is skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml.
+      - That file's blob is identical to the blob at commit 11f7c651308761724e4a3507db9b23948470e9bb.
+      - `bash skills/plan-to-invoker/scripts/formula-doctor.sh ci-regression-watch` exits 0.
+    prompt: |
+      Assume no prior context. Restack the existing PR #9213 change on the configured prerequisite base.
+      Review claim: Preserve PR #9213's exact reflect-task formula change while placing it after prerequisite PRs #9231 and #9209.
+      Review lane: docs
+      Safety invariant: The formula file content must remain byte-for-byte identical to commit 11f7c651308761724e4a3507db9b23948470e9bb, and no shared CI workflow or product file may change.
+      Slice rationale: This task changes dependency ordering only; the CI fixes remain in their existing independent PRs.
+      Architectural effect: Change only branch ancestry; do not change formula control flow or public behavior.
+      Goal: Reapply commit 11f7c651308761724e4a3507db9b23948470e9bb on top of the configured base branch.
+      Motivation: The build-artifacts failure is caused by missing native tools on the shared runner and is already fixed with a repro in PR #9209.
+      Alternative considerations: Do not edit .github/workflows/ci.yml here and do not recreate the existing prerequisite fix.
+      Implementation details: Fetch the original commit if necessary, cherry-pick only 11f7c651308761724e4a3507db9b23948470e9bb, and resolve nothing by altering its formula-file content. Confirm the diff contains exactly the declared file.
+      Non-goals: No unrelated cleanup, CI-policy edits, product changes, or formula redesign.
+      Files:
+      - skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml
+      Change types:
+      - skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml: modify
+      Acceptance criteria:
+      - The configured-base-to-HEAD diff contains exactly the declared file.
+      - Its HEAD blob equals the same path at 11f7c651308761724e4a3507db9b23948470e9bb.
+      - `bash skills/plan-to-invoker/scripts/formula-doctor.sh ci-regression-watch` exits 0.
+      Pass condition: All three acceptance criteria hold and the formula-doctor command exits 0.
+    dependencies: []
+
+  - id: verify-reflect-formula
+    description: |
+      Run the formula's deterministic render-and-validation proof after restacking.
+      Review claim: The preserved ci-regression-watch formula still renders plans that pass the full skill-doctor gate.
+      Review lane: proof
+      Safety invariant: This task is read-only and validates the same formula file without changing it.
+      Slice rationale: This is the terminal behavioral proof for the dependency-only restack.
+      Architectural effect: None; verification adds no runtime or repository behavior.
+      Goal: Prove the restacked formula remains valid by construction.
+      Motivation: Branch restructuring must not silently alter the formula's rendered workflow contract.
+      Alternative considerations: Ad hoc YAML parsing was rejected because formula-doctor exercises rendering and the complete deterministic validation gate.
+      Implementation details: Run the repository's formula-doctor for ci-regression-watch and require exit code 0.
+      Non-goals: No file edits, snapshots, or broad test-suite execution.
+      Layer: docs
+      Feature state: active
+      Acceptance criteria:
+      - `bash skills/plan-to-invoker/scripts/formula-doctor.sh ci-regression-watch` exits 0.
+    command: bash skills/plan-to-invoker/scripts/formula-doctor.sh ci-regression-watch
+    dependencies:
+      - restack-reflect-repair-formula
+
+  - id: verify-restack-scope
+    description: |
+      Verify the restack preserves the original file blob and introduces no other diff.
+      Review claim: PR #9213's review unit remains exactly its original one-file formula patch.
+      Review lane: proof
+      Safety invariant: This read-only comparison fails if any unrelated file or any formula content changes.
+      Slice rationale: Patch identity is separate deterministic evidence for the restructuring claim.
+      Architectural effect: None; this task only compares Git objects and paths.
+      Goal: Prove the restacked branch has the intended ancestry without patch drift.
+      Motivation: A successful rebase is insufficient if it silently changes the review claim.
+      Alternative considerations: Visual or manual diff inspection was rejected in favor of exact path and blob comparisons.
+      Implementation details: Compare the configured-base diff path list and the formula blob against the original PR head.
+      Non-goals: No repository edits or publication changes.
+      Layer: docs
+      Feature state: active
+      Acceptance criteria:
+      - The configured-base-to-HEAD diff names exactly the formula workflow file.
+      - The formula blob matches commit 11f7c651308761724e4a3507db9b23948470e9bb exactly.
+    command: 'test "$(git diff --name-only stack/EdbertChan/plan/ci-regression-691e466-build-artifacts/ci-regression-691e466-build-artifacts-1-provision--16e74a99...HEAD)" = "skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml" && test "$(git rev-parse HEAD:skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml)" = "$(git rev-parse 11f7c651308761724e4a3507db9b23948470e9bb:skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml)"'
+    dependencies:
+      - restack-reflect-repair-formula
