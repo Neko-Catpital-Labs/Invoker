@@ -9,16 +9,6 @@ const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergi
 const MERGE_QUEUE_HEAD_GATE = "${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const HEAD_REF_EXPRESSION = '${{ github.head_ref }}';
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
-const UI_VITEST_LIBATOMIC_INSTALL = `if ! ldconfig -p 2>/dev/null | grep -Fq 'libatomic.so.1'; then
-  if command -v apt-get >/dev/null 2>&1; then
-    SUDO=""
-    if command -v sudo >/dev/null 2>&1; then
-      SUDO="sudo"
-    fi
-    $SUDO apt-get update
-    $SUDO apt-get install -y libatomic1 make g++ python3
-  fi
-fi`;
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const prBodyWorkflow = YAML.parse(readFileSync('.github/workflows/pr-body.yml', 'utf8'));
@@ -125,10 +115,6 @@ assert(
   uiVitestSystemDependencyIndex >= 0 && uiVitestSystemDependencyIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install Node system dependencies before actions/setup-node@v4',
 );
-assert(
-  String(uiVitestSteps[uiVitestSystemDependencyIndex].run ?? '').trim() === UI_VITEST_LIBATOMIC_INSTALL,
-  'ui-vitest must mutate the package index and install libatomic1 only when libatomic.so.1 is unavailable',
-);
 const uiVitestTestStep = uiVitestSteps.find((step) => step.name === 'Run UI vitest');
 assert(
   String(uiVitestTestStep?.run ?? '').trim() === 'pnpm --filter @invoker/ui test',
@@ -149,6 +135,20 @@ for (const requiredPackage of ['libatomic1', 'make', 'g++', 'python3']) {
     `ui-vitest system dependency step must install ${requiredPackage}`,
   );
 }
+assert(
+  uiVitestSystemDependencyRun.includes('sudo -n true')
+    && uiVitestSystemDependencyRun.includes('sudo -n apt-get')
+    && !uiVitestSystemDependencyRun.includes('SUDO="sudo"')
+    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestSystemDependencyRun),
+  'ui-vitest libatomic install must prove passwordless sudo and use it noninteractively',
+);
+assert(
+  uiVitestSystemDependencyRun.includes('download libatomic1')
+    && uiVitestSystemDependencyRun.includes('Dir::State')
+    && uiVitestSystemDependencyRun.includes('LD_LIBRARY_PATH=')
+    && uiVitestSystemDependencyRun.includes('GITHUB_ENV'),
+  'ui-vitest libatomic install must provide a no-root LD_LIBRARY_PATH fallback',
+);
 
 const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
 const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
