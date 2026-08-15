@@ -99,6 +99,21 @@ assert(
   uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
   'ui-vitest must install libatomic1 before actions/setup-node@v4',
 );
+const uiVitestLibatomicScript = String(uiVitestSteps[uiVitestLibatomicIndex]?.run ?? '');
+assert(
+  uiVitestLibatomicScript.includes('sudo -n true')
+    && uiVitestLibatomicScript.includes('sudo -n apt-get')
+    && !uiVitestLibatomicScript.includes('SUDO="sudo"')
+    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestLibatomicScript),
+  'ui-vitest libatomic install must prove passwordless sudo and use it noninteractively',
+);
+assert(
+  uiVitestLibatomicScript.includes('download libatomic1')
+    && uiVitestLibatomicScript.includes('Dir::State')
+    && uiVitestLibatomicScript.includes('LD_LIBRARY_PATH=')
+    && uiVitestLibatomicScript.includes('GITHUB_ENV'),
+  'ui-vitest libatomic install must provide a no-root LD_LIBRARY_PATH fallback',
+);
 
 assert(jobs['required-fast-extra'], 'Missing required-fast-extra job');
 assert(jobs['required-fast-extra'].if === FULL_CI_GATE, 'required-fast-extra must run only for full CI events');
