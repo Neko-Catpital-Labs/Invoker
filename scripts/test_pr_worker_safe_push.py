@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -74,6 +75,18 @@ class SafePushTests(unittest.TestCase):
             env=merged_env,
         )
 
+    def gh_stub_env(self, payload: dict[str, str]) -> dict[str, str]:
+        wrapper_dir = self.root / "gh-bin"
+        wrapper_dir.mkdir(exist_ok=True)
+        wrapper = wrapper_dir / "gh"
+        wrapper.write_text(
+            "#!/usr/bin/env python3\n"
+            f"print({json.dumps(json.dumps(payload))})\n",
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        return {"PATH": f"{wrapper_dir}:{os.environ['PATH']}"}
+
     def test_matching_expected_sha_pushes_and_records_attempt_marker(self) -> None:
         pushed = self.commit(self.repo, "repair")
         ledger = self.root / "ledger.tsv"
@@ -110,6 +123,59 @@ class SafePushTests(unittest.TestCase):
         self.assertIn("stale-head", result.stderr)
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
+
+    def test_merged_pr_with_deleted_branch_and_unchanged_head_is_already_settled(self) -> None:
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9167",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+            env=self.gh_stub_env({
+                "state": "MERGED",
+                "headRefName": "main",
+                "headRefOid": self.expected,
+            }),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already MERGED", result.stdout)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
+
+    def test_deleted_branch_only_settles_for_closed_pr_with_matching_branch_and_head(self) -> None:
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        self.commit(self.repo, "repair")
+        cases = (
+            ({"state": "OPEN", "headRefName": "main", "headRefOid": self.expected}, "open"),
+            ({"state": "MERGED", "headRefName": "main", "headRefOid": "0" * 40}, "moved"),
+            ({"state": "MERGED", "headRefName": "other", "headRefOid": self.expected}, "other-branch"),
+        )
+
+        for payload, label in cases:
+            with self.subTest(label=label):
+                ledger = self.root / f"{label}.jsonl"
+                result = self.invoke_helper(
+                    "--branch", "main",
+                    "--expected-head", self.expected,
+                    "--record-json-ledger", str(ledger),
+                    "--json-kind", "repair-check-settled",
+                    "--json-pr", "9167",
+                    "--json-head-sha", self.expected,
+                    "--json-key", "PR Body",
+                    env=self.gh_stub_env(payload),
+                )
+
+                self.assertEqual(result.returncode, 20)
+                self.assertIn("stale-head", result.stderr)
+                self.assertEqual(self.remote_head(), "")
+                self.assertFalse(ledger.exists())
 
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
