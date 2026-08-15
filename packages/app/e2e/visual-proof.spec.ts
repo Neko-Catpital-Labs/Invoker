@@ -2089,7 +2089,6 @@ test.describe('Visual proof capture', () => {
   });
 
   test('review gate stack side panel shows a linear PR chain', async ({ page }) => {
-    test.fixme(true, 'TODO(ci-regression-f8533de): enable after merge-task state refresh lands');
     await loadPlanAndSelectWorkflow(page, MERGE_GATE_TEXT_VISUAL_PLAN);
     await page.locator('.react-flow__node[data-testid$="mg-visual-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
@@ -2138,7 +2137,6 @@ test.describe('Visual proof capture', () => {
   });
 
   test('workflow inspector captures review-ready and not-review-ready pull request states', async ({ page }) => {
-    test.fixme(true, 'TODO(ci-regression-f8533de): enable after merge-task state refresh lands');
     const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
     await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
@@ -2180,7 +2178,6 @@ test.describe('Visual proof capture', () => {
   });
 
   test('sidebar keyboard navigation focuses the first inspector item, not the container', async ({ page }) => {
-    test.fixme(true, 'TODO(ci-regression-f8533de): enable after merge-task state refresh lands');
     const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
     await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
