@@ -438,6 +438,15 @@ export interface InvokerConfig {
     cleanupEnabled?: boolean;
   };
   slackBugScan?: SlackBugScanConfig;
+  /**
+   * Owner-side idle-task-cleanup worker gate. The worker itself ships
+   * dry-run-only (see `idle-task-cleanup-worker.ts`'s `FORCE_DRY_RUN`), so
+   * enabling this only turns on the dry-run scan/log, not real mutation.
+   * Default: disabled.
+   */
+  staleTaskCleanup?: {
+    enabled?: boolean;
+  };
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
