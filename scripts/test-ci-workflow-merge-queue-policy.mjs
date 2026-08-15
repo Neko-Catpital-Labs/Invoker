@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import YAML from 'yaml';
 
 const FULL_CI_GATE = "${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}";
@@ -9,7 +12,9 @@ const PR_BODY_MERGE_QUEUE_CANCEL_GATE = "${{ !startsWith(github.head_ref, 'mergi
 const MERGE_QUEUE_HEAD_GATE = "${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const HEAD_REF_EXPRESSION = '${{ github.head_ref }}';
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
-const UI_VITEST_LIBATOMIC_INSTALL = `if ! ldconfig -p 2>/dev/null | grep -Fq 'libatomic.so.1'; then
+const UI_VITEST_SYSTEM_DEPENDENCY_INSTALL = `if ! ldconfig -p 2>/dev/null | grep -Fq 'libatomic.so.1' ||
+  ! command -v make >/dev/null 2>&1 ||
+  ! command -v g++ >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     SUDO=""
     if command -v sudo >/dev/null 2>&1; then
@@ -60,6 +65,10 @@ function assertStepBefore(job, firstStepName, secondStepName, jobName) {
   assert(firstIndex >= 0, `${jobName} must include "${firstStepName}"`);
   assert(secondIndex >= 0, `${jobName} must include "${secondStepName}"`);
   assert(firstIndex < secondIndex, `${jobName} must run "${firstStepName}" before "${secondStepName}"`);
+}
+
+function writeExecutable(directory, name, body) {
+  writeFileSync(join(directory, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
 }
 
 for (const jobName of FULL_CI_JOBS) {
@@ -114,28 +123,57 @@ assert(
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
-const uiVitestLibatomicIndex = uiVitestSteps.findIndex(
+const uiVitestSystemDependencyIndex = uiVitestSteps.findIndex(
   (step) => step.name === 'Install Node runtime system dependencies',
 );
 assert(
-  uiVitestLibatomicIndex >= 0 && uiVitestLibatomicIndex < uiVitestNodeSetupIndex,
+  uiVitestSystemDependencyIndex >= 0 && uiVitestSystemDependencyIndex < uiVitestNodeSetupIndex,
   'ui-vitest must check for and install libatomic1 before actions/setup-node@v4',
 );
+const uiVitestSystemDependencyStep = uiVitestSteps[uiVitestSystemDependencyIndex];
 assert(
-  String(uiVitestSteps[uiVitestLibatomicIndex].run ?? '').trim() === UI_VITEST_LIBATOMIC_INSTALL,
-  'ui-vitest must mutate the package index and install libatomic1 only when libatomic.so.1 is unavailable',
+  String(uiVitestSystemDependencyStep.run ?? '').trim() === UI_VITEST_SYSTEM_DEPENDENCY_INSTALL,
+  'ui-vitest must install system dependencies when libatomic, make, or g++ is unavailable',
 );
 const uiVitestTestStep = uiVitestSteps.find((step) => step.name === 'Run UI vitest');
 assert(
   String(uiVitestTestStep?.run ?? '').trim() === 'pnpm --filter @invoker/ui test',
   'ui-vitest must run the full pnpm --filter @invoker/ui test command',
 );
-const uiVitestNodePrerequisiteStep = uiVitestSteps[uiVitestLibatomicIndex];
 assert(
-  String(uiVitestNodePrerequisiteStep?.run ?? '').includes('make')
-    && String(uiVitestNodePrerequisiteStep?.run ?? '').includes('g++'),
+  String(uiVitestSystemDependencyStep.run ?? '').includes('make')
+    && String(uiVitestSystemDependencyStep.run ?? '').includes('g++'),
   'ui-vitest must install make and g++ so pnpm can build native dependencies on self-hosted runners',
 );
+
+const uiVitestMockBin = mkdtempSync(join(tmpdir(), 'ui-vitest-system-dependencies-'));
+const uiVitestAptLog = join(uiVitestMockBin, 'apt-get.log');
+try {
+  writeExecutable(uiVitestMockBin, 'ldconfig', "echo 'libatomic.so.1 (libc6,x86-64)'");
+  writeExecutable(uiVitestMockBin, 'grep', 'exit 0');
+  writeExecutable(uiVitestMockBin, 'apt-get', 'printf \'%s\\n\' "$*" >> "$UI_VITEST_APT_LOG"');
+
+  execFileSync('/bin/bash', ['-e', '-c', uiVitestSystemDependencyStep.run], {
+    env: { PATH: uiVitestMockBin, UI_VITEST_APT_LOG: uiVitestAptLog },
+  });
+  assert(
+    readFileSync(uiVitestAptLog, 'utf8') === 'update\ninstall -y libatomic1 make g++\n',
+    'ui-vitest must provision native build tools when libatomic exists but make and g++ are unavailable',
+  );
+
+  rmSync(uiVitestAptLog);
+  writeExecutable(uiVitestMockBin, 'make', 'exit 0');
+  writeExecutable(uiVitestMockBin, 'g++', 'exit 0');
+  execFileSync('/bin/bash', ['-e', '-c', uiVitestSystemDependencyStep.run], {
+    env: { PATH: uiVitestMockBin, UI_VITEST_APT_LOG: uiVitestAptLog },
+  });
+  assert(
+    !existsSync(uiVitestAptLog),
+    'ui-vitest must not mutate the package index when libatomic, make, and g++ are already available',
+  );
+} finally {
+  rmSync(uiVitestMockBin, { recursive: true, force: true });
+}
 
 const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
 const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
