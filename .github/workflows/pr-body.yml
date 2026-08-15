@@ -160,6 +160,12 @@ jobs:
             exit 1
           fi
 
+          if [[ -e "${RUNNER_TOOL_CACHE}/node" || -L "${RUNNER_TOOL_CACHE}/node" ]] &&
+            ! sudo -n chown -R -h -P "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}/node"; then
+            echo "::error::Could not assign the existing Node.js tool-cache subtree to the current runner account."
+            exit 1
+          fi
+
           if [[ ! -d "${RUNNER_TOOL_CACHE}" || ! -w "${RUNNER_TOOL_CACHE}" ]]; then
             echo "::error::RUNNER_TOOL_CACHE is not writable by the current runner account."
             exit 1
