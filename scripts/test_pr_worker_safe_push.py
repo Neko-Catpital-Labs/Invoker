@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -61,6 +62,23 @@ class SafePushTests(unittest.TestCase):
 
     def remote_head(self, branch: str = "main") -> str:
         return safe_push.remote_branch_sha(branch, remote="origin", cwd=self.repo) or ""
+
+    def test_portable_user_state_path_rehomes_another_workers_invoker_path(self) -> None:
+        worker_home = self.root / "worker-home"
+
+        resolved = safe_push.portable_user_state_path(
+            "/Users/submitter/.invoker/mergify-admin-requeue-state.jsonl",
+            home=worker_home,
+        )
+
+        self.assertEqual(resolved, worker_home / ".invoker" / "mergify-admin-requeue-state.jsonl")
+
+    def test_portable_user_state_path_preserves_explicit_non_invoker_path(self) -> None:
+        explicit = self.root / "shared" / "ledger.jsonl"
+
+        resolved = safe_push.portable_user_state_path(explicit, home=self.root / "worker-home")
+
+        self.assertEqual(resolved, explicit)
 
     def invoke_helper(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         command = ["python3", str(Path(__file__).with_name("pr_worker_safe_push.py")), *args]
@@ -168,6 +186,50 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
+
+    def test_deleted_pr_branch_with_matching_pull_ref_settles_without_recreating_branch(self) -> None:
+        git(self.repo, "push", "origin", f"{self.expected}:refs/pull/123/head")
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "123",
+            "--json-head-sha", self.expected,
+            "--json-key", "UI Vitest",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("nothing to push", result.stdout)
+        self.assertEqual(self.remote_head(), "")
+        row = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(row["pr"], 123)
+        self.assertEqual(row["headSha"], self.expected)
+
+    def test_deleted_pr_branch_with_moved_pull_ref_stays_stale(self) -> None:
+        moved = self.commit(self.repo, "moved")
+        git(self.repo, "push", "origin", f"{moved}:refs/pull/123/head")
+        git(self.repo, "push", "origin", ":refs/heads/main")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "123",
+            "--json-head-sha", self.expected,
+            "--json-key", "UI Vitest",
+        )
+
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(self.remote_head(), "")
+        self.assertFalse(ledger.exists())
 
 
 if __name__ == "__main__":

@@ -56,8 +56,7 @@ def validate_expected_head(expected_head: str) -> str:
     return value.lower()
 
 
-def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
-    ref = f"refs/heads/{normalize_branch(branch)}"
+def remote_ref_sha(ref: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
     out = run_git(["ls-remote", remote, ref], cwd=cwd)
     if not out:
         return None
@@ -66,6 +65,25 @@ def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | 
         if len(parts) >= 2 and parts[1] == ref:
             return parts[0].lower()
     return None
+
+
+def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
+    return remote_ref_sha(f"refs/heads/{normalize_branch(branch)}", remote=remote, cwd=cwd)
+
+
+def deleted_pr_branch_is_settled(
+    branch: str,
+    expected_head: str,
+    pr_number: int,
+    *,
+    remote: str = "origin",
+    cwd: Path | str | None = None,
+) -> bool:
+    branch_name = normalize_branch(branch)
+    expected = validate_expected_head(expected_head)
+    if remote_branch_sha(branch_name, remote=remote, cwd=cwd) is not None:
+        return False
+    return remote_ref_sha(f"refs/pull/{pr_number}/head", remote=remote, cwd=cwd) == expected
 
 
 def local_head(*, cwd: Path | str | None = None) -> str:
@@ -150,6 +168,15 @@ def append_json_ledger(
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def portable_user_state_path(path: str | Path, *, home: Path | None = None) -> Path:
+    value = Path(path).expanduser()
+    worker_home = home or Path.home()
+    if not value.is_absolute() or value.is_relative_to(worker_home) or ".invoker" not in value.parts:
+        return value
+    marker = value.parts.index(".invoker")
+    return worker_home.joinpath(*value.parts[marker:])
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Safely update a PR worker-owned branch only when its remote head matches the captured SHA.",
@@ -184,25 +211,12 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
-            branch=args.branch,
-            expected_head=args.expected_head,
-            expect_missing=args.expect_missing,
-            remote=args.remote,
-            cwd=Path(args.cwd),
-        )
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
                 "--tsv-kind": args.tsv_kind,
                 "--tsv-key": args.tsv_key,
                 "--tsv-marker": args.tsv_marker,
             })
-            append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
-                kind=args.tsv_kind,
-                key=args.tsv_key,
-                marker=args.tsv_marker,
-            )
         if args.record_json_ledger:
             require_all("JSONL ledger recording", {
                 "--json-kind": args.json_kind,
@@ -210,6 +224,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--json-head-sha": args.json_head_sha,
                 "--json-key": args.json_key,
             })
+
+        cwd = Path(args.cwd)
+        settled_without_push = (
+            not args.expect_missing
+            and args.json_pr is not None
+            and deleted_pr_branch_is_settled(
+                args.branch,
+                args.expected_head,
+                args.json_pr,
+                remote=args.remote,
+                cwd=cwd,
+            )
+        )
+        pushed = validate_expected_head(args.expected_head) if settled_without_push else safe_push(
+            branch=args.branch,
+            expected_head=args.expected_head,
+            expect_missing=args.expect_missing,
+            remote=args.remote,
+            cwd=cwd,
+        )
+        if args.record_tsv_ledger:
+            append_tsv_ledger(
+                portable_user_state_path(args.record_tsv_ledger),
+                kind=args.tsv_kind,
+                key=args.tsv_key,
+                marker=args.tsv_marker,
+            )
+        if args.record_json_ledger:
             meta = None
             if args.json_meta:
                 decoded = json.loads(args.json_meta)
@@ -217,14 +259,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
                 meta = decoded
             append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
+                portable_user_state_path(args.record_json_ledger),
                 kind=args.json_kind,
                 pr_number=args.json_pr,
                 head_sha=args.json_head_sha,
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        branch_name = normalize_branch(args.branch)
+        if settled_without_push:
+            print(
+                f"pr-worker-safe-push: refs/heads/{branch_name} is deleted and "
+                f"refs/pull/{args.json_pr}/head remains at {pushed}; nothing to push"
+            )
+        else:
+            print(f"pr-worker-safe-push: pushed refs/heads/{branch_name} to {pushed}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
