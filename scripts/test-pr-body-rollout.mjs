@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { strict as assert } from 'node:assert';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -166,6 +166,41 @@ assert.doesNotMatch(
   /\/home\/runner(?:\/|['"])/,
   'PR Body tool-cache ownership repair must not hard-code a runner path',
 );
+
+const toolCacheRunMarker = '        run: |\n';
+const toolCacheRunStart = toolCacheStep.indexOf(toolCacheRunMarker);
+assert.notEqual(toolCacheRunStart, -1, 'PR Body tool-cache ownership repair must use a literal run script');
+const toolCacheRunScript = toolCacheStep
+  .slice(toolCacheRunStart + toolCacheRunMarker.length)
+  .split('\n')
+  .map((line) => line.startsWith('          ') ? line.slice(10) : line)
+  .join('\n');
+
+const writableCacheReproDir = mkdtempSync(join(tmpdir(), 'pr-body-writable-tool-cache-'));
+try {
+  const fakeBinDir = join(writableCacheReproDir, 'bin');
+  const runnerToolCache = join(writableCacheReproDir, 'tool cache');
+  mkdirSync(fakeBinDir);
+  mkdirSync(runnerToolCache);
+  writeFileSync(join(fakeBinDir, 'sudo'), '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
+
+  const result = spawnSync('bash', ['-c', toolCacheRunScript], {
+    env: {
+      ...process.env,
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      RUNNER_TOOL_CACHE: runnerToolCache,
+    },
+    encoding: 'utf8',
+  });
+
+  assert.equal(
+    result.status,
+    0,
+    `PR Body must not require sudo when RUNNER_TOOL_CACHE is already writable:\n${result.stdout}${result.stderr}`,
+  );
+} finally {
+  rmSync(writableCacheReproDir, { recursive: true, force: true });
+}
 
 const outputDir = mkdtempSync(join(tmpdir(), 'pr-body-rollout-'));
 const outputFile = join(outputDir, 'github-output');
