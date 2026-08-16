@@ -164,6 +164,58 @@ export interface WorkerRuntimeController {
   snapshot(): WorkerStatusSnapshot;
 }
 
+export function createOwnerWorkerStatusReader(options: {
+  queryOwner: () => Promise<WorkerStatusSnapshot>;
+  createUnavailableSnapshot: () => WorkerStatusSnapshot;
+  now?: () => string;
+  onUnavailable?: (error: unknown) => void;
+}): () => Promise<WorkerStatusSnapshot> {
+  let latestSuccessfulSnapshot: WorkerStatusSnapshot | null = null;
+  const now = options.now ?? (() => new Date().toISOString());
+
+  return async () => {
+    try {
+      const ownerSnapshot = await options.queryOwner();
+      const {
+        authority: _authority,
+        lastSuccessfulAt: _lastSuccessfulAt,
+        unavailableReason: _unavailableReason,
+        ...snapshot
+      } = ownerSnapshot;
+      const liveSnapshot: WorkerStatusSnapshot = {
+        ...snapshot,
+        authority: 'live',
+        lastSuccessfulAt: now(),
+      };
+      latestSuccessfulSnapshot = liveSnapshot;
+      return liveSnapshot;
+    } catch (error) {
+      options.onUnavailable?.(error);
+      const unavailableReason = error instanceof Error ? error.message : String(error);
+      if (latestSuccessfulSnapshot) {
+        return {
+          ...latestSuccessfulSnapshot,
+          authority: 'cached',
+          unavailableReason,
+        };
+      }
+      const {
+        authority: _authority,
+        lastSuccessfulAt: _lastSuccessfulAt,
+        unavailableReason: _unavailableReason,
+        workers: _workers,
+        ...snapshot
+      } = options.createUnavailableSnapshot();
+      return {
+        ...snapshot,
+        workers: [],
+        authority: 'unavailable',
+        unavailableReason,
+      };
+    }
+  };
+}
+
 type WorkerStatusPersistence = Pick<
   SQLiteAdapter,
   | 'listWorkerActions'
