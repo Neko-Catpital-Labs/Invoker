@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { SQLiteAdapter, SlackPlanDraftRepository } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
@@ -81,7 +82,13 @@ describe('approveSlackPlanDraft', () => {
 
     await approve(onCommand, draft);
 
-    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({ type: 'start_plan', planText: draft.planText }));
+    const submitted = onCommand.mock.calls[0][0];
+    expect(submitted).toEqual(expect.objectContaining({ type: 'start_plan', repoUrl: draft.repoUrl }));
+    expect(parseYaml(submitted.planText)).toEqual({
+      name: 'Single',
+      tasks: [{ id: 'a', description: 'A' }],
+      repoUrl: draft.repoUrl,
+    });
     const stored = repo.get(draft.draftId, draft.version);
     expect(stored?.status).toBe('submitted');
     expect(JSON.parse(stored?.workflowIdsJson ?? '[]')).toEqual(['wf-1']);
