@@ -126,9 +126,10 @@ assert(
 );
 const uiVitestSystemDependenciesScript = String(uiVitestSteps[uiVitestSystemDependenciesIndex]?.run ?? '');
 assert(
-  uiVitestSystemDependenciesScript.includes('apt-get install -y libatomic1 make g++ python3')
-    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get install -y libatomic1 make g++ python3'),
-  'ui-vitest must install make, g++, and python3 so pnpm can build native dependencies',
+  uiVitestSystemDependenciesScript.includes('for tool in make g++ python3 unzip; do')
+    && uiVitestSystemDependenciesScript.includes('apt-get install -y libatomic1 make g++ python3 unzip')
+    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get install -y libatomic1 make g++ python3 unzip'),
+  'ui-vitest must install make, g++, python3, and unzip so pnpm can build and repair native dependencies',
 );
 assert(
   uiVitestSystemDependenciesScript.includes('sudo -n true')
