@@ -41,6 +41,9 @@ import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
+  RepairFiling,
+  RepairFilingInsertInput,
+  RepairFilingInsertResult,
   ReviewGateLookup,
   Workflow,
   WorkflowReadOptions,
@@ -2636,6 +2639,73 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteSlackPendingConfirmation(confirmKey: string): void {
     this.execRun('DELETE FROM slack_pending_confirmations WHERE confirm_key = ?', [confirmKey]);
+  }
+
+  // ── Repair Filings (cross-system CI/PR repair dedup ledger) ──
+
+  private mapRepairFilingRow(row: any): RepairFiling {
+    return {
+      id: row.id as number,
+      kind: row.kind as string,
+      subject: row.subject as string,
+      stateSha: row.state_sha as string,
+      metadata: row.metadata ? (JSON.parse(row.metadata as string) as Record<string, unknown>) : null,
+      createdAt: row.created_at as string,
+    };
+  }
+
+  insertRepairFiling(input: RepairFilingInsertInput): RepairFilingInsertResult {
+    return this.runTransaction(() => {
+      this.execRun(
+        `INSERT INTO repair_filings (kind, subject, state_sha, metadata)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(kind, subject, state_sha) DO NOTHING`,
+        [input.kind, input.subject, input.stateSha, input.metadata ? JSON.stringify(input.metadata) : null],
+      );
+      const inserted = this.db.getRowsModified() > 0;
+      const row = this.queryOne(
+        'SELECT * FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+        [input.kind, input.subject, input.stateSha],
+      );
+      if (!row) {
+        throw new Error('insertRepairFiling: row missing immediately after INSERT ... ON CONFLICT DO NOTHING');
+      }
+      return { inserted, row: this.mapRepairFilingRow(row) };
+    });
+  }
+
+  getRepairFiling(kind: string, subject: string, stateSha: string): RepairFiling | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+      [kind, subject, stateSha],
+    );
+    return row ? this.mapRepairFilingRow(row) : undefined;
+  }
+
+  listRepairFilings(kind?: string, subject?: string): RepairFiling[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (kind !== undefined) {
+      conditions.push('kind = ?');
+      params.push(kind);
+    }
+    if (subject !== undefined) {
+      conditions.push('subject = ?');
+      params.push(subject);
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const rows = this.queryAll(`SELECT * FROM repair_filings${where} ORDER BY created_at DESC`, params);
+    return rows.map((row: any) => this.mapRepairFilingRow(row));
+  }
+
+  deleteRepairFiling(kind: string, subject: string, stateSha: string): boolean {
+    return this.runTransaction(() => {
+      this.execRun(
+        'DELETE FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+        [kind, subject, stateSha],
+      );
+      return this.db.getRowsModified() > 0;
+    });
   }
 
   // ── Workflow Channels (Slack workflow↔channel mapping) ──
