@@ -596,7 +596,7 @@ jobs:
           }
 
           has_build_tools() {
-            command -v make >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1
+            command -v make >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1
           }
 
           if has_libatomic && has_build_tools; then
@@ -604,24 +604,24 @@ jobs:
           fi
 
           if ! command -v apt-get >/dev/null 2>&1; then
-            echo "::error::libatomic1, make, and g++ are required for Node ${NODE_VERSION}, but apt-get is unavailable."
+            echo "::error::libatomic1, make, g++, python3, and unzip are required for Node ${NODE_VERSION}, but apt-get is unavailable."
             exit 1
           fi
 
           if [ "$(id -u)" -eq 0 ]; then
             apt-get update
-            apt-get install -y libatomic1 make g++
+            apt-get install -y libatomic1 make g++ python3 unzip
             exit 0
           fi
 
           if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
             sudo -n apt-get update
-            sudo -n apt-get install -y libatomic1 make g++
+            sudo -n apt-get install -y libatomic1 make g++ python3 unzip
             exit 0
           fi
 
           if ! has_build_tools; then
-            echo "::error::make and g++ are required for Node ${NODE_VERSION} but cannot be installed without sudo."
+            echo "::error::make, g++, python3, and unzip are required for Node ${NODE_VERSION} but cannot be installed without sudo."
             exit 1
           fi
 
