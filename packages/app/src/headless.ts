@@ -426,6 +426,22 @@ export function resolveHeadlessDiskHeadroomConfig(
   };
 }
 
+export function resolveHeadlessClaudeOauthRefreshConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['claudeOauthRefresh']> {
+  return {
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
+    })),
+  };
+}
+
 export function resolveHeadlessInfraRepairConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
   repoRoot: string,
@@ -571,6 +587,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
       diskHeadroom: resolveHeadlessDiskHeadroomConfig(deps.invokerConfig),
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
+      claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');
