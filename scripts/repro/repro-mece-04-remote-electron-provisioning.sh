@@ -204,3 +204,68 @@ if [[ ! -x "$TMP_DIR/repo/node_modules/electron/dist/electron" ]]; then
 fi
 
 echo "remote-electron-provisioning fixed: fallback extraction succeeds without a host unzip executable"
+
+# Regression: a self-hosted CI runner reuses the same on-disk workspace across
+# job runs. If a run is killed (job cancellation, timeout-minutes) while
+# extract-zip is mid-write, an extraction straight into the live dist/
+# directory can leave some files present but not the platform binary --
+# resolveInstalledElectronBinary()'s existence-only check must never treat
+# that half-written state as installed, and a subsequent install-only must
+# never leave dist/ in that half-written shape either.
+cat >"$TMP_DIR/repo/node_modules/extract-zip/index.js" <<'JS'
+const fs = require('node:fs');
+const path = require('node:path');
+
+module.exports = async function extractZip(zipPath, options) {
+  if (zipPath !== process.env.FAKE_ELECTRON_ZIP) {
+    throw new Error(`unexpected Electron archive: ${zipPath}`);
+  }
+  fs.writeFileSync(process.env.FAKE_EXTRACT_ZIP_MARKER, 'yes\n');
+  fs.mkdirSync(path.join(options.dir, 'locales'), { recursive: true });
+  fs.writeFileSync(path.join(options.dir, 'locales', 'en-US.pak'), 'fake-locale-data');
+  throw new Error('simulated interruption: killed mid-extraction before the platform binary was written');
+};
+JS
+
+rm -f "$TMP_DIR/repo/installer-ran" "$FAKE_ELECTRON_DOWNLOAD_MARKER" "$FAKE_EXTRACT_ZIP_MARKER"
+rm -rf "$TMP_DIR/repo/node_modules/electron/dist" "$TMP_DIR/repo/node_modules/electron/path.txt"
+PLATFORM_BINARY_PATH="$("$NODE_BIN" -e "
+switch (process.platform) {
+  case 'mas':
+  case 'darwin':
+    console.log('Electron.app/Contents/MacOS/Electron');
+    break;
+  case 'win32':
+    console.log('electron.exe');
+    break;
+  default:
+    console.log('electron');
+}
+")"
+
+set +e
+(
+  cd "$TMP_DIR/repo"
+  PATH="$TMP_DIR/empty-path" \
+    FAKE_ELECTRON_INSTALL_EMPTY_SUCCESS=1 \
+    FAKE_ELECTRON_ZIP="$FAKE_ELECTRON_ZIP" \
+    FAKE_ELECTRON_DOWNLOAD_MARKER="$FAKE_ELECTRON_DOWNLOAD_MARKER" \
+    FAKE_EXTRACT_ZIP_MARKER="$FAKE_EXTRACT_ZIP_MARKER" \
+    "$NODE_BIN" scripts/electron.cjs --install-only
+) >"$TMP_DIR/interrupted-install-stdout" 2>"$TMP_DIR/interrupted-install-stderr"
+INTERRUPTED_STATUS=$?
+set -e
+
+if [[ "$INTERRUPTED_STATUS" -eq 0 ]]; then
+  echo "repro: expected install-only to fail after an interrupted extraction" >&2
+  echo "--- stderr ---" >&2
+  cat "$TMP_DIR/interrupted-install-stderr" >&2
+  exit 1
+fi
+if [[ -e "$TMP_DIR/repo/node_modules/electron/dist" ]] && [[ ! -e "$TMP_DIR/repo/node_modules/electron/dist/$PLATFORM_BINARY_PATH" ]]; then
+  echo "repro: an interrupted extraction left a half-written dist/ (has locales/ but not the platform binary) -- this is the corrupted state observed on the real CI fleet" >&2
+  find "$TMP_DIR/repo/node_modules/electron/dist" >&2
+  exit 1
+fi
+
+echo "remote-electron-provisioning interrupted-extraction fixed: a killed extraction never leaves a half-written dist/"
