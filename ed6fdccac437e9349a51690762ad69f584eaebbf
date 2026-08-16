@@ -1,0 +1,6 @@
+Revision history for #9420:
+
+rev 2 (rebase) 2026-08-16 11:41 UTC
+rev 1 (initial) 2026-08-16 11:41 UTC
+
+<!-- mergify-revision-data: {"schema_version":1,"pull_number":9420,"entries":[{"number":1,"change_type":"initial","old_sha":null,"new_sha":"5dbcbc3e630cd1cf030b3b139ed727906ca72432","timestamp_iso":"2026-08-16T11:41:11Z","reason":"","replay_sha":null,"compare_url":null},{"number":2,"change_type":"rebase","old_sha":"5dbcbc3e630cd1cf030b3b139ed727906ca72432","new_sha":"ed6fdccac437e9349a51690762ad69f584eaebbf","timestamp_iso":"2026-08-16T11:41:11Z","reason":"","replay_sha":null,"compare_url":"https://github.com/Neko-Catpital-Labs/Invoker/compare/5dbcbc3e630cd1cf030b3b139ed727906ca72432...ed6fdccac437e9349a51690762ad69f584eaebbf"}]} -->
