@@ -203,6 +203,14 @@ assert(
   + 'the same way ui-vitest already does -- raw `sudo apt-get` hangs on "a password is required" '
   + 'when the self-hosted runner has no passwordless sudo configured',
 );
+assert(
+  requiredFastExtraNodeLibraryScript.includes('unzip'),
+  'required-fast-extra must install unzip so the Electron repair fallback can complete during pnpm install',
+);
+assert(
+  requiredFastExtraNodeLibraryScript.includes('python3'),
+  'required-fast-extra must install python3 for node-gyp native builds on self-hosted runners',
+);
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
 const branchCarryForwardEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Branch Carry Forward');
 assert(branchCarryForwardEntry, 'required-fast-extra matrix must include Branch Carry Forward');
