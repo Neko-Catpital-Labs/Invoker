@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-// Checked-in registry of known-flaky test files, quarantined by file glob.
-// CI reads this via computeVitestExcludeArgs() to skip them without editing
-// test source; `node scripts/flaky-test-registry.mjs quarantine|restore|list`
-// is the manual entry point.
+// Checked-in registry of known-flaky quarantine targets. Each entry is either
+// a vitest test-file glob (kind: 'vitest-file', the default) or a
+// scripts/test-suites/**.sh relpath (kind: 'suite').
+// CI reads this via computeVitestExcludeArgs() to skip flaky vitest files
+// without editing test source; the do1 e2e worker reads it via
+// computeSuiteExcludeList() to skip flaky suite scripts. `node
+// scripts/flaky-test-registry.mjs quarantine|restore|list` is the manual
+// entry point.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,30 +16,36 @@ const REPO_ROOT = dirname(dirname(__filename));
 
 export const REGISTRY_PATH = resolve(REPO_ROOT, 'scripts/flaky-test-registry.json');
 
+const VALID_KINDS = new Set(['vitest-file', 'suite']);
+
 export function readRegistry(registryText) {
   if (!registryText || !registryText.trim()) return {};
   const parsed = JSON.parse(registryText);
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('flaky-test-registry.json must be a JSON object keyed by test-file glob.');
+    throw new Error('flaky-test-registry.json must be a JSON object keyed by quarantine target.');
   }
   return parsed;
 }
 
-export function quarantineInRegistry(registry, testGlob, { reason, source, now }) {
-  if (!testGlob || !testGlob.trim()) {
-    throw new Error('A test-file glob is required to quarantine.');
+export function quarantineInRegistry(registry, target, { reason, source, now, kind }) {
+  if (!target || !target.trim()) {
+    throw new Error('A quarantine target (test-file glob or suite path) is required.');
+  }
+  const resolvedKind = kind ?? 'vitest-file';
+  if (!VALID_KINDS.has(resolvedKind)) {
+    throw new Error(`Unknown kind "${resolvedKind}". Use "vitest-file" or "suite".`);
   }
   return {
     ...registry,
-    [testGlob]: { reason: reason || 'unspecified', source: source || 'manual', quarantinedAt: now },
+    [target]: { reason: reason || 'unspecified', source: source || 'manual', quarantinedAt: now, kind: resolvedKind },
   };
 }
 
-export function restoreInRegistry(registry, testGlob) {
-  if (!(testGlob in registry)) {
-    throw new Error(`"${testGlob}" is not currently quarantined.`);
+export function restoreInRegistry(registry, target) {
+  if (!(target in registry)) {
+    throw new Error(`"${target}" is not currently quarantined.`);
   }
-  const { [testGlob]: _removed, ...rest } = registry;
+  const { [target]: _removed, ...rest } = registry;
   return rest;
 }
 
@@ -43,9 +53,23 @@ export function restoreInRegistry(registry, testGlob) {
  * vitest's CLI `--exclude <glob>` is additive to (not a replacement of) its
  * own default excludes (node_modules, dist, etc.), so this only ever adds
  * exclusions on top of the normal run -- never widens what already runs.
+ * Suite-kind entries are never vitest globs, so they are filtered out here.
  */
 export function computeVitestExcludeArgs(registry) {
-  return Object.keys(registry).flatMap((testGlob) => ['--exclude', testGlob]);
+  return Object.entries(registry)
+    .filter(([, entry]) => (entry.kind ?? 'vitest-file') === 'vitest-file')
+    .flatMap(([testGlob]) => ['--exclude', testGlob]);
+}
+
+/**
+ * Suite-kind entries as a list of scripts/test-suites/**.sh relpaths, ready
+ * to join into run-all-tests.sh's INVOKER_TEST_ALL_EXCLUDE (comma or
+ * space separated).
+ */
+export function computeSuiteExcludeList(registry) {
+  return Object.entries(registry)
+    .filter(([, entry]) => entry.kind === 'suite')
+    .map(([suitePath]) => suitePath);
 }
 
 function readRegistryFile() {
@@ -58,7 +82,7 @@ function writeRegistryFile(registry) {
 }
 
 function main(argv) {
-  const [command, testGlob, ...rest] = argv;
+  const [command, target, ...rest] = argv;
   if (command === 'list') {
     process.stdout.write(`${JSON.stringify(readRegistryFile(), null, 2)}\n`);
     return;
@@ -67,9 +91,13 @@ function main(argv) {
     process.stdout.write(`${computeVitestExcludeArgs(readRegistryFile()).join(' ')}\n`);
     return;
   }
-  if (!command || !testGlob) {
+  if (command === 'exclude-suites-env') {
+    process.stdout.write(`${computeSuiteExcludeList(readRegistryFile()).join(',')}\n`);
+    return;
+  }
+  if (!command || !target) {
     process.stderr.write(
-      'Usage: node scripts/flaky-test-registry.mjs <quarantine|restore|list|exclude-args> "<test file glob>" [--reason "..."] [--source auto|manual]\n',
+      'Usage: node scripts/flaky-test-registry.mjs <quarantine|restore|list|exclude-args|exclude-suites-env> "<test file glob or suite path>" [--reason "..."] [--source auto|manual] [--kind vitest-file|suite]\n',
     );
     process.exit(1);
   }
@@ -77,23 +105,26 @@ function main(argv) {
   const reason = reasonIndex !== -1 ? rest[reasonIndex + 1] : undefined;
   const sourceIndex = rest.indexOf('--source');
   const source = sourceIndex !== -1 ? rest[sourceIndex + 1] : undefined;
+  const kindIndex = rest.indexOf('--kind');
+  const kind = kindIndex !== -1 ? rest[kindIndex + 1] : undefined;
 
   if (command === 'quarantine') {
-    const registry = quarantineInRegistry(readRegistryFile(), testGlob, {
+    const registry = quarantineInRegistry(readRegistryFile(), target, {
       reason,
       source,
+      kind,
       now: new Date().toISOString(),
     });
     writeRegistryFile(registry);
-    process.stdout.write(`Quarantined "${testGlob}": ${reason || 'unspecified'}\n`);
+    process.stdout.write(`Quarantined "${target}": ${reason || 'unspecified'}\n`);
     return;
   }
   if (command === 'restore') {
-    writeRegistryFile(restoreInRegistry(readRegistryFile(), testGlob));
-    process.stdout.write(`Restored "${testGlob}".\n`);
+    writeRegistryFile(restoreInRegistry(readRegistryFile(), target));
+    process.stdout.write(`Restored "${target}".\n`);
     return;
   }
-  throw new Error(`Unknown command "${command}". Use quarantine, restore, list, or exclude-args.`);
+  throw new Error(`Unknown command "${command}". Use quarantine, restore, list, exclude-args, or exclude-suites-env.`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
