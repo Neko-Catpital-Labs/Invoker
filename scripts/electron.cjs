@@ -68,6 +68,32 @@ function getElectronPlatformPath() {
   }
 }
 
+async function extractElectronArchive(electronPackageDir, zipPath, distPath) {
+  const unzip = spawnSync('unzip', ['-q', '-o', zipPath, '-d', distPath], {
+    cwd: electronPackageDir,
+    env: process.env,
+    stdio: 'inherit',
+  });
+  if (unzip.signal) {
+    process.kill(process.pid, unzip.signal);
+    return false;
+  }
+  if (!unzip.error && unzip.status === 0) {
+    return true;
+  }
+
+  const extractZipPath = require.resolve('extract-zip', {
+    paths: [electronPackageDir],
+  });
+  const extractZip = require(extractZipPath);
+  try {
+    await extractZip(zipPath, { dir: distPath });
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 async function repairElectronWithSystemUnzip(electronPackageDir) {
   if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
     return null;
@@ -97,16 +123,8 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
   fs.rmSync(distPath, { recursive: true, force: true });
   fs.mkdirSync(distPath, { recursive: true });
 
-  const unzip = spawnSync('unzip', ['-q', '-o', zipPath, '-d', distPath], {
-    cwd: electronPackageDir,
-    env: process.env,
-    stdio: 'inherit',
-  });
-  if (unzip.status !== 0) {
-    return null;
-  }
-  if (unzip.signal) {
-    process.kill(process.pid, unzip.signal);
+  const extracted = await extractElectronArchive(electronPackageDir, zipPath, distPath);
+  if (!extracted) {
     return null;
   }
 
