@@ -1137,8 +1137,6 @@ class MergifyRequeueAttemptStateShaCollisionRepro(PlannerTestCase):
         second = p.mergify_failed_check_actions(snapshot, self._ledger(), 3, NOW, claim_repair_filing=claim)
         self.assertEqual(first[0].kind, "repair_check")
         self.assertEqual(second, ())
-
-
 class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
     """default_claim_repair_filing/default_release_repair_filing are the real
     production functions wired into mergify_admin_requeue.py's main(); they
