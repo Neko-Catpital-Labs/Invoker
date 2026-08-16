@@ -656,6 +656,9 @@ jobs:
             .node-version
 
       - name: Install dependencies
+        env:
+          INVOKER_SKIP_ELECTRON_INSTALL: '1'
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Download build artifacts
