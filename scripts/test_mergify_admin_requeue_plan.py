@@ -1004,6 +1004,48 @@ class ClaimRepairFilingGate(PlannerTestCase):
         self.assertEqual(plan.actions[0].kind, "requeue")
 
 
+class PlanDirectRepairsUnguardedSecondPathRepro(PlannerTestCase):
+    """Reproduces the exact gap flagged in PR #9474's Non-goals: when BOTH the
+    Mergify queue event AND the PR's own check report the same check as
+    failing (the common case -- a real CI failure usually shows up both
+    places), mergify_failed_check_actions correctly honors a duplicate claim
+    and returns (), but plan_direct_repairs' own separate, un-gated
+    failed_check/conflict blocker handling picks the exact same repair right
+    back up and refiles it anyway. This is the live bug: the ledger claim
+    said "someone else already has this", and the planner filed it a second
+    time through a different code path regardless."""
+
+    def _plan(self, snapshot, claim_repair_filing):
+        ledger = self._ledger()
+        stack = m.StackGroup("s", (snapshot,))
+        facts = p.build_stack_facts(stack, REQUIRED, ledger, (), {}, "master", stale_base_by_pr={})
+        return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW, claim_repair_filing=claim_repair_filing)
+
+    def test_duplicate_claim_is_not_honored_by_plan_direct_repairs_failed_check_path(self):
+        # Both signals present: the PR's own "build" check is failing (drives
+        # classify_pr's failed_check blocker, which plan_direct_repairs
+        # handles inline) AND the Mergify queue event also lists "build" as
+        # failing (drives mergify_failed_check_actions, which IS gated).
+        snapshot = pr(checks={"build": check("failure")}, latest_mergify=event(failing=("build",)))
+        actions = self._plan(snapshot, claim_repair_filing=lambda kind, subject, sha: True)
+        repair_check_actions = [a for a in actions if a.kind == "repair_check"]
+        self.assertEqual(
+            repair_check_actions, [],
+            "plan_direct_repairs' own failed_check path refiled a repair_check the ledger "
+            "already said was claimed elsewhere -- it is not gated by claim_repair_filing",
+        )
+
+    def test_duplicate_claim_is_not_honored_by_plan_direct_repairs_conflict_path(self):
+        snapshot = pr(mergeable="CONFLICTING")
+        actions = self._plan(snapshot, claim_repair_filing=lambda kind, subject, sha: True)
+        repair_conflict_actions = [a for a in actions if a.kind == "repair_conflict"]
+        self.assertEqual(
+            repair_conflict_actions, [],
+            "plan_direct_repairs' own conflict path refiled a repair_conflict the ledger "
+            "already said was claimed elsewhere -- it is not gated by claim_repair_filing",
+        )
+
+
 class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
     """default_claim_repair_filing/default_release_repair_filing are the real
     production functions wired into mergify_admin_requeue.py's main(); they

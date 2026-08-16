@@ -81,6 +81,7 @@ def repair_filing_kind_for_check(check_name: str) -> str:
 
 
 REBASE_CONFLICT_REPAIR_FILING_KIND = "admin-requeue:rebase-conflict"
+CONFLICT_REPAIR_FILING_KIND = "admin-requeue:conflict"
 
 # Every claim_repair_filing call site below uses `subject=str(pr.number)` --
 # the raw PR number, same shape as repair_check_plan_name/repair_conflict_plan_name
@@ -976,10 +977,10 @@ def plan_direct_repairs(
                     continue
                 if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
                     continue
-                # Not yet gated by claim_repair_filing (repair_conflict is a
-                # separate, un-namespaced filing point from
-                # mergify_failed_check_actions/plan_rebase_onto_base) --
-                # see the handoff notes for this known gap.
+                if claim_repair_filing is not None and claim_repair_filing(
+                    CONFLICT_REPAIR_FILING_KIND, str(pr.number), pr.head_ref_oid,
+                ):
+                    continue
                 return Action("repair_conflict", pr.number, key, blocker.detail)
             if blocker.kind == "failed_check":
                 if facts.stale_base_by_pr.get(pr.number):
@@ -997,6 +998,16 @@ def plan_direct_repairs(
                 if decision["action"] == "backoff":
                     continue
                 if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
+                    continue
+                # Same kind formula as mergify_failed_check_actions -- a claim
+                # made via that path (the Mergify-queue-driven view of this
+                # same check) and a claim made via this path (the PR's own
+                # check state) collapse to the identical ledger key, which is
+                # exactly what closes the bug this class reproduces: both
+                # paths often fire for the same real check at once.
+                if claim_repair_filing is not None and claim_repair_filing(
+                    repair_filing_kind_for_check(blocker.key), str(pr.number), pr.head_ref_oid,
+                ):
                     continue
                 return Action("repair_check", pr.number, blocker.key, blocker.detail)
     return None
