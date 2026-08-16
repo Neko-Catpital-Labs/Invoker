@@ -65,11 +65,11 @@ class AsyncRepairPlan:
     yaml_text: str
 
 
-def _write_plan_header(*, name: str, base_branch: str, repo: str) -> str:
+def _write_plan_header(*, name: str, base_branch: str, repo: str, merge_mode: str = "manual") -> str:
     return (
         f"name: {name}\n"
         "onFinish: none\n"
-        "mergeMode: manual\n"
+        f"mergeMode: {merge_mode}\n"
         f"repoUrl: {_yaml_str(_repo_url(repo))}\n"
         f"baseBranch: {_yaml_str(base_branch)}\n"
         "tasks:\n"
@@ -280,7 +280,9 @@ def build_repair_bot_thread_plan(
         "If the thread is already resolved, or the PR is closed or merged, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {start_head}\nThread: {thread_id}\n"
     )
-    yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
+    yaml_text = _write_plan_header(
+        name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review"
+    )
     yaml_text += _repair_task_yaml(description=f"Resolve bot review thread on PR #{pr.number}", prompt=prompt)
     yaml_text += _safe_push_task_yaml(
         task_id="safe-push",
