@@ -37,6 +37,19 @@ describe('FailureClassifier.classifyError', () => {
       .toBe('ssh-oauth-session-expired');
   });
 
+  it('classifies the disk-full ref-lock signature (real error captured 2026-08-16 from a live SSH task failure on a 100%-full remote disk)', () => {
+    expect(FailureClassifier.classifyError(
+      "Error: Executor startup failed (ssh): SSH remote script failed (exit=255)\n"
+      + "STDERR:\n"
+      + "Preparing worktree (new branch 'experiment/wf-1786843012160-2/fix-ci-cd07355-fleet-cd07355-14-jobs/g0.t0.a-a0c172096-f593013d')\n"
+      + "fatal: cannot lock ref 'refs/heads/experiment/wf-1786843012160-2/fix-ci-cd07355-fleet-cd07355-14-jobs/g0.t0.a-a0c172096-f593013d': "
+      + "unable to create directory for .git/refs/heads/experiment/wf-1786843012160-2/fix-ci-cd07355-fleet-cd07355-14-jobs/g0.t0.a-a0c172096-f593013d",
+    )).toBe('ssh-disk-full');
+    expect(FailureClassifier.classifyError(
+      'No space left on device',
+    )).toBe('ssh-disk-full');
+  });
+
   it('does not classify a bare "not a git repository" outside the bootstrap-clone phase', () => {
     expect(FailureClassifier.classifyError(
       'fatal: not a git repository (or any of the parent directories): .git',

@@ -114,6 +114,14 @@ function makeHarness(
   const runRemoteProvisionRepairFn = vi.fn(async () => 'remote repair ok');
   const runRepoMirrorRepairFn = vi.fn(async () => 'mirror repair ok');
   const resolveRemoteBranchOwnerPathFn = vi.fn(async () => undefined as string | undefined);
+  const cleanupRemoteInvokerHomeFn = vi.fn(async () => ({
+    targetKey: 'ssh:remote-1 ~/.invoker',
+    ok: true as const,
+    reason: 'cleaned' as const,
+    detail: 'freed 21GB',
+    protectedSkipCount: 0,
+    protectedSkipBytes: 0,
+  }));
   let nowMs = Date.parse('2026-01-01T00:00:00.000Z');
   const tick = createInfraRepairTick({
     store,
@@ -134,6 +142,7 @@ function makeHarness(
     runRemoteProvisionRepairFn,
     runRepoMirrorRepairFn,
     resolveRemoteBranchOwnerPathFn,
+    cleanupRemoteInvokerHomeFn,
     now: () => nowMs,
   });
 
@@ -147,6 +156,7 @@ function makeHarness(
     runRemoteProvisionRepairFn,
     runRepoMirrorRepairFn,
     resolveRemoteBranchOwnerPathFn,
+    cleanupRemoteInvokerHomeFn,
     setNow: (nextNowMs: number) => { nowMs = nextNowMs; },
   };
 }
@@ -275,6 +285,53 @@ describe('infra-repair worker', () => {
         status: 'completed',
         payload: expect.objectContaining({
           infraReason: 'ssh-repo-mirror-corrupt',
+          channel: INFRA_REPAIR_RETRY_TASK_CHANNEL,
+        }),
+      }),
+    ]));
+  });
+
+  it('classifies a disk-full ref-lock failure, reclaims remote disk space, and queues retry-task', async () => {
+    // Repro: a live SSH task failure captured 2026-08-16 on a remote pool
+    // member whose disk was at 100% (`df -h /` showed 0 bytes available).
+    // git's own worktree/branch setup fails with "cannot lock ref ... unable
+    // to create directory" because there is no free space to create the ref
+    // directory -- this text matched none of FailureClassifier's patterns
+    // before this fix, so infra-repair silently dropped the candidate.
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: "Error: Executor startup failed (ssh): SSH remote script failed (exit=255)\n"
+            + "STDERR:\n"
+            + "Preparing worktree (new branch 'experiment/wf-1/fix-ci-x/g0.t0.a-a1')\n"
+            + "fatal: cannot lock ref 'refs/heads/experiment/wf-1/fix-ci-x/g0.t0.a-a1': "
+            + "unable to create directory for .git/refs/heads/experiment/wf-1/fix-ci-x/g0.t0.a-a1",
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.cleanupRemoteInvokerHomeFn).toHaveBeenCalledTimes(1);
+    expect(h.cleanupRemoteInvokerHomeFn).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        name: 'remote-1',
+        connection: expect.objectContaining({ host: '203.0.113.10' }),
+      }),
+    }));
+    expect(h.runRepoMirrorRepairFn).not.toHaveBeenCalled();
+    expect(h.runRemoteProvisionRepairFn).not.toHaveBeenCalled();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RETRY_TASK_CHANNEL);
+    expect(parseInfraRepairRetryTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-disk-full',
           channel: INFRA_REPAIR_RETRY_TASK_CHANNEL,
         }),
       }),
