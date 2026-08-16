@@ -615,6 +615,10 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
   return isDraftingAuthorized(message, normalizedMessages);
 }
 
+function isGitHubRepositoryAnswer(message: string): boolean {
+  return /^(?:(?:https?|ssh):\/\/|git@)?github\.com[/:][^\s/]+\/[^\s/]+\/?$/i.test(message.trim());
+}
+
 function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput' | 'planDoctorScriptPath'> & { mcpConfigPath?: string },
@@ -918,13 +922,18 @@ export async function sendPlanningChatMessage(
         const immediateDraftPlanText = deps.plannerReplyOverride
           ? extractFencedYamlPlanText(reply)
           : activeSession.conversation.lastTurnDraftPlanText;
+        const recoveredSidecarAfterRepositoryAnswer = !deps.plannerReplyOverride
+          && Boolean(immediateDraftPlanText)
+          && !extractFencedYamlPlanText(reply)
+          && isGitHubRepositoryAnswer(message);
         const result = evaluatePlanningTurn({
           userMessage: message,
           messagesBeforeTurn,
           assistantReply: reply,
           immediateDraftPlanText,
-          requireDraftAuthorization: hasDraftPlan(activeSession) || !immediateDraftPlanText,
-          hasExistingDraft: hasDraftPlan(activeSession),
+          // Preserve the ad665bff sidecar recovery after a repository answer;
+          // every other in-app candidate stays locked until drafting is authorized.
+          hasExistingDraft: hasDraftPlan(activeSession) || !recoveredSidecarAfterRepositoryAnswer,
         });
         if (result.kind === 'message') {
           activeSession.status = hasDraftPlan(activeSession)

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SQLiteAdapter, SlackPlanDraftRepository } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { parse as parseYaml } from 'yaml';
 
 interface MockHandler {
   pattern: string | RegExp;
@@ -81,7 +82,17 @@ describe('approveSlackPlanDraft', () => {
 
     await approve(onCommand, draft);
 
-    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({ type: 'start_plan', planText: draft.planText }));
+    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'start_plan',
+      repoUrl: 'https://github.com/acme/repo.git',
+      planText: expect.any(String),
+    }));
+    const submittedPlanText = (onCommand.mock.calls[0][0] as Extract<SurfaceCommand, { type: 'start_plan' }>).planText;
+    expect(parseYaml(submittedPlanText)).toEqual({
+      name: 'Single',
+      tasks: [{ id: 'a', description: 'A' }],
+      repoUrl: 'https://github.com/acme/repo.git',
+    });
     const stored = repo.get(draft.draftId, draft.version);
     expect(stored?.status).toBe('submitted');
     expect(JSON.parse(stored?.workflowIdsJson ?? '[]')).toEqual(['wf-1']);

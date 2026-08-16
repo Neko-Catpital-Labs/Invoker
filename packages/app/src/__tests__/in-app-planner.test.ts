@@ -343,10 +343,13 @@ describe('planning chat', () => {
 
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
     const prompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
-    expect(prompt).toContain('Treat this as a conversation before a plan.');
-    expect(prompt).toContain('Talk through edge cases, corner cases, architecture, and ambiguity with the human.');
-    expect(prompt).toContain('Resolve those points before producing a YAML plan.');
-    expect(prompt).toContain('Draft YAML only after the human asks you to draft/proceed');
+    expect(prompt).toContain('Current planning host: Invoker in-app planner.');
+    expect(prompt).toContain('This session is a planning conversation before any task plan exists.');
+    expect(prompt).toContain('Drafting is not authorized yet.');
+    expect(prompt).toContain('Ask scoping questions first');
+    expect(prompt).toContain('Do NOT output a ```yaml code block');
+    expect(prompt).toContain('Never direct the user to Slack');
+    expect(prompt).not.toContain('Current planning host: Invoker Slack planner.');
   });
 
   it('reuses an existing session and keeps its original preset', async () => {

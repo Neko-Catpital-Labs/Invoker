@@ -15,6 +15,7 @@ import { SlackSurface } from '../slack/slack-surface.js';
 import { redactAbsolutePaths, sanitizeSlashCommands, sanitizeSlackOutbound, splitForSlack } from '../slack/slack-message-helpers.js';
 import type { SurfaceCommand } from '../surface.js';
 import { SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
+import { parse as parseYaml } from 'yaml';
 
 // ── Mock @slack/bolt ────────────────────────────────────────
 
@@ -274,7 +275,11 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       });
       expect(receivedCommands).toHaveLength(1);
       expect(receivedCommands[0]).toEqual(expect.objectContaining({ type: 'start_plan' }));
-      expect((receivedCommands[0] as { planText: string }).planText.trim()).toBe(planText.trim());
+      expect(parseYaml((receivedCommands[0] as { planText: string }).planText)).toEqual({
+        name: 'Debug Issue',
+        tasks: [{ id: 't1', description: 'Run the debugger', dependencies: [] }],
+        repoUrl: 'https://github.com/example/repo.git',
+      });
 
       await adapter.close();
     });

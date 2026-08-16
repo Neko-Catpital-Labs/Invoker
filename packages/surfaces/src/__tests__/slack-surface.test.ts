@@ -619,11 +619,11 @@ describe('SlackSurface', () => {
 
       // A normal mention first pins the thread to a repo/working dir.
       const say1 = vi.fn().mockResolvedValue({ ts: '1111.001' });
-      await mentionHandler({ event: { text: '<@U_BOT> build me a REST API', ts: '1111', thread_ts: undefined }, say: say1 });
+      await mentionHandler({ event: { text: '<@U_BOT> build me a REST API', ts: '1111', thread_ts: undefined, user: 'U1' }, say: say1 });
 
       // Explicit /plan request drafts and posts a plan review with an inline approval button; nothing submitted yet.
       const say2 = vi.fn().mockResolvedValue({ ts: '2222.001' });
-      await mentionHandler({ event: { text: '<@U_BOT> /plan', ts: '2222', thread_ts: '1111' }, say: say2 });
+      await mentionHandler({ event: { text: '<@U_BOT> /plan', ts: '2222', thread_ts: '1111', user: 'U1' }, say: say2 });
       expect(receivedCommands).toHaveLength(0);
       expect(say2).toHaveBeenCalledWith(expect.objectContaining({
         blocks: expect.arrayContaining([expect.objectContaining({
@@ -637,7 +637,7 @@ describe('SlackSurface', () => {
 
       await approveHandler({
         action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
-        body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' } },
+        body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' }, user: { id: 'U1' } },
         ack: vi.fn().mockResolvedValue(undefined),
         respond: vi.fn().mockResolvedValue(undefined),
       });

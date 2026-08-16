@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SlackSurface } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
+import { parse as parseYaml } from 'yaml';
 
 // ── Mock @slack/bolt ────────────────────────────────────────
 
@@ -676,8 +677,15 @@ describe('E2E: Full Slack flow without real APIs', () => {
       respond: vi.fn().mockResolvedValue(undefined),
     });
     expect(receivedCommands).toHaveLength(1);
-    expect(receivedCommands[0]).toEqual(
-      expect.objectContaining({ type: 'start_plan', planText: expectedPlanText.trim() }),
-    );
+    expect(receivedCommands[0]).toEqual(expect.objectContaining({
+      type: 'start_plan',
+      repoUrl: 'https://github.com/example/repo.git',
+      planText: expect.any(String),
+    }));
+    expect(parseYaml((receivedCommands[0] as { planText: string }).planText)).toEqual({
+      name: 'Add REST API',
+      tasks: [{ id: 'implement', description: 'Implement the REST API endpoints', dependencies: [] }],
+      repoUrl: 'https://github.com/example/repo.git',
+    });
   });
 });
