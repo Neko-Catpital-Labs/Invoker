@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from '../../../execution-engine/src/__tests__/fixtures/pr-6976-oauth-session-expired.js';
 import { FailureClassifier, SSH_INFRA_FAILURE_CLASSES } from '../failure-classifier.js';
 
+const GIT_REF_PATH_CONFLICT_ERROR =
+  "fatal: cannot lock ref 'refs/heads/experiment/child': "
+  + 'unable to create directory for .git/refs/heads/experiment/child';
+
 describe('FailureClassifier.classifyError', () => {
   it('classifies the env.sh invalid-export signature', () => {
     expect(FailureClassifier.classifyError(
@@ -37,17 +41,14 @@ describe('FailureClassifier.classifyError', () => {
       .toBe('ssh-oauth-session-expired');
   });
 
-  it('classifies the disk-full ref-lock signature (real error captured 2026-08-16 from a live SSH task failure on a 100%-full remote disk)', () => {
-    expect(FailureClassifier.classifyError(
-      "Error: Executor startup failed (ssh): SSH remote script failed (exit=255)\n"
-      + "STDERR:\n"
-      + "Preparing worktree (new branch 'experiment/wf-1786843012160-2/fix-ci-cd07355-fleet-cd07355-14-jobs/g0.t0.a-a0c172096-f593013d')\n"
-      + "fatal: cannot lock ref 'refs/heads/experiment/wf-1786843012160-2/fix-ci-cd07355-fleet-cd07355-14-jobs/g0.t0.a-a0c172096-f593013d': "
-      + "unable to create directory for .git/refs/heads/experiment/wf-1786843012160-2/fix-ci-cd07355-fleet-cd07355-14-jobs/g0.t0.a-a0c172096-f593013d",
-    )).toBe('ssh-disk-full');
+  it('classifies an explicit disk-full signature', () => {
     expect(FailureClassifier.classifyError(
       'No space left on device',
     )).toBe('ssh-disk-full');
+  });
+
+  it('does not classify a non-ENOSPC Git ref-path conflict as disk-full', () => {
+    expect(FailureClassifier.classifyError(GIT_REF_PATH_CONFLICT_ERROR)).toBeUndefined();
   });
 
   it('does not classify a bare "not a git repository" outside the bootstrap-clone phase', () => {
