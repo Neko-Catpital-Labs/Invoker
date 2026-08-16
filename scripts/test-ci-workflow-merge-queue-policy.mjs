@@ -194,6 +194,10 @@ assert(
     && String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('g++'),
   'required-fast-extra must install make and g++ so pnpm can build native dependencies on self-hosted runners',
 );
+assert(
+  String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('unzip'),
+  'required-fast-extra must install unzip so the Electron repair fallback can complete during pnpm install',
+);
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
 const branchCarryForwardEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Branch Carry Forward');
 assert(branchCarryForwardEntry, 'required-fast-extra matrix must include Branch Carry Forward');
