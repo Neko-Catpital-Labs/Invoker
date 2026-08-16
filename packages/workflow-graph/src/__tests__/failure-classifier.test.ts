@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from '../../../execution-engine/src/__tests__/fixtures/pr-6976-oauth-session-expired.js';
 import { FailureClassifier, SSH_INFRA_FAILURE_CLASSES } from '../failure-classifier.js';
 
+const GIT_REF_PATH_CONFLICT_ERROR =
+  "fatal: cannot lock ref 'refs/heads/experiment/child': "
+  + 'unable to create directory for .git/refs/heads/experiment/child';
+
 describe('FailureClassifier.classifyError', () => {
   it('classifies the env.sh invalid-export signature', () => {
     expect(FailureClassifier.classifyError(
@@ -35,6 +39,16 @@ describe('FailureClassifier.classifyError', () => {
   it('classifies the OAuth-session-expired signature', () => {
     expect(FailureClassifier.classifyError(PR_6976_OAUTH_SESSION_EXPIRED_ERROR))
       .toBe('ssh-oauth-session-expired');
+  });
+
+  it('classifies an explicit disk-full signature', () => {
+    expect(FailureClassifier.classifyError(
+      'No space left on device',
+    )).toBe('ssh-disk-full');
+  });
+
+  it('does not classify a non-ENOSPC Git ref-path conflict as disk-full', () => {
+    expect(FailureClassifier.classifyError(GIT_REF_PATH_CONFLICT_ERROR)).toBeUndefined();
   });
 
   it('does not classify a bare "not a git repository" outside the bootstrap-clone phase', () => {
