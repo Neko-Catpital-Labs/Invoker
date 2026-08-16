@@ -581,7 +581,7 @@ jobs:
 
       - name: Install system libraries for Node
         if: matrix.runner_label != 'Github_Runner'
-        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1 make g++
+        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1 make g++ unzip
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
