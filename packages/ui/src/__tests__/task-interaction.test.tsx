@@ -46,7 +46,7 @@ describe('Task interaction (component)', () => {
 
     fireEvent.click(screen.getByTestId('rf__node-wf-a'));
 
-    const miniDag = screen.getByTestId('selected-workflow-mini-dag');
+    const miniDag = await screen.findByTestId('selected-workflow-mini-dag');
     expect(miniDag).toHaveTextContent('Workflow A');
     expect(miniDag).toHaveTextContent('Loading graph…');
     expect(screen.queryByTestId('rf__node-task-alpha')).not.toBeInTheDocument();
