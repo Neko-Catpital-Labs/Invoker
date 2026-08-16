@@ -80,6 +80,20 @@ def repair_filing_kind_for_check(check_name: str) -> str:
     return f"admin-requeue:check:{_slugify(check_name)}"
 
 
+def mergify_check_state_sha(pr: PrSnapshot, latest: MergifyQueueEvent) -> str:
+    # A merge-queue-derived check can fail against Mergify's ephemeral
+    # speculative-merge commit (PR head + whatever master is right now),
+    # which is not represented anywhere in PrSnapshot -- pr.head_ref_oid
+    # alone can stay identical across two genuinely different real Mergify
+    # attempts (PR dequeued, re-requeued once master moved). comment_id is
+    # this codebase's own existing signal for "a distinct real Mergify
+    # attempt at this same head" (see plan_bottom_progress's
+    # `requeue_key = latest.comment_id or "manual"`), so composite it into
+    # the claim key: two attempts at the same head_ref_oid but a different
+    # comment_id must not collide into the same claim.
+    return f"{pr.head_ref_oid}:{latest.comment_id or 'no-comment'}"
+
+
 REBASE_CONFLICT_REPAIR_FILING_KIND = "admin-requeue:rebase-conflict"
 CONFLICT_REPAIR_FILING_KIND = "admin-requeue:conflict"
 
@@ -504,7 +518,7 @@ def mergify_failed_check_actions(
         if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
             continue
         if claim_repair_filing is not None and claim_repair_filing(
-            repair_filing_kind_for_check(name), str(pr.number), pr.head_ref_oid,
+            repair_filing_kind_for_check(name), str(pr.number), mergify_check_state_sha(pr, latest),
         ):
             # Another filer (a previous tick that crashed before recording,
             # or a different system entirely, e.g. ci-regression-watch)

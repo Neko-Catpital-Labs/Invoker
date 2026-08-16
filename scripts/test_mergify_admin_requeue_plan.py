@@ -915,7 +915,10 @@ class ClaimRepairFilingGate(PlannerTestCase):
         self.assertEqual(len(actions), 1)
         self.assertNotEqual(actions[0].kind, "repair_check")
         self.assertEqual(actions[0].kind, "comment_admin_bypass_nudge")
-        self.assertEqual(calls, [("admin-requeue:check:build", "1", HEAD)])
+        # state_sha is composited with the Mergify comment_id ("cm1", the
+        # event() fixture default) -- see mergify_check_state_sha and
+        # MergifyRequeueAttemptStateShaCollisionRepro for why.
+        self.assertEqual(calls, [("admin-requeue:check:build", "1", f"{HEAD}:cm1")])
 
     def test_fresh_claim_lets_repair_check_action_through(self):
         calls = []
@@ -928,7 +931,10 @@ class ClaimRepairFilingGate(PlannerTestCase):
 
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].kind, "repair_check")
-        self.assertEqual(calls, [("admin-requeue:check:build", "1", HEAD)])
+        # state_sha is composited with the Mergify comment_id ("cm1", the
+        # event() fixture default) -- see mergify_check_state_sha and
+        # MergifyRequeueAttemptStateShaCollisionRepro for why.
+        self.assertEqual(calls, [("admin-requeue:check:build", "1", f"{HEAD}:cm1")])
 
     def test_duplicate_claim_suppresses_rebase_onto_base_action(self):
         # Same fixture as test_failed_check_with_stale_base_skips_agent_repair
@@ -1044,6 +1050,93 @@ class PlanDirectRepairsUnguardedSecondPathRepro(PlannerTestCase):
             "plan_direct_repairs' own conflict path refiled a repair_conflict the ledger "
             "already said was claimed elsewhere -- it is not gated by claim_repair_filing",
         )
+
+
+class MergifyRequeueAttemptStateShaCollisionRepro(PlannerTestCase):
+    """swarm finding #4, reproduced and then fixed. Before the fix,
+    mergify_failed_check_actions's claim key was
+    (kind, subject=pr_number, state_sha=pr.head_ref_oid) alone. Mergify can
+    dequeue and requeue the SAME PR head against a NEW merge-queue attempt --
+    a new speculative-merge commit combining the PR head with whatever
+    master is now -- without the PR's own head_ref_oid changing at all, so
+    two genuinely different real Mergify attempts at the same head used to
+    compute the identical claim key (proven below: repair_filing_kind_for_check
+    + str(pr_number) + pr.head_ref_oid alone, the pre-fix formula, collides).
+    The fix composites in latest_mergify.comment_id via mergify_check_state_sha
+    -- this codebase's own existing signal for "a distinct real Mergify
+    attempt at this same head" (see plan_bottom_progress's
+    `requeue_key = latest.comment_id or "manual"`, which already relies on
+    comment_id for exactly this distinction in a different context)."""
+
+    def test_pre_fix_key_formula_still_collides_across_distinct_attempts(self):
+        # Documents the bug that was fixed: the OLD key formula (bare
+        # head_ref_oid, no comment_id) is still exactly what
+        # plan_direct_repairs' un-gated-by-design-choice paths and any other
+        # bare-head_ref_oid caller would compute -- proving why
+        # mergify_check_state_sha, not a bare head_ref_oid, had to become the
+        # state_sha for this specific call site.
+        first_attempt = event(comment_id="attempt-1", failing=("build",))
+        second_attempt = event(comment_id="attempt-2", failing=("build",))
+        self.assertEqual(first_attempt.head_sha, second_attempt.head_sha)
+        self.assertNotEqual(first_attempt.comment_id, second_attempt.comment_id)
+
+        snapshot_a = pr(latest_mergify=first_attempt)
+        snapshot_b = pr(latest_mergify=second_attempt)
+        pre_fix_key_a = (p.repair_filing_kind_for_check("build"), str(snapshot_a.number), snapshot_a.head_ref_oid)
+        pre_fix_key_b = (p.repair_filing_kind_for_check("build"), str(snapshot_b.number), snapshot_b.head_ref_oid)
+        self.assertEqual(pre_fix_key_a, pre_fix_key_b, "bare head_ref_oid collides across attempts -- this is why the fix exists")
+
+    def test_mergify_check_state_sha_distinguishes_the_two_attempts(self):
+        first_attempt = event(comment_id="attempt-1", failing=("build",))
+        second_attempt = event(comment_id="attempt-2", failing=("build",))
+        snapshot_a = pr(latest_mergify=first_attempt)
+        snapshot_b = pr(latest_mergify=second_attempt)
+
+        self.assertNotEqual(
+            p.mergify_check_state_sha(snapshot_a, first_attempt),
+            p.mergify_check_state_sha(snapshot_b, second_attempt),
+        )
+
+    def test_second_distinct_mergify_attempt_is_no_longer_suppressed_as_a_duplicate(self):
+        ledger_rows = set()
+
+        def claim(kind, subject, state_sha):
+            key = (kind, subject, state_sha)
+            if key in ledger_rows:
+                return True  # already claimed
+            ledger_rows.add(key)
+            return False
+
+        first_pr = pr(latest_mergify=event(comment_id="attempt-1", failing=("build",)))
+        second_pr = pr(latest_mergify=event(comment_id="attempt-2", failing=("build",)))
+
+        first_actions = p.mergify_failed_check_actions(first_pr, self._ledger(), 3, NOW, claim_repair_filing=claim)
+        second_actions = p.mergify_failed_check_actions(second_pr, self._ledger(), 3, NOW, claim_repair_filing=claim)
+
+        self.assertEqual(first_actions[0].kind, "repair_check")
+        # Fixed: a second, genuinely distinct Mergify queue attempt at the
+        # same PR head is no longer wrongly suppressed as a duplicate.
+        self.assertEqual(len(second_actions), 1)
+        self.assertEqual(second_actions[0].kind, "repair_check")
+
+    def test_same_attempt_observed_twice_still_collapses_to_one_claim(self):
+        # The self-expiring property still holds: re-observing the identical
+        # (head, comment_id) attempt twice must still collapse to one claim,
+        # not fork a new one every tick.
+        ledger_rows = set()
+
+        def claim(kind, subject, state_sha):
+            key = (kind, subject, state_sha)
+            if key in ledger_rows:
+                return True
+            ledger_rows.add(key)
+            return False
+
+        snapshot = pr(latest_mergify=event(comment_id="attempt-1", failing=("build",)))
+        first = p.mergify_failed_check_actions(snapshot, self._ledger(), 3, NOW, claim_repair_filing=claim)
+        second = p.mergify_failed_check_actions(snapshot, self._ledger(), 3, NOW, claim_repair_filing=claim)
+        self.assertEqual(first[0].kind, "repair_check")
+        self.assertEqual(second, ())
 
 
 class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
