@@ -291,13 +291,7 @@ describe('infra-repair worker', () => {
     ]));
   });
 
-  it('classifies a disk-full ref-lock failure, reclaims remote disk space, and queues retry-task', async () => {
-    // Repro: a live SSH task failure captured 2026-08-16 on a remote pool
-    // member whose disk was at 100% (`df -h /` showed 0 bytes available).
-    // git's own worktree/branch setup fails with "cannot lock ref ... unable
-    // to create directory" because there is no free space to create the ref
-    // directory -- this text matched none of FailureClassifier's patterns
-    // before this fix, so infra-repair silently dropped the candidate.
+  it('classifies an explicit disk-full failure, reclaims remote disk space, and queues retry-task', async () => {
     const h = makeHarness([
       makeTask({
         execution: {
@@ -305,7 +299,8 @@ describe('infra-repair worker', () => {
             + "STDERR:\n"
             + "Preparing worktree (new branch 'experiment/wf-1/fix-ci-x/g0.t0.a-a1')\n"
             + "fatal: cannot lock ref 'refs/heads/experiment/wf-1/fix-ci-x/g0.t0.a-a1': "
-            + "unable to create directory for .git/refs/heads/experiment/wf-1/fix-ci-x/g0.t0.a-a1",
+            + "unable to create directory for .git/refs/heads/experiment/wf-1/fix-ci-x/g0.t0.a-a1\n"
+            + 'mkdir: No space left on device',
         },
       }),
     ]);
