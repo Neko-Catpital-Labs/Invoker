@@ -241,8 +241,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Compute flaky-test exclusions
+        id: flaky_excludes
+        run: echo "args=$(node scripts/flaky-test-registry.mjs exclude-args)" >> "$GITHUB_OUTPUT"
+
       - name: Run UI vitest
-        run: pnpm --filter @invoker/ui test
+        run: pnpm --filter @invoker/ui test -- ${{ steps.flaky_excludes.outputs.args }}
 
   required-package-builds:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
