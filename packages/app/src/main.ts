@@ -2017,8 +2017,8 @@ function startHeadlessMode(): void {
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
           const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone', headlessExecMutationContext);
           if (acknowledgement) return acknowledgement;
-          await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
-            await runHeadless(args, {
+          const commandResult = await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
+            return runHeadless(args, {
               ...headlessDeps,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
@@ -2026,7 +2026,10 @@ function startHeadlessMode(): void {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
           });
-          return { ok: true };
+          return {
+            ok: true,
+            ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
+          };
         });
         messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
           noteStandaloneOwnerActivity();
