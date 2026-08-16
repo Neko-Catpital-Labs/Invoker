@@ -228,6 +228,19 @@ assert(
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
+assertStepBefore(
+  jobs.docker,
+  'Install Electron extraction dependency',
+  'Install dependencies',
+  'docker',
+);
+const dockerElectronExtractionStep = jobs.docker.steps.find(
+  (step) => step.name === 'Install Electron extraction dependency',
+);
+assert(
+  String(dockerElectronExtractionStep?.run ?? '').includes('apt-get install -y unzip'),
+  'docker must install unzip so Electron postinstall can repair a missing binary',
+);
 
 assert(
   prBodyWorkflow.jobs.validate['runs-on'] === 'ubuntu-latest',
