@@ -437,6 +437,14 @@ export interface InvokerConfig {
   diskHeadroom?: {
     cleanupEnabled?: boolean;
   };
+  /**
+   * Owner-side Claude OAuth refresh worker gate. When enabled, the owner
+   * refreshes its own ~/.claude/.credentials.json ahead of expiry and
+   * distributes the refreshed file to every configured SSH remote target.
+   */
+  claudeOauthRefresh?: {
+    enabled?: boolean;
+  };
   slackBugScan?: SlackBugScanConfig;
   /**
    * Owner-side idle-task-cleanup worker gate. The worker itself ships
