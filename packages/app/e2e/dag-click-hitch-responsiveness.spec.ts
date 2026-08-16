@@ -65,14 +65,13 @@ test('workflow select shows mini-DAG within 250ms under a fat events table', asy
   }, planText);
   await page.getByRole('button', { name: 'Refresh' }).click();
 
-  const smallId = await page.waitForFunction(
-    (knownIds) => window.invoker.listWorkflows().then((workflows) => {
-      const created = workflows.find((workflow) => !knownIds.includes(workflow.id));
-      return created?.id ?? null;
-    }),
-    [...beforeIds],
-    { timeout: 30_000 },
-  ).then(async (handle) => handle.jsonValue());
+  let smallId: string | null = null;
+  await expect.poll(async () => {
+    const workflows = await page.evaluate(async () => window.invoker.listWorkflows());
+    const created = workflows.find((workflow) => !beforeIds.has(workflow.id));
+    smallId = created?.id ?? null;
+    return smallId;
+  }, { timeout: 30_000 }).toBeTruthy();
   expect(smallId, 'expected newly loaded ack plan workflow').toBeTruthy();
 
   const workflowNode = page.getByTestId(`workflow-node-${smallId}`);
