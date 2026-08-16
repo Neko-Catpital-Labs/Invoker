@@ -110,6 +110,11 @@ assert(
   jobs['ui-vitest']['runs-on']?.labels === 'Runner_Vitest',
   'ui-vitest must keep the Runner_Vitest runner label',
 );
+assert(
+  jobs['ui-vitest'].env?.ELECTRON_SKIP_BINARY_DOWNLOAD === '1'
+    && jobs['ui-vitest'].env?.INVOKER_SKIP_ELECTRON_INSTALL === '1',
+  'ui-vitest must not provision the unused Electron binary during dependency installation',
+);
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');

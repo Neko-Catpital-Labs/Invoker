@@ -149,6 +149,9 @@ jobs:
     runs-on:
       labels: Runner_Vitest
     timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      INVOKER_SKIP_ELECTRON_INSTALL: '1'
 
     steps:
       - name: Reclaim workspace
