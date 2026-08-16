@@ -228,6 +228,15 @@ assert(
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
+assertStepBefore(jobs.docker, 'Install native build tools', 'Install dependencies', 'docker');
+const dockerNativeBuildStep = jobs.docker.steps.find(
+  (step) => step.name === 'Install native build tools',
+);
+assert(
+  String(dockerNativeBuildStep?.run ?? '').includes('make')
+    && String(dockerNativeBuildStep?.run ?? '').includes('g++'),
+  'docker must install make and g++ so pnpm can build native dependencies on self-hosted runners',
+);
 
 assert(
   prBodyWorkflow.jobs.validate['runs-on'] === 'ubuntu-latest',
