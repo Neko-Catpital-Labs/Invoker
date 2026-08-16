@@ -43,7 +43,6 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
-import { preemptWorkflowBeforeMutation } from './workflow-preemption.js';
 import {
   type HeadlessDeps,
   BOLD,
@@ -55,7 +54,6 @@ import {
   restoreWorkflowForTaskUnlessDeleteAllWon,
   withRestoredTaskUnlessDeleteAllWon,
   preemptTaskSubgraph,
-  preemptWorkflowExecution,
 } from './headless-shared.js';
 import { parseStartReadyExcludeSelector, runStartReady } from './start-ready.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
@@ -752,12 +750,6 @@ export async function headlessResolveConflict(taskId: string, deps: HeadlessDeps
 export async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<void> {
   if (!target) throw new Error('Missing arguments. Usage: --headless rebase-retry <workflowId|mergeTaskId|taskId>');
   const workflowId = resolveHeadlessTargetWorkflowId(target, deps.persistence);
-  await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
-    logger: deps.logger,
-    context: 'headless.rebase-retry',
-    mutationTiming: deps.mutationTiming,
-  });
   const te = createHeadlessExecutor(deps);
   const started = await rebaseRetry(target, {
     ...deps,
@@ -796,12 +788,6 @@ export async function headlessRebaseRetry(target: string, deps: HeadlessDeps): P
 export async function headlessRebaseRecreate(workflowTarget: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowTarget) throw new Error('Missing arguments. Usage: --headless rebase-recreate <workflowId|mergeTaskId|taskId>');
   const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, deps.persistence);
-  await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
-    logger: deps.logger,
-    context: 'headless.rebase-recreate',
-    mutationTiming: deps.mutationTiming,
-  });
   const te = createHeadlessExecutor(deps);
   const started = await rebaseRecreate(workflowTarget, {
     ...deps,
@@ -841,12 +827,6 @@ export async function headlessRecreateWorkflow(workflowId: string, deps: Headles
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless recreate <workflowId>');
   }
-  await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
-    logger: deps.logger,
-    context: 'headless.recreate-workflow',
-    mutationTiming: deps.mutationTiming,
-  });
   const recreateWfEnvelope = makeEnvelope('recreate-workflow', 'headless', 'workflow', { workflowId });
   const recreateWfResult = deps.mutationTiming
     ? await deps.mutationTiming.span(
@@ -1047,12 +1027,6 @@ export async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDe
   }
   deps.logger.info(`headlessRetryWorkflow begin workflow="${workflowId}" noTrack=${deps.noTrack ? 'true' : 'false'}`, {
     module: 'headless',
-  });
-  await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
-    logger: deps.logger,
-    context: 'headless.retry-workflow',
-    mutationTiming: deps.mutationTiming,
   });
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
   const result = deps.mutationTiming
