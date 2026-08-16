@@ -930,6 +930,7 @@ export function processFailureFilingSweep(state, {
   save = () => {},
   onNeedsHuman = () => {},
   onRetired = () => {},
+  onFileError = () => {},
   fleetEventThreshold = FLEET_EVENT_THRESHOLD,
   isPaused = isAutoFixCircuitBreakerPaused,
 } = {}) {
@@ -967,6 +968,7 @@ export function processFailureFilingSweep(state, {
     groupsRetired: prepared.retiredFleetMembers.length,
     groupsRetiredStale: 0,
     groupsCorrelated: prepared.groupsCorrelated,
+    groupsFailedToFile: 0,
   };
 
   for (const failure of prepared.failures) {
@@ -1006,7 +1008,23 @@ export function processFailureFilingSweep(state, {
       continue;
     }
 
-    fileFailure(failure);
+    // One failure's own render/lint/submit (fileFailure) throwing must never
+    // stop the whole sweep -- confirmed live: a CI job whose name happened to
+    // contain a review-unit keyword ("optional / Visual Proof Validate")
+    // tripped skill-doctor.sh's lint and killed the entire process, so every
+    // other actionable failure in this sweep silently got zero filing
+    // attempts. recordFailureFiled still runs so this failure's attempt
+    // count advances toward the existing needs-human cap instead of
+    // retry-crashing forever on the same poison-pill job every sweep.
+    try {
+      fileFailure(failure);
+    } catch (error) {
+      counts.groupsFailedToFile += 1;
+      onFileError(failure, error);
+      recordFailureFiled(state, failure, filedAt);
+      save(state);
+      continue;
+    }
     recordFailureFiled(state, failure, filedAt);
     save(state);
     counts.groupsFiled += 1;
@@ -1073,6 +1091,9 @@ export async function main() {
         ? `CI has not reported this job in either direction for over ${Math.round(STALE_OBSERVATION_MS / 86_400_000)}d (last observed ${failure.lastObservedAt}); presumed renamed or removed`
         : 'has no mapped local verify command';
       console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" ${detail}; marking retired and skipping filing`);
+    },
+    onFileError: (failure, error) => {
+      console.error(`ci-regression-watch: failed to render/lint/submit a repair plan for "${buildMarker(failure.firstBadSha, failure.jobName)}": ${error.message}; continuing with the rest of the sweep`);
     },
   });
 

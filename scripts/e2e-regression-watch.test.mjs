@@ -862,3 +862,71 @@ describe('auto-fix circuit breaker (shared with execution-engine)', () => {
     assert.equal(counts.pausedByCircuitBreaker, undefined);
   }));
 });
+
+describe('a poison-pill failure must not abort the whole sweep', () => {
+  it('reproduces the bug: one fileFailure throwing used to stop every later candidate in the same sweep', () => {
+    // Real incident: e2e-regression-watch filed 4 repair plans successfully,
+    // then hit a CI job named "optional / Visual Proof Validate" -- its
+    // interpolated job name tripped skill-doctor.sh's review-unit lint, and
+    // that thrown error propagated all the way out of processFailureFilingSweep,
+    // so the 5th+ actionable failures in that sweep got zero filing attempts.
+    const jobs = [
+      'required-fast / Vitest Workspace',
+      'optional / Visual Proof Validate',
+      'docker / comprehensive',
+    ];
+    const state = stateWithFailures(jobs.map((jobName, index) => makeFailure({
+      jobName,
+      firstBadSha: `a5d6b3e626ace9e963e924c0de9410dc0302de9${index}`,
+    })));
+    const jobDefinitions = jobDefinitionsFor(jobs);
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T00:00:00Z'),
+      jobDefinitions,
+      isPaused: () => false,
+      liveQuery: () => false,
+      fileFailure: (failure) => {
+        if (failure.jobName === 'optional / Visual Proof Validate') {
+          throw new Error('skill-doctor.sh lint-review-units failed: mixes docs language with product-unit language');
+        }
+        filed.push(failure.jobName);
+      },
+    });
+
+    assert.deepEqual(
+      filed.sort(),
+      ['docker / comprehensive', 'required-fast / Vitest Workspace'],
+      'the two healthy candidates must still get filed even though the middle one threw',
+    );
+    assert.equal(counts.groupsFiled, 2);
+    assert.equal(counts.groupsFailedToFile, 1);
+  });
+
+  it('logs the failure via onFileError and still advances the attempt count so it eventually escalates to needs-human', () => {
+    const jobName = 'optional / Visual Proof Validate';
+    const state = stateWithFailure(makeFailure({ jobName }));
+    const errors = [];
+
+    processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T00:00:00Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      isPaused: () => false,
+      liveQuery: () => false,
+      fileFailure: () => {
+        throw new Error('lint-review-units failed');
+      },
+      onFileError: (failure, error) => {
+        errors.push({ jobName: failure.jobName, message: error.message });
+      },
+    });
+
+    assert.deepEqual(errors, [{ jobName, message: 'lint-review-units failed' }]);
+    assert.equal(
+      state.activeFailures[jobName].attempts,
+      1,
+      'a failed filing attempt must still count toward the cap, or this job would crash-loop every sweep forever',
+    );
+  });
+});
