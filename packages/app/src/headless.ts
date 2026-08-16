@@ -239,7 +239,7 @@ async function headlessInstallSkills(
 
 // ── Headless Command Router ──────────────────────────────────
 
-export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
+export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<unknown> {
   const command = args[0];
 
   if (isHeadlessHelpCommand(command)) {

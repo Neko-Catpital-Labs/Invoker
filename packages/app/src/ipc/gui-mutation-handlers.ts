@@ -758,7 +758,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     ) {
       cancelDeferredWorkflowLaunch(resolvedHeadlessTarget.workflowId, `headless.${headlessCommand}`);
     }
-    await runHeadless(payload.args, {
+    const commandResult = await runHeadless(payload.args, {
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
@@ -802,7 +802,10 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       module: 'ipc-delegate',
     });
     if (!workflowId) {
-      return { ok: true };
+      return {
+        ok: true,
+        ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
+      };
     }
     orchestrator.syncFromDb(workflowId);
     const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
