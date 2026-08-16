@@ -227,6 +227,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.editTaskPrompt(String(args[0]), String(args[1]));
       case 'invoker:edit-task-agent':
         return mutations.editTaskAgent(String(args[0]), String(args[1]));
+      case 'invoker:edit-task-model':
+        return mutations.editTaskModel(String(args[0]), args[1] === undefined || args[1] === null ? null : String(args[1]));
       case 'invoker:edit-task-type':
         return mutations.editTaskType(
           String(args[0]),

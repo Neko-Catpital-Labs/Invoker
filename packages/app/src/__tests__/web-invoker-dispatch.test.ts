@@ -17,6 +17,7 @@ function makeTask(id: string) {
 function makeDispatch(overrides: Record<string, unknown> = {}) {
   const approveTask = vi.fn(async () => ({ ok: true }));
   const spawnRepairWorkflow = vi.fn(async () => ({ ok: true }));
+  const editTaskModel = vi.fn(async () => ({ ok: true }));
   const deps = {
     orchestrator: {
       syncAllFromDb: vi.fn(),
@@ -27,7 +28,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     persistence: {
       listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
     },
-    mutations: { approveTask, spawnRepairWorkflow },
+    mutations: { approveTask, spawnRepairWorkflow, editTaskModel },
     agentRegistry: { listExecutionHarnesses: () => [] },
     loadConfig: () => ({}),
     getStreamSequence: () => 7,
@@ -36,7 +37,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     detachWorkflow: vi.fn(async () => {}),
     ...overrides,
   };
-  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask, spawnRepairWorkflow };
+  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask, spawnRepairWorkflow, editTaskModel };
 }
 function makeTaskTerminalAdapter() {
   return {
@@ -176,6 +177,12 @@ describe('buildWebInvokerDispatch', () => {
     const { dispatch, spawnRepairWorkflow } = makeDispatch();
     await dispatch('invoker:spawn-repair-workflow', [payload]);
     expect(spawnRepairWorkflow).toHaveBeenCalledWith(payload);
+  });
+
+  it('edit-task-model routes to the mutation facade', async () => {
+    const { dispatch, editTaskModel } = makeDispatch();
+    await dispatch('invoker:edit-task-model', ['wf-1/task-1', 'gpt-5.3-codex-spark']);
+    expect(editTaskModel).toHaveBeenCalledWith('wf-1/task-1', 'gpt-5.3-codex-spark');
   });
 
   it('open-terminal degrades gracefully when task terminal support is absent', async () => {
