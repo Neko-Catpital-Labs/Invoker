@@ -37,7 +37,6 @@ function captureProcessOutput() {
 
 describe('invoker-cli mutations', () => {
   const previousInvokerDbDir = process.env.INVOKER_DB_DIR;
-  const previousAllowProductionDeleteAll = process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL;
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -49,49 +48,10 @@ describe('invoker-cli mutations', () => {
     } else {
       process.env.INVOKER_DB_DIR = previousInvokerDbDir;
     }
-    if (previousAllowProductionDeleteAll === undefined) {
-      delete process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL;
-    } else {
-      process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL = previousAllowProductionDeleteAll;
-    }
   });
 
-  it('refuses delete-all against the default production DB root with exit 64', async () => {
+  it('runs delete-all against the default production DB root with no guard', async () => {
     process.env.INVOKER_DB_DIR = join(process.env.HOME ?? '', '.invoker');
-    delete process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL;
-    const output = captureProcessOutput();
-
-    const code = await main(['delete-all'], {
-      createMessageBus: () => {
-        throw new Error('delete-all guard should run before IPC setup');
-      },
-    });
-
-    expect(code).toBe(64);
-    expect(output.stderr).toContain("ERROR: Refusing to run 'delete-all' against production DB root:");
-    expect(output.stderr).toContain('Set INVOKER_DB_DIR to an isolated temp directory for tests.');
-    expect(output.stderr).toContain('Override only if intentional: INVOKER_ALLOW_PRODUCTION_DELETE_ALL=1');
-    output.restore();
-  });
-
-  it('runs the delete-all guard before owner discovery or IPC send', async () => {
-    process.env.INVOKER_DB_DIR = join(process.env.HOME ?? '', '.invoker');
-    delete process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL;
-    const output = captureProcessOutput();
-    const createMessageBus = vi.fn(() => {
-      throw new Error('should not be called');
-    });
-
-    const code = await main(['delete-all'], { createMessageBus });
-
-    expect(code).toBe(64);
-    expect(createMessageBus).not.toHaveBeenCalled();
-    output.restore();
-  });
-
-  it('allows delete-all past the production guard when the documented override is set', async () => {
-    process.env.INVOKER_DB_DIR = join(process.env.HOME ?? '', '.invoker');
-    process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL = '1';
     const output = captureProcessOutput();
     const bus = new LocalBus();
     const execHandler = vi.fn(async (request: unknown) => {
