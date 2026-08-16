@@ -58,6 +58,14 @@ request), see `scripts/jailbreak-admin-bypass-land.mjs`. This skill and that
 worker are two separate authorization paths to the same class of action —
 satisfying one is never sufficient authorization for the other.
 
+A PR that fixes the merge-gate machinery itself (the PR-body validator, a
+CI-policy test, `.mergify.yml`) is structurally unable to pass its own gate
+before it exists — the gate it needs is the one it's adding. This makes
+such a PR a legitimate candidate for this skill even when the normal queue
+is otherwise healthy, but it also means "the gate approved this diff" is
+never available as evidence for it; treat the human's explicit consent, not
+the merge itself, as the only approval this PR gets.
+
 ## When to use this vs. `land-stack`
 
 - `land-stack` lands a **specific stack the user names**, safely, through
@@ -125,6 +133,11 @@ diffs; stop and re-derive the safe approach first.
 ## Step 4: Merge each stack, bottom-up
 
 Both requirements in the STOP section must be satisfied before this step runs.
+
+Skim `gh pr diff <pr>` for each PR before merging it, even under consent —
+this is the only review most of these PRs get, since the merge bypasses
+required checks entirely. The human's consent authorizes bypassing CI; it
+does not stand in for having actually looked at what's being merged.
 
 For a single-PR stack:
 
