@@ -53,7 +53,12 @@ function hasInvokerHomeMismatch(snapshot: DelegatedTasksSnapshot, localInvokerHo
   return Boolean(snapshot.invokerHomeRoot && snapshot.invokerHomeRoot !== localInvokerHomeRoot);
 }
 
-export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlersContext): void {
+export interface ReadOnlyIpcHandlersHandle {
+  /** Drop the cached workflow-list result so the next read reflects an in-flight mutation immediately. */
+  invalidateWorkflowListCache(): void;
+}
+
+export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlersContext): ReadOnlyIpcHandlersHandle {
   const {
     ipcMain,
     logger,
@@ -239,4 +244,10 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
       return null;
     }
   });
+
+  return {
+    invalidateWorkflowListCache: () => {
+      cachedWorkflowList = null;
+    },
+  };
 }

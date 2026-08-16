@@ -2233,6 +2233,7 @@ startMainProcessBootstrap({
     );
   };
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
+  let invalidateWorkflowListCache: (() => void) | null = null;
   let startupWorkflowId: string | null = null;
   const startupWorkflowCache = createStartupWorkflowCache();
   let uiInteractive = false;
@@ -2388,6 +2389,7 @@ startMainProcessBootstrap({
 
   const requestWorkflowMetadataPublish = (reason: string): void => {
     uiPerfStats.workflowMetadataPublishRequests += 1;
+    invalidateWorkflowListCache?.();
     workflowMetadataPublisher?.requestPublish(reason);
   };
   function assertFatalExecutionCapacity(label: string): void {
@@ -3281,7 +3283,7 @@ startMainProcessBootstrap({
       getTaskDeltaStreamSequence,
       recordStartupDuration,
     });
-    await registerGuiMutationIpcHandlers({
+    const guiMutationHandlersResult = await registerGuiMutationIpcHandlers({
       ipcMain,
       app,
       logger,
@@ -3337,6 +3339,7 @@ startMainProcessBootstrap({
       getBundledSkillsStatus,
       installPackagedSkills,
     });
+    invalidateWorkflowListCache = guiMutationHandlersResult.invalidateWorkflowListCache;
     const guiPlanningConversationRepo = new ConversationRepository(persistence, {
       info: (message) => logger.info(message, { module: 'planning-chat' }),
       warn: (message) => logger.warn(message, { module: 'planning-chat' }),

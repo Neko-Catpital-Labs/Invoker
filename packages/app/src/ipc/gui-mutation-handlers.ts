@@ -1142,7 +1142,14 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
   };
 }
 
-export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutationIpcHandlersContext): Promise<void> {
+export interface RegisterGuiMutationIpcHandlersResult {
+  /** Drop the cached workflow-list read so the next read reflects an in-flight mutation immediately. */
+  invalidateWorkflowListCache(): void;
+}
+
+export async function registerGuiMutationIpcHandlers(
+  context: RegisterGuiMutationIpcHandlersContext,
+): Promise<RegisterGuiMutationIpcHandlersResult> {
   const {
     ipcMain,
     app,
@@ -1618,7 +1625,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       streamSequence: snapshot.streamSequence,
     });
   });
-  registerReadOnlyIpcHandlers({
+  const { invalidateWorkflowListCache } = registerReadOnlyIpcHandlers({
     ipcMain,
     logger,
     persistence,
@@ -2761,5 +2768,5 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   });
 
-
+  return { invalidateWorkflowListCache };
 }
