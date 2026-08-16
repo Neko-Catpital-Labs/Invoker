@@ -194,6 +194,15 @@ assert(
     && String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('g++'),
   'required-fast-extra must install make and g++ so pnpm can build native dependencies on self-hosted runners',
 );
+const requiredFastExtraNodeLibraryScript = String(requiredFastExtraNodeLibraryStep?.run ?? '');
+assert(
+  requiredFastExtraNodeLibraryScript.includes('sudo -n true')
+    && requiredFastExtraNodeLibraryScript.includes('sudo -n apt-get')
+    && !/^\s*sudo\s+(?!-n\b)/m.test(requiredFastExtraNodeLibraryScript),
+  'required-fast-extra libatomic install must prove passwordless sudo and use it noninteractively, '
+  + 'the same way ui-vitest already does -- raw `sudo apt-get` hangs on "a password is required" '
+  + 'when the self-hosted runner has no passwordless sudo configured',
+);
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
 const branchCarryForwardEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Branch Carry Forward');
 assert(branchCarryForwardEntry, 'required-fast-extra matrix must include Branch Carry Forward');

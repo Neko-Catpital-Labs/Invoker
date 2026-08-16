@@ -581,7 +581,68 @@ jobs:
 
       - name: Install system libraries for Node
         if: matrix.runner_label != 'Github_Runner'
-        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1 make g++
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_libatomic() {
+            if command -v ldconfig >/dev/null 2>&1; then
+              ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'
+              return
+            fi
+            find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
+          }
+
+          has_build_tools() {
+            command -v make >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1
+          }
+
+          if has_libatomic && has_build_tools; then
+            exit 0
+          fi
+
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::libatomic1, make, and g++ are required for Node ${NODE_VERSION}, but apt-get is unavailable."
+            exit 1
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y libatomic1 make g++
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y libatomic1 make g++
+            exit 0
+          fi
+
+          if ! has_build_tools; then
+            echo "::error::make and g++ are required for Node ${NODE_VERSION} but cannot be installed without sudo."
+            exit 1
+          fi
+
+          libatomic_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/node-runtime-system-deps.XXXXXX")"
+          mkdir -p "$libatomic_dir/apt-state/lists/partial" "$libatomic_dir/apt-cache/archives/partial"
+          (
+            cd "$libatomic_dir"
+            apt_options=(
+              -o "Dir::State=$libatomic_dir/apt-state"
+              -o "Dir::State::status=/var/lib/dpkg/status"
+              -o "Dir::Cache=$libatomic_dir/apt-cache"
+            )
+            apt-get "${apt_options[@]}" update
+            apt-get "${apt_options[@]}" download libatomic1
+            dpkg-deb -x ./*.deb root
+          )
+          libatomic_file="$(find "$libatomic_dir/root" -type f -name 'libatomic.so.1*' -print -quit)"
+          if [ -z "$libatomic_file" ]; then
+            echo "::error::Downloaded libatomic1 package did not contain libatomic.so.1."
+            exit 1
+          fi
+          libatomic_path="${libatomic_file%/*}"
+          echo "LD_LIBRARY_PATH=$libatomic_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
