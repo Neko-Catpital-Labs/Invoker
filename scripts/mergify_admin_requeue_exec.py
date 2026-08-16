@@ -12,7 +12,14 @@ try:
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from .mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
+    from .mergify_admin_requeue_plan import (
+        REBASE_CONFLICT_REPAIR_FILING_KIND,
+        ClaimRepairFiling,
+        ReleaseRepairFiling,
+        current_bottom_pr,
+        plan_stack_execution,
+        repair_filing_kind_for_check,
+    )
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
     from .mergify_admin_requeue_workflow_fastpath import (
@@ -27,7 +34,14 @@ except ImportError:
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
+    from mergify_admin_requeue_plan import (
+        REBASE_CONFLICT_REPAIR_FILING_KIND,
+        ClaimRepairFiling,
+        ReleaseRepairFiling,
+        current_bottom_pr,
+        plan_stack_execution,
+        repair_filing_kind_for_check,
+    )
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
     from mergify_admin_requeue_workflow_fastpath import (
@@ -97,7 +111,11 @@ def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClie
     return stale_base_by_pr
 
 
-def run_cycle(args: argparse.Namespace) -> bool:
+def run_cycle(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> bool:
     rule_path = REPO_ROOT / ".mergify.yml"
     try:
         trunk, _labels, required_checks = load_mergify_rules(rule_path)
@@ -161,6 +179,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
             args.max_repair_attempts,
             trunk,
             stale_base_by_pr,
+            claim_repair_filing,
         )
         queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
@@ -241,6 +260,15 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    # The planner already claimed this key (if claim_repair_filing was
+                    # wired in) before returning this Action; the actual dispatch
+                    # (fastpath or repairer.repair_check) never completed, so release
+                    # the claim or this key would be permanently blocked from every
+                    # future retry. bot_review_thread repairs are planned by
+                    # plan_bot_thread_repairs, which is not gated by claim_repair_filing,
+                    # so there is nothing to release for that key shape.
+                    if release_repair_filing is not None and not action.key.startswith("bot_review_thread:"):
+                        release_repair_filing(repair_filing_kind_for_check(action.key), str(action.pr_number), pr.head_ref_oid)
                     should_poll = True
                     continue
                 if progressed:
@@ -299,6 +327,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    if release_repair_filing is not None:
+                        release_repair_filing(REBASE_CONFLICT_REPAIR_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
                     should_poll = True
                     continue
                 repair_dispatch_attempted += 1
@@ -349,17 +379,25 @@ def run_cycle(args: argparse.Namespace) -> bool:
     return any_progress or should_poll
 
 
-def run_once(args: argparse.Namespace) -> int:
+def run_once(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> int:
     try:
-        run_cycle(args)
+        run_cycle(args, claim_repair_filing, release_repair_filing)
     except RuntimeError:
         return 2
     return 0
 
 
-def run_loop(args: argparse.Namespace) -> int:
+def run_loop(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> int:
     try:
-        while run_cycle(args):
+        while run_cycle(args, claim_repair_filing, release_repair_filing):
             time.sleep(args.poll_seconds)
     except RuntimeError:
         return 2

@@ -878,6 +878,166 @@ class PlanStackActions(PlannerTestCase):
         )
 
 
+class ClaimRepairFilingGate(PlannerTestCase):
+    """claim_repair_filing defaults to None everywhere (see PlanStackActions
+    and PlanStackExecution above, none of which pass it -- proving the
+    default preserves exact pre-existing behavior). This class proves the
+    gate itself: when a real claim function is wired in, a duplicate claim
+    suppresses the Action instead of returning it, matching
+    e2e-regression-watch.mjs's claimRepairFiling/releaseRepairFilingClaim."""
+
+    def _plan(self, stack_or_snapshot, claim_repair_filing, ledger=None, stale_base_by_pr=None):
+        ledger = ledger or self._ledger()
+        stack = stack_or_snapshot if isinstance(stack_or_snapshot, m.StackGroup) else m.StackGroup("s", (stack_or_snapshot,))
+        facts = p.build_stack_facts(stack, REQUIRED, ledger, (), {}, "master", stale_base_by_pr=stale_base_by_pr or {})
+        return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW, claim_repair_filing=claim_repair_filing)
+
+    def test_repair_filing_kind_for_check_is_namespaced_and_slugified(self):
+        self.assertEqual(p.repair_filing_kind_for_check("build"), "admin-requeue:check:build")
+        self.assertEqual(p.repair_filing_kind_for_check("quality / Dependency Cruise"), "admin-requeue:check:quality-dependency-cruise")
+
+    def test_rebase_conflict_kind_matches_the_spec_worked_example(self):
+        self.assertEqual(p.REBASE_CONFLICT_REPAIR_FILING_KIND, "admin-requeue:rebase-conflict")
+
+    def test_duplicate_claim_suppresses_repair_check_action(self):
+        calls = []
+
+        def claim(kind, subject, state_sha):
+            calls.append((kind, subject, state_sha))
+            return True  # already claimed elsewhere
+
+        actions = self._plan(pr(latest_mergify=event(failing=("build",))), claim)
+
+        # No admin-bypass label on this fixture, so once repair_check is
+        # suppressed the ladder falls through to the next rung (the missing-
+        # label nudge) rather than to no action at all -- the real assertion
+        # is that the duplicate repair_check was never returned.
+        self.assertEqual(len(actions), 1)
+        self.assertNotEqual(actions[0].kind, "repair_check")
+        self.assertEqual(actions[0].kind, "comment_admin_bypass_nudge")
+        self.assertEqual(calls, [("admin-requeue:check:build", "1", HEAD)])
+
+    def test_fresh_claim_lets_repair_check_action_through(self):
+        calls = []
+
+        def claim(kind, subject, state_sha):
+            calls.append((kind, subject, state_sha))
+            return False  # this call claimed it -- proceed
+
+        actions = self._plan(pr(latest_mergify=event(failing=("build",))), claim)
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, "repair_check")
+        self.assertEqual(calls, [("admin-requeue:check:build", "1", HEAD)])
+
+    def test_duplicate_claim_suppresses_rebase_onto_base_action(self):
+        # Same fixture as test_failed_check_with_stale_base_skips_agent_repair
+        # in PlanStackActions, which proves the un-gated (claim_repair_filing=None)
+        # case returns the rebase_onto_base Action -- this proves a duplicate
+        # claim suppresses it instead.
+        snapshot = pr(number=42, checks={"build": check("failure")})
+        actions = self._plan(snapshot, lambda kind, subject, sha: True, stale_base_by_pr={42: True})
+        self.assertEqual(actions, ())
+
+    def test_fresh_claim_lets_rebase_onto_base_action_through(self):
+        snapshot = pr(number=42, checks={"build": check("failure")})
+        calls = []
+        actions = self._plan(
+            snapshot,
+            lambda kind, subject, sha: calls.append((kind, subject, sha)) or False,
+            stale_base_by_pr={42: True},
+        )
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_base", 42))
+        self.assertEqual(calls, [("admin-requeue:rebase-conflict", "42", HEAD)])
+
+    def test_claim_does_not_consume_a_repair_check_ledger_attempt(self):
+        # A duplicate claim is a cross-system dedup skip, not a real attempt
+        # at this PR/check/sha -- it must not burn budget toward the
+        # independent retry_decision attempt cap.
+        ledger = self._ledger()
+        self._plan(pr(latest_mergify=event(failing=("build",))), lambda k, s, h: True, ledger=ledger)
+        self.assertEqual(ledger.count("repair-check", 1, HEAD, "build"), 0)
+
+    def test_second_failing_check_is_tried_when_the_first_is_a_duplicate_claim(self):
+        claimed = {"build"}
+
+        def claim(kind, subject, state_sha):
+            check_name = kind.rsplit(":", 1)[-1]
+            return check_name in claimed
+
+        snapshot = pr(
+            checks={"build": check("failure"), "lint": check("failure")},
+            latest_mergify=event(failing=("build", "lint")),
+        )
+        actions = self._plan(snapshot, claim)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "lint"))
+
+    def test_plan_stack_execution_threads_claim_repair_filing_through_to_the_gate(self):
+        # Same fixture shape as PlanStackExecution's tests, proving the
+        # production entrypoint (not just plan_actions_from_facts directly)
+        # reaches the gate. checks stays "success" (the default) so only the
+        # Mergify-queue-driven failing_checks path is live -- plan_direct_repairs'
+        # separate, un-gated failed_check blocker path (a known gap, see the
+        # handoff notes) would otherwise refile the same repair_check right
+        # back in and mask whether the gate did anything.
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", failing=("build",)),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+            open_pr_numbers_by_head={},
+            claim_repair_filing=lambda kind, subject, sha: True,
+        )
+        # admin-bypass label + dequeued state means the ladder falls through
+        # to a normal requeue once repair_check is suppressed as a
+        # duplicate -- the real assertion is that it's not repair_check.
+        self.assertEqual(len(plan.actions), 1)
+        self.assertNotEqual(plan.actions[0].kind, "repair_check")
+        self.assertEqual(plan.actions[0].kind, "requeue")
+
+
+class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
+    """default_claim_repair_filing/default_release_repair_filing are the real
+    production functions wired into mergify_admin_requeue.py's main(); they
+    are never reached by the tests above (which all pass an explicit fake),
+    so they get their own direct coverage here, patching
+    repair_filing_ledger the same way RepairCrashReason patches
+    repair_task_crashed_on_infra."""
+
+    def test_claims_a_fresh_key(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", return_value={"inserted": True, "row": {}}) as insert:
+            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+        self.assertFalse(already_claimed)
+        insert.assert_called_once_with("k", "s", "sha")
+
+    def test_reports_already_claimed_for_a_duplicate_key(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", return_value={"inserted": False, "row": {}}):
+            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+        self.assertTrue(already_claimed)
+
+    def test_fails_closed_when_the_ledger_call_raises(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", side_effect=RuntimeError("headless_mutation timed out")):
+            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+        self.assertTrue(already_claimed)
+
+    def test_release_calls_through(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "release_repair_filing", return_value={"released": True}) as release:
+            p.default_release_repair_filing("k", "s", "sha")
+        release.assert_called_once_with("k", "s", "sha")
+
+    def test_release_never_raises_even_when_the_ledger_call_fails(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "release_repair_filing", side_effect=RuntimeError("owner unreachable")):
+            p.default_release_repair_filing("k", "s", "sha")  # must not raise
+
+
 class RepairCrashReason(PlannerTestCase):
     """A submitted repair whose own Invoker workflow crashed with the known
     SSH/OAuth infra signature (the coding agent never launched) must not be

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Collection, Literal, Mapping
+from typing import Callable, Collection, Literal, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,6 +38,7 @@ except ImportError:
 
 try:
     from .mergify_admin_requeue_async_repair import (
+        _slugify,
         repair_bot_thread_plan_name,
         repair_check_plan_name,
         repair_conflict_plan_name,
@@ -45,8 +47,10 @@ try:
         SSH_OAUTH_INFRA_SIGNATURE,
         repair_task_crashed_on_infra,
     )
+    from . import repair_filing_ledger
 except ImportError:
     from mergify_admin_requeue_async_repair import (
+        _slugify,
         repair_bot_thread_plan_name,
         repair_check_plan_name,
         repair_conflict_plan_name,
@@ -55,9 +59,70 @@ except ImportError:
         SSH_OAUTH_INFRA_SIGNATURE,
         repair_task_crashed_on_infra,
     )
+    import repair_filing_ledger
 
 
 TRUNK = "master"
+
+# ClaimRepairFiling(kind, subject, state_sha) -> True means "already claimed
+# by someone else (this process, a prior tick, or a different system like
+# ci-regression-watch) -- skip filing"; False means "this call just claimed
+# it -- proceed". Every planning function below defaults this to None, which
+# preserves exact pre-existing behavior (no cross-system dedup check at all)
+# so the large existing test suite for this module needs no changes; only
+# the real production entrypoint (mergify_admin_requeue_exec.run_cycle) wires
+# in the real function, via default_claim_repair_filing below.
+ClaimRepairFiling = Callable[[str, str, str], bool]
+ReleaseRepairFiling = Callable[[str, str, str], None]
+
+
+def repair_filing_kind_for_check(check_name: str) -> str:
+    return f"admin-requeue:check:{_slugify(check_name)}"
+
+
+REBASE_CONFLICT_REPAIR_FILING_KIND = "admin-requeue:rebase-conflict"
+
+# Every claim_repair_filing call site below uses `subject=str(pr.number)` --
+# the raw PR number, same shape as repair_check_plan_name/repair_conflict_plan_name
+# in mergify_admin_requeue_async_repair.py (see that module's plan-naming
+# functions), which have no lineage concept either. PRs get recreated with a
+# new number on retarget under this repo's own `stack/` convention (see
+# land-stack.mjs), so a claim made against a PR that later gets closed and
+# replaced by a new PR number for the same logical stack slice just goes
+# stale rather than following the lineage -- not a correctness bug (the new
+# PR's own subject starts fresh), but the old claim never gets cleaned up
+# either. Known limitation, not fixed here.
+
+
+def default_claim_repair_filing(kind: str, subject: str, state_sha: str) -> bool:
+    """Real production claim function -- see ClaimRepairFiling above. Fails
+    closed (treats as already claimed) on any ledger-reach/parse failure,
+    matching e2e-regression-watch.mjs's claimRepairFiling: a broken dedup
+    check must never risk filing a duplicate PR."""
+    try:
+        result = repair_filing_ledger.insert_repair_filing(kind, subject, state_sha)
+        return not result["inserted"]
+    except Exception as exc:
+        print(
+            f"mergify_admin_requeue: default_claim_repair_filing failed for kind={kind!r} subject={subject!r} state_sha={state_sha!r}, assuming already claimed: {exc}",
+            file=sys.stderr,
+        )
+        return True
+
+
+def default_release_repair_filing(kind: str, subject: str, state_sha: str) -> None:
+    """Real production release function -- call after a claimed insert whose
+    downstream filing attempt then failed, so a later tick can reclaim the
+    same key. Never raises -- a failed release must not crash the caller's
+    own error handling; it just means this key stays claimed until manually
+    cleared or the sha changes."""
+    try:
+        repair_filing_ledger.release_repair_filing(kind, subject, state_sha)
+    except Exception as exc:
+        print(
+            f"mergify_admin_requeue: default_release_repair_filing failed for kind={kind!r} subject={subject!r} state_sha={state_sha!r}; this key stays claimed until manually cleared: {exc}",
+            file=sys.stderr,
+        )
 
 QUEUE_ONLY_REQUIRED_CHECK_PREFIXES = ("required-fast / ",)
 ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
@@ -409,6 +474,7 @@ def mergify_failed_check_actions(
     max_repair_attempts: int,
     now: int,
     suppressed_failed_checks: Collection[str] = (),
+    claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> tuple[Action, ...]:
     suppressed = set(suppressed_failed_checks)
     latest = pr.latest_mergify
@@ -435,6 +501,14 @@ def mergify_failed_check_actions(
         if decision["action"] == "backoff":
             continue
         if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
+            continue
+        if claim_repair_filing is not None and claim_repair_filing(
+            repair_filing_kind_for_check(name), str(pr.number), pr.head_ref_oid,
+        ):
+            # Another filer (a previous tick that crashed before recording,
+            # or a different system entirely, e.g. ci-regression-watch)
+            # already claimed this exact (kind, subject, stateSha) -- try the
+            # next failing check instead of returning a duplicate repair.
             continue
         return (Action("repair_check", pr.number, name, detail),)
     return ()
@@ -856,6 +930,7 @@ def plan_mergify_queue_repairs(
     max_repair_attempts: int,
     now: int,
     pr_numbers: Collection[int] | None = None,
+    claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> Action | None:
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
@@ -866,9 +941,11 @@ def plan_mergify_queue_repairs(
             return plan_rebase_onto_base(
                 pr, facts.trunk, ledger, max_repair_attempts,
                 "structural stale base is blocking its failing check(s), not a code problem",
+                claim_repair_filing,
             )
         actions = mergify_failed_check_actions(
             pr, ledger, max_repair_attempts, now, facts.suppressed_failed_checks_by_pr.get(pr.number, ()),
+            claim_repair_filing,
         )
         if actions:
             return actions[0]
@@ -881,6 +958,7 @@ def plan_direct_repairs(
     max_repair_attempts: int,
     now: int,
     pr_numbers: Collection[int] | None = None,
+    claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> Action | None:
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
@@ -898,12 +976,17 @@ def plan_direct_repairs(
                     continue
                 if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
                     continue
+                # Not yet gated by claim_repair_filing (repair_conflict is a
+                # separate, un-namespaced filing point from
+                # mergify_failed_check_actions/plan_rebase_onto_base) --
+                # see the handoff notes for this known gap.
                 return Action("repair_conflict", pr.number, key, blocker.detail)
             if blocker.kind == "failed_check":
                 if facts.stale_base_by_pr.get(pr.number):
                     return plan_rebase_onto_base(
                         pr, facts.trunk, ledger, max_repair_attempts,
                         "structural stale base is blocking its failing check(s), not a code problem",
+                        claim_repair_filing,
                     )
                 decision = retry_decision(
                     ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
@@ -1021,15 +1104,20 @@ def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
     return None
 
 
-def plan_rebase_onto_base(pr: PrSnapshot, trunk: str, ledger: Ledger, max_attempts: int, reason: str) -> Action:
+def plan_rebase_onto_base(
+    pr: PrSnapshot,
+    trunk: str,
+    ledger: Ledger,
+    max_attempts: int,
+    reason: str,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+) -> Action | None:
     # Persistent count (count_by_unit), not the head_sha-scoped count() --
     # a rebase attempt changes head_sha by definition, so the head_sha-scoped
     # count could never accumulate past 1 no matter how many times it
     # genuinely re-hit a conflict. This call site has no backoff/cooldown
     # concept and never has (a flat cap only, unlike the shared retry_decision
-    # used elsewhere in this module) -- kept that way here deliberately,
-    # since introducing a wait would change this function's return type from
-    # always-an-Action to optionally-None, out of scope for this fix.
+    # used elsewhere in this module) -- kept that way here deliberately.
     rebase_attempts = ledger.count_by_unit("rebase-onto-base-conflict", pr.number, trunk)
     if rebase_attempts >= max_attempts:
         return cap_action(
@@ -1037,10 +1125,25 @@ def plan_rebase_onto_base(pr: PrSnapshot, trunk: str, ledger: Ledger, max_attemp
             Blocker("rebase-onto-base", "rebase_conflict", pr.number, "rebase onto base"),
             f"rebase onto `{trunk}` keeps hitting a real conflict; a human needs to rebase PR #{pr.number} manually",
         )
+    # None here (not a cap_action) means "no action this tick" -- a different
+    # filer already claimed this exact (kind, subject, stateSha); every
+    # caller of plan_rebase_onto_base already returns an Action | None
+    # verbatim, so this propagates as "try the next planning pass" without
+    # needing any caller changes.
+    if claim_repair_filing is not None and claim_repair_filing(
+        REBASE_CONFLICT_REPAIR_FILING_KIND, str(pr.number), pr.head_ref_oid,
+    ):
+        return None
     return Action("rebase_onto_base", pr.number, trunk, f"rebase #{pr.number} onto `{trunk}`: {reason}")
 
 
-def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts: int, now: int) -> Action | None:
+def plan_bottom_progress(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_requeue_attempts: int,
+    now: int,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+) -> Action | None:
     if _bottom_has_pending_or_human_blocker(facts):
         return None
     if any(blocker.kind == "merge_hold" for blocker in facts.all_blockers):
@@ -1100,7 +1203,10 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
             )
         return Action("refresh_stale_queue", bottom.number, STALE_QUEUE_EVENT_REFRESH_KEY, detail)
     if bottom.base_ref_name == facts.trunk and facts.stale_base_by_pr.get(bottom.number):
-        return plan_rebase_onto_base(bottom, facts.trunk, ledger, max_requeue_attempts, "base pointer moved but content was never rebased")
+        return plan_rebase_onto_base(
+            bottom, facts.trunk, ledger, max_requeue_attempts,
+            "base pointer moved but content was never rebased", claim_repair_filing,
+        )
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
     if latest and latest.state == "dequeued":
@@ -1120,13 +1226,14 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
     now: int,
+    claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> tuple[Action, ...]:
     if facts.bottom:
         bottom_pr_numbers = (facts.bottom.number,)
-        action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers)
+        action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers, claim_repair_filing)
         if action is not None:
             return (action,)
-        action = plan_direct_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers)
+        action = plan_direct_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers, claim_repair_filing)
         if action is not None:
             return (action,)
         action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers)
@@ -1139,13 +1246,13 @@ def plan_actions_from_facts(
             return ()
         if _bottom_has_pending_or_human_blocker(facts) or _bottom_has_repairable_blocker(facts):
             return ()
-        action = plan_bottom_progress(facts, ledger, max_requeue_attempts, now)
+        action = plan_bottom_progress(facts, ledger, max_requeue_attempts, now, claim_repair_filing)
         if action is not None:
             return (action,)
-    action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now)
+    action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now, claim_repair_filing=claim_repair_filing)
     if action is not None:
         return (action,)
-    action = plan_direct_repairs(facts, ledger, max_repair_attempts, now)
+    action = plan_direct_repairs(facts, ledger, max_repair_attempts, now, claim_repair_filing=claim_repair_filing)
     if action is not None:
         return (action,)
     action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, now)
@@ -1162,7 +1269,7 @@ def plan_actions_from_facts(
     action = plan_merge_hold_cleanup(facts, ledger)
     if action is not None:
         return (action,)
-    action = plan_bottom_progress(facts, ledger, max_requeue_attempts, now)
+    action = plan_bottom_progress(facts, ledger, max_requeue_attempts, now, claim_repair_filing)
     if action is not None:
         return (action,)
     return ()
@@ -1177,6 +1284,7 @@ def plan_stack_actions(
     max_repair_attempts: int = 3,
     suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
     open_pr_numbers_by_head: Mapping[str, Collection[int]] | None = None,
+    claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> tuple[Action, ...]:
     del suppressed_failed_checks_by_pr
     facts = build_stack_facts(
@@ -1187,7 +1295,7 @@ def plan_stack_actions(
         open_pr_numbers_by_head=open_pr_numbers_by_head or {},
         trunk=TRUNK,
     )
-    return plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch)
+    return plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch, claim_repair_filing)
 
 
 def plan_stack_execution(
@@ -1201,6 +1309,7 @@ def plan_stack_execution(
     max_repair_attempts: int = 3,
     trunk: str = TRUNK,
     stale_base_by_pr: Mapping[int, bool] | None = None,
+    claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> StackExecutionPlan:
     facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head, trunk, stale_base_by_pr=stale_base_by_pr)
     summary = summarize_stack(facts)
@@ -1212,7 +1321,7 @@ def plan_stack_execution(
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
         )
-    actions = plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch)
+    actions = plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch, claim_repair_filing)
     if actions:
         return StackExecutionPlan(
             summary=summary,
