@@ -68,7 +68,7 @@ function getElectronPlatformPath() {
   }
 }
 
-async function repairElectronWithSystemUnzip(electronPackageDir) {
+async function repairElectronWithPackageExtractor(electronPackageDir) {
   if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
     return null;
   }
@@ -78,6 +78,10 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
     paths: [electronPackageDir],
   });
   const { downloadArtifact } = require(electronGetPath);
+  const extractZipPath = require.resolve('extract-zip', {
+    paths: [electronPackageDir],
+  });
+  const extractZip = require(extractZipPath);
   const platformPath = getElectronPlatformPath();
   const platform = process.env.npm_config_platform || process.platform;
   const arch = process.env.npm_config_arch || process.arch;
@@ -96,19 +100,7 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
   const distPath = path.join(electronPackageDir, 'dist');
   fs.rmSync(distPath, { recursive: true, force: true });
   fs.mkdirSync(distPath, { recursive: true });
-
-  const unzip = spawnSync('unzip', ['-q', '-o', zipPath, '-d', distPath], {
-    cwd: electronPackageDir,
-    env: process.env,
-    stdio: 'inherit',
-  });
-  if (unzip.status !== 0) {
-    return null;
-  }
-  if (unzip.signal) {
-    process.kill(process.pid, unzip.signal);
-    return null;
-  }
+  await extractZip(zipPath, { dir: distPath });
 
   const sourceTypeDefinitions = path.join(distPath, 'electron.d.ts');
   if (fs.existsSync(sourceTypeDefinitions)) {
@@ -166,7 +158,7 @@ async function installElectronOrExit() {
     return installedBinary;
   }
 
-  const repairedBinary = await repairElectronWithSystemUnzip(electronPackageDir);
+  const repairedBinary = await repairElectronWithPackageExtractor(electronPackageDir);
   if (!repairedBinary) {
     console.error(
       'Electron is still unavailable after running its installer. ' +
