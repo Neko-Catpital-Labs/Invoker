@@ -2052,12 +2052,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-workflow');
     logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.recreate-workflow',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const recreateWfEnvelope = makeEnvelope('recreate-workflow', 'ui', 'workflow', { workflowId });
       const recreateWfResult = activeMutationContext?.mutationTiming
         ? await activeMutationContext.mutationTiming.span(
@@ -2194,12 +2188,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     cancelDeferredWorkflowLaunch(workflowId, 'ipc.retry-workflow');
     logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.retry-workflow',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
       const result = activeMutationContext?.mutationTiming
         ? await activeMutationContext.mutationTiming.span(
@@ -2242,12 +2230,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
     logger.info(`rebase-retry: "${target}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.rebase-retry',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const started = await rebaseRetry(target, {
         logger,
         orchestrator,
@@ -2286,12 +2268,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     cancelDeferredWorkflowLaunch(workflowId, 'ipc.rebase-recreate');
     logger.info(`rebase-recreate: "${target}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.rebase-recreate',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const started = await rebaseRecreate(target, {
         logger,
         orchestrator,
