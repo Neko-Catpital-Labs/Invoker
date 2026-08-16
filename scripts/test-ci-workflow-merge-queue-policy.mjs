@@ -211,6 +211,16 @@ assert(
   requiredFastExtraNodeLibraryScript.includes('python3'),
   'required-fast-extra must install python3 for node-gyp native builds on self-hosted runners',
 );
+const requiredFastExtraInstallDepsStep = jobs['required-fast-extra'].steps.find(
+  (step) => step.name === 'Install dependencies',
+);
+assert(
+  requiredFastExtraInstallDepsStep?.env?.INVOKER_SKIP_ELECTRON_INSTALL === '1'
+    && requiredFastExtraInstallDepsStep?.env?.ELECTRON_SKIP_BINARY_DOWNLOAD === '1',
+  'required-fast-extra must skip installing Electron during pnpm install -- none of its suites launch the app, '
+  + 'and downloading the Electron binary is an unnecessary network dependency that can fail independently of '
+  + 'the system packages required-fast-extra actually needs',
+);
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
 const branchCarryForwardEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Branch Carry Forward');
 assert(branchCarryForwardEntry, 'required-fast-extra matrix must include Branch Carry Forward');
