@@ -1,0 +1,20 @@
+name: "Verify PR #9430 is superseded by already-merged #9406"
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+
+tasks:
+  - id: check-master-electron-cjs-has-no-unzip
+    description: "Confirm scripts/electron.cjs on master no longer references system unzip at all"
+    command: "! git show origin/master:scripts/electron.cjs | grep -n unzip"
+    dependencies: []
+
+  - id: run-missing-unzip-repro-against-master
+    description: "Run the existing missing-unzip repro against current master to confirm the fallback scenario PR #9430 targets already passes without PR #9430's diff"
+    command: "bash scripts/repro/repro-mece-04-remote-electron-provisioning.sh"
+    dependencies: []
+
+  - id: report-supersession-finding
+    description: "Summarize the finding for a human to act on: PR #9430 conflicts with master because PR #9406 (ff88543e4d7ff69168c43de0ccf29f2a2e51c50a) already replaced scripts/electron.cjs's system-unzip repair path with an unconditional extract-zip extraction, fully eliminating the unzip dependency PR #9430 was adding a fallback for. Merging PR #9430's unzip-first-with-fallback design would reintroduce the removed dependency. Recommend closing PR #9430 as superseded by #9406 rather than merging or force-rebasing it."
+    command: "echo 'PR 9430 is superseded by already-merged PR 9406 (ff88543e4). Recommend closing PR 9430 without merging. scripts/electron.cjs no longer uses system unzip at all on master, and the missing-unzip fallback scenario already passes deterministically.'"
+    dependencies: [check-master-electron-cjs-has-no-unzip, run-missing-unzip-repro-against-master]
