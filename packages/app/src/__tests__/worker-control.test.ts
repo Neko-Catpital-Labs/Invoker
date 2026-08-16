@@ -21,15 +21,36 @@ import {
 } from '@invoker/execution-engine';
 
 import type { WorkerActionRecord } from '@invoker/data-store';
+import type { WorkerStatusSnapshot } from '@invoker/contracts';
 import {
   autoStartedOwnerWorkerKinds,
   autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
+  createOwnerWorkerStatusReader,
   createWorkerRuntimeController,
   listWorkerActionHistory,
   listWorkerDecisions,
   toWorkerActionSummary,
 } from '../worker-control.js';
+
+function ownerSnapshot(
+  generatedAt: string,
+  lifecycles: Record<string, 'running' | 'stopped'>,
+): WorkerStatusSnapshot {
+  return {
+    generatedAt,
+    workers: Object.entries(lifecycles).map(([kind, lifecycle]) => ({
+      kind,
+      note: `${kind} worker`,
+      lifecycle,
+      policy: 'enabled',
+      autoStarts: lifecycle === 'running',
+      startable: lifecycle !== 'running',
+      stoppable: lifecycle === 'running',
+      recentActions: [],
+    })),
+  };
+}
 
 interface TestWorkerRuntime extends WorkerRuntime {
   forceExit: () => void;
@@ -617,6 +638,70 @@ describe('toWorkerActionSummary', () => {
     const act = toWorkerActionSummary(decisionRow({ id: 'a', status: 'queued', payload: {} }));
     expect(act.decision).toBe('act');
     expect(act.reason).toBeUndefined();
+  });
+});
+
+describe('createOwnerWorkerStatusReader', () => {
+  it('keeps the complete last owner snapshot stale through a timeout and replaces it on recovery', async () => {
+    const first = ownerSnapshot('2026-01-01T00:00:00.000Z', {
+      'pr-status': 'running',
+      autofix: 'stopped',
+    });
+    const recovered = ownerSnapshot('2026-01-01T00:02:00.000Z', {
+      'pr-status': 'stopped',
+      autofix: 'running',
+    });
+    const queryOwner = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error('Owner request timed out'))
+      .mockResolvedValueOnce(recovered);
+    const now = vi.fn()
+      .mockReturnValueOnce('2026-01-01T00:00:01.000Z')
+      .mockReturnValueOnce('2026-01-01T00:02:01.000Z');
+    const read = createOwnerWorkerStatusReader({
+      queryOwner,
+      createUnavailableSnapshot: () => ownerSnapshot('2026-01-01T00:01:00.000Z', {
+        'pr-status': 'stopped',
+        autofix: 'stopped',
+      }),
+      now,
+    });
+
+    await expect(read()).resolves.toEqual({
+      ...first,
+      authority: 'live',
+      lastSuccessfulAt: '2026-01-01T00:00:01.000Z',
+    });
+    await expect(read()).resolves.toEqual({
+      ...first,
+      authority: 'cached',
+      lastSuccessfulAt: '2026-01-01T00:00:01.000Z',
+      unavailableReason: 'Owner request timed out',
+    });
+    await expect(read()).resolves.toEqual({
+      ...recovered,
+      authority: 'live',
+      lastSuccessfulAt: '2026-01-01T00:02:01.000Z',
+    });
+  });
+
+  it('marks the local fallback unavailable before any owner response succeeds', async () => {
+    const localGuess = ownerSnapshot('2026-01-01T00:00:00.000Z', {
+      'pr-status': 'stopped',
+      autofix: 'stopped',
+    });
+    const read = createOwnerWorkerStatusReader({
+      queryOwner: vi.fn().mockRejectedValue(new Error('Owner request timed out')),
+      createUnavailableSnapshot: () => localGuess,
+      now: () => '2026-01-01T00:00:01.000Z',
+    });
+
+    await expect(read()).resolves.toEqual({
+      generatedAt: localGuess.generatedAt,
+      workers: [],
+      authority: 'unavailable',
+      unavailableReason: 'Owner request timed out',
+    });
   });
 });
 
