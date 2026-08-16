@@ -973,6 +973,35 @@ class InfraCrashDoesNotCountAgainstCap(PlannerTestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
 
+    def test_mergify_failed_check_actions_prioritizes_real_check_over_queue_only(self):
+        # Real incident: PR #9309 dequeued with six failing checks, five of
+        # them "required-fast /" queue-only matrix jobs that only run inside
+        # the merge queue (cancelled side effects of the sixth), plus one
+        # genuinely repairable check, UI Vitest. Queue-only checks always
+        # resolve to a no-op repair (nothing to fix outside the queue), so
+        # if the loop returns whichever failing check comes first in
+        # Mergify's list, it can pick a queue-only check forever and never
+        # reach the one check a repair could actually fix.
+        ledger = self._ledger()
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(
+                state="dequeued",
+                failing=(
+                    "required-fast / Guardrails",
+                    "required-fast / Launch Dispatch Queue Repro",
+                    "required-fast / Merge Gate Concurrency Repro",
+                    "required-fast / Start Running MECE Repros",
+                    "required-fast / Submit Workflow Chain",
+                    "UI Vitest",
+                ),
+            ),
+        )
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            actions = p.mergify_failed_check_actions(snapshot, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "UI Vitest"))
+
     def test_cap_still_applies_once_genuine_non_infra_attempts_reach_it(self):
         # Three genuinely-attempted (not infra-crashed) repairs plus one more
         # that crashed on infra: the cap must still fire on the three real
