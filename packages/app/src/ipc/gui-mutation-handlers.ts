@@ -126,6 +126,7 @@ import { createRendererTaskFeed } from '../window/renderer-task-feed.js';
 import { createTaskGraphEventPublisher } from '../task-graph-event-publisher.js';
 import type { GuiMutationPayload, GuiMutationRegistrars } from './ipc-registration.js';
 import { resolveInvokerHomeRoot } from '../delete-all-snapshot.js';
+import { publishInAppWorkflowCreatedEvents } from '../surface-event-relay.js';
 import {
   buildRecoveryWorkerAuditPayload,
   classifyAutoFixRecoveryPhase,
@@ -1290,7 +1291,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     planText: string,
     options?: { preserveTaskHandles?: boolean; logLabel?: string },
   ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
-    return loadPlanSubmissionBundle(planText, {
+    const submission = await loadPlanSubmissionBundle(planText, {
       persistence,
       orchestrator,
       allowGraphMutation: invokerConfig.allowGraphMutation,
@@ -1300,6 +1301,8 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       preserveTaskHandles: options?.preserveTaskHandles,
       taskHandles,
     });
+    publishInAppWorkflowCreatedEvents(messageBus, invokerConfig, submission, planText);
+    return submission;
   }
 
   const planningConversationRepo = new ConversationRepository(persistence, {

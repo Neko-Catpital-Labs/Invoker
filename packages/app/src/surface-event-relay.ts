@@ -18,6 +18,8 @@
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { Orchestrator, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { PersistenceAdapter } from '@invoker/data-store';
+import type { InvokerConfig } from './config.js';
+import type { PlanSubmissionLoadResult } from './plan-submission-loader.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 
 export interface SurfaceEventRelayDeps {
@@ -37,6 +39,36 @@ export interface SurfaceAlertFields {
   subject: string;
   message: string;
   alertKey: string;
+}
+
+/**
+ * Publish the trusted app-to-surface handoff for an in-app submission.
+ * Slack identity and destination come only from owner configuration; neither
+ * is accepted from the renderer request that supplied the plan.
+ */
+export function publishInAppWorkflowCreatedEvents(
+  messageBus: Pick<MessageBus, 'publish'>,
+  config: Pick<InvokerConfig, 'slackInAppRequesterId' | 'slackLobbyChannelId'>,
+  submission: Pick<PlanSubmissionLoadResult, 'workflowId' | 'workflowIds'>,
+  planText: string,
+): void {
+  const requestedBy = config.slackInAppRequesterId?.trim();
+  const lobbyChannel = config.slackLobbyChannelId?.trim();
+  if (!requestedBy || !lobbyChannel) return;
+
+  const workflowIds = submission.workflowIds?.length
+    ? submission.workflowIds
+    : [submission.workflowId];
+  for (const workflowId of new Set(workflowIds)) {
+    const event = {
+      type: 'workflow_created',
+      workflowId,
+      requestedBy,
+      lobbyChannel,
+      planText,
+    } as const;
+    messageBus.publish(Channels.SURFACE_EVENT, event);
+  }
 }
 
 export function publishSurfaceAlert(messageBus: MessageBus, alert: SurfaceAlertFields): void;

@@ -111,6 +111,9 @@ export type SurfaceEvent =
       lobbyThreadTs?: string;
       harnessPreset?: string;
       repoUrl?: string;
+      /** Immutable submitted YAML, used when the producing process does not share a plan file. */
+      planText?: string;
+      /** Legacy/local plan path used by file-backed producers. */
       planFile?: string;
     }
   | { type: 'error'; message: string };

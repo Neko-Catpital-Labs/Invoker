@@ -225,7 +225,7 @@ import {
   type WorkerRuntimeController,
 } from './worker-control.js';
 import { runStartReady } from './start-ready.js';
-import { startSurfaceEventRelay } from './surface-event-relay.js';
+import { publishInAppWorkflowCreatedEvents, startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
@@ -1275,14 +1275,16 @@ function startHeadlessMode(): void {
 
       const loadGeneratedPlan = async (
         planText: string,
-      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => (
-        loadPlanSubmissionBundle(planText, {
+      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => {
+        const submission = await loadPlanSubmissionBundle(planText, {
           persistence,
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        })
-      );
+        });
+        publishInAppWorkflowCreatedEvents(messageBus, invokerConfig, submission, planText);
+        return submission;
+      };
 
       const planningConversationRepo = new ConversationRepository(persistence, {
         info: (message) => logger.info(message, { module: 'planning-chat' }),

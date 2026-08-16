@@ -256,6 +256,10 @@ export interface InvokerConfig {
   defaultRepoUrl?: string;
   /** Slack user IDs allowed to run Slack administrative actions. */
   slackAdminUserIds?: string[];
+  /** Operator-owned Slack user ID invited to channels for workflows submitted in-app. */
+  slackInAppRequesterId?: string;
+  /** Operator-owned Slack channel ID where in-app workflow channel links are posted. */
+  slackLobbyChannelId?: string;
   /** Stable Slack channel ID → default repository URL for channel-scoped planning. */
   slackChannelRepos?: Record<string, string>;
   /** Maximum number of tasks that can run concurrently. Default: 6. */

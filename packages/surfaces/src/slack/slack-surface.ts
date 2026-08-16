@@ -2694,6 +2694,12 @@ ${text}`;
   private async createWorkflowChannel(
     event: Extract<SurfaceEvent, { type: 'workflow_created' }>,
   ): Promise<void> {
+    const existing = this.workflowChannelRepo?.getByWorkflowId(event.workflowId);
+    if (existing) {
+      this.log('slack', 'info', `[WORKFLOW_CHANNELS] Suppressed duplicate workflow_created (workflowId=${event.workflowId}, channel=${existing.channelId})`);
+      return;
+    }
+
     const client = this.app.client;
     const name = `workflow-${event.workflowId.replace(/^wf-/, '')}`
       .toLowerCase()
@@ -2758,7 +2764,7 @@ ${text}`;
       },
       channelId,
     );
-    await this.publishWorkflowPlanCard(channelId, event.workflowId, event.planFile);
+    await this.publishWorkflowPlanCard(channelId, event.workflowId, event.planText, event.planFile);
 
     if (event.lobbyChannel) {
       if (inviteFailed) {
@@ -2785,19 +2791,27 @@ ${text}`;
     }
   }
 
-  private async publishWorkflowPlanCard(channel: string, workflowId: string, planFile: string | undefined): Promise<void> {
-    if (!planFile) return;
-    let planText: string;
-    try {
-      planText = readFileSync(planFile, 'utf8');
-    } catch (err) {
-      this.log('slack', 'error', `[PLAN] Failed to read workflow plan ${planFile}: ${err}`);
-      await this.postMessage(
-        { text: `Could not read the workflow plan file: ${err instanceof Error ? err.message : String(err)}`, blocks: [] },
-        channel,
-      );
-      return;
+  private async publishWorkflowPlanCard(
+    channel: string,
+    workflowId: string,
+    submittedPlanText: string | undefined,
+    planFile: string | undefined,
+  ): Promise<void> {
+    if (submittedPlanText === undefined && !planFile) return;
+    let planText = submittedPlanText;
+    if (planText === undefined && planFile) {
+      try {
+        planText = readFileSync(planFile, 'utf8');
+      } catch (err) {
+        this.log('slack', 'error', `[PLAN] Failed to read workflow plan ${planFile}: ${err}`);
+        await this.postMessage(
+          { text: `Could not read the workflow plan file: ${err instanceof Error ? err.message : String(err)}`, blocks: [] },
+          channel,
+        );
+        return;
+      }
     }
+    if (planText === undefined) return;
     const summary = summarizePlanText(planText);
     if (!summary) {
       await this.postMessage(
@@ -2822,7 +2836,10 @@ ${text}`;
     try {
       await this.app.client.files.uploadV2({
         channel_id: channel,
-        file_uploads: [{ file: planFile, filename: `workflow-${workflowId}-plan.yaml` }],
+        file_uploads: [{
+          file: planFile ?? Buffer.from(planText, 'utf8'),
+          filename: `workflow-${workflowId}-plan.yaml`,
+        }],
       });
     } catch (err) {
       this.log('slack', 'error', `[PLAN] Failed to upload workflow plan (channel=${channel}, workflow=${workflowId}): ${err}`);
