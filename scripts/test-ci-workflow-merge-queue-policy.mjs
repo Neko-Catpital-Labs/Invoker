@@ -246,14 +246,9 @@ assert(
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
-assertStepBefore(jobs.docker, 'Install Electron repair dependency', 'Install dependencies', 'docker');
-const dockerElectronRepairStep = jobs.docker.steps.find(
-  (step) => step.name === 'Install Electron repair dependency',
-);
 assert(
-  String(dockerElectronRepairStep?.run ?? '').includes('apt-get install -y unzip')
-    && String(dockerElectronRepairStep?.run ?? '').includes('sudo -n apt-get install -y unzip'),
-  'docker must provision unzip so the Electron repair fallback can complete during pnpm install',
+  !jobs.docker.steps.some((step) => step.name === 'Install Electron repair dependency'),
+  'docker must not provision system unzip: scripts/electron.cjs\'s repair path uses the bundled extract-zip package, not a system unzip binary (see PR #9406)',
 );
 
 assert(
