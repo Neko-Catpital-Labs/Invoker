@@ -400,6 +400,9 @@ function buildRegisteredOwnerWorkerDeps(
       remoteTargets,
       cleanupEnabled: invokerConfig.diskHeadroom?.cleanupEnabled,
     },
+    claudeOauthRefresh: {
+      remoteTargets: remoteTargets.map((target) => ({ name: target.name, connection: target.connection })),
+    },
     infraRepair: {
       ownerRepoRoot: repoRoot,
       ownerInvokerHome: resolveInvokerHomeRoot(),

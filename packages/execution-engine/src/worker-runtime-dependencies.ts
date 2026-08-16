@@ -16,6 +16,7 @@ import type {
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
+import type { ClaudeOauthRefreshWorkerConfig } from './workers/claude-oauth-refresh-worker.js';
 import type { DiskHeadroomWorkerStore } from './workers/disk-headroom-reclaim.js';
 import type { SlackBugScanWorkerConfig } from './workers/slack-bug-scan-worker.js';
 import type {
@@ -70,6 +71,8 @@ export interface WorkerRuntimeDependencies {
   prMaintenance?: PrMaintenanceWorkerConfig;
   /** Disk-headroom worker configuration (local/remote paths and thresholds). */
   diskHeadroom?: DiskHeadroomWorkerConfig;
+  /** Claude OAuth refresh worker configuration (local credentials path and SSH pool distribution targets). */
+  claudeOauthRefresh?: ClaudeOauthRefreshWorkerConfig;
   /** Infra-repair worker configuration (owner/local repo plus remote SSH repair targets). */
   infraRepair?: InfraRepairWorkerConfig;
   /** Auto-approval tuning for worker-owned AI fix approvals. */

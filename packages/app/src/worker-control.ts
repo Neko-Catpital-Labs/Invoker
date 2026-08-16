@@ -15,6 +15,7 @@ import type { SQLiteAdapter, TaskEvent, WorkerActionRecord } from '@invoker/data
 import {
   AUTO_FIX_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
+  CLAUDE_OAUTH_REFRESH_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   IDLE_TASK_CLEANUP_WORKER_KIND,
@@ -62,6 +63,7 @@ type AutoStartedOwnerWorkerKindOptions = {
   workflowResumeEnabled?: boolean;
   requeueEnabled?: boolean;
   staleTaskCleanupEnabled?: boolean;
+  claudeOauthRefreshEnabled?: boolean;
 };
 
 type AutoStartedOwnerWorkerKindConfig = {
@@ -76,6 +78,7 @@ type AutoStartedOwnerWorkerKindConfig = {
   workflowResume?: { enabled?: boolean };
   requeueEnabled?: boolean;
   staleTaskCleanup?: { enabled?: boolean };
+  claudeOauthRefresh?: { enabled?: boolean };
 };
 
 /**
@@ -97,6 +100,7 @@ export function autoStartedOwnerWorkerKinds(
     options.requeueEnabled,
     options.slackBugScanEnabled,
     options.staleTaskCleanupEnabled,
+    options.claudeOauthRefreshEnabled,
   ].some((value) => value !== undefined);
   if (options.prMaintenanceEnabled && !hasWorkerGateOverrides) {
     workerKinds.push(PR_ADMIN_BYPASS_LAND_WORKER_KIND, INFRA_REPAIR_WORKER_KIND);
@@ -132,6 +136,9 @@ export function autoStartedOwnerWorkerKinds(
   if (options.staleTaskCleanupEnabled) {
     workerKinds.push(IDLE_TASK_CLEANUP_WORKER_KIND);
   }
+  if (options.claudeOauthRefreshEnabled) {
+    workerKinds.push(CLAUDE_OAUTH_REFRESH_WORKER_KIND);
+  }
   return workerKinds;
 }
 
@@ -150,6 +157,7 @@ export function autoStartedOwnerWorkerKindsForConfig(
     requeueEnabled: Boolean(config?.requeueEnabled),
     slackBugScanEnabled: Boolean(config?.slackBugScan?.enabled),
     staleTaskCleanupEnabled: Boolean(config?.staleTaskCleanup?.enabled),
+    claudeOauthRefreshEnabled: Boolean(config?.claudeOauthRefresh?.enabled),
   });
   return config?.e2eAutoFixEnabled
     ? [...workerKinds, E2E_AUTOFIX_WORKER_KIND]
