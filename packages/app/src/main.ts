@@ -72,6 +72,7 @@ import type {
   Logger,
   StartReadyRequest,
   StartReadyResult,
+  WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository, hasLiveWritableOwner } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -221,6 +222,7 @@ import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
+  createOwnerWorkerStatusReader,
   createWorkerRuntimeController,
   type WorkerRuntimeController,
 } from './worker-control.js';
@@ -3362,30 +3364,36 @@ startMainProcessBootstrap({
       planningTerminalState.restorePersistedPlanningTerminals();
     }
 
-    ipcMain.handle('invoker:get-workers', async () => {
-      if (!ownerMode) {
-        try {
-          return await messageBus.request('headless.query', { kind: 'workers' });
-        } catch (err) {
-          if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
-          logger.warn(
-            `get-workers owner delegation failed; falling back to local read-only snapshot: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-            { module: 'ipc' },
-          );
-        }
-        return createLocalWorkerStatusSnapshot({
-          registry: createRegisteredWorkerRegistry(),
-          persistence,
-          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-        });
-      }
-      return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+    const createUnavailableWorkerStatusSnapshot = (): WorkerStatusSnapshot =>
+      createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
         autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
       });
+    const readOwnerWorkerStatus = createOwnerWorkerStatusReader({
+      queryOwner: () => messageBus.request<{ kind: 'workers' }, WorkerStatusSnapshot>(
+        'headless.query',
+        { kind: 'workers' },
+      ),
+      createUnavailableSnapshot: createUnavailableWorkerStatusSnapshot,
+      onUnavailable: (err) => {
+        if (isMutationOwnerUnavailableError(err)) {
+          markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+        }
+        logger.warn(
+          `get-workers owner delegation failed; preserving last owner snapshot when available: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { module: 'ipc' },
+        );
+      },
+    });
+
+    ipcMain.handle('invoker:get-workers', async () => {
+      if (!ownerMode) {
+        return readOwnerWorkerStatus();
+      }
+      return workerRuntimeController?.snapshot() ?? createUnavailableWorkerStatusSnapshot();
     });
 
     ipcMain.handle('invoker:get-activity-logs', (_event, sinceId?: number, limit?: number) => {
