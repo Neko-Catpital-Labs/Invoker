@@ -176,7 +176,7 @@ jobs:
           }
 
           missing_native_tools=()
-          for tool in make g++ python3; do
+          for tool in make g++ python3 unzip; do
             if ! command -v "$tool" >/dev/null 2>&1; then
               missing_native_tools+=("$tool")
             fi
@@ -187,19 +187,19 @@ jobs:
           fi
 
           if ! command -v apt-get >/dev/null 2>&1; then
-            echo "::error::UI Vitest requires libatomic1, make, g++, and python3, but apt-get is unavailable."
+            echo "::error::UI Vitest requires libatomic1, make, g++, python3, and unzip, but apt-get is unavailable."
             exit 1
           fi
 
           if [ "$(id -u)" -eq 0 ]; then
             apt-get update
-            apt-get install -y libatomic1 make g++ python3
+            apt-get install -y libatomic1 make g++ python3 unzip
             exit 0
           fi
 
           if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
             sudo -n apt-get update
-            sudo -n apt-get install -y libatomic1 make g++ python3
+            sudo -n apt-get install -y libatomic1 make g++ python3 unzip
             exit 0
           fi
 
