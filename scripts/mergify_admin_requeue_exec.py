@@ -13,6 +13,7 @@ try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
     from .mergify_admin_requeue_plan import (
+        CONFLICT_REPAIR_FILING_KIND,
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         ClaimRepairFiling,
         ReleaseRepairFiling,
@@ -35,6 +36,7 @@ except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
     from mergify_admin_requeue_plan import (
+        CONFLICT_REPAIR_FILING_KIND,
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         ClaimRepairFiling,
         ReleaseRepairFiling,
@@ -303,6 +305,8 @@ def run_cycle(
                         key=action.key,
                         error=str(exc),
                     )
+                    if release_repair_filing is not None:
+                        release_repair_filing(CONFLICT_REPAIR_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
                     should_poll = True
                     continue
                 if progressed:
