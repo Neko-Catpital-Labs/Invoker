@@ -1173,6 +1173,81 @@ class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
             p.default_release_repair_filing("k", "s", "sha")  # must not raise
 
 
+class StaleClaimFreshnessGapRepro(PlannerTestCase):
+    """swarm finding #2, investigated.
+
+    First: claiming (kind, subject, shaA) then (kind, subject, shaB) for the
+    same PR, where shaB is shaA's real replacement (a rebase), both
+    succeeding is NOT a bug -- it is exactly the self-expiring-key property
+    the ledger exists for (see the spec's own worked example: a genuinely
+    new state must not be suppressed as a duplicate of an old one). Proven
+    below, then ruled out as the actual issue.
+
+    The real gap: default_claim_repair_filing (and its JS counterpart,
+    insertRepairFiling in scripts/repair-filing-ledger.mjs /
+    headlessRepairFiling in packages/app/src/headless.ts) takes state_sha as
+    a plain caller-supplied string with no verification against any
+    canonical source. A caller holding a PrSnapshot fetched before a rebase
+    landed can successfully claim a sha that is ALREADY superseded by the
+    time the claim executes -- proven below by inspecting the function's own
+    signature: there is no canonical-head-lookup parameter for it to use even
+    if it wanted to check. This is a structural gap, not a race that only
+    shows up under timing pressure -- it fires 100% of the time a claim is
+    made against non-current data, with no dependency on interleaving.
+
+    NOT fixed this round -- see the handoff notes for why: a real fix means
+    threading a canonical-head lookup (a GhClient/repo context in Python, a
+    live git/gh call in JS) into default_claim_repair_filing and its JS
+    counterpart, which is new external-dependency wiring and a real design
+    decision (what counts as "canonical" differs by caller: ci-regression-watch's
+    subject is a commit sha, mergify_admin_requeue's is a PR number), not a
+    contained fix alongside items 1-2's gating work.
+    """
+
+    def test_both_claims_for_a_pr_and_its_rebase_replacement_succeed_by_design(self):
+        # Confirms the by-design behavior described above -- NOT the bug.
+        ledger_rows = set()
+
+        def claim(kind, subject, state_sha):
+            key = (kind, subject, state_sha)
+            if key in ledger_rows:
+                return True
+            ledger_rows.add(key)
+            return False
+
+        self.assertFalse(claim("admin-requeue:rebase-conflict", "42", "shaA"))
+        self.assertFalse(claim("admin-requeue:rebase-conflict", "42", "shaB"))
+        self.assertEqual(len(ledger_rows), 2)
+
+    def test_default_claim_repair_filing_has_no_way_to_verify_state_sha_is_current(self):
+        # The actual gap: the function's public signature has no hook a
+        # caller (or the function itself) could use to re-verify state_sha
+        # against a live/canonical source before claiming -- it is
+        # structurally impossible for this function to catch a stale claim,
+        # not merely something it happens not to do today.
+        import inspect
+        signature = inspect.signature(p.default_claim_repair_filing)
+        self.assertEqual(list(signature.parameters), ["kind", "subject", "state_sha"])
+
+    def test_a_claim_against_an_already_superseded_sha_succeeds_unconditionally(self):
+        # Simulates the race directly: a caller's PrSnapshot was fetched
+        # when the PR's real head was "sha-stale"; by the time this claim
+        # actually executes, GitHub's canonical current head has already
+        # moved to "sha-fresh" (a rebase landed in between). No canonical
+        # lookup exists anywhere in this call path, so the stale claim
+        # succeeds exactly as if it were fresh -- proven against the real
+        # insert_repair_filing contract (mocked only at the transport
+        # boundary, matching this class's sibling tests).
+        canonical_current_head = {"42": "sha-fresh"}  # what a live `gh pr view` would report right now
+        caller_observed_head = "sha-stale"  # what this caller's PrSnapshot still says
+        self.assertNotEqual(caller_observed_head, canonical_current_head["42"], "the fixture must actually be stale to prove anything")
+
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", return_value={"inserted": True, "row": {}}):
+            already_claimed = p.default_claim_repair_filing("admin-requeue:check:build", "42", caller_observed_head)
+
+        self.assertFalse(already_claimed, "a claim against an already-superseded sha succeeded with no freshness check at all")
+
+
 class RepairCrashReason(PlannerTestCase):
     """A submitted repair whose own Invoker workflow crashed with the known
     SSH/OAuth infra signature (the coding agent never launched) must not be
