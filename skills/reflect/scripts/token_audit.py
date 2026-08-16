@@ -56,6 +56,17 @@ def sig(name, inp):
     s = json.dumps(inp, sort_keys=True)[:2000]
     return hashlib.sha1(s.encode()).hexdigest(), s
 
+# A Bash command matching this counts as "the agent checked its own work" -
+# the fast-feedback-loop signal used by the two detectors below. Heuristic
+# only: it flags the shape of a verification attempt, not whether the right
+# check ran or whether it passed.
+VERIFY_RE = re.compile(
+    r"\b(pytest|jest|vitest|mocha|rspec|unittest|go\s+(test|vet|build)|"
+    r"cargo\s+(test|check|build)|mvn\s+\S*test|gradle\s+\S*test|make\s+test|"
+    r"(npm|pnpm|yarn)\s+(run\s+)?test|tsc\b|typecheck|eslint|ruff|flake8|pylint)\b",
+    re.I,
+)
+
 def read_jsonl(path):
     out = []
     with open(path) as f:
@@ -85,6 +96,7 @@ def audit_claude(path):
     models = Counter()
     tool_use = {}
     tool_calls_seq = []
+    errors_detail = []  # (seq, tool_name, error_text) - for recurring-failure detection
     cache_points = []
     seq = 0
     simple_turns = 0  # turns whose only tool calls are Read/Grep/Glob - cheap-model candidates
@@ -129,6 +141,12 @@ def audit_claude(path):
                         tid = block.get("tool_use_id")
                         name, inp, s = tool_use.get(tid, ("?", {}, None))
                         tool_calls_seq.append((s, "__ERROR__:" + str(name), inp, tid))
+                        err_content = block.get("content")
+                        if isinstance(err_content, list):
+                            err_text = " ".join(b.get("text", "") for b in err_content if isinstance(b, dict))
+                        else:
+                            err_text = str(err_content or "")
+                        errors_detail.append((s, name, err_text))
 
     print(f"=== CLAUDE CODE token audit: {os.path.basename(path)} ===")
     print(f"assistant turns: {n_assistant}, models used: {dict(models)}")
@@ -173,10 +191,66 @@ def audit_claude(path):
         print(f"  {fp} offset/limit={window} (seq {s1} -> {s2})")
     print(f"redundant re-reads (identical window): {len(redundant)}")
 
-    errors = [(s, name) for s, name, inp, ident in tool_calls_seq if isinstance(name, str) and name.startswith("__ERROR__:")]
+    errors = [(s, name, inp) for s, name, inp, ident in tool_calls_seq if isinstance(name, str) and name.startswith("__ERROR__:")]
     print(f"-- tool errors: {len(errors)} --")
-    for s, name in errors:
+    for s, name, inp in errors:
         print(f"  seq {s}: {name[len('__ERROR__:'):]} failed")
+
+    if errors:
+        print("-- tool errors by tool --")
+        tool_error_counts = Counter(name[len("__ERROR__:"):] for s, name, inp in errors)
+        for tool, cnt in tool_error_counts.most_common():
+            print(f"  {tool}: {cnt}")
+        file_error_counts = Counter(
+            inp.get("file_path") for s, name, inp in errors if isinstance(inp, dict) and inp.get("file_path")
+        )
+        if file_error_counts:
+            print("-- tool errors by file --")
+            for fp, cnt in file_error_counts.most_common():
+                print(f"  {fp}: {cnt}")
+
+    # Same-problem-thrash detectors: a session can burn a lot of tokens with
+    # zero literal tool-call duplication (each Edit is different text) while
+    # still being stuck on one problem, because it never stops to check its
+    # own work. These two heuristics look for that shape instead of for
+    # exact repeats.
+    print("-- feedback-loop check: recurring failure signatures (same error shape repeating) --")
+    print("   (same-shaped failure recurring suggests the fix attempt didn't address the root")
+    print("    cause, or wasn't verified before the next attempt - a slow feedback loop, not")
+    print("    necessarily a broken one)")
+    sig_groups = {}
+    for s, name, text in errors_detail:
+        if "doesn't want to proceed" in text:
+            continue  # user rejection, not a stuck-on-the-same-problem signal
+        norm = re.sub(r"\d+", "#", text.strip())[:120]
+        sig_groups.setdefault((name, norm), []).append(s)
+    recurring = {k: v for k, v in sig_groups.items() if len(v) > 1}
+    for (name, norm), seqs in sorted(recurring.items(), key=lambda x: -len(x[1])):
+        print(f"  x{len(seqs)}  {name}: {norm!r} (seq {seqs})")
+    print(f"recurring failure signatures: {len(recurring)}")
+
+    print("-- feedback-loop check: edits without a verification run in between --")
+    print("   (a Bash call matching test/build/lint/typecheck keywords counts as verification;")
+    print("    heuristic only - doesn't confirm the right check ran or that it passed)")
+    edits_since_verify, file_streak_max = {}, {}
+    global_streak = global_streak_max = verify_count = 0
+    THRESH = 3
+    for s, name, inp, ident in sorted(tool_calls_seq, key=lambda x: x[0] or 0):
+        if name == "Bash" and isinstance(inp, dict) and VERIFY_RE.search(inp.get("command") or ""):
+            verify_count += 1
+            edits_since_verify.clear()
+            global_streak = 0
+        elif name in ("Edit", "Write") and isinstance(inp, dict):
+            fp = inp.get("file_path")
+            edits_since_verify[fp] = edits_since_verify.get(fp, 0) + 1
+            file_streak_max[fp] = max(file_streak_max.get(fp, 0), edits_since_verify[fp])
+            global_streak += 1
+            global_streak_max = max(global_streak_max, global_streak)
+    flagged_files = {fp: n for fp, n in file_streak_max.items() if n >= THRESH}
+    for fp, n in sorted(flagged_files.items(), key=lambda x: -x[1]):
+        print(f"  {fp}: {n} edits in a row with no verification call in between")
+    print(f"verification calls found (test/build/lint/typecheck-shaped Bash commands): {verify_count}")
+    print(f"longest edit streak with zero verification in between: {global_streak_max}")
 
     print("-- cache-creation spikes (fresh write, not cache read - expensive path) --")
     creations = sorted(c for _, c, r in cache_points if c > 0)
@@ -188,6 +262,19 @@ def audit_claude(path):
             if c >= threshold and c not in seen:
                 seen.add(c)
                 print(f"  seq~{s}: cache_creation={c:,} cache_read={r:,} (session median creation={median:,})")
+
+    return {
+        "input": total_input,
+        "output": total_output,
+        "cache_read": total_cache_read,
+        "cache_creation": total_cache_creation,
+        "total": grand,
+        "n_assistant": n_assistant,
+        "models": dict(models),
+        "n_errors": len(errors),
+        "n_recurring_failures": len(recurring),
+        "longest_edit_streak_no_verify": global_streak_max,
+    }
 
 
 def audit_codex(path):

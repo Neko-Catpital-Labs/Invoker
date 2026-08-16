@@ -169,6 +169,172 @@ class TestToolErrors(unittest.TestCase):
             os.unlink(path)
 
 
+def claude_error_line(tool_use_id, content):
+    return {
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id, "is_error": True, "content": content}]},
+    }
+
+
+class TestRecurringFailureSignatures(unittest.TestCase):
+    """Same-shaped failure repeating is the 'stuck on the same problem'
+    signal - distinct from exact-duplicate tool calls, which the redundant-
+    read detector already covers."""
+
+    def test_same_error_text_three_times_is_flagged(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = []
+        for i in range(1, 4):
+            tid = f"t{i}"
+            lines.append(claude_assistant_line(f"m{i}", f"u{i}", [{"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "pytest"}}], u))
+            lines.append(claude_error_line(tid, "ModuleNotFoundError: No module named 'foo'"))
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = token_audit.audit_claude(path)
+            self.assertIn("x3  Bash", buf.getvalue())
+            self.assertEqual(result["n_recurring_failures"], 1)
+        finally:
+            os.unlink(path)
+
+    def test_distinct_errors_not_flagged(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest"}}], u),
+            claude_error_line("t1", "ModuleNotFoundError: No module named 'foo'"),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "pytest"}}], u),
+            claude_error_line("t2", "AssertionError: expected 1 got 2"),
+        ]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = token_audit.audit_claude(path)
+            self.assertEqual(result["n_recurring_failures"], 0)
+        finally:
+            os.unlink(path)
+
+    def test_user_rejection_message_excluded_from_recurrence(self):
+        # A rejected tool use is the user redirecting the agent, not the
+        # agent repeatedly failing at the same problem - must not count.
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        rejection = "The user doesn't want to proceed with this tool use. The tool use was rejected"
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_error_line("t1", rejection),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_error_line("t2", rejection),
+        ]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = token_audit.audit_claude(path)
+            self.assertEqual(result["n_recurring_failures"], 0)
+        finally:
+            os.unlink(path)
+
+
+class TestEditStreaksWithoutVerification(unittest.TestCase):
+    def test_streak_of_edits_with_no_verify_call_is_flagged(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line(f"m{i}", f"u{i}", [{"type": "tool_use", "id": f"t{i}", "name": "Edit", "input": {"file_path": "/a.py"}}], u)
+            for i in range(1, 5)
+        ]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = token_audit.audit_claude(path)
+            out = buf.getvalue()
+            self.assertIn("/a.py: 4 edits in a row with no verification call in between", out)
+            self.assertEqual(result["longest_edit_streak_no_verify"], 4)
+            self.assertIn("verification calls found", out)
+        finally:
+            os.unlink(path)
+
+    def test_verify_bash_call_resets_the_streak(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_assistant_line("m3", "u3", [{"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "pytest -q"}}], u),
+            claude_assistant_line("m4", "u4", [{"type": "tool_use", "id": "t4", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+        ]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = token_audit.audit_claude(path)
+            out = buf.getvalue()
+            self.assertEqual(result["longest_edit_streak_no_verify"], 2)
+            self.assertIn("verification calls found (test/build/lint/typecheck-shaped Bash commands): 1", out)
+            self.assertNotIn("edits in a row with no verification", out)  # below THRESH=3, not flagged
+        finally:
+            os.unlink(path)
+
+    def test_non_verify_bash_call_does_not_reset_streak(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ls -la"}}], u),
+            claude_assistant_line("m3", "u3", [{"type": "tool_use", "id": "t3", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_assistant_line("m4", "u4", [{"type": "tool_use", "id": "t4", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+        ]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = token_audit.audit_claude(path)
+            self.assertEqual(result["longest_edit_streak_no_verify"], 3)
+        finally:
+            os.unlink(path)
+
+
+class TestToolErrorBreakdown(unittest.TestCase):
+    """Backlog item from a real reflect run: bucket tool errors by tool and
+    by file so a session with many failures shows where they concentrated,
+    not just a flat count."""
+
+    def test_breakdown_by_tool_and_file(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "false"}}], u),
+            claude_error_line("t1", "boom"),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_error_line("t2", "old_string not found"),
+            claude_assistant_line("m3", "u3", [{"type": "tool_use", "id": "t3", "name": "Edit", "input": {"file_path": "/a.py"}}], u),
+            claude_error_line("t3", "old_string not found again"),
+        ]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                token_audit.audit_claude(path)
+            out = buf.getvalue()
+            self.assertIn("-- tool errors by tool --", out)
+            self.assertIn("Edit: 2", out)
+            self.assertIn("Bash: 1", out)
+            self.assertIn("-- tool errors by file --", out)
+            self.assertIn("/a.py: 2", out)
+        finally:
+            os.unlink(path)
+
+    def test_no_breakdown_section_when_no_errors(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [claude_assistant_line("m1", "u1", [{"type": "text", "text": "hi"}], u)]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                token_audit.audit_claude(path)
+            self.assertNotIn("-- tool errors by tool --", buf.getvalue())
+        finally:
+            os.unlink(path)
+
+
 class TestModelTierSavings(unittest.TestCase):
     def test_savings_uses_real_published_prices(self):
         # 1M output tokens: sonnet $15.00, haiku $5.00 -> $10 saved.
