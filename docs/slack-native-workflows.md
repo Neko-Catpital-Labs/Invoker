@@ -1,14 +1,37 @@
 # Slack-native coding workflows
 
-Drive Invoker from Slack: mention `@Invoker` in any channel where the bot is present to start a normal agent thread in a checked-out repo. When the scope is ready, use `@Invoker /plan` in that same thread. Invoker posts a durable review message with the exact YAML attachment and Approve/Cancel buttons. When a workflow starts, Invoker creates a **private `workflow-<id>` channel**, invites you, and posts the workflow there. Mentioning `@Invoker` inside that mapped channel answers using **only that workflow's context** (its planning conversation plus every task transcript) and runs control actions on it.
+Drive Invoker from Slack: mention `@Invoker` in any channel where the bot is present to start a normal agent thread in a checked-out repo. When the scope is ready, use `@Invoker /plan` in that same thread. Invoker posts a durable review message with the exact YAML attachment and Approve/Cancel buttons. When a workflow starts, Invoker creates a **private `workflow-<id>` channel**, attempts to invite the authenticated requester, and posts the workflow there. Mentioning `@Invoker` inside that mapped channel answers using **only that workflow's context** (its planning conversation plus every task transcript) and runs control actions on it.
 
 ## Flow
 
 1. **Start a normal agent thread.** In any channel where Invoker is present: `@Invoker [omp+codex] [repo:web] fix the Slack routing bug` or `@Invoker fix this in https://github.com/acme/web`. Invoker checks out the selected repo and runs a normal OMP/Codex-style conversation in the thread.
 2. **Create a plan explicitly.** Use `@Invoker /plan` in the established thread. It uses the same thread history, pinned repo, and harness preset to convert the agreed scope to Invoker YAML.
-3. **Review and approve.** The review message contains newline-delimited steps, the exact YAML attachment, and Approve/Cancel buttons. It is durable: it does not expire. Approve starts that exact YAML plan as a workflow.
-4. **Workflow channel appears.** Invoker creates private `workflow-<id>`, invites you, posts the workflow summary there, and links it from the originating plan thread.
+3. **Review and approve.** The review message contains newline-delimited steps, the exact YAML attachment, and Approve/Cancel buttons. It is durable: it does not expire. Only the authenticated Slack user who requested the draft can approve it; approval starts that exact YAML plan as a workflow.
+4. **Workflow channel appears.** Invoker creates private `workflow-<id>`, invites that authenticated requester, posts the workflow summary there, and links it from the originating plan thread.
 5. **Operate in the channel.** `@Invoker status`, `@Invoker approve <task>`, `@Invoker reject <task>`, `@Invoker retry <task>`, `@Invoker input <task>: <text>`, or ask a free-form question (answered only from this workflow's planning + task transcripts).
+
+## In-app workflow channels
+
+Map successful planning-chat submissions from the desktop app to an operator-owned Slack identity and lobby in `~/.invoker/config.json`:
+
+```json
+{
+  "slackInAppRequesterId": "U0123456789",
+  "slackLobbyChannelId": "C0123456789"
+}
+```
+
+`slackInAppRequesterId` is the trusted Slack user ID invited to private workflow channels; it cannot be supplied by the renderer. `slackLobbyChannelId` is where each channel link is posted. Both values are required for this bridge.
+
+After a successful in-app submission, Invoker creates one idempotent private channel for each returned workflow, including each workflow in a stack. It posts each channel link as a root message in `slackLobbyChannelId`, not in a lobby thread. Re-delivering the same workflow-created event reuses the persisted mapping and does not create a channel or republish its content.
+
+If the trusted requester or lobby configuration is missing or blank, the in-app workflow still starts, but Slack channel provisioning is skipped and no channel-created success message is posted.
+
+## Workflow channel routing and invite failures
+
+If Slack cannot invite the requester, Invoker keeps the workflow-to-channel mapping and posts the private channel link at the same origin location with an explicit warning that the requester was not invited and the Slack error reason. It does not claim that the requester joined.
+
+Workflow progress, task changes, status, and other ongoing workflow messages are posted or updated only in that workflow's mapped private channel. Events for an unmapped workflow are suppressed; they never fall back to the lobby, the originating thread, or another workflow's channel.
 
 ## Message tags
 

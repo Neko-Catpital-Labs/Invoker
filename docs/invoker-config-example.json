@@ -93,6 +93,8 @@
     "codex": { "tool": "codex" }
   },
   "defaultSlackHarnessPreset": "cursor+claude",
+  "slackInAppRequesterId": "U0123456789",
+  "slackLobbyChannelId": "C0123456789",
   "slackRepos": {
     "comment": "Slack repo aliases: alias -> git URL, selected with [repo:<alias>] in a tagged request",
     "web": "git@github.com:acme/web.git",
