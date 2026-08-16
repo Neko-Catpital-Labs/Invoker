@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shouldRetry, isStale } from './retry-ledger.mjs';
+import { insertRepairFiling, releaseRepairFiling } from './repair-filing-ledger.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(__filename));
@@ -442,8 +443,13 @@ function failureIsMapped(failure, jobDefinitions) {
   return Boolean(getVerifyCommandForFailure(failure, jobDefinitions));
 }
 
-function buildFleetJobName(sha, count) {
-  return `fleet / ${shortSha(sha)} (${count} jobs)`;
+// Deliberately does NOT embed the member-job count: membership can change
+// between sweeps (a 4th co-failing job joins, or one flips back to green)
+// without that being a *different* fleet event for dedup purposes. The
+// member list belongs in the failure description/metadata, not the key --
+// see buildFleetFailureDescription and REPAIR_FILING_KIND_FLEET's stateSha.
+function buildFleetJobName(sha) {
+  return `fleet / ${shortSha(sha)}`;
 }
 
 function buildFleetFailureDescription(sha, members) {
@@ -492,7 +498,7 @@ function synthesizeFleetFailure(state, sha, members, jobDefinitions) {
     if (runDelta !== 0) return runDelta;
     return a.jobName.localeCompare(b.jobName);
   }).at(0);
-  const jobName = buildFleetJobName(sha, members.length);
+  const jobName = buildFleetJobName(sha);
   return {
     ...(existing ?? {}),
     jobName,
@@ -902,6 +908,68 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
   );
 }
 
+// ---------------------------------------------------------------------------
+// repair_filings ledger gate (replaces liveQueryHasNonTerminalWork as the
+// default dedup gate; see scripts/repair-filing-ledger.mjs)
+// ---------------------------------------------------------------------------
+
+/**
+ * kind is namespaced per CI job and deliberately excludes the sha (that's
+ * stateSha) and, for fleet events, excludes the member-job count (that's
+ * metadata only) -- see buildFleetJobName.
+ */
+export function repairFilingKind(failure) {
+  const job = failure.markerJobName ?? failure.jobName;
+  return `ci-regression:${slugify(job)}`;
+}
+
+export function buildRepairFilingMetadata(failure) {
+  const metadata = { jobName: failure.jobName };
+  if (Array.isArray(failure.memberJobNames)) metadata.memberJobNames = failure.memberJobNames;
+  return metadata;
+}
+
+/**
+ * Atomically claims the (kind, subject='master', stateSha) key for this
+ * failure. Returns true when the caller should SKIP filing -- either because
+ * another filer already holds this exact claim, or because the ledger call
+ * itself failed and we fail closed (same philosophy as the old
+ * liveQueryHasNonTerminalWork: a broken dedup check must never risk a
+ * duplicate fix PR). Returns false when this call created the claim and the
+ * caller should proceed to file -- on failure to actually file, the caller
+ * MUST call releaseRepairFilingClaim(failure) to undo the claim, or this key
+ * would be permanently blocked from ever being retried.
+ */
+export function claimRepairFiling(failure, insert = insertRepairFiling) {
+  try {
+    const result = insert({
+      kind: repairFilingKind(failure),
+      subject: 'master',
+      stateSha: failure.firstBadSha,
+      metadata: buildRepairFilingMetadata(failure),
+    });
+    return !result.inserted;
+  } catch (err) {
+    console.error(`ci-regression-watch: claimRepairFiling failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}", assuming already claimed: ${err instanceof Error ? err.message : String(err)}`);
+    return true;
+  }
+}
+
+/**
+ * Releases a claim made by claimRepairFiling when the subsequent fileFailure
+ * call throws, so a later sweep can retry the same (kind, subject, stateSha)
+ * instead of being permanently blocked. Never throws -- a failed release
+ * must not crash the sweep; it just means this key stays claimed until a
+ * human clears it or the sha changes.
+ */
+export function releaseRepairFilingClaim(failure, release = releaseRepairFiling) {
+  try {
+    release({ kind: repairFilingKind(failure), subject: 'master', stateSha: failure.firstBadSha });
+  } catch (err) {
+    console.error(`ci-regression-watch: releaseRepairFilingClaim failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}"; this key stays claimed until manually cleared: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export function fileBugfixPlan(failure, opts = {}) {
   const repoUrl = opts.repoUrl ?? getRepoUrl();
   const jobDefinitions = opts.jobDefinitions ?? buildCiJobDefinitions();
@@ -925,7 +993,8 @@ export function processFailureFilingSweep(state, {
   maxAttempts = MAX_ATTEMPTS,
   capPerSweep = CAP_PER_SWEEP,
   jobDefinitions = null,
-  liveQuery = liveQueryHasNonTerminalWork,
+  liveQuery = claimRepairFiling,
+  releaseFiling = releaseRepairFilingClaim,
   fileFailure = () => {},
   save = () => {},
   onNeedsHuman = () => {},
@@ -999,12 +1068,17 @@ export function processFailureFilingSweep(state, {
       counts.groupsInBackoff += 1;
       continue;
     }
-    if (liveQuery(failure)) {
-      counts.groupsSkippedAlreadyAddressed += 1;
-      continue;
-    }
+    // Cap check must run BEFORE the ledger claim below: liveQuery (default
+    // claimRepairFiling) now has a side effect -- it inserts the dedup row
+    // -- so deferring a failure by the per-sweep cap after already claiming
+    // it would leak a permanently-unfileable claim (no fileFailure call ever
+    // follows to either succeed or release it).
     if (capPerSweep > 0 && counts.groupsFiled >= capPerSweep) {
       counts.groupsDeferredByCap += 1;
+      continue;
+    }
+    if (liveQuery(failure)) {
+      counts.groupsSkippedAlreadyAddressed += 1;
       continue;
     }
 
@@ -1021,6 +1095,11 @@ export function processFailureFilingSweep(state, {
     } catch (error) {
       counts.groupsFailedToFile += 1;
       onFileError(failure, error);
+      // The liveQuery call above already claimed this (kind, subject,
+      // stateSha) in the repair_filings ledger; the filing attempt itself
+      // never got submitted, so release the claim or this key would be
+      // permanently blocked from every future retry.
+      releaseFiling(failure);
       recordFailureFiled(state, failure, filedAt);
       save(state);
       continue;
