@@ -218,6 +218,7 @@ export type WorkerActionStatus =
 export type WorkerSource = 'built-in' | 'external';
 export type WorkerAvailability = 'available' | 'unknown';
 export type WorkerLogSource = 'worker_actions' | 'task_events';
+export type WorkerSnapshotAuthority = 'live' | 'cached' | 'unavailable';
 
 export interface WorkerLogEntry {
   id: string;
@@ -304,6 +305,9 @@ export interface WorkerStatusEntry {
 export interface WorkerStatusSnapshot {
   generatedAt: string;
   workers: WorkerStatusEntry[];
+  authority?: WorkerSnapshotAuthority;
+  lastSuccessfulAt?: string;
+  unavailableReason?: string;
 }
 
 export interface WorkerActionHistoryRequest {
