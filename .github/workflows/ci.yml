@@ -581,7 +581,48 @@ jobs:
 
       - name: Install system libraries for Node
         if: matrix.runner_label != 'Github_Runner'
-        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1 make g++
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_libatomic() {
+            if command -v ldconfig >/dev/null 2>&1; then
+              ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'
+              return
+            fi
+            find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
+          }
+
+          missing_native_tools=()
+          for tool in make g++; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing_native_tools+=("$tool")
+            fi
+          done
+
+          if has_libatomic && [ "${#missing_native_tools[@]}" -eq 0 ]; then
+            exit 0
+          fi
+
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::required-fast-extra requires libatomic1, make, and g++, but apt-get is unavailable."
+            exit 1
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update -qq
+            apt-get install -y libatomic1 make g++
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n apt-get update -qq
+            sudo -n apt-get install -y libatomic1 make g++
+            exit 0
+          fi
+
+          echo "::error::required-fast-extra requires libatomic1, make, and g++; run as root or provide passwordless sudo for apt-get."
+          exit 1
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
