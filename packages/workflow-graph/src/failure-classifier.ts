@@ -20,6 +20,7 @@ export const SSH_INFRA_FAILURE_CLASSES: readonly SshInfraFailureClass[] = [
   'ssh-invalid-reference',
   'ssh-repo-mirror-corrupt',
   'ssh-oauth-session-expired',
+  'ssh-disk-full',
 ];
 
 export class FailureClassifier {
@@ -51,6 +52,12 @@ export class FailureClassifier {
     }
     if (errorText.includes('Failed to authenticate: OAuth session expired and could not be refreshed')) {
       return 'ssh-oauth-session-expired';
+    }
+    if (
+      (errorText.includes('cannot lock ref') && errorText.includes('unable to create directory'))
+      || errorText.includes('No space left on device')
+    ) {
+      return 'ssh-disk-full';
     }
     return undefined;
   }
