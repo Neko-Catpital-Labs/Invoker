@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import {
   buildCiJobDefinitions,
   buildMarker,
+  buildRepairFilingMetadata,
+  claimRepairFiling,
   fileBugfixPlan,
   getActionableFailures,
   groupFailuresBySha,
@@ -17,6 +19,8 @@ import {
   normalizeState,
   processFailureFilingSweep,
   reconcileCiRun,
+  releaseRepairFilingClaim,
+  repairFilingKind,
   RECOVERY_COOLDOWN_MS,
   STALE_OBSERVATION_MS,
 } from './e2e-regression-watch.mjs';
@@ -114,6 +118,128 @@ describe('liveQueryHasNonTerminalWork', () => {
   });
 });
 
+describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingClaim)', () => {
+  function makeFakeLedger() {
+    const rows = new Map();
+    return {
+      rows,
+      insert: ({ kind, subject, stateSha, metadata }) => {
+        const key = `${kind} ${subject} ${stateSha}`;
+        if (rows.has(key)) return { inserted: false, row: rows.get(key) };
+        const row = { kind, subject, stateSha, metadata };
+        rows.set(key, row);
+        return { inserted: true, row };
+      },
+      release: ({ kind, subject, stateSha }) => {
+        rows.delete(`${kind} ${subject} ${stateSha}`);
+      },
+    };
+  }
+
+  it('kind is namespaced per CI job and excludes the sha and the fleet member count', () => {
+    assert.equal(
+      repairFilingKind(makeFailure({ jobName: 'required-fast / Guardrails' })),
+      'ci-regression:required-fast-guardrails',
+    );
+    assert.equal(
+      repairFilingKind(makeFailure({ jobName: 'fleet / abc123d', markerJobName: 'fleet' })),
+      'ci-regression:fleet',
+    );
+  });
+
+  it('prevents a duplicate PR: a second claim for the identical (kind, subject, stateSha) is rejected', () => {
+    const ledger = makeFakeLedger();
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+
+    const firstAttemptSkips = claimRepairFiling(failure, ledger.insert);
+    assert.equal(firstAttemptSkips, false, 'first claim must succeed (caller proceeds to file)');
+    assert.equal(ledger.rows.size, 1);
+
+    // A second, independent caller (e.g. a fresh sweep, or a different
+    // process) tries to claim the exact same key.
+    const secondAttemptSkips = claimRepairFiling(failure, ledger.insert);
+    assert.equal(secondAttemptSkips, true, 'second claim for the identical key must be rejected');
+    assert.equal(ledger.rows.size, 1, 'exactly one row must exist for this key, not two');
+  });
+
+  it('worked example: different kind or different stateSha both claim as new work; same kind+sha collapses to one', () => {
+    const ledger = makeFakeLedger();
+    const rebaseAtShaA = makeFailure({ jobName: 'admin-requeue / rebase-conflict', firstBadSha: 'shaA' });
+    const uiVitestAtShaB = makeFailure({ jobName: 'admin-requeue / check-ui-vitest', firstBadSha: 'shaB' });
+    const rebaseAtShaBAgain = makeFailure({ jobName: 'admin-requeue / rebase-conflict', firstBadSha: 'shaB' });
+
+    assert.equal(claimRepairFiling(rebaseAtShaA, ledger.insert), false);
+    assert.equal(claimRepairFiling(uiVitestAtShaB, ledger.insert), false);
+    assert.equal(claimRepairFiling(rebaseAtShaBAgain, ledger.insert), false, 'different sha for the same kind must not be suppressed as a duplicate');
+    // Re-detecting the same problem on the same state must collapse to one row.
+    assert.equal(claimRepairFiling(rebaseAtShaBAgain, ledger.insert), true);
+    assert.equal(ledger.rows.size, 3);
+  });
+
+  it('releasing a claim after a failed filing lets a later sweep reclaim the identical key', () => {
+    const ledger = makeFakeLedger();
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+
+    assert.equal(claimRepairFiling(failure, ledger.insert), false);
+    assert.equal(ledger.rows.size, 1);
+
+    // fileFailure threw downstream -- release the claim.
+    releaseRepairFilingClaim(failure, ledger.release);
+    assert.equal(ledger.rows.size, 0);
+
+    // A later attempt for the identical key must succeed now.
+    assert.equal(claimRepairFiling(failure, ledger.insert), false);
+    assert.equal(ledger.rows.size, 1);
+  });
+
+  it('fails closed (treats as already claimed) when the ledger call throws', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const throwingInsert = () => { throw new Error('headless_mutation timed out'); };
+    assert.equal(claimRepairFiling(failure, throwingInsert), true);
+  });
+
+  it('puts the fleet member list in metadata, not the key', () => {
+    const failure = makeFailure({
+      jobName: 'fleet / abc123d',
+      markerJobName: 'fleet',
+      memberJobNames: ['required-fast / Vitest Workspace', 'quality / Dependency Cruise', 'docker / comprehensive'],
+    });
+    const metadata = buildRepairFilingMetadata(failure);
+    assert.deepEqual(metadata.memberJobNames, failure.memberJobNames);
+    assert.equal(repairFilingKind(failure), 'ci-regression:fleet');
+  });
+
+  it('processFailureFilingSweep end-to-end: a second sweep for the same (kind, subject, stateSha) never calls fileFailure again', () => {
+    const ledger = makeFakeLedger();
+    const state = stateWithFailure(makeFailure({ firstBadSha: 'shaA' }));
+    let filedCount = 0;
+
+    processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      liveQuery: (failure) => claimRepairFiling(failure, ledger.insert),
+      releaseFiling: (failure) => releaseRepairFilingClaim(failure, ledger.release),
+      fileFailure: () => { filedCount += 1; },
+      isPaused: () => false,
+    });
+    assert.equal(filedCount, 1);
+
+    // Simulate a second, independent sweep run (fresh local state entry for
+    // the same underlying failure, same ledger backing store) racing to file
+    // the identical (kind, subject, stateSha).
+    const secondSweepState = stateWithFailure(makeFailure({ firstBadSha: 'shaA' }));
+    processFailureFilingSweep(secondSweepState, {
+      now: new Date('2026-08-12T01:00:01Z'),
+      liveQuery: (failure) => claimRepairFiling(failure, ledger.insert),
+      releaseFiling: (failure) => releaseRepairFilingClaim(failure, ledger.release),
+      fileFailure: () => { filedCount += 1; },
+      isPaused: () => false,
+    });
+
+    assert.equal(filedCount, 1, 'the second sweep must not file a duplicate for the identical key');
+    assert.equal(ledger.rows.size, 1);
+  });
+});
+
 describe('fleet SHA correlation', () => {
   it('groups active failures by first bad SHA', () => {
     const sha = 'abc123def456abc123def456abc123def456ab1';
@@ -155,7 +281,7 @@ describe('fleet SHA correlation', () => {
     });
 
     assert.equal(filed.length, 1);
-    assert.equal(filed[0].jobName, 'fleet / abc123d (3 jobs)');
+    assert.equal(filed[0].jobName, 'fleet / abc123d');
     assert.equal(filed[0].markerJobName, 'fleet');
     assert.ok(filed[0].verifyCommand.startsWith('bash scripts/verify-'));
     assert.equal(filed[0].description.includes('No local verify command is mapped'), false);
@@ -166,7 +292,7 @@ describe('fleet SHA correlation', () => {
     assert.deepEqual(liveMarkers, [buildMarker(sha, 'fleet')]);
     assert.equal(counts.groupsCorrelated, 1);
     assert.equal(counts.groupsFiled, 1);
-    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].attempts, 1);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1);
   });
 
   it('keeps two same-SHA failures on the per-job path', () => {
@@ -223,7 +349,7 @@ describe('fleet SHA correlation', () => {
       },
     });
     assert.equal(filedCounts.groupsFiled, 1);
-    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].attempts, 1);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1);
 
     let liveQueryCalled = false;
     const cappedCounts = processFailureFilingSweep(state, {
@@ -242,7 +368,59 @@ describe('fleet SHA correlation', () => {
     assert.equal(liveQueryCalled, false, 'attempt cap should skip before live workflow dedup');
     assert.equal(cappedCounts.groupsNeedingHuman, 1);
     assert.equal(filed, 1);
-    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].needsHuman, true);
+    assert.equal(state.activeFailures['fleet / abc123d'].needsHuman, true);
+  });
+
+  it('buildFleetJobName-derived key is stable when fleet membership grows between sweeps', () => {
+    // Regression test: the fleet key used to embed the member-job COUNT
+    // ("fleet / abc123d (3 jobs)"), so a 4th co-failing job joining on the
+    // same sha rotated the key mid-flight. The old entry's attempt/backoff
+    // history was carried over by SHA lookup, but a caller keying its own
+    // dedup off the *jobName string itself must see one stable identity
+    // across the membership change, not a churn of keys.
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const threeJobs = [
+      'required-fast / Vitest Workspace',
+      'quality / Dependency Cruise',
+      'docker / comprehensive',
+    ];
+    const fourthJob = 'ssh / shard-30';
+    const state = stateWithFailures(threeJobs.map((jobName) => makeFailure({ jobName, firstBadSha: sha })));
+
+    const firstSweep = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      jobDefinitions: jobDefinitionsFor(threeJobs),
+      liveQuery: () => false,
+      fileFailure: () => {},
+      isPaused: () => false,
+    });
+    assert.equal(firstSweep.groupsFiled, 1);
+    const fleetKeysAfterFirst = Object.keys(state.activeFailures).filter((key) => key.startsWith('fleet /'));
+    assert.deepEqual(fleetKeysAfterFirst, ['fleet / abc123d']);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1);
+    assert.equal(state.activeFailures['fleet / abc123d'].memberJobNames.length, 3);
+
+    // A 4th job on the same sha joins the fleet on the next sweep.
+    state.activeFailures[fourthJob] = makeFailure({ jobName: fourthJob, firstBadSha: sha });
+
+    const secondSweep = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:05:00Z'), // well inside backoff -- must not re-file
+      jobDefinitions: jobDefinitionsFor([...threeJobs, fourthJob]),
+      liveQuery: () => false,
+      fileFailure: () => {
+        throw new Error('must not file again: still the same fleet key, still in backoff');
+      },
+      isPaused: () => false,
+    });
+
+    // Still exactly one fleet key -- membership growth did not fork a new
+    // "fleet / abc123d (4 jobs)" entry that would have reset attempts to 0
+    // and let a brand-new filing sneak past the attempt cap/backoff.
+    const fleetKeysAfterSecond = Object.keys(state.activeFailures).filter((key) => key.startsWith('fleet /'));
+    assert.deepEqual(fleetKeysAfterSecond, ['fleet / abc123d']);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1, 'attempts must carry over, not reset on membership growth');
+    assert.equal(state.activeFailures['fleet / abc123d'].memberJobNames.length, 4);
+    assert.equal(secondSweep.groupsInBackoff, 1);
   });
 
   it('keeps remaining members under an existing fleet key after the active count drops below threshold', () => {
@@ -324,7 +502,7 @@ describe('fleet SHA correlation', () => {
 
     assert.equal(historicalFilings.length, 11);
     assert.equal(fleetFilings.length, 1);
-    assert.equal(fleetFilings[0].jobName, 'fleet / 631a0d0 (11 jobs)');
+    assert.equal(fleetFilings[0].jobName, 'fleet / 631a0d0');
     for (const jobName of jobs) assert.match(fleetFilings[0].description, new RegExp(jobName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.equal(counts.groupsCorrelated, 1);
     assert.equal(counts.groupsFiled, 1);
