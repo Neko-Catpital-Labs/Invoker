@@ -48,6 +48,8 @@ must_contain "write \`UNVERIFIED:\` immediately before the claim" \
   "prove-it skill must require the UNVERIFIED prefix when evidence is missing"
 must_contain "Proxy proof:" \
   "prove-it skill must include a generalized proxy-proof example"
+must_contain "Wrong-target verify command:" \
+  "prove-it skill must require verify commands to invoke the changed file"
 must_contain "Stale state:" \
   "prove-it skill must include a generalized stale-state example"
 must_contain "Wrong target:" \
