@@ -178,6 +178,13 @@ describe('buildWebInvokerDispatch', () => {
     expect(spawnRepairWorkflow).toHaveBeenCalledWith(payload);
   });
 
+  it('edit-task-model currently rejects as unknown_channel (bug: not wired into the web dispatch)', async () => {
+    const { dispatch } = makeDispatch();
+    await expect(dispatch('invoker:edit-task-model', ['wf-1/task-1', 'gpt-5.3-codex-spark'])).rejects.toMatchObject({
+      code: 'unknown_channel',
+    });
+  });
+
   it('open-terminal degrades gracefully when task terminal support is absent', async () => {
     const { dispatch } = makeDispatch();
     expect(await dispatch('invoker:open-terminal', ['t'])).toEqual({
