@@ -38,6 +38,7 @@
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@slack/web-api": "^7.14.1",
     "yaml": "^2.8.2",
     "zod": "^4.4.3"
   },
