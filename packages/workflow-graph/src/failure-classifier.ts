@@ -53,10 +53,7 @@ export class FailureClassifier {
     if (errorText.includes('Failed to authenticate: OAuth session expired and could not be refreshed')) {
       return 'ssh-oauth-session-expired';
     }
-    if (
-      (errorText.includes('cannot lock ref') && errorText.includes('unable to create directory'))
-      || errorText.includes('No space left on device')
-    ) {
+    if (errorText.includes('No space left on device')) {
       return 'ssh-disk-full';
     }
     return undefined;
