@@ -43,6 +43,7 @@ When asked what happened, why it happened, or to investigate/diagnose/debug a pr
 ## Examples this rule is meant to stop
 
 - Proxy proof: do not cite "a test passed" when the reported failure was visual or behavioral and was never exercised.
+- Wrong-target verify command: do not treat an automated task template's default `verify_command`/"Acceptance criteria" as proof without checking it actually invokes the changed file. A fleet CI-repair chain filed `pnpm --filter @invoker/ui test` as its acceptance command for a fix that only touched `scripts/test-ci-workflow-merge-queue-policy.mjs` — a script wired only into the root `pnpm test` chain, never into the UI package's own test script (confirmed by running both: `pnpm --filter @invoker/ui test` never references the file, while `node scripts/test-ci-workflow-merge-queue-policy.mjs` does and passes). The picker had chosen the shortest verify command among several unrelated jobs bundled into one event, not the one covering the job actually diagnosed and fixed — so the recorded "Exit code: 0" most likely proved an unrelated, already-passing suite, not the fix.
 - Stale state: do not report an old merge, CI, task, or workflow status without a fresh live query.
 - Wrong target: do not reproduce against a sample, another branch, another PR, or another deployment unless you label the result as not the current target.
 - Broken repro: do not explain a failure from a repro that did not execute, did not fail, or failed for setup reasons.
