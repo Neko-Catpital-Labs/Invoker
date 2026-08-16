@@ -58,14 +58,15 @@ class AsyncRepairPlanTests(unittest.TestCase):
         bot_thread_plan = async_repair.build_repair_bot_thread_plan(
             pr(), "tbot", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
-        for plan, expected_task_ids in (
-            (checks_plan, ["repair", "normalize", "safe-push"]),
-            (conflict_plan, ["repair", "safe-push"]),
-            (bot_thread_plan, ["repair", "safe-push"]),
+        for plan, expected_task_ids, expected_merge_mode in (
+            (checks_plan, ["repair", "normalize", "safe-push"], "manual"),
+            (conflict_plan, ["repair", "safe-push"], "manual"),
+            (bot_thread_plan, ["repair", "safe-push"], "external_review"),
         ):
             with self.subTest(plan=plan.plan_name):
                 doc = yaml.safe_load(plan.yaml_text)
                 self.assertEqual(doc["onFinish"], "none")
+                self.assertEqual(doc["mergeMode"], expected_merge_mode)
                 self.assertEqual(doc["repoUrl"], "https://github.com/owner/repo.git")
                 self.assertEqual([task["id"] for task in doc["tasks"]], expected_task_ids)
                 for task, expected_id in zip(doc["tasks"][1:], expected_task_ids[1:]):
