@@ -18,6 +18,7 @@ try:
         ClaimRepairFiling,
         ReleaseRepairFiling,
         current_bottom_pr,
+        mergify_check_state_sha,
         plan_stack_execution,
         repair_filing_kind_for_check,
     )
@@ -41,6 +42,7 @@ except ImportError:
         ClaimRepairFiling,
         ReleaseRepairFiling,
         current_bottom_pr,
+        mergify_check_state_sha,
         plan_stack_execution,
         repair_filing_kind_for_check,
     )
@@ -269,8 +271,21 @@ def run_cycle(
                     # future retry. bot_review_thread repairs are planned by
                     # plan_bot_thread_repairs, which is not gated by claim_repair_filing,
                     # so there is nothing to release for that key shape.
+                    #
+                    # A "repair_check" Action can come from either
+                    # mergify_failed_check_actions (claims with
+                    # mergify_check_state_sha, a composite of head_ref_oid and
+                    # the Mergify comment_id -- see that function) or
+                    # plan_direct_repairs' own failed_check path (claims with
+                    # the plain head_ref_oid); the Action itself carries no
+                    # record of which one produced it, so release both
+                    # possible shapes -- releasing a key that was never
+                    # claimed is a safe no-op.
                     if release_repair_filing is not None and not action.key.startswith("bot_review_thread:"):
-                        release_repair_filing(repair_filing_kind_for_check(action.key), str(action.pr_number), pr.head_ref_oid)
+                        kind = repair_filing_kind_for_check(action.key)
+                        release_repair_filing(kind, str(action.pr_number), pr.head_ref_oid)
+                        if pr.latest_mergify is not None:
+                            release_repair_filing(kind, str(action.pr_number), mergify_check_state_sha(pr, pr.latest_mergify))
                     should_poll = True
                     continue
                 if progressed:
