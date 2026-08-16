@@ -211,6 +211,78 @@ async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   process.stdout.write(`  normalizedLegacyAcknowledgedLaunchDispatches: ${report.normalizedLegacyAcknowledgedLaunchDispatches}\n`);
 }
 
+function parseHeadlessRepairFilingInsertFlags(args: string[]): {
+  kind?: string;
+  subject?: string;
+  stateSha?: string;
+  metadata?: string;
+} {
+  const flags: { kind?: string; subject?: string; stateSha?: string; metadata?: string } = {};
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === '--kind' && i + 1 < args.length) {
+      flags.kind = args[i + 1];
+      i += 2;
+    } else if (arg === '--subject' && i + 1 < args.length) {
+      flags.subject = args[i + 1];
+      i += 2;
+    } else if (arg === '--state-sha' && i + 1 < args.length) {
+      flags.stateSha = args[i + 1];
+      i += 2;
+    } else if (arg === '--metadata' && i + 1 < args.length) {
+      flags.metadata = args[i + 1];
+      i += 2;
+    } else {
+      throw new Error(`Unrecognized repair-filing insert argument: "${arg}"`);
+    }
+  }
+  return flags;
+}
+
+const REPAIR_FILING_USAGE = 'Usage: --headless repair-filing <insert|release> --kind <kind> --subject <subject> --state-sha <sha> [--metadata <json>]';
+
+async function headlessRepairFiling(args: string[], deps: HeadlessDeps): Promise<{ inserted: boolean; row: unknown } | { released: boolean }> {
+  const subCommand = args[0];
+  if (subCommand !== 'insert' && subCommand !== 'release') {
+    throw new Error(REPAIR_FILING_USAGE);
+  }
+  const flags = parseHeadlessRepairFilingInsertFlags(args.slice(1));
+  if (!flags.kind || !flags.subject || !flags.stateSha) {
+    throw new Error(REPAIR_FILING_USAGE);
+  }
+
+  if (subCommand === 'release') {
+    const released = deps.persistence.deleteRepairFiling(flags.kind, flags.subject, flags.stateSha);
+    const output = { released };
+    process.stdout.write(`${JSON.stringify(output)}\n`);
+    return output;
+  }
+
+  let metadata: Record<string, unknown> | null = null;
+  if (flags.metadata !== undefined) {
+    try {
+      metadata = JSON.parse(flags.metadata) as Record<string, unknown>;
+    } catch (err) {
+      throw new Error(`--metadata must be valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const result = deps.persistence.insertRepairFiling({
+    kind: flags.kind,
+    subject: flags.subject,
+    stateSha: flags.stateSha,
+    metadata,
+  });
+  const output = { inserted: result.inserted, row: result.row };
+  // Printed for direct/standalone CLI callers; also returned so IPC-delegated
+  // callers (headless.exec against a live owner) get the same payload back
+  // instead of the generic `{ ok: true }` mutation ack -- see runHeadless's
+  // return-value plumbing and executeHeadlessExec/main.ts's standalone
+  // headless.exec handler, both of which merge this into their response.
+  process.stdout.write(`${JSON.stringify(output)}\n`);
+  return output;
+}
+
 async function headlessInstallSkills(
   mode: BundledSkillsInstallMode | undefined,
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
@@ -261,6 +333,8 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<u
     case 'migrate-compat':
       await headlessMigrateCompatibility(deps);
       break;
+    case 'repair-filing':
+      return headlessRepairFiling(args.slice(1), deps);
     case 'install-skills':
       await headlessInstallSkills(
         args[1] === 'reinstall' || args[1] === 'update' ? args[1] : 'install',
