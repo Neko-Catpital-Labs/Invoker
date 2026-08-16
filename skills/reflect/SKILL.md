@@ -77,7 +77,7 @@ The History lens needs a file list before it can run: pull the set of files the 
 One more `Agent` call, given all reviewers' output, merges overlapping findings and sorts into:
 
 - **Accepted** — real, durable, worth acting on.
-- **Backlog** — real, but the right fix is a script/lint/check, not more skill prose. Anything mechanically enforceable belongs here, not in Accepted.
+- **Backlog** — real, but the right fix is a script/lint/check, not more skill prose. Anything mechanically enforceable belongs here, not in Accepted. Before filing a new Backlog item, check `skills/reflect/BACKLOG.md` for an existing entry on the same defect class — a Backlog item scoped to one PR's diff is invisible to the next session that hits the same class, which is exactly how the same defect recurs past a prior reflect's already-filed recommendation. If found, append an occurrence line to the existing entry instead of creating an untracked duplicate; if new, add an entry there in the same PR.
 - **Rejected** — one-offs, already covered, or too speculative.
 
 ### 5. Get approval — always
