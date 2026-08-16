@@ -36,6 +36,19 @@ export FAKE_GH_REQUIRED_CHECKS
 NODE_MODULES_DIR="$(node -p "require.resolve('jsdom/package.json').split('/node_modules/')[0] + '/node_modules'")"
 export NODE_MODULES_DIR
 
+# Without this stub, resolve_workflow_for_pr falls through to the real
+# headless_query IPC call this hermetic repro never provides, which only
+# fails after its 30s subprocess timeout -- slow, and on a loaded CI runner
+# that timeout is what actually trips, degrading the repair dispatch instead
+# of raising, so the prerequisite PR silently never gets created.
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+
 BODY_PATH="$TMP/body.md"
 cat > "$BODY_PATH" <<'EOF'
 ## Summary
