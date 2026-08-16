@@ -414,7 +414,15 @@ def mergify_failed_check_actions(
     latest = pr.latest_mergify
     if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
         return ()
-    for name in latest.failing_checks:
+    # A queue-only check always resolves to a no-op repair (nothing to fix
+    # outside the queue -- see is_queue_only_required_check), so trying a
+    # genuinely repairable check first prevents a queue-only check earlier
+    # in Mergify's list from starving out the one failing check a repair
+    # could actually fix.
+    ordered_failing_checks = sorted(
+        latest.failing_checks, key=lambda name: is_queue_only_required_check(name)
+    )
+    for name in ordered_failing_checks:
         if name in suppressed:
             continue
         detail = f"Mergify queue check failed: {name}"
