@@ -59,7 +59,8 @@ jobs:
           pnpm --filter @invoker/ui build
           pnpm --filter @invoker/surfaces build
           pnpm --filter @invoker/app build
-          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist packages/surfaces/dist
+          pnpm --filter @invoker/cli build
+          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist packages/surfaces/dist packages/cli/dist
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
