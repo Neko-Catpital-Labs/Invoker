@@ -98,9 +98,23 @@ async function repairElectronWithPackageExtractor(electronPackageDir) {
   });
 
   const distPath = path.join(electronPackageDir, 'dist');
-  fs.rmSync(distPath, { recursive: true, force: true });
-  fs.mkdirSync(distPath, { recursive: true });
-  await extractZip(zipPath, { dir: distPath });
+  const stagingPath = path.join(electronPackageDir, `dist.staging-${process.pid}`);
+  fs.rmSync(stagingPath, { recursive: true, force: true });
+  fs.mkdirSync(stagingPath, { recursive: true });
+  try {
+    await extractZip(zipPath, { dir: stagingPath });
+
+    const stagedBinary = path.join(stagingPath, platformPath);
+    if (!fs.existsSync(stagedBinary)) {
+      throw new Error(`extract-zip did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
+    }
+
+    fs.rmSync(distPath, { recursive: true, force: true });
+    fs.renameSync(stagingPath, distPath);
+  } catch (error) {
+    fs.rmSync(stagingPath, { recursive: true, force: true });
+    throw error;
+  }
 
   const sourceTypeDefinitions = path.join(distPath, 'electron.d.ts');
   if (fs.existsSync(sourceTypeDefinitions)) {
