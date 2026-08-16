@@ -81,26 +81,37 @@ The built-in set includes `autofix` as the default recovery worker for failed-ta
 
 ## Auto-Started Workers
 
-On owner boot `startAutoStartedWorkers()` starts `pr-status`
-unconditionally. Every other built-in worker is opt-in through its own config
-field, and those fields all default to off:
+On owner boot `startAutoStartedWorkers()` applies four tiers:
 
-- `disk-headroom` auto-starts when `diskHeadroom.cleanupEnabled` is true.
-- `autoapprove` auto-starts when `autoApproveAIFixes` is true.
-- `pr-admin-bypass-land`, `pr-orphan-repair`, `pr-duplicate-close`, and
-  `pr-auto-label` auto-start when the shared `prMaintenance.enabled` field
-  is true.
-- `e2e-autofix` auto-starts when `e2eAutoFixEnabled` is true.
-- `infra-repair` auto-starts when `infraRepair.enabled` is true.
-- `autofix` auto-starts when `autofix.enabled` is true.
-- `reaper` auto-starts when `reaper.enabled` is true.
-- `workflow-resume` auto-starts when `workflowResume.enabled` is true.
-- `requeue` auto-starts when `requeueEnabled` is true.
+- **Always started:** `pr-status` starts unconditionally.
+- **Gated on their own config:** `disk-headroom`, `autoapprove`,
+  `pr-admin-bypass-land`, `pr-duplicate-close`, `pr-auto-label`,
+  `e2e-autofix`, `infra-repair`, `autofix`, `reaper`, `workflow-resume`, and
+  `requeue` auto-start only when their corresponding config field is enabled.
+  The PR-maintenance workers in this tier share `prMaintenance.enabled`.
+- **Registered but manual by default:** `pr-orphan-repair` remains available
+  through the built-in registry. It can still auto-start under some
+  `prMaintenance.enabled` plus gate-override combinations.
+- **Registered and strictly manual-only:** `pr-jailbreak-land` is registered
+  in the worker registry, so operators can see it and turn it on or off through
+  the normal registry surface, but it is absent from every auto-started-kinds
+  array under every configuration. This is stricter than the manual-by-default
+  tier occupied by `pr-orphan-repair`.
+
+`pr-jailbreak-land` is triggered by GitHub Actions concurrency exhaustion,
+detected with a debounce by `scripts/gh-actions-concurrency-exhausted.mjs`. It
+uses `scripts/jailbreak-admin-bypass-land.mjs` to force-squash-merge open
+admin-bypass PRs directly, bypassing CI, approval, and thread resolution
+entirely. It is a dry run unless `INVOKER_JAILBREAK_LIVE=1` is set.
+
+Conflict repair for admin-bypass PRs remains entirely the responsibility of
+the existing `pr-admin-bypass-land` worker. That worker keeps polling on its
+normal five-minute schedule regardless of `pr-jailbreak-land`'s state.
 
 Saved per-worker desired state (Workers tab / `worker start|stop`) overrides
 the auto-start default in both directions.
 
-Only `pr-status` auto-starts unconditionally; every other built-in worker requires its own config field set to enable auto-start.
+Only `pr-status` auto-starts unconditionally.
 
 ## Worker Wakeups
 
