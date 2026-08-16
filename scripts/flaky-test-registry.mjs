@@ -27,6 +27,15 @@ export function readRegistry(registryText) {
   return parsed;
 }
 
+// vitest resolves --exclude relative to each package's own directory (the
+// cwd it runs in, whether invoked via `pnpm --filter <pkg> test` or `pnpm -r
+// test`), never the repo root. A repo-root-relative glob like
+// "packages/ui/src/foo.test.ts" silently matches nothing and quarantines
+// nothing -- confirmed live: it left the target test running. Requiring a
+// double-star wildcard prefix on vitest-file targets keeps every such entry
+// package-relative-safe by construction instead of relying on whoever adds
+// an entry to remember this. Suite targets are shell script relpaths, not
+// vitest globs, so the requirement does not apply to them.
 export function quarantineInRegistry(registry, target, { reason, source, now, kind }) {
   if (!target || !target.trim()) {
     throw new Error('A quarantine target (test-file glob or suite path) is required.');
@@ -34,6 +43,11 @@ export function quarantineInRegistry(registry, target, { reason, source, now, ki
   const resolvedKind = kind ?? 'vitest-file';
   if (!VALID_KINDS.has(resolvedKind)) {
     throw new Error(`Unknown kind "${resolvedKind}". Use "vitest-file" or "suite".`);
+  }
+  if (resolvedKind === 'vitest-file' && !target.startsWith('**/')) {
+    throw new Error(
+      `Test-file glob "${target}" must start with "**/" so it matches regardless of which package vitest runs from (e.g. "**/src/__tests__/foo.test.ts").`,
+    );
   }
   return {
     ...registry,

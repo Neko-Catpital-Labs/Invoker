@@ -26,13 +26,13 @@ import {
 // quarantineInRegistry / restoreInRegistry
 {
   const empty = {};
-  const quarantined = quarantineInRegistry(empty, 'packages/ui/src/flaky.test.ts', {
+  const quarantined = quarantineInRegistry(empty, '**/src/__tests__/flaky.test.ts', {
     reason: 'timing race',
     source: 'manual',
     now: '2026-08-16T00:00:00Z',
   });
   assert.deepEqual(quarantined, {
-    'packages/ui/src/flaky.test.ts': {
+    '**/src/__tests__/flaky.test.ts': {
       reason: 'timing race',
       source: 'manual',
       quarantinedAt: '2026-08-16T00:00:00Z',
@@ -41,10 +41,10 @@ import {
   }, 'kind defaults to vitest-file when omitted');
   assert.deepEqual(empty, {}, 'quarantineInRegistry must not mutate its input');
 
-  const restored = restoreInRegistry(quarantined, 'packages/ui/src/flaky.test.ts');
+  const restored = restoreInRegistry(quarantined, '**/src/__tests__/flaky.test.ts');
   assert.deepEqual(restored, {}, 'restoring the only entry empties the registry');
   assert.deepEqual(quarantined, {
-    'packages/ui/src/flaky.test.ts': {
+    '**/src/__tests__/flaky.test.ts': {
       reason: 'timing race',
       source: 'manual',
       quarantinedAt: '2026-08-16T00:00:00Z',
@@ -83,6 +83,18 @@ import {
     /Unknown kind "bogus"/,
     'an invalid kind is rejected',
   );
+
+  // Reproduces a real bug: vitest resolves --exclude relative to each
+  // package's own cwd, not the repo root, so a repo-root-relative glob
+  // silently excludes nothing. Confirmed live before this guard existed:
+  // `pnpm --filter @invoker/ui test -- --exclude "packages/ui/src/__tests__/task-panel-error.test.tsx"`
+  // still ran that file. The guard rejects that shape at write time instead
+  // of letting it ship as a no-op quarantine entry.
+  assert.throws(
+    () => quarantineInRegistry({}, 'packages/ui/src/__tests__/flaky.test.ts', { now: '2026-08-16T00:00:00Z' }),
+    /must start with "\*\*\/"/,
+    'a repo-root-relative glob (no wildcard prefix) is rejected, not silently accepted as a no-op',
+  );
 }
 
 // computeVitestExcludeArgs / computeSuiteExcludeList
@@ -90,25 +102,25 @@ import {
   assert.deepEqual(computeVitestExcludeArgs({}), [], 'an empty registry produces no exclude args');
   assert.deepEqual(
     computeVitestExcludeArgs({
-      'packages/ui/src/a.test.ts': { reason: 'r1' },
-      'packages/ui/src/b.test.ts': { reason: 'r2', kind: 'vitest-file' },
+      '**/src/__tests__/a.test.ts': { reason: 'r1' },
+      '**/src/__tests__/b.test.ts': { reason: 'r2', kind: 'vitest-file' },
     }),
-    ['--exclude', 'packages/ui/src/a.test.ts', '--exclude', 'packages/ui/src/b.test.ts'],
+    ['--exclude', '**/src/__tests__/a.test.ts', '--exclude', '**/src/__tests__/b.test.ts'],
     'one --exclude pair per quarantined vitest-file glob, in registry order (kind omitted or explicit)',
   );
   assert.deepEqual(
     computeVitestExcludeArgs({
-      'packages/ui/src/a.test.ts': { reason: 'r1' },
+      '**/src/__tests__/a.test.ts': { reason: 'r1' },
       'optional/40-playwright-app.sh': { reason: 'r2', kind: 'suite' },
     }),
-    ['--exclude', 'packages/ui/src/a.test.ts'],
+    ['--exclude', '**/src/__tests__/a.test.ts'],
     'suite-kind entries never leak into vitest exclude args',
   );
 
   assert.deepEqual(computeSuiteExcludeList({}), [], 'an empty registry produces no suite excludes');
   assert.deepEqual(
     computeSuiteExcludeList({
-      'packages/ui/src/a.test.ts': { reason: 'r1', kind: 'vitest-file' },
+      '**/src/__tests__/a.test.ts': { reason: 'r1', kind: 'vitest-file' },
       'optional/40-playwright-app.sh': { reason: 'r2', kind: 'suite' },
       'required/18-start-running-mece-repros.sh': { reason: 'r3', kind: 'suite' },
     }),
@@ -138,20 +150,20 @@ import {
   const realRegistryPath = join(import.meta.dirname, 'flaky-test-registry.json');
   const original = readFileSync(realRegistryPath, 'utf8');
   try {
-    const quarantine = run(['quarantine', 'packages/ui/src/scratch.test.ts', '--reason', 'ci-only repro']);
+    const quarantine = run(['quarantine', '**/src/__tests__/scratch.test.ts', '--reason', 'ci-only repro']);
     assert.equal(quarantine.exitCode, 0);
-    assert.match(quarantine.stdout, /Quarantined "packages\/ui\/src\/scratch\.test\.ts"/);
+    assert.match(quarantine.stdout, /Quarantined "\*\*\/src\/__tests__\/scratch\.test\.ts"/);
 
     const list = run(['list']);
     const listed = JSON.parse(list.stdout);
-    assert.ok('packages/ui/src/scratch.test.ts' in listed, 'the quarantined glob shows up in list');
+    assert.ok('**/src/__tests__/scratch.test.ts' in listed, 'the quarantined glob shows up in list');
 
     const excludeArgs = run(['exclude-args']);
-    assert.equal(excludeArgs.stdout.trim(), '--exclude packages/ui/src/scratch.test.ts');
+    assert.equal(excludeArgs.stdout.trim(), '--exclude **/src/__tests__/scratch.test.ts');
 
-    const restore = run(['restore', 'packages/ui/src/scratch.test.ts']);
+    const restore = run(['restore', '**/src/__tests__/scratch.test.ts']);
     assert.equal(restore.exitCode, 0);
-    assert.match(restore.stdout, /Restored "packages\/ui\/src\/scratch\.test\.ts"/);
+    assert.match(restore.stdout, /Restored "\*\*\/src\/__tests__\/scratch\.test\.ts"/);
 
     const afterRestore = run(['exclude-args']);
     assert.equal(afterRestore.stdout.trim(), '', 'no excludes remain after restoring the only entry');
