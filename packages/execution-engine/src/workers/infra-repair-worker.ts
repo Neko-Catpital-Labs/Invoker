@@ -27,6 +27,8 @@ import {
   execRemoteCapture,
   shellPosixSingleQuote,
 } from '../ssh-git-exec.js';
+import { cleanupRemoteInvokerHome, type DiskCleanupResult } from './disk-headroom-reclaim.js';
+import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
 
 function buildPortableBase64DecodeFunction(functionName = 'invoker_base64_decode'): string {
   return `${functionName}() {
@@ -129,6 +131,7 @@ export interface InfraRepairWorkerPolicyOptions {
   resolveRemoteBranchOwnerPathFn?: typeof resolveRemoteBranchOwnerPath;
   runRemoteProvisionRepairFn?: typeof runRemoteProvisionRepair;
   runRepoMirrorRepairFn?: typeof runRepoMirrorRepair;
+  cleanupRemoteInvokerHomeFn?: (opts: { target: RemoteDiskTarget }) => Promise<DiskCleanupResult>;
 }
 
 export interface InfraRepairWorkerOptions {
@@ -652,6 +655,64 @@ async function handleRepoMirrorCorruptRecovery(
   );
 }
 
+async function handleDiskFullRecovery(
+  options: InfraRepairWorkerPolicyOptions,
+  candidate: ValidatedGenericSshInfraCandidate,
+): Promise<void> {
+  const remoteDiskTarget: RemoteDiskTarget = {
+    name: candidate.targetId,
+    connection: {
+      host: candidate.target.host,
+      user: candidate.target.user,
+      sshKeyPath: candidate.target.sshKeyPath,
+      port: candidate.target.port,
+    },
+    remotePath: candidate.target.remoteInvokerHome ?? '~/.invoker',
+  };
+
+  const repair = await runTargetRepairWithCooldown(options, {
+    targetKey: candidate.targetId,
+    reason: candidate.reason,
+    execute: async () => {
+      const result = await (options.cleanupRemoteInvokerHomeFn ?? cleanupRemoteInvokerHome)({
+        target: remoteDiskTarget,
+      });
+      if (!result.ok) {
+        throw new Error(`Disk cleanup ${result.reason} for ${result.targetKey}${result.detail ? `: ${result.detail}` : ''}`);
+      }
+      return result.detail ?? 'cleaned';
+    },
+  });
+
+  if (repair.kind === 'cooldown-skip') {
+    recordTaskDecision(options, candidate, candidate.reason, 'skipped', 'Skipped infra repair because target cooldown is active', {
+      targetId: candidate.targetId,
+      repairStatus: repair.action.status,
+    }, 'repair-cooldown');
+    return;
+  }
+  if (repair.kind === 'failed') {
+    recordTaskDecision(options, candidate, candidate.reason, 'failed', `Infra repair failed: ${firstLine(repair.errorMessage) ?? 'unknown error'}`, {
+      targetId: candidate.targetId,
+      error: repair.errorMessage,
+    }, 'repair-failed');
+    return;
+  }
+
+  await submitFollowUpMutation(
+    options,
+    candidate,
+    candidate.reason,
+    INFRA_REPAIR_RETRY_TASK_CHANNEL,
+    buildInfraRepairRetryTaskMutationArgs(candidate.taskId),
+    {
+      targetId: candidate.targetId,
+      reusedRecentRepair: repair.kind === 'reused-success',
+    },
+    'Queued retry-task after reclaiming disk space on the remote target',
+  );
+}
+
 async function handleMissingWorktreeRecovery(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedGenericSshInfraCandidate,
@@ -818,6 +879,10 @@ async function handleValidatedGenericSshInfraCandidate(
   }
   if (candidate.reason === 'ssh-oauth-session-expired') {
     await handleOauthSessionExpiredRecovery(options, candidate);
+    return;
+  }
+  if (candidate.reason === 'ssh-disk-full') {
+    await handleDiskFullRecovery(options, candidate);
     return;
   }
   await handleInvalidReferenceRecovery(options, candidate);
