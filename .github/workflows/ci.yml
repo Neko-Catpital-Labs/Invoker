@@ -1149,6 +1149,30 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Electron repair dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v unzip >/dev/null 2>&1; then
+            exit 0
+          fi
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::The Docker CI job requires unzip for Electron provisioning, but apt-get is unavailable."
+            exit 1
+          fi
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update -qq
+            apt-get install -y unzip
+            exit 0
+          fi
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n apt-get update -qq
+            sudo -n apt-get install -y unzip
+            exit 0
+          fi
+          echo "::error::The Docker CI job requires unzip; run as root or provide passwordless sudo for apt-get."
+          exit 1
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
