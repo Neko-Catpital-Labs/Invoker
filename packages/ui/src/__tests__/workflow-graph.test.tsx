@@ -538,6 +538,7 @@ describe('WorkflowGraph', () => {
 
   it('defers graph object updates while a manual viewport pan is active', async () => {
     const onManualViewport = vi.fn();
+    const onViewportGestureChange = vi.fn();
 
     const { rerender } = await renderAndSettleInitialFit({
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
@@ -546,11 +547,13 @@ describe('WorkflowGraph', () => {
       onSelectWorkflow: () => {},
       onWorkflowContextMenu: () => {},
       onManualViewport,
+      onViewportGestureChange,
     });
 
     const pane = screen.getByTestId('rf__pane');
     fireEvent.pointerDown(pane);
     expect(onManualViewport).toHaveBeenCalledTimes(1);
+    expect(onViewportGestureChange).toHaveBeenLastCalledWith(true);
 
     rerender(
       <WorkflowGraph
@@ -560,6 +563,7 @@ describe('WorkflowGraph', () => {
         onSelectWorkflow={() => {}}
         onWorkflowContextMenu={() => {}}
         onManualViewport={onManualViewport}
+        onViewportGestureChange={onViewportGestureChange}
       />,
     );
 
@@ -568,6 +572,7 @@ describe('WorkflowGraph', () => {
 
     fireEvent.pointerUp(pane);
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('completed'));
+    expect(onViewportGestureChange).toHaveBeenLastCalledWith(false);
   });
 
   it('pans the workflow viewport from native pane mouse drags', async () => {

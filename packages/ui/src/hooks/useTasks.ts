@@ -20,6 +20,7 @@ export interface UseTasksResult {
   workflows: Map<string, WorkflowMeta>;
   clearTasks: () => void;
   refreshTaskGraph: () => Promise<void>;
+  setTaskGraphPublicationDeferred: (deferred: boolean) => void;
 }
 export interface UseTasksOptions {
   onTaskGraphSnapshotApplied?: () => void;
@@ -27,6 +28,7 @@ export interface UseTasksOptions {
 /** Consecutive gap-resync round trips that don't close the gap before we
  * stop auto-retrying and fast-forward the watermark instead of looping. */
 const MAX_CONSECUTIVE_RESYNC_FAILURES = 3;
+const TASK_GRAPH_PUBLICATION_SETTLE_MS = 500;
 function normalizeWorkflowMeta(workflow: WorkflowMeta): WorkflowMeta {
   return {
     ...workflow,
@@ -163,9 +165,54 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     return next;
   });
   const tasksRef = useRef(tasks);
-  tasksRef.current = tasks;
   const workflowsRef = useRef(workflows);
-  workflowsRef.current = workflows;
+  const taskGraphPublicationDeferredRef = useRef(false);
+  const taskGraphPublicationPendingRef = useRef(false);
+  const taskGraphPublicationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  if (!taskGraphPublicationDeferredRef.current) {
+    tasksRef.current = tasks;
+    workflowsRef.current = workflows;
+  }
+  const publishTaskGraphState = useCallback(() => {
+    if (!taskGraphPublicationPendingRef.current) return;
+    taskGraphPublicationPendingRef.current = false;
+    setTasks(tasksRef.current);
+    setWorkflows(workflowsRef.current);
+  }, []);
+  const setTaskGraphPublicationDeferred = useCallback((deferred: boolean) => {
+    if (taskGraphPublicationTimerRef.current) {
+      clearTimeout(taskGraphPublicationTimerRef.current);
+      taskGraphPublicationTimerRef.current = null;
+    }
+    if (deferred) {
+      taskGraphPublicationDeferredRef.current = true;
+      return;
+    }
+    if (!taskGraphPublicationDeferredRef.current) return;
+    taskGraphPublicationTimerRef.current = setTimeout(() => {
+      taskGraphPublicationTimerRef.current = null;
+      taskGraphPublicationDeferredRef.current = false;
+      publishTaskGraphState();
+    }, TASK_GRAPH_PUBLICATION_SETTLE_MS);
+  }, [publishTaskGraphState]);
+  const applyWorkflowMetadata = useCallback((wfList: readonly WorkflowMeta[]) => {
+    const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
+      workflowsRef.current,
+      wfList,
+      tasksRef.current,
+    );
+    workflowsRef.current = nextWorkflows;
+    if (taskGraphPublicationDeferredRef.current) {
+      taskGraphPublicationPendingRef.current = true;
+    } else {
+      setWorkflows(nextWorkflows);
+    }
+  }, []);
+  useEffect(() => () => {
+    if (taskGraphPublicationTimerRef.current) {
+      clearTimeout(taskGraphPublicationTimerRef.current);
+    }
+  }, []);
   const graphEventPipelineRef = useRef<TaskGraphEventPipeline | null>(null);
   const deltaPerfRef = useRef({
     received: 0,
@@ -266,15 +313,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       return invoker
         .listWorkflows()
         .then((wfList) => {
-          setWorkflows((previous) => {
-            const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
-              previous,
-              wfList,
-              tasksRef.current,
-            );
-            workflowsRef.current = nextWorkflows;
-            return nextWorkflows;
-          });
+          applyWorkflowMetadata(wfList);
           void invoker.reportUiPerf?.('useTasks_workflow_metadata_refresh', {
             workflowCount: wfList.length,
             requestDurationMs: performance.now() - requestedAt,
@@ -296,7 +335,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         });
     };
     return runOnce();
-  }, []);
+  }, [applyWorkflowMetadata]);
   const refreshTaskGraph = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
     invalidateStartupSnapshot();
@@ -460,8 +499,12 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
         tasksRef.current = nextTasks;
         workflowsRef.current = nextWorkflows;
-        setTasks(nextTasks);
-        setWorkflows(nextWorkflows);
+        if (taskGraphPublicationDeferredRef.current) {
+          taskGraphPublicationPendingRef.current = true;
+        } else {
+          setTasks(nextTasks);
+          setWorkflows(nextWorkflows);
+        }
         if (removedWorkflowIds.length > 0) {
           // Pairs with the main-process delete log to measure delete → UI removal.
           void window.invoker.reportUiPerf?.('workflow_removed_applied', {
@@ -577,15 +620,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         }
       }
       if (Array.isArray(wfList)) {
-        setWorkflows((previous) => {
-          const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
-            previous,
-            wfList,
-            tasksRef.current,
-          );
-          workflowsRef.current = nextWorkflows;
-          return nextWorkflows;
-        });
+        applyWorkflowMetadata(wfList);
       }
     });
 
@@ -612,7 +647,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       unsub();
       unsubWf?.();
     };
-  }, [invalidateStartupSnapshot, loadStartupSnapshot, onTaskGraphSnapshotApplied, refreshTaskGraph, refreshWorkflowMetadata, traceRendererTaskGraphEvents, traceRendererWorkflowEvents]);
+  }, [applyWorkflowMetadata, invalidateStartupSnapshot, loadStartupSnapshot, onTaskGraphSnapshotApplied, refreshTaskGraph, refreshWorkflowMetadata, traceRendererTaskGraphEvents, traceRendererWorkflowEvents]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -631,9 +666,14 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   }, []);
 
   const clearTasks = useCallback(() => {
-    setTasks(new Map());
-    setWorkflows(new Map());
+    const nextTasks = new Map<string, TaskState>();
+    const nextWorkflows = new Map<string, WorkflowMeta>();
+    tasksRef.current = nextTasks;
+    workflowsRef.current = nextWorkflows;
+    taskGraphPublicationPendingRef.current = false;
+    setTasks(nextTasks);
+    setWorkflows(nextWorkflows);
   }, []);
 
-  return { tasks, workflows, clearTasks, refreshTaskGraph };
+  return { tasks, workflows, clearTasks, refreshTaskGraph, setTaskGraphPublicationDeferred };
 }

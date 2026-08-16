@@ -41,6 +41,8 @@ interface WorkflowGraphProps {
   onViewportSnapshot?: (viewport: GraphCameraViewport) => void;
   /** Fired when the user manually pans or zooms the viewport. */
   onManualViewport?: () => void;
+  /** Keeps task graph publication out of the active viewport gesture. */
+  onViewportGestureChange?: (active: boolean) => void;
 }
 
 interface WorkflowNodeData extends Record<string, unknown> {
@@ -299,6 +301,7 @@ function WorkflowGraphInner({
   onWorkflowContextMenu,
   onViewportSnapshot,
   onManualViewport,
+  onViewportGestureChange,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView, setCenter, getZoom, getViewport, setViewport } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
@@ -518,11 +521,14 @@ function WorkflowGraphInner({
   const onMoveStart = useCallback(
     (event: unknown) => {
       if (event) {
-        viewportGestureActiveRef.current = true;
+        if (!viewportGestureActiveRef.current) {
+          viewportGestureActiveRef.current = true;
+          onViewportGestureChange?.(true);
+        }
         onManualViewport?.();
       }
     },
-    [onManualViewport],
+    [onManualViewport, onViewportGestureChange],
   );
   const endViewportGesture = useCallback(() => {
     if (!viewportGestureActiveRef.current) return;
@@ -543,7 +549,8 @@ function WorkflowGraphInner({
     if (pendingEdges) {
       setRfEdges(pendingEdges);
     }
-  }, []);
+    onViewportGestureChange?.(false);
+  }, [onViewportGestureChange]);
   const onMoveEnd = useCallback((_event?: unknown, viewport?: GraphCameraViewport) => {
     endViewportGesture();
     if (viewport) {
@@ -574,12 +581,15 @@ function WorkflowGraphInner({
 
     panePointerPanRef.current = pan;
     schedulePanePanAnimation(panePointerPanRef.current);
-    viewportGestureActiveRef.current = true;
+    if (!viewportGestureActiveRef.current) {
+      viewportGestureActiveRef.current = true;
+      onViewportGestureChange?.(true);
+    }
     onManualViewport?.();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     event.preventDefault();
     event.stopPropagation();
-  }, [getViewport, onManualViewport]);
+  }, [getViewport, onManualViewport, onViewportGestureChange]);
 
   const updatePanePanViewport = useCallback((pan: PanePan, clientX: number, clientY: number) => {
     pan.hasMoved = true;
@@ -626,7 +636,10 @@ function WorkflowGraphInner({
       pendingPanePointerPanRef.current = null;
       panePointerPanRef.current = pendingPan;
       pan = pendingPan;
-      viewportGestureActiveRef.current = true;
+      if (!viewportGestureActiveRef.current) {
+        viewportGestureActiveRef.current = true;
+        onViewportGestureChange?.(true);
+      }
       onManualViewport?.();
       event.currentTarget.setPointerCapture?.(event.pointerId);
     }
@@ -635,7 +648,7 @@ function WorkflowGraphInner({
     updatePanePanViewport(pan, event.clientX, event.clientY);
     event.preventDefault();
     event.stopPropagation();
-  }, [onManualViewport, updatePanePanViewport]);
+  }, [onManualViewport, onViewportGestureChange, updatePanePanViewport]);
 
   const onPanePointerEndCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const pendingPan = pendingPanePointerPanRef.current;
@@ -666,11 +679,14 @@ function WorkflowGraphInner({
       graphRootRef.current?.querySelector('.react-flow__viewport') ?? null,
     );
     schedulePanePanAnimation(paneMousePanRef.current);
-    viewportGestureActiveRef.current = true;
+    if (!viewportGestureActiveRef.current) {
+      viewportGestureActiveRef.current = true;
+      onViewportGestureChange?.(true);
+    }
     onManualViewport?.();
     event.preventDefault();
     event.stopPropagation();
-  }, [getViewport, onManualViewport]);
+  }, [getViewport, onManualViewport, onViewportGestureChange]);
 
   const onPaneMouseMoveCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     const pan = paneMousePanRef.current;
@@ -720,7 +736,10 @@ function WorkflowGraphInner({
 
       paneMousePanRef.current = pan;
       schedulePanePanAnimation(paneMousePanRef.current);
-      viewportGestureActiveRef.current = true;
+      if (!viewportGestureActiveRef.current) {
+        viewportGestureActiveRef.current = true;
+        onViewportGestureChange?.(true);
+      }
       onManualViewport?.();
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -740,7 +759,10 @@ function WorkflowGraphInner({
         pendingPaneMousePanRef.current = null;
         paneMousePanRef.current = pendingPan;
         pan = pendingPan;
-        viewportGestureActiveRef.current = true;
+        if (!viewportGestureActiveRef.current) {
+          viewportGestureActiveRef.current = true;
+          onViewportGestureChange?.(true);
+        }
         onManualViewport?.();
       }
       if (!pan) return;
@@ -774,7 +796,7 @@ function WorkflowGraphInner({
       window.removeEventListener('mousemove', updatePaneMousePan, true);
       window.removeEventListener('mouseup', endPaneMousePan, true);
     };
-  }, [endViewportGesture, finishPanePan, getViewport, onManualViewport, updatePanePanViewport]);
+  }, [endViewportGesture, finishPanePan, getViewport, onManualViewport, onViewportGestureChange, updatePanePanViewport]);
 
   const onNodeClick = useCallback((event: ReactMouseEvent, node: Node) => {
     event.stopPropagation();

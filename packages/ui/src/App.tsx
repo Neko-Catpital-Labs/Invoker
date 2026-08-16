@@ -1046,7 +1046,7 @@ export function App() {
   const handleTaskGraphSnapshotApplied = useCallback(() => {
     setGraphRefreshSequence((sequence) => sequence + 1);
   }, []);
-  const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
+  const { tasks, workflows, clearTasks, refreshTaskGraph, setTaskGraphPublicationDeferred } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
   useEffect(() => {
@@ -4274,6 +4274,7 @@ export function App() {
                 onSelectWorkflow={handleWorkflowClick}
                 onWorkflowContextMenu={handleWorkflowContextMenu}
                 onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
+                onViewportGestureChange={setTaskGraphPublicationDeferred}
               />
             </div>
           )}
@@ -5271,6 +5272,7 @@ export function App() {
                 onSelectWorkflow={handleWorkflowClick}
                 onWorkflowContextMenu={handleWorkflowContextMenu}
                 onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
+                onViewportGestureChange={setTaskGraphPublicationDeferred}
               />
             )}
           </div>

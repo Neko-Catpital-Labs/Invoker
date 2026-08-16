@@ -141,6 +141,48 @@ describe('useTasks', () => {
     expect(result.current.tasks.get('wf-1/task-1')?.status).toBe('running');
   });
 
+  it('publishes one current task graph after a viewport gesture settles', async () => {
+    const task = makeUITask({ id: 'wf-1/task-1', workflowId: 'wf-1', status: 'pending' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [task],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
+    };
+
+    const { result, rerender } = renderHook(() => useTasks());
+    await waitFor(() => expect(taskGraphEventHandler).toBeDefined());
+
+    act(() => result.current.setTaskGraphPublicationDeferred(true));
+    await act(async () => {
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-1',
+          changes: { status: 'running' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
+        workflowRollups: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+    act(() => workflowsChangedHandler!([
+      { id: 'wf-1', name: 'Workflow 1', status: 'failed' },
+    ]));
+    rerender();
+
+    expect(result.current.tasks.get('wf-1/task-1')?.status).toBe('pending');
+    expect(result.current.workflows.get('wf-1')?.status).toBe('pending');
+    act(() => result.current.setTaskGraphPublicationDeferred(false));
+    await waitFor(
+      () => {
+        expect(result.current.tasks.get('wf-1/task-1')?.status).toBe('running');
+        expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
+      },
+      { timeout: 1_000 },
+    );
+  });
+
   it('replaces workflows when onWorkflowsChanged receives a non-empty list', async () => {
     const { result } = renderHook(() => useTasks());
 
