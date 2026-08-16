@@ -68,6 +68,8 @@ export * from './workers/pr-status-worker.js';
 export * from './workers/infra-repair-worker.js';
 export * from './workers/auto-approve-worker.js';
 export * from './workers/disk-headroom-worker.js';
+export * from './workers/claude-oauth-refresh-worker.js';
+export * from './claude-oauth-refresh.js';
 export * from './workers/disk-headroom-monitor.js';
 export * from './workers/disk-headroom-reclaim.js';
 export * from './workers/disk-headroom.js';

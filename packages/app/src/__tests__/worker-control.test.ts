@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_APPROVE_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
+  CLAUDE_OAUTH_REFRESH_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_AUTO_LABEL_WORKER_KIND,
@@ -220,6 +221,14 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
       DISK_HEADROOM_WORKER_KIND,
       { diskHeadroom: { cleanupEnabled: true } },
       { diskHeadroom: { cleanupEnabled: false } },
+    );
+  });
+
+  it('includes claude-oauth-refresh only when claudeOauthRefresh.enabled is true', () => {
+    expectConfigGate(
+      CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+      { claudeOauthRefresh: { enabled: true } },
+      { claudeOauthRefresh: { enabled: false } },
     );
   });
 
