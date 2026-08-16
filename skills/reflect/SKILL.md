@@ -27,6 +27,8 @@ Skip when the conversation is trivial, off-topic, or already covered by a skill 
 
 Claude Code stores session transcripts as JSONL under `~/.claude/projects/<encoded-cwd>/*.jsonl`, where `<encoded-cwd>` is the absolute working directory with every `/` replaced by `-` (e.g. `/Users/x/repo` → `-Users-x-repo`). Take the most recently modified file in that directory unless the user names a different project or session. Each line is JSON with a `type` field (`"user"` / `"assistant"` carry the conversation; skip other types like `mode` or `file-history-snapshot`); message text is at `.message.content`, either a plain string or a list of blocks (`text`, `thinking`, `tool_use`, `tool_result`).
 
+A transcript's last turn is not guaranteed to reflect the task's actual final outcome — an Invoker-orchestrated task's finalize/commit step can happen outside the agent's own captured session (e.g. a session that ends mid-`Monitor`-wait on a backgrounded test, with the resulting commit and passing verification appearing only in `git log`, never in that JSONL). Corroborate completion against `git log`/the task's recorded summary before treating a transcript's tail as proof the work finished, succeeded, or failed.
+
 ### 2. Run the cost audit, then spawn parallel reviewers
 
 Token usage is exact data sitting in every transcript (Claude Code and Codex embed a `usage{}` block per turn; Cursor's local transcripts don't — see below). Don't have an LLM reviewer eyeball the raw JSONL to guess at spend or thrash — that both burns context (the file itself can be multi-MB) and produces unreliable numbers. Run the mechanical counter first, then hand its *output* (small, structured) to the Cost lens:
