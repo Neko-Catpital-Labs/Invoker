@@ -237,7 +237,7 @@ export function classifyScopeKind(filePath) {
   if (path.startsWith('scripts/repro/')) return 'proof';
   if (path.startsWith('packages/app/e2e/visual-proof/')) return 'product-test';
   if (path.startsWith('skills/') || path.startsWith('docs/') || path.endsWith('.md')) return 'docs';
-  if (path.startsWith('scripts/')) return 'policy';
+  if (path.startsWith('scripts/') || path.startsWith('.github/')) return 'policy';
   if (
     path.includes('/e2e/')
     || path.includes('/__tests__/')
