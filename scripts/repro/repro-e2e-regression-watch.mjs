@@ -216,7 +216,8 @@ function testPlanVarsAndDryRunRendering() {
     if (!rendered.planPath.endsWith('ci-regression-watch.yaml')) fail('dry run did not render expected plan path');
     if (rendered.submitted) fail('dry run must not submit');
     const planText = readFileSync(rendered.planPath, 'utf8');
-    if (!planText.includes('executionAgent: codex')) fail('fix task must request codex (default claude agent hits the broken SSH pool)');
+    // #7086's codex pin outlived the outage it was a stopgap for; see #9452.
+    if (planText.includes('executionAgent: codex')) fail('fix task must not hardcode codex; let the configured default agent apply');
   } finally {
     rmSync(outRoot, { recursive: true, force: true });
   }
