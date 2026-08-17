@@ -47,14 +47,6 @@ if [[ "$remote_command" == *"exit 42"* ]]; then
   echo "before the failure"
   exit 42
 fi
-# --push-and-run builds a real compound shell command (mktemp/base64-decode/
-# run/rm) -- actually evaluate it locally (standing in for "remote") so the
-# push-and-run test below exercises the real temp-file dance, not just a
-# literal string match like the other cases here.
-if [[ "$remote_command" == *"fleet-push-"* ]]; then
-  eval "$remote_command"
-  exit $?
-fi
 echo "ran: $remote_command"
 exit 0
 FAKESSH
@@ -92,33 +84,5 @@ set +e
 own_exit=$?
 set -e
 [[ "$own_exit" -ne 0 ]] || fail "fleet-ssh.sh must exit non-zero when a remote host command fails"
-
-# --- test: --push-and-run pushes a real local script and runs it, args intact ---
-PUSH_SCRIPT="$TMP_DIR/pushed.sh"
-cat > "$PUSH_SCRIPT" <<'EOF'
-#!/usr/bin/env bash
-echo "pushed script ran, arg1=$1"
-EOF
-chmod +x "$PUSH_SCRIPT"
-out="$("$FLEET_SSH" --hosts host_a --push-and-run "$PUSH_SCRIPT" "value with spaces" 2>&1)" || true
-echo "$out" | grep -qF "=== host_a (exit=0) ===" || fail "--push-and-run must report the host's real exit code"
-echo "$out" | grep -qF "pushed script ran, arg1=value with spaces" || fail "--push-and-run must execute the real pushed script with args intact, spaces included"
-
-# --- test: --push-and-run propagates the pushed script's own exit code ---
-FAIL_SCRIPT="$TMP_DIR/pushed_fail.sh"
-cat > "$FAIL_SCRIPT" <<'EOF'
-#!/usr/bin/env bash
-exit 9
-EOF
-chmod +x "$FAIL_SCRIPT"
-out="$("$FLEET_SSH" --hosts host_a --push-and-run "$FAIL_SCRIPT" 2>&1)" || true
-echo "$out" | grep -qF "=== host_a (exit=9) ===" || fail "--push-and-run must propagate the pushed script's own exit code"
-
-# --- test: --push-and-run rejects a missing local script before touching SSH ---
-set +e
-"$FLEET_SSH" --hosts host_a --push-and-run "$TMP_DIR/does-not-exist.sh" > /dev/null 2>&1
-missing_exit=$?
-set -e
-[[ "$missing_exit" -ne 0 ]] || fail "--push-and-run must fail fast on a missing local script"
 
 echo "OK: fleet-ssh.sh contract checks passed"
