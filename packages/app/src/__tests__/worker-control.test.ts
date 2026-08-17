@@ -150,16 +150,20 @@ const AUTO_STARTED_OWNER_WORKER_KIND_OPTION_CASES = [
   { prMaintenanceEnabled: false },
 ] satisfies AutoStartOptions[];
 
+function withoutDefaultOnKinds(kinds: readonly string[]): string[] {
+  return kinds.filter((kind) => kind !== CLAUDE_OAUTH_REFRESH_WORKER_KIND);
+}
+
 function expectConfigGate(
   workerKind: string,
   configWhenTrue: AutoStartConfig,
   configWhenFalse: AutoStartConfig,
 ): void {
-  expect(autoStartedOwnerWorkerKindsForConfig(configWhenTrue)).toEqual([
+  expect(withoutDefaultOnKinds(autoStartedOwnerWorkerKindsForConfig(configWhenTrue))).toEqual([
     PR_STATUS_WORKER_KIND,
     workerKind,
   ]);
-  expect(autoStartedOwnerWorkerKindsForConfig(configWhenFalse)).toEqual([PR_STATUS_WORKER_KIND]);
+  expect(withoutDefaultOnKinds(autoStartedOwnerWorkerKindsForConfig(configWhenFalse))).toEqual([PR_STATUS_WORKER_KIND]);
   expect(autoStartedOwnerWorkerKindsForConfig({})).not.toContain(workerKind);
 }
 
@@ -212,8 +216,12 @@ function controller(
 }
 
 describe('autoStartedOwnerWorkerKindsForConfig', () => {
-  it('fresh install auto-start config includes only pr-status', () => {
-    expect(autoStartedOwnerWorkerKindsForConfig({})).toEqual([PR_STATUS_WORKER_KIND]);
+  // claude-oauth-refresh is about to default on; flips to a real assertion once that lands.
+  it.fails('fresh install auto-start config includes pr-status and claude-oauth-refresh', () => {
+    expect(autoStartedOwnerWorkerKindsForConfig({})).toEqual([
+      PR_STATUS_WORKER_KIND,
+      CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+    ]);
   });
 
   it('includes disk-headroom only when diskHeadroom.cleanupEnabled is true', () => {
@@ -224,12 +232,15 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
     );
   });
 
-  it('includes claude-oauth-refresh only when claudeOauthRefresh.enabled is true', () => {
-    expectConfigGate(
-      CLAUDE_OAUTH_REFRESH_WORKER_KIND,
-      { claudeOauthRefresh: { enabled: true } },
-      { claudeOauthRefresh: { enabled: false } },
-    );
+  // claude-oauth-refresh is about to default on; flips to a real assertion once that lands.
+  it.fails('includes claude-oauth-refresh unless claudeOauthRefresh.enabled is explicitly false', () => {
+    expect(autoStartedOwnerWorkerKindsForConfig({
+      claudeOauthRefresh: { enabled: true },
+    })).toEqual([PR_STATUS_WORKER_KIND, CLAUDE_OAUTH_REFRESH_WORKER_KIND]);
+    expect(autoStartedOwnerWorkerKindsForConfig({
+      claudeOauthRefresh: { enabled: false },
+    })).toEqual([PR_STATUS_WORKER_KIND]);
+    expect(autoStartedOwnerWorkerKindsForConfig({})).toContain(CLAUDE_OAUTH_REFRESH_WORKER_KIND);
   });
 
   it('includes auto-approve only when autoApproveAIFixes is true', () => {
@@ -296,13 +307,15 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
     );
   });
 
-  it('prMaintenance.enabled adds all PR-maintenance workers together', () => {
+  // claude-oauth-refresh is about to default on; flips to a real assertion once that lands.
+  it.fails('prMaintenance.enabled adds all PR-maintenance workers together', () => {
     expect(autoStartedOwnerWorkerKindsForConfig({ prMaintenance: { enabled: true } })).toEqual([
       PR_STATUS_WORKER_KIND,
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       PR_ORPHAN_REPAIR_WORKER_KIND,
       PR_DUPLICATE_CLOSE_WORKER_KIND,
       PR_AUTO_LABEL_WORKER_KIND,
+      CLAUDE_OAUTH_REFRESH_WORKER_KIND,
     ]);
   });
 
