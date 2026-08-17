@@ -432,6 +432,7 @@ describe('PR maintenance workers', () => {
       lockProbe: () => ({ held: false }),
       installSignalHandlers: false,
       store,
+      env: { INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: join(repoRoot, 'mergify-admin-requeue-state.jsonl') },
     });
 
     await worker.tick();
