@@ -100,8 +100,7 @@ describe('a drafted plan with an oversized task description does not trip Slack 
     nextDraftPlanText = null;
   });
 
-  // TODO(slack-plan-review-block-limit fix slice): flip to `it` once planDraftBlocks clamps its text.
-  it.fails('clamps the review card mrkdwn text to 3000 chars instead of posting an oversized block', async () => {
+  it('clamps the review card mrkdwn text to 3000 chars instead of posting an oversized block', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     const surface = new SlackSurface({
       botToken: 'xoxb-test',

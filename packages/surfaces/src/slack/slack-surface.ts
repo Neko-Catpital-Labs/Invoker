@@ -23,7 +23,7 @@ import {
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress } from '../surface.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
-import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
+import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
 import {
   splitForSlack,
   sanitizeSlackOutbound,
@@ -1679,7 +1679,7 @@ export class SlackSurface implements Surface {
     draft: SlackPlanDraft,
     state: 'ready' | 'kept',
   ): unknown[] {
-    const text = [`*${summary.name}*`, ...formatPlanSummaryLines(summary)].join('\n');
+    const text = clampMrkdwnText([`*${summary.name}*`, ...formatPlanSummaryLines(summary)].join('\n'));
     const actionButtons = state === 'ready'
       ? [
           {

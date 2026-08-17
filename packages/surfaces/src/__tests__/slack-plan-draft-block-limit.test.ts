@@ -29,8 +29,7 @@ describe('plan draft review card stays within Slack block text limits', () => {
 
   afterEach(() => adapter.close());
 
-  // TODO(slack-plan-review-block-limit fix slice): flip to `it` once planDraftBlocks clamps its text.
-  it.fails('clamps the section text to 3000 chars even when task descriptions are long', async () => {
+  it('clamps the section text to 3000 chars even when task descriptions are long', async () => {
     const longDescription = 'Goal: '.padEnd(3500, 'x');
     const planText = `name: Oversized plan\ntasks:\n  - id: a\n    description: "${longDescription}"\n`;
 

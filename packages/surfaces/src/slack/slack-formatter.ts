@@ -40,7 +40,7 @@ function statusEmoji(status: string): string {
 function statusLabel(status: string): string {
   return STATUS_LABEL[status] ?? status;
 }
-function clampMrkdwnText(text: string, max = 3000): string {
+export function clampMrkdwnText(text: string, max = 3000): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
