@@ -873,7 +873,7 @@ export async function cleanupRemoteInvokerHome(opts: {
   }
 
   let preservePaths: string[] = [];
-  if (opts.store) {
+  if (mode === 'critical' && opts.store) {
     try {
       preservePaths = computeRemotePreservationPaths(opts.store, opts.target);
     } catch (err) {

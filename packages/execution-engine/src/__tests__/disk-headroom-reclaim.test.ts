@@ -629,6 +629,28 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(result.reason).toBe('cleanup-error');
   });
 
+  it('stale-only mode skips the preservation lookup entirely, even when the store throws', async () => {
+    const target = makeTarget();
+    const throwingStore: DiskHeadroomWorkerStore = {
+      listWorkflows: () => {
+        throw new Error('db unavailable');
+      },
+      loadTasks: () => [],
+    };
+    const runRemoteScript = vi.fn(async () => 'ok');
+
+    const result = await cleanupRemoteInvokerHome({
+      target,
+      store: throwingStore,
+      runRemoteScript,
+      mode: 'stale-only',
+    });
+
+    expect(runRemoteScript).toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('warn-paced');
+  });
+
   it('narrows preservation to this target\'s own poolMemberId and embeds it in the generated script', async () => {
     const target = makeTarget({ name: 'remote-1', remotePath: '/home/remote/.invoker' });
     const otherTarget = makeTarget({ name: 'remote-2', remotePath: '/home/remote/.invoker' });
