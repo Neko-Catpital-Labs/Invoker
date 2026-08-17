@@ -10,17 +10,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
- * Locate the Invoker checkout that owns this doctor script. Checked in order:
+ * Locate the Invoker checkout that owns this doctor script, for the two
+ * dependencies (`yaml`, `review-unit-rules.mjs`) not already vendored under
+ * ./vendor. This is dev-convenience-only now — see resolveYamlModulePath and
+ * resolveReviewUnitRulesModulePath below, which check the vendored copies
+ * first and only fall back to this when ./vendor is somehow missing.
+ * Checked in order:
  * 1. `INVOKER_REPO_ROOT` (explicit override, same convention used elsewhere
  *    in the app, e.g. packages/contracts/src/repo-root.ts).
  * 2. The local relative path (this script running from inside a live
  *    Invoker checkout or worktree).
  * 3. The shared checkout behind a linked git worktree's common dir.
  * 4. `sourceRepoRoot` recorded in ~/.invoker/bundled-skills.json by the last
- *    `scripts/setup-agent-skills.sh` install — needed when this script is
- *    running from a machine-level skill install (e.g.
- *    ~/.claude/skills/invoker-plan-to-invoker/scripts), which ships outside
- *    any git repository and can't resolve steps 2-3.
+ *    `scripts/setup-agent-skills.sh` install.
  */
 function resolveInvokerRepoRoot(scriptDir) {
   const hasWorkspaceMarker = (dir) => existsSync(resolve(dir, 'pnpm-workspace.yaml'));
@@ -57,31 +59,62 @@ function resolveInvokerRepoRoot(scriptDir) {
   return null;
 }
 
-const invokerRepoRoot = resolveInvokerRepoRoot(__dirname);
-if (!invokerRepoRoot) {
+/**
+ * Primary path for both dependencies: a copy vendored directly under this
+ * script's own directory (./vendor/yaml, ./vendor/review-unit-rules.mjs),
+ * checked and re-synced by `bash scripts/vendor-plan-doctor-deps.sh` and
+ * drift-tested by scripts/test-plan-to-invoker-skill.sh. This is what makes
+ * skill-doctor.sh self-sufficient wherever skills/ ends up copied — the
+ * machine-level skill install, and the invoker-cli/invoker-slack release
+ * tarballs (scripts/archive-cli-binary.sh, scripts/archive-slack-binary.sh),
+ * none of which carry packages/ or a repo-root scripts/ directory.
+ */
+function resolveVendoredDependency(scriptDir, relativeVendorPath) {
+  const vendoredPath = resolve(scriptDir, 'vendor', relativeVendorPath);
+  return existsSync(vendoredPath) ? vendoredPath : null;
+}
+
+function resolveYamlModulePath(scriptDir) {
+  const vendored = resolveVendoredDependency(scriptDir, 'yaml/index.js');
+  if (vendored) return vendored;
+
+  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
+  if (invokerRepoRoot) {
+    const repoYamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+    if (existsSync(repoYamlPath)) return repoYamlPath;
+  }
+
   throw new Error(
-    'Unable to resolve the Invoker checkout for this doctor script (checked INVOKER_REPO_ROOT, the local '
-    + 'worktree, the shared git checkout, and ~/.invoker/bundled-skills.json). Set INVOKER_REPO_ROOT to an '
-    + "Invoker checkout, or reinstall skills with 'bash scripts/setup-agent-skills.sh' so "
-    + '~/.invoker/bundled-skills.json records the source checkout.',
+    'Unable to resolve yaml runtime. Checked ./vendor/yaml/index.js (run '
+    + "'bash scripts/vendor-plan-doctor-deps.sh' if this checkout is missing it) and "
+    + 'packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout.',
   );
 }
 
-const yamlModulePath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-if (!existsSync(yamlModulePath)) {
-  throw new Error(`Unable to resolve yaml runtime. Expected it at ${yamlModulePath}.`);
-}
-const { parse: parseYaml } = await import(yamlModulePath);
+function resolveReviewUnitRulesModulePath(scriptDir) {
+  const vendored = resolveVendoredDependency(scriptDir, 'review-unit-rules.mjs');
+  if (vendored) return vendored;
 
-const reviewUnitRulesPath = resolve(invokerRepoRoot, 'scripts/review-unit-rules.mjs');
-if (!existsSync(reviewUnitRulesPath)) {
-  throw new Error(`Unable to resolve review-unit-rules.mjs. Expected it at ${reviewUnitRulesPath}.`);
+  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
+  if (invokerRepoRoot) {
+    const repoReviewUnitRulesPath = resolve(invokerRepoRoot, 'scripts/review-unit-rules.mjs');
+    if (existsSync(repoReviewUnitRulesPath)) return repoReviewUnitRulesPath;
+  }
+
+  throw new Error(
+    'Unable to resolve review-unit-rules.mjs. Checked ./vendor/review-unit-rules.mjs (run '
+    + "'bash scripts/vendor-plan-doctor-deps.sh' if this checkout is missing it) and "
+    + 'scripts/review-unit-rules.mjs in a resolvable Invoker checkout.',
+  );
 }
+
+const { parse: parseYaml } = await import(resolveYamlModulePath(__dirname));
+
 const {
   getLabelSection,
   validateChangeTypeItems,
   validateSingleReviewUnitFocus,
-} = await import(reviewUnitRulesPath);
+} = await import(resolveReviewUnitRulesModulePath(__dirname));
 
 function reviewFocusTexts(text) {
   return [

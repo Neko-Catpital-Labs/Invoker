@@ -6,17 +6,24 @@ set -euo pipefail
 
 file="${1:?Usage: validate-plan.sh <plan.yaml>}"
 
-# Call typed validator (ESM .mjs - no compilation needed)
-# Run from packages/app directory so ESM can resolve 'yaml' from local node_modules
+# Call typed validator (ESM .mjs - no compilation needed).
 # Resolve to the physical script dir so this works via canonical path or symlink.
 script_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+abs_file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
 
-# Resolve the Invoker checkout that owns this doctor script. Prefer an
-# explicit override, then a live git checkout (works across layouts and
-# worktrees), then the source checkout recorded by the last
-# `setup-agent-skills.sh` install — needed when running from a machine-level
-# skill install (e.g. ~/.claude/skills/invoker-plan-to-invoker/scripts),
-# which ships outside any git repository and can't resolve via git.
+# validate-plan.mjs resolves its own `yaml` runtime — preferring the copy
+# vendored at ./vendor/yaml (see scripts/vendor-plan-doctor-deps.sh), which
+# is what makes this self-sufficient wherever skills/ ends up copied (a
+# machine-level skill install, or an invoker-cli/invoker-slack release
+# tarball, neither of which carry packages/app/node_modules alongside it).
+# No cwd change needed once that vendored copy is present.
+if [[ -f "$script_dir/vendor/yaml/index.js" ]]; then
+  exec node "$script_dir/validate-plan.mjs" "$abs_file"
+fi
+
+# Vendor copy missing (e.g. a hand-edited skill directory): fall back to
+# resolving a real Invoker checkout, same override order validate-plan.mjs
+# itself uses for its own INVOKER_REPO_ROOT fallback.
 repo_root="${INVOKER_REPO_ROOT:-}"
 if [[ -z "$repo_root" ]]; then
   repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -36,11 +43,9 @@ if [[ -z "$repo_root" ]]; then
 fi
 
 if [[ -z "$repo_root" || ! -d "$repo_root/packages/app" ]]; then
-  echo "Error: could not determine repository root from $script_dir" >&2
-  echo "Set INVOKER_REPO_ROOT to an Invoker checkout, or reinstall skills with 'bash scripts/setup-agent-skills.sh' so ~/.invoker/bundled-skills.json records the source checkout." >&2
+  echo "Error: could not resolve a yaml runtime — no $script_dir/vendor/yaml/index.js and no repository root from $script_dir" >&2
+  echo "Run 'bash scripts/vendor-plan-doctor-deps.sh' to restore the vendored copy, or set INVOKER_REPO_ROOT to an Invoker checkout." >&2
   exit 1
 fi
-abs_file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
 
-cd "$repo_root/packages/app"
 exec node "$script_dir/validate-plan.mjs" "$abs_file"

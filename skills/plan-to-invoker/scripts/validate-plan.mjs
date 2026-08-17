@@ -17,17 +17,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
- * Locate the Invoker checkout that owns this doctor script. Checked in order:
+ * Locate the Invoker checkout that owns this doctor script, for `yaml` when
+ * it isn't already vendored under ./vendor. Dev-convenience-only fallback —
+ * see resolveYamlModulePath below. Checked in order:
  * 1. `INVOKER_REPO_ROOT` (explicit override, same convention used elsewhere
  *    in the app, e.g. packages/contracts/src/repo-root.ts).
  * 2. The local relative path (this script running from inside a live
  *    Invoker checkout or worktree).
  * 3. The shared checkout behind a linked git worktree's common dir.
  * 4. `sourceRepoRoot` recorded in ~/.invoker/bundled-skills.json by the last
- *    `scripts/setup-agent-skills.sh` install — needed when this script is
- *    running from a machine-level skill install (e.g.
- *    ~/.claude/skills/invoker-plan-to-invoker/scripts), which ships outside
- *    any git repository and can't resolve steps 2-3.
+ *    `scripts/setup-agent-skills.sh` install.
  */
 function resolveInvokerRepoRoot(scriptDir) {
   const hasWorkspaceMarker = (dir) => existsSync(resolve(dir, 'pnpm-workspace.yaml'));
@@ -64,22 +63,33 @@ function resolveInvokerRepoRoot(scriptDir) {
   return null;
 }
 
-const invokerRepoRoot = resolveInvokerRepoRoot(__dirname);
-if (!invokerRepoRoot) {
+/**
+ * Primary path: a copy vendored directly under this script's own directory
+ * (./vendor/yaml), synced by `bash scripts/vendor-plan-doctor-deps.sh` and
+ * drift-tested by scripts/test-plan-to-invoker-skill.sh. This is what makes
+ * this script self-sufficient wherever skills/ ends up copied — the
+ * machine-level skill install, and the invoker-cli/invoker-slack release
+ * tarballs (scripts/archive-cli-binary.sh, scripts/archive-slack-binary.sh),
+ * none of which carry packages/app/node_modules alongside it.
+ */
+function resolveYamlModulePath(scriptDir) {
+  const vendoredPath = resolve(scriptDir, 'vendor', 'yaml', 'index.js');
+  if (existsSync(vendoredPath)) return vendoredPath;
+
+  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
+  if (invokerRepoRoot) {
+    const repoYamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+    if (existsSync(repoYamlPath)) return repoYamlPath;
+  }
+
   throw new Error(
-    'Unable to resolve the Invoker checkout for this doctor script (checked INVOKER_REPO_ROOT, the local '
-    + 'worktree, the shared git checkout, and ~/.invoker/bundled-skills.json). Set INVOKER_REPO_ROOT to an '
-    + "Invoker checkout, or reinstall skills with 'bash scripts/setup-agent-skills.sh' so "
-    + '~/.invoker/bundled-skills.json records the source checkout.',
+    'Unable to resolve yaml runtime. Checked ./vendor/yaml/index.js (run '
+    + "'bash scripts/vendor-plan-doctor-deps.sh' if this checkout is missing it) and "
+    + 'packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout.',
   );
 }
 
-const yamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-if (!existsSync(yamlPath)) {
-  throw new Error(`Unable to resolve yaml runtime. Expected it at ${yamlPath}.`);
-}
-
-const { parse: parseYaml } = await import(yamlPath);
+const { parse: parseYaml } = await import(resolveYamlModulePath(__dirname));
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
 const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review', 'no_op'];
