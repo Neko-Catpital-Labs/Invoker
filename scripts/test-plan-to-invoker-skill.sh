@@ -240,6 +240,73 @@ must_output_contain "$DOCTOR_HELP" "  1 = one or more checks failed" "skill-doct
 must_output_contain "$DOCTOR_HELP" "  2 = usage/argument error" "skill-doctor --help must expose usage-error exit code"
 must_output_contain "$DOCTOR_HELP" "Output: JSON summary of all checks with pass/fail status" "skill-doctor --help must expose JSON output contract"
 
+# Regression: skill-doctor.sh (and its validate-plan/lint-review-units
+# sub-checks) must work when copied wholesale to a machine-level skill
+# install outside any git checkout — e.g. ~/.claude/skills/invoker-plan-to-invoker,
+# the layout `scripts/setup-agent-skills.sh` produces. Reproduces the bug where
+# an agent planning against a non-Invoker repo had no working doctor: validate-plan.sh
+# resolved its repo root via `git -C <script dir>`, and lint-review-units.mjs
+# statically imported `../../../scripts/review-unit-rules.mjs` — both broke
+# once the scripts' physical location was no longer 3 directories under the
+# Invoker repo root.
+STANDALONE_INSTALL_DIR="$(mktemp -d)"
+STANDALONE_INVOKER_HOME="$(mktemp -d)"
+trap 'rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"' EXIT
+cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.sh "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.mjs "$STANDALONE_INSTALL_DIR/"
+STANDALONE_DOCTOR="$STANDALONE_INSTALL_DIR/skill-doctor.sh"
+STANDALONE_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
+
+# Without INVOKER_REPO_ROOT or a bundled-skills manifest, the doctor must fail
+# with an actionable message instead of a raw stack trace or generic error.
+STANDALONE_NO_FALLBACK_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT INVOKER_DB_DIR="$STANDALONE_INVOKER_HOME" bash "$STANDALONE_DOCTOR" --skip-assumptions "$STANDALONE_FIXTURE" 2>&1 || true)"
+must_output_contain "$STANDALONE_NO_FALLBACK_OUTPUT" "INVOKER_REPO_ROOT" "Standalone doctor without a resolvable repo root must point at the INVOKER_REPO_ROOT override"
+
+# INVOKER_REPO_ROOT must work as an explicit override, without any manifest.
+STANDALONE_ENV_OUTPUT="$(cd /tmp && env -u INVOKER_DB_DIR INVOKER_REPO_ROOT="$REPO_ROOT" bash "$STANDALONE_DOCTOR" --skip-assumptions "$STANDALONE_FIXTURE" 2>/dev/null || true)"
+STANDALONE_ENV_VALIDATE_STATUS="$(printf '%s' "$STANDALONE_ENV_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$STANDALONE_ENV_VALIDATE_STATUS" == "passed" ]] || fail "Standalone install with INVOKER_REPO_ROOT override must pass validate-plan; got status=$STANDALONE_ENV_VALIDATE_STATUS. Full output: $STANDALONE_ENV_OUTPUT"
+STANDALONE_ENV_REVIEW_UNITS_STATUS="$(printf '%s' "$STANDALONE_ENV_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$STANDALONE_ENV_REVIEW_UNITS_STATUS" == "passed" ]] || fail "Standalone install with INVOKER_REPO_ROOT override must pass lint-review-units; got status=$STANDALONE_ENV_REVIEW_UNITS_STATUS. Full output: $STANDALONE_ENV_OUTPUT"
+
+# With the bundled-skills manifest recording the source checkout (what
+# `installBundledSkills()` now writes on every install/reinstall), both
+# validate-plan and lint-review-units must pass standalone with no env var set —
+# the ordinary case for an agent working in a non-Invoker repo after running
+# `scripts/setup-agent-skills.sh` once.
+cat > "$STANDALONE_INVOKER_HOME/bundled-skills.json" <<EOF
+{"sourceRepoRoot": "$REPO_ROOT"}
+EOF
+STANDALONE_MANIFEST_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT INVOKER_DB_DIR="$STANDALONE_INVOKER_HOME" bash "$STANDALONE_DOCTOR" --skip-assumptions "$STANDALONE_FIXTURE" 2>/dev/null || true)"
+STANDALONE_MANIFEST_VALIDATE_STATUS="$(printf '%s' "$STANDALONE_MANIFEST_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$STANDALONE_MANIFEST_VALIDATE_STATUS" == "passed" ]] || fail "Standalone install (via bundled-skills.json sourceRepoRoot) must pass validate-plan; got status=$STANDALONE_MANIFEST_VALIDATE_STATUS. Full output: $STANDALONE_MANIFEST_OUTPUT"
+STANDALONE_MANIFEST_REVIEW_UNITS_STATUS="$(printf '%s' "$STANDALONE_MANIFEST_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$STANDALONE_MANIFEST_REVIEW_UNITS_STATUS" == "passed" ]] || fail "Standalone install (via bundled-skills.json sourceRepoRoot) must pass lint-review-units; got status=$STANDALONE_MANIFEST_REVIEW_UNITS_STATUS. Full output: $STANDALONE_MANIFEST_OUTPUT"
+
+rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"
+trap - EXIT
+
+echo "OK: skill-doctor works from a machine-level standalone install (outside any git checkout)"
+
 # Playbook — Phase 1a / 1b focused lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
 must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification" "Playbook must define runtime behavioral verification"
