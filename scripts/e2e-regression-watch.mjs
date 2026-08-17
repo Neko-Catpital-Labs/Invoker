@@ -43,6 +43,8 @@ export const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'close
 export const BROKEN_JOB_CONCLUSIONS = new Set(['failure', 'timed_out', 'action_required']);
 export const IGNORED_JOB_CONCLUSIONS = new Set(['cancelled', 'skipped', 'neutral']);
 export const MARKER_PREFIX = 'invoker-ci-regression-watch: first-bad-sha=';
+export const CI_REGRESSION_REFLECT_ENV = 'INVOKER_CI_REGRESSION_REFLECT';
+export const CATSTACK_REPO_URL = 'https://github.com/EdbertChan/catstack.git';
 export const STATE_SCHEMA_VERSION = 4;
 export const DEFAULT_MAX_ATTEMPTS = 3;
 export const MAX_ATTEMPTS = parseNonNegativeInteger(
@@ -970,6 +972,101 @@ export function releaseRepairFilingClaim(failure, release = releaseRepairFiling)
   }
 }
 
+export function isCiRegressionReflectEnabled(env = process.env) {
+  return env[CI_REGRESSION_REFLECT_ENV] === '1';
+}
+
+export function renderOptionalReflectTaskYaml(vars) {
+  const slug = vars.job_slug;
+  const jobName = vars.job_name;
+  const sha = vars.sha;
+  return `
+  - id: reflect-ci-${slug}
+    executionAgent: claude
+    description: |
+      Optional personal /reflect pass. Clone ${CATSTACK_REPO_URL} and draft
+      skill edits there only — never edit Invoker.
+      Review claim: Any skill edit is a catstack PR traceable to a cited
+      finding from this repair's own transcript, not a speculative rewrite.
+      Review lane: docs
+      Safety invariant: This task never edits Invoker files and never merges
+      a catstack PR on its own authority. If /reflect finds nothing durable,
+      it makes no changes and exits 0.
+      Slice rationale: Opt-in personal worker, downstream of verify, so
+      default CI repair stays fix+verify only.
+      Architectural effect: None to Invoker product code; accepted edits land
+      only in catstack.
+      Goal: Reduce the odds that the same class of regression escapes again.
+      Motivation: CI job \`${jobName}\` first failed at ${sha}.
+      Alternative considerations: Shipping /reflect inside Invoker was
+      rejected — the skill is personal and lives in catstack.
+      Implementation details: Clone ${CATSTACK_REPO_URL}, follow its
+      \`skills/reflect/SKILL.md\` against this workflow's fix/verify
+      transcripts, and open any Accepted skill PR against catstack.
+      Non-goals: No Invoker file edits; no auto-merge.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - Unknown at filing time; determined by what /reflect finds Accepted
+        in catstack.
+      Change types:
+      - Unknown at filing time; determined during the reflect pass.
+      Acceptance criteria:
+      - The task summary states "no durable finding" or records each
+        Accepted finding with its catstack PR URL.
+      - \`git diff --name-only\` in the Invoker checkout is empty.
+    prompt: |
+      Goal: Run /reflect from ${CATSTACK_REPO_URL} against the repair for
+      CI job \`${jobName}\` (first observed failing at ${sha}).
+      Review claim: Any drafted skill edit is a catstack PR traceable to a
+      cited finding from this repair's own transcript.
+      Review lane: docs
+      Safety invariant: Never edit Invoker files. Never merge a catstack PR
+      on this task's own authority. If there is no durable finding, make no
+      changes.
+      Slice rationale: Keep reflection opt-in and out of Invoker.
+      Architectural effect: Invoker product architecture is unchanged.
+      Motivation: Durable lessons belong in catstack, not this repo.
+      Alternative considerations: Vendoring /reflect into Invoker was
+      rejected.
+      Implementation details:
+      Assume no prior context beyond this workflow and its task transcripts.
+      1. Clone ${CATSTACK_REPO_URL} to a scratch directory.
+      2. Read that clone's \`skills/reflect/SKILL.md\` and follow it against
+         this workflow's fix/verify transcripts (or git artifacts if the
+         transcripts are gone).
+      3. For each Accepted finding, open a PR against catstack with
+         \`gh pr create\`. Record the URL in the task summary.
+      4. Do not apply Backlog/Rejected findings; summarize them as prose.
+      5. If nothing durable was found, make no file changes and say so.
+      Acceptance criteria: Summary says "no durable finding" or lists each
+      Accepted finding and its catstack PR. Invoker \`git diff --name-only\`
+      is empty.
+      Pass condition: Exit 0 only when those acceptance criteria hold.
+      Non-goals: Do not edit Invoker. Do not retry the fix/verify tasks.
+    dependencies:
+      - verify-ci-${slug}
+`;
+}
+
+export function appendOptionalReflectTask(planPath, vars) {
+  const planText = readFileSync(planPath, 'utf8');
+  if (planText.includes(`id: reflect-ci-${vars.job_slug}`)) return;
+  const waiver = `
+  Standalone workflow waiver: Optional personal reflect stays in this
+  workflow so it can read the repair transcripts; accepted edits go only
+  to catstack.
+`;
+  let next = planText;
+  if (!next.includes('Standalone workflow waiver:')) {
+    next = next.replace(
+      /^description: \|(\n(?:  .*\n)*)/m,
+      (match) => `${match.replace(/\n$/, '')}${waiver}`,
+    );
+  }
+  writeFileSync(planPath, `${next.trimEnd()}\n${renderOptionalReflectTaskYaml(vars)}`);
+}
+
 export function fileBugfixPlan(failure, opts = {}) {
   const repoUrl = opts.repoUrl ?? getRepoUrl();
   const jobDefinitions = opts.jobDefinitions ?? buildCiJobDefinitions();
@@ -982,9 +1079,11 @@ export function fileBugfixPlan(failure, opts = {}) {
   const run = opts.runCommand ?? runCommand;
   run('bash', [join(REPO_ROOT, 'skills/plan-to-invoker/scripts/render-formula.sh'), 'ci-regression-watch', ...varArgs, '--out', outDir]);
   const planPath = join(outDir, 'ci-regression-watch.yaml');
+  const enableReflect = opts.enableReflect ?? isCiRegressionReflectEnabled(opts.env);
+  if (enableReflect && existsSync(planPath)) appendOptionalReflectTask(planPath, vars);
   run('bash', [join(REPO_ROOT, 'skills/plan-to-invoker/scripts/skill-doctor.sh'), planPath]);
   if (!opts.dryRun) run('bash', [join(REPO_ROOT, 'submit-plan.sh'), planPath, '--no-track']);
-  return { planPath, vars, submitted: !opts.dryRun };
+  return { planPath, vars, submitted: !opts.dryRun, reflectEnabled: Boolean(enableReflect) };
 }
 
 export function processFailureFilingSweep(state, {
