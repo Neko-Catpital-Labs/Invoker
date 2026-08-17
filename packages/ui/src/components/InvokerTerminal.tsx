@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
-import type { TerminalSessionDescriptor } from '@invoker/contracts';
+import type { InAppPlanningTurnActivity, InAppPlanningTurnActivitySource, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { SendIcon } from './icons/index.js';
 
@@ -63,6 +63,7 @@ interface InvokerTerminalProps {
     taskGroups?: { workflow: string | null; tasks: string[] }[];
   };
   planningStream?: InvokerTerminalPlanningStream | null;
+  activity?: InAppPlanningTurnActivity[];
   readOnly?: boolean;
   expanded?: boolean;
   mode?: PlanningTerminalMode;
@@ -139,6 +140,67 @@ function MessageBody({ text, toneClass }: { text: string; toneClass: string }): 
         );
       })}
     </div>
+  );
+}
+
+function activitySourceLabel(source: InAppPlanningTurnActivitySource): string {
+  if (source === 'stdout') return 'stdout';
+  if (source === 'stderr') return 'stderr';
+  return 'provider-exposed reasoning';
+}
+
+function formatActivityStatus(status: InAppPlanningTurnActivity['status']): string {
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (status === 'interrupted') return 'interrupted';
+  return 'running';
+}
+
+function PlanningActivityDisclosure({ activity }: { activity: InAppPlanningTurnActivity }): JSX.Element {
+  const retained = `${activity.retainedBytes.toLocaleString()} retained`;
+  const dropped = activity.droppedBytes > 0 ? `${activity.droppedBytes.toLocaleString()} dropped` : null;
+  return (
+    <details
+      data-testid="planning-turn-activity"
+      data-turn-id={activity.turnId}
+      className="rounded-md border border-border bg-card/50"
+    >
+      <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+        <span>Activity</span>
+        <span className="ml-2 font-normal">
+          {formatActivityStatus(activity.status)} · {activity.events.length} chunk{activity.events.length === 1 ? '' : 's'} · {retained}{dropped ? ` · ${dropped}` : ''}
+        </span>
+      </summary>
+      <div className="border-t border-border px-3 py-2.5">
+        {activity.truncated && (
+          <div data-testid="planning-turn-activity-truncated" className="mb-2 text-xs text-amber-300">
+            Output truncated. {retained}{dropped ? `, ${dropped}` : ''}.
+          </div>
+        )}
+        <div className="max-h-72 space-y-2 overflow-y-auto">
+          {activity.events.length === 0 ? (
+            <div className="text-xs text-muted-foreground">No raw activity yet.</div>
+          ) : activity.events.map((event) => (
+            <section
+              key={`${activity.turnId}-${event.sequence}`}
+              data-testid="planning-turn-activity-event"
+              data-source={event.source}
+              data-sequence={event.sequence}
+              className="rounded-sm border border-border/70 bg-background/70"
+            >
+              <div className="flex flex-wrap items-center gap-2 border-b border-border/70 px-2.5 py-1.5 font-sans text-[11px] text-muted-foreground">
+                <span>{activitySourceLabel(event.source)}</span>
+                <span>#{event.sequence}</span>
+                <span>{event.byteCount.toLocaleString()} bytes</span>
+              </div>
+              <pre className="overflow-x-auto px-2.5 py-2 font-mono text-[12px] leading-5 text-foreground">
+                <code className="whitespace-pre-wrap">{event.text}</code>
+              </pre>
+            </section>
+          ))}
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -480,6 +542,7 @@ export function InvokerTerminal({
   draftPlanAvailable,
   draftPlanSummary,
   planningStream,
+  activity = [],
   readOnly = false,
   expanded = false,
   mode = 'chat',
@@ -613,6 +676,7 @@ export function InvokerTerminal({
   const composerDisabledCursorClass = busy || readOnly ? 'disabled:cursor-not-allowed' : '';
   const sendButtonDisabled = busy || readOnly || !value.trim();
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
+  const [verboseActivityVisible, setVerboseActivityVisible] = useState(false);
 
   const handleValueChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const startedAt = nowMs();
@@ -666,9 +730,21 @@ export function InvokerTerminal({
     }
   };
 
-  const transcriptContent = useMemo(() => (
-    <>
-      {lines.map((line) => {
+  const transcriptContent = useMemo(() => {
+    const activityByLineId = new Map<number, InAppPlanningTurnActivity[]>();
+    for (const item of activity) {
+      const owningLineId = item.assistantMessageId ?? item.userMessageId;
+      const existing = activityByLineId.get(owningLineId) ?? [];
+      existing.push(item);
+      activityByLineId.set(owningLineId, existing);
+    }
+    for (const items of activityByLineId.values()) {
+      items.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.turnId.localeCompare(b.turnId));
+    }
+
+    return (
+      <>
+        {lines.map((line) => {
         const toneClass = line.tone === 'error'
           ? 'text-destructive'
           : line.tone === 'success'
@@ -689,9 +765,16 @@ export function InvokerTerminal({
               {roleLabel(line.role)}
             </div>
             <MessageBody text={line.text} toneClass={toneClass} />
+            {verboseActivityVisible && (activityByLineId.get(line.id)?.length ?? 0) > 0 && (
+              <div className="space-y-2 pt-1">
+                {activityByLineId.get(line.id)!.map((item) => (
+                  <PlanningActivityDisclosure key={item.turnId} activity={item} />
+                ))}
+              </div>
+            )}
           </div>
         );
-      })}
+        })}
       {busy || planningStream ? (
         <div
           data-testid="invoker-terminal-planner-stream"
@@ -710,10 +793,23 @@ export function InvokerTerminal({
         </div>
       ) : null}
     </>
-  ), [busy, lines, planningStream]);
+    );
+  }, [activity, busy, lines, planningStream, verboseActivityVisible]);
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex items-center justify-end gap-2 border-b border-border bg-background px-4 py-2.5">
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-background px-4 py-2.5">
+        <button
+          type="button"
+          aria-pressed={verboseActivityVisible}
+          onClick={() => setVerboseActivityVisible((visible) => !visible)}
+          className={`rounded-sm border px-2.5 py-1 text-xs ${
+            verboseActivityVisible
+              ? 'border-border-strong bg-secondary text-foreground'
+              : 'border-border text-muted-foreground hover:border-border-strong hover:text-foreground'
+          }`}
+        >
+          Verbose
+        </button>
         <div className="flex shrink-0 items-center gap-2">
           {onModeChange && (
             <div
@@ -813,7 +909,14 @@ export function InvokerTerminal({
                 </div>
               </div>
             ) : (
-              transcriptContent
+              <>
+                {verboseActivityVisible && activity.length > 0 && (
+                  <div data-testid="planning-activity-warning" className="rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                    Raw local output may contain secrets.
+                  </div>
+                )}
+                {transcriptContent}
+              </>
             )}
           </div>
 

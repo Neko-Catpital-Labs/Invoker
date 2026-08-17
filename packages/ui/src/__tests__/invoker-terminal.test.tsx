@@ -659,7 +659,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith(expect.objectContaining({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' }));
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
@@ -676,10 +676,12 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('draft a streamed plan');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    const turnId = mock.api.planningChatSend.mock.calls[0]?.[0]?.turnId;
+    expect(typeof turnId).toBe('string');
 
     await act(async () => {
-      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'raw planner ' });
-      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'text' });
+      mock.firePlanningChatStream({ sessionId: 'session-1', turnId, chunk: 'raw planner ' });
+      mock.firePlanningChatStream({ sessionId: 'session-1', turnId, chunk: 'text' });
     });
 
     const panel = await screen.findByTestId('invoker-terminal-planner-stream');
@@ -720,8 +722,10 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('draft a failing streamed plan');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    const firstTurnId = mock.api.planningChatSend.mock.calls[0]?.[0]?.turnId;
+    expect(typeof firstTurnId).toBe('string');
     await act(async () => {
-      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'partial raw output' });
+      mock.firePlanningChatStream({ sessionId: 'session-1', turnId: firstTurnId, chunk: 'partial raw output' });
     });
     expect(await screen.findByTestId('invoker-terminal-planner-stream')).toHaveTextContent('Drafting your plan…');
 
@@ -739,12 +743,12 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
-      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith(expect.objectContaining({
         sessionId: 'session-1',
         message: 'try again',
         presetKey: 'codex',
         confirmationMode: 'require',
-      });
+      }));
       const panel = screen.getByTestId('invoker-terminal-planner-stream');
       expect(panel).toHaveAttribute('data-state', 'working');
       expect(panel).toHaveTextContent('Working…');
@@ -769,8 +773,10 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('first session request');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    const firstTurnId = mock.api.planningChatSend.mock.calls[0]?.[0]?.turnId;
+    expect(typeof firstTurnId).toBe('string');
     await act(async () => {
-      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'first raw stream' });
+      mock.firePlanningChatStream({ sessionId: 'session-1', turnId: firstTurnId, chunk: 'first raw stream' });
     });
     expect(await screen.findByTestId('invoker-terminal-planner-stream')).toHaveTextContent('Drafting your plan…');
 
@@ -779,8 +785,10 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('second session request');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2));
+    const secondTurnId = mock.api.planningChatSend.mock.calls[1]?.[0]?.turnId;
+    expect(typeof secondTurnId).toBe('string');
     await act(async () => {
-      mock.firePlanningChatStream({ sessionId: 'session-2', chunk: 'second raw stream' });
+      mock.firePlanningChatStream({ sessionId: 'session-2', turnId: secondTurnId, chunk: 'second raw stream' });
     });
 
     const secondPanel = await screen.findByTestId('invoker-terminal-planner-stream');
@@ -950,7 +958,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith(expect.objectContaining({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' }));
     });
   });
 
@@ -1218,12 +1226,12 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('continue the restored session');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'saved-pressure-chat',
         message: 'continue the restored session',
         presetKey: 'codex',
         confirmationMode: 'require',
-      });
+      }));
     });
   });
 
@@ -1433,12 +1441,12 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('make the plan more detailed');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith(expect.objectContaining({
         sessionId: 'session-1',
         message: 'make the plan more detailed',
         presetKey: 'codex',
         confirmationMode: 'require',
-      });
+      }));
     });
   });
 
@@ -1483,7 +1491,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft a plan');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' });
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith(expect.objectContaining({ message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' }));
     });
   });
 

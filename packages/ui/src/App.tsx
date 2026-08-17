@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnActivity, InAppPlanningTurnActivitySource, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -379,6 +379,51 @@ type PlanningStreamState = {
   status: 'streaming' | 'failed';
 };
 
+type PlanningTurnRoute = {
+  localSessionId: string;
+  sessionId?: string;
+};
+
+function planningActivityByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+function appendPlanningActivityEvent(
+  activity: InAppPlanningTurnActivity,
+  event: {
+    source?: InAppPlanningTurnActivitySource;
+    sequence?: number;
+    chunk: string;
+    createdAt?: string;
+  },
+): InAppPlanningTurnActivity {
+  const byteCount = planningActivityByteLength(event.chunk);
+  const sequence = event.sequence ?? ((activity.events.at(-1)?.sequence ?? 0) + 1);
+  const createdAt = event.createdAt ?? new Date().toISOString();
+  return {
+    ...activity,
+    updatedAt: createdAt,
+    retainedBytes: activity.retainedBytes + byteCount,
+    events: [
+      ...activity.events,
+      {
+        sequence,
+        source: event.source ?? 'stdout',
+        text: event.chunk,
+        byteCount,
+        createdAt,
+      },
+    ].sort((a, b) => a.sequence - b.sequence),
+  };
+}
+
+function withPlanningActivitySessionId(
+  activity: InAppPlanningTurnActivity[],
+  sessionId: string,
+): InAppPlanningTurnActivity[] {
+  return activity.map((item) => ({ ...item, sessionId }));
+}
+
 function makeInitialPlanningSession(
   now: string = new Date().toISOString(),
   confirmationMode: PlanningConfirmationMode = 'require',
@@ -400,6 +445,7 @@ function makeInitialPlanningSession(
     terminalSession: null,
     terminalBusy: false,
     terminalError: null,
+    activity: [],
   };
 }
 
@@ -1099,7 +1145,7 @@ export function App() {
   const planningSessionsRef = useRef<PlanningSessionView[]>(planningSessions);
   const activePlanningSessionIdRef = useRef('local-planning-session-1');
   const pendingPlanningStreamSessionIdsRef = useRef<Set<string>>(new Set());
-  const planningStreamSessionAliasesRef = useRef<Map<string, string>>(new Map());
+  const planningTurnRoutesRef = useRef<Map<string, PlanningTurnRoute>>(new Map());
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(1);
@@ -1457,32 +1503,20 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onPlanningChatStream?.((event) => {
       const sessionId = typeof event.sessionId === 'string' ? event.sessionId.trim() : '';
-      if (!sessionId || typeof event.chunk !== 'string' || !event.chunk) return;
+      const turnId = typeof event.turnId === 'string' ? event.turnId.trim() : '';
+      if (!sessionId || !turnId || typeof event.chunk !== 'string' || !event.chunk) return;
 
       const sessions = planningSessionsRef.current;
-      const isStreamingTarget = (session: PlanningSessionView): boolean => (
-        session.busy || pendingPlanningStreamSessionIdsRef.current.has(session.id)
-      );
-      const matchingSession = sessions.find((session) => session.id === sessionId);
-      const aliasedSessionId = planningStreamSessionAliasesRef.current.get(sessionId);
-      const aliasedSession = aliasedSessionId
-        ? sessions.find((session) => session.id === aliasedSessionId)
-        : undefined;
-      const activeLocalSession = sessions.find((session) => (
-        session.id === activePlanningSessionIdRef.current
-        && session.id.startsWith('local-')
-        && isStreamingTarget(session)
+      const route = planningTurnRoutesRef.current.get(turnId);
+      const matchingSession = sessions.find((session) => (
+        session.id === sessionId
+        && (session.activity ?? []).some((activity) => activity.turnId === turnId)
       ));
-      const localBusySession = sessions.find((session) => session.id.startsWith('local-') && isStreamingTarget(session));
-      const targetSessionId = matchingSession && isStreamingTarget(matchingSession)
-        ? matchingSession.id
-        : aliasedSession && isStreamingTarget(aliasedSession)
-          ? aliasedSession.id
-          : activeLocalSession?.id ?? localBusySession?.id;
+      const routedSession = route
+        ? sessions.find((session) => session.id === route.sessionId || session.id === route.localSessionId)
+        : undefined;
+      const targetSessionId = routedSession?.id ?? matchingSession?.id;
       if (!targetSessionId) return;
-      if (!matchingSession) {
-        planningStreamSessionAliasesRef.current.set(sessionId, targetSessionId);
-      }
 
       setPlanningStreamBySessionId((prev) => {
         const current = prev[targetSessionId];
@@ -1494,6 +1528,20 @@ export function App() {
           },
         };
       });
+      setPlanningSessions((prev) => prev.map((session) => {
+        const ownsTurn = (session.activity ?? []).some((activity) => activity.turnId === turnId);
+        if (session.id !== targetSessionId && session.id !== sessionId && !ownsTurn) return session;
+        const activity = session.activity ?? [];
+        let changed = false;
+        const nextActivity = activity.map((item) => {
+          if (item.turnId !== turnId) return item;
+          changed = true;
+          return appendPlanningActivityEvent(item, event);
+        });
+        return changed
+          ? { ...session, activity: nextActivity, updatedAt: event.createdAt ?? new Date().toISOString() }
+          : session;
+      }));
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -2746,12 +2794,12 @@ export function App() {
     });
   }, []);
 
-  const forgetPlanningStreamAliasesForSessionIds = useCallback((sessionIds: Array<string | null | undefined>) => {
+  const forgetPlanningTurnRoutesForSessionIds = useCallback((sessionIds: Array<string | null | undefined>) => {
     const ids = new Set(sessionIds.filter((sessionId): sessionId is string => Boolean(sessionId)));
     if (ids.size === 0) return;
-    for (const [streamSessionId, targetSessionId] of planningStreamSessionAliasesRef.current) {
-      if (ids.has(streamSessionId) || ids.has(targetSessionId)) {
-        planningStreamSessionAliasesRef.current.delete(streamSessionId);
+    for (const [turnId, route] of planningTurnRoutesRef.current) {
+      if (ids.has(route.localSessionId) || (route.sessionId && ids.has(route.sessionId))) {
+        planningTurnRoutesRef.current.delete(turnId);
       }
     }
   }, []);
@@ -2781,7 +2829,7 @@ export function App() {
     text: string,
     role: InvokerTerminalLine['role'] = 'system',
     tone?: InvokerTerminalLine['tone'],
-  ) => {
+  ): number => {
     const id = nextTerminalLineIdRef.current;
     nextTerminalLineIdRef.current += 1;
     const updatedAt = new Date().toISOString();
@@ -2790,6 +2838,7 @@ export function App() {
       messages: [...session.messages, { id, text, role, tone }],
       updatedAt,
     }));
+    return id;
   }, [updateActivePlanningSession]);
 
   const handleStartReadyAction = useCallback(async (
@@ -2985,7 +3034,7 @@ export function App() {
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
     if (!input || activePlanningSessionBusy || activePlanningReadOnly) return;
-    appendTerminalLine(input, 'user');
+    const userLineId = appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
 
@@ -3043,18 +3092,51 @@ export function App() {
       ...(planningSessionId ? { sessionId: planningSessionId } : {}),
     };
     const previousSessionId = activePlanningSessionId;
+    const startedAt = new Date().toISOString();
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
     clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
-    forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
-    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
+    forgetPlanningTurnRoutesForSessionIds([previousSessionId, planningSessionId]);
+    planningTurnRoutesRef.current.set(request.turnId, { localSessionId: previousSessionId, sessionId: planningSessionId ?? previousSessionId });
+    updatePlanningSessionById(previousSessionId, (session) => ({
+      ...session,
+      busy: true,
+      activity: [
+        ...(session.activity ?? []),
+        {
+          sessionId: session.id,
+          turnId: request.turnId,
+          userMessageId: userLineId,
+          status: 'running',
+          startedAt,
+          updatedAt: startedAt,
+          retainedBytes: 0,
+          droppedBytes: 0,
+          truncated: false,
+          events: [],
+        },
+      ],
+    }));
     try {
       const result = await invoker.planningChatSend(request);
       if (result.ok) {
         const updatedAt = new Date().toISOString();
         const replyLineId = nextTerminalLineIdRef.current;
         nextTerminalLineIdRef.current += 1;
+        planningTurnRoutesRef.current.set(request.turnId, { localSessionId: previousSessionId, sessionId: result.sessionId });
         setPlanningSessions((prev) => prev.map((session) => {
           if (session.id !== previousSessionId) return session;
+          const finalizedActivity = (session.activity ?? []).map((activity) => (
+            activity.turnId === request.turnId
+              ? {
+                  ...activity,
+                  sessionId: result.sessionId,
+                  assistantMessageId: replyLineId,
+                  status: 'completed' as const,
+                  completedAt: updatedAt,
+                  updatedAt,
+                }
+              : { ...activity, sessionId: result.sessionId }
+          ));
           return {
             ...session,
             busy: false,
@@ -3066,6 +3148,7 @@ export function App() {
             confirmationMode: result.confirmationMode ?? session.confirmationMode ?? 'require',
             status: result.draftPlanAvailable ? 'draft_ready' : result.reply.includes('?') ? 'waiting_for_answer' : 'still_discussing',
             messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant', ...((result as { reasoning?: string }).reasoning ? { reasoning: (result as { reasoning?: string }).reasoning } : {}) }],
+            activity: finalizedActivity,
             draftPlanAvailable: result.draftPlanAvailable,
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
             draftPlanText: result.draftPlanAvailable ? result.draftPlanText : undefined,
@@ -3076,7 +3159,6 @@ export function App() {
           currentSessionId === previousSessionId ? result.sessionId : currentSessionId
         ));
         clearPlanningStreamForSessionIds([previousSessionId, result.sessionId]);
-        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
         setHasLoadedPlan(false);
@@ -3094,19 +3176,36 @@ export function App() {
           }
         }
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        const failedAt = new Date().toISOString();
+        const failedSessionId = result.sessionId ?? previousSessionId;
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        planningTurnRoutesRef.current.set(request.turnId, { localSessionId: previousSessionId, sessionId: failedSessionId });
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== previousSessionId) return session;
+          return {
+            ...session,
+            busy: false,
+            id: failedSessionId,
+            messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system' as const, tone: 'error' as const }],
+            activity: withPlanningActivitySessionId(session.activity ?? [], failedSessionId).map((activity) => (
+              activity.turnId === request.turnId
+                ? {
+                    ...activity,
+                    status: 'failed' as const,
+                    completedAt: failedAt,
+                    updatedAt: failedAt,
+                  }
+                : activity
+            )),
+            updatedAt: failedAt,
+          };
+        }));
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
-        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
         if (result.sessionId) {
           const failedSessionId = result.sessionId;
-          setPlanningSessions((prev) => prev.map((session) => (
-            session.id === previousSessionId
-              ? { ...session, id: failedSessionId }
-              : session
-          )));
           setActivePlanningSessionId((currentSessionId) => (
             currentSessionId === previousSessionId ? failedSessionId : currentSessionId
           ));
@@ -3114,10 +3213,24 @@ export function App() {
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
-      updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+      const failedAt = new Date().toISOString();
+      updatePlanningSessionById(previousSessionId, (session) => ({
+        ...session,
+        busy: false,
+        activity: (session.activity ?? []).map((activity) => (
+          activity.turnId === request.turnId
+            ? {
+                ...activity,
+                status: 'failed' as const,
+                completedAt: failedAt,
+                updatedAt: failedAt,
+              }
+            : activity
+        )),
+        updatedAt: failedAt,
+      }));
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
       keepPlanningStreamFailureForSessionIds([previousSessionId, planningSessionId], message);
-      forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
       pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
       if (planningSessionId) pendingPlanningStreamSessionIdsRef.current.delete(planningSessionId);
       setPlanningSubmitError({ title: 'Planner could not respond', message });
@@ -3129,7 +3242,7 @@ export function App() {
     activePlanningReadOnly,
     appendTerminalLine,
     clearPlanningStreamForSessionIds,
-    forgetPlanningStreamAliasesForSessionIds,
+    forgetPlanningTurnRoutesForSessionIds,
     handlePlanningSubmitDraft,
     handleStartReadyAction,
     hasLoadedPlan,
@@ -3175,7 +3288,7 @@ export function App() {
     if (ids.size === 0) return;
 
     clearPlanningStreamForSessionIds(sessionIds);
-    forgetPlanningStreamAliasesForSessionIds(sessionIds);
+    forgetPlanningTurnRoutesForSessionIds(sessionIds);
     for (const id of ids) {
       pendingPlanningStreamSessionIdsRef.current.delete(id);
     }
@@ -3212,7 +3325,7 @@ export function App() {
     activePlanningSessionIdRef.current = nextActiveSessionId;
     setPlanningSessions(nextSessions);
     setActivePlanningSessionId(nextActiveSessionId);
-  }, [clearPlanningStreamForSessionIds, forgetPlanningStreamAliasesForSessionIds, makeFreshLocalPlanningSession]);
+  }, [clearPlanningStreamForSessionIds, forgetPlanningTurnRoutesForSessionIds, makeFreshLocalPlanningSession]);
 
   const handleDeletePlanningSession = useCallback((sessionId: string) => {
     if (activePlanningReadOnly) {
@@ -4791,6 +4904,7 @@ export function App() {
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
+            activity={activePlanningSession.activity ?? []}
             readOnly={activePlanningReadOnly}
             expanded={planningTerminalExpanded}
             mode={activePlanningMode}
