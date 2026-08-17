@@ -68,6 +68,22 @@ function getElectronPlatformPath() {
   }
 }
 
+// yauzl-based extraction (used by extract-zip below) can silently stop after the first
+// zip entry on some Node builds: the process exits 0 with a half-written dist/ and no
+// thrown error, instead of hanging or failing. System `unzip` extracts the same archives
+// correctly, so prefer it when available and only fall back to extract-zip on hosts that
+// lack the binary.
+function extractWithSystemUnzip(zipPath, destDir) {
+  const result = spawnSync('unzip', ['-q', '-o', zipPath, '-d', destDir], { stdio: 'inherit' });
+  if (result.error && result.error.code === 'ENOENT') {
+    return false;
+  }
+  if (result.status !== 0) {
+    throw new Error(`unzip exited with code ${result.status ?? 1} extracting ${zipPath}`);
+  }
+  return true;
+}
+
 async function repairElectronWithPackageExtractor(electronPackageDir) {
   if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
     return null;
@@ -102,11 +118,13 @@ async function repairElectronWithPackageExtractor(electronPackageDir) {
   fs.rmSync(stagingPath, { recursive: true, force: true });
   fs.mkdirSync(stagingPath, { recursive: true });
   try {
-    await extractZip(zipPath, { dir: stagingPath });
+    if (!extractWithSystemUnzip(zipPath, stagingPath)) {
+      await extractZip(zipPath, { dir: stagingPath });
+    }
 
     const stagedBinary = path.join(stagingPath, platformPath);
     if (!fs.existsSync(stagedBinary)) {
-      throw new Error(`extract-zip did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
+      throw new Error(`extraction did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
     }
 
     fs.rmSync(distPath, { recursive: true, force: true });
