@@ -107,7 +107,13 @@ echo "ok npm install yields working invoker-cli $VERSION (direct bin + ui wrappe
 CLI_INSTALL_ROOT="$PROJECT_DIR/node_modules/@neko-catpital-labs/invoker-cli"
 CLI_DOCTOR="$CLI_INSTALL_ROOT/vendor/skills/plan-to-invoker/scripts/skill-doctor.sh"
 [ -f "$CLI_DOCTOR" ] || fail "npm install did not lay down $CLI_DOCTOR"
-DOCTOR_OUTPUT="$(cd "$SCRATCH" && env -u INVOKER_REPO_ROOT -u INVOKER_DB_DIR bash "$CLI_DOCTOR" --skip-assumptions "$ROOT/skills/plan-to-invoker/fixtures/positive/02-feature-implementation.yaml" 2>/dev/null || true)"
+# Isolate HOME and INVOKER_DB_DIR under $SCRATCH: an inherited real
+# ~/.invoker/bundled-skills.json would let the doctor's manifest fallback
+# resolve yaml/scripts via the tester's own monorepo checkout, masking a
+# missing packaged dependency instead of proving the npm install stands alone.
+DOCTOR_HOME="$SCRATCH/doctor-home"
+mkdir -p "$DOCTOR_HOME"
+DOCTOR_OUTPUT="$(cd "$SCRATCH" && env -u INVOKER_REPO_ROOT HOME="$DOCTOR_HOME" INVOKER_DB_DIR="$DOCTOR_HOME/.invoker" bash "$CLI_DOCTOR" --skip-assumptions "$ROOT/skills/plan-to-invoker/fixtures/positive/02-feature-implementation.yaml" 2>/dev/null || true)"
 for step in validate-plan lint-review-units; do
   STATUS="$(printf '%s' "$DOCTOR_OUTPUT" | node -e '
     const raw = require("node:fs").readFileSync(0, "utf8");
