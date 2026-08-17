@@ -19,6 +19,7 @@ mkdir -p "$STAGE/$NAME"
 cp "$BINARY" "$STAGE/$NAME/invoker-slack"
 chmod +x "$STAGE/$NAME/invoker-slack"
 cp "$ROOT/packages/npm-slack/README.md" "$STAGE/$NAME/README.md"
+cp -r "$ROOT/skills" "$STAGE/$NAME/skills"
 
 (cd "$STAGE" && tar -czf "$RELEASE_DIR/$NAME.tar.gz" "$NAME")
 rm -rf "$STAGE"
