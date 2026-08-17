@@ -489,6 +489,9 @@ jobs:
       - name: Reclaim workspace
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
         shell: bash
+      - name: Reclaim disk space
+        run: find /tmp -maxdepth 1 -name 'invoker-*' -mmin +360 -exec rm -rf {} + 2>/dev/null || true
+        shell: bash
       - name: Checkout
         uses: actions/checkout@v4
         with:
