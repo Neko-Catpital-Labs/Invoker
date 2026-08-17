@@ -1,6 +1,6 @@
 # Getting started
 
-Install, configure, and run Invoker. For the product overview, see the [README](../README.md). Version history lives in [CHANGELOG.md](../CHANGELOG.md).
+Install, configure, and run Invoker. For the product overview, see the [README](../README.md). Version history lives in [CHANGELOG.md](../CHANGELOG.md). Join the community on [Invoker Slack](https://join.slack.com/t/invoker-ai/shared_invite/zt-476imo738-VqNp_SDfI6DFZp80EGgscQ).
 
 ## Prerequisites
 

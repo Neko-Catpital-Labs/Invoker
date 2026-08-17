@@ -10,10 +10,11 @@
 [![npm invoker-cli](https://img.shields.io/npm/v/@neko-catpital-labs/invoker-cli?label=invoker-cli&style=flat-square)](https://www.npmjs.com/package/@neko-catpital-labs/invoker-cli)
 [![npm invoker-ui](https://img.shields.io/npm/v/@neko-catpital-labs/invoker-ui?label=invoker-ui&style=flat-square)](https://www.npmjs.com/package/@neko-catpital-labs/invoker-ui)
 [![npm invoker-slack](https://img.shields.io/npm/v/@neko-catpital-labs/invoker-slack?label=invoker-slack&style=flat-square)](https://www.npmjs.com/package/@neko-catpital-labs/invoker-slack)
+[![Slack](https://img.shields.io/badge/slack-join-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/invoker-ai/shared_invite/zt-476imo738-VqNp_SDfI6DFZp80EGgscQ)
 
 A DAG of tasks in isolated git worktrees, composed through merge gates and review — desktop, CLI, and Slack on one control plane.
 
-**[Download](https://github.com/Neko-Catpital-Labs/Invoker/releases/latest)** · **[Website](https://invoker-control.dev)**
+**[Download](https://github.com/Neko-Catpital-Labs/Invoker/releases/latest)** · **[Website](https://invoker-control.dev)** · **[Join Slack](https://join.slack.com/t/invoker-ai/shared_invite/zt-476imo738-VqNp_SDfI6DFZp80EGgscQ)**
 
 <video src="docs/assets/invoker-preview.mp4" controls muted playsinline width="100%"></video>
 
