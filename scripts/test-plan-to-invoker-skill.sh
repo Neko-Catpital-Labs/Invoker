@@ -307,6 +307,59 @@ trap - EXIT
 
 echo "OK: skill-doctor works from a machine-level standalone install (outside any git checkout)"
 
+# Regression: the vendored copies under skills/plan-to-invoker/scripts/vendor/
+# must stay byte-identical to their sources, so `resolveYamlModulePath` /
+# `resolveReviewUnitRulesModulePath` never silently serve stale logic.
+VENDOR_DIR="$SKILL_DIR/scripts/vendor"
+[[ -f "$VENDOR_DIR/review-unit-rules.mjs" ]] || fail "Missing vendored copy: $VENDOR_DIR/review-unit-rules.mjs (run bash scripts/vendor-plan-doctor-deps.sh)"
+diff -q "$REPO_ROOT/scripts/review-unit-rules.mjs" "$VENDOR_DIR/review-unit-rules.mjs" >/dev/null 2>&1 \
+  || fail "$VENDOR_DIR/review-unit-rules.mjs has drifted from scripts/review-unit-rules.mjs — re-run bash scripts/vendor-plan-doctor-deps.sh"
+[[ -f "$VENDOR_DIR/yaml/index.js" ]] || fail "Missing vendored copy: $VENDOR_DIR/yaml/index.js (run bash scripts/vendor-plan-doctor-deps.sh)"
+[[ -d "$VENDOR_DIR/yaml/lib" ]] || fail "Missing vendored copy: $VENDOR_DIR/yaml/lib (run bash scripts/vendor-plan-doctor-deps.sh)"
+# .gitignore excludes any directory named `dist/`, so vendor-plan-doctor-deps.sh
+# renames yaml's `dist/` to `lib/` and rewrites the one file that references it
+# by name; everything under it is an untouched byte-for-byte copy.
+diff -rq "$REPO_ROOT/packages/app/node_modules/yaml/browser/dist" "$VENDOR_DIR/yaml/lib" >/dev/null 2>&1 \
+  || fail "$VENDOR_DIR/yaml/lib has drifted from packages/app/node_modules/yaml/browser/dist — re-run bash scripts/vendor-plan-doctor-deps.sh"
+diff -q <(sed "s#\./dist/index\.js#./lib/index.js#g" "$REPO_ROOT/packages/app/node_modules/yaml/browser/index.js") "$VENDOR_DIR/yaml/index.js" >/dev/null 2>&1 \
+  || fail "$VENDOR_DIR/yaml/index.js has drifted from packages/app/node_modules/yaml/browser/index.js (beyond the expected dist->lib rename) — re-run bash scripts/vendor-plan-doctor-deps.sh"
+echo "OK: vendored plan-doctor dependencies match their sources"
+
+# Regression: the plan-doctor must work from NOTHING but a copy of
+# skills/plan-to-invoker/ — no git repo, no INVOKER_REPO_ROOT, no
+# ~/.invoker/bundled-skills.json, no packages/, no repo-root scripts/
+# directory. This is exactly the payload scripts/archive-cli-binary.sh and
+# scripts/archive-slack-binary.sh ship next to the compiled invoker-cli /
+# invoker-slack release binaries — an installed binary with no backing
+# Invoker monorepo checkout anywhere on the machine. Before vendoring,
+# validate-plan failed with "could not determine repository root" and
+# lint-review-units failed with ERR_MODULE_NOT_FOUND in this exact layout.
+BARE_INSTALL_DIR="$(mktemp -d)"
+trap 'rm -rf "$BARE_INSTALL_DIR"' EXIT
+cp -R "$SKILL_DIR" "$BARE_INSTALL_DIR/plan-to-invoker"
+BARE_DOCTOR="$BARE_INSTALL_DIR/plan-to-invoker/scripts/skill-doctor.sh"
+BARE_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
+BARE_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT -u INVOKER_DB_DIR bash "$BARE_DOCTOR" --skip-assumptions "$BARE_FIXTURE" 2>/dev/null || true)"
+BARE_VALIDATE_STATUS="$(printf '%s' "$BARE_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$BARE_VALIDATE_STATUS" == "passed" ]] || fail "A bare skills/plan-to-invoker/ copy (no repo, no env var, no manifest) must pass validate-plan; got status=$BARE_VALIDATE_STATUS. Full output: $BARE_OUTPUT"
+BARE_REVIEW_UNITS_STATUS="$(printf '%s' "$BARE_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$BARE_REVIEW_UNITS_STATUS" == "passed" ]] || fail "A bare skills/plan-to-invoker/ copy (no repo, no env var, no manifest) must pass lint-review-units; got status=$BARE_REVIEW_UNITS_STATUS. Full output: $BARE_OUTPUT"
+
+rm -rf "$BARE_INSTALL_DIR"
+trap - EXIT
+
+echo "OK: skill-doctor works from a bare skills/plan-to-invoker/ copy alone (the invoker-cli/invoker-slack release tarball shape)"
+
 # Playbook — Phase 1a / 1b focused lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
 must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification" "Playbook must define runtime behavioral verification"
