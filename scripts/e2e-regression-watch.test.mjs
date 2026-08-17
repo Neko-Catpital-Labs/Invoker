@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,7 +8,9 @@ import {
   buildMarker,
   buildRepairFilingMetadata,
   claimRepairFiling,
+  CATSTACK_REPO_URL,
   fileBugfixPlan,
+  isCiRegressionReflectEnabled,
   getActionableFailures,
   groupFailuresBySha,
   isAutoFixCircuitBreakerPaused,
@@ -755,6 +757,60 @@ describe('retired CI job filing gate', () => {
       /unmapped CI job/,
     );
     assert.deepEqual(calls, []);
+  });
+
+  it('isCiRegressionReflectEnabled is off unless INVOKER_CI_REGRESSION_REFLECT=1', () => {
+    assert.equal(isCiRegressionReflectEnabled({}), false);
+    assert.equal(isCiRegressionReflectEnabled({ INVOKER_CI_REGRESSION_REFLECT: '0' }), false);
+    assert.equal(isCiRegressionReflectEnabled({ INVOKER_CI_REGRESSION_REFLECT: '1' }), true);
+  });
+
+  it('fileBugfixPlan default render has no reflect task', () => {
+    const failure = makeFailure({ jobName: 'required-fast / Vitest Workspace' });
+    const jobDefinitions = new Map([
+      [failure.jobName, { verifyCommand: 'bash scripts/test-suites/required/10-vitest-workspace.sh' }],
+    ]);
+    const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-no-reflect-'));
+    try {
+      const rendered = fileBugfixPlan(failure, {
+        repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+        jobDefinitions,
+        outRoot,
+        dryRun: true,
+        enableReflect: false,
+      });
+      const planText = readFileSync(rendered.planPath, 'utf8');
+      assert.equal(rendered.reflectEnabled, false);
+      assert.equal(planText.includes('reflect-ci-'), false);
+      assert.equal(planText.includes('skills/reflect'), false);
+    } finally {
+      rmSync(outRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fileBugfixPlan opt-in reflect writes only to catstack', () => {
+    const failure = makeFailure({ jobName: 'required-fast / Vitest Workspace' });
+    const jobDefinitions = new Map([
+      [failure.jobName, { verifyCommand: 'bash scripts/test-suites/required/10-vitest-workspace.sh' }],
+    ]);
+    const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-reflect-'));
+    try {
+      const rendered = fileBugfixPlan(failure, {
+        repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+        jobDefinitions,
+        outRoot,
+        dryRun: true,
+        enableReflect: true,
+      });
+      const planText = readFileSync(rendered.planPath, 'utf8');
+      assert.equal(rendered.reflectEnabled, true);
+      assert.equal(planText.includes('id: reflect-ci-'), true);
+      assert.equal(planText.includes(CATSTACK_REPO_URL), true);
+      assert.equal(planText.includes('Never edit Invoker files'), true);
+      assert.equal(planText.includes("this repo's `skills/reflect/SKILL.md`"), false);
+    } finally {
+      rmSync(outRoot, { recursive: true, force: true });
+    }
   });
 
   it('mapped live job files exactly as before', () => {
