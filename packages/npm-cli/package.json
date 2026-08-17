@@ -22,6 +22,9 @@
     "postinstall": "node scripts/install.js",
     "test": "node bin/invoker-cli.js --version || true"
   },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
   "publishConfig": {
     "access": "public"
   }
