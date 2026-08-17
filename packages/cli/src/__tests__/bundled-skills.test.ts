@@ -580,4 +580,64 @@ describe('bundled-skills', () => {
       }
     }
   });
+
+  it('records the source checkout in the manifest for the unpackaged CLI install, so installed doctor scripts outside any git repo (e.g. ~/.claude/skills/invoker-plan-to-invoker/scripts) can still resolve their Invoker checkout', () => {
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const cliHome = makeTempRoot('invoker-cli-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = cliHome;
+
+    try {
+      writeSkill(repoRoot, 'plan-to-invoker');
+      writePlanToInvokerCommands(repoRoot);
+
+      installBundledSkills({
+        isPackaged: false,
+        repoRoot,
+        invokerHomeRoot,
+        isInstalled: allHarnessesInstalled,
+      });
+
+      const manifest = JSON.parse(readFileSync(join(invokerHomeRoot, 'bundled-skills.json'), 'utf-8'));
+      expect(manifest.sourceRepoRoot).toBe(repoRoot);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('omits sourceRepoRoot for packaged Electron installs, whose resources dir is not a real Invoker checkout', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const codexHome = makeTempRoot('invoker-codex-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = codexHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      writePlanToInvokerCommands(resourcesRoot);
+
+      installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+        isInstalled: allHarnessesInstalled,
+      });
+
+      const manifest = JSON.parse(readFileSync(join(invokerHomeRoot, 'bundled-skills.json'), 'utf-8'));
+      expect(manifest.sourceRepoRoot).toBeUndefined();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
 });

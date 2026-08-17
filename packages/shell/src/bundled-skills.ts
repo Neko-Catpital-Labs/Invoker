@@ -28,6 +28,15 @@ interface BundledSkillsManifest {
   targets: Record<string, { path: string; installedSkillNames: string[] }>;
   commandTargets?: Record<string, { path: string; installedCommandNames: string[] }>;
   mcpTargets?: Record<string, { path: string; serverName: string }>;
+  /**
+   * The Invoker source checkout these skills were bundled from (unset for
+   * packaged Electron builds, whose resources dir isn't a real checkout).
+   * Read by installed doctor scripts (e.g. skills/plan-to-invoker/scripts/
+   * validate-plan.sh, lint-review-units.mjs) as a last-resort fallback when
+   * they're running from a machine-level skill install outside any git repo
+   * and can't resolve their own Invoker checkout via git.
+   */
+  sourceRepoRoot?: string;
 }
 
 interface BundledSkillsContext {
@@ -713,6 +722,7 @@ export function installBundledSkills(
     targets: manifestTargets,
     commandTargets: manifestCommandTargets,
     mcpTargets: manifestMcpTargets,
+    sourceRepoRoot: context.isPackaged ? undefined : context.repoRoot,
   };
 
   writeManifest(invokerHomeRoot, manifest);

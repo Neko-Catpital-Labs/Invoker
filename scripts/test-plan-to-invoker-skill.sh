@@ -278,10 +278,34 @@ STANDALONE_ENV_REVIEW_UNITS_STATUS="$(printf '%s' "$STANDALONE_ENV_OUTPUT" | nod
 ' "lint-review-units")"
 [[ "$STANDALONE_ENV_REVIEW_UNITS_STATUS" == "passed" ]] || fail "Standalone install with INVOKER_REPO_ROOT override must pass lint-review-units; got status=$STANDALONE_ENV_REVIEW_UNITS_STATUS. Full output: $STANDALONE_ENV_OUTPUT"
 
+# With the bundled-skills manifest recording the source checkout (what
+# `installBundledSkills()` now writes on every install/reinstall), both
+# validate-plan and lint-review-units must pass standalone with no env var set —
+# the ordinary case for an agent working in a non-Invoker repo after running
+# `scripts/setup-agent-skills.sh` once.
+cat > "$STANDALONE_INVOKER_HOME/bundled-skills.json" <<EOF
+{"sourceRepoRoot": "$REPO_ROOT"}
+EOF
+STANDALONE_MANIFEST_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT INVOKER_DB_DIR="$STANDALONE_INVOKER_HOME" bash "$STANDALONE_DOCTOR" --skip-assumptions "$STANDALONE_FIXTURE" 2>/dev/null || true)"
+STANDALONE_MANIFEST_VALIDATE_STATUS="$(printf '%s' "$STANDALONE_MANIFEST_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$STANDALONE_MANIFEST_VALIDATE_STATUS" == "passed" ]] || fail "Standalone install (via bundled-skills.json sourceRepoRoot) must pass validate-plan; got status=$STANDALONE_MANIFEST_VALIDATE_STATUS. Full output: $STANDALONE_MANIFEST_OUTPUT"
+STANDALONE_MANIFEST_REVIEW_UNITS_STATUS="$(printf '%s' "$STANDALONE_MANIFEST_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$STANDALONE_MANIFEST_REVIEW_UNITS_STATUS" == "passed" ]] || fail "Standalone install (via bundled-skills.json sourceRepoRoot) must pass lint-review-units; got status=$STANDALONE_MANIFEST_REVIEW_UNITS_STATUS. Full output: $STANDALONE_MANIFEST_OUTPUT"
+
 rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"
 trap - EXIT
 
-echo "OK: skill-doctor works from a machine-level standalone install via INVOKER_REPO_ROOT (outside any git checkout)"
+echo "OK: skill-doctor works from a machine-level standalone install (outside any git checkout)"
 
 # Playbook — Phase 1a / 1b focused lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
