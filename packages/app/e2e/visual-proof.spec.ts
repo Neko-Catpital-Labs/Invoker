@@ -258,6 +258,12 @@ const MENU_PROOF_PLAN = {
 const TERMINAL_PLANNED_PLAN = {
   ...TEST_PLAN,
   name: 'Terminal Planned Flow',
+  tasks: TEST_PLAN.tasks.map((task, index) => index === 0
+    ? {
+        ...task,
+        description: 'Review claim: Preserve multiline task descriptions.\nReview lane: behavior\nSafety invariant: Submission content remains unchanged.',
+      }
+    : task),
 };
 
 
@@ -838,6 +844,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Terminal Planned Flow');
+    await expect(page.getByTestId('draft-step-summary').first()).toHaveText(
+      'Review claim: Preserve multiline task descriptions.\nReview lane: behavior\nSafety invariant: Submission content remains unchanged.',
+    );
     // planning-draft-locked-note is a net-new element; this spec also runs
     // against the pre-change base branch for before/after visual proof, where
     // the testid does not exist yet.

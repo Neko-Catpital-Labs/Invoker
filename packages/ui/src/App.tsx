@@ -4675,7 +4675,7 @@ export function App() {
                   {group.workflow && <h3 className="text-xs font-medium text-foreground">{group.workflow}</h3>}
                   <ul className={group.workflow ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
                     {group.tasks.map((task, taskIndex) => (
-                      <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="text-xs leading-5 text-muted-foreground">
+                      <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
                         {task}
                       </li>
                     ))}

@@ -1487,6 +1487,54 @@ tasks:
     }
   });
 
+  it('rebuilds stale compacted draft summaries from the canonical draft text on restore', async () => {
+    const multilinePlan = `name: Greeting fix
+onFinish: none
+mergeMode: manual
+repoUrl: /tmp/greeting
+tasks:
+  - id: fix-greeting
+    description: |
+      Review claim: Fix greeting punctuation.
+      Review lane: behavior
+      Safety invariant: Preserve existing inputs.
+    command: pnpm test
+    dependencies: []
+`;
+    const record: InAppPlanningSessionRecord = {
+      id: 'planning-stale-summary',
+      title: 'Greeting fix',
+      presetKey: 'codex',
+      status: 'draft_ready',
+      messages: [],
+      pendingResponse: false,
+      draftPlanText: multilinePlan,
+      draftPlanSummary: {
+        name: 'Greeting fix',
+        steps: ['Review claim: Fix greeting punctuation. Review lane: behavior Safety invariant: Preserve existing inputs.'],
+        taskCount: 1,
+        taskGroups: [{
+          workflow: null,
+          tasks: ['Review claim: Fix greeting punctuation. Review lane: behavior Safety invariant: Preserve existing inputs.'],
+        }],
+      },
+      createdAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:01.000Z',
+    };
+    const sessions = createInAppPlanningChatSessions();
+
+    await restorePlanningChatSessions([record], {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(sessions.get(record.id)?.draftPlanSummary?.taskGroups[0]?.tasks[0]).toBe(
+      'Review claim: Fix greeting punctuation.\nReview lane: behavior\nSafety invariant: Preserve existing inputs.',
+    );
+  });
+
   it('clears submitted pending-response state during restore', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {

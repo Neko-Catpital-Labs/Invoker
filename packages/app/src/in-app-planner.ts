@@ -1381,7 +1381,7 @@ export async function restorePlanningChatSessions(
           'error',
         );
         shouldPersist = true;
-      } else if (!session.draftPlanSummary) {
+      } else {
         const restoredSummary = summarizePlanText(session.draftPlanText);
         if (!restoredSummary) {
           session.status = 'still_discussing';
@@ -1393,10 +1393,11 @@ export async function restorePlanningChatSessions(
             'The saved draft could not be restored. Ask the planner to draft it again.',
             'error',
           );
-        } else {
+          shouldPersist = true;
+        } else if (JSON.stringify(session.draftPlanSummary) !== JSON.stringify(restoredSummary)) {
           session.draftPlanSummary = restoredSummary;
+          shouldPersist = true;
         }
-        shouldPersist = true;
       }
     }
 

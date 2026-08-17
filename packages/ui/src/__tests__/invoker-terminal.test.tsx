@@ -1753,7 +1753,7 @@ describe('Invoker terminal (component)', () => {
         workflowCount: 2,
         steps: ['Workers Surface Contracts', 'Workers Surface UI'],
         taskGroups: [
-          { workflow: 'Workers Surface Contracts', tasks: ['Define contracts', 'Verify contracts'] },
+          { workflow: 'Workers Surface Contracts', tasks: ['Review claim: Define contracts\nReview lane: behavior\nSafety invariant: Preserve existing behavior.', 'Verify contracts'] },
           { workflow: 'Workers Surface UI', tasks: ['Build UI', 'Verify UI'] },
         ],
       },
@@ -1774,6 +1774,10 @@ describe('Invoker terminal (component)', () => {
     await screen.findByTestId('planning-create-workflow');
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.getAllByTestId('draft-task-group')).toHaveLength(2);
+    const multilineDescription = screen.getAllByTestId('draft-step-summary')[0];
+    expect(multilineDescription).toHaveClass('whitespace-pre-wrap');
+    expect(multilineDescription).toHaveTextContent('Review claim: Define contracts Review lane: behavior Safety invariant: Preserve existing behavior.');
+    expect(multilineDescription.textContent).toBe('Review claim: Define contracts\nReview lane: behavior\nSafety invariant: Preserve existing behavior.');
     fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     await waitFor(() => {
