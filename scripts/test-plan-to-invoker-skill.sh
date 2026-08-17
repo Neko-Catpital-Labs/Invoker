@@ -307,6 +307,76 @@ trap - EXIT
 
 echo "OK: skill-doctor works from a machine-level standalone install (outside any git checkout)"
 
+# Regression: the vendored copy under skills/plan-to-invoker/scripts/vendor/
+# must stay byte-identical to its source, so `resolveReviewUnitRulesModulePath`
+# never silently serves stale logic.
+VENDOR_DIR="$SKILL_DIR/scripts/vendor"
+[[ -f "$VENDOR_DIR/review-unit-rules.mjs" ]] || fail "Missing vendored copy: $VENDOR_DIR/review-unit-rules.mjs (run bash scripts/vendor-plan-doctor-deps.sh)"
+diff -q "$REPO_ROOT/scripts/review-unit-rules.mjs" "$VENDOR_DIR/review-unit-rules.mjs" >/dev/null 2>&1 \
+  || fail "$VENDOR_DIR/review-unit-rules.mjs has drifted from scripts/review-unit-rules.mjs — re-run bash scripts/vendor-plan-doctor-deps.sh"
+echo "OK: vendored plan-doctor dependency matches its source"
+
+# Regression: both sub-checks must work from the real invoker-cli npm-install
+# shape -- skills/ sitting under <install-root>/vendor/, with a real `yaml`
+# install (npm's declared-dependency placement, not a symlink into a pnpm
+# store) at <install-root>/node_modules/yaml, and nothing else: no git repo,
+# no INVOKER_REPO_ROOT, no ~/.invoker/bundled-skills.json, no packages/, no
+# repo-root scripts/ directory. This is exactly the payload
+# scripts/archive-cli-binary.sh ships next to the compiled invoker-cli
+# release binary, plus the `yaml` dependency packages/npm-cli/package.json
+# now declares, which npm installs into that same install root. It proves:
+# lint-review-units resolves via the vendored review-unit-rules.mjs copy
+# (there's no npm-based alternative for a private, unpublished helper file);
+# validate-plan resolves `yaml` via a plain bare import, walking up to the
+# sibling node_modules/yaml -- Node's own module resolution, no custom path
+# logic, no vendored copy.
+NPM_CLI_INSTALL_ROOT="$(mktemp -d)"
+trap 'rm -rf "$NPM_CLI_INSTALL_ROOT"' EXIT
+mkdir -p "$NPM_CLI_INSTALL_ROOT/node_modules" "$NPM_CLI_INSTALL_ROOT/vendor"
+cp -RL "$REPO_ROOT/packages/app/node_modules/yaml" "$NPM_CLI_INSTALL_ROOT/node_modules/yaml"
+cp -R "$SKILL_DIR" "$NPM_CLI_INSTALL_ROOT/vendor/plan-to-invoker"
+NPM_CLI_DOCTOR="$NPM_CLI_INSTALL_ROOT/vendor/plan-to-invoker/scripts/skill-doctor.sh"
+NPM_CLI_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
+NPM_CLI_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT -u INVOKER_DB_DIR bash "$NPM_CLI_DOCTOR" --skip-assumptions "$NPM_CLI_FIXTURE" 2>/dev/null || true)"
+NPM_CLI_VALIDATE_STATUS="$(printf '%s' "$NPM_CLI_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$NPM_CLI_VALIDATE_STATUS" == "passed" ]] || fail "The invoker-cli npm-install shape (skills/ under vendor/, sibling node_modules/yaml) must pass validate-plan via a plain 'yaml' import; got status=$NPM_CLI_VALIDATE_STATUS. Full output: $NPM_CLI_OUTPUT"
+NPM_CLI_REVIEW_UNITS_STATUS="$(printf '%s' "$NPM_CLI_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$NPM_CLI_REVIEW_UNITS_STATUS" == "passed" ]] || fail "The invoker-cli npm-install shape (skills/ under vendor/, sibling node_modules/yaml) must pass lint-review-units via the vendored review-unit-rules.mjs; got status=$NPM_CLI_REVIEW_UNITS_STATUS. Full output: $NPM_CLI_OUTPUT"
+
+rm -rf "$NPM_CLI_INSTALL_ROOT"
+trap - EXIT
+
+echo "OK: skill-doctor works from the invoker-cli npm-install shape (yaml as a real declared dependency, review-unit-rules.mjs vendored)"
+
+# Boundary check, not a bug: a skills/plan-to-invoker/ copy with truly
+# nothing else nearby -- no node_modules (so no declared `yaml` dependency
+# to find), no git repo, no INVOKER_REPO_ROOT, no manifest -- correctly
+# fails validate-plan with an actionable message, not a crash. Nothing can
+# make YAML parsing available with zero real dependency and zero checkout
+# present anywhere; this documents that boundary instead of silently
+# dropping coverage of it.
+TOTALLY_BARE_DIR="$(mktemp -d)"
+trap 'rm -rf "$TOTALLY_BARE_DIR"' EXIT
+cp -R "$SKILL_DIR" "$TOTALLY_BARE_DIR/plan-to-invoker"
+TOTALLY_BARE_DOCTOR="$TOTALLY_BARE_DIR/plan-to-invoker/scripts/skill-doctor.sh"
+TOTALLY_BARE_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT -u INVOKER_DB_DIR bash "$TOTALLY_BARE_DOCTOR" --skip-assumptions "$NPM_CLI_FIXTURE" 2>&1 || true)"
+must_output_contain "$TOTALLY_BARE_OUTPUT" "INVOKER_REPO_ROOT" "A totally bare skills/plan-to-invoker/ copy with no yaml dependency and no checkout anywhere must fail with an actionable message, not a raw stack trace"
+
+rm -rf "$TOTALLY_BARE_DIR"
+trap - EXIT
+
+echo "OK: a totally bare skills/plan-to-invoker/ copy fails informatively, not with a raw crash"
+
 # Playbook — Phase 1a / 1b focused lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
 must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification" "Playbook must define runtime behavioral verification"
