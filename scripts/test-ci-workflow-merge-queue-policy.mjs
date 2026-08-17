@@ -258,7 +258,8 @@ assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
 assert(
   !jobs.docker.steps.some((step) => step.name === 'Install Electron repair dependency'),
-  'docker must not provision system unzip: scripts/electron.cjs\'s repair path uses the bundled extract-zip package, not a system unzip binary (see PR #9406)',
+  'docker must not provision a dedicated system unzip install step: scripts/electron.cjs\'s repair path '
+  + 'falls back to the bundled extract-zip package when unzip is absent (see PR #9406)',
 );
 
 assert(
