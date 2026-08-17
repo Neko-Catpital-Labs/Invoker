@@ -21,6 +21,9 @@
     "postinstall": "node scripts/install.js",
     "test": "node bin/invoker-slack.js --version || true"
   },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
   "publishConfig": {
     "access": "public"
   }
