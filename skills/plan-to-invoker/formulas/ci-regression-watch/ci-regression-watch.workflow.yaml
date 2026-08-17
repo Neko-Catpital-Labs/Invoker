@@ -93,7 +93,6 @@ tasks:
       - fix-ci-{{job_slug}}
 
   - id: reflect-ci-{{job_slug}}
-    executionAgent: claude
     description: |
       Run the /reflect skill against this repair to find how the regression
       escaped, and draft (not auto-apply) any resulting skill updates.
