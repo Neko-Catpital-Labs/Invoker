@@ -20,6 +20,7 @@ import {
   getTasks,
   openPlanGraph,
   E2E_REPO_URL,
+  waitForStableUI,
 } from './fixtures/electron-app.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
@@ -1490,6 +1491,14 @@ test.describe('Visual proof capture', () => {
     await expect(page.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'dag-loaded');
     await assertPageScreenshot(page, 'dag-loaded');
+  });
+
+  test('pink-theme-dark-home', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
+    await waitForStableUI(page);
+    await captureScreenshot(page, 'pink-theme-dark-home');
   });
 
   test('system setup readiness report shows a failing default preset check', async ({ page, electronApp }) => {
