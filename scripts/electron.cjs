@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -9,6 +10,148 @@ const ELECTRON_INSTALL_ATTEMPTS = 3;
 const MISSING_ELECTRON_MESSAGE =
   'Electron is not installed. Provision this machine before running Invoker: ' +
   'run pnpm install with network access and approved Electron build scripts.';
+
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+const ZIP_UNIX_IFMT = 61440;
+const ZIP_UNIX_IFDIR = 16384;
+const ZIP_UNIX_IFLNK = 40960;
+
+function readZipCentralDirectory(fd, fileSize) {
+  const searchSize = Math.min(fileSize, 65557);
+  const tail = Buffer.alloc(searchSize);
+  fs.readSync(fd, tail, 0, searchSize, fileSize - searchSize);
+
+  let eocdOffset = -1;
+  for (let i = tail.length - 22; i >= 0; i -= 1) {
+    if (tail.readUInt32LE(i) === ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset === -1) {
+    throw new Error('End of central directory record not found in zip archive');
+  }
+
+  const numEntries = tail.readUInt16LE(eocdOffset + 10);
+  const centralDirectorySize = tail.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = tail.readUInt32LE(eocdOffset + 16);
+  if (numEntries === 0xffff || centralDirectoryOffset === 0xffffffff) {
+    throw new Error('ZIP64 archives are not supported by the fallback extractor');
+  }
+
+  const centralDirBuffer = Buffer.alloc(centralDirectorySize);
+  fs.readSync(fd, centralDirBuffer, 0, centralDirectorySize, centralDirectoryOffset);
+
+  const entries = [];
+  let offset = 0;
+  for (let i = 0; i < numEntries; i += 1) {
+    if (centralDirBuffer.readUInt32LE(offset) !== ZIP_CENTRAL_DIRECTORY_SIGNATURE) {
+      throw new Error(`Invalid central directory entry signature at index ${i}`);
+    }
+    const versionMadeBy = centralDirBuffer.readUInt16LE(offset + 4);
+    const compressionMethod = centralDirBuffer.readUInt16LE(offset + 10);
+    const compressedSize = centralDirBuffer.readUInt32LE(offset + 20);
+    const uncompressedSize = centralDirBuffer.readUInt32LE(offset + 24);
+    const fileNameLength = centralDirBuffer.readUInt16LE(offset + 28);
+    const extraFieldLength = centralDirBuffer.readUInt16LE(offset + 30);
+    const fileCommentLength = centralDirBuffer.readUInt16LE(offset + 32);
+    const externalFileAttributes = centralDirBuffer.readUInt32LE(offset + 38);
+    const relativeOffsetOfLocalHeader = centralDirBuffer.readUInt32LE(offset + 42);
+    const fileNameStart = offset + 46;
+    const fileName = centralDirBuffer.toString('utf8', fileNameStart, fileNameStart + fileNameLength);
+
+    entries.push({
+      versionMadeBy,
+      compressionMethod,
+      compressedSize,
+      uncompressedSize,
+      externalFileAttributes,
+      relativeOffsetOfLocalHeader,
+      fileName,
+    });
+
+    offset = fileNameStart + fileNameLength + extraFieldLength + fileCommentLength;
+  }
+  return entries;
+}
+
+function readZipEntryDataStart(fd, entry) {
+  const header = Buffer.alloc(30);
+  fs.readSync(fd, header, 0, 30, entry.relativeOffsetOfLocalHeader);
+  if (header.readUInt32LE(0) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+    throw new Error(`Invalid local file header signature for ${entry.fileName}`);
+  }
+  const fileNameLength = header.readUInt16LE(26);
+  const extraFieldLength = header.readUInt16LE(28);
+  return entry.relativeOffsetOfLocalHeader + 30 + fileNameLength + extraFieldLength;
+}
+
+function extractZipEntrySync(fd, entry, destDir) {
+  const unixMode = (entry.externalFileAttributes >> 16) & 0xffff;
+  const symlink = (unixMode & ZIP_UNIX_IFMT) === ZIP_UNIX_IFLNK;
+  let isDir = (unixMode & ZIP_UNIX_IFMT) === ZIP_UNIX_IFDIR;
+  if (!isDir && entry.fileName.endsWith('/')) {
+    isDir = true;
+  }
+  const madeBy = entry.versionMadeBy >> 8;
+  if (!isDir && madeBy === 0 && entry.externalFileAttributes === 16) {
+    isDir = true;
+  }
+
+  const destPath = path.join(destDir, entry.fileName);
+  const canonicalDestDir = path.resolve(isDir ? destPath : path.dirname(destPath));
+  const relativeDestDir = path.relative(destDir, canonicalDestDir);
+  if (relativeDestDir.split(path.sep).includes('..')) {
+    throw new Error(`Out of bound path "${canonicalDestDir}" found while processing file ${entry.fileName}`);
+  }
+
+  if (isDir) {
+    fs.mkdirSync(destPath, { recursive: true, mode: (unixMode & 0o777) || 0o755 });
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+
+  let data = Buffer.alloc(0);
+  if (entry.compressedSize > 0) {
+    const dataStart = readZipEntryDataStart(fd, entry);
+    const compressed = Buffer.alloc(entry.compressedSize);
+    fs.readSync(fd, compressed, 0, entry.compressedSize, dataStart);
+    if (entry.compressionMethod === 0) {
+      data = compressed;
+    } else if (entry.compressionMethod === 8) {
+      data = zlib.inflateRawSync(compressed);
+    } else {
+      throw new Error(`Unsupported compression method ${entry.compressionMethod} for ${entry.fileName}`);
+    }
+  }
+
+  if (symlink) {
+    fs.symlinkSync(data.toString('utf8'), destPath);
+    return;
+  }
+
+  fs.writeFileSync(destPath, data, { mode: (unixMode & 0o777) || 0o644 });
+}
+
+function extractZipSync(zipPath, destDir) {
+  const fd = fs.openSync(zipPath, 'r');
+  try {
+    const fileSize = fs.fstatSync(fd).size;
+    const entries = readZipCentralDirectory(fd, fileSize);
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const entry of entries) {
+      if (entry.fileName.startsWith('__MACOSX/')) {
+        continue;
+      }
+      extractZipEntrySync(fd, entry, destDir);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -78,10 +221,6 @@ async function repairElectronWithPackageExtractor(electronPackageDir) {
     paths: [electronPackageDir],
   });
   const { downloadArtifact } = require(electronGetPath);
-  const extractZipPath = require.resolve('extract-zip', {
-    paths: [electronPackageDir],
-  });
-  const extractZip = require(extractZipPath);
   const platformPath = getElectronPlatformPath();
   const platform = process.env.npm_config_platform || process.platform;
   const arch = process.env.npm_config_arch || process.arch;
@@ -102,11 +241,11 @@ async function repairElectronWithPackageExtractor(electronPackageDir) {
   fs.rmSync(stagingPath, { recursive: true, force: true });
   fs.mkdirSync(stagingPath, { recursive: true });
   try {
-    await extractZip(zipPath, { dir: stagingPath });
+    extractZipSync(zipPath, stagingPath);
 
     const stagedBinary = path.join(stagingPath, platformPath);
     if (!fs.existsSync(stagedBinary)) {
-      throw new Error(`extract-zip did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
+      throw new Error(`Zip extraction did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
     }
 
     fs.rmSync(distPath, { recursive: true, force: true });

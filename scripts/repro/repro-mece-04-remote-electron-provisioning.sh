@@ -2,16 +2,12 @@
 set -euo pipefail
 
 EXPECT_ISSUE=0
-EXPECT_MISSING_UNZIP_ISSUE=0
 if [[ "${1:-}" == "--expect-issue" ]]; then
   EXPECT_ISSUE=1
   shift
-elif [[ "${1:-}" == "--expect-missing-unzip-issue" ]]; then
-  EXPECT_MISSING_UNZIP_ISSUE=1
-  shift
 fi
 if [[ $# -ne 0 ]]; then
-  echo "usage: $0 [--expect-issue|--expect-missing-unzip-issue]" >&2
+  echo "usage: $0 [--expect-issue]" >&2
   exit 2
 fi
 
@@ -28,7 +24,6 @@ mkdir -p \
   "$TMP_DIR/repo/packages/app" \
   "$TMP_DIR/repo/node_modules/electron" \
   "$TMP_DIR/repo/node_modules/@electron/get" \
-  "$TMP_DIR/repo/node_modules/extract-zip" \
   "$TMP_DIR/empty-path"
 cp "$ROOT_DIR/scripts/electron.cjs" "$TMP_DIR/repo/scripts/electron.cjs"
 
@@ -79,29 +74,6 @@ exports.downloadArtifact = async function downloadArtifact() {
 };
 JS
 
-cat >"$TMP_DIR/repo/node_modules/extract-zip/package.json" <<'JSON'
-{
-  "name": "extract-zip",
-  "version": "0.0.0-test",
-  "main": "index.js"
-}
-JSON
-
-cat >"$TMP_DIR/repo/node_modules/extract-zip/index.js" <<'JS'
-const fs = require('node:fs');
-const path = require('node:path');
-
-module.exports = async function extractZip(zipPath, options) {
-  if (zipPath !== process.env.FAKE_ELECTRON_ZIP) {
-    throw new Error(`unexpected Electron archive: ${zipPath}`);
-  }
-  fs.writeFileSync(process.env.FAKE_EXTRACT_ZIP_MARKER, 'yes\n');
-  fs.mkdirSync(options.dir, { recursive: true });
-  fs.writeFileSync(path.join(options.dir, 'electron'), '#!/usr/bin/env sh\nexit 0\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(options.dir, 'electron.d.ts'), 'export {};\n');
-};
-JS
-
 set +e
 (
   cd "$TMP_DIR/repo"
@@ -144,10 +116,110 @@ if ! grep -q "Electron is not installed. Provision this machine before running I
   exit 1
 fi
 
-FAKE_ELECTRON_ZIP="$TMP_DIR/electron.zip"
+# scripts/electron.cjs's repair path (repairElectronWithPackageExtractor) does
+# its own zip extraction with fs.readSync + zlib.inflateRawSync instead of a
+# third-party unzip library, so these fixtures are real (if tiny) zip
+# archives -- built by hand here -- rather than a stub extraction module.
+cat >"$TMP_DIR/make-test-zip.cjs" <<'JS'
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+const [, , outPath, specPath] = process.argv;
+const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+
+function u16(n) {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(n, 0);
+  return b;
+}
+function u32(n) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(n, 0);
+  return b;
+}
+
+const localParts = [];
+const centralParts = [];
+let offset = 0;
+
+for (const entry of spec.entries) {
+  const nameBuf = Buffer.from(entry.name, 'utf8');
+  const uncompressed = Buffer.from(entry.data ?? '', 'utf8');
+  const compressed = entry.corrupt
+    ? Buffer.from('not a valid deflate stream, this is deliberately garbage bytes', 'utf8')
+    : zlib.deflateRawSync(uncompressed);
+  const method = 8;
+
+  const localHeader = Buffer.concat([
+    u32(0x04034b50),
+    u16(20),
+    u16(0),
+    u16(method),
+    u16(0),
+    u16(0x21),
+    u32(0),
+    u32(compressed.length),
+    u32(uncompressed.length),
+    u16(nameBuf.length),
+    u16(0),
+    nameBuf,
+  ]);
+  localParts.push(localHeader, compressed);
+
+  const unixMode = (entry.mode ?? 0o644) | 0o100000;
+  const externalAttrs = (unixMode * 0x10000) >>> 0;
+
+  const centralEntry = Buffer.concat([
+    u32(0x02014b50),
+    u16((3 << 8) | 20),
+    u16(20),
+    u16(0),
+    u16(method),
+    u16(0),
+    u16(0x21),
+    u32(0),
+    u32(compressed.length),
+    u32(uncompressed.length),
+    u16(nameBuf.length),
+    u16(0),
+    u16(0),
+    u16(0),
+    u16(0),
+    u32(externalAttrs),
+    u32(offset),
+    nameBuf,
+  ]);
+  centralParts.push(centralEntry);
+
+  offset += localHeader.length + compressed.length;
+}
+
+const centralDirectoryOffset = offset;
+const centralDirectory = Buffer.concat(centralParts);
+const eocd = Buffer.concat([
+  u32(0x06054b50),
+  u16(0),
+  u16(0),
+  u16(spec.entries.length),
+  u16(spec.entries.length),
+  u32(centralDirectory.length),
+  u32(centralDirectoryOffset),
+  u16(0),
+]);
+
+fs.writeFileSync(outPath, Buffer.concat([...localParts, centralDirectory, eocd]));
+JS
+
+cat >"$TMP_DIR/success-spec.json" <<'JSON'
+{"entries": [
+  {"name": "electron.d.ts", "data": "export {};\n", "mode": 420},
+  {"name": "electron", "data": "#!/usr/bin/env sh\nexit 0\n", "mode": 493}
+]}
+JSON
+"$NODE_BIN" "$TMP_DIR/make-test-zip.cjs" "$TMP_DIR/electron-success.zip" "$TMP_DIR/success-spec.json"
+
+FAKE_ELECTRON_ZIP="$TMP_DIR/electron-success.zip"
 FAKE_ELECTRON_DOWNLOAD_MARKER="$TMP_DIR/repo/electron-download-ran"
-FAKE_EXTRACT_ZIP_MARKER="$TMP_DIR/repo/extract-zip-ran"
-: >"$FAKE_ELECTRON_ZIP"
 
 set +e
 (
@@ -156,7 +228,6 @@ set +e
     FAKE_ELECTRON_INSTALL_EMPTY_SUCCESS=1 \
     FAKE_ELECTRON_ZIP="$FAKE_ELECTRON_ZIP" \
     FAKE_ELECTRON_DOWNLOAD_MARKER="$FAKE_ELECTRON_DOWNLOAD_MARKER" \
-    FAKE_EXTRACT_ZIP_MARKER="$FAKE_EXTRACT_ZIP_MARKER" \
     "$NODE_BIN" scripts/electron.cjs --install-only
 ) >"$TMP_DIR/install-stdout" 2>"$TMP_DIR/install-stderr"
 INSTALL_STATUS=$?
@@ -174,60 +245,39 @@ if [[ ! -f "$FAKE_ELECTRON_DOWNLOAD_MARKER" ]]; then
   cat "$TMP_DIR/install-stderr" >&2
   exit 1
 fi
-
-if [[ "$EXPECT_MISSING_UNZIP_ISSUE" -eq 1 ]]; then
-  if [[ "$INSTALL_STATUS" -eq 0 ]]; then
-    echo "repro: expected fallback to fail without a host unzip executable" >&2
-    exit 1
-  fi
-  if [[ -f "$FAKE_EXTRACT_ZIP_MARKER" ]]; then
-    echo "repro: expected broken fallback not to use extract-zip" >&2
-    exit 1
-  fi
-  echo "remote-electron-provisioning missing-unzip issue reproduced: fallback failed without a host unzip executable"
-  exit 0
-fi
-
 if [[ "$INSTALL_STATUS" -ne 0 ]]; then
-  echo "repro: expected Electron fallback extraction to succeed without a host unzip executable" >&2
+  echo "repro: expected Electron fallback extraction to succeed without a third-party unzip library" >&2
   echo "--- stderr ---" >&2
   cat "$TMP_DIR/install-stderr" >&2
   exit 1
 fi
-if [[ ! -f "$FAKE_EXTRACT_ZIP_MARKER" ]]; then
-  echo "repro: repaired fallback did not use extract-zip" >&2
-  exit 1
-fi
 if [[ ! -x "$TMP_DIR/repo/node_modules/electron/dist/electron" ]]; then
-  echo "repro: repaired fallback did not leave a usable Electron binary" >&2
+  echo "repro: repaired fallback did not leave a usable, executable Electron binary" >&2
   exit 1
 fi
 
-echo "remote-electron-provisioning fixed: fallback extraction succeeds without a host unzip executable"
+echo "remote-electron-provisioning fixed: fallback extraction succeeds without a third-party unzip library"
 
 # Regression: a self-hosted CI runner reuses the same on-disk workspace across
-# job runs. If a run is killed (job cancellation, timeout-minutes) while
-# extract-zip is mid-write, an extraction straight into the live dist/
-# directory can leave some files present but not the platform binary --
-# resolveInstalledElectronBinary()'s existence-only check must never treat
-# that half-written state as installed, and a subsequent install-only must
-# never leave dist/ in that half-written shape either.
-cat >"$TMP_DIR/repo/node_modules/extract-zip/index.js" <<'JS'
-const fs = require('node:fs');
-const path = require('node:path');
+# job runs. If a run is killed (job cancellation, timeout-minutes) or an
+# archive is truncated/corrupted while the fallback is mid-write, an
+# extraction straight into the live dist/ directory can leave some files
+# present but not the platform binary -- resolveInstalledElectronBinary()'s
+# existence-only check must never treat that half-written state as installed,
+# and a subsequent install-only must never leave dist/ in that half-written
+# shape either. This is also the exact corrupted-state signature observed on
+# the real CI fleet: a dist/locales/ directory with a lone, truncated locale
+# file and no platform binary.
+cat >"$TMP_DIR/interrupted-spec.json" <<'JSON'
+{"entries": [
+  {"name": "locales/en-US.pak", "data": "fake-locale-data", "mode": 420},
+  {"name": "electron", "corrupt": true, "mode": 493}
+]}
+JSON
+"$NODE_BIN" "$TMP_DIR/make-test-zip.cjs" "$TMP_DIR/electron-interrupted.zip" "$TMP_DIR/interrupted-spec.json"
 
-module.exports = async function extractZip(zipPath, options) {
-  if (zipPath !== process.env.FAKE_ELECTRON_ZIP) {
-    throw new Error(`unexpected Electron archive: ${zipPath}`);
-  }
-  fs.writeFileSync(process.env.FAKE_EXTRACT_ZIP_MARKER, 'yes\n');
-  fs.mkdirSync(path.join(options.dir, 'locales'), { recursive: true });
-  fs.writeFileSync(path.join(options.dir, 'locales', 'en-US.pak'), 'fake-locale-data');
-  throw new Error('simulated interruption: killed mid-extraction before the platform binary was written');
-};
-JS
-
-rm -f "$TMP_DIR/repo/installer-ran" "$FAKE_ELECTRON_DOWNLOAD_MARKER" "$FAKE_EXTRACT_ZIP_MARKER"
+FAKE_ELECTRON_ZIP="$TMP_DIR/electron-interrupted.zip"
+rm -f "$TMP_DIR/repo/installer-ran" "$FAKE_ELECTRON_DOWNLOAD_MARKER"
 rm -rf "$TMP_DIR/repo/node_modules/electron/dist" "$TMP_DIR/repo/node_modules/electron/path.txt"
 PLATFORM_BINARY_PATH="$("$NODE_BIN" -e "
 switch (process.platform) {
@@ -250,7 +300,6 @@ set +e
     FAKE_ELECTRON_INSTALL_EMPTY_SUCCESS=1 \
     FAKE_ELECTRON_ZIP="$FAKE_ELECTRON_ZIP" \
     FAKE_ELECTRON_DOWNLOAD_MARKER="$FAKE_ELECTRON_DOWNLOAD_MARKER" \
-    FAKE_EXTRACT_ZIP_MARKER="$FAKE_EXTRACT_ZIP_MARKER" \
     "$NODE_BIN" scripts/electron.cjs --install-only
 ) >"$TMP_DIR/interrupted-install-stdout" 2>"$TMP_DIR/interrupted-install-stderr"
 INTERRUPTED_STATUS=$?
