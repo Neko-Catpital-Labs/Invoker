@@ -261,7 +261,7 @@ const TERMINAL_PLANNED_PLAN = {
   tasks: TEST_PLAN.tasks.map((task, index) => index === 0
     ? {
         ...task,
-        description: 'Review claim: Preserve multiline task descriptions.\nReview lane: behavior\nSafety invariant: Submission content remains unchanged.',
+        description: 'Review claim: Preserve `multiline` task descriptions.\nReview lane: behavior\nSafety invariant: Submission content remains unchanged.\n\nFiles:\n- `src/greeter.js`\n- `test/greeter.test.js`',
       }
     : task),
 };
@@ -844,9 +844,11 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Terminal Planned Flow');
-    await expect(page.getByTestId('draft-step-summary').first()).toHaveText(
-      'Review claim: Preserve multiline task descriptions.\nReview lane: behavior\nSafety invariant: Submission content remains unchanged.',
-    );
+    const markdownTask = page.getByTestId('draft-step-summary').first();
+    await expect(markdownTask).toContainText('Review lane: behavior');
+    await expect(markdownTask.locator('code').first()).toHaveText('multiline');
+    await expect(markdownTask.getByRole('list')).toBeVisible();
+    await expect(markdownTask.getByRole('listitem')).toHaveCount(2);
     // planning-draft-locked-note is a net-new element; this spec also runs
     // against the pre-change base branch for before/after visual proof, where
     // the testid does not exist yet.

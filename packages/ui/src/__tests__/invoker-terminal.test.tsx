@@ -1753,7 +1753,7 @@ describe('Invoker terminal (component)', () => {
         workflowCount: 2,
         steps: ['Workers Surface Contracts', 'Workers Surface UI'],
         taskGroups: [
-          { workflow: 'Workers Surface Contracts', tasks: ['Review claim: Define contracts\nReview lane: behavior\nSafety invariant: Preserve existing behavior.', 'Verify contracts'] },
+          { workflow: 'Workers Surface Contracts', tasks: ['Review claim: Define `contracts`\nReview lane: behavior\n\nFiles:\n- `src/a.ts`\n- `src/b.ts`', 'Verify contracts'] },
           { workflow: 'Workers Surface UI', tasks: ['Build UI', 'Verify UI'] },
         ],
       },
@@ -1775,9 +1775,10 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.getAllByTestId('draft-task-group')).toHaveLength(2);
     const multilineDescription = screen.getAllByTestId('draft-step-summary')[0];
-    expect(multilineDescription).toHaveClass('whitespace-pre-wrap');
-    expect(multilineDescription).toHaveTextContent('Review claim: Define contracts Review lane: behavior Safety invariant: Preserve existing behavior.');
-    expect(multilineDescription.textContent).toBe('Review claim: Define contracts\nReview lane: behavior\nSafety invariant: Preserve existing behavior.');
+    expect(within(multilineDescription).getByText('contracts', { selector: 'code' })).toBeVisible();
+    expect(within(multilineDescription).getByRole('list')).toBeVisible();
+    expect(within(multilineDescription).getAllByRole('listitem')).toHaveLength(2);
+    expect(multilineDescription).toHaveTextContent('Review claim: Define contracts Review lane: behavior Files: src/a.ts src/b.ts');
     fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     await waitFor(() => {
