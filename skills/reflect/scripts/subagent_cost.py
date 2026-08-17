@@ -28,7 +28,6 @@ and a grand total, with each agent's meta.json description if present.
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from io import StringIO
 from contextlib import redirect_stdout
 
