@@ -6,6 +6,7 @@ const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const ELECTRON_INSTALL_ATTEMPTS = 3;
+const ELECTRON_EXTRACT_TIMEOUT_MS = 5 * 60 * 1000;
 const MISSING_ELECTRON_MESSAGE =
   'Electron is not installed. Provision this machine before running Invoker: ' +
   'run pnpm install with network access and approved Electron build scripts.';
@@ -68,6 +69,51 @@ function getElectronPlatformPath() {
   }
 }
 
+function hasSystemUnzip() {
+  const probe = spawnSync('unzip', ['-v'], { stdio: 'ignore' });
+  return !probe.error && probe.status === 0;
+}
+
+function extractWithSystemUnzip(zipPath, destDir) {
+  const unzip = spawnSync('unzip', ['-q', '-o', zipPath, '-d', destDir], {
+    env: process.env,
+    stdio: 'inherit',
+    timeout: ELECTRON_EXTRACT_TIMEOUT_MS,
+  });
+  if (unzip.error) {
+    throw unzip.error;
+  }
+  if (unzip.signal) {
+    throw new Error(`unzip was terminated by signal ${unzip.signal}`);
+  }
+  if (unzip.status !== 0) {
+    throw new Error(`unzip exited with status ${unzip.status}`);
+  }
+}
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// extract-zip's promise can stall forever partway through the real Electron
+// archive without settling, silently starving the caller. Prefer system
+// unzip when present, and bound the extract-zip fallback with a timeout.
+async function extractElectronArchive(zipPath, destDir, extractZip) {
+  if (hasSystemUnzip()) {
+    extractWithSystemUnzip(zipPath, destDir);
+    return;
+  }
+  await withTimeout(
+    extractZip(zipPath, { dir: destDir }),
+    ELECTRON_EXTRACT_TIMEOUT_MS,
+    `extract-zip did not finish extracting the Electron archive within ${ELECTRON_EXTRACT_TIMEOUT_MS}ms`,
+  );
+}
+
 async function repairElectronWithPackageExtractor(electronPackageDir) {
   if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
     return null;
@@ -102,11 +148,11 @@ async function repairElectronWithPackageExtractor(electronPackageDir) {
   fs.rmSync(stagingPath, { recursive: true, force: true });
   fs.mkdirSync(stagingPath, { recursive: true });
   try {
-    await extractZip(zipPath, { dir: stagingPath });
+    await extractElectronArchive(zipPath, stagingPath, extractZip);
 
     const stagedBinary = path.join(stagingPath, platformPath);
     if (!fs.existsSync(stagedBinary)) {
-      throw new Error(`extract-zip did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
+      throw new Error(`extraction did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
     }
 
     fs.rmSync(distPath, { recursive: true, force: true });
