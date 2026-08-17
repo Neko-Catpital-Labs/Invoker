@@ -68,6 +68,23 @@ function getElectronPlatformPath() {
   }
 }
 
+function systemUnzipIsAvailable() {
+  const probe = spawnSync('unzip', ['-v'], { stdio: 'ignore' });
+  return !probe.error && probe.status === 0;
+}
+
+// extract-zip's yauzl-based streaming reader has been observed to hang indefinitely on
+// zipfile.openReadStream() for the first entry on some self-hosted CI filesystems, leaving
+// the postinstall process to exit early with nothing extracted and no error surfaced. System
+// unzip reliably extracts the same archive in seconds, so prefer it when present.
+function extractZipWithSystemUnzip(zipPath, destDir) {
+  if (!systemUnzipIsAvailable()) {
+    return false;
+  }
+  const result = spawnSync('unzip', ['-q', '-o', zipPath, '-d', destDir], { stdio: 'inherit' });
+  return !result.error && result.status === 0;
+}
+
 async function repairElectronWithPackageExtractor(electronPackageDir) {
   if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
     return null;
@@ -102,7 +119,9 @@ async function repairElectronWithPackageExtractor(electronPackageDir) {
   fs.rmSync(stagingPath, { recursive: true, force: true });
   fs.mkdirSync(stagingPath, { recursive: true });
   try {
-    await extractZip(zipPath, { dir: stagingPath });
+    if (!extractZipWithSystemUnzip(zipPath, stagingPath)) {
+      await extractZip(zipPath, { dir: stagingPath });
+    }
 
     const stagedBinary = path.join(stagingPath, platformPath);
     if (!fs.existsSync(stagedBinary)) {
