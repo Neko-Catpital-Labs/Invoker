@@ -157,7 +157,7 @@ export function autoStartedOwnerWorkerKindsForConfig(
     requeueEnabled: Boolean(config?.requeueEnabled),
     slackBugScanEnabled: Boolean(config?.slackBugScan?.enabled),
     staleTaskCleanupEnabled: Boolean(config?.staleTaskCleanup?.enabled),
-    claudeOauthRefreshEnabled: Boolean(config?.claudeOauthRefresh?.enabled),
+    claudeOauthRefreshEnabled: config?.claudeOauthRefresh?.enabled !== false,
   });
   return config?.e2eAutoFixEnabled
     ? [...workerKinds, E2E_AUTOFIX_WORKER_KIND]
