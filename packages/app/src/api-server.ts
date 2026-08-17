@@ -80,6 +80,7 @@ export interface ApiMutationFacade {
   editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult>;
   editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): Promise<MutationResult>;
   editTaskAgent(taskId: string, agentName: string): Promise<MutationResult>;
+  editTaskModel(taskId: string, executionModel: string | null): Promise<MutationResult>;
   setTaskExternalGatePolicies(
     taskId: string,
     updates: ExternalGatePolicyUpdate[],

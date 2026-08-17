@@ -18,6 +18,7 @@ import { createExecutionBench } from './execution-bench.js';
 import {
   syncPlanBaseRemoteForRef,
   resolvePlanBaseRevision,
+  ensureRequiredCommitResolvable,
 } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
@@ -190,8 +191,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       bench('WorktreeExecutor.resolveBase.after', { baseRef, baseHead });
       log(`resolve base ${baseRef} done → ${baseHead}`);
     }
-    const startupBaseHead = request.inputs.upstreamBase?.commitHash?.trim()
-      || baseHead;
+    const upstreamBaseCommit = request.inputs.upstreamBase?.commitHash?.trim();
+    if (upstreamBaseCommit && remoteFetchForPool.enabled) {
+      log(`verify dependency commit ${upstreamBaseCommit} begin`);
+      bench('WorktreeExecutor.ensureRequiredCommitResolvable.before', { upstreamBaseCommit });
+      await ensureRequiredCommitResolvable(runGit, upstreamBaseCommit);
+      bench('WorktreeExecutor.ensureRequiredCommitResolvable.after', { upstreamBaseCommit });
+      log(`verify dependency commit ${upstreamBaseCommit} done`);
+    }
+    const startupBaseHead = upstreamBaseCommit || baseHead;
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);

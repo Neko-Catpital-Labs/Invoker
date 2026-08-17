@@ -159,6 +159,110 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO');
     expect(script).toContain('exit 32');
   });
+
+  it('includes a retry-with-backoff loop and exit 33, runtime-guarded on requiredCommit being set', () => {
+    const script = buildMirrorCloneScript({
+      repoUrl: 'git@github.com:owner/repo.git',
+      repoHash: 'abc123',
+      baseRef: 'main',
+      requiredCommit: 'deadbeef',
+    });
+
+    expect(script).toContain('REQUIRED_COMMIT=$(printf');
+    expect(script).toContain('git -C "$CLONE" rev-parse --verify "$REQUIRED_COMMIT^{commit}"');
+    expect(script).toContain('REQUIRED_COMMIT_UNRESOLVED=$REQUIRED_COMMIT');
+    expect(script).toContain('exit 33');
+  });
+
+  it('reproduces the bug: a downstream task cannot resolve a dependency\'s just-pushed commit from a stale shared clone', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-mirror-stale-clone-'));
+    const origin = join(root, 'origin.git');
+    const seed = join(root, 'seed');
+    const upstreamTask = join(root, 'upstream-task');
+
+    execSync('git init --bare -b master ' + JSON.stringify(origin), { stdio: 'ignore' });
+    execSync('git clone ' + JSON.stringify(origin) + ' ' + JSON.stringify(seed), { stdio: 'ignore' });
+    writeFileSync(join(seed, 'file.txt'), 'base\n');
+    execSync('git -c user.email=repro@example.com -c user.name=Repro add file.txt', { cwd: seed, stdio: 'ignore' });
+    execSync('git -c user.email=repro@example.com -c user.name=Repro commit -m base', { cwd: seed, stdio: 'ignore' });
+    execSync('git push origin master', { cwd: seed, stdio: 'ignore' });
+
+    // Simulate the real ordering: the shared mirror clone gets created and
+    // fetched (via buildMirrorCloneScript, no requiredCommit -- the caller
+    // has no way to know yet what commit a downstream task will need)
+    // BEFORE the dependency's branch is ever pushed. The clone is reused
+    // across tasks rather than recreated per task, so this fetch is the
+    // only one this clone gets until some later task runs.
+    const scriptBeforePush = buildMirrorCloneScript({
+      repoUrl: origin,
+      repoHash: 'shared-repo-hash',
+      baseRef: 'master',
+      invokerHome: root,
+    });
+    execFileSync('bash', ['-lc', scriptBeforePush], { env: { ...process.env, HOME: root } });
+    const sharedMirror = join(root, 'repos', 'shared-repo-hash');
+
+    // The upstream ("fix-ci") task commits and pushes a brand-new branch
+    // AFTER the shared mirror's fetch already ran.
+    execSync('git clone ' + JSON.stringify(origin) + ' ' + JSON.stringify(upstreamTask), { stdio: 'ignore' });
+    execSync('git checkout -b experiment/wf-repro/fix-ci/g0', { cwd: upstreamTask, stdio: 'ignore' });
+    writeFileSync(join(upstreamTask, 'fix.txt'), 'fix\n');
+    execSync('git -c user.email=repro@example.com -c user.name=Repro add fix.txt', { cwd: upstreamTask, stdio: 'ignore' });
+    execSync('git -c user.email=repro@example.com -c user.name=Repro commit -m fix', { cwd: upstreamTask, stdio: 'ignore' });
+    execSync('git push origin experiment/wf-repro/fix-ci/g0', { cwd: upstreamTask, stdio: 'ignore' });
+    const dependencyCommit = execSync('git rev-parse HEAD', { cwd: upstreamTask }).toString().trim();
+
+    // The downstream task's worktree setup (setupTaskBranch /
+    // buildWorktreeSandboxResetScript in the real code) tries to check out
+    // the dependency's recorded commit against the now-stale shared clone.
+    const check = require('node:child_process').spawnSync(
+      'git',
+      ['-C', sharedMirror, 'worktree', 'add', '--no-track', '-B', 'downstream-task', join(root, 'downstream-wt'), dependencyCommit],
+    );
+    expect(check.status).not.toBe(0);
+    expect(String(check.stderr)).toMatch(/invalid reference|not a valid object name|bad object|unknown revision/i);
+  });
+
+  it('self-heals: retries the fetch until the required commit resolves, then succeeds', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-mirror-required-commit-'));
+    const origin = join(root, 'origin.git');
+    const seed = join(root, 'seed');
+
+    execSync('git init --bare -b master ' + JSON.stringify(origin), { stdio: 'ignore' });
+    execSync('git clone ' + JSON.stringify(origin) + ' ' + JSON.stringify(seed), { stdio: 'ignore' });
+    writeFileSync(join(seed, 'file.txt'), 'base\n');
+    execSync('git -c user.email=repro@example.com -c user.name=Repro add file.txt', { cwd: seed, stdio: 'ignore' });
+    execSync('git -c user.email=repro@example.com -c user.name=Repro commit -m base', { cwd: seed, stdio: 'ignore' });
+    execSync('git push origin master', { cwd: seed, stdio: 'ignore' });
+    execSync('git checkout -b experiment/wf-repro/fix-ci/g0', { cwd: seed, stdio: 'ignore' });
+    writeFileSync(join(seed, 'fix.txt'), 'fix\n');
+    execSync('git -c user.email=repro@example.com -c user.name=Repro add fix.txt', { cwd: seed, stdio: 'ignore' });
+    execSync('git -c user.email=repro@example.com -c user.name=Repro commit -m fix', { cwd: seed, stdio: 'ignore' });
+    execSync('git push origin experiment/wf-repro/fix-ci/g0', { cwd: seed, stdio: 'ignore' });
+    const dependencyCommit = execSync('git rev-parse HEAD', { cwd: seed }).toString().trim();
+
+    // The mirror clone here is created AFTER the push, so requiredCommit
+    // resolves on the very first pass -- proving the retry path is wired up
+    // correctly without needing to wait through the full backoff window.
+    const script = buildMirrorCloneScript({
+      repoUrl: origin,
+      repoHash: 'fresh-repo-hash',
+      baseRef: 'master',
+      invokerHome: root,
+      requiredCommit: dependencyCommit,
+    });
+
+    expect(() => {
+      execFileSync('bash', ['-lc', script], { env: { ...process.env, HOME: root } });
+    }).not.toThrow();
+
+    const clone = join(root, 'repos', 'fresh-repo-hash');
+    const check = require('node:child_process').spawnSync(
+      'git',
+      ['-C', clone, 'rev-parse', '--verify', `${dependencyCommit}^{commit}`],
+    );
+    expect(check.status).toBe(0);
+  });
 });
 
 describe('parseBootstrapOutput', () => {

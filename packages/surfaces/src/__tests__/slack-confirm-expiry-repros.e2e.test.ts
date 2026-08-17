@@ -154,8 +154,8 @@ async function slashCommand(surface: SlackSurface, text: string): Promise<Mock> 
   return respond;
 }
 
-function actionValueFromLatestUpdatedCard(actionId: string): string {
-  for (const call of [...sharedSlack.client.chat.update.mock.calls].reverse()) {
+function actionValueFromLatestUpdatedCard(say: Mock, actionId: string): string {
+  for (const call of [...say.mock.calls].reverse()) {
     const message = call[0] as SaidMessage | undefined;
     for (const block of message?.blocks ?? []) {
       for (const element of block.elements ?? []) {
@@ -247,8 +247,8 @@ describe('Slack confirmation expiry repro contracts', () => {
 
   async function draftPlan(slack: SlackSurface, threadTs: string, planText: string, turnTs: string): Promise<string> {
     mockSpawn.mockImplementationOnce(() => processWith(planText));
-    await mention(slack, '/plan', turnTs, threadTs);
-    const value = actionValueFromLatestUpdatedCard('plan_draft_approve');
+    const planSay = await mention(slack, '/plan', turnTs, threadTs);
+    const value = actionValueFromLatestUpdatedCard(planSay, 'plan_draft_approve');
     const draft = slackPlanDrafts.getReady('C_LOBBY', threadTs);
     expect(value).toBe(`${draft?.draftId}:${draft?.version}`);
     return value;

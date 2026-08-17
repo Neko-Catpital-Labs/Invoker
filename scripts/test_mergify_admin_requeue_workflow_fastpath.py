@@ -174,3 +174,84 @@ class FastpathSettleObserver(unittest.TestCase):
     def test_parse_last_json_object_skips_noise_lines(self):
         stdout = '[invoker] maxConcurrency=13 exceeds pool capacity\n{"id": "wf-1", "status": "failed"}\n'
         self.assertEqual(f._parse_last_json_object(stdout), {"id": "wf-1", "status": "failed"})
+
+
+class RepairerPlanSettleObserver(unittest.TestCase):
+    def _ledger(self, tmpdir):
+        from mergify_admin_requeue_model import Ledger
+        return Ledger(Path(tmpdir) / "state.jsonl")
+
+    def test_settles_a_failed_bot_thread_repair_by_matching_its_plan_name(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "7bbccbd" + "0" * 33
+            ledger.record("repair-bot-thread", 9172, head, "PRRT_thread1", 100)
+            plan_name = f.repair_bot_thread_plan_name(9172, head)
+            workflows = [{"id": "wf-1", "name": plan_name, "status": "failed"}]
+            with mock.patch.object(f, "list_workflows", return_value=workflows):
+                settled = f.settle_repairer_plan_rows(ledger, 200)
+            self.assertEqual(settled, 1)
+            row = ledger.latest("repair-bot-thread-settled", 9172, head, "PRRT_thread1")
+            self.assertIsNotNone(row)
+            self.assertEqual(row["meta"]["workflowStatus"], "failed")
+            self.assertEqual(row["meta"]["workflowId"], "wf-1")
+
+    def test_settles_a_failed_check_repair_and_a_failed_conflict_repair_too(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "abc1234" + "0" * 33
+            ledger.record("repair-check", 100, head, "UI Vitest", 100)
+            ledger.record("conflict-repair", 200, head, "conflict:200", 100)
+            workflows = [
+                {"id": "wf-c1", "name": f.repair_check_plan_name(100, "UI Vitest", head), "status": "failed"},
+                {"id": "wf-c2", "name": f.repair_conflict_plan_name(200, head), "status": "completed"},
+            ]
+            with mock.patch.object(f, "list_workflows", return_value=workflows):
+                settled = f.settle_repairer_plan_rows(ledger, 200)
+            self.assertEqual(settled, 2)
+            self.assertIsNotNone(ledger.latest("repair-check-settled", 100, head, "UI Vitest"))
+            self.assertIsNotNone(ledger.latest("conflict-repair-settled", 200, head, "conflict:200"))
+
+    def test_leaves_a_still_running_repair_unsettled(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "7bbccbd" + "0" * 33
+            ledger.record("repair-bot-thread", 9172, head, "PRRT_thread1", 100)
+            plan_name = f.repair_bot_thread_plan_name(9172, head)
+            workflows = [{"id": "wf-1", "name": plan_name, "status": "running"}]
+            with mock.patch.object(f, "list_workflows", return_value=workflows):
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 0)
+            self.assertIsNone(ledger.latest("repair-bot-thread-settled", 9172, head, "PRRT_thread1"))
+
+    def test_does_not_resettle_an_already_settled_row(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "7bbccbd" + "0" * 33
+            ledger.record("repair-bot-thread", 9172, head, "PRRT_thread1", 100)
+            ledger.record("repair-bot-thread-settled", 9172, head, "PRRT_thread1", 150,
+                          meta={"workflowId": "wf-1"})
+            with mock.patch.object(f, "list_workflows") as listed:
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 0)
+                listed.assert_not_called()
+
+    def test_does_not_call_list_workflows_when_nothing_is_pending(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            with mock.patch.object(f, "list_workflows") as listed:
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 0)
+                listed.assert_not_called()
+
+    def test_unmatched_workflow_name_leaves_row_for_ttl_backstop(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "7bbccbd" + "0" * 33
+            ledger.record("repair-bot-thread", 9172, head, "PRRT_thread1", 100)
+            with mock.patch.object(f, "list_workflows", return_value=[]):
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 0)
+            self.assertIsNone(ledger.latest("repair-bot-thread-settled", 9172, head, "PRRT_thread1"))

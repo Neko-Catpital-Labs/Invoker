@@ -48,6 +48,8 @@ must_contain "write \`UNVERIFIED:\` immediately before the claim" \
   "prove-it skill must require the UNVERIFIED prefix when evidence is missing"
 must_contain "Proxy proof:" \
   "prove-it skill must include a generalized proxy-proof example"
+must_contain "Wrong-target verify command:" \
+  "prove-it skill must require verify commands to invoke the changed file"
 must_contain "Stale state:" \
   "prove-it skill must include a generalized stale-state example"
 must_contain "Wrong target:" \
@@ -64,6 +66,12 @@ must_contain "Visual mismatch:" \
   "prove-it skill must include a generalized visual-mismatch example"
 must_contain "Live-state mismatch:" \
   "prove-it skill must include a generalized live-state-mismatch example"
+must_contain "Intent from one data point:" \
+  "prove-it skill must include the intent-from-one-data-point example (jailbreak worker incident)"
+must_contain "Log-line misattribution:" \
+  "prove-it skill must include the log-line-misattribution example (owner crash-loop incident)"
+must_contain "Single-machine absence as proof:" \
+  "prove-it skill must include the single-machine-absence-as-proof example (never-pushed incident)"
 must_contain "rejects a \`## Visual Proof\` section that has" \
   "prove-it skill must document the mechanical validate-pr-body.mjs gate"
 

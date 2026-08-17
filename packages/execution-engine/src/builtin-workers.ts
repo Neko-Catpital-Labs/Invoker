@@ -3,7 +3,9 @@ import { registerAutoApproveWorker } from './workers/auto-approve-worker.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
 import { registerE2eAutoFixWorker } from './workers/e2e-autofix-worker.js';
+import { registerIdleTaskCleanupWorker } from './workers/idle-task-cleanup-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
+import { registerClaudeOauthRefreshWorker } from './workers/claude-oauth-refresh-worker.js';
 import { registerInfraRepairWorker } from './workers/infra-repair-worker.js';
 import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
@@ -22,10 +24,12 @@ export function registerBuiltinWorkers(
   registerPrStatusWorker(registry);
   registerInfraRepairWorker(registry);
   registerDiskHeadroomWorker(registry);
+  registerClaudeOauthRefreshWorker(registry);
   registerReaperWorker(registry);
   registerAutoApproveWorker(registry);
   registerPrMaintenanceWorkers(registry);
   registerE2eAutoFixWorker(registry);
   registerSlackBugScanWorker(registry);
+  registerIdleTaskCleanupWorker(registry);
   return registry;
 }

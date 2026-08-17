@@ -41,7 +41,7 @@ function makeLeg(kind) {
   writeFileSync(nodeLog, '');
   writeFileSync(
     join(bin, 'node'),
-    `#!/usr/bin/env bash\nprintf 'node %s\\n' "$*" >> ${JSON.stringify(nodeLog)}\nexit 0\n`,
+    `#!/usr/bin/env bash\nif [[ "$#" -ge 1 && "$1" == *"/scripts/retry-ledger.mjs" ]]; then\n  exec ${JSON.stringify(process.execPath)} "$@"\nfi\nprintf 'node %s\\n' "$*" >> ${JSON.stringify(nodeLog)}\nexit 0\n`,
     { mode: 0o755 },
   );
   const lines = [];

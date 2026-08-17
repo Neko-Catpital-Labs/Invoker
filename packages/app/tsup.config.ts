@@ -20,7 +20,6 @@ export default defineConfig({
     '@invoker/transport',
     '@invoker/execution-engine',
     '@invoker/planning-core',
-    '@invoker/slack-bug-scan',
     '@invoker/shell',
     '@invoker/slack-bug-scan',
     'yaml',

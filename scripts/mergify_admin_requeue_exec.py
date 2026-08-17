@@ -12,11 +12,21 @@ try:
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from .mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
+    from .mergify_admin_requeue_plan import (
+        CONFLICT_REPAIR_FILING_KIND,
+        REBASE_CONFLICT_REPAIR_FILING_KIND,
+        ClaimRepairFiling,
+        ReleaseRepairFiling,
+        current_bottom_pr,
+        mergify_check_state_sha,
+        plan_stack_execution,
+        repair_filing_kind_for_check,
+    )
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
     from .mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_repairer_plan_rows,
         settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
@@ -26,11 +36,21 @@ except ImportError:
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
+    from mergify_admin_requeue_plan import (
+        CONFLICT_REPAIR_FILING_KIND,
+        REBASE_CONFLICT_REPAIR_FILING_KIND,
+        ClaimRepairFiling,
+        ReleaseRepairFiling,
+        current_bottom_pr,
+        mergify_check_state_sha,
+        plan_stack_execution,
+        repair_filing_kind_for_check,
+    )
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
     from mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_repairer_plan_rows,
         settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
@@ -95,7 +115,11 @@ def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClie
     return stale_base_by_pr
 
 
-def run_cycle(args: argparse.Namespace) -> bool:
+def run_cycle(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> bool:
     rule_path = REPO_ROOT / ".mergify.yml"
     try:
         trunk, _labels, required_checks = load_mergify_rules(rule_path)
@@ -126,6 +150,12 @@ def run_cycle(args: argparse.Namespace) -> bool:
             logger.trace("admin-bypass-fastpath-settled", count=fastpath_settled)
     except Exception as exc:
         logger.trace("admin-bypass-fastpath-settle-failed", error=str(exc))
+    try:
+        repairer_plan_settled = settle_repairer_plan_rows(ledger, now)
+        if repairer_plan_settled:
+            logger.trace("admin-bypass-repairer-plan-settled", count=repairer_plan_settled)
+    except Exception as exc:
+        logger.trace("admin-bypass-repairer-plan-settle-failed", error=str(exc))
     pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
     logger.trace(
         "admin-bypass-scan-loaded",
@@ -153,6 +183,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
             args.max_repair_attempts,
             trunk,
             stale_base_by_pr,
+            claim_repair_filing,
         )
         queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
@@ -233,6 +264,28 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    # The planner already claimed this key (if claim_repair_filing was
+                    # wired in) before returning this Action; the actual dispatch
+                    # (fastpath or repairer.repair_check) never completed, so release
+                    # the claim or this key would be permanently blocked from every
+                    # future retry. bot_review_thread repairs are planned by
+                    # plan_bot_thread_repairs, which is not gated by claim_repair_filing,
+                    # so there is nothing to release for that key shape.
+                    #
+                    # A "repair_check" Action can come from either
+                    # mergify_failed_check_actions (claims with
+                    # mergify_check_state_sha, a composite of head_ref_oid and
+                    # the Mergify comment_id -- see that function) or
+                    # plan_direct_repairs' own failed_check path (claims with
+                    # the plain head_ref_oid); the Action itself carries no
+                    # record of which one produced it, so release both
+                    # possible shapes -- releasing a key that was never
+                    # claimed is a safe no-op.
+                    if release_repair_filing is not None and not action.key.startswith("bot_review_thread:"):
+                        kind = repair_filing_kind_for_check(action.key)
+                        release_repair_filing(kind, str(action.pr_number), pr.head_ref_oid)
+                        if pr.latest_mergify is not None:
+                            release_repair_filing(kind, str(action.pr_number), mergify_check_state_sha(pr, pr.latest_mergify))
                     should_poll = True
                     continue
                 if progressed:
@@ -267,6 +320,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    if release_repair_filing is not None:
+                        release_repair_filing(CONFLICT_REPAIR_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
                     should_poll = True
                     continue
                 if progressed:
@@ -291,6 +346,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    if release_repair_filing is not None:
+                        release_repair_filing(REBASE_CONFLICT_REPAIR_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
                     should_poll = True
                     continue
                 repair_dispatch_attempted += 1
@@ -341,17 +398,25 @@ def run_cycle(args: argparse.Namespace) -> bool:
     return any_progress or should_poll
 
 
-def run_once(args: argparse.Namespace) -> int:
+def run_once(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> int:
     try:
-        run_cycle(args)
+        run_cycle(args, claim_repair_filing, release_repair_filing)
     except RuntimeError:
         return 2
     return 0
 
 
-def run_loop(args: argparse.Namespace) -> int:
+def run_loop(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> int:
     try:
-        while run_cycle(args):
+        while run_cycle(args, claim_repair_filing, release_repair_filing):
             time.sleep(args.poll_seconds)
     except RuntimeError:
         return 2

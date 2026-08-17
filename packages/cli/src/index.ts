@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, resolve, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
@@ -195,7 +195,7 @@ function usage(): string {
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
     '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
     '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
-    '  delete-all      Ask a live Invoker owner to delete all workflows, after the production DB guard passes.',
+    '  delete-all      Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
@@ -376,49 +376,6 @@ async function queryLiveOwner(
 
 function resolveQueryDbDir(): string {
   return resolve(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
-}
-
-function expandHomePath(raw: string): string {
-  if (raw === '~') return homedir();
-  if (raw.startsWith('~/')) return join(homedir(), raw.slice(2));
-  return raw;
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function normalizeDeleteAllGuardPath(raw: string): string {
-  let expanded = expandHomePath(raw);
-  expanded = expanded.endsWith('/') ? expanded.slice(0, -1) : expanded;
-  if (expanded.length === 0) expanded = '/';
-
-  if (isDirectory(expanded)) {
-    return realpathSync(expanded);
-  }
-
-  const parent = dirname(expanded);
-  if (isDirectory(parent)) {
-    return join(realpathSync(parent), basename(expanded));
-  }
-
-  return expanded;
-}
-
-function checkDeleteAllProductionGuard(): number | undefined {
-  const dbRoot = normalizeDeleteAllGuardPath(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
-  const prodRoot = normalizeDeleteAllGuardPath(join(homedir(), '.invoker'));
-  if (process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL !== '1' && dbRoot === prodRoot) {
-    process.stderr.write(`ERROR: Refusing to run 'delete-all' against production DB root: ${dbRoot}\n`);
-    process.stderr.write('Set INVOKER_DB_DIR to an isolated temp directory for tests.\n');
-    process.stderr.write('Override only if intentional: INVOKER_ALLOW_PRODUCTION_DELETE_ALL=1\n');
-    return 64;
-  }
-  return undefined;
 }
 
 function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> {
@@ -634,9 +591,6 @@ async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume', tar
 }
 
 async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
-  const guardExitCode = checkDeleteAllProductionGuard();
-  if (guardExitCode !== undefined) return guardExitCode;
-
   let bus: MessageBus | undefined;
   try {
     bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());

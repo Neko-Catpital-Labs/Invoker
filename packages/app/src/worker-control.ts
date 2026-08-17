@@ -15,8 +15,10 @@ import type { SQLiteAdapter, TaskEvent, WorkerActionRecord } from '@invoker/data
 import {
   AUTO_FIX_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
+  CLAUDE_OAUTH_REFRESH_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
+  IDLE_TASK_CLEANUP_WORKER_KIND,
   INFRA_REPAIR_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_AUTO_LABEL_WORKER_KIND,
@@ -60,6 +62,8 @@ type AutoStartedOwnerWorkerKindOptions = {
   reaperEnabled?: boolean;
   workflowResumeEnabled?: boolean;
   requeueEnabled?: boolean;
+  staleTaskCleanupEnabled?: boolean;
+  claudeOauthRefreshEnabled?: boolean;
 };
 
 type AutoStartedOwnerWorkerKindConfig = {
@@ -73,6 +77,8 @@ type AutoStartedOwnerWorkerKindConfig = {
   reaper?: { enabled?: boolean };
   workflowResume?: { enabled?: boolean };
   requeueEnabled?: boolean;
+  staleTaskCleanup?: { enabled?: boolean };
+  claudeOauthRefresh?: { enabled?: boolean };
 };
 
 /**
@@ -93,6 +99,8 @@ export function autoStartedOwnerWorkerKinds(
     options.workflowResumeEnabled,
     options.requeueEnabled,
     options.slackBugScanEnabled,
+    options.staleTaskCleanupEnabled,
+    options.claudeOauthRefreshEnabled,
   ].some((value) => value !== undefined);
   if (options.prMaintenanceEnabled && !hasWorkerGateOverrides) {
     workerKinds.push(PR_ADMIN_BYPASS_LAND_WORKER_KIND, INFRA_REPAIR_WORKER_KIND);
@@ -125,6 +133,12 @@ export function autoStartedOwnerWorkerKinds(
   if (options.slackBugScanEnabled) {
     workerKinds.push(...SLACK_BUG_SCAN_AUTO_STARTED_WORKER_KINDS);
   }
+  if (options.staleTaskCleanupEnabled) {
+    workerKinds.push(IDLE_TASK_CLEANUP_WORKER_KIND);
+  }
+  if (options.claudeOauthRefreshEnabled) {
+    workerKinds.push(CLAUDE_OAUTH_REFRESH_WORKER_KIND);
+  }
   return workerKinds;
 }
 
@@ -142,6 +156,8 @@ export function autoStartedOwnerWorkerKindsForConfig(
     workflowResumeEnabled: Boolean(config?.workflowResume?.enabled),
     requeueEnabled: Boolean(config?.requeueEnabled),
     slackBugScanEnabled: Boolean(config?.slackBugScan?.enabled),
+    staleTaskCleanupEnabled: Boolean(config?.staleTaskCleanup?.enabled),
+    claudeOauthRefreshEnabled: Boolean(config?.claudeOauthRefresh?.enabled),
   });
   return config?.e2eAutoFixEnabled
     ? [...workerKinds, E2E_AUTOFIX_WORKER_KIND]
@@ -154,6 +170,58 @@ export interface WorkerRuntimeController {
   stop(kind: string, options?: { source?: string }): Promise<WorkerStatusEntry>;
   stopAll(): Promise<void>;
   snapshot(): WorkerStatusSnapshot;
+}
+
+export function createOwnerWorkerStatusReader(options: {
+  queryOwner: () => Promise<WorkerStatusSnapshot>;
+  createUnavailableSnapshot: () => WorkerStatusSnapshot;
+  now?: () => string;
+  onUnavailable?: (error: unknown) => void;
+}): () => Promise<WorkerStatusSnapshot> {
+  let latestSuccessfulSnapshot: WorkerStatusSnapshot | null = null;
+  const now = options.now ?? (() => new Date().toISOString());
+
+  return async () => {
+    try {
+      const ownerSnapshot = await options.queryOwner();
+      const {
+        authority: _authority,
+        lastSuccessfulAt: _lastSuccessfulAt,
+        unavailableReason: _unavailableReason,
+        ...snapshot
+      } = ownerSnapshot;
+      const liveSnapshot: WorkerStatusSnapshot = {
+        ...snapshot,
+        authority: 'live',
+        lastSuccessfulAt: now(),
+      };
+      latestSuccessfulSnapshot = liveSnapshot;
+      return liveSnapshot;
+    } catch (error) {
+      options.onUnavailable?.(error);
+      const unavailableReason = error instanceof Error ? error.message : String(error);
+      if (latestSuccessfulSnapshot) {
+        return {
+          ...latestSuccessfulSnapshot,
+          authority: 'cached',
+          unavailableReason,
+        };
+      }
+      const {
+        authority: _authority,
+        lastSuccessfulAt: _lastSuccessfulAt,
+        unavailableReason: _unavailableReason,
+        workers: _workers,
+        ...snapshot
+      } = options.createUnavailableSnapshot();
+      return {
+        ...snapshot,
+        workers: [],
+        authority: 'unavailable',
+        unavailableReason,
+      };
+    }
+  };
 }
 
 type WorkerStatusPersistence = Pick<
@@ -171,6 +239,7 @@ const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
 const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
 /** Bounded wait for quit / stopAll so in-flight ticks cannot hang process exit. */
 export const STOP_ALL_SETTLE_TIMEOUT_MS = 5_000;
+const WORKER_STATUS_SNAPSHOT_CACHE_MS = 1000;
 
 function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
@@ -299,6 +368,11 @@ export function createWorkerRuntimeController(options: {
 }): WorkerRuntimeController {
   const handles = new Map<string, RuntimeHandle>();
   const stoppedAtByKind = new Map<string, string>();
+  let cachedSnapshot: { at: number; value: WorkerStatusSnapshot } | null = null;
+
+  const invalidateSnapshot = (): void => {
+    cachedSnapshot = null;
+  };
 
   const requireDefinition = (kind: string) => {
     const definition = options.registry.get(kind);
@@ -391,6 +465,7 @@ export function createWorkerRuntimeController(options: {
       if (optionsArg?.persistDesiredState !== false) {
         persistDesiredState(kind, true, optionsArg?.source ?? 'controller-api');
       }
+      invalidateSnapshot();
 
       const existing = handles.get(kind);
       if (existing) {
@@ -408,16 +483,19 @@ export function createWorkerRuntimeController(options: {
         startedAt: new Date().toISOString(),
       });
       stoppedAtByKind.delete(kind);
+      invalidateSnapshot();
       return rowForKind(kind);
     },
     async stop(kind: string, optionsArg?: { source?: string }): Promise<WorkerStatusEntry> {
       requireDefinition(kind);
       persistDesiredState(kind, false, optionsArg?.source ?? 'controller-api');
+      invalidateSnapshot();
       const handle = handles.get(kind);
       if (!handle) {
         return rowForKind(kind);
       }
       await stopHandle(kind, handle);
+      invalidateSnapshot();
       return rowForKind(kind);
     },
 
@@ -426,13 +504,20 @@ export function createWorkerRuntimeController(options: {
         stopHandle(kind, handle, STOP_ALL_SETTLE_TIMEOUT_MS).catch(() => undefined),
       );
       await Promise.all(stopping);
+      invalidateSnapshot();
     },
 
     snapshot(): WorkerStatusSnapshot {
-      return {
+      const now = Date.now();
+      if (cachedSnapshot && now - cachedSnapshot.at >= 0 && now - cachedSnapshot.at < WORKER_STATUS_SNAPSHOT_CACHE_MS) {
+        return cachedSnapshot.value;
+      }
+      const value = {
         generatedAt: new Date().toISOString(),
         workers: options.registry.list().map((definition) => rowForKind(definition.kind)),
       };
+      cachedSnapshot = { at: now, value };
+      return value;
     },
   };
 }

@@ -283,6 +283,7 @@ export function classifyReviewUnitsForPath(filePath) {
     || path === 'skills/land-stack/SKILL.md'
     || path === 'skills/visual-proof/SKILL.md'
     || path === 'skills/prove-it/SKILL.md'
+    || path === 'skills/admin-bypass-sweep/SKILL.md'
   ) return ['tooling-policy'];
   if (path.startsWith('docs/') || path.startsWith('skills/') || path.endsWith('.md')) return ['docs'];
   if (path.startsWith('.github/')) return ['tooling-policy'];

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_APPROVE_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
+  CLAUDE_OAUTH_REFRESH_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_AUTO_LABEL_WORKER_KIND,
@@ -9,7 +10,9 @@ import {
   PR_ORPHAN_REPAIR_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
+  IDLE_TASK_CLEANUP_WORKER_KIND,
   INFRA_REPAIR_WORKER_KIND,
+  PR_JAILBREAK_LAND_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
@@ -19,15 +22,36 @@ import {
 } from '@invoker/execution-engine';
 
 import type { WorkerActionRecord } from '@invoker/data-store';
+import type { WorkerStatusSnapshot } from '@invoker/contracts';
 import {
   autoStartedOwnerWorkerKinds,
   autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
+  createOwnerWorkerStatusReader,
   createWorkerRuntimeController,
   listWorkerActionHistory,
   listWorkerDecisions,
   toWorkerActionSummary,
 } from '../worker-control.js';
+
+function ownerSnapshot(
+  generatedAt: string,
+  lifecycles: Record<string, 'running' | 'stopped'>,
+): WorkerStatusSnapshot {
+  return {
+    generatedAt,
+    workers: Object.entries(lifecycles).map(([kind, lifecycle]) => ({
+      kind,
+      note: `${kind} worker`,
+      lifecycle,
+      policy: 'enabled',
+      autoStarts: lifecycle === 'running',
+      startable: lifecycle !== 'running',
+      stoppable: lifecycle === 'running',
+      recentActions: [],
+    })),
+  };
+}
 
 interface TestWorkerRuntime extends WorkerRuntime {
   forceExit: () => void;
@@ -98,6 +122,33 @@ function deps(): WorkerRuntimeDependencies {
 }
 
 type AutoStartConfig = Parameters<typeof autoStartedOwnerWorkerKindsForConfig>[0];
+type AutoStartOptions = Parameters<typeof autoStartedOwnerWorkerKinds>[0];
+
+const AUTO_STARTED_OWNER_WORKER_KIND_CONFIG_CASES = [
+  {},
+  { diskHeadroom: { cleanupEnabled: true } },
+  { diskHeadroom: { cleanupEnabled: false } },
+  { autoApproveAIFixes: true },
+  { autoApproveAIFixes: false },
+  { infraRepair: { enabled: true } },
+  { infraRepair: { enabled: false } },
+  { autofix: { enabled: true } },
+  { autofix: { enabled: false } },
+  { reaper: { enabled: true } },
+  { reaper: { enabled: false } },
+  { workflowResume: { enabled: true } },
+  { workflowResume: { enabled: false } },
+  { requeueEnabled: true },
+  { requeueEnabled: false },
+  { e2eAutoFixEnabled: true },
+  { e2eAutoFixEnabled: false },
+  { prMaintenance: { enabled: true } },
+] satisfies AutoStartConfig[];
+
+const AUTO_STARTED_OWNER_WORKER_KIND_OPTION_CASES = [
+  { prMaintenanceEnabled: true },
+  { prMaintenanceEnabled: false },
+] satisfies AutoStartOptions[];
 
 function expectConfigGate(
   workerKind: string,
@@ -138,6 +189,7 @@ function controller(
   register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
   register(PR_ORPHAN_REPAIR_WORKER_KIND, 'Repairs unmapped broken pull requests.');
   register(PR_DUPLICATE_CLOSE_WORKER_KIND, 'Closes duplicate or already-landed pull requests.');
+  register(PR_JAILBREAK_LAND_WORKER_KIND, 'Force-merges eligible jailbreak PRs via admin bypass.');
   register(PR_AUTO_LABEL_WORKER_KIND, 'Auto-labels refactor/bugfix/repro/test-only PRs with admin-bypass.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(REAPER_WORKER_KIND, 'Reaps stale Invoker-managed artifacts.');
@@ -172,6 +224,14 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
     );
   });
 
+  it('includes claude-oauth-refresh only when claudeOauthRefresh.enabled is true', () => {
+    expectConfigGate(
+      CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+      { claudeOauthRefresh: { enabled: true } },
+      { claudeOauthRefresh: { enabled: false } },
+    );
+  });
+
   it('includes auto-approve only when autoApproveAIFixes is true', () => {
     expectConfigGate(
       AUTO_APPROVE_WORKER_KIND,
@@ -185,6 +245,14 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
       INFRA_REPAIR_WORKER_KIND,
       { infraRepair: { enabled: true } },
       { infraRepair: { enabled: false } },
+    );
+  });
+
+  it('includes idle-task-cleanup only when staleTaskCleanup.enabled is true', () => {
+    expectConfigGate(
+      IDLE_TASK_CLEANUP_WORKER_KIND,
+      { staleTaskCleanup: { enabled: true } },
+      { staleTaskCleanup: { enabled: false } },
     );
   });
 
@@ -236,6 +304,15 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
       PR_DUPLICATE_CLOSE_WORKER_KIND,
       PR_AUTO_LABEL_WORKER_KIND,
     ]);
+  });
+
+  it('never auto-starts jailbreak-land for the existing flag cases', () => {
+    for (const config of AUTO_STARTED_OWNER_WORKER_KIND_CONFIG_CASES) {
+      expect(autoStartedOwnerWorkerKindsForConfig(config)).not.toContain(PR_JAILBREAK_LAND_WORKER_KIND);
+    }
+    for (const options of AUTO_STARTED_OWNER_WORKER_KIND_OPTION_CASES) {
+      expect(autoStartedOwnerWorkerKinds(options)).not.toContain(PR_JAILBREAK_LAND_WORKER_KIND);
+    }
   });
 });
 
@@ -570,6 +647,70 @@ describe('toWorkerActionSummary', () => {
     const act = toWorkerActionSummary(decisionRow({ id: 'a', status: 'queued', payload: {} }));
     expect(act.decision).toBe('act');
     expect(act.reason).toBeUndefined();
+  });
+});
+
+describe('createOwnerWorkerStatusReader', () => {
+  it('keeps the complete last owner snapshot stale through a timeout and replaces it on recovery', async () => {
+    const first = ownerSnapshot('2026-01-01T00:00:00.000Z', {
+      'pr-status': 'running',
+      autofix: 'stopped',
+    });
+    const recovered = ownerSnapshot('2026-01-01T00:02:00.000Z', {
+      'pr-status': 'stopped',
+      autofix: 'running',
+    });
+    const queryOwner = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error('Owner request timed out'))
+      .mockResolvedValueOnce(recovered);
+    const now = vi.fn()
+      .mockReturnValueOnce('2026-01-01T00:00:01.000Z')
+      .mockReturnValueOnce('2026-01-01T00:02:01.000Z');
+    const read = createOwnerWorkerStatusReader({
+      queryOwner,
+      createUnavailableSnapshot: () => ownerSnapshot('2026-01-01T00:01:00.000Z', {
+        'pr-status': 'stopped',
+        autofix: 'stopped',
+      }),
+      now,
+    });
+
+    await expect(read()).resolves.toEqual({
+      ...first,
+      authority: 'live',
+      lastSuccessfulAt: '2026-01-01T00:00:01.000Z',
+    });
+    await expect(read()).resolves.toEqual({
+      ...first,
+      authority: 'cached',
+      lastSuccessfulAt: '2026-01-01T00:00:01.000Z',
+      unavailableReason: 'Owner request timed out',
+    });
+    await expect(read()).resolves.toEqual({
+      ...recovered,
+      authority: 'live',
+      lastSuccessfulAt: '2026-01-01T00:02:01.000Z',
+    });
+  });
+
+  it('marks the local fallback unavailable before any owner response succeeds', async () => {
+    const localGuess = ownerSnapshot('2026-01-01T00:00:00.000Z', {
+      'pr-status': 'stopped',
+      autofix: 'stopped',
+    });
+    const read = createOwnerWorkerStatusReader({
+      queryOwner: vi.fn().mockRejectedValue(new Error('Owner request timed out')),
+      createUnavailableSnapshot: () => localGuess,
+      now: () => '2026-01-01T00:00:01.000Z',
+    });
+
+    await expect(read()).resolves.toEqual({
+      generatedAt: localGuess.generatedAt,
+      workers: [],
+      authority: 'unavailable',
+      unavailableReason: 'Owner request timed out',
+    });
   });
 });
 

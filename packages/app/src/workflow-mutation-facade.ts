@@ -40,6 +40,7 @@ import {
   editTaskPrompt as sharedEditTaskPrompt,
   editTaskType as sharedEditTaskType,
   editTaskAgent as sharedEditTaskAgent,
+  editTaskModel as sharedEditTaskModel,
   setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
   setWorkflowExternalGatePolicies as sharedSetWorkflowExternalGatePolicies,
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
@@ -259,6 +260,14 @@ export class WorkflowMutationFacade {
       orchestrator: this.deps.orchestrator,
     });
     return this.finalizeWithTopup(started, 'facade.edit-task-agent', { scopedTaskIds: [taskId] });
+  }
+
+  async editTaskModel(taskId: string, executionModel: string | null): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
+    const started = sharedEditTaskModel(taskId, executionModel, {
+      orchestrator: this.deps.orchestrator,
+    });
+    return this.finalizeWithTopup(started, 'facade.edit-task-model', { scopedTaskIds: [taskId] });
   }
 
   async setTaskExternalGatePolicies(

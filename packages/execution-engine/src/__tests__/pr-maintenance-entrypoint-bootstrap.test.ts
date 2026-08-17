@@ -15,6 +15,7 @@ const PR_MAINTENANCE_ENTRYPOINTS = [
   { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
   { kind: 'pr-orphan-repair', scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh' },
   { kind: 'pr-duplicate-close', scriptRelativePath: 'scripts/cron-pr-duplicate-close.sh' },
+  { kind: 'pr-jailbreak-land', scriptRelativePath: 'scripts/cron-pr-jailbreak-land.sh' },
 ] as const;
 
 describe('PR maintenance entrypoints bootstrap', () => {

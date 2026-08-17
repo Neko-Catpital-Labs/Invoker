@@ -10,7 +10,8 @@ export type WorkerToggleConfigPath =
   | 'prMaintenance.enabled'
   | 'e2eAutoFixEnabled'
   | 'autoApproveAIFixes'
-  | 'diskHeadroom.cleanupEnabled';
+  | 'diskHeadroom.cleanupEnabled'
+  | 'staleTaskCleanup.enabled';
 
 export interface WorkerToggleSpec {
   id: string;
@@ -45,6 +46,12 @@ export const ONBOARDING_WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
     description: 'Automatically reclaims disk space when a machine gets critically full. The monitoring worker always runs; this only controls whether it is allowed to delete anything.',
     configPath: 'diskHeadroom.cleanupEnabled',
     defaultEnabled: true,
+  },
+  {
+    id: 'idle-task-cleanup',
+    label: 'Idle task cleanup',
+    description: 'Reports stale failed/completed/review_ready admin-bypass-repair and e2e-repair tasks. Dry-run only for now — it logs what it would close, it does not close anything yet.',
+    configPath: 'staleTaskCleanup.enabled',
   },
 ] as const;
 

@@ -1,15 +1,28 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   buildCiJobDefinitions,
   buildMarker,
+  buildRepairFilingMetadata,
+  claimRepairFiling,
   fileBugfixPlan,
+  getActionableFailures,
   groupFailuresBySha,
+  isAutoFixCircuitBreakerPaused,
+  isObservationStale,
   jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
   normalizeState,
   processFailureFilingSweep,
+  reconcileCiRun,
+  releaseRepairFilingClaim,
+  repairFilingKind,
+  RECOVERY_COOLDOWN_MS,
+  STALE_OBSERVATION_MS,
 } from './e2e-regression-watch.mjs';
 
 function makeFailure(overrides = {}) {
@@ -105,6 +118,128 @@ describe('liveQueryHasNonTerminalWork', () => {
   });
 });
 
+describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingClaim)', () => {
+  function makeFakeLedger() {
+    const rows = new Map();
+    return {
+      rows,
+      insert: ({ kind, subject, stateSha, metadata }) => {
+        const key = `${kind} ${subject} ${stateSha}`;
+        if (rows.has(key)) return { inserted: false, row: rows.get(key) };
+        const row = { kind, subject, stateSha, metadata };
+        rows.set(key, row);
+        return { inserted: true, row };
+      },
+      release: ({ kind, subject, stateSha }) => {
+        rows.delete(`${kind} ${subject} ${stateSha}`);
+      },
+    };
+  }
+
+  it('kind is namespaced per CI job and excludes the sha and the fleet member count', () => {
+    assert.equal(
+      repairFilingKind(makeFailure({ jobName: 'required-fast / Guardrails' })),
+      'ci-regression:required-fast-guardrails',
+    );
+    assert.equal(
+      repairFilingKind(makeFailure({ jobName: 'fleet / abc123d', markerJobName: 'fleet' })),
+      'ci-regression:fleet',
+    );
+  });
+
+  it('prevents a duplicate PR: a second claim for the identical (kind, subject, stateSha) is rejected', () => {
+    const ledger = makeFakeLedger();
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+
+    const firstAttemptSkips = claimRepairFiling(failure, ledger.insert);
+    assert.equal(firstAttemptSkips, false, 'first claim must succeed (caller proceeds to file)');
+    assert.equal(ledger.rows.size, 1);
+
+    // A second, independent caller (e.g. a fresh sweep, or a different
+    // process) tries to claim the exact same key.
+    const secondAttemptSkips = claimRepairFiling(failure, ledger.insert);
+    assert.equal(secondAttemptSkips, true, 'second claim for the identical key must be rejected');
+    assert.equal(ledger.rows.size, 1, 'exactly one row must exist for this key, not two');
+  });
+
+  it('worked example: different kind or different stateSha both claim as new work; same kind+sha collapses to one', () => {
+    const ledger = makeFakeLedger();
+    const rebaseAtShaA = makeFailure({ jobName: 'admin-requeue / rebase-conflict', firstBadSha: 'shaA' });
+    const uiVitestAtShaB = makeFailure({ jobName: 'admin-requeue / check-ui-vitest', firstBadSha: 'shaB' });
+    const rebaseAtShaBAgain = makeFailure({ jobName: 'admin-requeue / rebase-conflict', firstBadSha: 'shaB' });
+
+    assert.equal(claimRepairFiling(rebaseAtShaA, ledger.insert), false);
+    assert.equal(claimRepairFiling(uiVitestAtShaB, ledger.insert), false);
+    assert.equal(claimRepairFiling(rebaseAtShaBAgain, ledger.insert), false, 'different sha for the same kind must not be suppressed as a duplicate');
+    // Re-detecting the same problem on the same state must collapse to one row.
+    assert.equal(claimRepairFiling(rebaseAtShaBAgain, ledger.insert), true);
+    assert.equal(ledger.rows.size, 3);
+  });
+
+  it('releasing a claim after a failed filing lets a later sweep reclaim the identical key', () => {
+    const ledger = makeFakeLedger();
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+
+    assert.equal(claimRepairFiling(failure, ledger.insert), false);
+    assert.equal(ledger.rows.size, 1);
+
+    // fileFailure threw downstream -- release the claim.
+    releaseRepairFilingClaim(failure, ledger.release);
+    assert.equal(ledger.rows.size, 0);
+
+    // A later attempt for the identical key must succeed now.
+    assert.equal(claimRepairFiling(failure, ledger.insert), false);
+    assert.equal(ledger.rows.size, 1);
+  });
+
+  it('fails closed (treats as already claimed) when the ledger call throws', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const throwingInsert = () => { throw new Error('headless_mutation timed out'); };
+    assert.equal(claimRepairFiling(failure, throwingInsert), true);
+  });
+
+  it('puts the fleet member list in metadata, not the key', () => {
+    const failure = makeFailure({
+      jobName: 'fleet / abc123d',
+      markerJobName: 'fleet',
+      memberJobNames: ['required-fast / Vitest Workspace', 'quality / Dependency Cruise', 'docker / comprehensive'],
+    });
+    const metadata = buildRepairFilingMetadata(failure);
+    assert.deepEqual(metadata.memberJobNames, failure.memberJobNames);
+    assert.equal(repairFilingKind(failure), 'ci-regression:fleet');
+  });
+
+  it('processFailureFilingSweep end-to-end: a second sweep for the same (kind, subject, stateSha) never calls fileFailure again', () => {
+    const ledger = makeFakeLedger();
+    const state = stateWithFailure(makeFailure({ firstBadSha: 'shaA' }));
+    let filedCount = 0;
+
+    processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      liveQuery: (failure) => claimRepairFiling(failure, ledger.insert),
+      releaseFiling: (failure) => releaseRepairFilingClaim(failure, ledger.release),
+      fileFailure: () => { filedCount += 1; },
+      isPaused: () => false,
+    });
+    assert.equal(filedCount, 1);
+
+    // Simulate a second, independent sweep run (fresh local state entry for
+    // the same underlying failure, same ledger backing store) racing to file
+    // the identical (kind, subject, stateSha).
+    const secondSweepState = stateWithFailure(makeFailure({ firstBadSha: 'shaA' }));
+    processFailureFilingSweep(secondSweepState, {
+      now: new Date('2026-08-12T01:00:01Z'),
+      liveQuery: (failure) => claimRepairFiling(failure, ledger.insert),
+      releaseFiling: (failure) => releaseRepairFilingClaim(failure, ledger.release),
+      fileFailure: () => { filedCount += 1; },
+      isPaused: () => false,
+    });
+
+    assert.equal(filedCount, 1, 'the second sweep must not file a duplicate for the identical key');
+    assert.equal(ledger.rows.size, 1);
+  });
+});
+
 describe('fleet SHA correlation', () => {
   it('groups active failures by first bad SHA', () => {
     const sha = 'abc123def456abc123def456abc123def456ab1';
@@ -146,7 +281,7 @@ describe('fleet SHA correlation', () => {
     });
 
     assert.equal(filed.length, 1);
-    assert.equal(filed[0].jobName, 'fleet / abc123d (3 jobs)');
+    assert.equal(filed[0].jobName, 'fleet / abc123d');
     assert.equal(filed[0].markerJobName, 'fleet');
     assert.ok(filed[0].verifyCommand.startsWith('bash scripts/verify-'));
     assert.equal(filed[0].description.includes('No local verify command is mapped'), false);
@@ -157,7 +292,7 @@ describe('fleet SHA correlation', () => {
     assert.deepEqual(liveMarkers, [buildMarker(sha, 'fleet')]);
     assert.equal(counts.groupsCorrelated, 1);
     assert.equal(counts.groupsFiled, 1);
-    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].attempts, 1);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1);
   });
 
   it('keeps two same-SHA failures on the per-job path', () => {
@@ -214,7 +349,7 @@ describe('fleet SHA correlation', () => {
       },
     });
     assert.equal(filedCounts.groupsFiled, 1);
-    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].attempts, 1);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1);
 
     let liveQueryCalled = false;
     const cappedCounts = processFailureFilingSweep(state, {
@@ -233,7 +368,59 @@ describe('fleet SHA correlation', () => {
     assert.equal(liveQueryCalled, false, 'attempt cap should skip before live workflow dedup');
     assert.equal(cappedCounts.groupsNeedingHuman, 1);
     assert.equal(filed, 1);
-    assert.equal(state.activeFailures['fleet / abc123d (3 jobs)'].needsHuman, true);
+    assert.equal(state.activeFailures['fleet / abc123d'].needsHuman, true);
+  });
+
+  it('buildFleetJobName-derived key is stable when fleet membership grows between sweeps', () => {
+    // Regression test: the fleet key used to embed the member-job COUNT
+    // ("fleet / abc123d (3 jobs)"), so a 4th co-failing job joining on the
+    // same sha rotated the key mid-flight. The old entry's attempt/backoff
+    // history was carried over by SHA lookup, but a caller keying its own
+    // dedup off the *jobName string itself must see one stable identity
+    // across the membership change, not a churn of keys.
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const threeJobs = [
+      'required-fast / Vitest Workspace',
+      'quality / Dependency Cruise',
+      'docker / comprehensive',
+    ];
+    const fourthJob = 'ssh / shard-30';
+    const state = stateWithFailures(threeJobs.map((jobName) => makeFailure({ jobName, firstBadSha: sha })));
+
+    const firstSweep = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      jobDefinitions: jobDefinitionsFor(threeJobs),
+      liveQuery: () => false,
+      fileFailure: () => {},
+      isPaused: () => false,
+    });
+    assert.equal(firstSweep.groupsFiled, 1);
+    const fleetKeysAfterFirst = Object.keys(state.activeFailures).filter((key) => key.startsWith('fleet /'));
+    assert.deepEqual(fleetKeysAfterFirst, ['fleet / abc123d']);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1);
+    assert.equal(state.activeFailures['fleet / abc123d'].memberJobNames.length, 3);
+
+    // A 4th job on the same sha joins the fleet on the next sweep.
+    state.activeFailures[fourthJob] = makeFailure({ jobName: fourthJob, firstBadSha: sha });
+
+    const secondSweep = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T01:05:00Z'), // well inside backoff -- must not re-file
+      jobDefinitions: jobDefinitionsFor([...threeJobs, fourthJob]),
+      liveQuery: () => false,
+      fileFailure: () => {
+        throw new Error('must not file again: still the same fleet key, still in backoff');
+      },
+      isPaused: () => false,
+    });
+
+    // Still exactly one fleet key -- membership growth did not fork a new
+    // "fleet / abc123d (4 jobs)" entry that would have reset attempts to 0
+    // and let a brand-new filing sneak past the attempt cap/backoff.
+    const fleetKeysAfterSecond = Object.keys(state.activeFailures).filter((key) => key.startsWith('fleet /'));
+    assert.deepEqual(fleetKeysAfterSecond, ['fleet / abc123d']);
+    assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1, 'attempts must carry over, not reset on membership growth');
+    assert.equal(state.activeFailures['fleet / abc123d'].memberJobNames.length, 4);
+    assert.equal(secondSweep.groupsInBackoff, 1);
   });
 
   it('keeps remaining members under an existing fleet key after the active count drops below threshold', () => {
@@ -315,10 +502,77 @@ describe('fleet SHA correlation', () => {
 
     assert.equal(historicalFilings.length, 11);
     assert.equal(fleetFilings.length, 1);
-    assert.equal(fleetFilings[0].jobName, 'fleet / 631a0d0 (11 jobs)');
+    assert.equal(fleetFilings[0].jobName, 'fleet / 631a0d0');
     for (const jobName of jobs) assert.match(fleetFilings[0].description, new RegExp(jobName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.equal(counts.groupsCorrelated, 1);
     assert.equal(counts.groupsFiled, 1);
+  });
+
+  it('reproduces the bug: an orphaned fleet key is left un-retired forever when its last unmapped member goes silent', () => {
+    const sha1 = 'e73ee551a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7';
+    const sha2 = 'f00df00d1122334455667788990011223344f00d';
+    const jobA = 'quality / Dependency Cruise';
+    const jobB = 'required-fast / Vitest Workspace';
+
+    const state = stateWithFailures([
+      makeFailure({
+        jobName: jobA, firstBadSha: sha1, firstBadRunId: 100,
+        firstJobDatabaseId: 200, firstJobUrl: 'https://example.test/job/200',
+      }),
+      makeFailure({
+        jobName: jobB, firstBadSha: sha1, firstBadRunId: 101,
+        firstJobDatabaseId: 201, firstJobUrl: 'https://example.test/job/201',
+      }),
+    ]);
+
+    // Sweep 1: correlates jobA + jobB into one fleet entry under sha1. This
+    // is the pre-existing fleet-level entry the bug later orphans.
+    processFailureFilingSweep(state, {
+      jobDefinitions: jobDefinitionsFor([jobA, jobB]),
+      fleetEventThreshold: 2,
+      now: new Date('2026-08-12T00:00:00Z'),
+      liveQuery: () => false,
+      fileFailure: () => {},
+    });
+    const fleetKey = Object.keys(state.activeFailures).find((key) => key.startsWith('fleet /'));
+    assert.ok(fleetKey, 'expected a fleet entry to be synthesized');
+
+    // jobB recovers. Its own individual activeFailures entry never had its
+    // own lastFiledAt stamped (only the fleet-level object did, via
+    // recordFailureFiled), so withinRecoveryCooldown reads false
+    // immediately -- no artificial 24h time jump is needed to make
+    // reconcileCiRun delete it outright.
+    reconcileCiRun(state, makeRun({
+      headSha: sha1, jobName: jobB, conclusion: 'success',
+      databaseId: 102, jobDatabaseId: 202, createdAt: '2026-08-12T01:00:00Z',
+    }));
+    assert.equal(state.activeFailures[jobB], undefined);
+
+    // jobB re-fails on a brand-new commit. This creates a fresh, standalone
+    // activeFailures entry for jobB keyed to sha2 -- unrelated to the old
+    // fleet entry still sitting under sha1.
+    reconcileCiRun(state, makeRun({
+      headSha: sha2, jobName: jobB, conclusion: 'failure',
+      databaseId: 103, jobDatabaseId: 203, createdAt: '2026-08-12T02:00:00Z',
+    }));
+
+    // Sweep 2: jobA is now unmapped (simulating a rename/removal from CI).
+    // The old fleet entry's group now contains only jobA, which can't
+    // synthesize a valid fleet failure (no verify command) -- this is the
+    // sweep where the bug fires.
+    const filed = [];
+    processFailureFilingSweep(state, {
+      jobDefinitions: jobDefinitionsFor([jobB]),
+      fleetEventThreshold: 2,
+      now: new Date('2026-08-12T03:00:00Z'),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure),
+    });
+
+    assert.equal(state.activeFailures[fleetKey].retired, true);
+    assert.equal(state.activeFailures[jobA].retired, true);
+    assert.deepEqual(filed.map((failure) => failure.jobName), [jobB]);
+    assert.equal(filed[0].firstBadSha, sha2);
   });
 });
 
@@ -447,7 +701,7 @@ describe('attempt ledger filing gate', () => {
 
 describe('retired CI job filing gate', () => {
   it('skips an unmapped job, marks it retired, counts it, and never files', () => {
-    const key = 'playwright / launch-dispatch-stuck-lease';
+    const key = 'playwright / retired-example';
     const state = stateWithFailure(makeFailure({ jobName: key }));
     const jobDefinitions = new Map([
       ['playwright / 9-of-9', { verifyCommand: 'bash scripts/test-suites/optional/40-playwright-app.sh' }],
@@ -489,7 +743,7 @@ describe('retired CI job filing gate', () => {
   });
 
   it('fileBugfixPlan throws before rendering for an unmapped job', () => {
-    const failure = makeFailure({ jobName: 'playwright / launch-dispatch-stuck-lease' });
+    const failure = makeFailure({ jobName: 'playwright / retired-example' });
     const calls = [];
 
     assert.throws(
@@ -529,7 +783,7 @@ describe('retired CI job filing gate', () => {
     assert.equal(state.activeFailures[key].retired, false);
   });
 
-  it('backtests the real 2026-08-12 retired playwright key against current ci.yml', () => {
+  it('backtests the legacy 2026-08-12 stuck-lease playwright key against current ci.yml', () => {
     const key = 'playwright / launch-dispatch-stuck-lease';
     const state = stateWithFailure(makeFailure({
       jobName: key,
@@ -548,10 +802,309 @@ describe('retired CI job filing gate', () => {
       },
     });
 
-    assert.equal(jobNameIsMapped(key, jobDefinitions), false);
+    assert.equal(jobNameIsMapped(key, jobDefinitions), true);
     assert.equal(filed, 0);
-    assert.equal(counts.groupsRetired, 1);
+    assert.equal(counts.groupsRetired, 0);
     assert.equal(counts.groupsFiled, 0);
-    assert.equal(state.activeFailures[key].retired, true);
+    assert.equal(counts.groupsNeedingHuman, 1);
+    assert.equal(state.activeFailures[key].retired, false);
+    assert.equal(state.activeFailures[key].needsHuman, true);
+  });
+});
+
+function makeRun({ headSha, jobName, conclusion, databaseId, jobDatabaseId, createdAt }) {
+  return {
+    headSha,
+    headBranch: 'master',
+    databaseId,
+    createdAt,
+    jobs: [
+      {
+        name: jobName,
+        status: 'completed',
+        conclusion,
+        databaseId: jobDatabaseId,
+        url: `https://example.test/job/${jobDatabaseId}`,
+        completedAt: createdAt,
+      },
+    ],
+  };
+}
+
+describe('reconcileCiRun flaky-job flap handling', () => {
+  const jobName = 'playwright / launch-dispatch-stuck-lease';
+  const sha = 'a5d6b3e626ace9e963e924c0de9410dc0302de9e';
+
+  it('reproduces the bug: a single green run used to wipe attempts/occurrences before a flap back to red', () => {
+    // This is the historical (pre-fix) behavior this test guards against: a
+    // job filed twice (attempts: 2) goes green once -- CI flakiness, not a
+    // real fix -- then red again 10 minutes later. The watcher must not
+    // hand it a brand-new 3-attempt budget for what is still the same
+    // unresolved regression.
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      firstBadSha: sha,
+      lastBadSha: sha,
+      occurrences: 40,
+      attempts: 2,
+      lastFiledAt: '2026-08-13T20:00:00.000Z',
+    }));
+
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'success',
+      databaseId: 101, jobDatabaseId: 201, createdAt: '2026-08-13T20:05:00.000Z',
+    }));
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'failure',
+      databaseId: 102, jobDatabaseId: 202, createdAt: '2026-08-13T20:15:00.000Z',
+    }));
+
+    const failure = state.activeFailures[jobName];
+    assert.ok(failure, 'failure record must survive the flap, not disappear');
+    assert.equal(failure.attempts, 2, 'attempts must be preserved across a same-defect flap');
+    assert.equal(failure.occurrences, 41, 'occurrences should accumulate, not reset to 1');
+  });
+
+  it('does not re-file work for a job currently reporting green during its recovery cooldown', () => {
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      firstBadSha: sha,
+      lastBadSha: sha,
+      attempts: 1,
+      lastFiledAt: '2026-08-13T20:00:00.000Z',
+    }));
+
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'success',
+      databaseId: 101, jobDatabaseId: 201, createdAt: '2026-08-13T20:05:00.000Z',
+    }));
+
+    assert.ok(state.activeFailures[jobName], 'record kept for cooldown bookkeeping');
+    assert.deepEqual(
+      getActionableFailures(state).map((f) => f.jobName),
+      [],
+      'a job CI currently reports green must not be filed again while its record is retained',
+    );
+  });
+
+  it('still clears attempts/occurrences once the job has stayed green past the recovery cooldown', () => {
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      firstBadSha: sha,
+      lastBadSha: sha,
+      occurrences: 40,
+      attempts: 2,
+      lastFiledAt: '2026-08-13T20:00:00.000Z',
+    }));
+
+    reconcileCiRun(state, makeRun({
+      headSha: sha, jobName, conclusion: 'success',
+      databaseId: 101, jobDatabaseId: 201,
+      createdAt: new Date(new Date('2026-08-13T20:00:00.000Z').getTime() + RECOVERY_COOLDOWN_MS + 1000).toISOString(),
+    }));
+
+    assert.equal(state.activeFailures[jobName], undefined, 'a durably green job should still clear its history');
+
+    reconcileCiRun(state, makeRun({
+      headSha: 'f'.repeat(40), jobName, conclusion: 'failure',
+      databaseId: 103, jobDatabaseId: 203, createdAt: '2026-08-20T00:00:00.000Z',
+    }));
+
+    assert.equal(state.activeFailures[jobName].attempts, 0, 'a genuinely new regression starts with a fresh budget');
+    assert.equal(state.activeFailures[jobName].occurrences, 1);
+  });
+});
+
+describe('stale-observation retirement', () => {
+  const jobName = 'playwright / launch-dispatch-stuck-lease';
+
+  it('isObservationStale is false just inside the window and true just past it', () => {
+    const lastObservedAt = '2026-08-06T01:21:00.000Z';
+    const lastObservedMs = new Date(lastObservedAt).getTime();
+    assert.equal(
+      isObservationStale({ lastObservedAt }, lastObservedMs + STALE_OBSERVATION_MS - 1),
+      false,
+    );
+    assert.equal(
+      isObservationStale({ lastObservedAt }, lastObservedMs + STALE_OBSERVATION_MS + 1),
+      true,
+    );
+  });
+
+  it('reproduces the bug: a job kept "mapped" by a legacy alias, but never re-observed by CI, gets filed forever', () => {
+    // Models LEGACY_PLAYWRIGHT_JOB_ALIASES: jobDefinitions has a real,
+    // permanent entry for a job CI stopped producing after a shard rename
+    // (the incident: no run reported this job, green or red, for 8+ days,
+    // yet the watcher kept dispatching real "diagnose and fix" agents).
+    const jobDefinitions = jobDefinitionsFor([jobName]);
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      occurrences: 66,
+      attempts: 2,
+      lastFiledAt: '2026-08-14T00:20:38.634Z',
+      lastObservedAt: '2026-08-06T01:21:00.000Z',
+    }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T01:00:00.000Z'),
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+    });
+
+    assert.deepEqual(filed, [], 'a job CI has not reported on in either direction must not be re-filed');
+    assert.equal(counts.groupsRetiredStale, 1);
+    assert.equal(counts.groupsFiled, 0);
+    assert.equal(state.activeFailures[jobName].retired, true);
+  });
+
+  it('still files normally for a mapped job CI observed recently', () => {
+    const jobDefinitions = jobDefinitionsFor([jobName]);
+    const state = stateWithFailure(makeFailure({
+      jobName,
+      attempts: 0,
+      lastFiledAt: null,
+      lastObservedAt: '2026-08-13T23:00:00.000Z',
+    }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T01:00:00.000Z'),
+      jobDefinitions,
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+    });
+
+    assert.deepEqual(filed, [jobName]);
+    assert.equal(counts.groupsRetiredStale, 0);
+    assert.equal(state.activeFailures[jobName].retired, false);
+  });
+});
+
+describe('auto-fix circuit breaker (shared with execution-engine)', () => {
+  let dir;
+  let breakerPath;
+
+  function withDir(fn) {
+    dir = mkdtempSync(join(tmpdir(), 'invoker-watch-breaker-'));
+    breakerPath = join(dir, 'auto-fix-pause.json');
+    try {
+      return fn();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('isAutoFixCircuitBreakerPaused reads the same pause-file format execution-engine writes', () => withDir(() => {
+    writeFileSync(breakerPath, JSON.stringify({
+      pausedUntil: '2026-08-14T12:00:00.000Z',
+      reason: 'usage-limit',
+      triggeredAt: '2026-08-14T06:00:00.000Z',
+    }));
+    assert.equal(isAutoFixCircuitBreakerPaused(new Date('2026-08-14T08:00:00.000Z').getTime(), breakerPath), true);
+    assert.equal(isAutoFixCircuitBreakerPaused(new Date('2026-08-15T00:00:00.000Z').getTime(), breakerPath), false);
+  }));
+
+  it('reproduces the bug: without a pause check, the sweep files new repair work while the fleet is out of quota', () => withDir(() => {
+    const jobName = 'required-fast / Vitest Workspace';
+    const state = stateWithFailure(makeFailure({ jobName }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T08:00:00.000Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+      isPaused: () => true,
+    });
+
+    assert.deepEqual(filed, [], 'must not file while the shared circuit breaker is paused');
+    assert.equal(counts.pausedByCircuitBreaker, true);
+  }));
+
+  it('resumes filing once the breaker is no longer paused', () => withDir(() => {
+    const jobName = 'required-fast / Vitest Workspace';
+    const state = stateWithFailure(makeFailure({ jobName }));
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-14T08:00:00.000Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+      isPaused: () => false,
+    });
+
+    assert.deepEqual(filed, [jobName]);
+    assert.equal(counts.pausedByCircuitBreaker, undefined);
+  }));
+});
+
+describe('a poison-pill failure must not abort the whole sweep', () => {
+  it('reproduces the bug: one fileFailure throwing used to stop every later candidate in the same sweep', () => {
+    // Real incident: e2e-regression-watch filed 4 repair plans successfully,
+    // then hit a CI job named "optional / Visual Proof Validate" -- its
+    // interpolated job name tripped skill-doctor.sh's review-unit lint, and
+    // that thrown error propagated all the way out of processFailureFilingSweep,
+    // so the 5th+ actionable failures in that sweep got zero filing attempts.
+    const jobs = [
+      'required-fast / Vitest Workspace',
+      'optional / Visual Proof Validate',
+      'docker / comprehensive',
+    ];
+    const state = stateWithFailures(jobs.map((jobName, index) => makeFailure({
+      jobName,
+      firstBadSha: `a5d6b3e626ace9e963e924c0de9410dc0302de9${index}`,
+    })));
+    const jobDefinitions = jobDefinitionsFor(jobs);
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T00:00:00Z'),
+      jobDefinitions,
+      isPaused: () => false,
+      liveQuery: () => false,
+      fileFailure: (failure) => {
+        if (failure.jobName === 'optional / Visual Proof Validate') {
+          throw new Error('skill-doctor.sh lint-review-units failed: mixes docs language with product-unit language');
+        }
+        filed.push(failure.jobName);
+      },
+    });
+
+    assert.deepEqual(
+      filed.sort(),
+      ['docker / comprehensive', 'required-fast / Vitest Workspace'],
+      'the two healthy candidates must still get filed even though the middle one threw',
+    );
+    assert.equal(counts.groupsFiled, 2);
+    assert.equal(counts.groupsFailedToFile, 1);
+  });
+
+  it('logs the failure via onFileError and still advances the attempt count so it eventually escalates to needs-human', () => {
+    const jobName = 'optional / Visual Proof Validate';
+    const state = stateWithFailure(makeFailure({ jobName }));
+    const errors = [];
+
+    processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T00:00:00Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      isPaused: () => false,
+      liveQuery: () => false,
+      fileFailure: () => {
+        throw new Error('lint-review-units failed');
+      },
+      onFileError: (failure, error) => {
+        errors.push({ jobName: failure.jobName, message: error.message });
+      },
+    });
+
+    assert.deepEqual(errors, [{ jobName, message: 'lint-review-units failed' }]);
+    assert.equal(
+      state.activeFailures[jobName].attempts,
+      1,
+      'a failed filing attempt must still count toward the cap, or this job would crash-loop every sweep forever',
+    );
   });
 });

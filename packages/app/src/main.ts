@@ -72,6 +72,7 @@ import type {
   Logger,
   StartReadyRequest,
   StartReadyResult,
+  WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository, hasLiveWritableOwner } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -103,6 +104,8 @@ import {
   reconcileTerminalWorkerActionsOnStartup,
   SPAWN_REPAIR_WORKFLOW_CHANNEL,
   submitRepairWorkflowFromCiFailure,
+  createPrMaintenanceGitHub,
+  spawnPrMaintenanceCommand,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -219,6 +222,7 @@ import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
+  createOwnerWorkerStatusReader,
   createWorkerRuntimeController,
   type WorkerRuntimeController,
 } from './worker-control.js';
@@ -396,6 +400,9 @@ function buildRegisteredOwnerWorkerDeps(
       remoteTargets,
       cleanupEnabled: invokerConfig.diskHeadroom?.cleanupEnabled,
     },
+    claudeOauthRefresh: {
+      remoteTargets: remoteTargets.map((target) => ({ name: target.name, connection: target.connection })),
+    },
     infraRepair: {
       ownerRepoRoot: repoRoot,
       ownerInvokerHome: resolveInvokerHomeRoot(),
@@ -418,6 +425,15 @@ function buildRegisteredOwnerWorkerDeps(
       enabled: resolveAutoApproveAIFixes(invokerConfig),
     },
     slackBugScan: buildSlackBugScanWorkerConfig(planningCommandBuilder, executionAgentRegistry),
+    idleTaskCleanup: {
+      github: createPrMaintenanceGitHub({
+        run: spawnPrMaintenanceCommand,
+        repo: process.env.INVOKER_GITHUB_TARGET_REPO?.trim() || 'Neko-Catpital-Labs/Invoker',
+        author: process.env.INVOKER_PR_CRON_AUTHOR?.trim() || 'EdbertChan',
+        logger,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      }),
+    },
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -701,13 +717,6 @@ async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   const delayMs = Number(raw);
   if (!Number.isFinite(delayMs) || delayMs <= 0) return;
   await new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
 }
 
 interface InitServicesOptions {
@@ -3358,30 +3367,36 @@ startMainProcessBootstrap({
       planningTerminalState.restorePersistedPlanningTerminals();
     }
 
-    ipcMain.handle('invoker:get-workers', async () => {
-      if (!ownerMode) {
-        try {
-          return await messageBus.request('headless.query', { kind: 'workers' });
-        } catch (err) {
-          if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
-          logger.warn(
-            `get-workers owner delegation failed; falling back to local read-only snapshot: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-            { module: 'ipc' },
-          );
-        }
-        return createLocalWorkerStatusSnapshot({
-          registry: createRegisteredWorkerRegistry(),
-          persistence,
-          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-        });
-      }
-      return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+    const createUnavailableWorkerStatusSnapshot = (): WorkerStatusSnapshot =>
+      createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
         autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
       });
+    const readOwnerWorkerStatus = createOwnerWorkerStatusReader({
+      queryOwner: () => messageBus.request<{ kind: 'workers' }, WorkerStatusSnapshot>(
+        'headless.query',
+        { kind: 'workers' },
+      ),
+      createUnavailableSnapshot: createUnavailableWorkerStatusSnapshot,
+      onUnavailable: (err) => {
+        if (isMutationOwnerUnavailableError(err)) {
+          markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+        }
+        logger.warn(
+          `get-workers owner delegation failed; preserving last owner snapshot when available: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { module: 'ipc' },
+        );
+      },
+    });
+
+    ipcMain.handle('invoker:get-workers', async () => {
+      if (!ownerMode) {
+        return readOwnerWorkerStatus();
+      }
+      return workerRuntimeController?.snapshot() ?? createUnavailableWorkerStatusSnapshot();
     });
 
     ipcMain.handle('invoker:get-activity-logs', (_event, sinceId?: number, limit?: number) => {

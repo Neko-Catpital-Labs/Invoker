@@ -14,6 +14,8 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { shouldRetry, isStale } from './retry-ledger.mjs';
+import { insertRepairFiling, releaseRepairFiling } from './repair-filing-ledger.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(__filename));
@@ -52,6 +54,35 @@ export const FLEET_EVENT_THRESHOLD = parsePositiveInteger(
   3,
 );
 export const ATTEMPT_BACKOFF_BASE_MS = 30 * 60 * 1000;
+/**
+ * How long a job's attempt/backoff/occurrence history survives after CI
+ * reports it green, before a later red observation is treated as a brand
+ * new regression. Without this, one green run on a flaky job (one that
+ * flaps pass/fail on the same underlying defect) wipes `attempts` back to
+ * 0, handing it a fresh attempt budget every flap and defeating the cap
+ * in `shouldFileFailure`.
+ */
+export const RECOVERY_COOLDOWN_MS = parseNonNegativeInteger(
+  process.env.INVOKER_CI_WATCH_RECOVERY_COOLDOWN_MS,
+  24 * 60 * 60 * 1000,
+);
+/**
+ * A job CI hasn't reported on (green or red) in this long is presumed
+ * renamed, removed, or otherwise no longer produced by the current
+ * workflow -- most concretely, a job kept "mapped" only by a
+ * LEGACY_PLAYWRIGHT_JOB_ALIASES-style compatibility shim after a shard
+ * rename. Such a job can never again resolve itself via a real 'ok'
+ * observation in reconcileCiRun, so the filing sweep retires it instead of
+ * re-filing repairs against it forever.
+ */
+export const STALE_OBSERVATION_MS = parseNonNegativeInteger(
+  process.env.INVOKER_CI_WATCH_STALE_OBSERVATION_MS,
+  3 * 24 * 60 * 60 * 1000,
+);
+
+export function isObservationStale(failure, nowMs, staleMs = STALE_OBSERVATION_MS) {
+  return isStale({ lastObservedAt: failure?.lastObservedAt, nowMs, staleMs });
+}
 
 const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
   ?? process.env.INVOKER_E2E_WATCH_STATE_DIR
@@ -59,6 +90,26 @@ const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
 const STATE_FILE = join(STATE_DIR, 'state.json');
 const SWEEP_LOG_FILE = join(STATE_DIR, 'sweep-log.jsonl');
 const WORKFLOW_PATH = join(REPO_ROOT, '.github', 'workflows', WORKFLOW_FILE);
+/**
+ * Shared fleet-wide auto-fix pause flag, same file and format written by
+ * packages/execution-engine/src/auto-fix-circuit-breaker.ts. One usage-limit
+ * failure anywhere in Invoker (not just here) pauses this watcher's filing
+ * too, since a filed repair here dispatches the same rate-limited agent.
+ */
+const AUTO_FIX_PAUSE_FILE = process.env.INVOKER_AUTO_FIX_PAUSE_FILE
+  ?? join(homedir(), '.invoker', 'auto-fix-pause.json');
+
+export function isAutoFixCircuitBreakerPaused(nowMs = Date.now(), path = AUTO_FIX_PAUSE_FILE) {
+  if (!existsSync(path)) return false;
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    if (!raw?.pausedUntil) return false;
+    const untilMs = new Date(raw.pausedUntil).getTime();
+    return Number.isFinite(untilMs) && nowMs < untilMs;
+  } catch {
+    return false;
+  }
+}
 const BUILD_APP_COMMAND = [
   'pnpm --filter @invoker/ui build',
   'pnpm --filter @invoker/surfaces build',
@@ -223,7 +274,27 @@ export function reconcileCiRun(state, run) {
     if (classification === 'ok') {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
-      delete normalized.activeFailures[jobName];
+      const existing = normalized.activeFailures[jobName];
+      const lastFiledMs = existing?.lastFiledAt ? new Date(existing.lastFiledAt).getTime() : NaN;
+      const observedAtMs = baseObservation.observedAt ? new Date(baseObservation.observedAt).getTime() : NaN;
+      const withinRecoveryCooldown = existing
+        && Number.isFinite(lastFiledMs)
+        && Number.isFinite(observedAtMs)
+        && (observedAtMs - lastFiledMs) < RECOVERY_COOLDOWN_MS;
+      // A flaky job can report green once and then red again shortly after
+      // on the same underlying defect. Keep attempts/occurrences/lastFiledAt
+      // through the cooldown so that flap resumes the existing backoff
+      // instead of starting over; getActionableFailures excludes it via
+      // lastObservedState while it reads as currently green.
+      if (withinRecoveryCooldown) {
+        normalized.activeFailures[jobName] = {
+          ...existing,
+          ...normalizeActiveFailure(existing, jobName),
+          lastObservedState: 'ok',
+        };
+      } else {
+        delete normalized.activeFailures[jobName];
+      }
       continue;
     }
 
@@ -241,6 +312,7 @@ export function reconcileCiRun(state, run) {
           lastJobUrl: job.url ?? '',
           lastObservedAt: baseObservation.observedAt,
           occurrences: Number(existing.occurrences ?? 1) + 1,
+          lastObservedState: 'broken',
         };
       } else {
         normalized.activeFailures[jobName] = {
@@ -259,6 +331,7 @@ export function reconcileCiRun(state, run) {
           attempts: 0,
           lastFiledAt: null,
           needsHuman: false,
+          lastObservedState: 'broken',
         };
       }
       continue;
@@ -277,6 +350,10 @@ export function getActionableFailures(state) {
   const normalized = normalizeState(state);
   return Object.values(normalized.activeFailures)
     .filter((failure) => failure && typeof failure.jobName === 'string' && typeof failure.firstBadSha === 'string')
+    // Retained during the post-recovery cooldown (see reconcileCiRun) purely
+    // to preserve attempt/backoff history for a possible flap back to red;
+    // CI currently reports it passing, so it is not actionable right now.
+    .filter((failure) => failure.lastObservedState !== 'ok')
     .sort((a, b) => {
       const runDelta = Number(a.firstBadRunId ?? 0) - Number(b.firstBadRunId ?? 0);
       if (runDelta !== 0) return runDelta;
@@ -306,20 +383,13 @@ export function shouldFileFailure(failure, {
   maxAttempts = MAX_ATTEMPTS,
   backoffBaseMs = ATTEMPT_BACKOFF_BASE_MS,
 } = {}) {
-  const attempts = Number(failure?.attempts ?? 0);
-  if (attempts >= maxAttempts) {
-    return { action: 'needs-human', attempts };
-  }
-  if (failure?.lastFiledAt) {
-    const lastFiledMs = Date.parse(failure.lastFiledAt);
-    if (Number.isFinite(lastFiledMs)) {
-      const backoffUntilMs = lastFiledMs + (backoffBaseMs * (2 ** attempts));
-      if (nowMs < backoffUntilMs) {
-        return { action: 'backoff', attempts, backoffUntilMs };
-      }
-    }
-  }
-  return { action: 'file', attempts };
+  return shouldRetry({
+    attempts: failure?.attempts,
+    lastAttemptAt: failure?.lastFiledAt,
+    nowMs,
+    maxAttempts,
+    backoffBaseMs,
+  });
 }
 
 export function markFailureNeedsHuman(state, failure) {
@@ -373,8 +443,13 @@ function failureIsMapped(failure, jobDefinitions) {
   return Boolean(getVerifyCommandForFailure(failure, jobDefinitions));
 }
 
-function buildFleetJobName(sha, count) {
-  return `fleet / ${shortSha(sha)} (${count} jobs)`;
+// Deliberately does NOT embed the member-job count: membership can change
+// between sweeps (a 4th co-failing job joins, or one flips back to green)
+// without that being a *different* fleet event for dedup purposes. The
+// member list belongs in the failure description/metadata, not the key --
+// see buildFleetFailureDescription and REPAIR_FILING_KIND_FLEET's stateSha.
+function buildFleetJobName(sha) {
+  return `fleet / ${shortSha(sha)}`;
 }
 
 function buildFleetFailureDescription(sha, members) {
@@ -423,7 +498,7 @@ function synthesizeFleetFailure(state, sha, members, jobDefinitions) {
     if (runDelta !== 0) return runDelta;
     return a.jobName.localeCompare(b.jobName);
   }).at(0);
-  const jobName = buildFleetJobName(sha, members.length);
+  const jobName = buildFleetJobName(sha);
   return {
     ...(existing ?? {}),
     jobName,
@@ -470,6 +545,16 @@ function prepareFleetCorrelatedFailures(state, failures, {
     if (members.length < threshold && !existingFleetBySha.has(sha)) continue;
     const fleetFailure = synthesizeFleetFailure(normalized, sha, members, jobDefinitions);
     if (!fleetFailure) {
+      if (existingFleetBySha.has(sha)) {
+        const existingFleetEntry = existingFleetBySha.get(sha);
+        if (normalized.activeFailures[existingFleetEntry.jobName]) {
+          normalized.activeFailures[existingFleetEntry.jobName] = {
+            ...normalized.activeFailures[existingFleetEntry.jobName],
+            retired: true,
+          };
+          stateChanged = true;
+        }
+      }
       for (const member of members) {
         const existing = normalized.activeFailures[member.jobName];
         if (!existing) continue;
@@ -823,6 +908,68 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
   );
 }
 
+// ---------------------------------------------------------------------------
+// repair_filings ledger gate (replaces liveQueryHasNonTerminalWork as the
+// default dedup gate; see scripts/repair-filing-ledger.mjs)
+// ---------------------------------------------------------------------------
+
+/**
+ * kind is namespaced per CI job and deliberately excludes the sha (that's
+ * stateSha) and, for fleet events, excludes the member-job count (that's
+ * metadata only) -- see buildFleetJobName.
+ */
+export function repairFilingKind(failure) {
+  const job = failure.markerJobName ?? failure.jobName;
+  return `ci-regression:${slugify(job)}`;
+}
+
+export function buildRepairFilingMetadata(failure) {
+  const metadata = { jobName: failure.jobName };
+  if (Array.isArray(failure.memberJobNames)) metadata.memberJobNames = failure.memberJobNames;
+  return metadata;
+}
+
+/**
+ * Atomically claims the (kind, subject='master', stateSha) key for this
+ * failure. Returns true when the caller should SKIP filing -- either because
+ * another filer already holds this exact claim, or because the ledger call
+ * itself failed and we fail closed (same philosophy as the old
+ * liveQueryHasNonTerminalWork: a broken dedup check must never risk a
+ * duplicate fix PR). Returns false when this call created the claim and the
+ * caller should proceed to file -- on failure to actually file, the caller
+ * MUST call releaseRepairFilingClaim(failure) to undo the claim, or this key
+ * would be permanently blocked from ever being retried.
+ */
+export function claimRepairFiling(failure, insert = insertRepairFiling) {
+  try {
+    const result = insert({
+      kind: repairFilingKind(failure),
+      subject: 'master',
+      stateSha: failure.firstBadSha,
+      metadata: buildRepairFilingMetadata(failure),
+    });
+    return !result.inserted;
+  } catch (err) {
+    console.error(`ci-regression-watch: claimRepairFiling failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}", assuming already claimed: ${err instanceof Error ? err.message : String(err)}`);
+    return true;
+  }
+}
+
+/**
+ * Releases a claim made by claimRepairFiling when the subsequent fileFailure
+ * call throws, so a later sweep can retry the same (kind, subject, stateSha)
+ * instead of being permanently blocked. Never throws -- a failed release
+ * must not crash the sweep; it just means this key stays claimed until a
+ * human clears it or the sha changes.
+ */
+export function releaseRepairFilingClaim(failure, release = releaseRepairFiling) {
+  try {
+    release({ kind: repairFilingKind(failure), subject: 'master', stateSha: failure.firstBadSha });
+  } catch (err) {
+    console.error(`ci-regression-watch: releaseRepairFilingClaim failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}"; this key stays claimed until manually cleared: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export function fileBugfixPlan(failure, opts = {}) {
   const repoUrl = opts.repoUrl ?? getRepoUrl();
   const jobDefinitions = opts.jobDefinitions ?? buildCiJobDefinitions();
@@ -846,15 +993,34 @@ export function processFailureFilingSweep(state, {
   maxAttempts = MAX_ATTEMPTS,
   capPerSweep = CAP_PER_SWEEP,
   jobDefinitions = null,
-  liveQuery = liveQueryHasNonTerminalWork,
+  liveQuery = claimRepairFiling,
+  releaseFiling = releaseRepairFilingClaim,
   fileFailure = () => {},
   save = () => {},
   onNeedsHuman = () => {},
   onRetired = () => {},
+  onFileError = () => {},
   fleetEventThreshold = FLEET_EVENT_THRESHOLD,
+  isPaused = isAutoFixCircuitBreakerPaused,
 } = {}) {
   const filedAt = now instanceof Date ? now : new Date(now);
   const nowMs = filedAt.getTime();
+
+  if (isPaused(nowMs)) {
+    return {
+      groupsFound: failures.length,
+      groupsFiled: 0,
+      groupsSkippedAlreadyAddressed: 0,
+      groupsDeferredByCap: 0,
+      groupsNeedingHuman: 0,
+      groupsInBackoff: 0,
+      groupsRetired: 0,
+      groupsRetiredStale: 0,
+      groupsCorrelated: 0,
+      pausedByCircuitBreaker: true,
+    };
+  }
+
   const prepared = prepareFleetCorrelatedFailures(state, failures, {
     threshold: fleetEventThreshold,
     jobDefinitions,
@@ -869,7 +1035,9 @@ export function processFailureFilingSweep(state, {
     groupsNeedingHuman: 0,
     groupsInBackoff: 0,
     groupsRetired: prepared.retiredFleetMembers.length,
+    groupsRetiredStale: 0,
     groupsCorrelated: prepared.groupsCorrelated,
+    groupsFailedToFile: 0,
   };
 
   for (const failure of prepared.failures) {
@@ -877,7 +1045,15 @@ export function processFailureFilingSweep(state, {
       counts.groupsRetired += 1;
       markFailureRetired(state, failure, true);
       save(state);
-      onRetired(failure);
+      onRetired(failure, 'unmapped');
+      continue;
+    }
+    if (isObservationStale(failure, nowMs)) {
+      counts.groupsRetired += 1;
+      counts.groupsRetiredStale += 1;
+      markFailureRetired(state, failure, true);
+      save(state);
+      onRetired(failure, 'stale-observation');
       continue;
     }
     const attemptGate = shouldFileFailure(failure, { nowMs, maxAttempts });
@@ -892,16 +1068,42 @@ export function processFailureFilingSweep(state, {
       counts.groupsInBackoff += 1;
       continue;
     }
-    if (liveQuery(failure)) {
-      counts.groupsSkippedAlreadyAddressed += 1;
-      continue;
-    }
+    // Cap check must run BEFORE the ledger claim below: liveQuery (default
+    // claimRepairFiling) now has a side effect -- it inserts the dedup row
+    // -- so deferring a failure by the per-sweep cap after already claiming
+    // it would leak a permanently-unfileable claim (no fileFailure call ever
+    // follows to either succeed or release it).
     if (capPerSweep > 0 && counts.groupsFiled >= capPerSweep) {
       counts.groupsDeferredByCap += 1;
       continue;
     }
+    if (liveQuery(failure)) {
+      counts.groupsSkippedAlreadyAddressed += 1;
+      continue;
+    }
 
-    fileFailure(failure);
+    // One failure's own render/lint/submit (fileFailure) throwing must never
+    // stop the whole sweep -- confirmed live: a CI job whose name happened to
+    // contain a review-unit keyword ("optional / Visual Proof Validate")
+    // tripped skill-doctor.sh's lint and killed the entire process, so every
+    // other actionable failure in this sweep silently got zero filing
+    // attempts. recordFailureFiled still runs so this failure's attempt
+    // count advances toward the existing needs-human cap instead of
+    // retry-crashing forever on the same poison-pill job every sweep.
+    try {
+      fileFailure(failure);
+    } catch (error) {
+      counts.groupsFailedToFile += 1;
+      onFileError(failure, error);
+      // The liveQuery call above already claimed this (kind, subject,
+      // stateSha) in the repair_filings ledger; the filing attempt itself
+      // never got submitted, so release the claim or this key would be
+      // permanently blocked from every future retry.
+      releaseFiling(failure);
+      recordFailureFiled(state, failure, filedAt);
+      save(state);
+      continue;
+    }
     recordFailureFiled(state, failure, filedAt);
     save(state);
     counts.groupsFiled += 1;
@@ -963,10 +1165,20 @@ export async function main() {
     onNeedsHuman: (failure, attemptGate) => {
       console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
     },
-    onRetired: (failure) => {
-      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" has no mapped local verify command; marking retired and skipping filing`);
+    onRetired: (failure, reason) => {
+      const detail = reason === 'stale-observation'
+        ? `CI has not reported this job in either direction for over ${Math.round(STALE_OBSERVATION_MS / 86_400_000)}d (last observed ${failure.lastObservedAt}); presumed renamed or removed`
+        : 'has no mapped local verify command';
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" ${detail}; marking retired and skipping filing`);
+    },
+    onFileError: (failure, error) => {
+      console.error(`ci-regression-watch: failed to render/lint/submit a repair plan for "${buildMarker(failure.firstBadSha, failure.jobName)}": ${error.message}; continuing with the rest of the sweep`);
     },
   });
+
+  if (filingCounts.pausedByCircuitBreaker) {
+    console.error('ci-regression-watch: auto-fix circuit breaker is paused; skipped filing this sweep');
+  }
 
   appendSweepLog({
     runsProcessed,

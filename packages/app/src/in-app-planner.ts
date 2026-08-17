@@ -228,6 +228,19 @@ function oneLine(value: string): string {
     .trim();
 }
 
+function extractFencedYamlPlanText(text: string): string | null {
+  const fenceStart = text.lastIndexOf('```yaml\n');
+  if (fenceStart === -1) return null;
+  const contentStart = fenceStart + '```yaml\n'.length;
+  const rest = text.slice(contentStart);
+  const closeMatch = rest.match(/^```\s*$/m);
+  const yamlContent = closeMatch && closeMatch.index !== undefined
+    ? rest.slice(0, closeMatch.index)
+    : rest;
+  const trimmed = yamlContent.trim();
+  return trimmed ? trimmed : null;
+}
+
 function truncatedLine(value: string, limit = PLANNING_TERMINAL_BRIDGE_TEXT_LIMIT): string {
   const normalized = oneLine(value);
   if (normalized.length <= limit) return normalized;
@@ -879,7 +892,6 @@ export async function sendPlanningChatMessage(
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
       try {
-        const { extractYamlPlan } = await loadPlannerSurfaces();
         const hostedMessage = formatPlanningHostedTurn('in_app', message);
         if (deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
@@ -904,7 +916,7 @@ export async function sendPlanningChatMessage(
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
         const immediateDraftPlanText = deps.plannerReplyOverride
-          ? extractYamlPlan(reply)
+          ? extractFencedYamlPlanText(reply)
           : activeSession.conversation.lastTurnDraftPlanText;
         const result = evaluatePlanningTurn({
           userMessage: message,

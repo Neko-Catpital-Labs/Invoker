@@ -8,8 +8,14 @@ import type {
   WorkflowMutationPriority,
 } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
-import type { TaskState } from '@invoker/workflow-core';
+import { FailureClassifier, type TaskState } from '@invoker/workflow-core';
 
+import {
+  defaultCircuitBreakerPath,
+  isCircuitBreakerPaused,
+  loadCircuitBreakerState,
+  tripCircuitBreaker,
+} from './auto-fix-circuit-breaker.js';
 import {
   buildFixWithAgentMutationArgs,
   listOpenFixIntentsForTask,
@@ -47,6 +53,15 @@ export const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
 export const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
+/**
+ * A failed task's auto-fix attempt is a real, capacity-limited agent
+ * dispatch, not a free retry. If the provider itself is out of quota, every
+ * other failed task's auto-fix attempt fails identically -- so one such
+ * failure pauses all auto-fix dispatch fleet-wide for this long, instead of
+ * each failed task separately burning its own attempt budget on certain
+ * failure. See auto-fix-circuit-breaker.ts.
+ */
+export const DEFAULT_CIRCUIT_BREAKER_PAUSE_MS = 6 * 60 * 60 * 1000;
 
 const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 'submit' | 'skip' }> = {
   'worker-autofix-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
@@ -99,6 +114,8 @@ export interface AutoFixRecoveryPolicyOptions {
   getAutoFixAgent?: () => string | undefined;
   getRetryBudget?: (task: TaskState) => number;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
+  circuitBreakerPath?: string;
+  circuitBreakerPauseMs?: number;
 }
 /** Register the built-in auto-fix worker. */
 export function registerAutoFixWorker(
@@ -424,6 +441,12 @@ function validateAutoFixCandidate(
   }
   const latestRef = snapshotComparison.ref;
 
+  if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.error)) {
+    tripAutoFixCircuitBreaker(options);
+    skipAutoFixCandidate(options, candidate, 'usage-limit', { status: latest.status });
+    return undefined;
+  }
+
   const latestRetryBudget = retryBudgetForTask(latest, options);
   if (!isRuntimeAutoFixEligibleTask(latest, options)) {
     const reason = latestRetryBudget <= 0
@@ -460,9 +483,25 @@ export function collectValidatedAutoFixRecoveryCandidates(
     .filter((candidate): candidate is ValidatedAutoFixRecoveryCandidate => Boolean(candidate));
 }
 
+function tripAutoFixCircuitBreaker(options: AutoFixRecoveryPolicyOptions): void {
+  tripCircuitBreaker(options.circuitBreakerPath ?? defaultCircuitBreakerPath(), {
+    reason: 'usage-limit',
+    pauseMs: options.circuitBreakerPauseMs ?? DEFAULT_CIRCUIT_BREAKER_PAUSE_MS,
+  });
+}
+
 export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
   return async (ctx) => {
     ctx.signal?.throwIfAborted();
+    const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
+    if (isCircuitBreakerPaused(breakerState, Date.now())) {
+      options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] worker-autofix-circuit-breaker-paused`, {
+        module: 'auto-fix-recovery',
+        pausedUntil: breakerState.pausedUntil,
+        reason: breakerState.reason,
+      });
+      return;
+    }
     // Drain wake hints (coalesce only). Discover work from a fresh scan —
     // wake snapshots go stale across bare-retry generation bumps.
     options.drainWakeupHints?.();
@@ -470,6 +509,19 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
     const submittedThisTick = new Set<string>();
 
     for (const candidate of collectValidatedAutoFixRecoveryCandidates(options, candidates)) {
+      // Re-check per candidate, not just once at tick start: candidate
+      // validation above can itself trip the breaker (a usage-limit
+      // failure), and every candidate after it in this same tick must stop
+      // too, not just on the next tick a minute later.
+      const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
+      if (isCircuitBreakerPaused(breakerState, Date.now())) {
+        skipAutoFixCandidate(options, candidate, 'circuit-breaker-paused', {
+          pausedUntil: breakerState.pausedUntil,
+          breakerReason: breakerState.reason,
+        });
+        continue;
+      }
+
       if (submittedThisTick.has(candidate.taskId)) {
         skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
         continue;

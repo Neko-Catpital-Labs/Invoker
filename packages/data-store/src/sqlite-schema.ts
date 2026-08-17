@@ -533,6 +533,18 @@ export const SCHEMA_DDL = `
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS repair_filings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        state_sha TEXT NOT NULL,
+        metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_filings_kind_subject_sha
+        ON repair_filings(kind, subject, state_sha);
+
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
@@ -676,6 +688,18 @@ export const POST_MIGRATION_STATEMENTS = [
     last_received_seq INTEGER NOT NULL DEFAULT 0 CHECK (typeof(last_received_seq) = 'integer' AND last_received_seq >= 0),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  // repair_filings: durable cross-system dedup ledger for auto-filed CI/PR
+  // repair work. UNIQUE(kind, subject, state_sha) is the atomic
+  // insert-if-not-exists primitive -- see insertRepairFiling().
+  `CREATE TABLE IF NOT EXISTS repair_filings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    state_sha TEXT NOT NULL,
+    metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_filings_kind_subject_sha ON repair_filings(kind, subject, state_sha)',
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */

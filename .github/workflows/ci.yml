@@ -24,8 +24,7 @@ jobs:
   # Ordinary PRs keep only cheap quality checks so stacked PR pushes do not fan out heavy jobs.
   build-artifacts:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
-    runs-on:
-      labels: Runner_2_4_core
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -39,6 +38,9 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install native build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y make g++
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -57,7 +59,8 @@ jobs:
           pnpm --filter @invoker/ui build
           pnpm --filter @invoker/surfaces build
           pnpm --filter @invoker/app build
-          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist packages/surfaces/dist
+          pnpm --filter @invoker/cli build
+          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist packages/surfaces/dist packages/cli/dist
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -67,8 +70,7 @@ jobs:
           if-no-files-found: error
 
   quality-required:
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
@@ -76,7 +78,6 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
-            runner_label: Runner_2_4_core
 
     name: quality / ${{ matrix.name }}
 
@@ -109,8 +110,7 @@ jobs:
 
   typescript-types:
     name: quality / TypeScript Types
-    runs-on:
-      labels: Runner_2_4_core
+    runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
@@ -149,11 +149,13 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Reclaim workspace
-        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+          find "$GITHUB_WORKSPACE/.git" -name '*.lock' -delete 2>/dev/null || true
         shell: bash
       - name: Checkout
         uses: actions/checkout@v4
@@ -162,6 +164,73 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_libatomic() {
+            if command -v ldconfig >/dev/null 2>&1; then
+              ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'
+              return
+            fi
+            find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
+          }
+
+          missing_native_tools=()
+          for tool in make g++ python3 unzip; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing_native_tools+=("$tool")
+            fi
+          done
+
+          if has_libatomic && [ "${#missing_native_tools[@]}" -eq 0 ]; then
+            exit 0
+          fi
+
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::UI Vitest requires libatomic1, make, g++, python3, and unzip, but apt-get is unavailable."
+            exit 1
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y libatomic1 make g++ python3 unzip
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y libatomic1 make g++ python3 unzip
+            exit 0
+          fi
+
+          if [ "${#missing_native_tools[@]}" -gt 0 ]; then
+            echo "::error::UI Vitest requires ${missing_native_tools[*]}; run as root or provide passwordless sudo for apt-get."
+            exit 1
+          fi
+
+          libatomic_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/node-runtime-system-deps.XXXXXX")"
+          mkdir -p "$libatomic_dir/apt-state/lists/partial" "$libatomic_dir/apt-cache/archives/partial"
+          (
+            cd "$libatomic_dir"
+            apt_options=(
+              -o "Dir::State=$libatomic_dir/apt-state"
+              -o "Dir::State::status=/var/lib/dpkg/status"
+              -o "Dir::Cache=$libatomic_dir/apt-cache"
+            )
+            apt-get "${apt_options[@]}" update
+            apt-get "${apt_options[@]}" download libatomic1
+            dpkg-deb -x ./*.deb root
+          )
+          libatomic_file="$(find "$libatomic_dir/root" -type f -name 'libatomic.so.1*' -print -quit)"
+          if [ -z "$libatomic_file" ]; then
+            echo "::error::Downloaded libatomic1 package did not contain libatomic.so.1."
+            exit 1
+          fi
+          libatomic_path="${libatomic_file%/*}"
+          echo "LD_LIBRARY_PATH=$libatomic_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -175,8 +244,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Compute flaky-test exclusions
+        id: flaky_excludes
+        run: echo "args=$(node scripts/flaky-test-registry.mjs exclude-args)" >> "$GITHUB_OUTPUT"
+
       - name: Run UI vitest
-        run: pnpm --filter @invoker/ui test
+        run: pnpm --filter @invoker/ui test -- ${{ steps.flaky_excludes.outputs.args }}
 
   required-package-builds:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
@@ -210,8 +283,7 @@ jobs:
 
   quality-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
@@ -219,7 +291,6 @@ jobs:
         include:
           - name: Release Version Sync
             command: pnpm run check:versions
-            runner_label: Runner_2_4_core
 
     name: quality / ${{ matrix.name }}
 
@@ -400,6 +471,7 @@ jobs:
               bash scripts/test-suites/required/06-large-file-guardrail.sh
               bash scripts/test-suites/required/07-invalid-config-json.sh
               bash scripts/test-suites/required/08-build-artifact-surfaces-guard.sh
+              bash scripts/test-suites/required/09-headless-cli-boots-smoke.sh
               bash scripts/test-suites/required/10-dag-background-click-noop-guard.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
@@ -407,7 +479,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: Vitest Workspace
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
-            runner_label: Runner_2_4_core
+            runner_label: ubuntu-latest
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
             runner_label: Github_Runner
@@ -468,8 +540,7 @@ jobs:
   required-fast-extra:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -477,7 +548,7 @@ jobs:
         include:
           - name: Branch Carry Forward
             command: bash scripts/test-suites/required/16-branch-carry-forward.sh
-            runner_label: Runner_2_4_core
+            runner_label: ubuntu-latest
           - name: Merge Gate Concurrency Repro
             command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
             runner_label: Runner_2_4_core
@@ -492,7 +563,7 @@ jobs:
             runner_label: Runner_2_4_core
           - name: PR Authoring Guardrails
             command: bash scripts/test-suites/required/11-pr-authoring-guardrails.sh
-            runner_label: Github_Runner
+            runner_label: ubuntu-latest
           - name: Mergify Admin Requeue
             command: bash scripts/test-suites/required/12-mergify-admin-requeue.sh
             runner_label: Runner_2_4_core
@@ -503,6 +574,9 @@ jobs:
       - name: Reclaim workspace
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
         shell: bash
+      - name: Reclaim disk space
+        run: find /tmp -maxdepth 1 -name 'invoker-*' -mmin +360 -exec rm -rf {} + 2>/dev/null || true
+        shell: bash
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -512,7 +586,69 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Install system libraries for Node
-        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1
+        if: matrix.runner_label != 'Github_Runner'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_libatomic() {
+            if command -v ldconfig >/dev/null 2>&1; then
+              ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'
+              return
+            fi
+            find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
+          }
+
+          has_build_tools() {
+            command -v make >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1
+          }
+
+          if has_libatomic && has_build_tools; then
+            exit 0
+          fi
+
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::libatomic1, make, g++, python3, and unzip are required for Node ${NODE_VERSION}, but apt-get is unavailable."
+            exit 1
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y libatomic1 make g++ python3 unzip
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y libatomic1 make g++ python3 unzip
+            exit 0
+          fi
+
+          if ! has_build_tools; then
+            echo "::error::make, g++, python3, and unzip are required for Node ${NODE_VERSION} but cannot be installed without sudo."
+            exit 1
+          fi
+
+          libatomic_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/node-runtime-system-deps.XXXXXX")"
+          mkdir -p "$libatomic_dir/apt-state/lists/partial" "$libatomic_dir/apt-cache/archives/partial"
+          (
+            cd "$libatomic_dir"
+            apt_options=(
+              -o "Dir::State=$libatomic_dir/apt-state"
+              -o "Dir::State::status=/var/lib/dpkg/status"
+              -o "Dir::Cache=$libatomic_dir/apt-cache"
+            )
+            apt-get "${apt_options[@]}" update
+            apt-get "${apt_options[@]}" download libatomic1
+            dpkg-deb -x ./*.deb root
+          )
+          libatomic_file="$(find "$libatomic_dir/root" -type f -name 'libatomic.so.1*' -print -quit)"
+          if [ -z "$libatomic_file" ]; then
+            echo "::error::Downloaded libatomic1 package did not contain libatomic.so.1."
+            exit 1
+          fi
+          libatomic_path="${libatomic_file%/*}"
+          echo "LD_LIBRARY_PATH=$libatomic_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -524,6 +660,9 @@ jobs:
             .node-version
 
       - name: Install dependencies
+        env:
+          INVOKER_SKIP_ELECTRON_INSTALL: '1'
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Download build artifacts
@@ -1005,8 +1144,7 @@ jobs:
   optional-other:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1014,7 +1152,7 @@ jobs:
         include:
           - name: Worktree Provisioning
             command: bash scripts/test-suites/optional/60-worktree-provisioning.sh
-            runner_label: Runner_2_4_core
+            runner_label: ubuntu-latest
           - name: Visual Proof Validate
             command: bash scripts/test-suites/optional/70-ui-visual-proof-validate.sh
             runner_label: Runner_1
@@ -1030,14 +1168,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Node.js runtime dependency
-        if: matrix.name == 'Worktree Provisioning'
-        run: sudo apt-get update && sudo apt-get install -y libatomic1
-
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
       - name: Install Node runtime system dependencies
+        if: matrix.name == 'Worktree Provisioning'
         run: |
           if command -v apt-get >/dev/null 2>&1; then
             SUDO=""

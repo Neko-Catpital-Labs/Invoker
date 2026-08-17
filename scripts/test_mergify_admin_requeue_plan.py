@@ -878,6 +878,376 @@ class PlanStackActions(PlannerTestCase):
         )
 
 
+class ClaimRepairFilingGate(PlannerTestCase):
+    """claim_repair_filing defaults to None everywhere (see PlanStackActions
+    and PlanStackExecution above, none of which pass it -- proving the
+    default preserves exact pre-existing behavior). This class proves the
+    gate itself: when a real claim function is wired in, a duplicate claim
+    suppresses the Action instead of returning it, matching
+    e2e-regression-watch.mjs's claimRepairFiling/releaseRepairFilingClaim."""
+
+    def _plan(self, stack_or_snapshot, claim_repair_filing, ledger=None, stale_base_by_pr=None):
+        ledger = ledger or self._ledger()
+        stack = stack_or_snapshot if isinstance(stack_or_snapshot, m.StackGroup) else m.StackGroup("s", (stack_or_snapshot,))
+        facts = p.build_stack_facts(stack, REQUIRED, ledger, (), {}, "master", stale_base_by_pr=stale_base_by_pr or {})
+        return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW, claim_repair_filing=claim_repair_filing)
+
+    def test_repair_filing_kind_for_check_is_namespaced_and_slugified(self):
+        self.assertEqual(p.repair_filing_kind_for_check("build"), "admin-requeue:check:build")
+        self.assertEqual(p.repair_filing_kind_for_check("quality / Dependency Cruise"), "admin-requeue:check:quality-dependency-cruise")
+
+    def test_rebase_conflict_kind_matches_the_spec_worked_example(self):
+        self.assertEqual(p.REBASE_CONFLICT_REPAIR_FILING_KIND, "admin-requeue:rebase-conflict")
+
+    def test_duplicate_claim_suppresses_repair_check_action(self):
+        calls = []
+
+        def claim(kind, subject, state_sha):
+            calls.append((kind, subject, state_sha))
+            return True  # already claimed elsewhere
+
+        actions = self._plan(pr(latest_mergify=event(failing=("build",))), claim)
+
+        # No admin-bypass label on this fixture, so once repair_check is
+        # suppressed the ladder falls through to the next rung (the missing-
+        # label nudge) rather than to no action at all -- the real assertion
+        # is that the duplicate repair_check was never returned.
+        self.assertEqual(len(actions), 1)
+        self.assertNotEqual(actions[0].kind, "repair_check")
+        self.assertEqual(actions[0].kind, "comment_admin_bypass_nudge")
+        # state_sha is composited with the Mergify comment_id ("cm1", the
+        # event() fixture default) -- see mergify_check_state_sha and
+        # MergifyRequeueAttemptStateShaCollisionRepro for why.
+        self.assertEqual(calls, [("admin-requeue:check:build", "1", f"{HEAD}:cm1")])
+
+    def test_fresh_claim_lets_repair_check_action_through(self):
+        calls = []
+
+        def claim(kind, subject, state_sha):
+            calls.append((kind, subject, state_sha))
+            return False  # this call claimed it -- proceed
+
+        actions = self._plan(pr(latest_mergify=event(failing=("build",))), claim)
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, "repair_check")
+        # state_sha is composited with the Mergify comment_id ("cm1", the
+        # event() fixture default) -- see mergify_check_state_sha and
+        # MergifyRequeueAttemptStateShaCollisionRepro for why.
+        self.assertEqual(calls, [("admin-requeue:check:build", "1", f"{HEAD}:cm1")])
+
+    def test_duplicate_claim_suppresses_rebase_onto_base_action(self):
+        # Same fixture as test_failed_check_with_stale_base_skips_agent_repair
+        # in PlanStackActions, which proves the un-gated (claim_repair_filing=None)
+        # case returns the rebase_onto_base Action -- this proves a duplicate
+        # claim suppresses it instead.
+        snapshot = pr(number=42, checks={"build": check("failure")})
+        actions = self._plan(snapshot, lambda kind, subject, sha: True, stale_base_by_pr={42: True})
+        self.assertEqual(actions, ())
+
+    def test_fresh_claim_lets_rebase_onto_base_action_through(self):
+        snapshot = pr(number=42, checks={"build": check("failure")})
+        calls = []
+        actions = self._plan(
+            snapshot,
+            lambda kind, subject, sha: calls.append((kind, subject, sha)) or False,
+            stale_base_by_pr={42: True},
+        )
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_base", 42))
+        self.assertEqual(calls, [("admin-requeue:rebase-conflict", "42", HEAD)])
+
+    def test_claim_does_not_consume_a_repair_check_ledger_attempt(self):
+        # A duplicate claim is a cross-system dedup skip, not a real attempt
+        # at this PR/check/sha -- it must not burn budget toward the
+        # independent retry_decision attempt cap.
+        ledger = self._ledger()
+        self._plan(pr(latest_mergify=event(failing=("build",))), lambda k, s, h: True, ledger=ledger)
+        self.assertEqual(ledger.count("repair-check", 1, HEAD, "build"), 0)
+
+    def test_second_failing_check_is_tried_when_the_first_is_a_duplicate_claim(self):
+        claimed = {"build"}
+
+        def claim(kind, subject, state_sha):
+            check_name = kind.rsplit(":", 1)[-1]
+            return check_name in claimed
+
+        snapshot = pr(
+            checks={"build": check("failure"), "lint": check("failure")},
+            latest_mergify=event(failing=("build", "lint")),
+        )
+        actions = self._plan(snapshot, claim)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "lint"))
+
+    def test_plan_stack_execution_threads_claim_repair_filing_through_to_the_gate(self):
+        # Same fixture shape as PlanStackExecution's tests, proving the
+        # production entrypoint (not just plan_actions_from_facts directly)
+        # reaches the gate. checks stays "success" (the default) so only the
+        # Mergify-queue-driven failing_checks path is live -- plan_direct_repairs'
+        # separate, un-gated failed_check blocker path (a known gap, see the
+        # handoff notes) would otherwise refile the same repair_check right
+        # back in and mask whether the gate did anything.
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", failing=("build",)),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+            open_pr_numbers_by_head={},
+            claim_repair_filing=lambda kind, subject, sha: True,
+        )
+        # admin-bypass label + dequeued state means the ladder falls through
+        # to a normal requeue once repair_check is suppressed as a
+        # duplicate -- the real assertion is that it's not repair_check.
+        self.assertEqual(len(plan.actions), 1)
+        self.assertNotEqual(plan.actions[0].kind, "repair_check")
+        self.assertEqual(plan.actions[0].kind, "requeue")
+
+
+class PlanDirectRepairsUnguardedSecondPathRepro(PlannerTestCase):
+    """Reproduces the exact gap flagged in PR #9474's Non-goals: when BOTH the
+    Mergify queue event AND the PR's own check report the same check as
+    failing (the common case -- a real CI failure usually shows up both
+    places), mergify_failed_check_actions correctly honors a duplicate claim
+    and returns (), but plan_direct_repairs' own separate, un-gated
+    failed_check/conflict blocker handling picks the exact same repair right
+    back up and refiles it anyway. This is the live bug: the ledger claim
+    said "someone else already has this", and the planner filed it a second
+    time through a different code path regardless."""
+
+    def _plan(self, snapshot, claim_repair_filing):
+        ledger = self._ledger()
+        stack = m.StackGroup("s", (snapshot,))
+        facts = p.build_stack_facts(stack, REQUIRED, ledger, (), {}, "master", stale_base_by_pr={})
+        return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW, claim_repair_filing=claim_repair_filing)
+
+    def test_duplicate_claim_is_not_honored_by_plan_direct_repairs_failed_check_path(self):
+        # Both signals present: the PR's own "build" check is failing (drives
+        # classify_pr's failed_check blocker, which plan_direct_repairs
+        # handles inline) AND the Mergify queue event also lists "build" as
+        # failing (drives mergify_failed_check_actions, which IS gated).
+        snapshot = pr(checks={"build": check("failure")}, latest_mergify=event(failing=("build",)))
+        actions = self._plan(snapshot, claim_repair_filing=lambda kind, subject, sha: True)
+        repair_check_actions = [a for a in actions if a.kind == "repair_check"]
+        self.assertEqual(
+            repair_check_actions, [],
+            "plan_direct_repairs' own failed_check path refiled a repair_check the ledger "
+            "already said was claimed elsewhere -- it is not gated by claim_repair_filing",
+        )
+
+    def test_duplicate_claim_is_not_honored_by_plan_direct_repairs_conflict_path(self):
+        snapshot = pr(mergeable="CONFLICTING")
+        actions = self._plan(snapshot, claim_repair_filing=lambda kind, subject, sha: True)
+        repair_conflict_actions = [a for a in actions if a.kind == "repair_conflict"]
+        self.assertEqual(
+            repair_conflict_actions, [],
+            "plan_direct_repairs' own conflict path refiled a repair_conflict the ledger "
+            "already said was claimed elsewhere -- it is not gated by claim_repair_filing",
+        )
+
+
+class MergifyRequeueAttemptStateShaCollisionRepro(PlannerTestCase):
+    """swarm finding #4, reproduced and then fixed. Before the fix,
+    mergify_failed_check_actions's claim key was
+    (kind, subject=pr_number, state_sha=pr.head_ref_oid) alone. Mergify can
+    dequeue and requeue the SAME PR head against a NEW merge-queue attempt --
+    a new speculative-merge commit combining the PR head with whatever
+    master is now -- without the PR's own head_ref_oid changing at all, so
+    two genuinely different real Mergify attempts at the same head used to
+    compute the identical claim key (proven below: repair_filing_kind_for_check
+    + str(pr_number) + pr.head_ref_oid alone, the pre-fix formula, collides).
+    The fix composites in latest_mergify.comment_id via mergify_check_state_sha
+    -- this codebase's own existing signal for "a distinct real Mergify
+    attempt at this same head" (see plan_bottom_progress's
+    `requeue_key = latest.comment_id or "manual"`, which already relies on
+    comment_id for exactly this distinction in a different context)."""
+
+    def test_pre_fix_key_formula_still_collides_across_distinct_attempts(self):
+        # Documents the bug that was fixed: the OLD key formula (bare
+        # head_ref_oid, no comment_id) is still exactly what
+        # plan_direct_repairs' un-gated-by-design-choice paths and any other
+        # bare-head_ref_oid caller would compute -- proving why
+        # mergify_check_state_sha, not a bare head_ref_oid, had to become the
+        # state_sha for this specific call site.
+        first_attempt = event(comment_id="attempt-1", failing=("build",))
+        second_attempt = event(comment_id="attempt-2", failing=("build",))
+        self.assertEqual(first_attempt.head_sha, second_attempt.head_sha)
+        self.assertNotEqual(first_attempt.comment_id, second_attempt.comment_id)
+
+        snapshot_a = pr(latest_mergify=first_attempt)
+        snapshot_b = pr(latest_mergify=second_attempt)
+        pre_fix_key_a = (p.repair_filing_kind_for_check("build"), str(snapshot_a.number), snapshot_a.head_ref_oid)
+        pre_fix_key_b = (p.repair_filing_kind_for_check("build"), str(snapshot_b.number), snapshot_b.head_ref_oid)
+        self.assertEqual(pre_fix_key_a, pre_fix_key_b, "bare head_ref_oid collides across attempts -- this is why the fix exists")
+
+    def test_mergify_check_state_sha_distinguishes_the_two_attempts(self):
+        first_attempt = event(comment_id="attempt-1", failing=("build",))
+        second_attempt = event(comment_id="attempt-2", failing=("build",))
+        snapshot_a = pr(latest_mergify=first_attempt)
+        snapshot_b = pr(latest_mergify=second_attempt)
+
+        self.assertNotEqual(
+            p.mergify_check_state_sha(snapshot_a, first_attempt),
+            p.mergify_check_state_sha(snapshot_b, second_attempt),
+        )
+
+    def test_second_distinct_mergify_attempt_is_no_longer_suppressed_as_a_duplicate(self):
+        ledger_rows = set()
+
+        def claim(kind, subject, state_sha):
+            key = (kind, subject, state_sha)
+            if key in ledger_rows:
+                return True  # already claimed
+            ledger_rows.add(key)
+            return False
+
+        first_pr = pr(latest_mergify=event(comment_id="attempt-1", failing=("build",)))
+        second_pr = pr(latest_mergify=event(comment_id="attempt-2", failing=("build",)))
+
+        first_actions = p.mergify_failed_check_actions(first_pr, self._ledger(), 3, NOW, claim_repair_filing=claim)
+        second_actions = p.mergify_failed_check_actions(second_pr, self._ledger(), 3, NOW, claim_repair_filing=claim)
+
+        self.assertEqual(first_actions[0].kind, "repair_check")
+        # Fixed: a second, genuinely distinct Mergify queue attempt at the
+        # same PR head is no longer wrongly suppressed as a duplicate.
+        self.assertEqual(len(second_actions), 1)
+        self.assertEqual(second_actions[0].kind, "repair_check")
+
+    def test_same_attempt_observed_twice_still_collapses_to_one_claim(self):
+        # The self-expiring property still holds: re-observing the identical
+        # (head, comment_id) attempt twice must still collapse to one claim,
+        # not fork a new one every tick.
+        ledger_rows = set()
+
+        def claim(kind, subject, state_sha):
+            key = (kind, subject, state_sha)
+            if key in ledger_rows:
+                return True
+            ledger_rows.add(key)
+            return False
+
+        snapshot = pr(latest_mergify=event(comment_id="attempt-1", failing=("build",)))
+        first = p.mergify_failed_check_actions(snapshot, self._ledger(), 3, NOW, claim_repair_filing=claim)
+        second = p.mergify_failed_check_actions(snapshot, self._ledger(), 3, NOW, claim_repair_filing=claim)
+        self.assertEqual(first[0].kind, "repair_check")
+        self.assertEqual(second, ())
+
+
+class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
+    """default_claim_repair_filing/default_release_repair_filing are the real
+    production functions wired into mergify_admin_requeue.py's main(); they
+    are never reached by the tests above (which all pass an explicit fake),
+    so they get their own direct coverage here, patching
+    repair_filing_ledger the same way RepairCrashReason patches
+    repair_task_crashed_on_infra."""
+
+    def test_claims_a_fresh_key(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", return_value={"inserted": True, "row": {}}) as insert:
+            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+        self.assertFalse(already_claimed)
+        insert.assert_called_once_with("k", "s", "sha")
+
+    def test_reports_already_claimed_for_a_duplicate_key(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", return_value={"inserted": False, "row": {}}):
+            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+        self.assertTrue(already_claimed)
+
+    def test_fails_closed_when_the_ledger_call_raises(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", side_effect=RuntimeError("headless_mutation timed out")):
+            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+        self.assertTrue(already_claimed)
+
+    def test_release_calls_through(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "release_repair_filing", return_value={"released": True}) as release:
+            p.default_release_repair_filing("k", "s", "sha")
+        release.assert_called_once_with("k", "s", "sha")
+
+    def test_release_never_raises_even_when_the_ledger_call_fails(self):
+        with unittest.mock.patch.object(p.repair_filing_ledger, "release_repair_filing", side_effect=RuntimeError("owner unreachable")):
+            p.default_release_repair_filing("k", "s", "sha")  # must not raise
+
+
+class StaleClaimFreshnessGapRepro(PlannerTestCase):
+    """swarm finding #2, investigated.
+
+    First: claiming (kind, subject, shaA) then (kind, subject, shaB) for the
+    same PR, where shaB is shaA's real replacement (a rebase), both
+    succeeding is NOT a bug -- it is exactly the self-expiring-key property
+    the ledger exists for (see the spec's own worked example: a genuinely
+    new state must not be suppressed as a duplicate of an old one). Proven
+    below, then ruled out as the actual issue.
+
+    The real gap: default_claim_repair_filing (and its JS counterpart,
+    insertRepairFiling in scripts/repair-filing-ledger.mjs /
+    headlessRepairFiling in packages/app/src/headless.ts) takes state_sha as
+    a plain caller-supplied string with no verification against any
+    canonical source. A caller holding a PrSnapshot fetched before a rebase
+    landed can successfully claim a sha that is ALREADY superseded by the
+    time the claim executes -- proven below by inspecting the function's own
+    signature: there is no canonical-head-lookup parameter for it to use even
+    if it wanted to check. This is a structural gap, not a race that only
+    shows up under timing pressure -- it fires 100% of the time a claim is
+    made against non-current data, with no dependency on interleaving.
+
+    NOT fixed this round -- see the handoff notes for why: a real fix means
+    threading a canonical-head lookup (a GhClient/repo context in Python, a
+    live git/gh call in JS) into default_claim_repair_filing and its JS
+    counterpart, which is new external-dependency wiring and a real design
+    decision (what counts as "canonical" differs by caller: ci-regression-watch's
+    subject is a commit sha, mergify_admin_requeue's is a PR number), not a
+    contained fix alongside items 1-2's gating work.
+    """
+
+    def test_both_claims_for_a_pr_and_its_rebase_replacement_succeed_by_design(self):
+        # Confirms the by-design behavior described above -- NOT the bug.
+        ledger_rows = set()
+
+        def claim(kind, subject, state_sha):
+            key = (kind, subject, state_sha)
+            if key in ledger_rows:
+                return True
+            ledger_rows.add(key)
+            return False
+
+        self.assertFalse(claim("admin-requeue:rebase-conflict", "42", "shaA"))
+        self.assertFalse(claim("admin-requeue:rebase-conflict", "42", "shaB"))
+        self.assertEqual(len(ledger_rows), 2)
+
+    def test_default_claim_repair_filing_has_no_way_to_verify_state_sha_is_current(self):
+        # The actual gap: the function's public signature has no hook a
+        # caller (or the function itself) could use to re-verify state_sha
+        # against a live/canonical source before claiming -- it is
+        # structurally impossible for this function to catch a stale claim,
+        # not merely something it happens not to do today.
+        import inspect
+        signature = inspect.signature(p.default_claim_repair_filing)
+        self.assertEqual(list(signature.parameters), ["kind", "subject", "state_sha"])
+
+    def test_a_claim_against_an_already_superseded_sha_succeeds_unconditionally(self):
+        # Simulates the race directly: a caller's PrSnapshot was fetched
+        # when the PR's real head was "sha-stale"; by the time this claim
+        # actually executes, GitHub's canonical current head has already
+        # moved to "sha-fresh" (a rebase landed in between). No canonical
+        # lookup exists anywhere in this call path, so the stale claim
+        # succeeds exactly as if it were fresh -- proven against the real
+        # insert_repair_filing contract (mocked only at the transport
+        # boundary, matching this class's sibling tests).
+        canonical_current_head = {"42": "sha-fresh"}  # what a live `gh pr view` would report right now
+        caller_observed_head = "sha-stale"  # what this caller's PrSnapshot still says
+        self.assertNotEqual(caller_observed_head, canonical_current_head["42"], "the fixture must actually be stale to prove anything")
+
+        with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", return_value={"inserted": True, "row": {}}):
+            already_claimed = p.default_claim_repair_filing("admin-requeue:check:build", "42", caller_observed_head)
+
+        self.assertFalse(already_claimed, "a claim against an already-superseded sha succeeded with no freshness check at all")
+
+
 class RepairCrashReason(PlannerTestCase):
     """A submitted repair whose own Invoker workflow crashed with the known
     SSH/OAuth infra signature (the coding agent never launched) must not be
@@ -973,6 +1343,35 @@ class InfraCrashDoesNotCountAgainstCap(PlannerTestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
 
+    def test_mergify_failed_check_actions_prioritizes_real_check_over_queue_only(self):
+        # Real incident: PR #9309 dequeued with six failing checks, five of
+        # them "required-fast /" queue-only matrix jobs that only run inside
+        # the merge queue (cancelled side effects of the sixth), plus one
+        # genuinely repairable check, UI Vitest. Queue-only checks always
+        # resolve to a no-op repair (nothing to fix outside the queue), so
+        # if the loop returns whichever failing check comes first in
+        # Mergify's list, it can pick a queue-only check forever and never
+        # reach the one check a repair could actually fix.
+        ledger = self._ledger()
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(
+                state="dequeued",
+                failing=(
+                    "required-fast / Guardrails",
+                    "required-fast / Launch Dispatch Queue Repro",
+                    "required-fast / Merge Gate Concurrency Repro",
+                    "required-fast / Start Running MECE Repros",
+                    "required-fast / Submit Workflow Chain",
+                    "UI Vitest",
+                ),
+            ),
+        )
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            actions = p.mergify_failed_check_actions(snapshot, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "UI Vitest"))
+
     def test_cap_still_applies_once_genuine_non_infra_attempts_reach_it(self):
         # Three genuinely-attempted (not infra-crashed) repairs plus one more
         # that crashed on infra: the cap must still fire on the three real
@@ -1001,6 +1400,32 @@ class InfraCrashDoesNotCountAgainstCap(PlannerTestCase):
         with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
             action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
         self.assertIsNone(action)
+
+
+class RepairAttemptResetsOnNewHeadSha(PlannerTestCase):
+    """A repair attempt that successfully pushes a commit changes head_sha as
+    a normal side effect. Ledger.count() filters on head_sha, so the retry
+    cap never accumulates for a check that keeps almost-but-not-quite getting
+    fixed -- only for a PR that's completely frozen on one sha. Reproduces
+    the live incident: PR 9067's ui-vitest check refiled repeatedly across
+    several different head_shas in one day, never once approaching
+    max_repair_attempts=3."""
+
+    def test_plan_direct_repairs_never_caps_across_head_sha_changes(self):
+        ledger = self._ledger()
+        heads = [HEAD, "b" * 40, "c" * 40]
+        for head in heads:
+            ledger.record("repair-check", 1, head, "build", epoch=NOW - 100)
+        # current head is a 4th, brand-new sha -- exactly what a real push
+        # produces as the side effect of the 3 prior repair attempts above.
+        snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")}, head_ref_oid="d" * 40)
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        # Fixed: 3 real prior attempts on this check, across 3 different
+        # head_shas, now correctly caps the 4th instead of resubmitting --
+        # the count persists via Ledger.count_by_unit() instead of resetting
+        # on every new commit.
+        self.assertEqual(action.kind, "comment_blocked")
 
 
 class PlanStackExecution(PlannerTestCase):

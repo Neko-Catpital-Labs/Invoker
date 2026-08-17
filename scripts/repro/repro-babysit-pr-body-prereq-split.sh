@@ -97,6 +97,22 @@ git add .github/workflows/ci.yml scripts/test-suites/required/guardrails.sh
 git commit -m "worker tooling-policy repair" >/dev/null
 EOF
 chmod +x "$TMP/bin/claude"
+
+# Without this, resolve_workflow_for_pr (mergify_admin_requeue_workflow_fastpath.py)
+# shells out to a live Invoker owner over IPC to look up a review-gate workflow
+# mapping for PR #5800, which this hermetic repro never provides -- the lookup
+# subprocess fails to connect, resolve_workflow_for_pr raises, and the whole
+# repair attempt aborts before reaching the async repair path below (same
+# hermetic-IPC class as the Incident 2026-08-12 note further down; mocked the
+# same way its sibling repros already do, e.g. repro-babysit-pr-body-human-split.sh).
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+
 REMOTE="$TMP/origin.git"
 SEED="$TMP/seed"
 WORK_ROOT="$WORK_PARENT/5800"

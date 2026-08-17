@@ -41,6 +41,9 @@ import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
+  RepairFiling,
+  RepairFilingInsertInput,
+  RepairFilingInsertResult,
   ReviewGateLookup,
   Workflow,
   WorkflowReadOptions,
@@ -658,6 +661,7 @@ type InAppPlanningMessagePersistState = {
   count: number;
   maxMessageId: number;
   signature?: string;
+  messagesRef?: InAppPlanningChatLine[];
 };
 
 function parseTerminalArgsJson(value: unknown): string[] {
@@ -777,6 +781,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private dirty = false;
   private readonly inAppPlanningMessagePersistStates = new Map<string, InAppPlanningMessagePersistState>();
   private readonly inAppPlanningMessagePersistSignatures = new Map<string, string>();
+  private readonly inAppPlanningMessagePersistRefs = new Map<string, InAppPlanningChatLine[]>();
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private outputDir: string;
@@ -1582,6 +1587,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
       this.inAppPlanningMessagePersistStates.delete(sessionId);
       this.inAppPlanningMessagePersistSignatures.delete(sessionId);
+      this.inAppPlanningMessagePersistRefs.delete(sessionId);
     });
   }
 
@@ -1986,6 +1992,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
       return [];
     }
 
+    const orderBy = filters.sortBy === 'asc' ? 'ASC' : 'DESC';
+    if (filters.eventTypes && !filters.taskId && filters.limit !== undefined) {
+      const pageLimit = Math.floor(filters.limit);
+      const merged: TaskEvent[] = [];
+      for (const eventType of filters.eventTypes) {
+        const rows = this.queryAll(
+          `SELECT * FROM events
+           WHERE event_type = ?
+           ORDER BY id ${orderBy}
+           LIMIT ?`,
+          [eventType, pageLimit],
+        );
+        for (const row of rows) {
+          merged.push(this.rowToTaskEvent(row));
+        }
+      }
+      merged.sort((a, b) => (orderBy === 'ASC' ? a.id - b.id : b.id - a.id));
+      return merged.slice(0, pageLimit);
+    }
+
     const where: string[] = [];
     const params: unknown[] = [];
     if (filters.taskId) {
@@ -1997,7 +2023,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       params.push(...filters.eventTypes);
     }
 
-    const orderBy = filters.sortBy === 'asc' ? 'ASC' : 'DESC';
     let limitSql = '';
     if (filters.limit !== undefined) {
       limitSql = ' LIMIT ?';
@@ -2616,6 +2641,73 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun('DELETE FROM slack_pending_confirmations WHERE confirm_key = ?', [confirmKey]);
   }
 
+  // ── Repair Filings (cross-system CI/PR repair dedup ledger) ──
+
+  private mapRepairFilingRow(row: any): RepairFiling {
+    return {
+      id: row.id as number,
+      kind: row.kind as string,
+      subject: row.subject as string,
+      stateSha: row.state_sha as string,
+      metadata: row.metadata ? (JSON.parse(row.metadata as string) as Record<string, unknown>) : null,
+      createdAt: row.created_at as string,
+    };
+  }
+
+  insertRepairFiling(input: RepairFilingInsertInput): RepairFilingInsertResult {
+    return this.runTransaction(() => {
+      this.execRun(
+        `INSERT INTO repair_filings (kind, subject, state_sha, metadata)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(kind, subject, state_sha) DO NOTHING`,
+        [input.kind, input.subject, input.stateSha, input.metadata ? JSON.stringify(input.metadata) : null],
+      );
+      const inserted = this.db.getRowsModified() > 0;
+      const row = this.queryOne(
+        'SELECT * FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+        [input.kind, input.subject, input.stateSha],
+      );
+      if (!row) {
+        throw new Error('insertRepairFiling: row missing immediately after INSERT ... ON CONFLICT DO NOTHING');
+      }
+      return { inserted, row: this.mapRepairFilingRow(row) };
+    });
+  }
+
+  getRepairFiling(kind: string, subject: string, stateSha: string): RepairFiling | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+      [kind, subject, stateSha],
+    );
+    return row ? this.mapRepairFilingRow(row) : undefined;
+  }
+
+  listRepairFilings(kind?: string, subject?: string): RepairFiling[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (kind !== undefined) {
+      conditions.push('kind = ?');
+      params.push(kind);
+    }
+    if (subject !== undefined) {
+      conditions.push('subject = ?');
+      params.push(subject);
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const rows = this.queryAll(`SELECT * FROM repair_filings${where} ORDER BY created_at DESC`, params);
+    return rows.map((row: any) => this.mapRepairFilingRow(row));
+  }
+
+  deleteRepairFiling(kind: string, subject: string, stateSha: string): boolean {
+    return this.runTransaction(() => {
+      this.execRun(
+        'DELETE FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+        [kind, subject, stateSha],
+      );
+      return this.db.getRowsModified() > 0;
+    });
+  }
+
   // ── Workflow Channels (Slack workflow↔channel mapping) ──
 
   saveWorkflowChannel(rec: WorkflowChannel): void {
@@ -3014,6 +3106,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (state.signature !== undefined) {
       this.inAppPlanningMessagePersistSignatures.set(sessionId, state.signature);
     }
+    this.inAppPlanningMessagePersistRefs.set(sessionId, messages);
   }
 
   private persistInAppPlanningMessages(
@@ -3030,11 +3123,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     for (const message of messages.slice(persistedState.count)) {
       this.insertInAppPlanningMessage(sessionId, message, fallbackCreatedAt);
     }
-    const state = this.stateForInAppPlanningMessages(messages);
+    const state = this.stateForAppendedInAppPlanningMessages(messages, persistedState);
     this.inAppPlanningMessagePersistStates.set(sessionId, state);
     if (state.signature !== undefined) {
       this.inAppPlanningMessagePersistSignatures.set(sessionId, state.signature);
     }
+    this.inAppPlanningMessagePersistRefs.set(sessionId, messages);
   }
 
   private getInAppPlanningMessagePersistState(sessionId: string): InAppPlanningMessagePersistState {
@@ -3051,6 +3145,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       count: Number(row?.message_count ?? 0),
       maxMessageId: Number(row?.max_message_id ?? 0),
       signature: this.inAppPlanningMessagePersistSignatures.get(sessionId),
+      messagesRef: this.inAppPlanningMessagePersistRefs.get(sessionId),
     };
     this.inAppPlanningMessagePersistStates.set(sessionId, state);
     return state;
@@ -3062,8 +3157,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   ): boolean {
     if (persistedState.count > messages.length) return false;
 
-    let previousMessageId = 0;
-    for (const message of messages) {
+    let previousMessageId = persistedState.count > 0 ? persistedState.maxMessageId : 0;
+    const firstUnseenIndex = persistedState.count > 0 ? persistedState.count : 0;
+    for (let index = firstUnseenIndex; index < messages.length; index += 1) {
+      const message = messages[index];
       if (!Number.isSafeInteger(message.id) || message.id <= previousMessageId) {
         return false;
       }
@@ -3073,6 +3170,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (persistedState.count === 0) return true;
     if (messages[persistedState.count - 1]?.id !== persistedState.maxMessageId) {
       return false;
+    }
+    if (persistedState.messagesRef === messages) {
+      return true;
     }
     if (persistedState.signature === undefined) {
       return messages.length > persistedState.count;
@@ -3085,12 +3185,36 @@ export class SQLiteAdapter implements PersistenceAdapter {
       count: messages.length,
       maxMessageId: messages.reduce((maxMessageId, message) => Math.max(maxMessageId, message.id), 0),
       signature: this.signatureForInAppPlanningMessages(messages),
+      messagesRef: messages,
     };
   }
 
-  private signatureForInAppPlanningMessages(messages: InAppPlanningChatLine[], count = messages.length): string {
+  private stateForAppendedInAppPlanningMessages(
+    messages: InAppPlanningChatLine[],
+    persistedState: InAppPlanningMessagePersistState,
+  ): InAppPlanningMessagePersistState {
+    const lastMessage = messages[messages.length - 1];
+    return {
+      count: messages.length,
+      maxMessageId: lastMessage ? lastMessage.id : persistedState.maxMessageId,
+      signature: persistedState.signature === undefined
+        ? undefined
+        : persistedState.signature + this.signatureForInAppPlanningMessages(
+          messages,
+          messages.length,
+          persistedState.count,
+        ),
+      messagesRef: messages,
+    };
+  }
+
+  private signatureForInAppPlanningMessages(
+    messages: InAppPlanningChatLine[],
+    count = messages.length,
+    startIndex = 0,
+  ): string {
     let signature = '';
-    for (let index = 0; index < count; index += 1) {
+    for (let index = startIndex; index < count; index += 1) {
       const message = messages[index];
       if (!message) break;
       signature += `${message.id}\x1f${message.role}\x1f${message.tone ?? ''}\x1f${message.createdAt ?? ''}\x1f${message.text.length}\x1f${message.text}\x1e`;
@@ -3187,6 +3311,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         });
       }
       this.inAppPlanningMessagePersistSignatures.set(id, this.signatureForInAppPlanningMessages(messages));
+      this.inAppPlanningMessagePersistRefs.set(id, messages);
 
       return {
         id,

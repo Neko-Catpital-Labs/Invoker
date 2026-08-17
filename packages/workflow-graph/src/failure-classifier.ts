@@ -20,6 +20,7 @@ export const SSH_INFRA_FAILURE_CLASSES: readonly SshInfraFailureClass[] = [
   'ssh-invalid-reference',
   'ssh-repo-mirror-corrupt',
   'ssh-oauth-session-expired',
+  'ssh-disk-full',
 ];
 
 export class FailureClassifier {
@@ -52,6 +53,9 @@ export class FailureClassifier {
     if (errorText.includes('Failed to authenticate: OAuth session expired and could not be refreshed')) {
       return 'ssh-oauth-session-expired';
     }
+    if (errorText.includes('No space left on device')) {
+      return 'ssh-disk-full';
+    }
     return undefined;
   }
 
@@ -74,5 +78,16 @@ export class FailureClassifier {
     if (typeof errorText !== 'string') return false;
     return errorText.startsWith('Cancelled by user') || errorText.startsWith('Cancelled:')
       || errorText.startsWith('Terminated by user') || errorText.startsWith('Terminated:');
+  }
+
+  /**
+   * True when the failure is the agent provider refusing to run because its
+   * usage/rate quota is exhausted, not a defect in the task itself. Retrying
+   * immediately cannot succeed until the quota resets, so callers should
+   * back off globally rather than spend a per-task auto-fix attempt on it.
+   */
+  static isUsageLimit(errorText: unknown): boolean {
+    if (typeof errorText !== 'string') return false;
+    return /usage limit|rate limit/i.test(errorText);
   }
 }

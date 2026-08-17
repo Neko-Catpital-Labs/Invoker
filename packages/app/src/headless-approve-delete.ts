@@ -307,6 +307,17 @@ export async function headlessDeleteTask(taskId: string, deps: HeadlessDeps): Pr
   });
 }
 
+export async function headlessCloseTask(taskId: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless close-task <taskId>');
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'close-task', async (restored) => {
+    taskId = restored.resolvedTaskId;
+    const envelope = makeEnvelope('close-task', 'headless', 'task', { taskId });
+    const result = await deps.commandService.closeIdleTask(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    process.stdout.write(`Closed task: ${taskId}\n`);
+  });
+}
+
 export async function headlessDeleteWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
   // Preempt running tasks (kill processes + cancel) — matches owner-mode bridge contract

@@ -173,8 +173,7 @@ describe('slack planning session happy path', () => {
     expect(draft?.slackFileId).toBe('F-SESSION');
     expect(draft?.messageTs).toBeTruthy();
 
-    const app = surface.getApp() as any;
-    const readyCard = app.client.chat.update.mock.calls.find(([msg]: [any]) =>
+    const readyCard = say.mock.calls.find(([msg]: [any]) =>
       JSON.stringify(msg?.blocks ?? []).includes('plan_draft_approve'));
     expect(readyCard).toBeDefined();
 

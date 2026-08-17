@@ -101,6 +101,30 @@ export interface WorkflowChannel {
   createdAt: string;
 }
 
+// ── Repair Filing Types (cross-system CI/PR repair dedup ledger) ─
+
+export interface RepairFiling {
+  id: number;
+  kind: string;
+  subject: string;
+  stateSha: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface RepairFilingInsertInput {
+  kind: string;
+  subject: string;
+  stateSha: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface RepairFilingInsertResult {
+  /** True only when this call created the row; false means an identical (kind, subject, stateSha) row already existed. */
+  inserted: boolean;
+  row: RepairFiling;
+}
+
 // ── Workflow Types ──────────────────────────────────────────
 
 export interface Workflow {
@@ -429,6 +453,13 @@ export interface PersistenceAdapter {
   loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined;
   loadLatestSlackPendingConfirmationByThread(threadTs: string): SlackPendingConfirmation | undefined;
   deleteSlackPendingConfirmation(confirmKey: string): void;
+
+  // Repair filings (cross-system CI/PR repair dedup ledger)
+  insertRepairFiling(input: RepairFilingInsertInput): RepairFilingInsertResult;
+  getRepairFiling(kind: string, subject: string, stateSha: string): RepairFiling | undefined;
+  listRepairFilings(kind?: string, subject?: string): RepairFiling[];
+  /** Release a claimed (kind, subject, stateSha) row -- e.g. the actual filing failed after the claim succeeded -- so a later attempt can reclaim it. Returns true iff a row was deleted. */
+  deleteRepairFiling(kind: string, subject: string, stateSha: string): boolean;
 
   // Workflow channels (Slack workflow↔channel mapping)
   saveWorkflowChannel(rec: WorkflowChannel): void;

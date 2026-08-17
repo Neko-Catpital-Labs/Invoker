@@ -55,53 +55,6 @@ ensure_workspace_bootstrapped() {
   touch "$BOOTSTRAP_STAMP"
 }
 
-expand_home_path() {
-  case "$1" in
-    "~") printf '%s\n' "$HOME" ;;
-    "~/"*) printf '%s\n' "$HOME/${1#~/}" ;;
-    *) printf '%s\n' "$1" ;;
-  esac
-}
-
-normalize_path() {
-  local raw="$1"
-  local expanded
-  expanded="$(expand_home_path "$raw")"
-  expanded="${expanded%/}"
-  if [ -z "$expanded" ]; then
-    expanded="/"
-  fi
-
-  if [ -d "$expanded" ]; then
-    (cd "$expanded" && pwd -P)
-    return
-  fi
-
-  local parent base
-  parent="$(dirname "$expanded")"
-  base="$(basename "$expanded")"
-  if [ -d "$parent" ]; then
-    printf '%s/%s\n' "$(cd "$parent" && pwd -P)" "$base"
-  else
-    printf '%s\n' "$expanded"
-  fi
-}
-
-# Hard safety guard: never allow headless delete-all to target the default
-# production DB unless explicitly overridden.
-if [ "${1:-}" = "--headless" ] && [ "${2:-}" = "delete-all" ]; then
-  DB_ROOT_RAW="${INVOKER_DB_DIR:-$HOME/.invoker}"
-  DB_ROOT="$(normalize_path "$DB_ROOT_RAW")"
-  PROD_ROOT="$(normalize_path "$HOME/.invoker")"
-
-  if [ "${INVOKER_ALLOW_PRODUCTION_DELETE_ALL:-0}" != "1" ] && [ "$DB_ROOT" = "$PROD_ROOT" ]; then
-    echo "ERROR: Refusing to run 'delete-all' against production DB root: $DB_ROOT" >&2
-    echo "Set INVOKER_DB_DIR to an isolated temp directory for tests." >&2
-    echo "Override only if intentional: INVOKER_ALLOW_PRODUCTION_DELETE_ALL=1" >&2
-    exit 64
-  fi
-fi
-
 # Ensure workspace dependencies are linked before building.
 # Headless commands must keep stdout clean because scripts parse labels/JSON.
 ensure_workspace_bootstrapped

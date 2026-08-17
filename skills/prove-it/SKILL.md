@@ -43,6 +43,7 @@ When asked what happened, why it happened, or to investigate/diagnose/debug a pr
 ## Examples this rule is meant to stop
 
 - Proxy proof: do not cite "a test passed" when the reported failure was visual or behavioral and was never exercised.
+- Wrong-target verify command: do not treat an automated task template's default `verify_command`/"Acceptance criteria" as proof without checking it actually invokes the changed file. A fleet CI-repair chain filed `pnpm --filter @invoker/ui test` as its acceptance command for a fix that only touched `scripts/test-ci-workflow-merge-queue-policy.mjs` — a script wired only into the root `pnpm test` chain, never into the UI package's own test script (confirmed by running both: `pnpm --filter @invoker/ui test` never references the file, while `node scripts/test-ci-workflow-merge-queue-policy.mjs` does and passes). The picker had chosen the shortest verify command among several unrelated jobs bundled into one event, not the one covering the job actually diagnosed and fixed — so the recorded "Exit code: 0" most likely proved an unrelated, already-passing suite, not the fix.
 - Stale state: do not report an old merge, CI, task, or workflow status without a fresh live query.
 - Wrong target: do not reproduce against a sample, another branch, another PR, or another deployment unless you label the result as not the current target.
 - Broken repro: do not explain a failure from a repro that did not execute, did not fail, or failed for setup reasons.
@@ -51,6 +52,9 @@ When asked what happened, why it happened, or to investigate/diagnose/debug a pr
 - Assertion mismatch: do not claim the proof shows one thing when the output only demonstrates a weaker or different fact.
 - Visual mismatch: do not rely on DOM, file, or path checks instead of opening the exact screenshot or video and stating what you saw.
 - Live-state mismatch: do not use remembered counts or statuses as current evidence for running, merged, queued, or failed work.
+- Intent from one data point: do not assert malicious intent (e.g. "someone snuck this in") from a suspicious name plus a single supporting fact. Ask before accusing — a workflow literally named `jailbreak-admin-bypass-land` turned out to be a deliberately built feature; the user had to correct it directly.
+- Log-line misattribution: do not assume a single log line's meaning without checking what code actually emits it. "Confirmed... a severe crash loop" was delivered from counting `"module":"startup"` lines, without checking that the same banner prints on every CLI invocation, not only on an owner restart — self-caught, but only after the user had already acted on the claim.
+- Single-machine absence as proof: do not conclude "never pushed" or "doesn't exist" from one machine's local git/file state. Check the actual remote (`gh api`, `git ls-remote`) independently before asserting something is missing — a commit that looked stranded on one host was already sitting on GitHub, just not yet fetched elsewhere.
 
 ## Where this is enforced mechanically
 

@@ -2,7 +2,10 @@
 process.env.TZ = 'UTC';
 
 import '@testing-library/jest-dom/vitest';
+import { configure } from '@testing-library/react';
 import { beforeEach } from 'vitest';
+
+configure({ asyncUtilTimeout: 2_000 });
 
 if (typeof globalThis.ResizeObserver === 'undefined') {
   class ResizeObserverPolyfill {

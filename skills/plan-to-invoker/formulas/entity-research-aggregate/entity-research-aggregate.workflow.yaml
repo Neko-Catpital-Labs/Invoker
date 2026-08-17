@@ -1,0 +1,50 @@
+name: "Aggregate {{aggregate_summary}}"
+description: |
+  Regenerate {{aggregate_output_path}} from every already-merged record
+  matching {{record_glob}} on {{base_branch}}. Never reads an in-flight
+  entity-research branch. Gated on every upstream entity-research
+  workflow's __merge__ task via externalDependencies below — duplicate the
+  externalDependencies block once per additional upstream workflow before
+  submit; 2 entries are shown as the minimal example.
+
+  REPLACE_ME: list which entity workflows this batch actually gates on.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: {{base_branch}}
+repoUrl: {{repo_url}}
+externalDependencies:
+  - workflowId: "{{upstream_workflow_id_a}}"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+  - workflowId: "{{upstream_workflow_id_b}}"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: build-{{aggregate_slug}}-table
+    description: |
+      Read every {{record_glob}} file on {{base_branch}} (post-merge, never
+      an in-flight entity branch) and regenerate {{aggregate_output_path}}.
+      Review claim: {{aggregate_output_path}}'s row count matches the count of files matching {{record_glob}} exactly, or the task fails.
+      Review lane: docs
+      Safety invariant: Reads only {{base_branch}}; never reads or merges any upstream entity-research feature branch directly.
+      Slice rationale: One deterministic transform slice: read staged records, write the mart table, nothing else.
+      Architectural effect: None; adds no product code, only a generated table.
+      Goal: Produce a single reviewable table across all landed records, with a loud failure on any gap.
+      Motivation: Building the table per-entity or pre-merge makes correctness depend on N branch-chaining operations all succeeding at once, with no single point that checks "did every one of these actually land" — the exact blind spot that made wf-1786134278894-20's CPB drop invisible.
+      Alternative considerations: Assembling the table inside a per-entity workflow, or before merge, was rejected for the reason above.
+      Implementation details: Run `{{aggregate_build_command}}`, which globs {{record_glob}} and rewrites {{aggregate_output_path}}.
+      Non-goals: No new records, no edits to any file matching {{record_glob}}; read-only transform except for {{aggregate_output_path}}.
+      Layer: docs
+      Feature state: active
+      Files:
+      - {{aggregate_output_path}}
+      Change types:
+      - {{aggregate_output_path}}: modify
+      Acceptance criteria:
+      - {{aggregate_output_path}} has one row per file matching {{record_glob}} present on {{base_branch}}.
+      - Row count matches file count exactly; the task fails loudly rather than silently skipping a missing or malformed record.
+    command: "{{aggregate_build_command}}"
+    dependencies: []

@@ -10,9 +10,19 @@ from pathlib import Path
 try:
     from .mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from .mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from .mergify_admin_requeue_async_repair import (
+        repair_bot_thread_plan_name,
+        repair_check_plan_name,
+        repair_conflict_plan_name,
+    )
 except ImportError:
     from mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from mergify_admin_requeue_async_repair import (
+        repair_bot_thread_plan_name,
+        repair_check_plan_name,
+        repair_conflict_plan_name,
+    )
 
 
 def resolve_workflow_for_pr(pr_number: int) -> str | None:
@@ -142,6 +152,85 @@ def settle_workflow_fastpath_rows(ledger, now: int) -> int:
             ledger.record(
                 f"{kind}-settled", pr, head, key, now,
                 meta={"workflowId": str(workflow_id), "workflowStatus": status, "settledBy": "fastpath-observer"},
+            )
+            settled += 1
+    return settled
+
+
+def list_workflows() -> list[dict] | None:
+    """List every known workflow. Used by settle_repairer_plan_rows, which
+    (unlike settle_workflow_fastpath_rows) has no workflowId to look up
+    directly and must find its match by name instead."""
+    completed = _run_headless('headless_query query workflows --output json')
+    if completed.returncode != 0:
+        return None
+    text = completed.stdout.strip()
+    if not text:
+        return None
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            return parsed
+    return None
+
+
+# repairer.py's ad-hoc repair plans (repair-check, conflict-repair,
+# repair-bot-thread) settle via their own plan's `safe-push` task, which only
+# runs if the upstream `repair` task succeeds. When `repair` itself fails,
+# `safe-push` never runs and the `-settled` row is never written -- the row
+# repairer.py records before submission (see AdminBypassRepairer) carries no
+# meta.workflowId, so settle_workflow_fastpath_rows's lookup can't find it
+# either. Unlike a fast-path rebase-recreate, these plan names are fully
+# deterministic from (pr, headSha, key) via the same *_plan_name() helpers
+# used to build the plan, so the matching workflow can be found by name
+# instead of by a recorded id (PR #9172: a failed repair-bot-thread attempt
+# left `repair_in_flight` believing a repair was still running for the rest
+# of its 90-minute TTL, even though the workflow had already failed).
+_REPAIRER_PLAN_SETTLE_KINDS = ("repair-check", "conflict-repair", "repair-bot-thread")
+
+
+def _repairer_plan_name(kind: str, pr: int, head: str, key: str) -> str:
+    if kind == "repair-check":
+        return repair_check_plan_name(pr, key, head)
+    if kind == "conflict-repair":
+        return repair_conflict_plan_name(pr, head)
+    return repair_bot_thread_plan_name(pr, head)
+
+
+def settle_repairer_plan_rows(ledger, now: int) -> int:
+    """Write `<kind>-settled` rows for repairer.py's ad-hoc repair plans whose
+    workflow reached a terminal status but whose own safe-push task never ran
+    to write it. Returns how many rows were settled."""
+    pending = [row for row in ledger.rows if row.get("kind") in _REPAIRER_PLAN_SETTLE_KINDS]
+    if not pending:
+        return 0
+    workflows: list[dict] | None = None
+    settled = 0
+    for row in pending:
+        kind = str(row.get("kind"))
+        pr = int(row.get("pr", -1))
+        head = str(row.get("headSha") or "")
+        key = str(row.get("key") or "")
+        existing = ledger.latest(f"{kind}-settled", pr, head, key)
+        if existing is not None and int(existing.get("epoch", 0) or 0) >= int(row.get("epoch", 0) or 0):
+            continue
+        if workflows is None:
+            workflows = list_workflows() or []
+        plan_name = _repairer_plan_name(kind, pr, head, key)
+        match = next((w for w in workflows if w.get("name") == plan_name), None)
+        if match is None:
+            continue
+        status = match.get("status")
+        if status in _TERMINAL_WORKFLOW_STATUSES:
+            ledger.record(
+                f"{kind}-settled", pr, head, key, now,
+                meta={"workflowId": match.get("id"), "workflowStatus": status, "settledBy": "repairer-plan-observer"},
             )
             settled += 1
     return settled

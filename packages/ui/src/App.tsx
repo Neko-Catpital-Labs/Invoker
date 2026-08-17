@@ -1038,6 +1038,9 @@ type SelectedWorkflowGraphSnapshot = {
   tasks: Map<string, TaskState>;
 };
 
+const EMPTY_SELECTED_WORKFLOW_TASKS = new Map<string, TaskState>();
+const SELECTED_WORKFLOW_GRAPH_BODY_DELAY_MS = 1000;
+
 export function App() {
   const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
   const handleTaskGraphSnapshotApplied = useCallback(() => {
@@ -1053,6 +1056,20 @@ export function App() {
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const loadedTasks = useMemo(() => [...tasks.values()], [tasks]);
+  const tasksByWorkflow = useMemo(() => {
+    const groups = new Map<string, Map<string, TaskState>>();
+    for (const task of tasks.values()) {
+      const workflowId = task.config.workflowId;
+      if (!workflowId) continue;
+      let group = groups.get(workflowId);
+      if (!group) {
+        group = new Map<string, TaskState>();
+        groups.set(workflowId, group);
+      }
+      group.set(task.id, task);
+    }
+    return groups;
+  }, [tasks]);
   const initialRendererRecoveryState = useMemo(readRendererRecoveryState, []);
   const [viewMode, setViewMode] = useState<RendererRecoveryViewMode>(initialRendererRecoveryState.viewMode);
   const {
@@ -1687,12 +1704,8 @@ export function App() {
       : null);
   const selectedWorkflowTaskCount = useMemo(() => {
     if (!selectedWorkflowId) return 0;
-    let count = 0;
-    for (const task of tasks.values()) {
-      if (task.config.workflowId === selectedWorkflowId) count += 1;
-    }
-    return count;
-  }, [selectedWorkflowId, tasks]);
+    return tasksByWorkflow.get(selectedWorkflowId)?.size ?? 0;
+  }, [selectedWorkflowId, tasksByWorkflow]);
   const selectedWorkflow = useMemo(() => {
     if (selectedWorkflowId) {
       return workflows.get(selectedWorkflowId)
@@ -1710,15 +1723,15 @@ export function App() {
   }, [selectedWorkflowId, selectedTask, workflows, stickySelectedWorkflow, selectedWorkflowTaskCount]);
   const miniDagTasks = useMemo(() => {
     const activeWorkflowId = selectedWorkflow?.id ?? selectedWorkflowId;
-    if (!activeWorkflowId) return new Map<string, TaskState>();
-    const next = new Map<string, TaskState>();
-    for (const task of tasks.values()) {
-      if (task.config.workflowId === activeWorkflowId) {
-        next.set(task.id, task);
-      }
+    if (!activeWorkflowId) return EMPTY_SELECTED_WORKFLOW_TASKS;
+    return tasksByWorkflow.get(activeWorkflowId) ?? EMPTY_SELECTED_WORKFLOW_TASKS;
+  }, [selectedWorkflow, selectedWorkflowId, tasksByWorkflow]);
+  const selectedMergeTaskStateVersion = useMemo(() => {
+    for (const task of miniDagTasks.values()) {
+      if (task.config.isMergeNode) return task.taskStateVersion;
     }
-    return next;
-  }, [selectedWorkflow, selectedWorkflowId, tasks]);
+    return null;
+  }, [miniDagTasks]);
   useEffect(() => {
     if (selectedWorkflow && miniDagTasks.size > 0) {
       lastGoodSelectedWorkflowGraphRef.current = {
@@ -1761,8 +1774,25 @@ export function App() {
 
     return null;
   }, [miniDagTasks, selectedTask, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
+  const [renderedSelectedWorkflowGraph, setRenderedSelectedWorkflowGraph] = useState<SelectedWorkflowGraphSnapshot | null>(null);
+  useEffect(() => {
+    if (displayedSelectedWorkflowGraph === null) {
+      setRenderedSelectedWorkflowGraph(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!cancelled) {
+        setRenderedSelectedWorkflowGraph(displayedSelectedWorkflowGraph);
+      }
+    }, SELECTED_WORKFLOW_GRAPH_BODY_DELAY_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [displayedSelectedWorkflowGraph]);
   const isSelectedWorkflowGraphRefreshing = displayedSelectedWorkflowGraph !== null
-    && !(selectedWorkflow && miniDagTasks.size > 0);
+    && (selectedWorkflow?.id !== displayedSelectedWorkflowGraph.workflowId || miniDagTasks.size === 0);
   const selectedWorkflowGraphAvailable = displayedSelectedWorkflowGraph !== null;
   const selectedTaskDagWorkflows = useMemo(() => {
     const workflowForDag = displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow;
@@ -1773,10 +1803,17 @@ export function App() {
     next.set(workflowForDag.id, workflowForDag);
     return next;
   }, [displayedSelectedWorkflowGraph, selectedWorkflow, workflows]);
+  const taskGraphCameraCommand = cameraCommand?.scope === 'task' ? cameraCommand : null;
 
   useEffect(() => {
     const workflowId = selectedWorkflow?.id;
     if (!workflowId) return;
+    if (selectedWorkflow.onFinish !== 'pull_request') {
+      setReviewGateByWorkflowId((prev) => (
+        prev[workflowId] === null ? prev : { ...prev, [workflowId]: null }
+      ));
+      return;
+    }
     const getReviewGate = window.invoker?.getReviewGate;
     if (!getReviewGate) {
       setReviewGateByWorkflowId((prev) => ({ ...prev, [workflowId]: null }));
@@ -1795,7 +1832,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedWorkflow?.id, tasks]);
+  }, [selectedMergeTaskStateVersion, selectedWorkflow?.id, selectedWorkflow?.onFinish]);
 
   useEffect(() => {
     if (!selectedWorkflowId) {
@@ -4110,6 +4147,7 @@ export function App() {
 
   const renderSelectedWorkflowTaskGraph = (floating: boolean): JSX.Element | null => {
     if (displayedSelectedWorkflowGraph === null) return null;
+    const bodyGraph = renderedSelectedWorkflowGraph;
 
     const graphBody = (
       <div
@@ -4123,26 +4161,32 @@ export function App() {
             Refreshing graph…
           </div>
         )}
-        <TaskDAG
-          key={`${displayedSelectedWorkflowGraph.workflow.id}-${floating ? 'floating' : 'browser'}`}
-          tasks={displayedSelectedWorkflowGraph.tasks}
-          workflows={selectedTaskDagWorkflows}
-          selectedTaskId={selectedTaskId}
-          cameraCommand={cameraCommand}
-          onTaskClick={handleTaskClick}
-          onTaskDoubleClick={handleTaskDoubleClick}
-          onTaskContextMenu={handleTaskContextMenu}
-          statusFilters={new Set<string>()}
-          runningTaskIds={runningTaskIds}
-          surfaceMode={floating ? 'default' : 'browser'}
-        />
+        {bodyGraph ? (
+          <TaskDAG
+            key={`${bodyGraph.workflow.id}-${floating ? 'floating' : 'browser'}`}
+            tasks={bodyGraph.tasks}
+            workflows={selectedTaskDagWorkflows}
+            selectedTaskId={selectedTaskId}
+            cameraCommand={taskGraphCameraCommand}
+            onTaskClick={handleTaskClick}
+            onTaskDoubleClick={handleTaskDoubleClick}
+            onTaskContextMenu={handleTaskContextMenu}
+            statusFilters={new Set<string>()}
+            runningTaskIds={runningTaskIds}
+            surfaceMode={floating ? 'default' : 'browser'}
+          />
+        ) : (
+          <div className="flex h-full items-center px-3 text-xs text-muted-foreground">
+            Loading graph…
+          </div>
+        )}
       </div>
     );
 
     if (floating) {
       return (
         <FloatingGraphPanel
-          key={displayedSelectedWorkflowGraph.workflow.id}
+          key="selected-workflow-mini-dag-floating"
           testId="selected-workflow-mini-dag"
           dragHandleTestId="selected-workflow-mini-dag-drag-handle"
           title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
@@ -4591,12 +4635,12 @@ export function App() {
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
   const submittedPlanningSessionCount = planningSessions.filter((session) => session.status === 'submitted').length;
+  const activeDraftReviewOpen = reviewDraftSessionId === activePlanningSession.id && Boolean(draftPlanSummary);
   const connectedAgentLabels = (systemDiagnostics?.tools ?? [])
     .filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed)
     .map((tool) => tool.name.replace(/\s+CLI$/i, ''));
 
   const renderPlanningContextPanel = (): JSX.Element => {
-    const reviewingDraft = reviewDraftSessionId === activePlanningSession.id && Boolean(draftPlanSummary);
     const draftTaskGroups = draftPlanSummary?.taskGroups ?? (
       draftPlanSummary ? [{ workflow: null, tasks: draftPlanSummary.steps }] : []
     );
@@ -4608,7 +4652,7 @@ export function App() {
       >
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2.5">
           {!planningContextCollapsed && (
-            <h2 className="text-sm font-semibold text-foreground">{reviewingDraft ? 'Review draft' : 'Current plan'}</h2>
+            <h2 className="text-sm font-semibold text-foreground">{activeDraftReviewOpen ? 'Review draft' : 'Current plan'}</h2>
           )}
           <button
             type="button"
@@ -4621,7 +4665,7 @@ export function App() {
           </button>
         </div>
         {!planningContextCollapsed && (
-          reviewingDraft ? (
+          activeDraftReviewOpen ? (
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 text-sm">
               <p data-testid="planning-draft-locked-note" className="text-xs text-muted-foreground">
                 This draft is locked — critique in chat, or ask Invoker to re-draft, to change it.
@@ -4840,6 +4884,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             selectedConfirmationMode={selectedPlanningConfirmationMode}
             draftPlanAvailable={draftPlanAvailable}
+            draftReviewOpen={activeDraftReviewOpen}
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
             readOnly={activePlanningReadOnly}
@@ -5207,7 +5252,7 @@ export function App() {
                 tasks={displayedSelectedWorkflowGraph.tasks}
                 workflows={selectedTaskDagWorkflows}
                 selectedTaskId={selectedTaskId}
-                cameraCommand={cameraCommand}
+                cameraCommand={taskGraphCameraCommand}
                 onTaskClick={handleTaskClick}
                 onTaskDoubleClick={handleTaskDoubleClick}
                 onTaskContextMenu={handleTaskContextMenu}

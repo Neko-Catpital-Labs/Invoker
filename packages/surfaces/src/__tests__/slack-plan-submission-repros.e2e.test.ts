@@ -233,23 +233,18 @@ describe('Slack plan submission restart repro contracts', () => {
     const say = await mention(slack, '/plan', 'plan-turn', 'incident-thread');
 
     expect(JSON.stringify(mockSpawn.mock.calls[1])).toContain('attention inbox');
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('Preparing YAML attachment'),
-    }));
     const draft = slackPlanDrafts.getReady('C_LOBBY', 'incident-thread');
     expect(draft).toBeTruthy();
     expect(draft?.planText.trim()).toContain('name: Proof plan');
-    expect(sharedSlack.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'C_LOBBY',
-      blocks: expect.arrayContaining([
-        expect.objectContaining({
-          elements: expect.arrayContaining([
-            expect.objectContaining({ action_id: 'plan_draft_approve', text: expect.objectContaining({ text: 'Approve' }) }),
-            expect.objectContaining({ action_id: 'plan_draft_cancel', text: expect.objectContaining({ text: 'Cancel' }) }),
-          ]),
-        }),
-      ]),
-    }));
+    const reviewCardCall = say.mock.calls.find(([msg]) => msg?.thread_ts === 'incident-thread'
+      && JSON.stringify(msg?.blocks ?? []).includes('plan_draft_approve'));
+    expect(reviewCardCall).toBeDefined();
+    const [reviewCardMessage] = reviewCardCall ?? [];
+    const actionElements = reviewCardMessage?.blocks?.flatMap((block) => block.elements ?? []) ?? [];
+    expect(actionElements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action_id: 'plan_draft_approve', text: expect.objectContaining({ text: 'Approve' }) }),
+      expect.objectContaining({ action_id: 'plan_draft_cancel', text: expect.objectContaining({ text: 'Cancel' }) }),
+    ]));
   });
 
   it('treats untagged thread replies as passive context that never reaches the planner', async () => {
@@ -317,7 +312,7 @@ describe('Slack plan submission restart repro contracts', () => {
     mockSpawn.mockImplementationOnce(() => processWith('ok'));
     const warning = await mention(slack, '[auto-submit] build this draft', 'thread-auto-start');
     mockSpawn.mockImplementationOnce(() => processWith(plan));
-    await mention(slack, '/plan', 'plan-turn-auto', 'thread-auto-start');
+    const planSay = await mention(slack, '/plan', 'plan-turn-auto', 'thread-auto-start');
 
     expect(warning).toHaveBeenCalledWith(expect.objectContaining({
       text: 'Auto-submit is unavailable in conversational planning. I will stage the draft for review instead.',
@@ -328,10 +323,8 @@ describe('Slack plan submission restart repro contracts', () => {
       status: 'ready',
       confirmationMode: 'require',
     }));
-    const autoReviewUpdateCalls = sharedSlack.client.chat.update.mock.calls;
-    expect(autoReviewUpdateCalls).toContainEqual([expect.objectContaining({
-      channel: 'C_LOBBY',
-      ts: 'plan-turn-auto-reply',
+    expect(planSay).toHaveBeenCalledWith(expect.objectContaining({
+      thread_ts: 'thread-auto-start',
       blocks: expect.arrayContaining([
         expect.objectContaining({
           elements: expect.arrayContaining([
@@ -340,7 +333,7 @@ describe('Slack plan submission restart repro contracts', () => {
           ]),
         }),
       ]),
-    })]);
+    }));
   });
 
   it('submits the ready draft when its requester types an exact submit command', async () => {

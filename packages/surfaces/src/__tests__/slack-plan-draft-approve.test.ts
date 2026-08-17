@@ -146,7 +146,7 @@ describe('approveSlackPlanDraft', () => {
       channel_id: 'C1',
       thread_ts: 'T1',
     }));
-    expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(app.client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({
       channel: 'C1',
       blocks: expect.arrayContaining([
         expect.objectContaining({

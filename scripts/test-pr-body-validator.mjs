@@ -891,6 +891,12 @@ assert(
   JSON.stringify(scopeKindsForChangedFiles(proofToolingPolicyFiles)) === JSON.stringify(['policy']),
   'scopeKindsForChangedFiles should drop other files and keep sorted unique policy kinds',
 );
+assert(
+  JSON.stringify(scopeKindsForChangedFiles(['.github/workflows/ci.yml'])) === JSON.stringify(['policy']),
+  'a .github/ file alone must map to scope kind "policy", matching its tooling-policy review unit -- '
+  + 'otherwise the repair-normalize auto-split gate (which requires "policy" in scopeKinds) silently '
+  + 'refuses to split a proof-lane PR whose only tooling-policy file lives under .github/',
+);
 
 const refactorBody = `## Summary
 

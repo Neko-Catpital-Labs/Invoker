@@ -49,6 +49,7 @@ function mergeTrace(tag: string, data: Record<string, unknown>): void {
 export const OrchestratorErrorCode = {
   TASK_NOT_FOUND: 'TASK_NOT_FOUND',
   TASK_ALREADY_TERMINAL: 'TASK_ALREADY_TERMINAL',
+  TASK_NOT_CLOSABLE: 'TASK_NOT_CLOSABLE',
   WORKFLOW_NOT_FOUND: 'WORKFLOW_NOT_FOUND',
   REVIEW_GATE_NOT_APPROVED: 'REVIEW_GATE_NOT_APPROVED',
 } as const;
@@ -111,6 +112,7 @@ import {
   cancelActiveCandidatesImpl,
   cancelTaskImpl,
   cancelWorkflowImpl,
+  closeIdleTaskImpl,
   deferTaskImpl,
   finalizeCancelInvalidationImpl,
 } from './orchestrator/cancellation.js';
@@ -3399,6 +3401,15 @@ export class Orchestrator {
    */
   cancelTask(taskId: string): { cancelled: string[]; runningCancelled: string[] } {
     return cancelTaskImpl(this as unknown as CancellationHost, taskId);
+  }
+
+  /**
+   * Close a single idle task (`failed` / `completed` / `review_ready`) without
+   * cascading to dependents, ancestors, or the parent workflow's status.
+   * Used by the stale-task cleanup sweep, distinct from `cancelTask`.
+   */
+  closeIdleTask(taskId: string): TaskState {
+    return closeIdleTaskImpl(this as unknown as CancellationHost, taskId);
   }
 
   /**

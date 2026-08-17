@@ -279,6 +279,157 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       await adapter.close();
     });
 
+    it('surfaces a visible error and fires a lobby alert when the YAML upload fails during auto-stage', async () => {
+      const adapter = await SQLiteAdapter.create(':memory:');
+      const slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
+      const slackSessionRepo = new SlackSessionRepository(adapter);
+      surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
+        workingDir: '/tmp/repo',
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-anthropic-key',
+        slackPlanDraftRepo,
+        slackSessionRepo,
+        conversationalPlanning: true,
+      });
+
+      const planText = 'name: "Debug Issue"\ntasks:\n  - id: t1\n    description: "Run the debugger"\n    dependencies: []\n';
+      mockSendMessage.mockResolvedValue('Here is the drafted plan.');
+      mockLastTurnDraftPlanText = planText;
+      mockPlanConversation.conversationMode = 'plan';
+
+      const app = surface.getApp() as any;
+      app.client.files.uploadV2.mockRejectedValueOnce(new Error('missing_scope'));
+
+      await surface.start(async (cmd) => {
+        receivedCommands.push(cmd);
+      });
+
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+      const say = vi.fn().mockImplementation(async ({ text }) => {
+        const ts = `${Date.now()}.${Math.random().toString(36).substr(2, 6)}`;
+        apiCalls.push({ method: 'postMessage', channel: 'C-test', text, ts });
+        return { ts, ok: true };
+      });
+
+      await mentionHandler({
+        event: { text: '<@UBOT123456> create a plan for me', ts: '2222.001', thread_ts: undefined, user: 'U123' },
+        say,
+      });
+
+      const errorReply = apiCalls.find((c) => c.text?.includes('I hit an error trying to prepare the plan review card'));
+      expect(errorReply).toBeTruthy();
+      expect(errorReply?.text).toContain('missing_scope');
+
+      const alertPost = apiCalls.find((c) => c.text?.includes('Plan review card failed to post'));
+      expect(alertPost).toBeTruthy();
+
+      mockPlanConversation.conversationMode = 'agent';
+      await adapter.close();
+    });
+
+    it('stays silent during auto-stage when the turn is not draft-ready yet', async () => {
+      const adapter = await SQLiteAdapter.create(':memory:');
+      const slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
+      const slackSessionRepo = new SlackSessionRepository(adapter);
+      surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
+        workingDir: '/tmp/repo',
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-anthropic-key',
+        slackPlanDraftRepo,
+        slackSessionRepo,
+        conversationalPlanning: true,
+      });
+
+      mockSendMessage.mockResolvedValue('Still thinking about your request.');
+      mockLastTurnDraftPlanText = 'not a real yaml plan';
+      mockPlanConversation.conversationMode = 'plan';
+
+      await surface.start(async (cmd) => {
+        receivedCommands.push(cmd);
+      });
+
+      const app = surface.getApp() as any;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+      const say = vi.fn().mockImplementation(async ({ text }) => {
+        const ts = `${Date.now()}.${Math.random().toString(36).substr(2, 6)}`;
+        apiCalls.push({ method: 'postMessage', channel: 'C-test', text, ts });
+        return { ts, ok: true };
+      });
+
+      await mentionHandler({
+        event: { text: '<@UBOT123456> create a plan for me', ts: '3333.001', thread_ts: undefined, user: 'U123' },
+        say,
+      });
+
+      expect(apiCalls.some((c) => c.text?.includes('error trying to prepare'))).toBe(false);
+      expect(apiCalls.some((c) => c.text?.includes('Plan review card failed to post'))).toBe(false);
+      expect(slackPlanDraftRepo.getReady('C-test', '3333.001')).toBeFalsy();
+
+      mockPlanConversation.conversationMode = 'agent';
+      await adapter.close();
+    });
+
+    it('surfaces a visible error on the explicit /plan path when the YAML upload fails', async () => {
+      const adapter = await SQLiteAdapter.create(':memory:');
+      const slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
+      const slackSessionRepo = new SlackSessionRepository(adapter);
+      surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
+        workingDir: '/tmp/repo',
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-anthropic-key',
+        slackPlanDraftRepo,
+        slackSessionRepo,
+      });
+
+      const planText = 'name: "Debug Issue"\ntasks:\n  - id: t1\n    description: "Run the debugger"\n    dependencies: []\n';
+      mockSendMessage.mockResolvedValue('Sure, let me look into it.');
+      mockRunPlanConversion.mockResolvedValue('Here is the plan.');
+      mockLastTurnDraftPlanText = planText;
+
+      const app = surface.getApp() as any;
+      app.client.files.uploadV2.mockRejectedValueOnce(new Error('missing_scope'));
+
+      await surface.start(async (cmd) => {
+        receivedCommands.push(cmd);
+      });
+
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+      const say = vi.fn().mockImplementation(async ({ text }) => {
+        const ts = `${Date.now()}.${Math.random().toString(36).substr(2, 6)}`;
+        apiCalls.push({ method: 'postMessage', channel: 'C-test', text, ts });
+        return { ts, ok: true };
+      });
+
+      await mentionHandler({
+        event: { text: '<@UBOT123456> create a plan for me', ts: '4444.001', thread_ts: undefined, user: 'U123' },
+        say,
+      });
+
+      await mentionHandler({
+        event: { text: '<@UBOT123456> /plan', ts: '4444.5', thread_ts: '4444.001', user: 'U123' },
+        say,
+      });
+
+      const errorReply = apiCalls.find((c) => c.text?.includes('I hit an error trying to prepare the plan review card'));
+      expect(errorReply).toBeTruthy();
+      expect(errorReply?.text).toContain('missing_scope');
+      expect(errorReply?.text).toContain('An operator needs to look at draft');
+
+      await adapter.close();
+    });
+
     it('replies to a literal `plan:` mention as normal agent text and clears the Processing ack', async () => {
       surface = new SlackSurface({
         defaultRepoUrl: 'https://github.com/example/repo.git',
