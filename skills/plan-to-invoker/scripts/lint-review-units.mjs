@@ -2,21 +2,34 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  getLabelSection,
-  validateChangeTypeItems,
-  validateSingleReviewUnitFocus,
-} from '../../../scripts/review-unit-rules.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function resolveYamlModulePath(scriptDir) {
+/**
+ * Locate the Invoker checkout that owns this doctor script. Checked in order:
+ * 1. `INVOKER_REPO_ROOT` (explicit override, same convention used elsewhere
+ *    in the app, e.g. packages/contracts/src/repo-root.ts).
+ * 2. The local relative path (this script running from inside a live
+ *    Invoker checkout or worktree).
+ * 3. The shared checkout behind a linked git worktree's common dir.
+ * 4. `sourceRepoRoot` recorded in ~/.invoker/bundled-skills.json by the last
+ *    `scripts/setup-agent-skills.sh` install — needed when this script is
+ *    running from a machine-level skill install (e.g.
+ *    ~/.claude/skills/invoker-plan-to-invoker/scripts), which ships outside
+ *    any git repository and can't resolve steps 2-3.
+ */
+function resolveInvokerRepoRoot(scriptDir) {
+  const hasWorkspaceMarker = (dir) => existsSync(resolve(dir, 'pnpm-workspace.yaml'));
+
+  const envRoot = process.env.INVOKER_REPO_ROOT;
+  if (envRoot && hasWorkspaceMarker(envRoot)) return resolve(envRoot);
+
   const localRepoRoot = resolve(scriptDir, '../../..');
-  const localYamlPath = resolve(localRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-  if (existsSync(localYamlPath)) return localYamlPath;
+  if (hasWorkspaceMarker(localRepoRoot)) return localRepoRoot;
 
   try {
     const gitCommonDir = execSync('git rev-parse --git-common-dir', {
@@ -25,18 +38,50 @@ function resolveYamlModulePath(scriptDir) {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     const sharedRepoRoot = resolve(scriptDir, gitCommonDir, '..');
-    const sharedYamlPath = resolve(sharedRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-    if (existsSync(sharedYamlPath)) return sharedYamlPath;
+    if (hasWorkspaceMarker(sharedRepoRoot)) return sharedRepoRoot;
   } catch {
-    // Fall through to the explicit error below.
+    // Fall through to the manifest-based lookup below.
   }
 
+  try {
+    const invokerHome = process.env.INVOKER_DB_DIR ?? resolve(homedir(), '.invoker');
+    const manifestPath = resolve(invokerHome, 'bundled-skills.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (typeof manifest.sourceRepoRoot === 'string' && hasWorkspaceMarker(manifest.sourceRepoRoot)) {
+      return resolve(manifest.sourceRepoRoot);
+    }
+  } catch {
+    // Fall through to the explicit error at the call site.
+  }
+
+  return null;
+}
+
+const invokerRepoRoot = resolveInvokerRepoRoot(__dirname);
+if (!invokerRepoRoot) {
   throw new Error(
-    'Unable to resolve yaml runtime. Checked packages/app/node_modules/yaml/dist/index.js in the current worktree and the shared git checkout.',
+    'Unable to resolve the Invoker checkout for this doctor script (checked INVOKER_REPO_ROOT, the local '
+    + 'worktree, the shared git checkout, and ~/.invoker/bundled-skills.json). Set INVOKER_REPO_ROOT to an '
+    + "Invoker checkout, or reinstall skills with 'bash scripts/setup-agent-skills.sh' so "
+    + '~/.invoker/bundled-skills.json records the source checkout.',
   );
 }
 
-const { parse: parseYaml } = await import(resolveYamlModulePath(__dirname));
+const yamlModulePath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+if (!existsSync(yamlModulePath)) {
+  throw new Error(`Unable to resolve yaml runtime. Expected it at ${yamlModulePath}.`);
+}
+const { parse: parseYaml } = await import(yamlModulePath);
+
+const reviewUnitRulesPath = resolve(invokerRepoRoot, 'scripts/review-unit-rules.mjs');
+if (!existsSync(reviewUnitRulesPath)) {
+  throw new Error(`Unable to resolve review-unit-rules.mjs. Expected it at ${reviewUnitRulesPath}.`);
+}
+const {
+  getLabelSection,
+  validateChangeTypeItems,
+  validateSingleReviewUnitFocus,
+} = await import(reviewUnitRulesPath);
 
 function reviewFocusTexts(text) {
   return [
