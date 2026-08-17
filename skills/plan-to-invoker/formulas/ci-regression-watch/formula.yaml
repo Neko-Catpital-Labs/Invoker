@@ -3,7 +3,8 @@ version: 1
 description: >
   File a bug-fix workflow for one CI job that first went red on a default-branch
   push commit. The task reproduces against the observed commit, then ports the
-  fix to current master so the resulting PR is mergeable.
+  fix to current master so the resulting PR is mergeable. The recipe is fix
+  then verify only. It does not include a /reflect task.
 vars:
   repo_url:
     required: true
