@@ -296,6 +296,8 @@ export function cleanGitRepositoryEnv(env: NodeJS.ProcessEnv = process.env): Nod
 const AGENT_OUTPUT_DETAIL_MAX_CHARS = 2000;
 
 const CODEX_STDIN_NOISE = /^Reading additional input from stdin\.\.\.$/;
+const CODEX_REFRESH_TOKEN_REUSED = /refresh_token_reused|refresh token (?:has already been|was already) used/i;
+const CODEX_AUTH_RECOVERY = 'Codex authentication expired. Run `codex logout`, then `codex login`, and retry.';
 
 /** Lines that actually explain a non-zero exit, as opposed to build progress,
  * download spinners, or delegation traces that happen to print alongside them.
@@ -338,6 +340,9 @@ export function buildAgentExitFailureDetail(
   const meaningfulStderr = stripCodexStdinNoise(stderr);
   const meaningfulDisplay = stripCodexStdinNoise(displayStdout ?? '');
   const meaningfulStdout = stripCodexStdinNoise(rawStdout);
+  if (CODEX_REFRESH_TOKEN_REUSED.test(meaningfulStderr) || CODEX_REFRESH_TOKEN_REUSED.test(meaningfulStdout)) {
+    return CODEX_AUTH_RECOVERY;
+  }
   const candidate = meaningfulStderr || meaningfulDisplay || meaningfulStdout;
   if (candidate) return tailChars(extractErrorSignal(candidate) || candidate);
 

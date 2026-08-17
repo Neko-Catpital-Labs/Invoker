@@ -298,6 +298,20 @@ describe('buildAgentExitFailureDetail', () => {
     expect(detail).toBe('panic: boom at line 5');
   });
 
+  it('collapses repeated Codex refresh-token failures into one recovery action', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const repeatedAuthFailure = [
+      'Reading additional input from stdin...',
+      'ERROR codex_login::auth::manager: 401 Unauthorized: {"code":"refresh_token_reused"}',
+      'ERROR codex_login::auth::manager: Your refresh token was already used. Please log out and sign in again.',
+      'ERROR codex_api::endpoint::responses_websocket: failed to connect: 401 Unauthorized',
+    ].join('\n');
+
+    expect(processUtils.buildAgentExitFailureDetail('', repeatedAuthFailure)).toBe(
+      'Codex authentication expired. Run `codex logout`, then `codex login`, and retry.',
+    );
+  });
+
   it('falls back to raw stdout when no driver-processed output is available', async () => {
     const { processUtils } = await loadProcessUtils();
     const detail = processUtils.buildAgentExitFailureDetail(
