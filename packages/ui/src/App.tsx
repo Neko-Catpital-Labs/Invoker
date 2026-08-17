@@ -79,6 +79,7 @@ import {
 } from './lib/planning-session-view.js';
 import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } from './components/InvokerTerminal.js';
 import { WorkflowContextMenu, type ContextMenuCloseOptions } from './components/WorkflowContextMenu.js';
+import { MarkdownText } from './components/MarkdownText.js';
 import { Toaster, toast } from 'sonner';
 import { Trash2 } from 'lucide-react';
 import { Button } from './components/primitives/index.js';
@@ -4577,8 +4578,8 @@ export function App() {
                   {group.workflow && <h3 className="text-xs font-medium text-foreground">{group.workflow}</h3>}
                   <ul className={group.workflow ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
                     {group.tasks.map((task, taskIndex) => (
-                      <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-                        {task}
+                      <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="text-xs leading-5 text-muted-foreground">
+                        <MarkdownText text={task} />
                       </li>
                     ))}
                   </ul>
