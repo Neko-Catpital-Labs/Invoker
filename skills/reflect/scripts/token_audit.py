@@ -67,6 +67,36 @@ VERIFY_RE = re.compile(
     re.I,
 )
 
+# A Bash command directly interpreting/running the just-edited file (no
+# test framework involved) also counts as verification for a one-off
+# script - e.g. `python3 foo.py`, `node foo.js`, `./foo.sh`. VERIFY_RE alone
+# missed this: confirmed against a real session where a 9-edit streak on
+# claude_session_cost.py was flagged even though every edit cluster was
+# immediately followed by `python3 claude_session_cost.py ...` and the
+# agent read its real output before editing again - the feedback loop was
+# in use, the detector just didn't recognize the shape. Unlike VERIFY_RE
+# (which resets every file's streak on any match), this only counts as
+# verification for the specific file(s) actually being run.
+DIRECT_RUN_RE = re.compile(
+    r"(?:\b(?:python3?|node|ruby|bash|sh|perl)\s+\S*?([\w.-]+\.\w+)\b|"
+    r"\./([\w./-]*[\w.-]+\.\w+)\b)"
+)
+
+
+def _direct_run_targets(command):
+    """Basenames of any file(s) a Bash command directly executes, e.g.
+    'python3 tools/claude_session_cost.py --top 5' -> {'claude_session_cost.py'},
+    './run-all.sh' -> {'run-all.sh'}. Two alternatives because a bare `./foo.sh`
+    has no space between the `./` prefix and the filename, unlike an
+    interpreter invocation - verified against both real shapes, not merged
+    into one pattern that silently missed the no-space case."""
+    hits = set()
+    for m in DIRECT_RUN_RE.finditer(command or ""):
+        name = m.group(1) or m.group(2)
+        if name:
+            hits.add(os.path.basename(name))
+    return hits
+
 def read_jsonl(path):
     out = []
     with open(path) as f:
@@ -233,13 +263,21 @@ def audit_claude(path):
     print("   (a Bash call matching test/build/lint/typecheck keywords counts as verification;")
     print("    heuristic only - doesn't confirm the right check ran or that it passed)")
     edits_since_verify, file_streak_max = {}, {}
-    global_streak = global_streak_max = verify_count = 0
+    global_streak = global_streak_max = verify_count = direct_run_verify_count = 0
     THRESH = 3
     for s, name, inp, ident in sorted(tool_calls_seq, key=lambda x: x[0] or 0):
         if name == "Bash" and isinstance(inp, dict) and VERIFY_RE.search(inp.get("command") or ""):
             verify_count += 1
             edits_since_verify.clear()
             global_streak = 0
+        elif name == "Bash" and isinstance(inp, dict):
+            targets = _direct_run_targets(inp.get("command") or "")
+            edited_basenames = {os.path.basename(fp) for fp in edits_since_verify if fp}
+            hit = targets & edited_basenames
+            if hit:
+                direct_run_verify_count += 1
+                edits_since_verify.clear()
+                global_streak = 0
         elif name in ("Edit", "Write") and isinstance(inp, dict):
             fp = inp.get("file_path")
             edits_since_verify[fp] = edits_since_verify.get(fp, 0) + 1
@@ -250,6 +288,8 @@ def audit_claude(path):
     for fp, n in sorted(flagged_files.items(), key=lambda x: -x[1]):
         print(f"  {fp}: {n} edits in a row with no verification call in between")
     print(f"verification calls found (test/build/lint/typecheck-shaped Bash commands): {verify_count}")
+    print(f"verification calls found (direct execution of the just-edited file, e.g. "
+          f"`python3 foo.py`): {direct_run_verify_count}")
     print(f"longest edit streak with zero verification in between: {global_streak_max}")
 
     print("-- cache-creation spikes (fresh write, not cache read - expensive path) --")
@@ -274,6 +314,7 @@ def audit_claude(path):
         "n_errors": len(errors),
         "n_recurring_failures": len(recurring),
         "longest_edit_streak_no_verify": global_streak_max,
+        "direct_run_verify_count": direct_run_verify_count,
     }
 
 
