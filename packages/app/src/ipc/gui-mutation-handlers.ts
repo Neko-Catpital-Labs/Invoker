@@ -1367,7 +1367,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-list', async () => {
-    return listPlanningChatSessions({ sessions: planningChatSessions });
+    return listPlanningChatSessions({ sessions: planningChatSessions, config: invokerConfig });
   });
   registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
     const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;

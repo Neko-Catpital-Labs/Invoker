@@ -508,6 +508,12 @@ export interface InAppPlanningCreateSessionRequest {
   presetKey?: string;
   title?: string;
   confirmationMode?: PlanningConfirmationMode;
+  repoBinding?: InAppPlanningRepoBinding;
+}
+
+export interface InAppPlanningRepoBinding {
+  repoUrl: string;
+  baseBranch: string;
 }
 
 export type InAppPlanningCreateSessionResponse =
@@ -523,6 +529,7 @@ export type InAppPlanningCreateSessionResponse =
 export type InAppPlanningListSessionsResponse = {
   ok: true;
   sessions: InAppPlanningSessionSummary[];
+  repoBinding?: InAppPlanningRepoBinding;
 };
 
 export interface InAppPlanningStreamEvent {
@@ -535,6 +542,7 @@ export interface InAppPlanningChatRequest {
   message: string;
   presetKey?: string;
   confirmationMode?: PlanningConfirmationMode;
+  repoBinding?: InAppPlanningRepoBinding;
 }
 
 export type InAppPlanningChatResponse =

@@ -16,6 +16,7 @@ import type {
   InAppPlanningDiscardDraftRequest,
   InAppPlanningDiscardDraftResponse,
   InAppPlanningListSessionsResponse,
+  InAppPlanningRepoBinding,
   InAppPlanningPlanSummary,
   InAppPlanningRebindRepoRequest,
   InAppPlanningRebindRepoResponse,
@@ -685,30 +686,7 @@ async function createSession(
     resolveDefaultPlanningConfirmationMode(deps.config),
   );
 
-  const repoUrl = deps.config.defaultRepoUrl;
-  const baseBranch = deps.config.defaultBranch ?? 'main';
-  let worktreeBinding:
-    | { repoUrl: string; baseBranch: string; baseCommit: string; worktreePath: string; worktreeBranch: string }
-    | undefined;
-  if (deps.repoPool && typeof repoUrl === 'string' && repoUrl.trim()) {
-    const provisioned = await provisionPlanningWorktree(deps.repoPool, { repoUrl, baseBranch, sessionId: id });
-    worktreeBinding = {
-      repoUrl,
-      baseBranch,
-      baseCommit: provisioned.baseCommit,
-      worktreePath: provisioned.worktreePath,
-      worktreeBranch: provisioned.branch,
-    };
-  }
-  const conversationDeps = worktreeBinding
-    ? {
-        ...deps,
-        planDoctorScriptPath: deps.planDoctorScriptPath,
-        workingDir: worktreeBinding.worktreePath,
-        mcpConfigPath: planningMcpConfigPath(worktreeBinding.worktreePath),
-      }
-    : deps;
-
+  const repoBinding = request?.repoBinding ?? resolvePlanningRepoBinding(deps.config);
   const session: InAppPlanningChatSession = {
     id,
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
@@ -716,12 +694,9 @@ async function createSession(
     confirmationMode,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, conversationDeps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
-    repoUrl: worktreeBinding?.repoUrl,
-    baseBranch: worktreeBinding?.baseBranch,
-    baseCommit: worktreeBinding?.baseCommit,
-    worktreePath: worktreeBinding?.worktreePath,
-    worktreeBranch: worktreeBinding?.worktreeBranch,
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
+    repoUrl: repoBinding?.repoUrl,
+    baseBranch: repoBinding?.baseBranch,
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -731,6 +706,46 @@ async function createSession(
   deps.sessions.set(session.id, session);
   persistPlanningSession(session, deps.planningSessionStore, false);
   return session;
+}
+
+export function resolvePlanningRepoBinding(config: InvokerConfig): InAppPlanningRepoBinding | undefined {
+  const repoUrl = config.defaultRepoUrl?.trim();
+  if (!repoUrl) return undefined;
+  return { repoUrl, baseBranch: config.defaultBranch ?? 'main' };
+}
+
+async function activatePlanningSessionWorktree(
+  session: InAppPlanningChatSession,
+  deps: InAppPlannerDeps & { repoPool?: PlanningRepoPool },
+): Promise<boolean> {
+  if (!deps.repoPool || !session.repoUrl || !session.baseBranch || session.worktreePath) return false;
+
+  const provisioned = await provisionPlanningWorktree(deps.repoPool, {
+    repoUrl: session.repoUrl,
+    baseBranch: session.baseBranch,
+    sessionId: session.id,
+  });
+  const presets = await resolveHarnessPresets(deps.config);
+  const preset = presets[session.presetKey];
+  if (!preset) throw new Error(`Unknown planner preset "${session.presetKey}".`);
+  const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
+  const conversationDeps = {
+    ...deps,
+    workingDir: provisioned.worktreePath,
+    mcpConfigPath: planningMcpConfigPath(provisioned.worktreePath),
+  };
+
+  session.baseCommit = provisioned.baseCommit;
+  session.worktreePath = provisioned.worktreePath;
+  session.worktreeBranch = provisioned.branch;
+  session.conversation = new PlanConversation(planConversationConfig(
+    preset,
+    conversationDeps,
+    session.id,
+    selectHarnessSessionDriver,
+    { conversationalPlanning: true },
+  ));
+  return true;
 }
 
 export async function listInAppPlanningPresets(config: InvokerConfig): Promise<PlanningPresetOption[]> {
@@ -816,12 +831,12 @@ export async function createPlanningChatSession(
 }
 
 export function listPlanningChatSessions(
-  deps: { sessions: InAppPlanningChatSessions },
+  deps: { sessions: InAppPlanningChatSessions; config: InvokerConfig },
 ): InAppPlanningListSessionsResponse {
   const sessions = [...deps.sessions.values()]
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
     .map(sessionToSummary);
-  return { ok: true, sessions };
+  return { ok: true, sessions, repoBinding: resolvePlanningRepoBinding(deps.config) };
 }
 
 export async function sendPlanningChatMessage(
@@ -865,6 +880,7 @@ export async function sendPlanningChatMessage(
         presetKey: rawRequest?.presetKey,
         title: titleFromMessage(message),
         confirmationMode: requestedConfirmationMode,
+        repoBinding: rawRequest?.repoBinding,
       }, deps);
       if ('error' in created) {
         return { ok: false, sessionId, error: created.error };
@@ -892,8 +908,10 @@ export async function sendPlanningChatMessage(
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
       try {
+        const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
         const hostedMessage = formatPlanningHostedTurn('in_app', message);
-        if (deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
+        if (!activatedWorktree && deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
             await ensurePlanningWorktreeReady(deps.repoPool, {
               repoUrl: activeSession.repoUrl,

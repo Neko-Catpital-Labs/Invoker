@@ -97,7 +97,7 @@ describe('planning terminal restore invariants repro', () => {
       presetKey: 'codex',
       status: 'still_discussing',
     });
-    expect(listPlanningChatSessions({ sessions }).sessions.map((session) => session.id)).toEqual(
+    expect(listPlanningChatSessions({ sessions, config: {} }).sessions.map((session) => session.id)).toEqual(
       expect.arrayContaining(['remapped-preset', 'missing-preset']),
     );
   });
