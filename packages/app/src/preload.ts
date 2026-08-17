@@ -24,6 +24,15 @@ const bootstrapState = process.env.NODE_ENV === 'test'
     | undefined;
 const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
 
+// Passed via webPreferences.additionalArguments so it is available
+// synchronously without the blocking bootstrap IPC call this skips
+// under NODE_ENV=test.
+const appStartedAtEpochMsArg = process.argv
+  .find((arg) => arg.startsWith('--invoker-app-started-at-epoch-ms='))
+  ?.split('=')[1];
+const appStartedAtEpochMs = bootstrapState?.appStartedAtEpochMs
+  ?? (appStartedAtEpochMsArg ? Number(appStartedAtEpochMsArg) : undefined);
+
 export function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(() => {
@@ -111,7 +120,10 @@ for (const channel of Object.keys(IpcEventChannels)) {
 }
 
 contextBridge.exposeInMainWorld('invoker', api as InvokerAPI);
-contextBridge.exposeInMainWorld('__INVOKER_BOOTSTRAP__', bootstrapState ?? { tasks: [], workflows: [] });
+contextBridge.exposeInMainWorld(
+  '__INVOKER_BOOTSTRAP__',
+  bootstrapState ?? { tasks: [], workflows: [], appStartedAtEpochMs },
+);
 contextBridge.exposeInMainWorld(
   '__INVOKER_TRACE_RENDERER_TASK_GRAPH__',
   process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1',
@@ -127,8 +139,8 @@ setTimeout(() => {
     taskCount: bootstrapState?.tasks?.length ?? 0,
     workflowCount: bootstrapState?.workflows?.length ?? 0,
     jsonSizeBytes: Buffer.byteLength(JSON.stringify(bootstrapState ?? { tasks: [], workflows: [] }), 'utf8'),
-    processElapsedMs: bootstrapState?.appStartedAtEpochMs
-      ? Date.now() - bootstrapState.appStartedAtEpochMs
+    processElapsedMs: appStartedAtEpochMs
+      ? Date.now() - appStartedAtEpochMs
       : undefined,
   }).catch(() => undefined);
 }, 0);

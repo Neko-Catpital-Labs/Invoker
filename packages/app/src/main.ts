@@ -2451,6 +2451,7 @@ startMainProcessBootstrap({
       logger,
       hideE2eWindow,
       enableTestCompositor,
+      appStartedAtEpochMs: appProcessStartedAt,
       recordStartupMark,
       setUiInteractive: (value) => { uiInteractive = value; },
       startDeferredStartupWork,

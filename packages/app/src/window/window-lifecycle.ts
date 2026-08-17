@@ -11,6 +11,7 @@ export interface MainWindowLifecycleDeps {
   logger: Logger;
   hideE2eWindow: boolean;
   enableTestCompositor: boolean;
+  appStartedAtEpochMs?: number;
   recordStartupMark: (phase: string, extra?: Record<string, unknown>) => void;
   setUiInteractive: (uiInteractive: boolean) => void;
   startDeferredStartupWork: () => void;
@@ -82,6 +83,7 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      additionalArguments: [`--invoker-app-started-at-epoch-ms=${deps.appStartedAtEpochMs ?? Date.now()}`],
     },
     icon: !icon.isEmpty() && process.platform !== 'darwin' ? icon : undefined,
     title: 'Invoker',
