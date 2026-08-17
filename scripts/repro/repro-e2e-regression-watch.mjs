@@ -216,8 +216,8 @@ function testPlanVarsAndDryRunRendering() {
     if (!rendered.planPath.endsWith('ci-regression-watch.yaml')) fail('dry run did not render expected plan path');
     if (rendered.submitted) fail('dry run must not submit');
     const planText = readFileSync(rendered.planPath, 'utf8');
-    // #7086's codex pin outlived the outage it was a stopgap for; see #9452.
-    if (planText.includes('executionAgent: codex')) fail('fix task must not hardcode codex; let the configured default agent apply');
+    if (planText.includes('executionAgent:')) fail('fix task must not pin an execution agent');
+    if (planText.includes('executionModel:')) fail('fix task must not pin an execution model');
   } finally {
     rmSync(outRoot, { recursive: true, force: true });
   }
