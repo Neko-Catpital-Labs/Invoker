@@ -292,6 +292,62 @@ class TestEditStreaksWithoutVerification(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_direct_interpreter_run_of_edited_file_counts_as_verification(self):
+        """Real reflect finding: a 9-edit streak on claude_session_cost.py was
+        flagged even though every edit cluster was immediately followed by
+        `python3 claude_session_cost.py ...` - a real feedback-loop check
+        VERIFY_RE didn't recognize since it only matches test/build/lint
+        commands, not direct interpreter execution of a one-off script."""
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "tools/claude_session_cost.py"}}], u),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Edit", "input": {"file_path": "tools/claude_session_cost.py"}}], u),
+            claude_assistant_line("m3", "u3", [{"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "python3 tools/claude_session_cost.py ~/.claude/projects --top 5"}}], u),
+            claude_assistant_line("m4", "u4", [{"type": "tool_use", "id": "t4", "name": "Edit", "input": {"file_path": "tools/claude_session_cost.py"}}], u),
+        ]
+        path = write_jsonl(lines)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = token_audit.audit_claude(path)
+            out = buf.getvalue()
+            self.assertEqual(result["longest_edit_streak_no_verify"], 2)
+            self.assertEqual(result["direct_run_verify_count"], 1)
+            self.assertIn("verification calls found (direct execution of the just-edited file", out)
+        finally:
+            os.unlink(path)
+
+    def test_bare_dot_slash_run_of_edited_file_counts_as_verification(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "run-all.sh"}}], u),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "./run-all.sh"}}], u),
+        ]
+        path = write_jsonl(lines)
+        try:
+            with redirect_stdout(io.StringIO()):
+                result = token_audit.audit_claude(path)
+            self.assertEqual(result["direct_run_verify_count"], 1)
+            self.assertEqual(result["longest_edit_streak_no_verify"], 1)
+        finally:
+            os.unlink(path)
+
+    def test_running_a_different_file_does_not_verify_the_edited_one(self):
+        u = {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        lines = [
+            claude_assistant_line("m1", "u1", [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "a.py"}}], u),
+            claude_assistant_line("m2", "u2", [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "python3 b.py"}}], u),
+            claude_assistant_line("m3", "u3", [{"type": "tool_use", "id": "t3", "name": "Edit", "input": {"file_path": "a.py"}}], u),
+        ]
+        path = write_jsonl(lines)
+        try:
+            with redirect_stdout(io.StringIO()):
+                result = token_audit.audit_claude(path)
+            self.assertEqual(result["direct_run_verify_count"], 0)
+            self.assertEqual(result["longest_edit_streak_no_verify"], 2)
+        finally:
+            os.unlink(path)
+
 
 class TestToolErrorBreakdown(unittest.TestCase):
     """Backlog item from a real reflect run: bucket tool errors by tool and
