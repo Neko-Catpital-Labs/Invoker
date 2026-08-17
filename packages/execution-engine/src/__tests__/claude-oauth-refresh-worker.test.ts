@@ -34,23 +34,88 @@ function makeStore(): { store: WorkerDecisionStore; rows: unknown[] } {
 }
 
 describe('runClaudeOauthRefreshCheck', () => {
-  it('does nothing when the token is not close to expiring', async () => {
+  it('does nothing when the local token and every remote target are all healthy', async () => {
     const writeCredentials = vi.fn();
     const refreshFn = vi.fn();
     const distributeFn = vi.fn();
+    const now = Date.now();
     await runClaudeOauthRefreshCheck({
       logger: makeLogger(),
       credentialsPath: '/home/invoker/.claude/.credentials.json',
       remoteTargets: [makeTarget('do1')],
-      readCredentials: () => credentialsJson(Date.now() + 60 * 60 * 1000),
+      readCredentials: () => credentialsJson(now + 60 * 60 * 1000),
+      readRemoteCredentials: async () => credentialsJson(now + 60 * 60 * 1000),
       writeCredentials,
       refreshFn,
       distributeFn,
-      now: () => Date.now(),
+      now: () => now,
     });
     expect(refreshFn).not.toHaveBeenCalled();
     expect(writeCredentials).not.toHaveBeenCalled();
     expect(distributeFn).not.toHaveBeenCalled();
+  });
+
+  it('reproduces the real incident: distributes current credentials to a remote target whose own copy is expiring, even when the local token is healthy', async () => {
+    // Real incident, 2026-08-16: the owner's own credentials stayed healthy
+    // (refreshed by its own live CLI usage) while all 5 SSH pool targets
+    // independently expired. The worker never fired because the entire
+    // check -- local refresh AND remote distribution -- was gated on the
+    // local token's own expiry alone.
+    const now = 1_000_000_000_000;
+    const healthyLocal = credentialsJson(now + 60 * 60 * 1000);
+    const distributeFn = vi.fn(async () => undefined);
+    const refreshFn = vi.fn();
+    const writeCredentials = vi.fn();
+    const { store, rows } = makeStore();
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: '/home/invoker/.claude/.credentials.json',
+      remoteTargets: [makeTarget('do1'), makeTarget('do2')],
+      store,
+      readCredentials: () => healthyLocal,
+      readRemoteCredentials: async (target) =>
+        target.name === 'do1' ? credentialsJson(now - 1) : credentialsJson(now + 60 * 60 * 1000),
+      writeCredentials,
+      refreshFn,
+      distributeFn,
+      now: () => now,
+    });
+
+    expect(refreshFn).not.toHaveBeenCalled();
+    expect(writeCredentials).not.toHaveBeenCalled();
+    expect(distributeFn).toHaveBeenCalledTimes(1);
+    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), healthyLocal);
+    const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
+    expect(statuses.do1).toBe('completed');
+    expect(statuses.do2).toBeUndefined();
+  });
+
+  it('treats a failed remote credential read as needing distribution, without stopping other targets', async () => {
+    const now = 1_000_000_000_000;
+    const healthyLocal = credentialsJson(now + 60 * 60 * 1000);
+    const distributeFn = vi.fn(async () => undefined);
+    const { store, rows } = makeStore();
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: '/home/invoker/.claude/.credentials.json',
+      remoteTargets: [makeTarget('do1'), makeTarget('do2')],
+      store,
+      readCredentials: () => healthyLocal,
+      readRemoteCredentials: async (target) => {
+        if (target.name === 'do1') throw new Error('ssh: connection refused');
+        return credentialsJson(now + 60 * 60 * 1000);
+      },
+      distributeFn,
+      now: () => now,
+    });
+
+    expect(distributeFn).toHaveBeenCalledTimes(1);
+    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), healthyLocal);
+    const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
+    expect(statuses.do1).toBe('completed');
+    expect(statuses.do2).toBeUndefined();
   });
 
   it('refreshes, writes the local file, and distributes to every remote target when the token is expiring', async () => {
