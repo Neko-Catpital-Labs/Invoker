@@ -90,6 +90,8 @@ export class ExecutionHarnessSessionDriver implements HarnessSessionDriver {
         return ['exec', 'resume', ...resumeArgs.slice(1), ...(model ? ['--model', model] : []), prompt];
       case 'omp':
         return [...resumeArgs, ...(model ? ['--model', model] : []), '-p', prompt];
+      case 'cursor':
+        return [...resumeArgs, '--print', '--trust', ...(model ? ['--model', model] : []), prompt];
       default:
         throw new Error(`Harness "${this.agent.name}" does not support non-interactive session append.`);
     }

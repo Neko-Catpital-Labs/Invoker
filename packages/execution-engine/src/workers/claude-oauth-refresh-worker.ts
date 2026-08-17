@@ -9,6 +9,11 @@ import {
   refreshClaudeOauthCredentials,
   type OauthFetchFn,
 } from '../claude-oauth-refresh.js';
+import {
+  isCodexAuthExpiring,
+  refreshCodexOauthCredentials,
+  resolveCodexAuthPath,
+} from '../codex-oauth-refresh.js';
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
 import { base64Encode, execRemoteCapture } from '../ssh-git-exec.js';
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
@@ -19,6 +24,8 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 
 export const CLAUDE_OAUTH_REFRESH_WORKER_KIND = 'claude-oauth-refresh';
 export const DEFAULT_CLAUDE_OAUTH_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_CODEX_REMOTE_AUTH_PATH = '~/.codex/auth.json';
+const DEFAULT_CLAUDE_REMOTE_CREDENTIALS_PATH = '~/.claude/.credentials.json';
 
 export interface ClaudeOauthRefreshTarget {
   name: string;
@@ -42,6 +49,13 @@ export interface ClaudeOauthRefreshWorkerConfig {
   writeCredentials?: (path: string, contents: string) => void;
   refreshFn?: (credentialsJson: string) => Promise<string | null>;
   distributeFn?: (target: ClaudeOauthRefreshTarget, credentialsJson: string) => Promise<void>;
+  /** Local Codex auth.json path. Defaults to $CODEX_HOME/auth.json or ~/.codex/auth.json. */
+  codexAuthPath?: string;
+  readCodexCredentials?: (path: string) => string;
+  readRemoteCodexCredentials?: (target: ClaudeOauthRefreshTarget) => Promise<string | null>;
+  writeCodexCredentials?: (path: string, contents: string) => void;
+  refreshCodexFn?: (authJson: string) => Promise<string | null>;
+  distributeCodexFn?: (target: ClaudeOauthRefreshTarget, authJson: string) => Promise<void>;
   fetchFn?: OauthFetchFn;
   now?: () => number;
   onTick?: WorkerTick;
@@ -61,6 +75,19 @@ export interface ClaudeOauthRefreshWorkerOptions {
   distributeFn?: (target: ClaudeOauthRefreshTarget, credentialsJson: string) => Promise<void>;
   now?: () => number;
   onTick?: WorkerTick;
+}
+
+export interface CodexOauthRefreshWorkerOptions {
+  logger: Logger;
+  authPath: string;
+  remoteTargets: ClaudeOauthRefreshTarget[];
+  store?: WorkerDecisionStore;
+  readCredentials?: (path: string) => string;
+  readRemoteCredentials?: (target: ClaudeOauthRefreshTarget) => Promise<string | null>;
+  writeCredentials?: (path: string, contents: string) => void;
+  refreshFn?: (authJson: string) => Promise<string | null>;
+  distributeFn?: (target: ClaudeOauthRefreshTarget, authJson: string) => Promise<void>;
+  now?: () => number;
 }
 
 export function resolveClaudeCredentialsPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -104,29 +131,66 @@ chmod 600 "$TMP_PATH"
 mv "$TMP_PATH" "$REMOTE_PATH"`;
 }
 
-function defaultDistribute(target: ClaudeOauthRefreshTarget, credentialsJson: string): Promise<void> {
-  const remotePath = target.remotePath ?? '~/.claude/.credentials.json';
+function defaultDistributeToPath(
+  target: ClaudeOauthRefreshTarget,
+  credentialsJson: string,
+  remotePath: string,
+  phase: string,
+): Promise<void> {
   const sshArgs = buildSshConnectionArgs(target.connection, { batchMode: true });
   return execRemoteCapture({
     sshArgs,
     script: buildDistributeCredentialsScript(remotePath, credentialsJson),
-    phase: `claude-oauth-refresh:${target.name}`,
+    phase,
   }).then(() => undefined);
 }
 
-async function defaultReadRemoteCredentials(target: ClaudeOauthRefreshTarget): Promise<string | null> {
-  const remotePath = target.remotePath ?? '~/.claude/.credentials.json';
+function defaultDistribute(target: ClaudeOauthRefreshTarget, credentialsJson: string): Promise<void> {
+  return defaultDistributeToPath(
+    target,
+    credentialsJson,
+    target.remotePath ?? DEFAULT_CLAUDE_REMOTE_CREDENTIALS_PATH,
+    `claude-oauth-refresh:${target.name}`,
+  );
+}
+
+function defaultDistributeCodex(target: ClaudeOauthRefreshTarget, authJson: string): Promise<void> {
+  return defaultDistributeToPath(
+    target,
+    authJson,
+    DEFAULT_CODEX_REMOTE_AUTH_PATH,
+    `codex-oauth-refresh:${target.name}`,
+  );
+}
+
+async function defaultReadRemoteFile(target: ClaudeOauthRefreshTarget, remotePath: string, phase: string): Promise<string | null> {
   const sshArgs = buildSshConnectionArgs(target.connection, { batchMode: true });
   try {
     const output = await execRemoteCapture({
       sshArgs,
       script: `cat "${remotePath}" 2>/dev/null || true`,
-      phase: `claude-oauth-refresh-check:${target.name}`,
+      phase,
     });
     return output.trim() ? output : null;
   } catch {
     return null;
   }
+}
+
+async function defaultReadRemoteCredentials(target: ClaudeOauthRefreshTarget): Promise<string | null> {
+  return defaultReadRemoteFile(
+    target,
+    target.remotePath ?? DEFAULT_CLAUDE_REMOTE_CREDENTIALS_PATH,
+    `claude-oauth-refresh-check:${target.name}`,
+  );
+}
+
+async function defaultReadRemoteCodexCredentials(target: ClaudeOauthRefreshTarget): Promise<string | null> {
+  return defaultReadRemoteFile(
+    target,
+    DEFAULT_CODEX_REMOTE_AUTH_PATH,
+    `codex-oauth-refresh-check:${target.name}`,
+  );
 }
 
 function recordDecision(
@@ -150,22 +214,23 @@ function recordDecision(
 }
 
 async function distributeToTarget(
-  options: ClaudeOauthRefreshWorkerOptions,
-  distribute: NonNullable<ClaudeOauthRefreshWorkerOptions['distributeFn']> | typeof defaultDistribute,
+  options: { logger: Logger; store?: WorkerDecisionStore },
+  distribute: (target: ClaudeOauthRefreshTarget, contents: string) => Promise<void>,
   target: ClaudeOauthRefreshTarget,
   credentialsJson: string,
   summary: string,
+  subjectId: string = target.name,
 ): Promise<void> {
   try {
     await distribute(target, credentialsJson);
-    recordDecision(options.store, target.name, 'completed', summary);
+    recordDecision(options.store, subjectId, 'completed', summary);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     options.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] failed to distribute to ${target.name}: ${detail}`, {
       module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
       target: target.name,
     });
-    recordDecision(options.store, target.name, 'failed', `Failed to distribute credentials to ${target.name}: ${detail}`);
+    recordDecision(options.store, subjectId, 'failed', `Failed to distribute credentials to ${target.name}: ${detail}`);
   }
 }
 
@@ -231,6 +296,97 @@ export async function runClaudeOauthRefreshCheck(options: ClaudeOauthRefreshWork
   }
 }
 
+export async function runCodexOauthRefreshCheck(options: CodexOauthRefreshWorkerOptions): Promise<void> {
+  const readCredentials = options.readCredentials ?? defaultReadCredentials;
+  const readRemoteCredentials = options.readRemoteCredentials ?? defaultReadRemoteCodexCredentials;
+  const writeCredentials = options.writeCredentials ?? defaultWriteCredentials;
+  const distribute = options.distributeFn ?? defaultDistributeCodex;
+  const now = options.now ?? Date.now;
+
+  let authJson: string;
+  try {
+    authJson = readCredentials(options.authPath);
+  } catch (error) {
+    options.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] failed to read ${options.authPath}: ${error instanceof Error ? error.message : String(error)}`, {
+      module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+    });
+    return;
+  }
+
+  if (!isCodexAuthExpiring(authJson, now())) {
+    for (const target of options.remoteTargets) {
+      let remoteJson: string | null;
+      try {
+        remoteJson = await readRemoteCredentials(target);
+      } catch (error) {
+        options.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] failed to read remote Codex auth for ${target.name}: ${error instanceof Error ? error.message : String(error)}`, {
+          module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+          target: target.name,
+        });
+        remoteJson = null;
+      }
+      const remoteNeedsDistribution = remoteJson === null || isCodexAuthExpiring(remoteJson, now());
+      if (!remoteNeedsDistribution) continue;
+      await distributeToTarget(
+        options,
+        distribute,
+        target,
+        authJson,
+        `Distributed current Codex auth to ${target.name} (its own copy was stale)`,
+        `codex:${target.name}`,
+      );
+    }
+    return;
+  }
+
+  const refresh = options.refreshFn ?? ((json: string) => refreshCodexOauthCredentials(json, { now: now() }));
+  const refreshed = await refresh(authJson);
+  if (!refreshed) {
+    options.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] Codex token refresh failed for ${options.authPath}; leaving existing auth in place`, {
+      module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+    });
+    recordDecision(options.store, 'codex:local', 'failed', 'Codex OAuth token refresh request failed');
+    return;
+  }
+
+  writeCredentials(options.authPath, refreshed);
+  recordDecision(options.store, 'codex:local', 'completed', 'Refreshed local Codex OAuth credentials');
+  options.logger.info(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] refreshed local Codex auth`, {
+    module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+  });
+
+  for (const target of options.remoteTargets) {
+    await distributeToTarget(
+      options,
+      distribute,
+      target,
+      refreshed,
+      `Distributed refreshed Codex auth to ${target.name}`,
+      `codex:${target.name}`,
+    );
+  }
+}
+
+export async function runClaudeAndCodexOauthRefreshCheck(
+  claude: ClaudeOauthRefreshWorkerOptions,
+  codex: CodexOauthRefreshWorkerOptions,
+): Promise<void> {
+  try {
+    await runClaudeOauthRefreshCheck(claude);
+  } catch (error) {
+    claude.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] Claude pass threw: ${error instanceof Error ? error.message : String(error)}`, {
+      module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+    });
+  }
+  try {
+    await runCodexOauthRefreshCheck(codex);
+  } catch (error) {
+    codex.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] Codex pass threw: ${error instanceof Error ? error.message : String(error)}`, {
+      module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+    });
+  }
+}
+
 export function createClaudeOauthRefreshWorker(config: ClaudeOauthRefreshWorkerConfig & { logger: Logger }): WorkerRuntime {
   const options: ClaudeOauthRefreshWorkerOptions = {
     logger: config.logger,
@@ -246,8 +402,22 @@ export function createClaudeOauthRefreshWorker(config: ClaudeOauthRefreshWorkerC
     distributeFn: config.distributeFn,
     now: config.now,
   };
+  const codexOptions: CodexOauthRefreshWorkerOptions = {
+    logger: config.logger,
+    authPath: config.codexAuthPath ?? resolveCodexAuthPath(),
+    remoteTargets: config.remoteTargets ?? [],
+    store: config.store,
+    readCredentials: config.readCodexCredentials,
+    readRemoteCredentials: config.readRemoteCodexCredentials,
+    writeCredentials: config.writeCodexCredentials,
+    refreshFn: config.refreshCodexFn ?? (config.fetchFn
+      ? (json: string) => refreshCodexOauthCredentials(json, { fetchFn: config.fetchFn, now: config.now?.() })
+      : undefined),
+    distributeFn: config.distributeCodexFn,
+    now: config.now,
+  };
   const onTick: WorkerTick = config.onTick ?? (async () => {
-    await runClaudeOauthRefreshCheck(options);
+    await runClaudeAndCodexOauthRefreshCheck(options, codexOptions);
   });
   return createWorkerRuntime({
     kind: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
