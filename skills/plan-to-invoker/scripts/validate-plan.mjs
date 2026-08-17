@@ -17,17 +17,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
- * Locate the Invoker checkout that owns this doctor script. Checked in order:
+ * Locate the Invoker checkout that owns this doctor script, for `yaml` when
+ * it isn't resolvable as a real installed dependency. Dev-convenience/other-
+ * install-shape fallback — see importYaml below. Checked in order:
  * 1. `INVOKER_REPO_ROOT` (explicit override, same convention used elsewhere
  *    in the app, e.g. packages/contracts/src/repo-root.ts).
  * 2. The local relative path (this script running from inside a live
  *    Invoker checkout or worktree).
  * 3. The shared checkout behind a linked git worktree's common dir.
  * 4. `sourceRepoRoot` recorded in ~/.invoker/bundled-skills.json by the last
- *    `scripts/setup-agent-skills.sh` install — needed when this script is
- *    running from a machine-level skill install (e.g.
- *    ~/.claude/skills/invoker-plan-to-invoker/scripts), which ships outside
- *    any git repository and can't resolve steps 2-3.
+ *    `scripts/setup-agent-skills.sh` install.
  */
 function resolveInvokerRepoRoot(scriptDir) {
   const hasWorkspaceMarker = (dir) => existsSync(resolve(dir, 'pnpm-workspace.yaml'));
@@ -64,22 +63,41 @@ function resolveInvokerRepoRoot(scriptDir) {
   return null;
 }
 
-const invokerRepoRoot = resolveInvokerRepoRoot(__dirname);
-if (!invokerRepoRoot) {
+/**
+ * `yaml` is a real declared dependency of the published `invoker-cli` npm
+ * package (packages/npm-cli/package.json), so when this script runs from
+ * inside that package's install (npm places `yaml` in an ancestor
+ * node_modules, e.g. <install-root>/node_modules/yaml sitting above
+ * <install-root>/vendor/skills/plan-to-invoker/scripts), a plain bare
+ * import resolves it via Node's own module resolution — no custom path
+ * logic needed. Fall back to locating a real Invoker checkout only when
+ * that fails, e.g. a machine-level skill install (~/.claude/skills/...)
+ * copied via `installBundledSkills()`, which has no such node_modules
+ * anywhere nearby.
+ */
+async function importYaml(scriptDir) {
+  try {
+    return await import('yaml');
+  } catch {
+    // Fall through to the checkout-based lookup below.
+  }
+
+  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
+  if (invokerRepoRoot) {
+    const repoYamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+    if (existsSync(repoYamlPath)) return import(repoYamlPath);
+  }
+
   throw new Error(
-    'Unable to resolve the Invoker checkout for this doctor script (checked INVOKER_REPO_ROOT, the local '
-    + 'worktree, the shared git checkout, and ~/.invoker/bundled-skills.json). Set INVOKER_REPO_ROOT to an '
-    + "Invoker checkout, or reinstall skills with 'bash scripts/setup-agent-skills.sh' so "
-    + '~/.invoker/bundled-skills.json records the source checkout.',
+    "Unable to resolve yaml runtime. Checked a plain 'yaml' import (present if this script is "
+    + 'running from inside the invoker-cli npm install, which declares it as a real dependency) '
+    + 'and packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout '
+    + '(INVOKER_REPO_ROOT, a live git checkout, or ~/.invoker/bundled-skills.json). Set '
+    + 'INVOKER_REPO_ROOT to an Invoker checkout if neither applies.',
   );
 }
 
-const yamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-if (!existsSync(yamlPath)) {
-  throw new Error(`Unable to resolve yaml runtime. Expected it at ${yamlPath}.`);
-}
-
-const { parse: parseYaml } = await import(yamlPath);
+const { parse: parseYaml } = await importYaml(__dirname);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
 const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review', 'no_op'];
