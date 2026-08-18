@@ -941,7 +941,13 @@ export async function sendPlanningChatMessage(
         const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
         const repositoryContext = planningRepositoryContext(activeSession);
-        const hostedMessage = [repositoryContext, formatPlanningHostedTurn('in_app', message)]
+        const previousVisibleAssistantMessage = [...messagesBeforeTurn]
+          .reverse()
+          .find((entry) => entry.role === 'assistant')?.content;
+        const visibleTranscriptContext = previousVisibleAssistantMessage
+          ? `Previous assistant message visible in the Invoker chat:\n${previousVisibleAssistantMessage}`
+          : '';
+        const hostedMessage = [repositoryContext, visibleTranscriptContext, formatPlanningHostedTurn('in_app', message)]
           .filter(Boolean)
           .join('\n\n');
         if (!activatedWorktree && deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
@@ -956,9 +962,9 @@ export async function sendPlanningChatMessage(
             logPlanningWorktreeReadyError(activeSession.id, 'before-send', error);
           }
         }
-        const reply = deps.plannerReplyOverride
+        let reply = deps.plannerReplyOverride
           ? await deps.plannerReplyOverride(hostedMessage)
-          : await activeSession.conversation.sendMessage(message);
+          : await activeSession.conversation.sendMessage(hostedMessage);
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, message, reply);
         }
@@ -995,7 +1001,7 @@ export async function sendPlanningChatMessage(
           } as InAppPlanningChatResponse;
         }
 
-        const review = preparePlanningReview({
+        let review = preparePlanningReview({
           plannerOutput: reply,
           extractDraftPlanText: () => result.planText,
           confirmationMode: activeSession.confirmationMode,
@@ -1022,18 +1028,40 @@ export async function sendPlanningChatMessage(
         if (mismatchedRepoUrl) {
           const mismatchReply = `Draft rejected because it silently changed repositories to ${mismatchedRepoUrl}. `
             + `This planning session is bound to ${activeSession.repoUrl}. Name a different repository explicitly if that is intentional.`;
-          removePlanDraftSidecarIfPresent(activeSession.id);
-          activeSession.status = 'still_discussing';
-          appendSessionMessage(activeSession, 'assistant', mismatchReply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
-            ok: true,
-            sessionId: activeSession.id,
-            reply: mismatchReply,
-            reasoning,
-            confirmationMode: activeSession.confirmationMode,
-            draftPlanAvailable: false,
-          } as InAppPlanningChatResponse;
+          const correctionPrompt = `${repositoryContext}\n\nInvoker host feedback:\n${mismatchReply}\n\nRewrite the complete YAML draft now using the bound repository.`;
+          const correctedReply = deps.plannerReplyOverride
+            ? await deps.plannerReplyOverride(correctionPrompt)
+            : await activeSession.conversation.sendMessage(correctionPrompt);
+          const correctedPlanText = deps.plannerReplyOverride
+            ? extractFencedYamlPlanText(correctedReply)
+            : activeSession.conversation.lastTurnDraftPlanText;
+          const correctedReview = correctedPlanText
+            ? preparePlanningReview({
+                plannerOutput: correctedReply,
+                extractDraftPlanText: () => correctedPlanText,
+                confirmationMode: activeSession.confirmationMode,
+              })
+            : undefined;
+          const correctedMismatch = correctedReview && !('kind' in correctedReview)
+            ? await silentRepoMismatch(activeSession, correctedReview.planText)
+            : mismatchedRepoUrl;
+          if (correctedReview && !('kind' in correctedReview) && !correctedMismatch) {
+            reply = correctedReply;
+            review = correctedReview;
+          } else {
+            removePlanDraftSidecarIfPresent(activeSession.id);
+            activeSession.status = 'still_discussing';
+            appendSessionMessage(activeSession, 'assistant', mismatchReply);
+            persistPlanningSession(activeSession, deps.planningSessionStore, false);
+            return {
+              ok: true,
+              sessionId: activeSession.id,
+              reply: mismatchReply,
+              reasoning,
+              confirmationMode: activeSession.confirmationMode,
+              draftPlanAvailable: false,
+            } as InAppPlanningChatResponse;
+          }
         }
 
         activeSession.draftPlanSummary = review.summary;

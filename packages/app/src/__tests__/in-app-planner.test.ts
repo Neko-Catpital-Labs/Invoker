@@ -450,7 +450,7 @@ describe('planning chat', () => {
     ));
   });
 
-  it('rejects a silent repository change before staging the draft', async () => {
+  it('automatically corrects a silent repository change before staging the draft', async () => {
     const wrongRepoPlan = `\`\`\`yaml
 name: Wrong repo
 repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
@@ -461,19 +461,32 @@ tasks:
     command: echo smoke
 \`\`\``;
 
-    const result = await sendPlanningChatMessage({ message: 'draft the full plan' }, {
+    const plannerReplyOverride = vi.fn()
+      .mockResolvedValueOnce(wrongRepoPlan)
+      .mockResolvedValueOnce(`\`\`\`yaml
+name: Corrected repo
+repoUrl: /tmp/tutorial-repo
+baseBranch: main
+onFinish: none
+tasks:
+  - id: smoke
+    description: Smoke test
+    command: echo smoke
+\`\`\``);
+    const deps = {
       config: { defaultRepoUrl: '/tmp/tutorial-repo', defaultBranch: 'main' },
       loadGeneratedPlan: vi.fn(),
       sessions: createInAppPlanningChatSessions(),
       planningCommandBuilder,
-      plannerReplyOverride: vi.fn(async () => wrongRepoPlan),
-    });
+      plannerReplyOverride,
+    };
+    const result = await sendPlanningChatMessage({ message: 'draft the full plan' }, deps);
 
-    expect(result).toMatchObject({
-      ok: true,
-      draftPlanAvailable: false,
-      reply: expect.stringContaining('Draft rejected because it silently changed repositories'),
-    });
+    expect(result).toMatchObject({ ok: true, draftPlanAvailable: true });
+    expect(plannerReplyOverride).toHaveBeenNthCalledWith(2, expect.stringContaining(
+      'Invoker host feedback:\nDraft rejected because it silently changed repositories to '
+      + 'https://github.com/Neko-Catpital-Labs/Invoker.git. This planning session is bound to /tmp/tutorial-repo.',
+    ));
   });
 
   it('allows a cross-repository draft when the user explicitly names its repoUrl', async () => {
