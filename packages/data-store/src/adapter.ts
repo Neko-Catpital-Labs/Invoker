@@ -148,6 +148,7 @@ export interface Workflow {
   /** Read-only provenance for dependencies removed by `detachWorkflow`. Never re-read by scheduling. */
   detachedExternalDependencies?: DetachedExternalDependency[];
   generation?: number;
+  staged?: boolean;
   deletedAt?: number;
   createdAt: string;
   updatedAt: string;
@@ -370,7 +371,7 @@ export type InAppPlanningSessionPatch = Partial<Pick<
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void;
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'staged' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined;
   listWorkflows(options?: WorkflowReadOptions): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];

@@ -1286,7 +1286,7 @@ function startHeadlessMode(): void {
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        })
+        }, { staged: true })
       );
 
       const planningConversationRepo = new ConversationRepository(persistence, {

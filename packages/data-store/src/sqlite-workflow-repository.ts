@@ -54,6 +54,7 @@ export type WorkflowMetadataChanges = Partial<
     | 'externalDependencyChanges'
     | 'detachedExternalDependencies'
     | 'generation'
+    | 'staged'
     | 'updatedAt'
   >
 >;
@@ -100,8 +101,8 @@ export class SqliteWorkflowRepository {
     assertWorkflowConsistent(workflow);
     this.exec.runTransaction(() => {
       this.exec.execRun(`
-        INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, deleted_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, staged, deleted_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         workflow.id, workflow.name,
         workflow.description ?? null,
@@ -114,6 +115,7 @@ export class SqliteWorkflowRepository {
         workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
         workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
         workflow.generation ?? 0,
+        workflow.staged ? 1 : 0,
         workflow.deletedAt ?? null,
         workflow.createdAt, workflow.updatedAt,
       ]);
@@ -162,6 +164,10 @@ export class SqliteWorkflowRepository {
     if (changes.generation !== undefined) {
       setClauses.push('generation = ?');
       values.push(changes.generation);
+    }
+    if (changes.staged !== undefined) {
+      setClauses.push('staged = ?');
+      values.push(changes.staged ? 1 : 0);
     }
     if (changes.mergeMode !== undefined) {
       // handled by columnMap; kept for backward-compatible patch shapes

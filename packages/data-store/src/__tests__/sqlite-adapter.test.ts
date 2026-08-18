@@ -2684,6 +2684,17 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('updateWorkflow', () => {
+    it('persists staged workflow activation with active as the default', () => {
+      adapter.saveWorkflow(testWorkflow);
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(false);
+
+      adapter.updateWorkflow('wf-1', { staged: true });
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(true);
+
+      adapter.updateWorkflow('wf-1', { staged: false });
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(false);
+    });
+
     it('ignores workflow status mutations because status is derived from tasks', () => {
       adapter.saveWorkflow(testWorkflow);
       // @ts-expect-error workflow status is derived output, not a persistence input.
