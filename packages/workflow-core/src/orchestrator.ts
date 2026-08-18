@@ -280,8 +280,9 @@ export interface OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
+    staged?: boolean;
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[]; staged?: boolean }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges, opts?: { skipWorkflowStatusSync?: boolean }): void;
   updateTaskLaunchState?(taskId: string, changes: TaskStateChanges): void;
@@ -306,6 +307,7 @@ export interface OrchestratorPersistence {
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
     generation?: number;
+    staged?: boolean;
   }>;
   loadTasks(workflowId: string): TaskState[];
   /**
@@ -363,6 +365,7 @@ export interface OrchestratorPersistence {
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
     generation?: number;
+    staged?: boolean;
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
@@ -1382,7 +1385,7 @@ export class Orchestrator {
    * Parse a plan definition and create tasks with dependencies.
    * Persists workflow and tasks, publishes deltas via MessageBus.
    */
-  loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean }): void {
+  loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean; staged?: boolean }): void {
     const workflowId = nextWorkflowId();
     const localToScoped = buildPlanLocalToScopedIdMap(workflowId, plan.tasks);
     const workflowExternalDependencies = this.normalizePlanExternalDependencies([
@@ -1536,6 +1539,7 @@ export class Orchestrator {
       featureBranch: plan.featureBranch,
       mergeMode: plan.mergeMode,
       externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
+      staged: opts?.staged === true,
       createdAt,
       updatedAt: createdAt,
     });
@@ -1582,11 +1586,7 @@ export class Orchestrator {
 
     const activeAttempts = this.countActivePersistedAttempts();
     const hasPerCallLimit = typeof opts?.limit === 'number' && opts.limit >= 0;
-    const readyTasks = hasPerCallLimit
-      ? this.getExecutableReadyTasks({ alreadyRefreshed: true })
-      : this.stateMachine
-        .getReadyTasks()
-        .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+    const readyTasks = this.getExecutableReadyTasks({ alreadyRefreshed: true });
     this.logger.info('[orchestrator] startExecution', {
       ready: readyTasks.length,
       active: activeAttempts,
@@ -3327,9 +3327,13 @@ export class Orchestrator {
     return this.stateMachine.getReadyTasks();
   }
 
-  getExecutableReadyTasks(opts?: { alreadyRefreshed?: boolean }): TaskState[] {
+  getExecutableReadyTasks(opts?: { alreadyRefreshed?: boolean; includeStaged?: boolean }): TaskState[] {
+    const stagedWorkflowIds = opts?.includeStaged
+      ? new Set<string>()
+      : new Set(this.persistence.listWorkflows().filter((workflow) => workflow.staged === true).map((workflow) => workflow.id));
     const readyTasks = this.stateMachine
       .getReadyTasks()
+      .filter((task) => !task.config.workflowId || !stagedWorkflowIds.has(task.config.workflowId))
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
     const readyTasksById = new Map(readyTasks.map((task) => [task.id, task]));
     return getPendingLaunchQueueSnapshotImpl(
@@ -3343,6 +3347,29 @@ export class Orchestrator {
     )
       .map((job) => readyTasksById.get(job.taskId))
       .filter((task): task is TaskState => task !== undefined);
+  }
+
+  private isWorkflowStaged(workflowId: string | undefined): boolean {
+    if (!workflowId) return false;
+    const workflow = this.persistence.loadWorkflow?.(workflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
+    return workflow?.staged === true;
+  }
+
+  activateStagedWorkflows(workflowIds: string[]): string[] {
+    const activated: string[] = [];
+    for (const workflowId of workflowIds) {
+      if (!this.isWorkflowStaged(workflowId)) continue;
+      this.persistence.updateWorkflow?.(workflowId, { staged: false, updatedAt: new Date().toISOString() });
+      activated.push(workflowId);
+    }
+    return activated;
+  }
+
+  getStagedWorkflowIds(): string[] {
+    return this.persistence.listWorkflows()
+      .filter((workflow) => workflow.staged === true)
+      .map((workflow) => workflow.id);
   }
 
   /**
