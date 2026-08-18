@@ -428,6 +428,36 @@ function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary'
   return Boolean(session.draftPlanText || session.draftPlanSummary);
 }
 
+function planningRepositoryContext(session: InAppPlanningChatSession): string {
+  if (!session.repoUrl || !session.baseBranch) return '';
+  return [
+    'Current planning repository binding:',
+    `- Default every workflow repoUrl to exactly: ${session.repoUrl}`,
+    `- Default every workflow baseBranch to exactly: ${session.baseBranch}`,
+    '- Only target another repository when the user explicitly asks for that repository.',
+  ].join('\n');
+}
+
+async function silentRepoMismatch(
+  session: InAppPlanningChatSession,
+  planText: string,
+): Promise<string | undefined> {
+  if (!session.repoUrl) return undefined;
+  const { parsePlanSubmissionBundle } = await import('./plan-parser.js');
+  const submission = parsePlanSubmissionBundle(planText);
+  const userText = session.messages
+    .filter((message) => message.role === 'user')
+    .map((message) => message.text)
+    .join('\n');
+  return submission.plans
+    .map((plan) => plan.repoUrl)
+    .find((repoUrl): repoUrl is string => Boolean(
+      repoUrl
+      && repoUrl !== session.repoUrl
+      && !userText.includes(repoUrl),
+    ));
+}
+
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
@@ -910,7 +940,10 @@ export async function sendPlanningChatMessage(
       try {
         const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
-        const hostedMessage = formatPlanningHostedTurn('in_app', message);
+        const repositoryContext = planningRepositoryContext(activeSession);
+        const hostedMessage = [repositoryContext, formatPlanningHostedTurn('in_app', message)]
+          .filter(Boolean)
+          .join('\n\n');
         if (!activatedWorktree && deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
             await ensurePlanningWorktreeReady(deps.repoPool, {
@@ -982,6 +1015,24 @@ export async function sendPlanningChatMessage(
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
             draftPlanText: activeSession.draftPlanText,
+          } as InAppPlanningChatResponse;
+        }
+
+        const mismatchedRepoUrl = await silentRepoMismatch(activeSession, review.planText);
+        if (mismatchedRepoUrl) {
+          const mismatchReply = `Draft rejected because it silently changed repositories to ${mismatchedRepoUrl}. `
+            + `This planning session is bound to ${activeSession.repoUrl}. Name a different repository explicitly if that is intentional.`;
+          removePlanDraftSidecarIfPresent(activeSession.id);
+          activeSession.status = 'still_discussing';
+          appendSessionMessage(activeSession, 'assistant', mismatchReply);
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          return {
+            ok: true,
+            sessionId: activeSession.id,
+            reply: mismatchReply,
+            reasoning,
+            confirmationMode: activeSession.confirmationMode,
+            draftPlanAvailable: false,
           } as InAppPlanningChatResponse;
         }
 

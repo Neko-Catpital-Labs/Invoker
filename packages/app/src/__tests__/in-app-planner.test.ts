@@ -431,6 +431,76 @@ describe('planning chat', () => {
     expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN);
   });
 
+  it('tells the planner to default drafts to the backend-bound repository and branch', async () => {
+    const plannerReplyOverride = vi.fn(async () => VALID_PLAN);
+
+    await sendPlanningChatMessage({ message: 'draft the full plan' }, {
+      config: { defaultRepoUrl: '/tmp/tutorial-repo', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions: createInAppPlanningChatSessions(),
+      planningCommandBuilder,
+      plannerReplyOverride,
+    });
+
+    expect(plannerReplyOverride).toHaveBeenCalledWith(expect.stringContaining(
+      'Default every workflow repoUrl to exactly: /tmp/tutorial-repo',
+    ));
+    expect(plannerReplyOverride).toHaveBeenCalledWith(expect.stringContaining(
+      'Default every workflow baseBranch to exactly: main',
+    ));
+  });
+
+  it('rejects a silent repository change before staging the draft', async () => {
+    const wrongRepoPlan = `\`\`\`yaml
+name: Wrong repo
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+onFinish: none
+tasks:
+  - id: smoke
+    description: Smoke test
+    command: echo smoke
+\`\`\``;
+
+    const result = await sendPlanningChatMessage({ message: 'draft the full plan' }, {
+      config: { defaultRepoUrl: '/tmp/tutorial-repo', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions: createInAppPlanningChatSessions(),
+      planningCommandBuilder,
+      plannerReplyOverride: vi.fn(async () => wrongRepoPlan),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      draftPlanAvailable: false,
+      reply: expect.stringContaining('Draft rejected because it silently changed repositories'),
+    });
+  });
+
+  it('allows a cross-repository draft when the user explicitly names its repoUrl', async () => {
+    const requestedRepo = 'https://github.com/Neko-Catpital-Labs/Invoker.git';
+    const crossRepoPlan = `\`\`\`yaml
+name: Explicit repo
+repoUrl: ${requestedRepo}
+onFinish: none
+tasks:
+  - id: smoke
+    description: Smoke test
+    command: echo smoke
+\`\`\``;
+
+    const result = await sendPlanningChatMessage({
+      message: `Draft a smoke test for ${requestedRepo}`,
+    }, {
+      config: { defaultRepoUrl: '/tmp/tutorial-repo', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions: createInAppPlanningChatSessions(),
+      planningCommandBuilder,
+      plannerReplyOverride: vi.fn(async () => crossRepoPlan),
+    });
+
+    expect(result).toMatchObject({ ok: true, draftPlanAvailable: true });
+  });
+
   it('keeps unauthorized YAML from becoming draft-ready and refuses submit', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
