@@ -12,7 +12,7 @@ import {
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
 
 type HandleHandler = (_event: unknown, ...args: unknown[]) => Promise<unknown>;
-type OnHandler = (event: { returnValue?: unknown }) => void;
+type OnHandler = (event: { returnValue?: unknown }, ...args: unknown[]) => void;
 
 function createFakeIpcMain() {
   const handleHandlers = new Map<string, HandleHandler>();
@@ -247,6 +247,34 @@ describe('ipc-registration', () => {
         workflowCount: 1,
         jsonSizeBytes: expect.any(Number),
       }),
+    );
+  });
+
+  it('returns only appStartedAtEpochMs and skips task/workflow reads in light mode', () => {
+    const { ipcMain, onHandlers } = createFakeIpcMain();
+    const recordStartupDuration = vi.fn();
+    const getTasks = vi.fn(() => [{ id: 'task-1' } as any]);
+    const getWorkflows = vi.fn(() => [{ id: 'workflow-1' }]);
+    registerBootstrapStateIpc({
+      ipcMain,
+      getTasks,
+      getWorkflows,
+      getInitialWorkflowId: () => 'workflow-1',
+      appStartedAtEpochMs: 123,
+      getTaskDeltaStreamSequence: () => 7,
+      recordStartupDuration,
+    });
+
+    const event: { returnValue?: unknown } = {};
+    onHandlers.get('invoker:get-bootstrap-state-sync')?.(event, { light: true });
+
+    expect(event.returnValue).toEqual({ appStartedAtEpochMs: 123 });
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(getWorkflows).not.toHaveBeenCalled();
+    expect(recordStartupDuration).toHaveBeenCalledWith(
+      'bootstrap-ipc.serialize-return',
+      expect.any(Number),
+      expect.objectContaining({ taskCount: 0, workflowCount: 0, light: true }),
     );
   });
 
