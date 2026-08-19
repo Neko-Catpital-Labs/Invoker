@@ -32,14 +32,14 @@ function makeFailure(overrides = {}) {
     jobName: 'playwright / launch-dispatch-stuck-lease',
     firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
     firstBadRunId: 100,
-    firstBadRunCreatedAt: '2026-08-12T00:00:00Z',
+    firstBadRunCreatedAt: '2026-08-18T00:00:00Z',
     firstJobDatabaseId: 200,
     firstJobUrl: 'https://example.test/job/200',
     lastBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
     lastBadRunId: 100,
     lastJobDatabaseId: 200,
     lastJobUrl: 'https://example.test/job/200',
-    lastObservedAt: '2026-08-12T00:00:00Z',
+    lastObservedAt: '2026-08-18T00:00:00Z',
     occurrences: 1,
     attempts: 0,
     lastFiledAt: null,
@@ -354,12 +354,14 @@ describe('fleet SHA correlation', () => {
     assert.equal(state.activeFailures['fleet / abc123d'].attempts, 1);
 
     let liveQueryCalled = false;
+    const liveQueried = [];
     const cappedCounts = processFailureFilingSweep(state, {
       now: new Date('2026-08-12T03:00:00Z'),
       maxAttempts: 1,
       jobDefinitions,
-      liveQuery: () => {
+      liveQuery: (failure) => {
         liveQueryCalled = true;
+        liveQueried.push(failure.jobName);
         return false;
       },
       fileFailure: () => {
@@ -367,9 +369,56 @@ describe('fleet SHA correlation', () => {
       },
     });
 
-    assert.equal(liveQueryCalled, false, 'attempt cap should skip before live workflow dedup');
+    // Fleet key is exhausted in prepare (before liveQuery); members fall back
+    // to the per-job path and are claimed/filed individually.
+    assert.equal(liveQueried.includes('fleet / abc123d'), false);
+    assert.equal(liveQueryCalled, true);
     assert.equal(cappedCounts.groupsNeedingHuman, 1);
-    assert.equal(filed, 1);
+    assert.equal(cappedCounts.groupsFiled, 3);
+    assert.equal(filed, 4);
+    assert.equal(state.activeFailures['fleet / abc123d'].needsHuman, true);
+    for (const jobName of jobs) {
+      assert.equal(state.activeFailures[jobName].memberOfFleetEvent, undefined);
+      assert.equal(state.activeFailures[jobName].attempts, 1);
+    }
+  });
+
+  it('files member jobs individually once a fleet key is already needsHuman', () => {
+    const sha = 'abc123def456abc123def456abc123def456ab1';
+    const jobs = [
+      'required-fast / Vitest Workspace',
+      'quality / Dependency Cruise',
+      'docker / comprehensive',
+    ];
+    const state = stateWithFailures(jobs.map((jobName) => makeFailure({
+      jobName,
+      firstBadSha: sha,
+      memberOfFleetEvent: sha,
+    })));
+    state.activeFailures['fleet / abc123d'] = makeFailure({
+      jobName: 'fleet / abc123d',
+      markerJobName: 'fleet',
+      isFleetEvent: true,
+      firstBadSha: sha,
+      attempts: 3,
+      needsHuman: true,
+      lastFiledAt: '2026-08-12T00:00:00.000Z',
+      memberJobNames: jobs,
+    });
+    const filed = [];
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-12T04:00:00Z'),
+      maxAttempts: 3,
+      jobDefinitions: jobDefinitionsFor(jobs),
+      liveQuery: () => false,
+      fileFailure: (failure) => filed.push(failure.jobName),
+    });
+
+    assert.equal(counts.groupsCorrelated, 0);
+    assert.equal(counts.groupsNeedingHuman, 1);
+    assert.deepEqual(filed.sort(), [...jobs].sort());
+    assert.equal(counts.groupsFiled, 3);
     assert.equal(state.activeFailures['fleet / abc123d'].needsHuman, true);
   });
 

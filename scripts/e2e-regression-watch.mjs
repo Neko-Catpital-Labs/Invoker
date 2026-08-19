@@ -530,6 +530,8 @@ function synthesizeFleetFailure(state, sha, members, jobDefinitions) {
 function prepareFleetCorrelatedFailures(state, failures, {
   threshold = FLEET_EVENT_THRESHOLD,
   jobDefinitions = null,
+  maxAttempts = MAX_ATTEMPTS,
+  nowMs = Date.now(),
 } = {}) {
   const normalized = normalizeStateForMutation(state);
   const groups = groupFailuresBySha(failures);
@@ -537,6 +539,7 @@ function prepareFleetCorrelatedFailures(state, failures, {
   const fleetFailures = [];
   const retiredFleetMembers = [];
   let stateChanged = false;
+  let groupsNeedingHuman = 0;
   const existingFleetBySha = new Map(
     Object.values(normalized.activeFailures)
       .filter((failure) => isFleetEventFailure(failure) && typeof failure.firstBadSha === 'string')
@@ -577,6 +580,21 @@ function prepareFleetCorrelatedFailures(state, failures, {
     if (existingFleet?.jobName && existingFleet.jobName !== fleetFailure.jobName) {
       delete normalized.activeFailures[existingFleet.jobName];
     }
+
+    // When the consolidated fleet key has exhausted its attempt budget,
+    // keep the fleet record as needs-human but stop swallowing members —
+    // otherwise those jobs sit forever at attempts:0 with no repair queued.
+    const fleetGate = shouldFileFailure(fleetFailure, { nowMs, maxAttempts });
+    if (fleetGate.action === 'needs-human') {
+      normalized.activeFailures[fleetFailure.jobName] = {
+        ...fleetFailure,
+        needsHuman: true,
+      };
+      groupsNeedingHuman += 1;
+      stateChanged = true;
+      continue;
+    }
+
     normalized.activeFailures[fleetFailure.jobName] = fleetFailure;
     fleetFailures.push(fleetFailure);
     stateChanged = true;
@@ -625,6 +643,7 @@ function prepareFleetCorrelatedFailures(state, failures, {
   return {
     failures: prepared,
     groupsCorrelated: fleetFailures.length,
+    groupsNeedingHuman,
     retiredFleetMembers,
     stateChanged,
   };
@@ -1123,6 +1142,8 @@ export function processFailureFilingSweep(state, {
   const prepared = prepareFleetCorrelatedFailures(state, failures, {
     threshold: fleetEventThreshold,
     jobDefinitions,
+    maxAttempts,
+    nowMs,
   });
   if (prepared.stateChanged) save(state);
   for (const retired of prepared.retiredFleetMembers) onRetired(retired);
@@ -1131,7 +1152,7 @@ export function processFailureFilingSweep(state, {
     groupsFiled: 0,
     groupsSkippedAlreadyAddressed: 0,
     groupsDeferredByCap: 0,
-    groupsNeedingHuman: 0,
+    groupsNeedingHuman: prepared.groupsNeedingHuman ?? 0,
     groupsInBackoff: 0,
     groupsRetired: prepared.retiredFleetMembers.length,
     groupsRetiredStale: 0,
