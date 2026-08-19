@@ -106,7 +106,7 @@ fi
 if ! node ./scripts/cleanup-orphaned-automation-chrome.mjs; then
   echo "WARN: orphaned automation Chrome cleanup failed; continuing launch" >&2
 fi
-pkill -f "electron.*packages/app/dist/main.js" 2>/dev/null || true
+bash "$REPO_ROOT/scripts/cleanup-local-invoker-processes.sh"
 pkill -f "tsup.*packages/app" 2>/dev/null || true
 sleep 0.2
 
