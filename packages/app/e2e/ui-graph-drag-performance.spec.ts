@@ -404,11 +404,11 @@ function expectSmoothDrag(
   budgets: typeof DRAG_PERF_BUDGETS = DRAG_PERF_BUDGETS,
 ): void {
   const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets });
-  expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
+  expect(result.frameCount, evidence).toBeGreaterThanOrEqual(budgets.minFrameCount);
   expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(budgets.maxP95FrameGapMs);
-  expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
+  expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(budgets.maxFrameGapMs);
   expect(result.transformChanged, evidence).toBe(true);
-  expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(MIN_TRANSFORM_CHANGES);
+  expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(budgets.minTransformChanges);
   expect(result.firstTransformMs ?? Number.POSITIVE_INFINITY, evidence).toBeLessThanOrEqual(MAX_FIRST_TRANSFORM_MS);
   expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidence).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
   expect(numberOrZero(perf.maxRendererLongTaskMs), evidence).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
