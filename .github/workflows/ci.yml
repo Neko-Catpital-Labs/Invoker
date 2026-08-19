@@ -537,6 +537,44 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
+      - name: Install Electron GUI system libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_libgtk3() {
+            if command -v ldconfig >/dev/null 2>&1; then
+              ldconfig -p 2>/dev/null | grep -q 'libgtk-3\.so\.0'
+              return
+            fi
+            find /lib /usr/lib -name 'libgtk-3.so.0*' -print -quit 2>/dev/null | grep -q .
+          }
+
+          # Electron links against libgtk-3, but `playwright install-deps
+          # chromium` does not install it (Chromium alone does not need
+          # GTK3), so guard scripts that boot Electron directly (see
+          # scripts/test-suites/required/05-delete-all-prod-db-guard.sh and
+          # 09-headless-cli-boots-smoke.sh) fail with "libgtk-3.so.0: cannot
+          # open shared object file" unless it's installed separately.
+          if has_libgtk3; then
+            exit 0
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y libgtk-3-0t64
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y libgtk-3-0t64
+            exit 0
+          fi
+
+          echo "::error::Guardrails requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get."
+          exit 1
+
       - name: Run suite group
         run: ${{ matrix.command }}
 
