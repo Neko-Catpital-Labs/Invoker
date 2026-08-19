@@ -667,7 +667,7 @@ describe('E2E: Full Slack flow without real APIs', () => {
     expect(draft).toBeTruthy();
     expect(receivedCommands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
 
-    // Step 3: Approve the PlanDraft card → start_plan with the raw plan text.
+    // Step 3: Approve the PlanDraft card → start_plan with the repoUrl-normalized plan text.
     say.mockClear();
     await getActionHandler(surface, 'plan_draft_approve')({
       action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
@@ -677,7 +677,10 @@ describe('E2E: Full Slack flow without real APIs', () => {
     });
     expect(receivedCommands).toHaveLength(1);
     expect(receivedCommands[0]).toEqual(
-      expect.objectContaining({ type: 'start_plan', planText: expectedPlanText.trim() }),
+      expect.objectContaining({
+        type: 'start_plan',
+        planText: expect.stringContaining('repoUrl: https://github.com/example/repo.git'),
+      }),
     );
   });
 });
