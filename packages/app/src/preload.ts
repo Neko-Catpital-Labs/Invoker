@@ -17,11 +17,12 @@ import type { InvokerAPI } from '@invoker/contracts';
 
 const api: Record<string, unknown> = {};
 const bootstrapStartedAt = Date.now();
-const bootstrapState = process.env.NODE_ENV === 'test'
-  ? undefined
-  : ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') as
-    | { tasks?: unknown[]; workflows?: unknown[]; runtimeStatus?: unknown; appStartedAtEpochMs?: number }
-    | undefined;
+const bootstrapState = ipcRenderer.sendSync(
+  'invoker:get-bootstrap-state-sync',
+  process.env.NODE_ENV === 'test' ? { light: true } : undefined,
+) as
+  | { tasks?: unknown[]; workflows?: unknown[]; runtimeStatus?: unknown; appStartedAtEpochMs?: number }
+  | undefined;
 const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
 
 export function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
