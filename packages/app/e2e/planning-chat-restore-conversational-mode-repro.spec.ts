@@ -132,7 +132,7 @@ base.describe('Planning chat conversational mode restore', () => {
 
       await openPlanningTerminal(page);
       await submitPlanningText(page, 'Draft a YAML plan to add a README');
-      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('Draft ready', { timeout: 10000 });
+      await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible({ timeout: 10000 });
       const savedSessionId = await page.evaluate(async () => {
         const list = await window.invoker.planningChatList();
         return list.sessions[0]?.id;
