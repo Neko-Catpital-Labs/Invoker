@@ -2812,6 +2812,7 @@ startMainProcessBootstrap({
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+        process.exitCode = 1;
         app.quit();
         return;
       }
@@ -2827,6 +2828,7 @@ startMainProcessBootstrap({
         const message = err instanceof Error ? err.message : String(err);
         if (!message.includes('[db-writer-lock]')) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          process.exitCode = 1;
           app.quit();
           return;
         }
@@ -2834,6 +2836,7 @@ startMainProcessBootstrap({
         if (!isStandaloneCapable(owner)) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
           process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
+          process.exitCode = 1;
           app.quit();
           return;
         }
