@@ -116,6 +116,7 @@ PY
 chmod +x "$TMP/bin/gh"
 
 export PATH="$TMP/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 out="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo Neko-Catpital-Labs/Invoker --author EdbertChan --state-file "$TMP/ledger.jsonl" --pr 2969)"
 printf '%s\n' "$out"
 

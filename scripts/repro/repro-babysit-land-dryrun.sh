@@ -16,6 +16,7 @@ fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" &
 mkdir -p "$TMP/state"
 export FAKE_GH_STATE_DIR="$TMP/state"
 export PATH="$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 
 # The fake gh expands the "*" checks default to the repo's real required-check
 # names, so the landing brain sees every .mergify.yml-required check green.
