@@ -129,7 +129,8 @@ async function bootstrapPlanningDraft(page: Page, planYaml: string): Promise<str
 
   await openPlanningTerminal(page);
   await submitPlanningText(page, 'Draft a YAML plan to reproduce planning terminal tmux blanking');
-  await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText(/draft ready/i, { timeout: 10000 });
+  await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Planning Terminal Tmux Blank Repro', { timeout: 10000 });
   const sessionId = await page.evaluate(async () => {
     const list = await window.invoker.planningChatList();
     return list.sessions[0]?.id;
