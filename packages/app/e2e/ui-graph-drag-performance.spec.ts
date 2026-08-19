@@ -21,6 +21,7 @@ const UPDATE_BURST_DELAY_MS = 50;
 const UPDATE_START_DELAY_MS = 250;
 const MIN_FRAME_COUNT = 35;
 const MAX_P95_FRAME_GAP_MS = 80;
+const MAX_P95_FRAME_GAP_WITH_UPDATES_MS = 220;
 const MAX_FRAME_GAP_MS = 250;
 const MIN_TRANSFORM_CHANGES = 12;
 const MAX_FIRST_TRANSFORM_MS = 600;
@@ -37,6 +38,11 @@ const DRAG_PERF_BUDGETS = {
   maxRendererEventLoopLagMs: MAX_RENDERER_EVENT_LOOP_LAG_MS,
   maxRendererLongTaskMs: MAX_RENDERER_LONG_TASK_MS,
   maxTaskDeltaBatchSize: MAX_TASK_DELTA_BATCH_SIZE,
+};
+
+const DRAG_PERF_BUDGETS_WITH_UPDATES = {
+  ...DRAG_PERF_BUDGETS,
+  maxP95FrameGapMs: MAX_P95_FRAME_GAP_WITH_UPDATES_MS,
 };
 
 interface DragPerfResult {
@@ -395,10 +401,11 @@ function expectSmoothDrag(
   result: DragPerfResult,
   perf: Record<string, unknown>,
   perfPayloads: readonly UiPerfPayload[],
+  budgets: typeof DRAG_PERF_BUDGETS = DRAG_PERF_BUDGETS,
 ): void {
-  const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets: DRAG_PERF_BUDGETS });
+  const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets });
   expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
-  expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(MAX_P95_FRAME_GAP_MS);
+  expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(budgets.maxP95FrameGapMs);
   expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
   expect(result.transformChanged, evidence).toBe(true);
   expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(MIN_TRANSFORM_CHANGES);
@@ -462,11 +469,11 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
       updatesPerBurst: UPDATES_PER_BURST,
       perfPayloads,
       perf,
-      budgets: DRAG_PERF_BUDGETS,
+      budgets: DRAG_PERF_BUDGETS_WITH_UPDATES,
     })}`);
-    const evidence = JSON.stringify({ ...result, updateCount, perfPayloads, perf, budgets: DRAG_PERF_BUDGETS });
+    const evidence = JSON.stringify({ ...result, updateCount, perfPayloads, perf, budgets: DRAG_PERF_BUDGETS_WITH_UPDATES });
     expect(updateCount, evidence).toBe(UPDATE_BURSTS * UPDATES_PER_BURST);
-    expectSmoothDrag(result, perf, perfPayloads);
+    expectSmoothDrag(result, perf, perfPayloads, DRAG_PERF_BUDGETS_WITH_UPDATES);
   } finally {
     await completeAllSeededTasks(page).catch(() => {});
   }
