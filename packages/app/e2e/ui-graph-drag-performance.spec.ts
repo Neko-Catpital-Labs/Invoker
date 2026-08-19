@@ -404,17 +404,17 @@ function expectSmoothDrag(
   budgets: typeof DRAG_PERF_BUDGETS = DRAG_PERF_BUDGETS,
 ): void {
   const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets });
-  expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
+  expect(result.frameCount, evidence).toBeGreaterThanOrEqual(budgets.minFrameCount);
   expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(budgets.maxP95FrameGapMs);
-  expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
+  expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(budgets.maxFrameGapMs);
   expect(result.transformChanged, evidence).toBe(true);
-  expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(MIN_TRANSFORM_CHANGES);
-  expect(result.firstTransformMs ?? Number.POSITIVE_INFINITY, evidence).toBeLessThanOrEqual(MAX_FIRST_TRANSFORM_MS);
-  expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidence).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
-  expect(numberOrZero(perf.maxRendererLongTaskMs), evidence).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
-  expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidence).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
-  expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidence).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
-  expect(numberOrZero(perf.maxTaskDeltaBatchSize), evidence).toBeLessThanOrEqual(MAX_TASK_DELTA_BATCH_SIZE);
+  expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(budgets.minTransformChanges);
+  expect(result.firstTransformMs ?? Number.POSITIVE_INFINITY, evidence).toBeLessThanOrEqual(budgets.maxFirstTransformMs);
+  expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidence).toBeLessThanOrEqual(budgets.maxRendererEventLoopLagMs);
+  expect(numberOrZero(perf.maxRendererLongTaskMs), evidence).toBeLessThanOrEqual(budgets.maxRendererLongTaskMs);
+  expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidence).toBeLessThanOrEqual(budgets.maxRendererEventLoopLagMs);
+  expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidence).toBeLessThanOrEqual(budgets.maxRendererLongTaskMs);
+  expect(numberOrZero(perf.maxTaskDeltaBatchSize), evidence).toBeLessThanOrEqual(budgets.maxTaskDeltaBatchSize);
 }
 
 test('workflow graph pan stays responsive under a large persisted graph', async ({ page }) => {
