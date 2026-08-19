@@ -166,8 +166,20 @@ export interface BootstrapStateIpcContext {
 }
 
 export function registerBootstrapStateIpc(context: BootstrapStateIpcContext): void {
-  context.ipcMain.on('invoker:get-bootstrap-state-sync', (event) => {
+  context.ipcMain.on('invoker:get-bootstrap-state-sync', (event, options?: { light?: boolean }) => {
     const startedAtMs = Date.now();
+    if (options?.light) {
+      const payload = { appStartedAtEpochMs: context.appStartedAtEpochMs };
+      const jsonSizeBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+      context.recordStartupDuration('bootstrap-ipc.serialize-return', startedAtMs, {
+        taskCount: 0,
+        workflowCount: 0,
+        jsonSizeBytes,
+        light: true,
+      });
+      event.returnValue = payload;
+      return;
+    }
     const tasks = context.getTasks();
     const workflows = context.getWorkflows();
     const streamSequence = context.getTaskDeltaStreamSequence();
