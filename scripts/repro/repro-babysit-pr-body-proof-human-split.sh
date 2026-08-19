@@ -23,6 +23,7 @@ export FAKE_GH_STATE_DIR="$TMP/state"
 REAL_NODE="$(command -v node)"
 export REAL_NODE
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
 import sys
