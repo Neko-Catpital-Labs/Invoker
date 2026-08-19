@@ -171,6 +171,13 @@ def run_cycle(
     repair_dispatch_last_error: str | None = None
     open_pr_numbers = set(pr_by_number)
     stale_base_by_pr = compute_stale_base_by_pr(stacks, trunk, args.repo, gh, logger)
+    # A dry run never dispatches a repair (see the `if args.dry_run: continue`
+    # below, right after print_action), so it has nothing to dedup against
+    # other systems for -- claiming here would perform a real ledger write
+    # for a filing that's never going to happen, and a claim that fails
+    # closed (ledger/owner unreachable) would silently drop the action from
+    # the printed plan instead.
+    dry_run_claim_repair_filing = None if args.dry_run else claim_repair_filing
     for stack in stacks:
         plan = plan_stack_execution(
             stack,
@@ -183,7 +190,7 @@ def run_cycle(
             args.max_repair_attempts,
             trunk,
             stale_base_by_pr,
-            claim_repair_filing,
+            dry_run_claim_repair_filing,
         )
         queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
