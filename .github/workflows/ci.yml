@@ -1302,6 +1302,48 @@ jobs:
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
+      - name: Install Playwright system dependencies
+        continue-on-error: true
+        run: pnpm --filter @invoker/app exec playwright install-deps chromium
+
+      - name: Install Electron GUI system libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_libgtk3() {
+            if command -v ldconfig >/dev/null 2>&1; then
+              ldconfig -p 2>/dev/null | grep -q 'libgtk-3\.so\.0'
+              return
+            fi
+            find /lib /usr/lib -name 'libgtk-3.so.0*' -print -quit 2>/dev/null | grep -q .
+          }
+
+          # test-docker-comprehensive.sh boots Electron headless on the
+          # runner host (not inside a container). `playwright install-deps
+          # chromium` above does not install libgtk-3 (Chromium alone does
+          # not need GTK3), so Electron fails with "libgtk-3.so.0: cannot
+          # open shared object file" unless it's installed separately (same
+          # gap already covered for required-fast / Guardrails).
+          if has_libgtk3; then
+            exit 0
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y libgtk-3-0t64
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y libgtk-3-0t64
+            exit 0
+          fi
+
+          echo "::error::docker / comprehensive requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get."
+          exit 1
+
       - name: Build invoker agent base image
         run: bash scripts/build-agent-base-image.sh
 
