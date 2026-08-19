@@ -21,6 +21,7 @@ WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
 mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 export CLAUDE_CALLED="$TMP/claude-called"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
