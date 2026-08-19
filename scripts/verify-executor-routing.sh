@@ -14,6 +14,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Executors clone the repo with `git clone file://<root>`. In CI containers the
+# checkout is owned by a different uid than the container user, so git rejects
+# the source with "detected dubious ownership in repository at <root>/.git".
+# safe.directory=<root> does not cover the check on <root>/.git — only the "*"
+# wildcard does (see invoker_e2e_allow_repo_git_ops in e2e-dry-run/lib/common.sh).
+git config --global --add safe.directory "*" >/dev/null 2>&1 || true
+
 if [[ ! -f packages/app/dist/main.js ]]; then
   echo "==> packages/app/dist/main.js missing — building..." >&2
   pnpm --filter @invoker/core build >&2
