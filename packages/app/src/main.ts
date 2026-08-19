@@ -68,6 +68,8 @@ import type {
   InAppPlanningListSessionsResponse,
   InAppPlanningRebindRepoRequest,
   InAppPlanningResetRequest,
+  InAppPlanningSetTerminalModeRequest,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
   StartReadyRequest,
@@ -159,6 +161,7 @@ import {
   tryDelegateExec,
   tryDelegateQuery,
   createHeadlessExecutor,
+  createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
@@ -254,6 +257,7 @@ import {
 } from './renderer-ui-perf.js';
 import {
   bindPlanningTerminalSessionState,
+  createPlanningTerminalAdapter,
   registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
@@ -284,6 +288,7 @@ import {
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
+  setPlanningChatTerminalMode,
   submitPlanningChatDraft,
 } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
@@ -1246,11 +1251,16 @@ function startHeadlessMode(): void {
         getWorkerRuntimeController: () => workerRuntimeController,
       } as HeadlessDeps;
 
-      const createStandaloneTaskExecutor = (): TaskRunner => {
-        const executor = createHeadlessExecutor(headlessDeps);
-        wireHeadlessApproveHook(headlessDeps, executor);
-        return executor;
-      };
+      // Every standalone execution path (launch dispatcher, fix/retry handlers,
+            // REST mutations) builds its executor through this factory, so one shared
+            // handle map covers all owner-serve task processes. The web surface needs
+            // those live handles to open task terminals in the browser.
+            const standaloneTaskHandles: TaskHandleMap = new Map();
+            const createStandaloneTaskExecutor = (): TaskRunner => {
+              const executor = createTrackedHeadlessExecutor(headlessDeps, standaloneTaskHandles);
+              wireHeadlessApproveHook(headlessDeps, executor);
+              return executor;
+            };
 
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
         const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
@@ -1289,6 +1299,14 @@ function startHeadlessMode(): void {
         })
       );
 
+      // Web clients get planning-chat token streaming over SSE. The bridge does
+      // not exist yet when these handlers are built, so route through a
+      // mutable ref that owner-serve fills in after the web surface starts.
+      let broadcastPlanningChatStream: ((event: InAppPlanningStreamEvent) => void) | undefined;
+      const emitPlanningChatStreamToWeb = (event: InAppPlanningStreamEvent): void => {
+        broadcastPlanningChatStream?.(event);
+      };
+
       const planningConversationRepo = new ConversationRepository(persistence, {
         info: (message) => logger.info(message, { module: 'planning-chat' }),
         warn: (message) => logger.warn(message, { module: 'planning-chat' }),
@@ -1305,6 +1323,7 @@ function startHeadlessMode(): void {
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
         logger,
+        onRawPlannerOutput: emitPlanningChatStreamToWeb,
         repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
       });
 
@@ -1365,6 +1384,7 @@ function startHeadlessMode(): void {
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
               logger,
+              onRawPlannerOutput: emitPlanningChatStreamToWeb,
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
@@ -1399,6 +1419,7 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
               logger,
               plannerReplyOverride,
+              onRawPlannerOutput: emitPlanningChatStreamToWeb,
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
@@ -1417,6 +1438,12 @@ function startHeadlessMode(): void {
           }
           case 'invoker:planning-chat-reset': {
             return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, {
+              sessions: planningChatSessions,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+            });
+          }
+          case 'invoker:planning-chat-set-terminal-mode': {
+            return setPlanningChatTerminalMode(payload.args[0] as InAppPlanningSetTerminalModeRequest, {
               sessions: planningChatSessions,
               planningSessionStore: readOnlyMode ? undefined : persistence,
             });
@@ -2092,10 +2119,17 @@ function startHeadlessMode(): void {
               executionAgentRegistry: agentRegistry,
               invokerConfig,
               repoRoot,
+              executorRegistry,
+              taskHandles: standaloneTaskHandles,
               appRootDir: __dirname,
+              guiMutations: (channel, args) => executeStandaloneGuiMutation({ channel, args } as GuiMutationPayload),
+              planningChatSessions,
             },
             apiServerDeps,
           );
+          broadcastPlanningChatStream = (event) => {
+            headlessWebBridge?.broadcast('invoker:planning-chat-stream', event);
+          };
           startOwnerSocketSentinelForBus(messageBus);
         }
 
@@ -2291,6 +2325,16 @@ startMainProcessBootstrap({
       };
     },
   };
+  // Planning terminals for the desktop-owned web surface. Shares the same
+  // EmbeddedTerminalManager and session map as the Electron IPC handlers, so
+  // browser and desktop views stay consistent.
+  const webPlanningTerminals = createPlanningTerminalAdapter({
+    embeddedTerminalManager,
+    logger,
+    planningChatSessions,
+    getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
+    repoRoot,
+  });
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
   const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
@@ -2728,6 +2772,14 @@ startMainProcessBootstrap({
             autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           }),
           taskTerminals,
+          guiMutations: async (channel, args) => {
+            const handler = guiMutationHandlers.get(channel);
+            if (!handler) {
+              throw new Error(`No GUI mutation handler registered for ${channel}`);
+            }
+            return handler(...args);
+          },
+          planningTerminals: webPlanningTerminals,
           getSystemDiagnostics: () => collectSystemDiagnostics({
             appVersion: app.getVersion(),
             isPackaged: app.isPackaged,
@@ -3325,6 +3377,7 @@ startMainProcessBootstrap({
         if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
           mainWindow.webContents.send('invoker:planning-chat-stream', event);
         }
+        webBridge?.broadcast('invoker:planning-chat-stream', event);
       },
       taskGraphEventPublisher,
       loadTaskByIdFromPersistence,
