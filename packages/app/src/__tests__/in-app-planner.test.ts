@@ -342,11 +342,11 @@ describe('planning chat', () => {
     });
 
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
-    const prompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
-    expect(prompt).toContain('Treat this as a conversation before a plan.');
-    expect(prompt).toContain('Talk through edge cases, corner cases, architecture, and ambiguity with the human.');
-    expect(prompt).toContain('Resolve those points before producing a YAML plan.');
-    expect(prompt).toContain('Draft YAML only after the human asks you to draft/proceed');
+    const sentPlannerPrompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
+    expect(sentPlannerPrompt).toContain('This session is a planning conversation before any task plan exists.');
+    expect(sentPlannerPrompt).toContain('Discuss relevant edge cases, corner cases, architecture choices, ambiguity');
+    expect(sentPlannerPrompt).toContain('Drafting is not authorized yet. Do NOT output a ```yaml code block');
+    expect(sentPlannerPrompt).toContain('Do not rush directly to YAML unless the user has clearly approved drafting a plan.');
   });
 
   it('reuses an existing session and keeps its original preset', async () => {
