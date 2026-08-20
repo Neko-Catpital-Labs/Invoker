@@ -1434,6 +1434,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return rebindPlanningChatRepo(request as InAppPlanningRebindRepoRequest, {
       config: invokerConfig,
       sessions: planningChatSessions,
+      planningCommandBuilder,
+      executionAgentRegistry: agentRegistry,
+      conversationRepo: planningConversationRepo,
+      logger,
+      onRawPlannerOutput: emitPlanningChatStream,
       planningSessionStore: ownerMode ? persistence : undefined,
       repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
       workingDir: repoRoot,
