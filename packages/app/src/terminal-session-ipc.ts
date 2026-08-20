@@ -11,10 +11,12 @@ import {
   type TerminalUiPerfReporter,
   type TerminalUiPerfSink,
 } from './terminal-ui-perf.js';
+import { existsSync } from 'node:fs';
 import {
   ensurePlanningTerminalSummaryBridge,
   hydrateRemotePlanningTerminalSession,
   updatePlanningChatTerminalState,
+  type InAppPlanningChatSession,
   type InAppPlanningChatSessions,
   type InAppPlanningSessionStore,
 } from './in-app-planner.js';
@@ -385,6 +387,21 @@ function planningTerminalWritable(
   return { ok: true };
 }
 
+/**
+ * Planning terminals follow the conversation's repo binding: a session bound
+ * to a repo opens its terminal in that provisioned worktree; unbound sessions
+ * (and sessions whose worktree no longer exists on disk) fall back to the
+ * owner's repoRoot.
+ */
+export function resolvePlanningTerminalCwd(
+  session: Pick<InAppPlanningChatSession, 'worktreePath'>,
+  repoRoot: string,
+): string {
+  const worktreePath = session.worktreePath?.trim();
+  if (worktreePath && existsSync(worktreePath)) return worktreePath;
+  return repoRoot;
+}
+
 function planningTerminalTargetKey(planningSessionId: string, repoRoot: string): string {
   return JSON.stringify({
     kind: 'planning',
@@ -444,14 +461,15 @@ export function bindPlanningTerminalSessionState(deps: {
           session.terminalOutputSnapshot ?? '',
           MAX_OUTPUT_SNAPSHOT_CHARS,
         );
+        const terminalCwd = resolvePlanningTerminalCwd(session, repoRoot);
         embeddedTerminalManager.restoreSpawnSession({
           sessionId: session.terminalSessionId,
           taskId: `planning:${session.id}`,
           kind: 'planning',
           planningSessionId: session.id,
-          targetKey: planningTerminalTargetKey(session.id, repoRoot),
-          spec: { cwd: repoRoot },
-          cwd: repoRoot,
+          targetKey: planningTerminalTargetKey(session.id, terminalCwd),
+          spec: { cwd: terminalCwd },
+          cwd: terminalCwd,
           createdAt: session.terminalUpdatedAt ?? session.updatedAt,
           outputSnapshot,
         });
@@ -540,12 +558,13 @@ export function createPlanningTerminalAdapter(deps: PlanningTerminalAdapterDeps)
           planningSession.terminalOutputSnapshot ?? '',
           MAX_OUTPUT_SNAPSHOT_CHARS,
         );
+        const terminalCwd = resolvePlanningTerminalCwd(planningSession, repoRoot);
         const session = embeddedTerminalManager.openOrReuse({
           kind: 'planning',
           taskId: `planning:${planningSessionId}`,
           planningSessionId,
-          spec: { cwd: repoRoot },
-          cwd: repoRoot,
+          spec: { cwd: terminalCwd },
+          cwd: terminalCwd,
           outputSnapshot,
         });
         updatePlanningChatTerminalState(planningSessionId, {
