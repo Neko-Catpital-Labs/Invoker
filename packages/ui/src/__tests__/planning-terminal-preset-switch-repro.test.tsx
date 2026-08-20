@@ -83,6 +83,7 @@ describe('planning terminal preset ownership repro', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         sessionId: 'claude-chat',
         message: 'continue with claude',
         presetKey: 'omp+claude',
@@ -179,6 +180,7 @@ describe('planning terminal preset ownership repro', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         sessionId: 'existing-chat',
         message: 'continue with a different model',
         presetKey: 'omp+claude',
