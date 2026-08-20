@@ -52,7 +52,7 @@ tasks:
     command: echo coincidental
 \`\`\``;
 
-const PLAN_C_REPLY = `Here is the revised plan against the new repo.
+const PLAN_C_REPLY = `Here is the revised plan.
 
 \`\`\`yaml
 name: Plan C
@@ -97,7 +97,7 @@ function sidecarPathFor(sessionId: string): string {
   return join(resolveInvokerHomeRoot(), 'plan-drafts', `${sessionId}.yaml`);
 }
 
-describe('planning chat E2E acceptance: explore -> draft -> critique -> repo switch -> re-draft -> submit', () => {
+describe('planning chat E2E acceptance: explore -> draft -> critique -> locked repo binding -> re-draft -> submit', () => {
   let sessionId: string | undefined;
 
   afterEach(() => {
@@ -105,7 +105,7 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> repo swi
     vi.restoreAllMocks();
   });
 
-  it('proves worktree binding, durable draft persistence, post-draft immutability, repo-switch invalidation, and DB-identical submit all hold together across one continuous session', async () => {
+  it('proves worktree binding, durable draft persistence, post-draft immutability, mid-conversation rebind refusal, and DB-identical submit all hold together across one continuous session', async () => {
     const worktreeRoot = mkdtempSync(join(tmpdir(), 'planning-chat-e2e-'));
     const repoPool = createFakeRepoPool({
       [REPO_A]: { worktreePath: join(worktreeRoot, 'repo-a'), headSha: 'sha-repo-a' },
@@ -192,7 +192,8 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> repo swi
       expect(sessions.get(sessionId)?.status).toBe('draft_ready');
       expect(adapter.loadInAppPlanningSession(sessionId)?.draftPlanText).toBe(planAText);
 
-      const rebindResult = await rebindPlanningChatRepo({
+      const messageCountBeforeRebind = sessions.get(sessionId)?.messages.length;
+      const rebindRefusal = await rebindPlanningChatRepo({
         sessionId,
         repoUrl: REPO_B,
         baseBranch: 'main',
@@ -202,30 +203,27 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> repo swi
         repoPool,
         planningSessionStore: adapter,
       });
-      expect(rebindResult).toEqual({ ok: true, action: 'invalidate_and_block_submit' });
-      expect(sessions.get(sessionId)?.draftPlanText).toBeUndefined();
-      expect(sessions.get(sessionId)?.status).toBe('still_discussing');
-      expect(sessions.get(sessionId)?.repoUrl).toBe(REPO_B);
-      expect(sessions.get(sessionId)?.baseCommit).toBe('sha-repo-b');
-      expect(adapter.loadInAppPlanningSession(sessionId)?.draftPlanText).toBeUndefined();
-      expect(existsSync(sidecarPathFor(sessionId))).toBe(false);
-      const invalidateMessage = sessions.get(sessionId)?.messages.at(-1);
-      expect(invalidateMessage?.tone).toBe('error');
-
-      const submitBeforeRedraft = await submitPlanningChatDraft({ sessionId }, {
-        sessions,
-        loadGeneratedPlan,
-        planningSessionStore: adapter,
+      expect(rebindRefusal).toEqual({
+        ok: false,
+        error: 'Set the repo before the conversation or terminal starts.',
       });
-      expect(submitBeforeRedraft.ok).toBe(false);
-      expect(loadGeneratedPlan).not.toHaveBeenCalled();
+      const sessionAfterRefusedRebind = sessions.get(sessionId);
+      expect(sessionAfterRefusedRebind).toMatchObject({
+        draftPlanText: planAText,
+        status: 'draft_ready',
+        repoUrl: REPO_A,
+        baseCommit: 'sha-repo-a',
+      });
+      expect(sessionAfterRefusedRebind?.messages.length).toBe(messageCountBeforeRebind);
+      expect(adapter.loadInAppPlanningSession(sessionId)?.draftPlanText).toBe(planAText);
+      expect(readFileSync(sidecarPathFor(sessionId), 'utf8')).toBe(planAText);
 
       spawnPlanner.mockResolvedValueOnce(PLAN_C_REPLY);
       const redraftTurn = await sendPlanningChatMessage({
         sessionId,
         message: 'draft the full plan again',
       }, {
-        config: { defaultRepoUrl: REPO_B, defaultBranch: 'main' },
+        config: { defaultRepoUrl: REPO_A, defaultBranch: 'main' },
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
