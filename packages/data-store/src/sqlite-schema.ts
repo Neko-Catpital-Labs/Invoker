@@ -254,6 +254,9 @@ export const SCHEMA_DDL = `
         terminal_output_snapshot TEXT NOT NULL DEFAULT '',
         terminal_updated_at TEXT,
         pending_response INTEGER NOT NULL DEFAULT 0 CHECK (pending_response IN (0, 1)),
+        active_turn_id TEXT,
+        active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed')),
+        active_turn_error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -641,6 +644,9 @@ export const COLUMN_MIGRATIONS = [
   // a later slice's scoped retry count -- unused for now.
   'ALTER TABLE task_launch_dispatch ADD COLUMN abandon_reason TEXT',
   'ALTER TABLE workflows ADD COLUMN deleted_at INTEGER',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_id TEXT',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed'))",
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_error TEXT',
 ];
 
 /**
