@@ -68,6 +68,7 @@ import {
   BOLD,
   RESET,
   createHeadlessExecutor,
+  createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   parseQueryFlags,
   trackHeadlessWorkflow,
@@ -76,7 +77,7 @@ import {
   withRestoredTaskUnlessDeleteAllWon,
 } from './headless-shared.js';
 
-export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
+export { createHeadlessExecutor, createTrackedHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
 import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headless-query-list.js';
 export { resolveAgentSession } from './headless-query-list.js';
