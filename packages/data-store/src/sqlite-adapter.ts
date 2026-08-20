@@ -644,6 +644,9 @@ type InAppPlanningSessionRow = {
   terminal_output_snapshot?: unknown;
   terminal_updated_at?: unknown;
   pending_response?: unknown;
+  active_turn_id?: unknown;
+  active_turn_status?: unknown;
+  active_turn_error?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
 };
@@ -1404,9 +1407,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
           terminal_output_snapshot,
           terminal_updated_at,
           pending_response,
+          active_turn_id,
+          active_turn_status,
+          active_turn_error,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
@@ -1428,6 +1434,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           terminal_output_snapshot = excluded.terminal_output_snapshot,
           terminal_updated_at = excluded.terminal_updated_at,
           pending_response = excluded.pending_response,
+          active_turn_id = excluded.active_turn_id,
+          active_turn_status = excluded.active_turn_status,
+          active_turn_error = excluded.active_turn_error,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at`,
         [
@@ -1452,6 +1461,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.terminalOutputSnapshot ?? '',
           record.terminalUpdatedAt ?? null,
           record.pendingResponse ? 1 : 0,
+          record.activeTurnId ?? null,
+          record.activeTurnStatus ?? null,
+          record.activeTurnError ?? null,
           record.createdAt,
           record.updatedAt,
         ],
@@ -1557,6 +1569,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'pendingResponse')) {
         setClauses.push('pending_response = ?');
         values.push(patch.pendingResponse ? 1 : 0);
+      }
+      if (Object.hasOwn(patch, 'activeTurnId')) {
+        setClauses.push('active_turn_id = ?');
+        values.push(patch.activeTurnId ?? null);
+      }
+      if (Object.hasOwn(patch, 'activeTurnStatus')) {
+        setClauses.push('active_turn_status = ?');
+        values.push(patch.activeTurnStatus ?? null);
+      }
+      if (Object.hasOwn(patch, 'activeTurnError')) {
+        setClauses.push('active_turn_error = ?');
+        values.push(patch.activeTurnError ?? null);
       }
       if (Object.hasOwn(patch, 'updatedAt')) {
         setClauses.push('updated_at = ?');
@@ -3335,6 +3359,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ...(typeof row.terminal_exit_code === 'number' ? { terminalExitCode: row.terminal_exit_code } : {}),
         terminalOutputSnapshot: typeof row.terminal_output_snapshot === 'string' ? row.terminal_output_snapshot : '',
         ...(typeof row.terminal_updated_at === 'string' ? { terminalUpdatedAt: row.terminal_updated_at } : {}),
+        ...(typeof row.active_turn_id === 'string' ? { activeTurnId: row.active_turn_id } : {}),
+        ...(row.active_turn_status === 'running' || row.active_turn_status === 'failed'
+          ? { activeTurnStatus: row.active_turn_status }
+          : {}),
+        ...(typeof row.active_turn_error === 'string' ? { activeTurnError: row.active_turn_error } : {}),
         pendingResponse: row.pending_response === 1,
         createdAt,
         updatedAt,

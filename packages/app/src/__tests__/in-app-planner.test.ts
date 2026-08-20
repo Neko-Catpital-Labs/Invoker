@@ -56,6 +56,12 @@ tasks:
 
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
+const INTERRUPTED_TURN_SYSTEM_LINE = {
+  role: 'system',
+  text: 'Planner was interrupted before it could answer.',
+  tone: 'error',
+} as const;
+
 function planningSession(
   overrides: Partial<InAppPlanningChatSession> & Pick<InAppPlanningChatSession, 'id' | 'title'>,
 ): InAppPlanningChatSession {
@@ -274,7 +280,7 @@ describe('planning chat', () => {
   it('rejects blank messages without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       sessionId: 'session-1',
       message: '   ',
     }, {
@@ -282,14 +288,16 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: 'session-1', error: 'Type a message first.' });
+    });
+    expect(rejected).toMatchObject({ ok: false, sessionId: 'session-1', error: 'Type a message first.' });
+    expect(rejected.turnId).toEqual(expect.any(String));
     expect(sessions.size).toBe(0);
   });
 
   it('rejects an unknown preset without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       message: 'hello',
       presetKey: 'bad',
     }, {
@@ -297,7 +305,9 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: undefined, error: 'Unknown planner preset "bad".' });
+    });
+    expect(rejected).toMatchObject({ ok: false, sessionId: undefined, error: 'Unknown planner preset "bad".' });
+    expect(rejected.turnId).toEqual(expect.any(String));
     expect(sessions.size).toBe(0);
   });
 
@@ -398,6 +408,7 @@ describe('planning chat', () => {
     })).resolves.toEqual({
       ok: false,
       sessionId: 'missing-session',
+      turnId: expect.any(String),
       error: 'Planning session "missing-session" was not found.',
     });
 
@@ -970,6 +981,126 @@ tasks:
     expect(secondResult.ok && secondResult.reply).toBe('turn 2 reply');
     expect(thirdResult.ok && thirdResult.reply).toBe('turn 3 reply');
     expect(overrideCalls.length).toBe(2);
+  });
+
+  it('echoes an explicit turnId and rejects a duplicate send while that turn runs', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    let resolveTurn: ((value: string) => void) | undefined;
+    let turnStarted!: () => void;
+    const started = new Promise<void>((resolve) => { turnStarted = resolve; });
+    const plannerReplyOverride = vi.fn(() => {
+      turnStarted();
+      return new Promise<string>((resolve) => { resolveTurn = resolve; });
+    });
+    const deps = {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride,
+    };
+
+    const first = sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-explicit' }, deps);
+    await started;
+
+    const sessionId = [...sessions.keys()][0];
+    const duplicate = await sendPlanningChatMessage({ sessionId, message: 'draft', turnId: 'turn-explicit' }, deps);
+    expect(duplicate).toMatchObject({ ok: false, turnId: 'turn-explicit', error: 'duplicate-turn' });
+
+    resolveTurn?.('turn reply');
+    const result = await first;
+    if (!result.ok) throw new Error(result.error);
+    expect(result.turnId).toBe('turn-explicit');
+    expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a failed turn and a retry with the same turnId re-runs without duplicating the user line', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const plannerReplyOverride = vi.fn()
+        .mockRejectedValueOnce(new Error('planner crashed'))
+        .mockResolvedValueOnce('recovered reply');
+      const deps = {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        plannerReplyOverride,
+        planningSessionStore: adapter,
+      };
+
+      const failed = await sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-retry' }, deps);
+      if (failed.ok) throw new Error('expected the first turn to fail');
+      expect(failed.turnId).toBe('turn-retry');
+      const sessionId = failed.sessionId;
+      if (!sessionId) throw new Error('expected a sessionId on the failed turn');
+      const session = sessions.get(sessionId);
+      expect(session?.activeTurnId).toBe('turn-retry');
+      expect(session?.activeTurnStatus).toBe('failed');
+      expect(session?.activeTurnError).toBe('planner crashed');
+      const persisted = adapter.loadInAppPlanningSession(sessionId);
+      expect(persisted?.activeTurnId).toBe('turn-retry');
+      expect(persisted?.activeTurnStatus).toBe('failed');
+      expect(persisted?.activeTurnError).toBe('planner crashed');
+      const userLinesBefore = session?.messages.filter((line) => line.role === 'user').length;
+
+      const retried = await sendPlanningChatMessage({ sessionId, message: 'draft', turnId: 'turn-retry' }, deps);
+      if (!retried.ok) throw new Error(retried.error);
+      expect(retried.reply).toBe('recovered reply');
+      expect(session?.messages.filter((line) => line.role === 'user').length).toBe(userLinesBefore);
+      expect(session?.activeTurnId).toBeUndefined();
+      expect(session?.activeTurnStatus).toBeUndefined();
+      expect(session?.activeTurnError).toBeUndefined();
+      const persistedAfter = adapter.loadInAppPlanningSession(sessionId);
+      expect(persistedAfter?.activeTurnId).toBeUndefined();
+      expect(persistedAfter?.activeTurnStatus).toBeUndefined();
+      expect(persistedAfter?.activeTurnError).toBeUndefined();
+      expect(plannerReplyOverride).toHaveBeenCalledTimes(2);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('emits turn outcome events on the planning stream channel', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const onRawPlannerOutput = vi.fn();
+    const ok = await sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-events' }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'turn reply',
+      onRawPlannerOutput,
+    });
+    if (!ok.ok) throw new Error(ok.error);
+    const completedEvent = onRawPlannerOutput.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.turn?.status === 'completed');
+    expect(completedEvent).toMatchObject({
+      sessionId: ok.sessionId,
+      turnId: 'turn-events',
+      turn: { status: 'completed', reply: 'turn reply', draftPlanAvailable: false },
+    });
+
+    const failSessions = createInAppPlanningChatSessions();
+    const onFailEvent = vi.fn();
+    const failed = await sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-fail' }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions: failSessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => { throw new Error('boom'); },
+      onRawPlannerOutput: onFailEvent,
+    });
+    expect(failed.ok).toBe(false);
+    const failedEvent = onFailEvent.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.turn?.status === 'failed');
+    expect(failedEvent).toMatchObject({
+      turnId: 'turn-fail',
+      turn: { status: 'failed', error: 'boom' },
+    });
   });
 
   it('never constructs a session in mode: agent (createSession and planFromGoal paths)', async () => {
@@ -1571,14 +1702,54 @@ tasks:
         planningSessionStore: adapter,
       });
 
-      const restored = sessions.get('planning-interrupted');
-      expect(restored?.pendingSend).toBeUndefined();
-      expect(restored?.messages.at(-1)).toMatchObject({
-        role: 'system',
-        text: 'Planner was interrupted before it could answer. Send another message to continue.',
-        tone: 'error',
-      });
+      const restoredInterrupted = sessions.get('planning-interrupted');
+      expect(restoredInterrupted?.pendingSend).toBeUndefined();
+      expect(restoredInterrupted?.messages.at(-1)).toMatchObject(INTERRUPTED_TURN_SYSTEM_LINE);
       expect(adapter.loadInAppPlanningSession('planning-interrupted')?.pendingResponse).toBe(false);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('restores an interrupted pending turn as failed with its turnId preserved', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-interrupted-turn',
+        title: 'Interrupted turn',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        confirmationMode: 'require',
+        messages: [
+          { id: 1, role: 'user', text: 'Continue', createdAt: '2026-07-07T00:00:01.000Z' },
+        ],
+        activeTurnId: 'turn-x',
+        activeTurnStatus: 'running',
+        pendingResponse: true,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+      adapter.upsertInAppPlanningSession(record);
+      const sessions = createInAppPlanningChatSessions();
+
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      });
+
+      const restoredTurn = sessions.get('planning-interrupted-turn');
+      expect(restoredTurn?.activeTurnId).toBe('turn-x');
+      expect(restoredTurn?.activeTurnStatus).toBe('failed');
+      expect(restoredTurn?.activeTurnError).toBe(INTERRUPTED_TURN_SYSTEM_LINE.text);
+      expect(restoredTurn?.messages.at(-1)).toMatchObject(INTERRUPTED_TURN_SYSTEM_LINE);
+      const persisted = adapter.loadInAppPlanningSession('planning-interrupted-turn');
+      expect(persisted?.activeTurnId).toBe('turn-x');
+      expect(persisted?.activeTurnStatus).toBe('failed');
+      expect(persisted?.pendingResponse).toBe(false);
     } finally {
       adapter.close();
     }

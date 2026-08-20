@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
@@ -337,6 +337,9 @@ export interface InAppPlanningSessionRecord {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   pendingResponse: boolean;
   createdAt: string;
   updatedAt: string;
@@ -363,6 +366,9 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'terminalExitCode'
   | 'terminalOutputSnapshot'
   | 'terminalUpdatedAt'
+  | 'activeTurnId'
+  | 'activeTurnStatus'
+  | 'activeTurnError'
   | 'pendingResponse'
   | 'updatedAt'
 >>;
