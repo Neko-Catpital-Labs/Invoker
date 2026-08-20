@@ -1129,13 +1129,14 @@ export function setPlanningChatTerminalMode(
 
 export async function rebindPlanningChatRepo(
   request: InAppPlanningRebindRepoRequest,
-  deps: {
-    config: InvokerConfig;
+  deps: Pick<
+    InAppPlannerDeps,
+    'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry'
+    | 'conversationRepo' | 'logger' | 'onRawPlannerOutput' | 'planDoctorScriptPath'
+  > & {
     sessions: InAppPlanningChatSessions;
     planningSessionStore?: InAppPlanningSessionStore;
     repoPool?: PlanningRepoPool;
-    workingDir?: string;
-    planDoctorScriptPath?: string;
   },
 ): Promise<InAppPlanningRebindRepoResponse> {
   const rawRequest = request as Partial<InAppPlanningRebindRepoRequest> | null | undefined;
@@ -1146,6 +1147,9 @@ export async function rebindPlanningChatRepo(
   }
   if (session.status === 'submitted') {
     return { ok: false, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
+  }
+  if (session.messages.length > 0 || session.terminalSessionId) {
+    return { ok: false, error: 'Set the repo before the conversation or terminal starts.' };
   }
   if (!deps.repoPool) {
     return { ok: false, error: 'Worktree provisioning is not available.' };
