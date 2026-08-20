@@ -62,6 +62,7 @@ describe('planning terminal failed first send session id persist repro', () => {
     submitPlanningText('draft a plan that fails before replying');
     expect(await screen.findByText('planner exited before producing a reply')).toBeInTheDocument();
     expect(mock.api.planningChatSend).toHaveBeenNthCalledWith(1, {
+      turnId: expect.any(String),
       message: 'draft a plan that fails before replying',
       presetKey: 'codex',
       confirmationMode: 'require',
@@ -72,6 +73,7 @@ describe('planning terminal failed first send session id persist repro', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-created-before-error',
         message: 'retry in the same chat',
         presetKey: 'codex',
