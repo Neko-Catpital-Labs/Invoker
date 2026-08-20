@@ -28,6 +28,7 @@ import type {
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  InAppPlanningTurnStatus,
   Logger,
   PlanningConfirmationMode,
   PlanningTerminalMode,
@@ -118,6 +119,9 @@ export interface InAppPlanningChatSession {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   createdAt: string;
   updatedAt: string;
   nextMessageId: number;
@@ -452,6 +456,9 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activeTurnId: session.activeTurnId,
+    activeTurnStatus: session.activeTurnStatus,
+    activeTurnError: session.activeTurnError,
     pendingResponse,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -507,6 +514,9 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activeTurnId: session.activeTurnId,
+    activeTurnStatus: session.activeTurnStatus,
+    activeTurnError: session.activeTurnError,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -848,8 +858,9 @@ export async function sendPlanningChatMessage(
     taggedMessage.confirmationMode ?? rawRequest?.confirmationMode,
     resolveDefaultPlanningConfirmationMode(deps.config),
   );
+  const turnId = (typeof rawRequest?.turnId === 'string' && rawRequest.turnId.trim()) || randomUUID();
   if (!message) {
-    return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
+    return { ok: false, sessionId: rawRequest?.sessionId, turnId, error: 'Type a message first.' };
   }
 
   const suppliedSessionId = typeof rawRequest?.sessionId === 'string'
@@ -864,6 +875,7 @@ export async function sendPlanningChatMessage(
       return {
         ok: false,
         sessionId: suppliedSessionId,
+        turnId,
         error: `Planning session "${suppliedSessionId}" was not found.`,
       };
     }
@@ -874,14 +886,18 @@ export async function sendPlanningChatMessage(
         confirmationMode: requestedConfirmationMode,
       }, deps);
       if ('error' in created) {
-        return { ok: false, sessionId, error: created.error };
+        return { ok: false, sessionId, turnId, error: created.error };
       }
       session = created;
       sessionId = session.id;
     }
     if (session.status === 'submitted') {
-      return { ok: false, sessionId: session.id, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
+      return { ok: false, sessionId: session.id, turnId, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
     }
+    if (session.activeTurnStatus === 'running' && session.activeTurnId === turnId) {
+      return { ok: false, sessionId: session.id, turnId, error: 'duplicate-turn' };
+    }
+    const isRetry = session.activeTurnStatus === 'failed' && session.activeTurnId === turnId;
 
     const activeSession = session;
     activeSession.confirmationMode = requestedConfirmationMode;
@@ -892,11 +908,36 @@ export async function sendPlanningChatMessage(
         role: entry.role,
         content: entry.text,
       }));
-      appendSessionMessage(activeSession, 'user', message);
+      if (!isRetry) {
+        appendSessionMessage(activeSession, 'user', message);
+      }
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
       }
+      activeSession.activeTurnId = turnId;
+      activeSession.activeTurnStatus = 'running';
+      activeSession.activeTurnError = undefined;
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
+
+      const finishTurn = (response: Extract<InAppPlanningChatResponse, { ok: true }>): InAppPlanningChatResponse => {
+        activeSession.activeTurnId = undefined;
+        activeSession.activeTurnStatus = undefined;
+        activeSession.activeTurnError = undefined;
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        deps.onRawPlannerOutput?.({
+          sessionId: activeSession.id,
+          turnId,
+          turn: {
+            status: 'completed',
+            reply: response.reply,
+            confirmationMode: response.confirmationMode,
+            draftPlanAvailable: response.draftPlanAvailable,
+            draftPlanSummary: response.draftPlanSummary,
+            draftPlanText: response.draftPlanText,
+          },
+        });
+        return response;
+      };
 
       try {
         const hostedMessage = formatPlanningHostedTurn('in_app', message);
@@ -938,17 +979,17 @@ export async function sendPlanningChatMessage(
             ? 'draft_ready'
             : result.status;
           appendSessionMessage(activeSession, 'assistant', reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
+          return finishTurn({
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
             draftPlanText: activeSession.draftPlanText,
-          } as InAppPlanningChatResponse;
+          } as Extract<InAppPlanningChatResponse, { ok: true }>);
         }
 
         const review = preparePlanningReview({
@@ -961,40 +1002,49 @@ export async function sendPlanningChatMessage(
             ? 'draft_ready'
             : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', review.reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
+          return finishTurn({
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply: review.reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
             draftPlanText: activeSession.draftPlanText,
-          } as InAppPlanningChatResponse;
+          } as Extract<InAppPlanningChatResponse, { ok: true }>);
         }
 
         activeSession.draftPlanSummary = review.summary;
         activeSession.draftPlanText = review.planText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
-        persistPlanningSession(activeSession, deps.planningSessionStore, false);
-        return {
+        return finishTurn({
           ok: true,
           sessionId: activeSession.id,
+          turnId,
           reply,
           reasoning,
           confirmationMode: activeSession.confirmationMode,
           draftPlanAvailable: true,
           draftPlanSummary: review.summary,
           draftPlanText: review.planText,
-        } as InAppPlanningChatResponse;
+        } as Extract<InAppPlanningChatResponse, { ok: true }>);
       } catch (error) {
+        const failureMessage = error instanceof Error ? error.message : String(error);
+        activeSession.activeTurnStatus = 'failed';
+        activeSession.activeTurnError = failureMessage;
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        deps.onRawPlannerOutput?.({
+          sessionId: activeSession.id,
+          turnId,
+          turn: { status: 'failed', error: failureMessage },
+        });
         return {
           ok: false,
           sessionId: activeSession.id,
-          error: error instanceof Error ? error.message : String(error),
+          turnId,
+          error: failureMessage,
         };
       }
     });
@@ -1004,6 +1054,7 @@ export async function sendPlanningChatMessage(
     return {
       ok: false,
       sessionId,
+      turnId,
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -1363,6 +1414,9 @@ export async function restorePlanningChatSessions(
       terminalExitCode: record.terminalExitCode,
       terminalOutputSnapshot: record.terminalOutputSnapshot ?? '',
       terminalUpdatedAt: record.terminalUpdatedAt,
+      activeTurnId: record.activeTurnId,
+      activeTurnStatus: record.activeTurnStatus,
+      activeTurnError: record.activeTurnError,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       nextMessageId,
@@ -1374,9 +1428,12 @@ export async function restorePlanningChatSessions(
         appendSessionMessage(
           session,
           'system',
-          'Planner was interrupted before it could answer. Send another message to continue.',
+          'Planner was interrupted before it could answer.',
           'error',
         );
+        session.activeTurnId = record.activeTurnId ?? randomUUID();
+        session.activeTurnStatus = 'failed';
+        session.activeTurnError = 'Planner was interrupted before it could answer.';
       }
       shouldPersist = true;
     }
