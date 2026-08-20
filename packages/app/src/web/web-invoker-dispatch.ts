@@ -32,6 +32,7 @@ import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveAgentSession } from '../headless-query-list.js';
 import { buildTaskGraphSnapshot } from './task-graph-snapshot.js';
 import type { TaskTerminalAdapter } from '../task-terminal-adapter.js';
+import type { PlanningTerminalAdapter } from '../terminal-session-ipc.js';
 
 export interface WebInvokerDispatchDeps {
   orchestrator: Orchestrator;
@@ -51,6 +52,13 @@ export interface WebInvokerDispatchDeps {
   checkPrStatuses?: () => void | Promise<void>;
   getWorkers?: () => WorkerStatusSnapshot;
   taskTerminals?: TaskTerminalAdapter;
+  /**
+   * Routes planning-chat channels (and plan-from-goal) to the owner's shared
+   * GUI-mutation handlers. Wired by both the desktop-owned and headless web
+   * surfaces; absent means the historical web downgrades stay in effect.
+   */
+  guiMutations?: (channel: string, args: unknown[]) => Promise<unknown>;
+  planningTerminals?: PlanningTerminalAdapter;
   logger?: Logger;
 }
 
@@ -279,15 +287,41 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           return { ok: false, reason: 'unsupported' };
         }
         return deps.taskTerminals.close(String(args[0]));
+      // ── Planning chat + planning terminals ──
+      // Routed to the owner's shared GUI-mutation handlers / terminal adapter
+      // when the host wires them; otherwise keep the historical downgrades.
+      case 'invoker:plan-from-goal':
+      case 'invoker:planning-chat-create':
+      case 'invoker:planning-chat-list':
+      case 'invoker:planning-chat-send':
+      case 'invoker:planning-chat-submit':
+      case 'invoker:planning-chat-discard-draft':
+      case 'invoker:planning-chat-reset':
+      case 'invoker:planning-chat-delete':
+      case 'invoker:planning-chat-delete-submitted':
+      case 'invoker:planning-chat-rebind-repo':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        return unsupported(channel);
+      case 'invoker:planning-chat-set-terminal-mode':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        return { ok: false, error: 'Planning tmux is not available in the web UI' };
       case 'invoker:planning-terminal-open':
+        if (deps.planningTerminals) return deps.planningTerminals.open(String(args[0]));
         return { opened: false, reason: 'Planning terminals are not available in the web UI' };
       case 'invoker:planning-terminal-list':
-        return [];
-      case 'invoker:planning-chat-set-terminal-mode':
-        return { ok: false, error: 'Planning tmux is not available in the web UI' };
+        return deps.planningTerminals?.list() ?? [];
+      case 'invoker:planning-terminal-applied-size':
+        return deps.planningTerminals?.appliedSize(String(args[0])) ?? null;
       case 'invoker:planning-terminal-write':
+        if (deps.planningTerminals) return deps.planningTerminals.write(String(args[0]), String(args[1]));
+        return { ok: false, reason: 'unsupported' };
       case 'invoker:planning-terminal-resize':
+        if (deps.planningTerminals) {
+          return deps.planningTerminals.resize(String(args[0]), Number(args[1]), Number(args[2]));
+        }
+        return { ok: false, reason: 'unsupported' };
       case 'invoker:planning-terminal-close':
+        if (deps.planningTerminals) return deps.planningTerminals.close(String(args[0]));
         return { ok: false, reason: 'unsupported' };
 
       // ── Mutations not exposed on the facade / global lifecycle ──
