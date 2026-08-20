@@ -514,6 +514,10 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
     pressMenuKey('ArrowDown');
     await expectHighlightedMenuItem('Fix with Codex');
     pressMenuKey('ArrowDown');
+    // The fix menu offers every harness the owner reports (mock: claude,
+    // codex, omp), so the disabled Open Terminal entry is skipped after Omp.
+    await expectHighlightedMenuItem('Fix with Omp');
+    pressMenuKey('ArrowDown');
     await expectHighlightedMenuItem('Restart Task');
     pressMenuKey('Enter');
 
