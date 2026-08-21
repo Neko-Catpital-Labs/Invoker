@@ -198,6 +198,7 @@ export type SshInfraFailureClass =
   | 'ssh-worktree-missing'
   | 'ssh-invalid-reference'
   | 'ssh-repo-mirror-corrupt'
+  | 'ssh-worktree-corrupt'
   | 'ssh-oauth-session-expired'
   | 'ssh-disk-full';
 
