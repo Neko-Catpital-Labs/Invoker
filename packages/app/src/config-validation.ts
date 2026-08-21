@@ -25,6 +25,17 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
     throw new Error('defaultExecutionModel requires defaultExecutionAgent');
   }
 
+  if (config.enabledExecutionAgents !== undefined) {
+    if (!Array.isArray(config.enabledExecutionAgents)) {
+      throw new Error('enabledExecutionAgents must be an array of agent names');
+    }
+    for (const entry of config.enabledExecutionAgents) {
+      if (typeof entry !== 'string' || entry.trim().length === 0) {
+        throw new Error('enabledExecutionAgents entries must be non-empty strings');
+      }
+    }
+  }
+
   validateConfiguredModel(config.defaultExecution?.executionAgent, config.defaultExecution?.executionModel);
   validateConfiguredModel(config.defaultExecutionAgent, config.defaultExecutionModel);
   return config;
