@@ -59,7 +59,7 @@ export function WorkflowContextMenu({
   canDetach,
   onClose,
   autoFocus = false,
-}: WorkflowContextMenuProps): JSX.Element {
+}: WorkflowContextMenuProps): React.JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [position, setPosition] = useState({ left: x, top: y });
