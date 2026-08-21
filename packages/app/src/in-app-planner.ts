@@ -53,7 +53,7 @@ import {
   type PlanningMessage,
 } from '@invoker/planning-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
-import type { InvokerConfig } from './config.js';
+import { filterPlanningPresets, type InvokerConfig } from './config.js';
 import {
   ensurePlanningWorktreeReady,
   planningMcpConfigPath,
@@ -733,11 +733,17 @@ async function createSession(
   return session;
 }
 
+/**
+ * List the planning presets offered to pickers.
+ * The `enabledExecutionAgents` allowlist is applied HERE (not at the IPC/web
+ * dispatch surfaces) so every caller — the Electron IPC handler and the web
+ * dispatch — gets the same filtered view without double-filtering.
+ */
 export async function listInAppPlanningPresets(config: InvokerConfig): Promise<PlanningPresetOption[]> {
   const presets = await resolveHarnessPresets(config);
   const defaultPresetKey = await resolveDefaultPresetKey(config);
   const defaultConfirmationMode = resolveDefaultPlanningConfirmationMode(config);
-  return Object.entries(presets).map(([key, preset]) => ({
+  const options = Object.entries(presets).map(([key, preset]) => ({
     key,
     label: labelForPresetKey(key),
     tool: preset.tool,
@@ -745,6 +751,7 @@ export async function listInAppPlanningPresets(config: InvokerConfig): Promise<P
     isDefault: key === defaultPresetKey,
     defaultConfirmationMode,
   }));
+  return filterPlanningPresets(options, config);
 }
 
 export function createPlanningCommandBuilderFromRegistry(
