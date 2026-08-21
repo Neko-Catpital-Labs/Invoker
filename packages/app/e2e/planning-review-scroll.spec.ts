@@ -12,6 +12,7 @@ test('a long Review draft panel scrolls with the mouse wheel', async ({ page }) 
       planYaml: yaml,
       planName: 'Reaper workers for finished e2e and admin-bypass tasks',
       reply: 'I wrote the 3-slice plan to the draft file.',
+      sidecarDraft: true,
     });
   }, { yaml: planYaml });
 
