@@ -156,6 +156,7 @@ describe('Task interaction (component)', () => {
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([task], workflows));
 
+    await screen.findByTestId('selected-workflow-mini-dag');
     fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
 
     await waitFor(() => {
