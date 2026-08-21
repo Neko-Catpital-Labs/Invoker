@@ -1310,7 +1310,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('continue the restored session');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({
         turnId: expect.any(String),
         sessionId: 'saved-pressure-chat',
         message: 'continue the restored session',
@@ -1622,7 +1622,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('submit');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({
         turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'submit',
