@@ -1195,7 +1195,7 @@ export function App() {
   const activePlanningWorkflowRunning = activePlanningSession.submittedWorkflowId
     ? workflows.get(activePlanningSession.submittedWorkflowId)?.status === 'running'
     : false;
-  const activePlanningRepoLocked = activePlanningSession.messages.length > 0
+  const activePlanningRepoLocked = activePlanningSession.messages.some((message) => message.role !== 'system')
     || Boolean(activePlanningSession.terminalSession)
     || activePlanningSession.mode === 'tmux'
     || activePlanningReadOnly;
@@ -3341,22 +3341,23 @@ export function App() {
     }));
   }, [activePlanningSession.id, updatePlanningSessionById]);
 
-  const planningRepoCommitInFlightRef = useRef<Promise<{ ok: boolean; sessionId: string | null }> | null>(null);
+  const planningRepoCommitInFlightRef = useRef<Promise<{ ok: boolean; sessionId: string | null; error?: string }> | null>(null);
+  const [planningRepoBindingId, setPlanningRepoBindingId] = useState<string | null>(null);
 
-  const commitPlanningRepo = useCallback((): Promise<{ ok: boolean; sessionId: string | null }> => {
+  const commitPlanningRepo = useCallback((): Promise<{ ok: boolean; sessionId: string | null; error?: string }> => {
     // Clicking Send or Tmux blurs the repo input, so the blur commit and the
     // caller's commit can race; every caller must share one in-flight run.
     const inFlight = planningRepoCommitInFlightRef.current;
     if (inFlight) return inFlight;
 
-    const run = (async (): Promise<{ ok: boolean; sessionId: string | null }> => {
+    const run = (async (): Promise<{ ok: boolean; sessionId: string | null; error?: string }> => {
       // Read the latest view state from refs: render closures go stale across
       // the awaits below and would re-materialize an already-swapped session.
       const viewSessionId = activePlanningSessionIdRef.current;
       const session = planningSessionsRef.current.find((current) => current.id === viewSessionId);
       if (!session) return { ok: true, sessionId: null };
       const currentBackendId = session.id.startsWith('local-') ? null : session.id;
-      const locked = session.messages.length > 0
+      const locked = session.messages.some((message) => message.role !== 'system')
         || Boolean(session.terminalSession)
         || session.mode === 'tmux'
         || session.status === 'submitted'
@@ -3368,10 +3369,15 @@ export function App() {
 
       let sessionId = currentBackendId;
       let viewId = session.id;
+      const failBind = (id: string, sessionIdForResult: string | null, message: string): { ok: false; sessionId: string | null; error: string } => {
+        updatePlanningSessionById(id, (current) => ({ ...current, repoError: message }));
+        appendTerminalLine(`Could not bind repository: ${message}`, 'system', 'error', id);
+        return { ok: false, sessionId: sessionIdForResult, error: message };
+      };
+      setPlanningRepoBindingId(viewId);
       if (!sessionId) {
         if (!invoker?.planningChatCreate) {
-          updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: 'Planner is not available.' }));
-          return { ok: false, sessionId: null };
+          return failBind(viewId, null, 'Planner is not available.');
         }
         try {
           const result = await invoker.planningChatCreate({
@@ -3380,8 +3386,7 @@ export function App() {
             confirmationMode: session.confirmationMode ?? selectedPlanningConfirmationMode,
           });
           if (!result.ok) {
-            updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: result.error }));
-            return { ok: false, sessionId: null };
+            return failBind(viewId, null, result.error);
           }
           const localId = viewId;
           sessionId = result.session.id;
@@ -3406,22 +3411,20 @@ export function App() {
           setActivePlanningSessionId((currentSessionId) => (
             currentSessionId === localId ? result.session.id : currentSessionId
           ));
+          setPlanningRepoBindingId((current) => (current === localId ? result.session.id : current));
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Failed to create a planning session.';
-          updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: message }));
-          return { ok: false, sessionId: null };
+          return failBind(viewId, null, message);
         }
       }
 
       if (!invoker?.planningChatRebindRepo) {
-        updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: 'Repo binding is not available.' }));
-        return { ok: false, sessionId };
+        return failBind(viewId, sessionId, 'Repo binding is not available.');
       }
       try {
         const result = await invoker.planningChatRebindRepo({ sessionId, repoUrl: pending });
         if (!result.ok) {
-          updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: result.error }));
-          return { ok: false, sessionId };
+          return failBind(viewId, sessionId, result.error);
         }
         updatePlanningSessionById(viewId, (current) => ({
           ...current,
@@ -3433,19 +3436,20 @@ export function App() {
         return { ok: true, sessionId };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to bind the repository.';
-        updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: message }));
-        return { ok: false, sessionId };
+        return failBind(viewId, sessionId, message);
       }
     })();
 
     planningRepoCommitInFlightRef.current = run;
     void run.finally(() => {
+      setPlanningRepoBindingId(null);
       if (planningRepoCommitInFlightRef.current === run) {
         planningRepoCommitInFlightRef.current = null;
       }
     });
     return run;
   }, [
+    appendTerminalLine,
     invoker,
     runtimeStatus,
     selectedPlanningConfirmationMode,
@@ -5276,6 +5280,7 @@ export function App() {
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
+            binding={planningRepoBindingId !== null && planningRepoBindingId === activePlanningSessionId}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
