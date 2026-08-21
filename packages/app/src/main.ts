@@ -1452,6 +1452,11 @@ function startHeadlessMode(): void {
             return rebindPlanningChatRepo(payload.args[0] as InAppPlanningRebindRepoRequest, {
               config: invokerConfig,
               sessions: planningChatSessions,
+              planningCommandBuilder,
+              executionAgentRegistry: agentRegistry,
+              conversationRepo: planningConversationRepo,
+              logger,
+              onRawPlannerOutput: emitPlanningChatStreamToWeb,
               planningSessionStore: readOnlyMode ? undefined : persistence,
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
               workingDir: repoRoot,
