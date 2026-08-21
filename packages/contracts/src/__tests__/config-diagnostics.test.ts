@@ -64,7 +64,10 @@ describe('collectInvokerConfigDiagnostics', () => {
     });
 
     it('accepts a fully specified target', () => {
-      expect(collectInvokerConfigDiagnostics({ remoteTargets: { box: { ...sshTarget, port: 22 } } })).toEqual([]);
+      expect(collectInvokerConfigDiagnostics({
+        remoteTargets: { box: { ...sshTarget, port: 22 } },
+        infraRepair: { enabled: true },
+      })).toEqual([]);
     });
   });
 
@@ -117,6 +120,7 @@ describe('collectInvokerConfigDiagnostics', () => {
       expect(collectInvokerConfigDiagnostics({
         remoteTargets: { box: sshTarget },
         executionPools: { fast: { members: [{ type: 'ssh', id: 'box' }] } },
+        infraRepair: { enabled: true },
       })).toEqual([]);
     });
 
@@ -259,5 +263,26 @@ describe('collectInvokerConfigDiagnostics', () => {
       defaultPoolId: 'missing',
     });
     expect(diagnostics.filter((entry) => entry.severity === 'error').length).toBeGreaterThan(3);
+  });
+
+  it('warns when SSH remoteTargets exist but infraRepair is not enabled', () => {
+    const sshTarget = {
+      host: '203.0.113.10',
+      user: 'invoker',
+      sshKeyPath: '/tmp/key',
+    };
+    expect(warnings({
+      remoteTargets: { box: sshTarget },
+    })).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: 'warning',
+        path: 'infraRepair.enabled',
+        message: expect.stringContaining('infraRepair.enabled is not true'),
+      }),
+    ]));
+    expect(warnings({
+      remoteTargets: { box: sshTarget },
+      infraRepair: { enabled: true },
+    })).toEqual([]);
   });
 });
