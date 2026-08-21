@@ -2199,7 +2199,7 @@ describe('Invoker terminal (component)', () => {
   });
 
   it('swaps the send icon for a pending spinner while a turn is running', () => {
-    render(<InvokerTerminal {...terminalProps({ busy: true })} />);
+    render(<InvokerTerminal {...terminalProps({ value: 'draft a plan', busy: true })} />);
 
     const sendButton = screen.getByRole('button', { name: 'Send' });
     expect(sendButton).toBeDisabled();
