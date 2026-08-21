@@ -259,4 +259,69 @@ describe('buildWebInvokerDispatch', () => {
     const { dispatch } = makeDispatch();
     await expect(dispatch('invoker:does-not-exist', [])).rejects.toMatchObject({ code: 'unknown_channel' });
   });
+
+  describe('planning routes', () => {
+    it('routes planning-chat channels through guiMutations when wired', async () => {
+      const guiMutations = vi.fn(async (channel: string) => ({ ok: true, channel }));
+      const { dispatch } = makeDispatch({ guiMutations });
+      const request = { title: 'demo' };
+      expect(await dispatch('invoker:planning-chat-create', [request])).toEqual({
+        ok: true,
+        channel: 'invoker:planning-chat-create',
+      });
+      expect(guiMutations).toHaveBeenCalledWith('invoker:planning-chat-create', [request]);
+      await dispatch('invoker:planning-chat-list', []);
+      await dispatch('invoker:planning-chat-set-terminal-mode', [{ sessionId: 's1', mode: 'tmux' }]);
+      expect(guiMutations).toHaveBeenCalledTimes(3);
+    });
+
+    it('keeps the historical downgrades when guiMutations is absent', async () => {
+      const { dispatch } = makeDispatch();
+      await expect(dispatch('invoker:planning-chat-create', [{}])).rejects.toMatchObject({
+        code: 'unsupported_on_web',
+      });
+      expect(await dispatch('invoker:planning-chat-set-terminal-mode', [{}])).toEqual({
+        ok: false,
+        error: 'Planning tmux is not available in the web UI',
+      });
+    });
+
+    it('routes planning-terminal channels through the adapter when wired', async () => {
+      const planningTerminals = {
+        open: vi.fn(async (planningSessionId: string) => ({
+          opened: true,
+          session: { sessionId: `pt-${planningSessionId}`, taskId: `planning:${planningSessionId}`, kind: 'planning', status: 'running' },
+        })),
+        list: vi.fn(() => [{ sessionId: 'pt-1', taskId: 'planning:chat-1', kind: 'planning', status: 'running' }]),
+        write: vi.fn((sessionId: string, data: string) => ({ ok: true as const, sessionId, bytes: data.length })),
+        resize: vi.fn(() => ({ ok: true as const })),
+        appliedSize: vi.fn(() => ({ cols: 80, rows: 24 })),
+        close: vi.fn(() => ({ ok: true as const })),
+      };
+      const { dispatch } = makeDispatch({ planningTerminals });
+      const opened = await dispatch('invoker:planning-terminal-open', ['chat-1']) as { opened: boolean };
+      expect(opened.opened).toBe(true);
+      expect(planningTerminals.open).toHaveBeenCalledWith('chat-1');
+      expect(await dispatch('invoker:planning-terminal-list', [])).toHaveLength(1);
+      await dispatch('invoker:planning-terminal-write', ['pt-1', 'ls\n']);
+      expect(planningTerminals.write).toHaveBeenCalledWith('pt-1', 'ls\n');
+      await dispatch('invoker:planning-terminal-resize', ['pt-1', 120, 40]);
+      expect(planningTerminals.resize).toHaveBeenCalledWith('pt-1', 120, 40);
+      expect(await dispatch('invoker:planning-terminal-applied-size', ['pt-1'])).toEqual({ cols: 80, rows: 24 });
+      await dispatch('invoker:planning-terminal-close', ['pt-1']);
+      expect(planningTerminals.close).toHaveBeenCalledWith('pt-1');
+    });
+
+    it('keeps planning terminals downgraded when the adapter is absent', async () => {
+      const { dispatch } = makeDispatch();
+      expect(await dispatch('invoker:planning-terminal-open', ['chat-1'])).toEqual({
+        opened: false,
+        reason: 'Planning terminals are not available in the web UI',
+      });
+      expect(await dispatch('invoker:planning-terminal-list', [])).toEqual([]);
+      expect(await dispatch('invoker:planning-terminal-applied-size', ['pt-1'])).toBeNull();
+      expect(await dispatch('invoker:planning-terminal-write', ['pt-1', 'x'])).toEqual({ ok: false, reason: 'unsupported' });
+    });
+  });
+
 });
