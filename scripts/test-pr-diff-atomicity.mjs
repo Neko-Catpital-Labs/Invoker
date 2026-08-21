@@ -260,6 +260,44 @@ function kinds(findings) {
   assert.deepEqual(collectDiffAtomicityFindings({ diffText: text }), []);
 }
 
+// Case 10: adding a new field to a call's expected object at one call site
+// must not be paired with an unrelated single-line replacement of a
+// same-target/same-matcher assertion elsewhere in the file — they are
+// different call sites with different literal args, not one flipped
+// assertion. (PR #9966: `toHaveBeenCalledWith` is asserted with different
+// literal payloads across many `it()` blocks; adding a field at one site
+// was cross-matched against a same-target/matcher edit at a different site.)
+{
+  const text = diff([
+    'diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx',
+    '--- a/packages/ui/src/App.tsx',
+    '+++ b/packages/ui/src/App.tsx',
+    '@@ -1,3 +1,3 @@',
+    ' export function send(payload) {',
+    '-  return post(payload);',
+    '+  return post({ ...payload, turnId: makeId() });',
+    ' }',
+    'diff --git a/packages/ui/src/App.test.tsx b/packages/ui/src/App.test.tsx',
+    '--- a/packages/ui/src/App.test.tsx',
+    '+++ b/packages/ui/src/App.test.tsx',
+    '@@ -1,10 +1,11 @@',
+    " it('sends hello', () => {",
+    '-  expect(mock.send).toHaveBeenCalledWith({ message: \'hello\' });',
+    '+  expect(vi.mocked(mock.send)).toHaveBeenCalledWith({ turnId: expect.any(String), message: \'hello\' });',
+    ' });',
+    '',
+    " it('sends with a session', () => {",
+    '   expect(mock.send).toHaveBeenCalledWith({',
+    '+    turnId: expect.any(String),',
+    "     sessionId: 'session-1',",
+    "     message: 'continue',",
+    '   });',
+    ' });',
+  ]);
+  const findings = collectDiffAtomicityFindings({ diffText: text });
+  assert.deepEqual(findings, [], 'adding a field at one call site must not be flagged via an unrelated call site edit');
+}
+
 // Temp git case: the git entry path flags a real added debugger and exits 1,
 // and a clean follow-up change passes with the success message on stdout.
 {
