@@ -96,6 +96,20 @@ describe('buildWebInvokerDispatch', () => {
     expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual(harnesses);
   });
 
+  it('get-execution-harnesses honors the enabledExecutionAgents allowlist', async () => {
+    const harnesses = [
+      { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+      { name: 'codex', supportedModels: [] },
+    ];
+    const { dispatch } = makeDispatch({
+      agentRegistry: { listExecutionHarnesses: () => harnesses },
+      loadConfig: () => ({ enabledExecutionAgents: ['claude'] } as unknown as InvokerConfig),
+    });
+    expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual([
+      { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+    ]);
+  });
+
   it('get-planning-presets returns configured planning presets', async () => {
     const { dispatch } = makeDispatch({
       loadConfig: () =>
