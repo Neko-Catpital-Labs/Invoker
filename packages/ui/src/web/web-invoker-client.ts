@@ -12,23 +12,48 @@
 // break the browser bundle.
 import { IpcChannels, IpcEventChannels, channelToMethod, channelToEventMethod } from '@invoker/contracts/ipc-channels';
 import type { InvokerAPI } from '@invoker/contracts/ipc-channels';
+import { logPlanningEvent } from '../lib/planning-telemetry.js';
 
 export function installWebInvoker(opts: { basePath?: string }): void {
   const base = opts.basePath ?? '';
 
   async function invoke(channel: string, args: unknown[]): Promise<unknown> {
-    const res = await fetch(base + '/invoke', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ channel, args }),
-    });
-    if (!res.ok) throw new Error('web invoke transport failed: ' + res.status);
+    const startedAt = performance.now();
+    // Failures are telemetry, not just console noise: they ride the buffered
+    // ui-perf pipeline so the server records what each tab experienced.
+    // report-ui-perf itself is excluded — its failures are handled by the
+    // telemetry retry queue and must not self-report.
+    const note = (metric: string, detail: Record<string, unknown>): void => {
+      if (channel === 'invoker:report-ui-perf') return;
+      logPlanningEvent(metric, { channel, durationMs: Math.round(performance.now() - startedAt), ...detail });
+    };
+    let res: Response;
+    try {
+      res = await fetch(base + '/invoke', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ channel, args }),
+      });
+    } catch (err) {
+      note('web_invoke_network_error', { error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+    if (!res.ok) {
+      note('web_invoke_http_error', { status: res.status });
+      throw new Error('web invoke transport failed: ' + res.status);
+    }
     const body = await res.json();
     if (!body || body.ok !== true) {
+      note('web_invoke_error', { code: body?.error?.code, message: body?.error?.message });
       const err = new Error(body?.error?.message ?? 'web invoke failed');
       (err as { code?: unknown }).code = body?.error?.code;
       throw err;
+    }
+    // planning-chat-send legitimately runs for minutes; anything else this
+    // slow is the "popup says failed, server says fine" shape worth a record.
+    if (channel !== 'invoker:planning-chat-send' && performance.now() - startedAt > 20_000) {
+      note('web_invoke_slow', {});
     }
     return body.result;
   }
@@ -73,6 +98,7 @@ export function installWebInvoker(opts: { basePath?: string }): void {
   }
 
   (window as unknown as { invoker: InvokerAPI }).invoker = api as InvokerAPI;
+  logPlanningEvent('planning_web_boot', { href: window.location.href, visibility: document.visibilityState });
   (window as unknown as { __INVOKER_BOOTSTRAP__: unknown }).__INVOKER_BOOTSTRAP__ = {
     tasks: [],
     workflows: [],
