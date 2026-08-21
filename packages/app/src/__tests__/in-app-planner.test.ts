@@ -280,7 +280,7 @@ describe('planning chat', () => {
   it('rejects blank messages without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       sessionId: 'session-1',
       message: '   ',
     }, {
@@ -288,14 +288,16 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: 'session-1', turnId: expect.any(String), error: 'Type a message first.' });
+    });
+    expect(rejected).toMatchObject({ ok: false, sessionId: 'session-1', error: 'Type a message first.' });
+    expect(rejected.turnId).toEqual(expect.any(String));
     expect(sessions.size).toBe(0);
   });
 
   it('rejects an unknown preset without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       message: 'hello',
       presetKey: 'bad',
     }, {
@@ -303,7 +305,9 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: undefined, turnId: expect.any(String), error: 'Unknown planner preset "bad".' });
+    });
+    expect(rejected).toMatchObject({ ok: false, sessionId: undefined, error: 'Unknown planner preset "bad".' });
+    expect(rejected.turnId).toEqual(expect.any(String));
     expect(sessions.size).toBe(0);
   });
 
@@ -348,11 +352,11 @@ describe('planning chat', () => {
     });
 
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
-    const prompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
-    expect(prompt).toContain('Treat this as a conversation before a plan.');
-    expect(prompt).toContain('Talk through edge cases, corner cases, architecture, and ambiguity with the human.');
-    expect(prompt).toContain('Resolve those points before producing a YAML plan.');
-    expect(prompt).toContain('Draft YAML only after the human asks you to draft/proceed');
+    const sentPlannerPrompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
+    expect(sentPlannerPrompt).toContain('This session is a planning conversation before any task plan exists.');
+    expect(sentPlannerPrompt).toContain('Discuss relevant edge cases, corner cases, architecture choices, ambiguity');
+    expect(sentPlannerPrompt).toContain('Drafting is not authorized yet. Do NOT output a ```yaml code block');
+    expect(sentPlannerPrompt).toContain('Do not rush directly to YAML unless the user has clearly approved drafting a plan.');
   });
 
   it('reuses an existing session and keeps its original preset', async () => {
