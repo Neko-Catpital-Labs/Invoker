@@ -47,6 +47,7 @@ import {
   formatPlanningHostedTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
+  looksLikeQuestion,
   preparePlanningReview,
   submitPlanningReview,
   summarizePlanText,
@@ -933,7 +934,7 @@ export async function sendPlanningChatMessage(
         // asked for a draft (#5320 draft gate).
         const sidecarDraftApproved = !deps.plannerReplyOverride
           && activeSession.conversation.lastTurnDraftFromSidecarFile
-          && !message.includes('?');
+          && !looksLikeQuestion(message);
         const unauthorizedDraft = result.kind === 'draft_ready'
           && !result.draftingAuthorized
           && !sidecarDraftApproved;
