@@ -46,6 +46,20 @@ export function isShortDraftConfirmation(message: string): boolean {
   ].includes(normalized(message).replace(/[.!]+$/g, '').replace(/\s+/g, ' '));
 }
 
+const QUESTION_PUNCTUATION_PATTERN = /[?？¿؟՞︖⁇⁈⁉]/;
+
+const LEADING_QUESTION_WORD_PATTERN = /^(what|when|where|who|whom|whose|which|why|how|is|are|am|was|were|do|does|did|can|could|will|would|shall|should|may|might|must)\b/i;
+
+// A bare `?` check misses punctuation-free ("What files are in this repo")
+// and non-ASCII questions, which can slip past authorization gates that key
+// off "is this a question."
+export function looksLikeQuestion(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  if (QUESTION_PUNCTUATION_PATTERN.test(trimmed)) return true;
+  return LEADING_QUESTION_WORD_PATTERN.test(trimmed);
+}
+
 export function assistantAskedWhetherToDraft(message: string): boolean {
   return message.includes('?')
     && /\b(draft|create|generate|write|produce)\b/i.test(message)
