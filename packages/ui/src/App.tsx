@@ -3409,6 +3409,7 @@ export function App() {
     activePlanningSession,
     commitPlanningRepo,
     invoker,
+    selectedPlanningConfirmationMode,
     selectedPlanningPresetKey,
     updatePlanningSessionById,
   ]);
