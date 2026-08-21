@@ -11,6 +11,24 @@ function normalized(text: string): string {
   return text.trim().toLowerCase();
 }
 
+// ASCII '?' plus the non-ASCII question-mark glyphs other locales use:
+// inverted (¿), Greek (;), Armenian (՞), Arabic (؟), reversed (⸮), fullwidth (？).
+const QUESTION_MARK_PATTERN = /[?¿;՞؟⸮？]/u;
+
+const INTERROGATIVE_LEAD_PATTERN = new RegExp(
+  '^(what|why|when|where|who|whom|whose|which|how'
+    + '|is|are|was|were|am|do|does|did'
+    + '|can|could|will|would|shall|should|may|might|must|have|has|had)\\b',
+  'i',
+);
+
+export function looksLikeQuestion(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  if (QUESTION_MARK_PATTERN.test(trimmed)) return true;
+  return INTERROGATIVE_LEAD_PATTERN.test(trimmed);
+}
+
 export function hasExplicitDraftIntent(message: string): boolean {
   if (isExactPlanningSubmitCommand(message)) return true;
   const value = message.trim().toLowerCase().replace(/\s+/g, ' ');
