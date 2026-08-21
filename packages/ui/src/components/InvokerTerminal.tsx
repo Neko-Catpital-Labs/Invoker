@@ -1110,10 +1110,18 @@ export function InvokerTerminal({
                   disabled={sendButtonDisabled}
                   className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
                 >
-                  <SendIcon
-                    data-testid="invoker-terminal-send-icon"
-                    className="h-4 w-4"
-                  />
+                  {busy ? (
+                    <span
+                      data-testid="invoker-terminal-send-spinner"
+                      aria-hidden="true"
+                      className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-500 border-t-gray-100"
+                    />
+                  ) : (
+                    <SendIcon
+                      data-testid="invoker-terminal-send-icon"
+                      className="h-4 w-4"
+                    />
+                  )}
                 </button>
               </div>
             </div>
