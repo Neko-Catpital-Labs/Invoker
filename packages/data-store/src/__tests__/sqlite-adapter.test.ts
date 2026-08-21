@@ -474,6 +474,9 @@ describe('SQLiteAdapter', () => {
         'terminal_exit_code',
         'terminal_output_snapshot',
         'terminal_updated_at',
+        'active_turn_id',
+        'active_turn_status',
+        'active_turn_error',
         'pending_response',
         'created_at',
         'updated_at',
@@ -539,6 +542,35 @@ describe('SQLiteAdapter', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+
+    it('round-trips a failed active turn across adapter reopen', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-active-turn-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(makePlanningSession('planning-active-turn', {
+          activeTurnId: 'turn-1',
+          activeTurnStatus: 'failed',
+          activeTurnError: 'planner exploded',
+        }));
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadInAppPlanningSession('planning-active-turn')).toEqual(makePlanningSession('planning-active-turn', {
+          activeTurnId: 'turn-1',
+          activeTurnStatus: 'failed',
+          activeTurnError: 'planner exploded',
+        }));
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('round-trips omitted active turn fields as undefined', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+      expect(adapter.loadInAppPlanningSession('planning-1')).toEqual(makePlanningSession('planning-1'));
     });
 
     it('updates planning sessions and replaces visible messages', () => {
