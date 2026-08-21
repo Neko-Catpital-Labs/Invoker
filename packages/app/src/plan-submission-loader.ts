@@ -10,8 +10,11 @@ export interface PlanSubmissionLoadResult {
 }
 
 export interface PlanSubmissionLoadDeps {
-  persistence: { listWorkflows(): Array<{ id: string; featureBranch?: string }> };
-  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean }): void };
+  persistence: {
+    listWorkflows(): Array<{ id: string; featureBranch?: string; staged?: boolean }>;
+    updateWorkflow(workflowId: string, changes: { staged: boolean }): void;
+  };
+  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean; staged?: boolean }): void };
   allowGraphMutation?: boolean;
   logger?: Logger;
 }
@@ -20,6 +23,7 @@ export interface PlanSubmissionLoadOptions {
   logLabel?: string;
   preserveTaskHandles?: boolean;
   taskHandles?: { clear(): void };
+  staged?: boolean;
 }
 
 export async function loadPlanSubmissionBundle(
@@ -64,10 +68,13 @@ export async function loadPlanSubmissionBundle(
       };
     }
     backupPlan(plan, undefined, deps.logger);
-    deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation });
+    deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
     const workflow = deps.persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
     if (!workflow) {
       throw new Error('Loaded plan did not create a workflow.');
+    }
+    if (options?.staged && workflow.staged !== true) {
+      deps.persistence.updateWorkflow(workflow.id, { staged: true });
     }
     existingWorkflowIds.add(workflow.id);
     loadedWorkflowIds.push(workflow.id);

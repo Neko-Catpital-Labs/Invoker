@@ -22,6 +22,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
+    staged?: boolean;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
@@ -34,8 +35,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
-    generation?: number;
-  } }> = [];
+      generation?: number;
+      staged?: boolean;
+    } }> = [];
 
   saveWorkflow(workflow: {
     id: string;
@@ -47,6 +49,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
+    staged?: boolean;
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -71,6 +74,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
       generation?: number;
+      staged?: boolean;
     },
   ): void {
     const wf = this.workflows.get(workflowId);
@@ -95,6 +99,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.generation !== undefined) {
       wf.generation = changes.generation;
     }
+    if (wf && changes.staged !== undefined) {
+      wf.staged = changes.staged;
+    }
 
   }
 
@@ -106,6 +113,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
+    staged?: boolean;
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
@@ -1149,6 +1157,22 @@ describe('Orchestrator', () => {
   // ── loadPlan ────────────────────────────────────────────
 
   describe('loadPlan', () => {
+    it('keeps staged workflows out of automatic execution until activation', () => {
+      orchestrator.loadPlan({
+        name: 'staged-plan',
+        tasks: [{ id: 't1', description: 'Staged task' }],
+      }, { staged: true });
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+
+      expect(persistence.workflows.get(workflowId)?.staged).toBe(true);
+      expect(orchestrator.getExecutableReadyTasks()).toEqual([]);
+      expect(orchestrator.startExecution()).toEqual([]);
+
+      expect(orchestrator.activateStagedWorkflows([workflowId])).toEqual([workflowId]);
+      expect(persistence.workflows.get(workflowId)?.staged).toBe(false);
+      expect(orchestrator.startExecution().map((task) => task.id)).toEqual([sid(orchestrator, 0, 't1')]);
+    });
+
     it('creates tasks with correct dependencies', () => {
       const plan: PlanDefinition = {
         name: 'test-plan',

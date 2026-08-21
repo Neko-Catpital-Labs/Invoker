@@ -27,6 +27,7 @@ export const SCHEMA_DDL = `
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
         detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
+        staged INTEGER NOT NULL DEFAULT 0 CHECK (staged IN (0, 1)),
         deleted_at INTEGER,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -641,6 +642,7 @@ export const COLUMN_MIGRATIONS = [
   // a later slice's scoped retry count -- unused for now.
   'ALTER TABLE task_launch_dispatch ADD COLUMN abandon_reason TEXT',
   'ALTER TABLE workflows ADD COLUMN deleted_at INTEGER',
+  'ALTER TABLE workflows ADD COLUMN staged INTEGER NOT NULL DEFAULT 0 CHECK (staged IN (0, 1))',
 ];
 
 /**

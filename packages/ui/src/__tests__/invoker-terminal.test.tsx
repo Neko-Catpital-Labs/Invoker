@@ -1707,7 +1707,7 @@ describe('Invoker terminal (component)', () => {
     );
   });
 
-  it('submits a draft and starts ready work when the user types submit', async () => {
+  it('submits a draft without starting staged work', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
@@ -1730,11 +1730,11 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. No ready work to start.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review the graph, then Start ready work.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
@@ -1825,7 +1825,7 @@ describe('Invoker terminal (component)', () => {
     });
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. No ready work to start.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review the graph, then Start ready work.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
