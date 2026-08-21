@@ -5486,6 +5486,7 @@ export function App() {
           onDelete={handleDeleteTask}
           onClose={closeContextMenu}
           autoFocus={Boolean(contextMenu.returnFocusRegion)}
+          agents={executionHarnesses.map((harness) => harness.name)}
         />
       )}
     </div>

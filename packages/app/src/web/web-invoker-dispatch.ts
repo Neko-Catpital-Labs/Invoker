@@ -22,7 +22,7 @@ import type {
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
-import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
+import { filterExecutionHarnesses, resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import { listInAppPlanningPresets } from '../in-app-planner.js';
 import type { ApiMutationFacade } from '../api-server.js';
 import { getEventsPage } from '../get-events-page.js';
@@ -174,7 +174,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:get-execution-pools':
         return Object.keys(deps.loadConfig().executionPools ?? {});
       case 'invoker:get-execution-harnesses':
-        return agentRegistry.listExecutionHarnesses();
+        return filterExecutionHarnesses(agentRegistry.listExecutionHarnesses(), deps.loadConfig());
       case 'invoker:get-planning-presets':
         return listInAppPlanningPresets(deps.loadConfig());
       case 'invoker:get-execution-defaults':
