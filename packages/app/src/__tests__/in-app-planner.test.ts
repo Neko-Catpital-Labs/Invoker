@@ -280,7 +280,7 @@ describe('planning chat', () => {
   it('rejects blank messages without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       sessionId: 'session-1',
       message: '   ',
     }, {
@@ -288,14 +288,15 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: 'session-1', turnId: expect.any(String), error: 'Type a message first.' });
+    });
+    expect(rejected).toEqual({ ok: false, sessionId: 'session-1', turnId: expect.any(String), error: 'Type a message first.' });
     expect(sessions.size).toBe(0);
   });
 
   it('rejects an unknown preset without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       message: 'hello',
       presetKey: 'bad',
     }, {
@@ -303,7 +304,8 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: undefined, turnId: expect.any(String), error: 'Unknown planner preset "bad".' });
+    });
+    expect(rejected).toEqual({ ok: false, sessionId: undefined, turnId: expect.any(String), error: 'Unknown planner preset "bad".' });
     expect(sessions.size).toBe(0);
   });
 
