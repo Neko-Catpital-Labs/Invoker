@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   hasExplicitDraftIntent,
   isDraftingAuthorized,
+  looksLikeQuestion,
 } from '../lifecycle.js';
 
 describe('Planning Terminal lifecycle contract', () => {
@@ -17,5 +18,18 @@ describe('Planning Terminal lifecycle contract', () => {
     expect(isDraftingAuthorized('yes', [
       { role: 'assistant', content: 'Here is an explanation.' },
     ])).toBe(false);
+  });
+
+  it('classifies questions without relying solely on an ASCII "?"', () => {
+    expect(looksLikeQuestion('What files are in this repo')).toBe(true);
+    expect(looksLikeQuestion('How does this work')).toBe(true);
+    expect(looksLikeQuestion('Can you explain the auth flow')).toBe(true);
+    expect(looksLikeQuestion('这个文件在哪里？')).toBe(true);
+    expect(looksLikeQuestion('¿Qué archivos hay')).toBe(true);
+    expect(looksLikeQuestion('من فضلك، أين الملف؟')).toBe(true);
+    expect(looksLikeQuestion('What files are in this repo?')).toBe(true);
+    expect(looksLikeQuestion('Here is the info you need.')).toBe(false);
+    expect(looksLikeQuestion('The API key is stored in .env.')).toBe(false);
+    expect(looksLikeQuestion('')).toBe(false);
   });
 });
