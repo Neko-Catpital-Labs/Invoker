@@ -129,10 +129,16 @@ interface InvokerTerminalProps {
   terminalError?: string | null;
   terminalActive?: boolean;
   workflowRunning?: boolean;
+  repoValue?: string;
+  repoLocked?: boolean;
+  repoSuggestions?: string[];
+  repoError?: string | null;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
   onConfirmationModeChange: (confirmationMode: PlanningConfirmationMode) => void;
+  onRepoInputChange?: (value: string) => void;
+  onRepoCommit?: () => void;
   onModeChange?: (mode: PlanningTerminalMode) => void;
   onExpand: () => void;
   onCloseExpanded?: () => void;
@@ -549,8 +555,14 @@ export function InvokerTerminal({
   workflowRunning = false,
   onValueChange,
   onSubmit,
+  repoValue = '',
+  repoLocked = true,
+  repoSuggestions = [],
+  repoError = null,
   onPresetChange,
   onConfirmationModeChange,
+  onRepoInputChange,
+  onRepoCommit,
   onModeChange,
   onExpand,
   onCloseExpanded,
@@ -1040,6 +1052,33 @@ export function InvokerTerminal({
                           <option value="require">Ask first</option>
                         </select>
                       </label>
+                      {!repoLocked && (
+                        <label className="text-xs text-muted-foreground">
+                          Repo
+                          <input
+                            data-testid="invoker-terminal-repo"
+                            list="invoker-terminal-repo-suggestions"
+                            value={repoValue}
+                            disabled={readOnly}
+                            placeholder="path or URL (default if empty)"
+                            onChange={(event) => onRepoInputChange?.(event.target.value)}
+                            onBlur={() => onRepoCommit?.()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                onRepoCommit?.();
+                              }
+                            }}
+                            className="ml-2 w-56 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                          />
+                          <datalist id="invoker-terminal-repo-suggestions">
+                            {repoSuggestions.map((repo) => <option key={repo} value={repo} />)}
+                          </datalist>
+                        </label>
+                      )}
+                      {repoError && !repoLocked && (
+                        <span data-testid="invoker-terminal-repo-error" className="text-xs text-red-400">{repoError}</span>
+                      )}
                     </div>
                   )}
                 </div>
