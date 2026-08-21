@@ -4,6 +4,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { SendIcon } from './icons/index.js';
+import { logPlanningEvent } from '../lib/planning-telemetry.js';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -102,7 +103,7 @@ function roundMs(durationMs: number): number {
 }
 
 function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
-  void window.invoker?.reportUiPerf?.(metric, data);
+  logPlanningEvent(metric, data);
 }
 
 interface InvokerTerminalProps {
