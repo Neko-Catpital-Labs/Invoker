@@ -2214,6 +2214,149 @@ describe('rebindPlanningChatRepo', () => {
     expect(stored?.conversation).toBe(originalConversation);
   });
 
+  it('rejects rebinding once the conversation has a message', async () => {
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'message-rebind-session',
+      title: 'Message rebind',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-message',
+      worktreeBranch: 'invoker/planning/message-rebind-session',
+      messages: [
+        { id: 1, role: 'user', text: 'What does this repo do?', createdAt: '2026-07-07T00:00:01.000Z' },
+      ],
+    });
+    const originalConversation = session.conversation;
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/other-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Set the repo before the conversation or terminal starts.',
+    });
+    expect(repoPool.ensureCloneThroughRepoQueue).not.toHaveBeenCalled();
+    expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+    expect(repoPool.release).not.toHaveBeenCalled();
+
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/repo.git');
+    expect(stored?.baseCommit).toBe('sha-a');
+    expect(stored?.worktreePath).toBe('/fake/worktree/existing-message');
+    expect(stored?.conversation).toBe(originalConversation);
+  });
+
+  it('rejects rebinding once a terminal session exists', async () => {
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'terminal-rebind-session',
+      title: 'Terminal rebind',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-terminal',
+      worktreeBranch: 'invoker/planning/terminal-rebind-session',
+      terminalMode: 'tmux',
+      terminalSessionId: 'term-planning-rebind',
+    });
+    const originalConversation = session.conversation;
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/other-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Set the repo before the conversation or terminal starts.',
+    });
+    expect(repoPool.ensureCloneThroughRepoQueue).not.toHaveBeenCalled();
+    expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/repo.git');
+    expect(stored?.baseCommit).toBe('sha-a');
+    expect(stored?.worktreePath).toBe('/fake/worktree/existing-terminal');
+    expect(stored?.conversation).toBe(originalConversation);
+  });
+
+  it('rebinds an untouched session with a prior binding to a different repo', async () => {
+    const worktreePath = '/fake/worktree/retarget-session';
+    const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'retarget-session',
+      title: 'Retarget test',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-retarget',
+      worktreeBranch: 'invoker/planning/retarget-session',
+    });
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/other-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({ ok: true, action: 'provision' });
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/other-repo.git');
+    expect(stored?.baseCommit).toBe('new-head-sha');
+    expect(stored?.worktreePath).toBe(worktreePath);
+  });
+
+  it('threads the planning command builder into the rebuilt conversation', async () => {
+    const worktreePath = '/fake/worktree/builder-session';
+    const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
+    const session = planningSession({ id: 'builder-session', title: 'Builder test' });
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/new-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+      planningCommandBuilder,
+    });
+
+    expect(result).toEqual({ ok: true, action: 'provision' });
+    const stored = sessions.get(session.id);
+    // Without the builder the conversation falls back to spawning the literal
+    // `agent` CLI, which does not exist on headless hosts.
+    const conversation = stored?.conversation as unknown as { planningCommandBuilder?: unknown };
+    expect(conversation.planningCommandBuilder).toBe(planningCommandBuilder);
+  });
+
   it('returns an error when no repo URL can be resolved', async () => {
     const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'sha-a');
     const sessions = createInAppPlanningChatSessions();
