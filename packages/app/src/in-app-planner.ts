@@ -91,6 +91,8 @@ export interface InAppPlannerDeps {
   conversationRepo?: ConversationRepository;
   logger?: Logger;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  /** Only consulted when plannerReplyOverride is set (see the ad665bff sidecar-approval comment in sendPlanningChatMessage). */
+  plannerReplyOverrideSidecarDraft?: boolean;
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
   /** Canonical full skill-doctor script. Kept separate from target worktrees. */
   planDoctorScriptPath?: string;
@@ -938,10 +940,14 @@ export async function sendPlanningChatMessage(
         // user supplied information rather than asking a question, is
         // review-ready without an explicit "draft it" message. YAML that
         // merely appears in the chat reply text still needs the user to have
-        // asked for a draft (#5320 draft gate).
-        const sidecarDraftApproved = !deps.plannerReplyOverride
-          && activeSession.conversation.lastTurnDraftFromSidecarFile
-          && !looksLikeQuestion(message);
+        // asked for a draft (#5320 draft gate). Test/e2e sends never exercise
+        // the real sidecar file, so plannerReplyOverride callers signal the
+        // same scenario via deps.plannerReplyOverrideSidecarDraft instead.
+        const sidecarDraftApproved = (
+          deps.plannerReplyOverride
+            ? Boolean(deps.plannerReplyOverrideSidecarDraft)
+            : activeSession.conversation.lastTurnDraftFromSidecarFile
+        ) && !looksLikeQuestion(message);
         const unauthorizedDraft = result.kind === 'draft_ready'
           && !result.draftingAuthorized
           && !sidecarDraftApproved;
