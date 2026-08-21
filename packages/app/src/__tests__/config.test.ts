@@ -3,6 +3,8 @@ import type * as NodeOs from 'node:os';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import {
+  filterExecutionHarnesses,
+  filterPlanningPresets,
   loadConfig,
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
@@ -11,6 +13,7 @@ import {
   resolveDefaultTaskExecutionSettings,
   resolveConflictResolutionSettings,
   resolveEmbeddedTerminalBackendConfig,
+  resolveEnabledExecutionAgents,
 } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -81,6 +84,23 @@ describe('loadConfig', () => {
     );
     const config = loadConfig();
     expect(config.planningHeartbeatIntervalSeconds).toBe(30);
+  });
+
+  it('reads enabledExecutionAgents from user config', () => {
+    writeUserConfig({ enabledExecutionAgents: ['claude', 'omp'] });
+    expect(loadConfig().enabledExecutionAgents).toEqual(['claude', 'omp']);
+  });
+
+  it('rejects non-array enabledExecutionAgents', () => {
+    writeUserConfig({ enabledExecutionAgents: 'claude' });
+    expect(() => loadConfig()).toThrow(/enabledExecutionAgents must be an array/);
+  });
+
+  it('rejects empty or non-string enabledExecutionAgents entries', () => {
+    writeUserConfig({ enabledExecutionAgents: ['claude', '  '] });
+    expect(() => loadConfig()).toThrow(/non-empty strings/);
+    writeUserConfig({ enabledExecutionAgents: [42] });
+    expect(() => loadConfig()).toThrow(/non-empty strings/);
   });
 
   it('reads disableAutoRunOnStartup from user config', () => {
@@ -512,5 +532,81 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
       {},
       { INVOKER_EMBEDDED_TERMINAL_BACKEND: 'external' },
     )).toThrow(/Invalid embedded terminal backend/);
+  });
+});
+
+describe('resolveEnabledExecutionAgents', () => {
+  it('returns null when the field is unset', () => {
+    expect(resolveEnabledExecutionAgents({})).toBeNull();
+  });
+
+  it('returns null when the field is empty or whitespace-only', () => {
+    expect(resolveEnabledExecutionAgents({ enabledExecutionAgents: [] })).toBeNull();
+    expect(resolveEnabledExecutionAgents({ enabledExecutionAgents: ['  ', ''] })).toBeNull();
+  });
+
+  it('trims and lowercases entries and drops empty ones', () => {
+    expect(resolveEnabledExecutionAgents({ enabledExecutionAgents: ['  Claude ', 'OMP', ''] }))
+      .toEqual(new Set(['claude', 'omp']));
+  });
+});
+
+describe('filterExecutionHarnesses', () => {
+  const harnesses = [
+    { name: 'claude', supportedModels: [] },
+    { name: 'codex', supportedModels: [] },
+    { name: 'omp', supportedModels: [] },
+  ];
+
+  it('returns the input unchanged when no allowlist is configured', () => {
+    expect(filterExecutionHarnesses(harnesses, {})).toEqual(harnesses);
+    expect(filterExecutionHarnesses(harnesses, { enabledExecutionAgents: [] })).toEqual(harnesses);
+  });
+
+  it('drops harnesses missing from the allowlist', () => {
+    expect(filterExecutionHarnesses(harnesses, { enabledExecutionAgents: ['claude'] }))
+      .toEqual([{ name: 'claude', supportedModels: [] }]);
+  });
+
+  it('matches case-insensitively with whitespace tolerated', () => {
+    expect(filterExecutionHarnesses(harnesses, { enabledExecutionAgents: [' CLAUDE ', 'Omp'] }))
+      .toEqual([
+        { name: 'claude', supportedModels: [] },
+        { name: 'omp', supportedModels: [] },
+      ]);
+  });
+});
+
+describe('filterPlanningPresets', () => {
+  const presets = [
+    { key: 'claude', tool: 'claude', model: undefined },
+    { key: 'codex', tool: 'codex', model: undefined },
+    { key: 'cursor+claude', tool: 'cursor', model: 'claude' },
+    { key: 'cursor+codex', tool: 'cursor', model: 'codex' },
+    { key: 'omp+claude', tool: 'omp', model: 'claude' },
+  ];
+
+  it('returns the input unchanged when no allowlist is configured', () => {
+    expect(filterPlanningPresets(presets, {})).toEqual(presets);
+  });
+
+  it('keeps direct-tool presets and wrapper presets whose model is allowed', () => {
+    expect(filterPlanningPresets(presets, { enabledExecutionAgents: ['claude'] }).map((p) => p.key))
+      .toEqual(['claude', 'cursor+claude', 'omp+claude']);
+  });
+
+  it('drops wrapper presets whose model is not allowed', () => {
+    expect(filterPlanningPresets(presets, { enabledExecutionAgents: ['codex'] }).map((p) => p.key))
+      .toEqual(['codex', 'cursor+codex']);
+  });
+
+  it('does not treat a non-wrapper tool model as an allowlist match', () => {
+    const custom = [{ key: 'x', tool: 'someplanner', model: 'claude' }];
+    expect(filterPlanningPresets(custom, { enabledExecutionAgents: ['claude'] })).toEqual([]);
+  });
+
+  it('normalizes allowlist whitespace and case', () => {
+    expect(filterPlanningPresets(presets, { enabledExecutionAgents: [' Claude '] }).map((p) => p.key))
+      .toEqual(['claude', 'cursor+claude', 'omp+claude']);
   });
 });
