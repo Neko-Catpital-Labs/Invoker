@@ -92,6 +92,70 @@ def submit_rebase_recreate(workflow_id: str) -> None:
 
 _FASTPATH_SETTLE_KINDS = ("conflict-repair", "repair-check")
 _TERMINAL_WORKFLOW_STATUSES = frozenset({"completed", "failed", "cancelled", "review_ready", "merged"})
+_SSH_INFRA_FAILURE_CLASSES = frozenset({
+    "ssh-env-invalid-export",
+    "ssh-worktree-missing",
+    "ssh-invalid-reference",
+    "ssh-repo-mirror-corrupt",
+    "ssh-worktree-corrupt",
+    "ssh-oauth-session-expired",
+    "ssh-disk-full",
+})
+_OAUTH_INFRA_SIGNATURE = "Failed to authenticate: OAuth session expired and could not be refreshed"
+
+
+def list_workflow_tasks(workflow_id: str) -> list[dict] | None:
+    completed = _run_headless('headless_query query tasks "$2" --output json', workflow_id)
+    if completed.returncode != 0:
+        return None
+    text = completed.stdout.strip()
+    if not text:
+        return None
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            return [row for row in parsed if isinstance(row, dict)]
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return [row for row in parsed if isinstance(row, dict)] if isinstance(parsed, list) else None
+
+
+def classify_repair_outcome(workflow_id: str, status: str) -> str:
+    """Classify a terminal repair workflow for Mergify code-cap accounting.
+
+    `infra` and `superseded` must not spend the code-repair attempt budget.
+    Unknown/code failures still count so thrash cannot loop forever.
+    """
+    if status == "completed":
+        return "success"
+    tasks = list_workflow_tasks(workflow_id) or []
+    for task in tasks:
+        execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
+        failure_class = execution.get("failureClass")
+        if isinstance(failure_class, str) and failure_class in _SSH_INFRA_FAILURE_CLASSES:
+            return "infra"
+        error = str(execution.get("error") or "")
+        if "stale-head" in error:
+            return "superseded"
+        if "fatal: not a git repository" in error and "/.git/worktrees/" in error:
+            return "infra"
+        if _OAUTH_INFRA_SIGNATURE in error:
+            return "infra"
+        if "No space left on device" in error:
+            return "infra"
+        if "/Users/" in error and ("PermissionError" in error or "Permission denied" in error):
+            return "infra"
+    if status in _TERMINAL_WORKFLOW_STATUSES:
+        return "code"
+    return "unknown"
 
 
 def _parse_last_json_object(stdout: str) -> dict | None:
@@ -149,9 +213,15 @@ def settle_workflow_fastpath_rows(ledger, now: int) -> int:
             continue
         status = workflow_status(str(workflow_id))
         if status in _TERMINAL_WORKFLOW_STATUSES:
+            outcome = classify_repair_outcome(str(workflow_id), status)
             ledger.record(
                 f"{kind}-settled", pr, head, key, now,
-                meta={"workflowId": str(workflow_id), "workflowStatus": status, "settledBy": "fastpath-observer"},
+                meta={
+                    "workflowId": str(workflow_id),
+                    "workflowStatus": status,
+                    "outcomeClass": outcome,
+                    "settledBy": "fastpath-observer",
+                },
             )
             settled += 1
     return settled
@@ -228,9 +298,16 @@ def settle_repairer_plan_rows(ledger, now: int) -> int:
             continue
         status = match.get("status")
         if status in _TERMINAL_WORKFLOW_STATUSES:
+            workflow_id = str(match.get("id") or "")
+            outcome = classify_repair_outcome(workflow_id, str(status)) if workflow_id else "unknown"
             ledger.record(
                 f"{kind}-settled", pr, head, key, now,
-                meta={"workflowId": match.get("id"), "workflowStatus": status, "settledBy": "repairer-plan-observer"},
+                meta={
+                    "workflowId": match.get("id"),
+                    "workflowStatus": status,
+                    "outcomeClass": outcome,
+                    "settledBy": "repairer-plan-observer",
+                },
             )
             settled += 1
     return settled
