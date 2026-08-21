@@ -922,18 +922,21 @@ export function InvokerTerminal({
           {turnError && !readOnly && (
             <div
               data-testid="invoker-terminal-turn-error"
+              role="alert"
               className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-card/80 px-4 py-3.5 backdrop-blur-sm"
             >
               <span className="min-w-0 flex-1 text-xs text-red-400">{turnError}</span>
-              <button
-                type="button"
-                data-testid="invoker-terminal-retry-turn"
-                disabled={busy}
-                onClick={() => onRetryTurn?.()}
-                className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Retry
-              </button>
+              {onRetryTurn && (
+                <button
+                  type="button"
+                  data-testid="invoker-terminal-retry-turn"
+                  disabled={busy}
+                  onClick={onRetryTurn}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Retry
+                </button>
+              )}
             </div>
           )}
 
