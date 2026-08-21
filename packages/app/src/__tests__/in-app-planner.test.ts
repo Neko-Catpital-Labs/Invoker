@@ -327,6 +327,121 @@ describe('planning chat', () => {
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
   });
 
+  it('reports the active turn as failed in the session summary when the planner errors', async () => {
+    vi.spyOn(PlanConversation.prototype, 'sendMessage').mockRejectedValue(new Error('planner exploded'));
+    const sessions = createInAppPlanningChatSessions();
+
+    const result = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok || result.error).toBe('planner exploded');
+    const sessionId = sessions.keys().next().value as string;
+    expect(result.ok || result.sessionId).toBe(sessionId);
+    expect(result.ok || result.turnId).toBeTruthy();
+
+    const { sessions: summaries } = listPlanningChatSessions({ sessions });
+    const summary = summaries.find((entry) => entry.id === sessionId);
+    expect(summary?.activeTurnStatus).toBe('failed');
+    expect(summary?.activeTurnError).toBe('planner exploded');
+    expect(summary?.activeTurnId).toBeTruthy();
+  });
+
+  it('clears the active turn from the session summary once a reply completes', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('I can help.');
+    const sessions = createInAppPlanningChatSessions();
+
+    const result = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(result.ok).toBe(true);
+    const sessionId = result.ok ? result.sessionId : undefined;
+    const { sessions: summaries } = listPlanningChatSessions({ sessions });
+    const summary = summaries.find((entry) => entry.id === sessionId);
+    expect(summary?.activeTurnStatus).toBeUndefined();
+    expect(summary?.activeTurnId).toBeUndefined();
+    expect(summary?.activeTurnError).toBeUndefined();
+  });
+
+  it('persists the failed active turn so a restored session keeps it', async () => {
+    vi.spyOn(PlanConversation.prototype, 'sendMessage').mockRejectedValue(new Error('planner exploded'));
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+
+      const result = await sendPlanningChatMessage({
+        message: 'hello',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+      });
+
+      expect(result.ok).toBe(false);
+      const sessionId = sessions.keys().next().value as string;
+      const persisted = adapter.loadInAppPlanningSession(sessionId);
+      expect(persisted?.activeTurnStatus).toBe('failed');
+      expect(persisted?.activeTurnError).toBe('planner exploded');
+      expect(persisted?.activeTurnId).toBeTruthy();
+
+      const hydrated = hydrateRemotePlanningTerminalSession({
+        ...listPlanningChatSessions({ sessions }).sessions.find((entry) => entry.id === sessionId)!,
+        activeTurnId: persisted?.activeTurnId,
+        activeTurnStatus: persisted?.activeTurnStatus,
+        activeTurnError: persisted?.activeTurnError,
+      });
+      expect(hydrated.activeTurnStatus).toBe('failed');
+      expect(hydrated.activeTurnError).toBe('planner exploded');
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('does not persist a completed turn as still running', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('I can help.');
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+
+      const result = await sendPlanningChatMessage({
+        message: 'hello',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+      });
+
+      expect(result.ok).toBe(true);
+      const sessionId = result.ok ? result.sessionId : undefined;
+      const persisted = sessionId ? adapter.loadInAppPlanningSession(sessionId) : undefined;
+      expect(persisted?.activeTurnStatus).toBeUndefined();
+      expect(persisted?.activeTurnId).toBeUndefined();
+      expect(persisted?.activeTurnError).toBeUndefined();
+    } finally {
+      adapter.close();
+    }
+  });
+
   it('tells the in-app planner to resolve ambiguity before drafting', async () => {
     const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('What edge cases matter most?');
     const sessions = createInAppPlanningChatSessions();
