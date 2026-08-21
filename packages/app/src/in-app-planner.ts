@@ -28,6 +28,7 @@ import type {
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  InAppPlanningTurnStatus,
   Logger,
   PlanningConfirmationMode,
   PlanningTerminalMode,
@@ -118,6 +119,9 @@ export interface InAppPlanningChatSession {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   createdAt: string;
   updatedAt: string;
   nextMessageId: number;
@@ -479,6 +483,9 @@ export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessi
     terminalExitCode: summary.terminalExitCode,
     terminalOutputSnapshot: summary.terminalOutputSnapshot,
     terminalUpdatedAt: summary.terminalUpdatedAt,
+    activeTurnId: summary.activeTurnId,
+    activeTurnStatus: summary.activeTurnStatus,
+    activeTurnError: summary.activeTurnError,
     createdAt: summary.createdAt,
     updatedAt: summary.updatedAt,
     nextMessageId: summary.messages.length + 1,
@@ -507,6 +514,9 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activeTurnId: session.activeTurnId,
+    activeTurnStatus: session.activeTurnStatus,
+    activeTurnError: session.activeTurnError,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -885,6 +895,9 @@ export async function sendPlanningChatMessage(
 
     const activeSession = session;
     activeSession.confirmationMode = requestedConfirmationMode;
+    const turnId = typeof rawRequest?.turnId === 'string' && rawRequest.turnId.trim()
+      ? rawRequest.turnId
+      : randomUUID();
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
       clearStarterPromptIfUnused(activeSession);
@@ -896,6 +909,9 @@ export async function sendPlanningChatMessage(
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
       }
+      activeSession.activeTurnId = turnId;
+      activeSession.activeTurnStatus = 'running';
+      activeSession.activeTurnError = undefined;
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
       try {
@@ -938,10 +954,14 @@ export async function sendPlanningChatMessage(
             ? 'draft_ready'
             : result.status;
           appendSessionMessage(activeSession, 'assistant', reply);
+          activeSession.activeTurnId = undefined;
+          activeSession.activeTurnStatus = undefined;
+          activeSession.activeTurnError = undefined;
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
@@ -961,10 +981,14 @@ export async function sendPlanningChatMessage(
             ? 'draft_ready'
             : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', review.reply);
+          activeSession.activeTurnId = undefined;
+          activeSession.activeTurnStatus = undefined;
+          activeSession.activeTurnError = undefined;
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply: review.reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
@@ -978,10 +1002,14 @@ export async function sendPlanningChatMessage(
         activeSession.draftPlanText = review.planText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
+        activeSession.activeTurnId = undefined;
+        activeSession.activeTurnStatus = undefined;
+        activeSession.activeTurnError = undefined;
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
         return {
           ok: true,
           sessionId: activeSession.id,
+          turnId,
           reply,
           reasoning,
           confirmationMode: activeSession.confirmationMode,
@@ -990,11 +1018,15 @@ export async function sendPlanningChatMessage(
           draftPlanText: review.planText,
         } as InAppPlanningChatResponse;
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        activeSession.activeTurnStatus = 'failed';
+        activeSession.activeTurnError = message;
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
         return {
           ok: false,
           sessionId: activeSession.id,
-          error: error instanceof Error ? error.message : String(error),
+          turnId,
+          error: message,
         };
       }
     });

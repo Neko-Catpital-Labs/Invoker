@@ -327,6 +327,55 @@ describe('planning chat', () => {
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
   });
 
+  it('clears the active turn from the session summary once a turn completes', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('I can help.');
+    const sessions = createInAppPlanningChatSessions();
+
+    const result = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!result.ok) throw new Error(result.error);
+
+    expect(result.turnId).toBeTruthy();
+    const summary = listPlanningChatSessions({ sessions }).sessions[0];
+    expect(summary).toMatchObject({
+      activeTurnId: undefined,
+      activeTurnStatus: undefined,
+      activeTurnError: undefined,
+    });
+  });
+
+  it('surfaces a failed turn on the session summary when the planner throws', async () => {
+    vi.spyOn(PlanConversation.prototype, 'sendMessage').mockRejectedValue(new Error('planner exploded'));
+    const sessions = createInAppPlanningChatSessions();
+
+    const result = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'planner exploded' });
+    if (result.ok) throw new Error('expected failure');
+    expect(result.turnId).toBeTruthy();
+    const summary = listPlanningChatSessions({ sessions }).sessions[0];
+    expect(summary).toMatchObject({
+      activeTurnId: result.turnId,
+      activeTurnStatus: 'failed',
+      activeTurnError: 'planner exploded',
+    });
+  });
+
   it('tells the in-app planner to resolve ambiguity before drafting', async () => {
     const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('What edge cases matter most?');
     const sessions = createInAppPlanningChatSessions();
