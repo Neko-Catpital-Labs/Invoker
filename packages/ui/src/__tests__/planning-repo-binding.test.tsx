@@ -142,7 +142,7 @@ describe('planning composer repo binding', () => {
 
   it('hides the repo field once the conversation has messages', async () => {
     mock.api.planningChatList = vi.fn(async () => ({
-      ok: true,
+      ok: true as const,
       sessions: [
         makePlanningSessionSummary({
           id: 'existing-chat',
