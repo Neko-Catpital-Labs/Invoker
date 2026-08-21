@@ -42,6 +42,7 @@ import {
 import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
+  filterExecutionHarnesses,
   loadConfig,
   resolveAutoFixExecutionModel,
   resolveDefaultTaskExecutionSettings,
@@ -2684,7 +2685,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   ipcMain.handle('invoker:get-execution-harnesses', () => {
-    return agentRegistry.listExecutionHarnesses();
+    return filterExecutionHarnesses(agentRegistry.listExecutionHarnesses(), loadConfig());
   });
 
   ipcMain.handle('invoker:get-planning-presets', () => {
