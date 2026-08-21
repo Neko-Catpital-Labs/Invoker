@@ -257,6 +257,27 @@ describe('autoStartedOwnerWorkerKindsForConfig', () => {
     );
   });
 
+  it('surfaces configured-versus-persisted infra-repair suppression on status rows', () => {
+    const setup = controller([INFRA_REPAIR_WORKER_KIND], { [INFRA_REPAIR_WORKER_KIND]: false });
+    setup.controller.startAutoStartedWorkers();
+    const row = setup.controller.snapshot().workers.find((worker) => worker.kind === INFRA_REPAIR_WORKER_KIND);
+    expect(row).toMatchObject({
+      lifecycle: 'stopped',
+      configuredAutoStart: true,
+      desiredEnabled: false,
+      autoStarts: false,
+      suppressedByPersistedStop: true,
+    });
+    expect(setup.logger.warn).toHaveBeenCalledWith(
+      '[worker-control] configured auto-start suppressed by persisted desired state',
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        configuredAutoStart: true,
+        persistedDesiredEnabled: false,
+      }),
+    );
+  });
+
   it('includes idle-task-cleanup only when staleTaskCleanup.enabled is true', () => {
     expectConfigGate(
       IDLE_TASK_CLEANUP_WORKER_KIND,
