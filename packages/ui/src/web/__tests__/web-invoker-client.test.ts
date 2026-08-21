@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWebInvoker } from '../web-invoker-client.js';
+import { planningTelemetryRing, resetPlanningTelemetryForTests } from '../../lib/planning-telemetry.js';
 
 interface FetchCall {
   url: string;
@@ -30,7 +31,12 @@ describe('installWebInvoker', () => {
   let fetchCalls: FetchCall[];
   let fetchResult: unknown;
 
+  // installWebInvoker ships a planning_web_boot telemetry event over the
+  // report-ui-perf channel; app-level assertions must ignore that traffic.
+  const invokeCalls = (): FetchCall[] => fetchCalls.filter((call) => call.body.channel !== 'invoker:report-ui-perf');
+
   beforeEach(() => {
+    resetPlanningTelemetryForTests();
     fetchCalls = [];
     fetchResult = { tasks: [], workflows: [], streamSequence: 0 };
     FakeEventSource.instances = [];
@@ -60,9 +66,9 @@ describe('installWebInvoker', () => {
   it('getTasks POSTs to /invoke and resolves the mocked result', async () => {
     installWebInvoker({});
     const result = await window.invoker.getTasks();
-    expect(fetchCalls).toHaveLength(1);
-    expect(fetchCalls[0].url).toBe('/invoke');
-    expect(fetchCalls[0].body).toEqual({ channel: 'invoker:get-tasks', args: [] });
+    expect(invokeCalls()).toHaveLength(1);
+    expect(invokeCalls()[0].url).toBe('/invoke');
+    expect(invokeCalls()[0].body).toEqual({ channel: 'invoker:get-tasks', args: [] });
     expect(result).toEqual({ tasks: [], workflows: [], streamSequence: 0 });
   });
 
@@ -99,6 +105,29 @@ describe('installWebInvoker', () => {
     fetchResult = undefined;
     installWebInvoker({});
     await window.invoker.approve('wf/x');
-    expect(fetchCalls[0].body).toEqual({ channel: 'invoker:approve', args: ['wf/x'] });
+    expect(invokeCalls()[0].body).toEqual({ channel: 'invoker:approve', args: ['wf/x'] });
+  });
+
+  it('ships a planning_web_boot telemetry event through report-ui-perf on install', () => {
+    installWebInvoker({});
+    const bootCalls = fetchCalls.filter((call) => call.body.channel === 'invoker:report-ui-perf');
+    expect(bootCalls).toHaveLength(1);
+    expect(bootCalls[0].body.args[0]).toBe('planning_web_boot');
+  });
+
+  it('records a web_invoke_error telemetry event when an invoke returns ok:false', async () => {
+    installWebInvoker({});
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      fetchCalls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return {
+        ok: true,
+        json: async () => ({ ok: false, error: { message: 'boom', code: 'unsupported_on_web' } }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    await expect(window.invoker.getTasks()).rejects.toThrow('boom');
+    const entry = planningTelemetryRing().find((row) => row.metric === 'web_invoke_error');
+    expect(entry).toBeDefined();
+    expect(entry?.data).toMatchObject({ channel: 'invoker:get-tasks', code: 'unsupported_on_web', message: 'boom' });
   });
 });
