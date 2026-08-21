@@ -253,6 +253,9 @@ export const SCHEMA_DDL = `
         terminal_exit_code INTEGER,
         terminal_output_snapshot TEXT NOT NULL DEFAULT '',
         terminal_updated_at TEXT,
+        active_turn_id TEXT,
+        active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed')),
+        active_turn_error TEXT,
         pending_response INTEGER NOT NULL DEFAULT 0 CHECK (pending_response IN (0, 1)),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -636,6 +639,9 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE in_app_planning_sessions ADD COLUMN base_commit TEXT',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN worktree_path TEXT',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN worktree_branch TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_id TEXT',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed'))",
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_error TEXT',
   // abandon_reason: why a launch dispatch row was abandoned (e.g.
   // 'stuck-lease', 'lifecycle-reset', 'stale-claim'). Written now, read by
   // a later slice's scoped retry count -- unused for now.

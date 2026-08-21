@@ -462,6 +462,9 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activeTurnId: session.activeTurnId,
+    activeTurnStatus: session.activeTurnStatus,
+    activeTurnError: session.activeTurnError,
     pendingResponse,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -489,6 +492,9 @@ export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessi
     terminalExitCode: summary.terminalExitCode,
     terminalOutputSnapshot: summary.terminalOutputSnapshot,
     terminalUpdatedAt: summary.terminalUpdatedAt,
+    activeTurnId: summary.activeTurnId,
+    activeTurnStatus: summary.activeTurnStatus,
+    activeTurnError: summary.activeTurnError,
     createdAt: summary.createdAt,
     updatedAt: summary.updatedAt,
     nextMessageId: summary.messages.length + 1,
@@ -957,8 +963,8 @@ export async function sendPlanningChatMessage(
             ? 'draft_ready'
             : result.status;
           appendSessionMessage(activeSession, 'assistant', reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
           clearActiveTurn(activeSession);
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
             ok: true,
             sessionId: activeSession.id,
@@ -982,8 +988,8 @@ export async function sendPlanningChatMessage(
             ? 'draft_ready'
             : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', review.reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
           clearActiveTurn(activeSession);
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
             ok: true,
             sessionId: activeSession.id,
@@ -1001,8 +1007,8 @@ export async function sendPlanningChatMessage(
         activeSession.draftPlanText = review.planText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
-        persistPlanningSession(activeSession, deps.planningSessionStore, false);
         clearActiveTurn(activeSession);
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
         return {
           ok: true,
           sessionId: activeSession.id,

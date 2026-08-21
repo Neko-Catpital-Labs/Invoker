@@ -36,7 +36,7 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
@@ -643,6 +643,9 @@ type InAppPlanningSessionRow = {
   terminal_exit_code?: unknown;
   terminal_output_snapshot?: unknown;
   terminal_updated_at?: unknown;
+  active_turn_id?: unknown;
+  active_turn_status?: unknown;
+  active_turn_error?: unknown;
   pending_response?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
@@ -687,6 +690,10 @@ function isPlanningTerminalMode(value: unknown): value is PlanningTerminalMode {
 
 function isPlanningTerminalStatus(value: unknown): value is 'running' | 'exited' | undefined {
   return value === undefined || value === null || value === 'running' || value === 'exited';
+}
+
+function isInAppPlanningTurnStatus(value: unknown): value is InAppPlanningTurnStatus | undefined {
+  return value === undefined || value === null || value === 'running' || value === 'failed';
 }
 
 function isInAppPlanningMessageRole(value: unknown): value is InAppPlanningChatLine['role'] {
@@ -1403,10 +1410,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
           terminal_exit_code,
           terminal_output_snapshot,
           terminal_updated_at,
+          active_turn_id,
+          active_turn_status,
+          active_turn_error,
           pending_response,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
@@ -1427,6 +1437,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           terminal_exit_code = excluded.terminal_exit_code,
           terminal_output_snapshot = excluded.terminal_output_snapshot,
           terminal_updated_at = excluded.terminal_updated_at,
+          active_turn_id = excluded.active_turn_id,
+          active_turn_status = excluded.active_turn_status,
+          active_turn_error = excluded.active_turn_error,
           pending_response = excluded.pending_response,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at`,
@@ -1451,6 +1464,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.terminalExitCode ?? null,
           record.terminalOutputSnapshot ?? '',
           record.terminalUpdatedAt ?? null,
+          record.activeTurnId ?? null,
+          record.activeTurnStatus ?? null,
+          record.activeTurnError ?? null,
           record.pendingResponse ? 1 : 0,
           record.createdAt,
           record.updatedAt,
@@ -3276,6 +3292,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (!isPlanningTerminalStatus(row.terminal_status)) {
         return undefined;
       }
+      if (!isInAppPlanningTurnStatus(row.active_turn_status)) {
+        return undefined;
+      }
       if (
         row.status === 'submitted'
         && (
@@ -3335,6 +3354,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ...(typeof row.terminal_exit_code === 'number' ? { terminalExitCode: row.terminal_exit_code } : {}),
         terminalOutputSnapshot: typeof row.terminal_output_snapshot === 'string' ? row.terminal_output_snapshot : '',
         ...(typeof row.terminal_updated_at === 'string' ? { terminalUpdatedAt: row.terminal_updated_at } : {}),
+        ...(typeof row.active_turn_id === 'string' ? { activeTurnId: row.active_turn_id } : {}),
+        ...(row.active_turn_status ? { activeTurnStatus: row.active_turn_status } : {}),
+        ...(typeof row.active_turn_error === 'string' ? { activeTurnError: row.active_turn_error } : {}),
         pendingResponse: row.pending_response === 1,
         createdAt,
         updatedAt,
