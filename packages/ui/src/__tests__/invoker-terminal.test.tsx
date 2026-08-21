@@ -385,6 +385,30 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-model')).not.toBeInTheDocument();
   });
 
+  it('announces the turn error and only renders Retry when a handler is provided', () => {
+    const { rerender } = render(<InvokerTerminal
+      {...terminalProps({
+        turnError: 'Planner was interrupted before it could answer.',
+      })}
+    />);
+
+    const errorBar = screen.getByTestId('invoker-terminal-turn-error');
+    expect(errorBar).toHaveAttribute('role', 'alert');
+    expect(errorBar).toHaveTextContent('Planner was interrupted before it could answer.');
+    expect(screen.queryByTestId('invoker-terminal-retry-turn')).not.toBeInTheDocument();
+
+    const onRetryTurn = vi.fn();
+    rerender(<InvokerTerminal
+      {...terminalProps({
+        turnError: 'Planner was interrupted before it could answer.',
+        onRetryTurn,
+      })}
+    />);
+
+    fireEvent.click(screen.getByTestId('invoker-terminal-retry-turn'));
+    expect(onRetryTurn).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves a still-valid model when switching harnesses', () => {
     const onPresetChange = vi.fn();
     render(<InvokerTerminal
