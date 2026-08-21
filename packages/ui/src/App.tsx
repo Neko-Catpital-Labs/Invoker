@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningChatResponse, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnOutcome, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { resolvePlanningSubmitAction } from '@invoker/contracts/planning-surface';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
@@ -340,6 +340,8 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   terminalSession?: TerminalSessionDescriptor | null;
   terminalBusy?: boolean;
   terminalError?: string | null;
+  repoInput?: string;
+  repoError?: string | null;
 };
 
 function planningSessionFromSummary(
@@ -371,7 +373,7 @@ function planningSessionFromSummary(
       tone: line.tone,
     })),
     input: '',
-    busy: false,
+    busy: summary.activeTurnStatus === 'running',
     conversationKey: summary.id,
     mode: summary.terminalMode ?? 'chat',
     terminalSession: restoredTerminalSession,
@@ -443,12 +445,14 @@ function reconcileHydratedPlanningSessions(
     return {
       ...restored,
       input: session.input,
-      busy: session.busy,
+      busy: restored.activeTurnStatus === 'running' ? session.busy : false,
       conversationKey: session.conversationKey,
       mode: session.mode === 'tmux' || restored.mode === 'tmux' ? 'tmux' : restored.mode,
       terminalSession: restored.terminalSession ?? session.terminalSession,
       terminalBusy: restored.terminalSession ? false : session.terminalBusy,
       terminalError: restored.terminalSession ? null : session.terminalError,
+      repoInput: session.repoInput,
+      repoError: session.repoError,
     };
   });
   const newRestoredSessions = restoredSessions.filter((session) => !currentIds.has(session.id));
@@ -473,6 +477,10 @@ function planningRepoStatusText(repoUrl: string | undefined, baseCommit: string 
   if (!repoUrl) return 'No repository bound yet';
   const label = planningRepoLabel(repoUrl);
   return baseCommit ? `${label} @ ${baseCommit.slice(0, 7)}` : label;
+}
+
+function newPlanningTurnId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function previewPlanningMessage(session: PlanningSessionView): string {
@@ -1131,6 +1139,9 @@ export function App() {
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(1);
+  const applyTurnOutcomeRef = useRef<(sessionId: string, turnId: string, outcome: InAppPlanningTurnOutcome) => void>(() => {});
+  const planningPollFailureCountRef = useRef(0);
+  const planningTurnGoneCountsRef = useRef<Map<string, number>>(new Map());
   const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
   const [planningPresetOptions, setPlanningPresetOptions] = useState<PlanningPresetOption[]>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
@@ -1185,6 +1196,18 @@ export function App() {
   const activePlanningWorkflowRunning = activePlanningSession.submittedWorkflowId
     ? workflows.get(activePlanningSession.submittedWorkflowId)?.status === 'running'
     : false;
+  const activePlanningRepoLocked = activePlanningSession.messages.some((message) => message.role !== 'system')
+    || Boolean(activePlanningSession.terminalSession)
+    || activePlanningSession.mode === 'tmux'
+    || activePlanningReadOnly;
+  const planningRepoSuggestions = useMemo(() => {
+    const repos = new Set<string>();
+    for (const workflow of workflows.values()) {
+      if (workflow.repoUrl) repos.add(workflow.repoUrl);
+    }
+    if (activePlanningSession.repoUrl) repos.add(activePlanningSession.repoUrl);
+    return [...repos].sort();
+  }, [activePlanningSession.repoUrl, workflows]);
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
@@ -1368,48 +1391,122 @@ export function App() {
     }).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const hydratePlanningSessions = async (): Promise<void> => {
-      const planningChatList = window.invoker?.planningChatList;
-      if (!planningChatList) return;
-      try {
-        const [chatList, terminalList] = await Promise.all([
-          planningChatList(),
-          window.invoker?.planningTerminalList?.().catch(() => [] as TerminalSessionDescriptor[]) ?? Promise.resolve([] as TerminalSessionDescriptor[]),
-        ]);
-        if (cancelled || !chatList.ok || chatList.sessions.length === 0) return;
-        const terminalsByPlanningSession = new Map(
-          terminalList
-            .filter((session) => session.kind === 'planning' && session.planningSessionId)
-            .map((session) => [session.planningSessionId!, session]),
-        );
-        const restored = chatList.sessions.map((summary) => {
-          const liveTerminal = terminalsByPlanningSession.get(summary.id);
-          return liveTerminal
-            ? planningSessionFromSummary(summary, { terminalSession: liveTerminal })
-            : planningSessionFromSummary(summary);
-        });
-        const nextSessions = reconcileHydratedPlanningSessions(planningSessionsRef.current, restored);
-        planningSessionsRef.current = nextSessions;
-        setPlanningSessions(nextSessions);
-        const currentSessionId = activePlanningSessionIdRef.current;
-        const nextActiveSessionId = nextSessions.some((session) => session.id === currentSessionId)
-          ? currentSessionId
-          : nextSessions[0]?.id ?? currentSessionId;
-        activePlanningSessionIdRef.current = nextActiveSessionId;
-        setActivePlanningSessionId(nextActiveSessionId);
-        const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
-        nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
-      } catch {
-        /* planning chat restore is best-effort */
+  const refreshPlanningSessionsNow = useCallback(async (): Promise<boolean> => {
+    const planningChatList = window.invoker?.planningChatList;
+    if (!planningChatList) return false;
+    try {
+      const [chatList, terminalList] = await Promise.all([
+        planningChatList(),
+        window.invoker?.planningTerminalList?.().catch(() => [] as TerminalSessionDescriptor[]) ?? Promise.resolve([] as TerminalSessionDescriptor[]),
+      ]);
+      if (!chatList.ok) return false;
+      const terminalsByPlanningSession = new Map(
+        terminalList
+          .filter((session) => session.kind === 'planning' && session.planningSessionId)
+          .map((session) => [session.planningSessionId!, session]),
+      );
+      const restored = chatList.sessions.map((summary) => {
+        const liveTerminal = terminalsByPlanningSession.get(summary.id);
+        return liveTerminal
+          ? planningSessionFromSummary(summary, { terminalSession: liveTerminal })
+          : planningSessionFromSummary(summary);
+      });
+      // A first send from a local view runs against a backend session whose
+      // id this tab does not know yet. Appending that session as a new row
+      // would duplicate the chat; the response's id-swap adopts it instead.
+      const currentIds = new Set(planningSessionsRef.current.map((session) => session.id));
+      const aliasedBackendIds = new Set(planningStreamSessionAliasesRef.current.keys());
+      const hasBusyLocalView = planningSessionsRef.current.some((session) => session.id.startsWith('local-') && session.busy);
+      const admissibleRestored = restored.filter((session) => {
+        if (currentIds.has(session.id)) return true;
+        if (aliasedBackendIds.has(session.id)) return false;
+        return !(hasBusyLocalView && session.activeTurnStatus === 'running');
+      });
+      const nextSessions = reconcileHydratedPlanningSessions(planningSessionsRef.current, admissibleRestored);
+      planningSessionsRef.current = nextSessions;
+      setPlanningSessions(nextSessions);
+      const currentSessionId = activePlanningSessionIdRef.current;
+      const nextActiveSessionId = nextSessions.some((session) => session.id === currentSessionId)
+        ? currentSessionId
+        : nextSessions[0]?.id ?? currentSessionId;
+      activePlanningSessionIdRef.current = nextActiveSessionId;
+      setActivePlanningSessionId(nextActiveSessionId);
+      const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+      nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
+      const serverIds = new Set(chatList.sessions.map((session) => session.id));
+      const serverHasUnknownRunningTurn = chatList.sessions.some(
+        (session) => session.activeTurnStatus === 'running' && !currentIds.has(session.id),
+      );
+      const goneCounts = planningTurnGoneCountsRef.current;
+      const liveIds = new Set(planningSessionsRef.current.map((session) => session.id));
+      for (const key of goneCounts.keys()) {
+        if (!liveIds.has(key)) goneCounts.delete(key);
       }
-    };
-    void hydratePlanningSessions();
-    return () => {
-      cancelled = true;
-    };
+      for (const session of planningSessionsRef.current) {
+        if (!session.busy || !session.activeTurnId) {
+          goneCounts.delete(session.id);
+          continue;
+        }
+        // A busy local view's backend twin is unknown by id; any unknown running
+        // turn may be it, so its absence across polls is the "gone" signal. With
+        // several busy local views this under-fails (never false-fails).
+        const gone = session.id.startsWith('local-')
+          ? !serverHasUnknownRunningTurn
+          : !serverIds.has(session.id);
+        if (!gone) {
+          goneCounts.delete(session.id);
+          continue;
+        }
+        const count = (goneCounts.get(session.id) ?? 0) + 1;
+        if (count < 2) {
+          goneCounts.set(session.id, count);
+          continue;
+        }
+        goneCounts.delete(session.id);
+        applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
+          status: 'failed',
+          error: 'The planner session no longer exists on the server. It may have been reset.',
+        });
+      }
+      return true;
+    } catch (err) {
+      console.error('[planning] planning session refresh failed', err);
+      return false;
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshPlanningSessionsNow();
+  }, [refreshPlanningSessionsNow]);
+
+  const anyPlanningSessionBusy = planningSessions.some((session) => session.busy);
+
+  useEffect(() => {
+    if (!anyPlanningSessionBusy) {
+      planningPollFailureCountRef.current = 0;
+      return;
+    }
+    const interval = setInterval(() => {
+      void refreshPlanningSessionsNow().then((refreshed) => {
+        if (refreshed) {
+          planningPollFailureCountRef.current = 0;
+          return;
+        }
+        planningPollFailureCountRef.current += 1;
+        if (planningPollFailureCountRef.current < 3) return;
+        planningPollFailureCountRef.current = 0;
+        for (const session of planningSessionsRef.current) {
+          if (session.busy && session.activeTurnId) {
+            applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
+              status: 'failed',
+              error: 'Lost connection to the planner.',
+            });
+          }
+        }
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [anyPlanningSessionBusy, refreshPlanningSessionsNow]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1498,6 +1595,10 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onPlanningChatStream?.((event) => {
       const sessionId = typeof event.sessionId === 'string' ? event.sessionId.trim() : '';
+      if (sessionId && event.turn && typeof event.turn === 'object' && typeof event.turnId === 'string') {
+        applyTurnOutcomeRef.current(sessionId, event.turnId, event.turn);
+        return;
+      }
       if (!sessionId || typeof event.chunk !== 'string' || !event.chunk) return;
 
       const sessions = planningSessionsRef.current;
@@ -2871,16 +2972,211 @@ export function App() {
     text: string,
     role: InvokerTerminalLine['role'] = 'system',
     tone?: InvokerTerminalLine['tone'],
+    targetSessionId?: string,
   ) => {
     const id = nextTerminalLineIdRef.current;
     nextTerminalLineIdRef.current += 1;
     const updatedAt = new Date().toISOString();
-    updateActivePlanningSession((session) => ({
+    const appendLine = (session: PlanningSessionView): PlanningSessionView => ({
       ...session,
       messages: [...session.messages, { id, text, role, tone }],
       updatedAt,
+    });
+    if (targetSessionId) {
+      updatePlanningSessionById(targetSessionId, appendLine);
+    } else {
+      updateActivePlanningSession(appendLine);
+    }
+  }, [updateActivePlanningSession, updatePlanningSessionById]);
+
+  // The ONLY code path that lands a planning turn result. Response, stream
+  // event, and poll deliveries all funnel through here, so whichever arrives
+  // first wins and the rest are dropped by the activeTurnId guard.
+  const applyPlanningTurnOutcome = useCallback((sessionId: string, turnId: string, outcome: InAppPlanningTurnOutcome) => {
+    const target = planningSessionsRef.current.find((session) => session.id === sessionId)
+      ?? planningSessionsRef.current.find((session) => session.id === planningStreamSessionAliasesRef.current.get(sessionId));
+    if (!target || target.activeTurnId !== turnId) return; // already applied or foreign turn
+    const targetId = target.id;
+    const updatedAt = new Date().toISOString();
+    if (outcome.status === 'completed') {
+      const replyLineId = nextTerminalLineIdRef.current;
+      nextTerminalLineIdRef.current += 1;
+      const applyCompleted = (session: PlanningSessionView): PlanningSessionView => {
+        if (session.id !== targetId) return session;
+        return {
+          ...session,
+          busy: false,
+          activeTurnId: undefined,
+          activeTurnStatus: undefined,
+          activeTurnError: undefined,
+          confirmationMode: outcome.confirmationMode ?? session.confirmationMode ?? 'require',
+          status: outcome.draftPlanAvailable ? 'draft_ready' : outcome.reply.includes('?') ? 'waiting_for_answer' : 'still_discussing',
+          messages: [...session.messages, {
+            id: replyLineId,
+            text: outcome.reply,
+            role: 'assistant' as const,
+            ...(outcome.reasoning ? { reasoning: outcome.reasoning } : {}),
+          }],
+          draftPlanAvailable: outcome.draftPlanAvailable,
+          draftPlanSummary: outcome.draftPlanAvailable ? outcome.draftPlanSummary : undefined,
+          draftPlanText: outcome.draftPlanAvailable ? outcome.draftPlanText : undefined,
+          updatedAt,
+        };
+      };
+      // Sync the ref immediately: a second delivery of the same outcome can
+      // arrive before the render commits, and the guard reads the ref.
+      planningSessionsRef.current = planningSessionsRef.current.map(applyCompleted);
+      setPlanningSessions((prev) => prev.map(applyCompleted));
+      clearPlanningStreamForSessionIds([sessionId, targetId]);
+      forgetPlanningStreamAliasesForSessionIds([sessionId, targetId]);
+      pendingPlanningStreamSessionIdsRef.current.delete(sessionId);
+      pendingPlanningStreamSessionIdsRef.current.delete(targetId);
+      setHasLoadedPlan(false);
+      setKeptPlanningDraftSessionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(sessionId);
+        next.delete(targetId);
+        return next;
+      });
+      if (outcome.draftPlanAvailable) {
+        setReviewDraftSessionId(targetId);
+        setPlanningContextCollapsed(false);
+      }
+      return;
+    }
+    const applyFailed = (session: PlanningSessionView): PlanningSessionView => (
+      session.id === targetId
+        ? { ...session, busy: false, activeTurnStatus: 'failed' as const, activeTurnError: outcome.error, updatedAt }
+        : session
+    );
+    planningSessionsRef.current = planningSessionsRef.current.map(applyFailed);
+    setPlanningSessions((prev) => prev.map(applyFailed));
+    clearPlanningStreamForSessionIds([sessionId, targetId]);
+    forgetPlanningStreamAliasesForSessionIds([sessionId, targetId]);
+    pendingPlanningStreamSessionIdsRef.current.delete(sessionId);
+    pendingPlanningStreamSessionIdsRef.current.delete(targetId);
+  }, [clearPlanningStreamForSessionIds, forgetPlanningStreamAliasesForSessionIds]);
+
+  useEffect(() => {
+    applyTurnOutcomeRef.current = applyPlanningTurnOutcome;
+  }, [applyPlanningTurnOutcome]);
+
+  const markPlanningTurnRunning = useCallback((sessionId: string, turnId: string) => {
+    const markRunning = (session: PlanningSessionView): PlanningSessionView => (
+      session.id === sessionId
+        ? { ...session, busy: true, activeTurnId: turnId, activeTurnStatus: 'running' as const, activeTurnError: undefined }
+        : session
+    );
+    // Sync the ref immediately: a response can resolve before the render
+    // commits, and applyPlanningTurnOutcome's guard reads the ref.
+    planningSessionsRef.current = planningSessionsRef.current.map(markRunning);
+    setPlanningSessions((prev) => prev.map(markRunning));
+  }, []);
+
+  const handlePlanningSendResult = useCallback((
+    previousSessionId: string,
+    turnId: string,
+    result: InAppPlanningChatResponse,
+    options: { inputForTitle?: string; presetKey?: string } = {},
+  ) => {
+    if (result.ok) {
+      const swapId = (session: PlanningSessionView): PlanningSessionView => {
+        if (session.id !== previousSessionId) return session;
+        return {
+          ...session,
+          id: result.sessionId,
+          title: session.title === 'Untitled plan' && options.inputForTitle
+            ? (options.inputForTitle.length > 56 ? `${options.inputForTitle.slice(0, 53).trimEnd()}…` : options.inputForTitle)
+            : session.title,
+          presetKey: options.presetKey ?? session.presetKey,
+        };
+      };
+      // Drop a row the busy poll may have appended for the same backend
+      // session, then swap the in-flight view onto the backend id. Sync the
+      // refs immediately so applyPlanningTurnOutcome finds the swapped id
+      // before the next render commits.
+      const dedupeAndSwap = (sessions: PlanningSessionView[]): PlanningSessionView[] => (
+        sessions.some((session) => session.id === previousSessionId)
+          ? sessions
+              .filter((session) => session.id === previousSessionId || session.id !== result.sessionId)
+              .map(swapId)
+          : sessions
+      );
+      planningSessionsRef.current = dedupeAndSwap(planningSessionsRef.current);
+      activePlanningSessionIdRef.current = activePlanningSessionIdRef.current === previousSessionId
+        ? result.sessionId
+        : activePlanningSessionIdRef.current;
+      setPlanningSessions((prev) => dedupeAndSwap(prev));
+      setActivePlanningSessionId((currentSessionId) => (
+        currentSessionId === previousSessionId ? result.sessionId : currentSessionId
+      ));
+      applyPlanningTurnOutcome(result.sessionId, turnId, {
+        status: 'completed',
+        reply: result.reply,
+        reasoning: (result as { reasoning?: string }).reasoning,
+        confirmationMode: result.confirmationMode,
+        draftPlanAvailable: result.draftPlanAvailable,
+        draftPlanSummary: result.draftPlanSummary,
+        draftPlanText: result.draftPlanText,
+      });
+      return;
+    }
+    if (result.error === 'duplicate-turn') {
+      // The original request's outcome will land via response, event, or poll.
+      return;
+    }
+    if (result.turnId === turnId) {
+      if (result.sessionId && result.sessionId !== previousSessionId) {
+        const failedSessionId = result.sessionId;
+        const dedupeAndSwap = (sessions: PlanningSessionView[]): PlanningSessionView[] => (
+          sessions.some((session) => session.id === previousSessionId)
+            ? sessions.filter((session) => session.id !== failedSessionId).map((session) => (
+                session.id === previousSessionId ? { ...session, id: failedSessionId } : session
+              ))
+            : sessions
+        );
+        planningSessionsRef.current = dedupeAndSwap(planningSessionsRef.current);
+        activePlanningSessionIdRef.current = activePlanningSessionIdRef.current === previousSessionId
+          ? failedSessionId
+          : activePlanningSessionIdRef.current;
+        setPlanningSessions((prev) => dedupeAndSwap(prev));
+        setActivePlanningSessionId((currentSessionId) => (
+          currentSessionId === previousSessionId ? failedSessionId : currentSessionId
+        ));
+      }
+      applyPlanningTurnOutcome(result.sessionId ?? previousSessionId, turnId, { status: 'failed', error: result.error });
+      return;
+    }
+    // Pre-turn failures without our turnId keep the error-line + modal path.
+    updatePlanningSessionById(previousSessionId, (session) => ({
+      ...session,
+      busy: false,
+      activeTurnId: undefined,
+      activeTurnStatus: undefined,
+      activeTurnError: undefined,
     }));
-  }, [updateActivePlanningSession]);
+    keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
+    forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
+    pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
+    if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
+    appendTerminalLine(result.error, 'system', 'error', previousSessionId);
+    if (result.sessionId) {
+      const failedSessionId = result.sessionId;
+      setPlanningSessions((prev) => prev.map((session) => (
+        session.id === previousSessionId ? { ...session, id: failedSessionId } : session
+      )));
+      setActivePlanningSessionId((currentSessionId) => (
+        currentSessionId === previousSessionId ? failedSessionId : currentSessionId
+      ));
+    }
+    setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
+  }, [
+    applyPlanningTurnOutcome,
+    appendTerminalLine,
+    forgetPlanningStreamAliasesForSessionIds,
+    keepPlanningStreamFailureForSessionIds,
+    updatePlanningSessionById,
+  ]);
 
   const handleStartReadyAction = useCallback(async (
     request: StartReadyRequest = {},
@@ -3072,11 +3368,150 @@ export function App() {
     }));
   }, [appendTerminalLine, invoker, planningSessionId, updatePlanningSessionById]);
 
+  const handlePlanningRepoInputChange = useCallback((value: string) => {
+    updatePlanningSessionById(activePlanningSession.id, (session) => ({
+      ...session,
+      repoInput: value,
+      repoError: null,
+    }));
+  }, [activePlanningSession.id, updatePlanningSessionById]);
+
+  const planningRepoCommitInFlightRef = useRef<Promise<{ ok: boolean; sessionId: string | null; error?: string }> | null>(null);
+  const [planningRepoBindingId, setPlanningRepoBindingId] = useState<string | null>(null);
+
+  const commitPlanningRepo = useCallback((): Promise<{ ok: boolean; sessionId: string | null; error?: string }> => {
+    // Clicking Send or Tmux blurs the repo input, so the blur commit and the
+    // caller's commit can race; every caller must share one in-flight run.
+    const inFlight = planningRepoCommitInFlightRef.current;
+    if (inFlight) return inFlight;
+
+    const run = (async (): Promise<{ ok: boolean; sessionId: string | null; error?: string }> => {
+      // Read the latest view state from refs: render closures go stale across
+      // the awaits below and would re-materialize an already-swapped session.
+      const viewSessionId = activePlanningSessionIdRef.current;
+      const session = planningSessionsRef.current.find((current) => current.id === viewSessionId);
+      if (!session) return { ok: true, sessionId: null };
+      const currentBackendId = session.id.startsWith('local-') ? null : session.id;
+      const locked = session.messages.some((message) => message.role !== 'system')
+        || Boolean(session.terminalSession)
+        || session.mode === 'tmux'
+        || session.status === 'submitted'
+        || runtimeStatus?.readOnly === true;
+      const pending = (session.repoInput ?? '').trim();
+      if (locked || !pending || pending === (session.repoUrl ?? '')) {
+        return { ok: true, sessionId: currentBackendId };
+      }
+
+      let sessionId = currentBackendId;
+      let viewId = session.id;
+      const failBind = (id: string, sessionIdForResult: string | null, message: string): { ok: false; sessionId: string | null; error: string } => {
+        updatePlanningSessionById(id, (current) => ({ ...current, repoError: message }));
+        appendTerminalLine(`Could not bind repository: ${message}`, 'system', 'error', id);
+        return { ok: false, sessionId: sessionIdForResult, error: message };
+      };
+      setPlanningRepoBindingId(viewId);
+      if (!sessionId) {
+        if (!invoker?.planningChatCreate) {
+          return failBind(viewId, null, 'Planner is not available.');
+        }
+        try {
+          const result = await invoker.planningChatCreate({
+            presetKey: session.presetKey || selectedPlanningPresetKey || undefined,
+            title: session.title,
+            confirmationMode: session.confirmationMode ?? selectedPlanningConfirmationMode,
+          });
+          if (!result.ok) {
+            return failBind(viewId, null, result.error);
+          }
+          const localId = viewId;
+          sessionId = result.session.id;
+          viewId = result.session.id;
+          const materialize = (current: PlanningSessionView): PlanningSessionView => (
+            current.id === localId
+              ? planningSessionFromSummary(result.session, {
+                  input: current.input,
+                  busy: false,
+                  repoInput: current.repoInput,
+                  repoError: null,
+                })
+              : current
+          );
+          // Sync the refs immediately so concurrent callers see the swap
+          // before the next render commits.
+          planningSessionsRef.current = planningSessionsRef.current.map(materialize);
+          activePlanningSessionIdRef.current = activePlanningSessionIdRef.current === localId
+            ? result.session.id
+            : activePlanningSessionIdRef.current;
+          setPlanningSessions((prev) => prev.map(materialize));
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === localId ? result.session.id : currentSessionId
+          ));
+          setPlanningRepoBindingId((current) => (current === localId ? result.session.id : current));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Failed to create a planning session.';
+          return failBind(viewId, null, message);
+        }
+      }
+
+      if (!invoker?.planningChatRebindRepo) {
+        return failBind(viewId, sessionId, 'Repo binding is not available.');
+      }
+      try {
+        const result = await invoker.planningChatRebindRepo({ sessionId, repoUrl: pending });
+        if (!result.ok) {
+          return failBind(viewId, sessionId, result.error);
+        }
+        updatePlanningSessionById(viewId, (current) => ({
+          ...current,
+          repoUrl: pending,
+          baseCommit: undefined,
+          repoInput: undefined,
+          repoError: null,
+        }));
+        return { ok: true, sessionId };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to bind the repository.';
+        return failBind(viewId, sessionId, message);
+      }
+    })();
+
+    planningRepoCommitInFlightRef.current = run;
+    void run.finally(() => {
+      setPlanningRepoBindingId(null);
+      if (planningRepoCommitInFlightRef.current === run) {
+        planningRepoCommitInFlightRef.current = null;
+      }
+    });
+    return run;
+  }, [
+    appendTerminalLine,
+    invoker,
+    runtimeStatus,
+    selectedPlanningConfirmationMode,
+    selectedPlanningPresetKey,
+    updatePlanningSessionById,
+  ]);
+
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
     if (!input || activePlanningSessionBusy || activePlanningReadOnly) return;
-    appendTerminalLine(input, 'user');
-    setPlanningInput('');
+
+    let sendSessionId = planningSessionId;
+    let activeViewId = activePlanningSessionId;
+    const pendingRepoInput = (activePlanningSession.repoInput ?? '').trim();
+    if (!activePlanningRepoLocked && pendingRepoInput && pendingRepoInput !== (activePlanningSession.repoUrl ?? '')) {
+      const bind = await commitPlanningRepo();
+      if (!bind.ok) return;
+      if (bind.sessionId) {
+        sendSessionId = bind.sessionId;
+        activeViewId = bind.sessionId;
+      }
+    }
+
+    appendTerminalLine(input, 'user', undefined, activeViewId);
+    // Clear via the view id: a repo commit may have just swapped the active
+    // session, and setPlanningInput would target the stale id.
+    updatePlanningSessionById(activeViewId, (session) => ({ ...session, input: '' }));
     setPlanningSubmitError(null);
 
     if (input.toLowerCase() === 'run') {
@@ -3088,7 +3523,7 @@ export function App() {
         );
         return;
       }
-      updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: true }));
+      updatePlanningSessionById(activeViewId, (session) => ({ ...session, busy: true }));
       try {
         const result = await handleStartReadyAction();
         if (result && !result.dryRun) {
@@ -3099,10 +3534,11 @@ export function App() {
               : 'No ready work to start.',
             'system',
             startedCount > 0 ? 'success' : undefined,
+            activeViewId,
           );
         }
       } finally {
-        updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: false }));
+        updatePlanningSessionById(activeViewId, (session) => ({ ...session, busy: false }));
       }
       return;
     }
@@ -3117,114 +3553,58 @@ export function App() {
     }
 
     if (!invoker?.planningChatSend) {
-      appendTerminalLine('Planner is not available.', 'system', 'error');
+      appendTerminalLine('Planner is not available.', 'system', 'error', activeViewId);
       return;
     }
 
-    if (!planningSessionId && activePlanningSession.messages.length > 0) {
+    if (!sendSessionId && activePlanningSession.messages.length > 0) {
       setPlanningSubmitError({ title: 'Planner could not respond', message: PLANNING_CONTINUATION_LOST_MESSAGE });
-      appendTerminalLine(PLANNING_CONTINUATION_LOST_MESSAGE, 'system', 'error');
+      appendTerminalLine(PLANNING_CONTINUATION_LOST_MESSAGE, 'system', 'error', activeViewId);
       return;
     }
 
+    const turnId = newPlanningTurnId();
     const request = {
       message: input,
       presetKey: selectedPlanningPresetKey || undefined,
       confirmationMode: selectedPlanningConfirmationMode,
-      ...(planningSessionId ? { sessionId: planningSessionId } : {}),
+      turnId,
+      ...(sendSessionId ? { sessionId: sendSessionId } : {}),
     };
-    const previousSessionId = activePlanningSessionId;
+    const previousSessionId = activeViewId;
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
-    clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
-    forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
-    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
+    clearPlanningStreamForSessionIds([previousSessionId, sendSessionId]);
+    forgetPlanningStreamAliasesForSessionIds([previousSessionId, sendSessionId]);
+    markPlanningTurnRunning(previousSessionId, turnId);
     try {
       const result = await invoker.planningChatSend(request);
-      if (result.ok) {
-        const updatedAt = new Date().toISOString();
-        const replyLineId = nextTerminalLineIdRef.current;
-        nextTerminalLineIdRef.current += 1;
-        setPlanningSessions((prev) => prev.map((session) => {
-          if (session.id !== previousSessionId) return session;
-          return {
-            ...session,
-            busy: false,
-            id: result.sessionId,
-            title: session.title === 'Untitled plan'
-              ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
-              : session.title,
-            presetKey: request.presetKey ?? session.presetKey,
-            confirmationMode: result.confirmationMode ?? session.confirmationMode ?? 'require',
-            status: result.draftPlanAvailable ? 'draft_ready' : result.reply.includes('?') ? 'waiting_for_answer' : 'still_discussing',
-            messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant', ...((result as { reasoning?: string }).reasoning ? { reasoning: (result as { reasoning?: string }).reasoning } : {}) }],
-            draftPlanAvailable: result.draftPlanAvailable,
-            draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
-            draftPlanText: result.draftPlanAvailable ? result.draftPlanText : undefined,
-            updatedAt,
-          };
-        }));
-        setActivePlanningSessionId((currentSessionId) => (
-          currentSessionId === previousSessionId ? result.sessionId : currentSessionId
-        ));
-        clearPlanningStreamForSessionIds([previousSessionId, result.sessionId]);
-        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
-        pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
-        pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        setHasLoadedPlan(false);
-        setKeptPlanningDraftSessionIds((prev) => {
-          const next = new Set(prev);
-          next.delete(previousSessionId);
-          next.delete(result.sessionId);
-          return next;
-        });
-        if (result.draftPlanAvailable) {
-          setReviewDraftSessionId(result.sessionId);
-          setPlanningContextCollapsed(false);
-        }
-      } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
-        keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
-        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
-        pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
-        if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
-        if (result.sessionId) {
-          const failedSessionId = result.sessionId;
-          setPlanningSessions((prev) => prev.map((session) => (
-            session.id === previousSessionId
-              ? { ...session, id: failedSessionId }
-              : session
-          )));
-          setActivePlanningSessionId((currentSessionId) => (
-            currentSessionId === previousSessionId ? failedSessionId : currentSessionId
-          ));
-        }
-        setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
-      }
+      handlePlanningSendResult(previousSessionId, turnId, result, { inputForTitle: input, presetKey: request.presetKey });
     } catch (err) {
-      updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
-      const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
-      keepPlanningStreamFailureForSessionIds([previousSessionId, planningSessionId], message);
-      forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
-      pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
-      if (planningSessionId) pendingPlanningStreamSessionIdsRef.current.delete(planningSessionId);
-      setPlanningSubmitError({ title: 'Planner could not respond', message });
-      appendTerminalLine(message, 'system', 'error');
+      // Keep the turn marked running: recovery rides the busy poll, which
+      // either observes the finished turn or fails it after 3 missed polls.
+      console.error('[planning] planningChatSend transport failure', err);
+      void refreshPlanningSessionsNow();
     }
   }, [
     activePlanningSessionBusy,
     activePlanningSessionId,
     activePlanningReadOnly,
+    activePlanningRepoLocked,
     appendTerminalLine,
+    commitPlanningRepo,
     clearPlanningStreamForSessionIds,
     forgetPlanningStreamAliasesForSessionIds,
+    handlePlanningSendResult,
     handlePlanningSubmitDraft,
     handleStartReadyAction,
     hasLoadedPlan,
-    keepPlanningStreamFailureForSessionIds,
     invoker,
+    markPlanningTurnRunning,
+    refreshPlanningSessionsNow,
     activePlanningSession.draftPlanAvailable,
     activePlanningSession.messages.length,
+    activePlanningSession.repoInput,
+    activePlanningSession.repoUrl,
     activePlanningSession.status,
     planningInput,
     planningSessionId,
@@ -3234,6 +3614,39 @@ export function App() {
     tasks.size,
     updatePlanningSessionById,
     workflows.size,
+  ]);
+
+  const handleRetryPlanningTurn = useCallback(async () => {
+    const session = activePlanningSession;
+    if (session.activeTurnStatus !== 'failed' || !session.activeTurnId || session.busy) return;
+    const lastUserLine = [...session.messages].reverse().find((line) => line.role === 'user');
+    if (!lastUserLine || !invoker?.planningChatSend) return;
+    const turnId = session.activeTurnId;
+    const previousSessionId = session.id;
+    markPlanningTurnRunning(previousSessionId, turnId);
+    try {
+      const result = await invoker.planningChatSend({
+        ...(previousSessionId.startsWith('local-') ? {} : { sessionId: previousSessionId }),
+        turnId,
+        message: lastUserLine.text,
+        presetKey: selectedPlanningPresetKey || undefined,
+        confirmationMode: selectedPlanningConfirmationMode,
+      });
+      handlePlanningSendResult(previousSessionId, turnId, result);
+    } catch (err) {
+      // Same recovery contract as handlePlanningSubmit's catch: stay busy,
+      // let the poll observe the turn or fail it after 3 missed polls.
+      console.error('[planning] planningChatSend retry transport failure', err);
+      void refreshPlanningSessionsNow();
+    }
+  }, [
+    activePlanningSession,
+    handlePlanningSendResult,
+    invoker,
+    markPlanningTurnRunning,
+    refreshPlanningSessionsNow,
+    selectedPlanningConfirmationMode,
+    selectedPlanningPresetKey,
   ]);
 
   const makeFreshLocalPlanningSession = useCallback((): PlanningSessionView => {
@@ -3359,54 +3772,76 @@ export function App() {
     let terminalSession = sourceSession.terminalSession ?? null;
 
     if (sourceSession.id.startsWith('local-')) {
-      if (!invoker?.planningChatCreate) {
-        updatePlanningSessionById(sourceSession.id, (session) => ({
+      // Switching to tmux blurs the repo input; share its commit so a pending
+      // repo bind and this materialization never create two backend sessions.
+      const bind = await commitPlanningRepo();
+      if (!bind.ok) {
+        updatePlanningSessionById(bind.sessionId ?? sourceSession.id, (session) => ({
           ...session,
+          mode: 'chat',
           terminalBusy: false,
-          terminalError: 'Planner is not available.',
         }));
         return;
       }
-
-      try {
-        const result = await invoker.planningChatCreate({
-          presetKey: sourceSession.presetKey || selectedPlanningPresetKey || undefined,
-          title: sourceSession.title,
-          confirmationMode: sourceSession.confirmationMode ?? selectedPlanningConfirmationMode,
-        });
-        if (!result.ok) {
+      if (bind.sessionId) {
+        targetSessionId = bind.sessionId;
+        terminalSession = null;
+        updatePlanningSessionById(targetSessionId, (session) => ({
+          ...session,
+          mode: 'tmux',
+          terminalBusy: true,
+          terminalError: null,
+        }));
+      } else {
+        if (!invoker?.planningChatCreate) {
           updatePlanningSessionById(sourceSession.id, (session) => ({
             ...session,
             terminalBusy: false,
-            terminalError: result.error,
+            terminalError: 'Planner is not available.',
           }));
           return;
         }
 
-        targetSessionId = result.session.id;
-        terminalSession = null;
-        setPlanningSessions((prev) => prev.map((session) => (
-          session.id === sourceSession.id
-            ? planningSessionFromSummary(result.session, {
-                input: session.input,
-                busy: false,
-                mode: 'tmux',
-                terminalBusy: true,
-                terminalError: null,
-              })
-            : session
-        )));
-        setActivePlanningSessionId((currentSessionId) => (
-          currentSessionId === sourceSession.id ? targetSessionId : currentSessionId
-        ));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to create a planning session.';
-        updatePlanningSessionById(sourceSession.id, (session) => ({
-          ...session,
-          terminalBusy: false,
-          terminalError: message,
-        }));
-        return;
+        try {
+          const result = await invoker.planningChatCreate({
+            presetKey: sourceSession.presetKey || selectedPlanningPresetKey || undefined,
+            title: sourceSession.title,
+            confirmationMode: sourceSession.confirmationMode ?? selectedPlanningConfirmationMode,
+          });
+          if (!result.ok) {
+            updatePlanningSessionById(sourceSession.id, (session) => ({
+              ...session,
+              terminalBusy: false,
+              terminalError: result.error,
+            }));
+            return;
+          }
+
+          targetSessionId = result.session.id;
+          terminalSession = null;
+          setPlanningSessions((prev) => prev.map((session) => (
+            session.id === sourceSession.id
+              ? planningSessionFromSummary(result.session, {
+                  input: session.input,
+                  busy: false,
+                  mode: 'tmux',
+                  terminalBusy: true,
+                  terminalError: null,
+                })
+              : session
+          )));
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === sourceSession.id ? targetSessionId : currentSessionId
+          ));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Failed to create a planning session.';
+          updatePlanningSessionById(sourceSession.id, (session) => ({
+            ...session,
+            terminalBusy: false,
+            terminalError: message,
+          }));
+          return;
+        }
       }
     }
 
@@ -3461,6 +3896,7 @@ export function App() {
   }, [
     activePlanningReadOnly,
     activePlanningSession,
+    commitPlanningRepo,
     invoker,
     selectedPlanningPresetKey,
     updatePlanningSessionById,
@@ -4879,6 +5315,7 @@ export function App() {
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
+            binding={planningRepoBindingId !== null && planningRepoBindingId === activePlanningSessionId}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
@@ -4895,10 +5332,18 @@ export function App() {
             terminalError={activePlanningTerminalError}
             workflowRunning={activePlanningWorkflowRunning}
             submittedPlanName={activePlanningSession.submittedPlanName}
+            repoValue={activePlanningSession.repoInput ?? activePlanningSession.repoUrl ?? ''}
+            repoLocked={activePlanningRepoLocked}
+            repoSuggestions={planningRepoSuggestions}
+            repoError={activePlanningSession.repoError ?? null}
+            turnError={activePlanningSession.activeTurnStatus === 'failed' ? activePlanningSession.activeTurnError ?? 'The planner turn failed.' : null}
+            onRetryTurn={() => void handleRetryPlanningTurn()}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
             onPresetChange={handlePlanningPresetChange}
             onConfirmationModeChange={handlePlanningConfirmationModeChange}
+            onRepoInputChange={handlePlanningRepoInputChange}
+            onRepoCommit={() => void commitPlanningRepo()}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
             onCloseExpanded={() => setPlanningTerminalExpanded(false)}
