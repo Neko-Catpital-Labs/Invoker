@@ -53,6 +53,34 @@ function makeTaskTerminalAdapter() {
 }
 
 describe('buildWebInvokerDispatch', () => {
+  it('report-ui-perf persists the metric to the activity log like the GUI handler', async () => {
+    const writeActivityLog = vi.fn();
+    const { dispatch } = makeDispatch({
+      persistence: {
+        listWorkflows: () => [],
+        writeActivityLog,
+      },
+    });
+    await dispatch('invoker:report-ui-perf', ['planning_send_start', { sessionId: 's-1', turnId: 't-1' }]);
+    expect(writeActivityLog).toHaveBeenCalledTimes(1);
+    const [source, level, message] = writeActivityLog.mock.calls[0];
+    expect(source).toBe('ui-perf');
+    expect(level).toBe('info');
+    expect(JSON.parse(message)).toMatchObject({ metric: 'planning_send_start', sessionId: 's-1', turnId: 't-1' });
+  });
+
+  it('report-ui-perf swallows activity-log write failures', async () => {
+    const { dispatch } = makeDispatch({
+      persistence: {
+        listWorkflows: () => [],
+        writeActivityLog: vi.fn(() => {
+          throw new Error('database is locked');
+        }),
+      },
+    });
+    await expect(dispatch('invoker:report-ui-perf', ['planning_send_start', {}])).resolves.toBeUndefined();
+  });
+
   it('list-workflows returns the persisted workflows', async () => {
     const { dispatch } = makeDispatch();
     expect(await dispatch('invoker:list-workflows', [])).toEqual([
