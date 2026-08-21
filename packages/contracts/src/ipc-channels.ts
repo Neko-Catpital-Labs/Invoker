@@ -500,6 +500,9 @@ export interface InAppPlanningSessionSummary {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -525,9 +528,25 @@ export type InAppPlanningListSessionsResponse = {
   sessions: InAppPlanningSessionSummary[];
 };
 
+export type InAppPlanningTurnStatus = 'running' | 'failed';
+
+export type InAppPlanningTurnOutcome =
+  | {
+      status: 'completed';
+      reply: string;
+      reasoning?: string;
+      confirmationMode?: PlanningConfirmationMode;
+      draftPlanAvailable: boolean;
+      draftPlanSummary?: InAppPlanningPlanSummary;
+      draftPlanText?: string;
+    }
+  | { status: 'failed'; error: string };
+
 export interface InAppPlanningStreamEvent {
   sessionId: string;
-  chunk: string;
+  chunk?: string;
+  turnId?: string;
+  turn?: InAppPlanningTurnOutcome;
 }
 
 export interface InAppPlanningChatRequest {
@@ -535,12 +554,14 @@ export interface InAppPlanningChatRequest {
   message: string;
   presetKey?: string;
   confirmationMode?: PlanningConfirmationMode;
+  turnId?: string;
 }
 
 export type InAppPlanningChatResponse =
   | {
       ok: true;
       sessionId: string;
+      turnId?: string;
       reply: string;
       confirmationMode?: PlanningConfirmationMode;
       draftPlanAvailable: boolean;
@@ -550,6 +571,7 @@ export type InAppPlanningChatResponse =
   | {
       ok: false;
       sessionId?: string;
+      turnId?: string;
       error: string;
     };
 
