@@ -387,12 +387,6 @@ function planningTerminalWritable(
   return { ok: true };
 }
 
-/**
- * Planning terminals follow the conversation's repo binding: a session bound
- * to a repo opens its terminal in that provisioned worktree; unbound sessions
- * (and sessions whose worktree no longer exists on disk) fall back to the
- * owner's repoRoot.
- */
 export function resolvePlanningTerminalCwd(
   session: Pick<InAppPlanningChatSession, 'worktreePath'>,
   repoRoot: string,
