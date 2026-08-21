@@ -477,8 +477,7 @@ export function bindPlanningTerminalSessionState(deps: {
   return { restorePersistedPlanningTerminals };
 }
 
-export function registerPlanningTerminalSessionIpcHandlers(deps: {
-  ipcMain: IpcMain;
+export interface PlanningTerminalAdapterDeps {
   embeddedTerminalManager: EmbeddedTerminalManager;
   logger: PlanningTerminalLogger;
   planningChatSessions: InAppPlanningChatSessions;
@@ -486,9 +485,25 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
   repoRoot: string;
   resolveRemotePlanningSession?: (planningSessionId: string) => Promise<InAppPlanningSessionSummary | undefined>;
   isPlanningTerminalWriteAllowed?: () => boolean;
-}): void {
+}
+
+/**
+ * Transport-neutral planning-terminal operations shared by the Electron IPC
+ * handlers and the web-surface dispatch. All state lives in the
+ * EmbeddedTerminalManager and the planning chat session map, so multiple
+ * adapter instances over the same stores stay consistent.
+ */
+export interface PlanningTerminalAdapter {
+  open(planningSessionId: string): Promise<{ opened: boolean; reason?: string; session?: TerminalSessionDescriptor }>;
+  list(): TerminalSessionDescriptor[];
+  write(sessionId: string, data: string): { ok: boolean; reason?: string };
+  resize(sessionId: string, cols: number, rows: number): { ok: boolean; reason?: string };
+  appliedSize(sessionId: string): { cols: number; rows: number } | null;
+  close(sessionId: string): { ok: boolean; reason?: string };
+}
+
+export function createPlanningTerminalAdapter(deps: PlanningTerminalAdapterDeps): PlanningTerminalAdapter {
   const {
-    ipcMain,
     embeddedTerminalManager,
     logger,
     planningChatSessions,
@@ -498,89 +513,122 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
     isPlanningTerminalWriteAllowed = () => Boolean(getPlanningSessionStore()),
   } = deps;
 
-  ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
-    const planningSessionId = String(planningSessionIdArg ?? '').trim();
-    if (!planningSessionId) {
-      return { opened: false, reason: 'Planning session id is required.' };
-    }
-    let planningSession = planningChatSessions.get(planningSessionId);
-    if (!planningSession && resolveRemotePlanningSession) {
-      const remoteSummary = await resolveRemotePlanningSession(planningSessionId);
-      if (remoteSummary) {
-        planningSession = hydrateRemotePlanningTerminalSession(remoteSummary);
-        planningChatSessions.set(planningSessionId, planningSession);
+  return {
+    async open(planningSessionIdArg: string) {
+      const planningSessionId = String(planningSessionIdArg ?? '').trim();
+      if (!planningSessionId) {
+        return { opened: false, reason: 'Planning session id is required.' };
       }
-    }
-    if (!planningSession) {
-      return { opened: false, reason: 'Planning conversation was not found.' };
-    }
-    if (planningSession.status === 'submitted') {
-      return { opened: false, reason: 'This planning session was already submitted.' };
-    }
-    logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
-    try {
-      const outputSnapshot = ensurePlanningTerminalSummaryBridge(
-        planningSession,
-        planningSession.terminalOutputSnapshot ?? '',
-        MAX_OUTPUT_SNAPSHOT_CHARS,
+      let planningSession = planningChatSessions.get(planningSessionId);
+      if (!planningSession && resolveRemotePlanningSession) {
+        const remoteSummary = await resolveRemotePlanningSession(planningSessionId);
+        if (remoteSummary) {
+          planningSession = hydrateRemotePlanningTerminalSession(remoteSummary);
+          planningChatSessions.set(planningSessionId, planningSession);
+        }
+      }
+      if (!planningSession) {
+        return { opened: false, reason: 'Planning conversation was not found.' };
+      }
+      if (planningSession.status === 'submitted') {
+        return { opened: false, reason: 'This planning session was already submitted.' };
+      }
+      logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
+      try {
+        const outputSnapshot = ensurePlanningTerminalSummaryBridge(
+          planningSession,
+          planningSession.terminalOutputSnapshot ?? '',
+          MAX_OUTPUT_SNAPSHOT_CHARS,
+        );
+        const session = embeddedTerminalManager.openOrReuse({
+          kind: 'planning',
+          taskId: `planning:${planningSessionId}`,
+          planningSessionId,
+          spec: { cwd: repoRoot },
+          cwd: repoRoot,
+          outputSnapshot,
+        });
+        updatePlanningChatTerminalState(planningSessionId, {
+          terminalMode: 'tmux',
+          terminalSessionId: session.sessionId,
+          terminalStatus: session.status,
+          terminalExitCode: session.exitCode,
+          terminalOutputSnapshot: session.outputSnapshot ?? '',
+          touchSessionUpdatedAt: true,
+        }, {
+          sessions: planningChatSessions,
+          planningSessionStore: getPlanningSessionStore(),
+        });
+        return { opened: true, session };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
+        return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
+      }
+    },
+
+    list() {
+      return embeddedTerminalManager.list().filter((session) => session.kind === 'planning');
+    },
+
+    write(sessionId: string, data: string) {
+      const allowed = planningTerminalWritable(
+        embeddedTerminalManager,
+        planningChatSessions,
+        isPlanningTerminalWriteAllowed,
+        sessionId,
       );
-      const session = embeddedTerminalManager.openOrReuse({
-        kind: 'planning',
-        taskId: `planning:${planningSessionId}`,
-        planningSessionId,
-        spec: { cwd: repoRoot },
-        cwd: repoRoot,
-        outputSnapshot,
-      });
-      updatePlanningChatTerminalState(planningSessionId, {
-        terminalMode: 'tmux',
-        terminalSessionId: session.sessionId,
-        terminalStatus: session.status,
-        terminalExitCode: session.exitCode,
-        terminalOutputSnapshot: session.outputSnapshot ?? '',
-        touchSessionUpdatedAt: true,
-      }, {
-        sessions: planningChatSessions,
-        planningSessionStore: getPlanningSessionStore(),
-      });
-      return { opened: true, session };
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
-      return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
-    }
+      if (!allowed.ok) return allowed;
+      return embeddedTerminalManager.write(sessionId, data);
+    },
+
+    resize(sessionId: string, cols: number, rows: number) {
+      const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+      if (!allowed.ok) return allowed;
+      return embeddedTerminalManager.resize(sessionId, cols, rows);
+    },
+
+    appliedSize(sessionId: string) {
+      const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+      if (!allowed.ok) return null;
+      return embeddedTerminalManager.getAppliedSize(sessionId);
+    },
+
+    close(sessionId: string) {
+      const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+      if (!allowed.ok) return allowed;
+      return embeddedTerminalManager.close(sessionId);
+    },
+  };
+}
+
+export function registerPlanningTerminalSessionIpcHandlers(deps: PlanningTerminalAdapterDeps & {
+  ipcMain: IpcMain;
+}): void {
+  const { ipcMain, ...adapterDeps } = deps;
+  const adapter = createPlanningTerminalAdapter(adapterDeps);
+
+  ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
+    return adapter.open(planningSessionIdArg);
   });
 
   ipcMain.handle('invoker:planning-terminal-list', async () => {
-    return embeddedTerminalManager.list().filter((session) => session.kind === 'planning');
+    return adapter.list();
   });
 
   ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
-    const allowed = planningTerminalWritable(
-      embeddedTerminalManager,
-      planningChatSessions,
-      isPlanningTerminalWriteAllowed,
-      sessionId,
-    );
-    if (!allowed.ok) return allowed;
-    return embeddedTerminalManager.write(sessionId, data);
+    return adapter.write(sessionId, data);
   });
 
   ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
-    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
-    if (!allowed.ok) return allowed;
-    return embeddedTerminalManager.resize(sessionId, cols, rows);
+    return adapter.resize(sessionId, cols, rows);
   });
 
   ipcMain.handle('invoker:planning-terminal-applied-size', async (_event, sessionId: string) => {
-    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
-    if (!allowed.ok) return null;
-    return embeddedTerminalManager.getAppliedSize(sessionId);
+    return adapter.appliedSize(sessionId);
   });
 
   ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
-    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
-    if (!allowed.ok) return allowed;
-    return embeddedTerminalManager.close(sessionId);
+    return adapter.close(sessionId);
   });
 }
