@@ -117,6 +117,7 @@ export function createMockInvoker(
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
   const workflowMutationFailedCallbacks = new Set<(event: WorkflowMutationFailedEvent) => void>();
   const runtimeStatusCallbacks = new Set<(status: RuntimeStatus) => void>();
+  let planningSessionIndex = 0;
   let actionGraphSnapshot: ActionGraphResponse = {
     generatedAt: '2026-01-01T00:00:00.000Z',
     stallThresholdMs: 60_000,
@@ -197,20 +198,23 @@ export function createMockInvoker(
       planName: 'Mock Plan',
       workflowId: 'wf-1',
     })),
-    planningChatCreate: vi.fn(async () => ({
-      ok: true,
-      session: {
-        id: 'session-1',
-        title: 'Untitled plan',
-        status: 'still_discussing',
-        presetKey: 'codex',
-        confirmationMode: 'require',
-        messages: [],
-        draftPlanAvailable: false,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-    })),
+    planningChatCreate: vi.fn(async () => {
+      planningSessionIndex += 1;
+      return {
+        ok: true,
+        session: {
+          id: `session-${planningSessionIndex}`,
+          title: 'Untitled plan',
+          status: 'still_discussing',
+          presetKey: 'codex',
+          confirmationMode: 'require',
+          messages: [],
+          draftPlanAvailable: false,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      };
+    }),
     planningChatList: vi.fn(async () => ({ ok: true, sessions: [] })),
     planningChatSend: vi.fn(async () => ({
       ok: true,

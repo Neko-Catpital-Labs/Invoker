@@ -16,6 +16,7 @@ import type {
   InAppPlanningDiscardDraftRequest,
   InAppPlanningDiscardDraftResponse,
   InAppPlanningListSessionsResponse,
+  InAppPlanningRepoBinding,
   InAppPlanningPlanSummary,
   InAppPlanningRebindRepoRequest,
   InAppPlanningRebindRepoResponse,
@@ -427,6 +428,36 @@ function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary'
   return Boolean(session.draftPlanText || session.draftPlanSummary);
 }
 
+function planningRepositoryContext(session: InAppPlanningChatSession): string {
+  if (!session.repoUrl || !session.baseBranch) return '';
+  return [
+    'Current planning repository binding:',
+    `- Default every workflow repoUrl to exactly: ${session.repoUrl}`,
+    `- Default every workflow baseBranch to exactly: ${session.baseBranch}`,
+    '- Only target another repository when the user explicitly asks for that repository.',
+  ].join('\n');
+}
+
+async function silentRepoMismatch(
+  session: InAppPlanningChatSession,
+  planText: string,
+): Promise<string | undefined> {
+  if (!session.repoUrl) return undefined;
+  const { parsePlanSubmissionBundle } = await import('./plan-parser.js');
+  const submission = parsePlanSubmissionBundle(planText);
+  const userText = session.messages
+    .filter((message) => message.role === 'user')
+    .map((message) => message.text)
+    .join('\n');
+  return submission.plans
+    .map((plan) => plan.repoUrl)
+    .find((repoUrl): repoUrl is string => Boolean(
+      repoUrl
+      && repoUrl !== session.repoUrl
+      && !userText.includes(repoUrl),
+    ));
+}
+
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
@@ -685,30 +716,7 @@ async function createSession(
     resolveDefaultPlanningConfirmationMode(deps.config),
   );
 
-  const repoUrl = deps.config.defaultRepoUrl;
-  const baseBranch = deps.config.defaultBranch ?? 'main';
-  let worktreeBinding:
-    | { repoUrl: string; baseBranch: string; baseCommit: string; worktreePath: string; worktreeBranch: string }
-    | undefined;
-  if (deps.repoPool && typeof repoUrl === 'string' && repoUrl.trim()) {
-    const provisioned = await provisionPlanningWorktree(deps.repoPool, { repoUrl, baseBranch, sessionId: id });
-    worktreeBinding = {
-      repoUrl,
-      baseBranch,
-      baseCommit: provisioned.baseCommit,
-      worktreePath: provisioned.worktreePath,
-      worktreeBranch: provisioned.branch,
-    };
-  }
-  const conversationDeps = worktreeBinding
-    ? {
-        ...deps,
-        planDoctorScriptPath: deps.planDoctorScriptPath,
-        workingDir: worktreeBinding.worktreePath,
-        mcpConfigPath: planningMcpConfigPath(worktreeBinding.worktreePath),
-      }
-    : deps;
-
+  const repoBinding = request?.repoBinding ?? resolvePlanningRepoBinding(deps.config);
   const session: InAppPlanningChatSession = {
     id,
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
@@ -716,12 +724,9 @@ async function createSession(
     confirmationMode,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, conversationDeps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
-    repoUrl: worktreeBinding?.repoUrl,
-    baseBranch: worktreeBinding?.baseBranch,
-    baseCommit: worktreeBinding?.baseCommit,
-    worktreePath: worktreeBinding?.worktreePath,
-    worktreeBranch: worktreeBinding?.worktreeBranch,
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
+    repoUrl: repoBinding?.repoUrl,
+    baseBranch: repoBinding?.baseBranch,
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -731,6 +736,46 @@ async function createSession(
   deps.sessions.set(session.id, session);
   persistPlanningSession(session, deps.planningSessionStore, false);
   return session;
+}
+
+export function resolvePlanningRepoBinding(config: InvokerConfig): InAppPlanningRepoBinding | undefined {
+  const repoUrl = config.defaultRepoUrl?.trim();
+  if (!repoUrl) return undefined;
+  return { repoUrl, baseBranch: config.defaultBranch ?? 'main' };
+}
+
+async function activatePlanningSessionWorktree(
+  session: InAppPlanningChatSession,
+  deps: InAppPlannerDeps & { repoPool?: PlanningRepoPool },
+): Promise<boolean> {
+  if (!deps.repoPool || !session.repoUrl || !session.baseBranch || session.worktreePath) return false;
+
+  const provisioned = await provisionPlanningWorktree(deps.repoPool, {
+    repoUrl: session.repoUrl,
+    baseBranch: session.baseBranch,
+    sessionId: session.id,
+  });
+  const presets = await resolveHarnessPresets(deps.config);
+  const preset = presets[session.presetKey];
+  if (!preset) throw new Error(`Unknown planner preset "${session.presetKey}".`);
+  const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
+  const conversationDeps = {
+    ...deps,
+    workingDir: provisioned.worktreePath,
+    mcpConfigPath: planningMcpConfigPath(provisioned.worktreePath),
+  };
+
+  session.baseCommit = provisioned.baseCommit;
+  session.worktreePath = provisioned.worktreePath;
+  session.worktreeBranch = provisioned.branch;
+  session.conversation = new PlanConversation(planConversationConfig(
+    preset,
+    conversationDeps,
+    session.id,
+    selectHarnessSessionDriver,
+    { conversationalPlanning: true },
+  ));
+  return true;
 }
 
 export async function listInAppPlanningPresets(config: InvokerConfig): Promise<PlanningPresetOption[]> {
@@ -816,12 +861,12 @@ export async function createPlanningChatSession(
 }
 
 export function listPlanningChatSessions(
-  deps: { sessions: InAppPlanningChatSessions },
+  deps: { sessions: InAppPlanningChatSessions; config: InvokerConfig },
 ): InAppPlanningListSessionsResponse {
   const sessions = [...deps.sessions.values()]
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
     .map(sessionToSummary);
-  return { ok: true, sessions };
+  return { ok: true, sessions, repoBinding: resolvePlanningRepoBinding(deps.config) };
 }
 
 export async function sendPlanningChatMessage(
@@ -865,6 +910,7 @@ export async function sendPlanningChatMessage(
         presetKey: rawRequest?.presetKey,
         title: titleFromMessage(message),
         confirmationMode: requestedConfirmationMode,
+        repoBinding: rawRequest?.repoBinding,
       }, deps);
       if ('error' in created) {
         return { ok: false, sessionId, error: created.error };
@@ -892,8 +938,19 @@ export async function sendPlanningChatMessage(
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
       try {
-        const hostedMessage = formatPlanningHostedTurn('in_app', message);
-        if (deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
+        const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        const repositoryContext = planningRepositoryContext(activeSession);
+        const previousVisibleAssistantMessage = [...messagesBeforeTurn]
+          .reverse()
+          .find((entry) => entry.role === 'assistant')?.content;
+        const visibleTranscriptContext = previousVisibleAssistantMessage
+          ? `Previous assistant message visible in the Invoker chat:\n${previousVisibleAssistantMessage}`
+          : '';
+        const hostedMessage = [repositoryContext, visibleTranscriptContext, formatPlanningHostedTurn('in_app', message)]
+          .filter(Boolean)
+          .join('\n\n');
+        if (!activatedWorktree && deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
             await ensurePlanningWorktreeReady(deps.repoPool, {
               repoUrl: activeSession.repoUrl,
@@ -905,9 +962,9 @@ export async function sendPlanningChatMessage(
             logPlanningWorktreeReadyError(activeSession.id, 'before-send', error);
           }
         }
-        const reply = deps.plannerReplyOverride
+        let reply = deps.plannerReplyOverride
           ? await deps.plannerReplyOverride(hostedMessage)
-          : await activeSession.conversation.sendMessage(message);
+          : await activeSession.conversation.sendMessage(hostedMessage);
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, message, reply);
         }
@@ -944,7 +1001,7 @@ export async function sendPlanningChatMessage(
           } as InAppPlanningChatResponse;
         }
 
-        const review = preparePlanningReview({
+        let review = preparePlanningReview({
           plannerOutput: reply,
           extractDraftPlanText: () => result.planText,
           confirmationMode: activeSession.confirmationMode,
@@ -965,6 +1022,46 @@ export async function sendPlanningChatMessage(
             draftPlanSummary: activeSession.draftPlanSummary,
             draftPlanText: activeSession.draftPlanText,
           } as InAppPlanningChatResponse;
+        }
+
+        const mismatchedRepoUrl = await silentRepoMismatch(activeSession, review.planText);
+        if (mismatchedRepoUrl) {
+          const mismatchReply = `Draft rejected because it silently changed repositories to ${mismatchedRepoUrl}. `
+            + `This planning session is bound to ${activeSession.repoUrl}. Name a different repository explicitly if that is intentional.`;
+          const correctionPrompt = `${repositoryContext}\n\nInvoker host feedback:\n${mismatchReply}\n\nRewrite the complete YAML draft now using the bound repository.`;
+          const correctedReply = deps.plannerReplyOverride
+            ? await deps.plannerReplyOverride(correctionPrompt)
+            : await activeSession.conversation.sendMessage(correctionPrompt);
+          const correctedPlanText = deps.plannerReplyOverride
+            ? extractFencedYamlPlanText(correctedReply)
+            : activeSession.conversation.lastTurnDraftPlanText;
+          const correctedReview = correctedPlanText
+            ? preparePlanningReview({
+                plannerOutput: correctedReply,
+                extractDraftPlanText: () => correctedPlanText,
+                confirmationMode: activeSession.confirmationMode,
+              })
+            : undefined;
+          const correctedMismatch = correctedReview && !('kind' in correctedReview)
+            ? await silentRepoMismatch(activeSession, correctedReview.planText)
+            : mismatchedRepoUrl;
+          if (correctedReview && !('kind' in correctedReview) && !correctedMismatch) {
+            reply = correctedReply;
+            review = correctedReview;
+          } else {
+            removePlanDraftSidecarIfPresent(activeSession.id);
+            activeSession.status = 'still_discussing';
+            appendSessionMessage(activeSession, 'assistant', mismatchReply);
+            persistPlanningSession(activeSession, deps.planningSessionStore, false);
+            return {
+              ok: true,
+              sessionId: activeSession.id,
+              reply: mismatchReply,
+              reasoning,
+              confirmationMode: activeSession.confirmationMode,
+              draftPlanAvailable: false,
+            } as InAppPlanningChatResponse;
+          }
         }
 
         activeSession.draftPlanSummary = review.summary;

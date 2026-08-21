@@ -1126,6 +1126,7 @@ export function App() {
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const planningSessionsRef = useRef<PlanningSessionView[]>(planningSessions);
   const activePlanningSessionIdRef = useRef('local-planning-session-1');
+  const planningRepoBindingRef = useRef<Pick<PlanningSessionView, 'repoUrl' | 'baseBranch'>>({});
   const pendingPlanningStreamSessionIdsRef = useRef<Set<string>>(new Set());
   const planningStreamSessionAliasesRef = useRef<Map<string, string>>(new Map());
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
@@ -1330,8 +1331,15 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     window.invoker?.planningChatList?.()
-      .then((response) => {
-        if (cancelled || !response.ok || response.sessions.length === 0) return;
+      .then(async (response) => {
+        if (cancelled || !response.ok) return;
+        planningRepoBindingRef.current = response.repoBinding ?? {};
+        if (response.sessions.length === 0) {
+          setPlanningSessions((current) => current.map((session) => session.id.startsWith('local-')
+            ? { ...session, ...planningRepoBindingRef.current }
+            : session));
+          return;
+        }
         const currentSessions = planningSessionsRef.current;
         const restored = response.sessions.map(planningSessionSummaryToView);
         const nextSessions = reconcileHydratedPlanningSessions(currentSessions, restored);
@@ -1378,7 +1386,14 @@ export function App() {
           planningChatList(),
           window.invoker?.planningTerminalList?.().catch(() => [] as TerminalSessionDescriptor[]) ?? Promise.resolve([] as TerminalSessionDescriptor[]),
         ]);
-        if (cancelled || !chatList.ok || chatList.sessions.length === 0) return;
+        if (cancelled || !chatList.ok) return;
+        planningRepoBindingRef.current = chatList.repoBinding ?? {};
+        if (chatList.sessions.length === 0) {
+          setPlanningSessions((current) => current.map((session) => session.id.startsWith('local-')
+            ? { ...session, ...planningRepoBindingRef.current }
+            : session));
+          return;
+        }
         const terminalsByPlanningSession = new Map(
           terminalList
             .filter((session) => session.kind === 'planning' && session.planningSessionId)
@@ -3132,6 +3147,9 @@ export function App() {
       presetKey: selectedPlanningPresetKey || undefined,
       confirmationMode: selectedPlanningConfirmationMode,
       ...(planningSessionId ? { sessionId: planningSessionId } : {}),
+      ...(!planningSessionId && activePlanningSession.repoUrl && activePlanningSession.baseBranch
+        ? { repoBinding: { repoUrl: activePlanningSession.repoUrl, baseBranch: activePlanningSession.baseBranch } }
+        : {}),
     };
     const previousSessionId = activePlanningSessionId;
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
@@ -3247,6 +3265,7 @@ export function App() {
       conversationKey: localId,
       presetKey: selectedPlanningPresetKey,
       confirmationMode: selectedPlanningConfirmationMode,
+      ...planningRepoBindingRef.current,
     };
   }, [selectedPlanningConfirmationMode, selectedPlanningPresetKey]);
 

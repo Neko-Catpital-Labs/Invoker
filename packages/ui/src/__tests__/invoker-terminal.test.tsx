@@ -863,7 +863,7 @@ describe('Invoker terminal (component)', () => {
     expect(await screen.findByTestId('invoker-terminal-planner-stream')).toHaveTextContent('Drafting your plan…');
 
     fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
-    expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument());
 
     submitPlanningText('second session request');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2));
@@ -1533,11 +1533,12 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
-  it('shows a lost-session error instead of starting a fresh chat for local transcript continuation', async () => {
+  it('keeps using the eagerly created session after a failed send', async () => {
     mock.api.planningChatSend = vi
       .fn()
       .mockResolvedValueOnce({
         ok: false,
+        sessionId: 'session-1',
         error: 'planner failed before creating a server session',
       })
       .mockResolvedValueOnce({
@@ -1557,13 +1558,11 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('continue without losing context');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-        'This planning chat lost its server session. Start a new chat to continue planning.',
-      );
-    });
-    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('What do you want to build?');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2));
+    expect(mock.api.planningChatSend).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      message: 'continue without losing context',
+    }));
   });
 
   it('passes the selected planning preset', async () => {
@@ -1661,6 +1660,32 @@ describe('Invoker terminal (component)', () => {
 
     const repoStatus = await screen.findByTestId('planning-repo-status');
     expect(repoStatus).toHaveTextContent('Neko-Catpital-Labs/Invoker @ a1b2c3d');
+  });
+
+  it('shows the backend repo binding without creating a planning session', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [makePlanningSessionSummary({
+        id: 'only-planning-session',
+        repoUrl: '/tmp/invoker-first-agent-workflow',
+        baseBranch: 'main',
+      })],
+      repoBinding: { repoUrl: '/tmp/invoker-first-agent-workflow', baseBranch: 'main' },
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+    fireEvent.click(screen.getByTestId('planning-context-toggle'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('planning-repo-status')).toHaveTextContent('invoker-first-agent-workflow');
+    });
+    expect(screen.getByTestId('planning-repo-status')).not.toHaveTextContent('No repository bound yet');
+    expect(mock.api.planningChatCreate).not.toHaveBeenCalled();
+
+    fireEvent.click(within(getPlanningSessionRowByText('Saved planning chat')).getByRole('button', { name: 'Delete planning chat' }));
+    expect(screen.getByTestId('planning-repo-status')).toHaveTextContent('invoker-first-agent-workflow');
+    expect(mock.api.planningChatCreate).not.toHaveBeenCalled();
   });
 
   it('shows "No repository bound yet" when the planning session has no repo bound', async () => {

@@ -1369,7 +1369,7 @@ function startHeadlessMode(): void {
             });
           }
           case 'invoker:planning-chat-list': {
-            return listPlanningChatSessions({ sessions: planningChatSessions });
+            return listPlanningChatSessions({ sessions: planningChatSessions, config: invokerConfig });
           }
           case 'invoker:planning-chat-send': {
             const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;

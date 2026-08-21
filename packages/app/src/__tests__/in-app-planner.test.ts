@@ -431,6 +431,89 @@ describe('planning chat', () => {
     expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN);
   });
 
+  it('tells the planner to default drafts to the backend-bound repository and branch', async () => {
+    const plannerReplyOverride = vi.fn(async () => VALID_PLAN);
+
+    await sendPlanningChatMessage({ message: 'draft the full plan' }, {
+      config: { defaultRepoUrl: '/tmp/tutorial-repo', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions: createInAppPlanningChatSessions(),
+      planningCommandBuilder,
+      plannerReplyOverride,
+    });
+
+    expect(plannerReplyOverride).toHaveBeenCalledWith(expect.stringContaining(
+      'Default every workflow repoUrl to exactly: /tmp/tutorial-repo',
+    ));
+    expect(plannerReplyOverride).toHaveBeenCalledWith(expect.stringContaining(
+      'Default every workflow baseBranch to exactly: main',
+    ));
+  });
+
+  it('automatically corrects a silent repository change before staging the draft', async () => {
+    const wrongRepoPlan = `\`\`\`yaml
+name: Wrong repo
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+onFinish: none
+tasks:
+  - id: smoke
+    description: Smoke test
+    command: echo smoke
+\`\`\``;
+
+    const plannerReplyOverride = vi.fn()
+      .mockResolvedValueOnce(wrongRepoPlan)
+      .mockResolvedValueOnce(`\`\`\`yaml
+name: Corrected repo
+repoUrl: /tmp/tutorial-repo
+baseBranch: main
+onFinish: none
+tasks:
+  - id: smoke
+    description: Smoke test
+    command: echo smoke
+\`\`\``);
+    const deps = {
+      config: { defaultRepoUrl: '/tmp/tutorial-repo', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions: createInAppPlanningChatSessions(),
+      planningCommandBuilder,
+      plannerReplyOverride,
+    };
+    const result = await sendPlanningChatMessage({ message: 'draft the full plan' }, deps);
+
+    expect(result).toMatchObject({ ok: true, draftPlanAvailable: true });
+    expect(plannerReplyOverride).toHaveBeenNthCalledWith(2, expect.stringContaining(
+      'Invoker host feedback:\nDraft rejected because it silently changed repositories to '
+      + 'https://github.com/Neko-Catpital-Labs/Invoker.git. This planning session is bound to /tmp/tutorial-repo.',
+    ));
+  });
+
+  it('allows a cross-repository draft when the user explicitly names its repoUrl', async () => {
+    const requestedRepo = 'https://github.com/Neko-Catpital-Labs/Invoker.git';
+    const crossRepoPlan = `\`\`\`yaml
+name: Explicit repo
+repoUrl: ${requestedRepo}
+onFinish: none
+tasks:
+  - id: smoke
+    description: Smoke test
+    command: echo smoke
+\`\`\``;
+
+    const result = await sendPlanningChatMessage({
+      message: `Draft a smoke test for ${requestedRepo}`,
+    }, {
+      config: { defaultRepoUrl: '/tmp/tutorial-repo', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions: createInAppPlanningChatSessions(),
+      planningCommandBuilder,
+      plannerReplyOverride: vi.fn(async () => crossRepoPlan),
+    });
+
+    expect(result).toMatchObject({ ok: true, draftPlanAvailable: true });
+  });
+
   it('keeps unauthorized YAML from becoming draft-ready and refuses submit', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
@@ -1397,7 +1480,7 @@ tasks:
         terminalStatus: 'running',
         terminalOutputSnapshot: 'planner tmux output\n',
       });
-      expect(listPlanningChatSessions({ sessions }).sessions[0]).toMatchObject({
+      expect(listPlanningChatSessions({ sessions, config: {} }).sessions[0]).toMatchObject({
         terminalMode: 'tmux',
         terminalSessionId: 'term-planning-owned',
         terminalStatus: 'running',
@@ -1636,33 +1719,40 @@ describe('planning chat worktree provisioning', () => {
     };
   }
 
-  it('provisions a worktree and persists the binding fields when repoPool + config.defaultRepoUrl are set', async () => {
+  it('reuses the displayed repo binding when first send creates and provisions the session', async () => {
     const worktreePath = '/fake/worktree/create-session';
     const repoPool = createFakeRepoPool(worktreePath);
     const sessions = createInAppPlanningChatSessions();
     const upsert = vi.fn();
 
-    const created = await createPlanningChatSession({}, {
-      config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+    const config = { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' };
+    const deps = {
+      config,
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
       repoPool,
+      plannerReplyOverride: vi.fn(async () => 'What behavior should change?'),
       planningSessionStore: {
         upsertInAppPlanningSession: upsert,
         updateInAppPlanningSession: vi.fn(),
         deleteInAppPlanningSession: vi.fn(),
       },
-    });
-    if (!created.ok) throw new Error(created.error);
-    const sessionId = created.session.id;
-    const expectedBranch = `invoker/planning/${sessionId}`;
+    };
+    const repoBinding = listPlanningChatSessions({ sessions, config }).repoBinding;
+    expect(repoBinding).toEqual({ repoUrl: 'https://example.com/repo.git', baseBranch: 'main' });
+    expect(sessions.size).toBe(0);
 
-    expect(created.session.repoUrl).toBe('https://example.com/repo.git');
-    expect(created.session.baseBranch).toBe('main');
-    expect(created.session.baseCommit).toBe('fake-head-sha');
-    expect((created.session as { worktreePath?: string }).worktreePath).toBeUndefined();
-    expect((created.session as { worktreeBranch?: string }).worktreeBranch).toBeUndefined();
+    expect(repoPool.ensureCloneThroughRepoQueue).not.toHaveBeenCalled();
+    expect(repoPool.resolveBaseCommit).not.toHaveBeenCalled();
+    expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+
+    config.defaultRepoUrl = 'https://example.com/different.git';
+    config.defaultBranch = 'changed';
+    const sent = await sendPlanningChatMessage({ message: 'Inspect this repo', repoBinding }, deps);
+    if (!sent.ok) throw new Error(sent.error);
+    const sessionId = sent.sessionId;
+    const expectedBranch = `invoker/planning/${sessionId}`;
 
     expect(repoPool.ensureCloneThroughRepoQueue).toHaveBeenCalledWith('https://example.com/repo.git');
     expect(repoPool.resolveBaseCommit).toHaveBeenCalledWith('https://example.com/repo.git', 'main');
@@ -1708,7 +1798,7 @@ describe('planning chat worktree provisioning', () => {
     const hydrated = hydrateRemotePlanningTerminalSession(created.session);
     expect(hydrated.repoUrl).toBe('https://example.com/repo.git');
     expect(hydrated.baseBranch).toBe('main');
-    expect(hydrated.baseCommit).toBe('fake-head-sha');
+    expect(hydrated.baseCommit).toBeUndefined();
   });
 
   it('preserves a terminalSessionId-present/terminalStatus-absent divergence verbatim across hydration', async () => {
@@ -1744,14 +1834,14 @@ describe('planning chat worktree provisioning', () => {
       });
       if (!created.ok) throw new Error(created.error);
       const session = sessions.get(created.session.id);
-      expect(session?.repoUrl).toBeUndefined();
-      expect(session?.baseBranch).toBeUndefined();
+      expect(session?.repoUrl).toBe('https://example.com/repo.git');
+      expect(session?.baseBranch).toBe('main');
       expect(session?.baseCommit).toBeUndefined();
       expect(session?.worktreePath).toBeUndefined();
       expect(session?.worktreeBranch).toBeUndefined();
       expect(session?.conversation.workingDir).toBe(workingDir);
-      expect(created.session.repoUrl).toBeUndefined();
-      expect(created.session.baseBranch).toBeUndefined();
+      expect(created.session.repoUrl).toBe('https://example.com/repo.git');
+      expect(created.session.baseBranch).toBe('main');
       expect(created.session.baseCommit).toBeUndefined();
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
@@ -1879,6 +1969,14 @@ describe('planning chat worktree provisioning', () => {
         repoPool,
       });
       if (!created.ok) throw new Error(created.error);
+      await sendPlanningChatMessage({ sessionId: created.session.id, message: 'Inspect the repo' }, {
+        config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        repoPool,
+        plannerReplyOverride: vi.fn(async () => 'What should change?'),
+      });
 
       const mcpConfigPath = join(worktreePath, '.mcp.json');
       expect(existsSync(mcpConfigPath)).toBe(true);
