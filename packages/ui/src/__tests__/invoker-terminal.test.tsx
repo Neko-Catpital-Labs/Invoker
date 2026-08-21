@@ -3,6 +3,7 @@ import { act, render, screen, fireEvent, waitFor, within } from '@testing-librar
 import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { planningTelemetryRing, resetPlanningTelemetryForTests } from '../lib/planning-telemetry.js';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -2198,6 +2199,30 @@ describe('Invoker terminal (component)', () => {
     expect(within(sendButton).getByTestId('invoker-terminal-send-icon')).toBeInTheDocument();
   });
 
+  it('records a dead-click telemetry event when the disabled send button is pressed', () => {
+    resetPlanningTelemetryForTests();
+    render(<InvokerTerminal {...terminalProps({ busy: true, value: 'stuck draft' })} />);
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    fireEvent.pointerDown(screen.getByTestId('invoker-terminal-send-wrap'));
+
+    const entry = planningTelemetryRing().find((row) => row.metric === 'planning_chat_send_dead_click');
+    expect(entry).toBeDefined();
+    expect(entry?.data).toMatchObject({ busy: true, binding: false, readOnly: false, valueLength: 11 });
+    resetPlanningTelemetryForTests();
+  });
+
+  it('does not record dead clicks while the send button is enabled', () => {
+    resetPlanningTelemetryForTests();
+    render(<InvokerTerminal {...terminalProps({ value: 'ready to send' })} />);
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+    fireEvent.pointerDown(screen.getByTestId('invoker-terminal-send-wrap'));
+
+    expect(planningTelemetryRing().some((row) => row.metric === 'planning_chat_send_dead_click')).toBe(false);
+    resetPlanningTelemetryForTests();
+  });
+
   it('swaps the send icon for a pending spinner while a turn is running', () => {
     render(<InvokerTerminal {...terminalProps({ busy: true })} />);
 
@@ -2205,6 +2230,22 @@ describe('Invoker terminal (component)', () => {
     expect(sendButton).toBeDisabled();
     expect(within(sendButton).getByTestId('invoker-terminal-send-spinner')).toBeInTheDocument();
     expect(within(sendButton).queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
+  });
+
+  it('shows the pending spinner and locks the composer while a repo bind is in flight', () => {
+    const props = terminalProps({ binding: true, value: 'draft a plan' });
+    render(<InvokerTerminal {...props} />);
+
+    const sendButton = screen.getByRole('button', { name: 'Send' });
+    expect(sendButton).toBeDisabled();
+    expect(within(sendButton).getByTestId('invoker-terminal-send-spinner')).toBeInTheDocument();
+    expect(within(sendButton).queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
+
+    const input = screen.getByTestId('invoker-terminal-input');
+    expect(input).toBeDisabled();
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(props.onSubmit).not.toHaveBeenCalled();
   });
 
   it('uses the amber send-button styling in the enabled state', () => {
