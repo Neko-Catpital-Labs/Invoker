@@ -15,6 +15,7 @@ import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppP
 import { resolvePlanningSubmitAction } from '@invoker/contracts/planning-surface';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
+import { logPlanningEvent } from './lib/planning-telemetry.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
 import {
   persistRendererRecoveryState,
@@ -1459,10 +1460,12 @@ export function App() {
         }
         const count = (goneCounts.get(session.id) ?? 0) + 1;
         if (count < 2) {
+          logPlanningEvent('planning_turn_gone_tick', { sessionId: session.id, turnId: session.activeTurnId, count });
           goneCounts.set(session.id, count);
           continue;
         }
         goneCounts.delete(session.id);
+        logPlanningEvent('planning_turn_gone_failed', { sessionId: session.id, turnId: session.activeTurnId });
         applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
           status: 'failed',
           error: 'The planner session no longer exists on the server. It may have been reset.',
@@ -1470,6 +1473,7 @@ export function App() {
       }
       return true;
     } catch (err) {
+      logPlanningEvent('planning_poll_error', { error: err instanceof Error ? err.message : String(err) });
       console.error('[planning] planning session refresh failed', err);
       return false;
     }
@@ -1493,10 +1497,12 @@ export function App() {
           return;
         }
         planningPollFailureCountRef.current += 1;
+        logPlanningEvent('planning_poll_failure', { consecutiveFailures: planningPollFailureCountRef.current });
         if (planningPollFailureCountRef.current < 3) return;
         planningPollFailureCountRef.current = 0;
         for (const session of planningSessionsRef.current) {
           if (session.busy && session.activeTurnId) {
+            logPlanningEvent('planning_poll_lost_connection', { sessionId: session.id, turnId: session.activeTurnId });
             applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
               status: 'failed',
               error: 'Lost connection to the planner.',
@@ -2995,8 +3001,18 @@ export function App() {
   const applyPlanningTurnOutcome = useCallback((sessionId: string, turnId: string, outcome: InAppPlanningTurnOutcome) => {
     const target = planningSessionsRef.current.find((session) => session.id === sessionId)
       ?? planningSessionsRef.current.find((session) => session.id === planningStreamSessionAliasesRef.current.get(sessionId));
-    if (!target || target.activeTurnId !== turnId) return; // already applied or foreign turn
+    if (!target || target.activeTurnId !== turnId) {
+      // already applied or foreign turn
+      logPlanningEvent('planning_turn_outcome_dropped', { sessionId, turnId, reason: !target ? 'no-session' : 'turn-mismatch' });
+      return;
+    }
     const targetId = target.id;
+    logPlanningEvent('planning_turn_outcome', {
+      sessionId: targetId,
+      turnId,
+      status: outcome.status,
+      ...(outcome.status === 'failed' ? { error: outcome.error } : {}),
+    });
     const updatedAt = new Date().toISOString();
     if (outcome.status === 'completed') {
       const replyLineId = nextTerminalLineIdRef.current;
@@ -3184,8 +3200,18 @@ export function App() {
     if (!invoker?.startReady) return null;
     setStartReadyBusy(true);
     setStartReadyMenuOpen(false);
+    const startReadyStartedAt = performance.now();
+    logPlanningEvent('planning_start_ready_start', { dryRun: request.dryRun === true });
     try {
       const result = await invoker.startReady(request);
+      logPlanningEvent('planning_start_ready_ok', {
+        dryRun: result.dryRun === true,
+        startedCount: result.started.length,
+        recreatedCount: result.recreatedWorkflowIds.length,
+        failedOutcomeCount: result.workflowOutcomes?.filter((outcome) => !outcome.ok).length ?? 0,
+        partial: result.partial === true,
+        durationMs: Math.round(performance.now() - startReadyStartedAt),
+      });
       if (!result.dryRun) {
         await refreshTaskGraph();
         void refreshActionGraph();
@@ -3223,6 +3249,10 @@ export function App() {
       }
       return result;
     } catch (err) {
+      logPlanningEvent('planning_start_ready_error', {
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Math.round(performance.now() - startReadyStartedAt),
+      });
       notifyMutationError('Failed to start ready work:', err);
       return null;
     } finally {
@@ -3277,9 +3307,17 @@ export function App() {
       return;
     }
     updatePlanningSessionById(targetSessionId, (session) => ({ ...session, busy: true }));
+    const submitStartedAt = performance.now();
+    logPlanningEvent('planning_plan_submit_start', { sessionId: targetSessionId });
     try {
       const result = await invoker.planningChatSubmit({ sessionId: targetSessionId });
       if (result.ok) {
+        logPlanningEvent('planning_plan_submit_ok', {
+          sessionId: targetSessionId,
+          workflowId: result.workflowId,
+          planName: result.planName,
+          durationMs: Math.round(performance.now() - submitStartedAt),
+        });
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
         setWorkflowSelectionDismissed(false);
@@ -3322,11 +3360,22 @@ export function App() {
           'success',
         );
       } else {
+        logPlanningEvent('planning_plan_submit_error', {
+          sessionId: targetSessionId,
+          error: result.error,
+          durationMs: Math.round(performance.now() - submitStartedAt),
+        });
         updatePlanningSessionById(targetSessionId, (session) => ({ ...session, busy: false }));
         setPlanningSubmitError({ title: 'Plan could not be submitted', message: result.error });
         appendTerminalLine(`Plan could not be submitted:\n${result.error}`, 'system', 'error');
       }
     } catch (err) {
+      logPlanningEvent('planning_plan_submit_error', {
+        sessionId: targetSessionId,
+        transport: true,
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Math.round(performance.now() - submitStartedAt),
+      });
       updatePlanningSessionById(targetSessionId, (session) => ({ ...session, busy: false }));
       const message = err instanceof Error ? err.message : 'Failed to submit the plan.';
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
@@ -3494,7 +3543,13 @@ export function App() {
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
-    if (!input || activePlanningSessionBusy || activePlanningReadOnly) return;
+    if (!input || activePlanningSessionBusy || activePlanningReadOnly) {
+      logPlanningEvent('planning_submit_blocked', {
+        sessionId: activePlanningSessionId,
+        reason: !input ? 'empty-input' : activePlanningSessionBusy ? 'busy' : 'read-only',
+      });
+      return;
+    }
 
     let sendSessionId = planningSessionId;
     let activeViewId = activePlanningSessionId;
@@ -3576,12 +3631,27 @@ export function App() {
     clearPlanningStreamForSessionIds([previousSessionId, sendSessionId]);
     forgetPlanningStreamAliasesForSessionIds([previousSessionId, sendSessionId]);
     markPlanningTurnRunning(previousSessionId, turnId);
+    const sendStartedAt = performance.now();
+    logPlanningEvent('planning_send_start', { sessionId: previousSessionId, turnId, messageLength: input.length });
     try {
       const result = await invoker.planningChatSend(request);
+      logPlanningEvent('planning_send_result', {
+        sessionId: previousSessionId,
+        turnId,
+        ok: result.ok,
+        ...(result.ok ? {} : { error: result.error }),
+        durationMs: Math.round(performance.now() - sendStartedAt),
+      });
       handlePlanningSendResult(previousSessionId, turnId, result, { inputForTitle: input, presetKey: request.presetKey });
     } catch (err) {
       // Keep the turn marked running: recovery rides the busy poll, which
       // either observes the finished turn or fails it after 3 missed polls.
+      logPlanningEvent('planning_send_transport_failure', {
+        sessionId: previousSessionId,
+        turnId,
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Math.round(performance.now() - sendStartedAt),
+      });
       console.error('[planning] planningChatSend transport failure', err);
       void refreshPlanningSessionsNow();
     }
@@ -3624,6 +3694,8 @@ export function App() {
     const turnId = session.activeTurnId;
     const previousSessionId = session.id;
     markPlanningTurnRunning(previousSessionId, turnId);
+    const retryStartedAt = performance.now();
+    logPlanningEvent('planning_send_start', { sessionId: previousSessionId, turnId, retry: true });
     try {
       const result = await invoker.planningChatSend({
         ...(previousSessionId.startsWith('local-') ? {} : { sessionId: previousSessionId }),
@@ -3632,10 +3704,25 @@ export function App() {
         presetKey: selectedPlanningPresetKey || undefined,
         confirmationMode: selectedPlanningConfirmationMode,
       });
+      logPlanningEvent('planning_send_result', {
+        sessionId: previousSessionId,
+        turnId,
+        retry: true,
+        ok: result.ok,
+        ...(result.ok ? {} : { error: result.error }),
+        durationMs: Math.round(performance.now() - retryStartedAt),
+      });
       handlePlanningSendResult(previousSessionId, turnId, result);
     } catch (err) {
       // Same recovery contract as handlePlanningSubmit's catch: stay busy,
       // let the poll observe the turn or fail it after 3 missed polls.
+      logPlanningEvent('planning_send_transport_failure', {
+        sessionId: previousSessionId,
+        turnId,
+        retry: true,
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Math.round(performance.now() - retryStartedAt),
+      });
       console.error('[planning] planningChatSend retry transport failure', err);
       void refreshPlanningSessionsNow();
     }
@@ -3665,6 +3752,7 @@ export function App() {
 
   const handleCreatePlanningSession = useCallback(() => {
     const session = makeFreshLocalPlanningSession();
+    logPlanningEvent('planning_session_new', { sessionId: session.id });
     setPlanningSessions((prev) => [session, ...prev]);
     setActivePlanningSessionId(session.id);
     setSidebarSurface('home');
@@ -3719,6 +3807,7 @@ export function App() {
     if (activePlanningReadOnly) {
       return;
     }
+    logPlanningEvent('planning_session_delete', { sessionId });
     if (!sessionId.startsWith('local-')) {
       void invoker?.planningChatDelete?.({ sessionId });
     }
@@ -5023,7 +5112,10 @@ export function App() {
             >
               <button
                 type="button"
-                onClick={() => setActivePlanningSessionId(session.id)}
+                onClick={() => {
+                  logPlanningEvent('planning_session_switch', { to: session.id });
+                  setActivePlanningSessionId(session.id);
+                }}
                 className={`flex w-full min-w-0 flex-1 items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
               >
                 <PlanningSessionStatusIcon

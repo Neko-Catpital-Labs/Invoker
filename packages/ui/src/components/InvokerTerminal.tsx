@@ -1107,6 +1107,19 @@ export function InvokerTerminal({
                     </div>
                   )}
                 </div>
+                {/* pointerdown on the wrapper fires even when the button is
+                    disabled (disabled buttons swallow click) — this records
+                    the "I clicked send and nothing happened" case. */}
+                <span
+                  data-testid="invoker-terminal-send-wrap"
+                  className="inline-flex shrink-0"
+                  onPointerDown={sendButtonDisabled ? () => logPlanningEvent('planning_chat_send_dead_click', {
+                    busy,
+                    binding,
+                    readOnly,
+                    valueLength: value.length,
+                  }) : undefined}
+                >
                 <button
                   type="submit"
                   aria-label="Send"
@@ -1126,6 +1139,7 @@ export function InvokerTerminal({
                     />
                   )}
                 </button>
+                </span>
               </div>
             </div>
           </form>
