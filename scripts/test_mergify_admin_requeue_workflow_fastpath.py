@@ -196,6 +196,27 @@ class RepairerPlanSettleObserver(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(row["meta"]["workflowStatus"], "failed")
             self.assertEqual(row["meta"]["workflowId"], "wf-1")
+            self.assertEqual(row["meta"]["settledBy"], "repairer-plan-observer")
+
+    def test_owner_observer_settles_successful_repair_without_remote_ledger_write(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "b92253b" + "0" * 33
+            ledger.record("repair-check", 9966, head, "PR Body", 100)
+            plan_name = f.repair_check_plan_name(9966, "PR Body", head)
+            workflows = [{"id": "wf-ok", "name": plan_name, "status": "completed"}]
+            with mock.patch.object(f, "list_workflows", return_value=workflows):
+                settled = f.settle_repairer_plan_rows(ledger, 200)
+            self.assertEqual(settled, 1)
+            row = ledger.latest("repair-check-settled", 9966, head, "PR Body")
+            self.assertIsNotNone(row)
+            self.assertEqual(row["meta"]["workflowStatus"], "completed")
+            self.assertEqual(row["meta"]["settledBy"], "repairer-plan-observer")
+            self.assertEqual(row["meta"]["outcomeClass"], "success")
+            self.assertEqual(row["pr"], 9966)
+            self.assertEqual(row["headSha"], head)
+            self.assertEqual(row["key"], "PR Body")
 
     def test_settles_a_failed_check_repair_and_a_failed_conflict_repair_too(self):
         import tempfile
