@@ -93,6 +93,19 @@ describe('resolvePlanningTerminalCwd', () => {
       resolvePlanningTerminalCwd({ worktreePath: '/definitely/not/a/real/dir' }, '/repo-root'),
     ).toBe('/repo-root');
   });
+
+  it('falls back to repoRoot when the worktree path is a regular file', () => {
+    const worktreeDir = mkdtempSync(join(tmpdir(), 'inv-wt-'));
+    const filePath = join(worktreeDir, 'not-a-dir');
+    writeFileSync(filePath, 'not a directory');
+    try {
+      expect(resolvePlanningTerminalCwd({ worktreePath: filePath }, '/repo-root')).toBe(
+        '/repo-root',
+      );
+    } finally {
+      rmSync(worktreeDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('planning terminal repo binding', () => {

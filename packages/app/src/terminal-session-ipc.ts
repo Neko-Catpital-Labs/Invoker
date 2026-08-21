@@ -11,7 +11,7 @@ import {
   type TerminalUiPerfReporter,
   type TerminalUiPerfSink,
 } from './terminal-ui-perf.js';
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import {
   ensurePlanningTerminalSummaryBridge,
   hydrateRemotePlanningTerminalSession,
@@ -398,8 +398,16 @@ export function resolvePlanningTerminalCwd(
   repoRoot: string,
 ): string {
   const worktreePath = session.worktreePath?.trim();
-  if (worktreePath && existsSync(worktreePath)) return worktreePath;
+  if (worktreePath && isDirectory(worktreePath)) return worktreePath;
   return repoRoot;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function planningTerminalTargetKey(planningSessionId: string, repoRoot: string): string {
