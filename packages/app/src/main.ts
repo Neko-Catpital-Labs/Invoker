@@ -1328,7 +1328,7 @@ function startHeadlessMode(): void {
       });
 
       let testPlanningChatResponse:
-        | { planYaml: string; planName: string; reply?: string; delayMs?: number }
+        | { planYaml: string; planName: string; reply?: string; delayMs?: number; sidecarDraft?: boolean }
         | { throwError: string }
         | { replyOnly: string }
         | null = null;
@@ -1407,6 +1407,11 @@ function startHeadlessMode(): void {
                 return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
               }
               : undefined;
+            const plannerReplyOverrideSidecarDraft = Boolean(
+              planningChatResponseOverride
+              && 'planYaml' in planningChatResponseOverride
+              && planningChatResponseOverride.sidecarDraft,
+            );
             return sendPlanningChatMessage(payload.args[0] as InAppPlanningChatRequest, {
               config: invokerConfig,
               workingDir: repoRoot,
@@ -1419,6 +1424,7 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
               logger,
               plannerReplyOverride,
+              plannerReplyOverrideSidecarDraft,
               onRawPlannerOutput: emitPlanningChatStreamToWeb,
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
