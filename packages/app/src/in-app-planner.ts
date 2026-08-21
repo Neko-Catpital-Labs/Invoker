@@ -26,6 +26,7 @@ import type {
   InAppPlanningSessionStatus,
   InAppPlanningSessionSummary,
   InAppPlanningStreamEvent,
+  InAppPlanningTurnStatus,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
   Logger,
@@ -118,6 +119,9 @@ export interface InAppPlanningChatSession {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   createdAt: string;
   updatedAt: string;
   nextMessageId: number;
@@ -411,6 +415,12 @@ function appendSessionMessage(
   session.nextMessageId += 1;
   session.updatedAt = createdAt;
 }
+function clearActiveTurn(session: InAppPlanningChatSession): void {
+  session.activeTurnId = undefined;
+  session.activeTurnStatus = undefined;
+  session.activeTurnError = undefined;
+}
+
 function clearStarterPromptIfUnused(session: InAppPlanningChatSession): void {
   if (
     session.messages.length === 1
@@ -507,6 +517,9 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activeTurnId: session.activeTurnId,
+    activeTurnStatus: session.activeTurnStatus,
+    activeTurnError: session.activeTurnError,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -885,8 +898,14 @@ export async function sendPlanningChatMessage(
 
     const activeSession = session;
     activeSession.confirmationMode = requestedConfirmationMode;
+    const turnId = typeof rawRequest?.turnId === 'string' && rawRequest.turnId.trim()
+      ? rawRequest.turnId.trim()
+      : randomUUID();
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
+      activeSession.activeTurnId = turnId;
+      activeSession.activeTurnStatus = 'running';
+      activeSession.activeTurnError = undefined;
       clearStarterPromptIfUnused(activeSession);
       const messagesBeforeTurn: PlanningMessage[] = activeSession.messages.map((entry) => ({
         role: entry.role,
@@ -939,9 +958,11 @@ export async function sendPlanningChatMessage(
             : result.status;
           appendSessionMessage(activeSession, 'assistant', reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          clearActiveTurn(activeSession);
           return {
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
@@ -962,9 +983,11 @@ export async function sendPlanningChatMessage(
             : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', review.reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          clearActiveTurn(activeSession);
           return {
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply: review.reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
@@ -979,9 +1002,11 @@ export async function sendPlanningChatMessage(
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        clearActiveTurn(activeSession);
         return {
           ok: true,
           sessionId: activeSession.id,
+          turnId,
           reply,
           reasoning,
           confirmationMode: activeSession.confirmationMode,
@@ -990,11 +1015,15 @@ export async function sendPlanningChatMessage(
           draftPlanText: review.planText,
         } as InAppPlanningChatResponse;
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        activeSession.activeTurnStatus = 'failed';
+        activeSession.activeTurnError = errorMessage;
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
         return {
           ok: false,
           sessionId: activeSession.id,
-          error: error instanceof Error ? error.message : String(error),
+          turnId,
+          error: errorMessage,
         };
       }
     });
