@@ -36,6 +36,14 @@ describe('FailureClassifier.classifyError', () => {
     )).toBe('ssh-repo-mirror-corrupt');
   });
 
+  it('classifies finalize-time stale managed-worktree admin metadata', () => {
+    expect(FailureClassifier.classifyError(
+      'remote commit or push failed (code 128): fatal: not a git repository: '
+      + '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+      + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+    )).toBe('ssh-worktree-corrupt');
+  });
+
   it('classifies the OAuth-session-expired signature', () => {
     expect(FailureClassifier.classifyError(PR_6976_OAUTH_SESSION_EXPIRED_ERROR))
       .toBe('ssh-oauth-session-expired');
