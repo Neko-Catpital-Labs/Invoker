@@ -178,6 +178,15 @@ export interface InvokerConfig {
   /** Default execution model for prompt-backed tasks when the task does not override it. */
   defaultExecutionModel?: string;
   /**
+   * Allowlist of execution agents offered by UI surfaces (execution-harness
+   * pickers and planning presets). Entries are agent names, e.g. 'claude',
+   * 'codex', 'omp'; matching is case-insensitive and whitespace-trimmed.
+   * Unset (or empty after trimming) means every registered agent is offered.
+   * This only restricts what surfaces offer — a task explicitly pinned to a
+   * disabled agent still runs.
+   */
+  enabledExecutionAgents?: string[];
+  /**
    * Config-owned default execution harness/model for tasks that omit them.
    * This is separate from Slack planning presets and applies across surfaces.
    */
@@ -502,6 +511,52 @@ export function loadConfig(): InvokerConfig {
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = config.defaultExecutionAgent?.trim();
   return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
+}
+
+/**
+ * Resolve the configured execution-agent allowlist.
+ * Returns null when `enabledExecutionAgents` is unset or empty after trimming
+ * (null = no restriction). Entries are trimmed and lowercased.
+ */
+export function resolveEnabledExecutionAgents(config: InvokerConfig): Set<string> | null {
+  const entries = (config.enabledExecutionAgents ?? [])
+    .map((name) => (typeof name === 'string' ? name.trim().toLowerCase() : ''))
+    .filter((name) => name.length > 0);
+  return entries.length > 0 ? new Set(entries) : null;
+}
+
+/**
+ * Filter execution harnesses down to the configured allowlist.
+ * No allowlist configured -> input returned unchanged.
+ */
+export function filterExecutionHarnesses<T extends { name: string }>(harnesses: T[], config: InvokerConfig): T[] {
+  const enabled = resolveEnabledExecutionAgents(config);
+  if (!enabled) return harnesses;
+  return harnesses.filter((harness) => enabled.has(harness.name.trim().toLowerCase()));
+}
+
+/** Planning tools that wrap another agent; their `model` names the wrapped agent. */
+const WRAPPER_PLANNING_TOOLS: Record<string, true> = { cursor: true, omp: true };
+
+/**
+ * Filter planning presets down to the configured allowlist.
+ * A preset is kept when its `tool` is allowlisted, or when the tool is a
+ * wrapper ('cursor'/'omp') whose `model` names an allowlisted agent.
+ * No allowlist configured -> input returned unchanged.
+ */
+export function filterPlanningPresets<T extends { tool: string; model?: string }>(
+  presets: T[],
+  config: InvokerConfig,
+): T[] {
+  const enabled = resolveEnabledExecutionAgents(config);
+  if (!enabled) return presets;
+  return presets.filter((preset) => {
+    const tool = preset.tool.trim().toLowerCase();
+    if (enabled.has(tool)) return true;
+    if (!WRAPPER_PLANNING_TOOLS[tool]) return false;
+    const model = preset.model?.trim().toLowerCase();
+    return Boolean(model && enabled.has(model));
+  });
 }
 
 
