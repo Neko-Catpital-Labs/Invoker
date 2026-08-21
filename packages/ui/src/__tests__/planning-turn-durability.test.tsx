@@ -233,4 +233,230 @@ describe('planning turn durability', () => {
     expect(transcriptText.split('I can help draft that.').length - 1).toBe(1);
     expect(screen.getByTestId('invoker-terminal-input')).not.toBeDisabled();
   });
+  it('fails a wiped mid-first-send turn into the banner and keeps the chat', async () => {
+    mock.api.planningChatSend = vi.fn((request: { turnId?: string }) => new Promise(() => {
+      void request; // never resolves: the server was wiped mid-turn
+    })) as typeof mock.api.planningChatSend;
+    const serverSessions = { current: [] as ReturnType<typeof makePlanningSessionSummary>[] };
+    mock.api.planningChatList = vi.fn(async () => ({ ok: true, sessions: serverSessions.current }));
+
+    render(<App />);
+    await openPlanningSurface();
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello planner' } });
+      fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+      serverSessions.current = [
+        makePlanningSessionSummary({
+          id: 'server-1',
+          title: 'Server chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          messages: [
+            { id: 1, role: 'user', text: 'hello planner', createdAt: '2026-07-07T00:00:01.000Z' },
+          ],
+          activeTurnId: 'turn-live',
+          activeTurnStatus: 'running',
+        }),
+      ];
+
+      // While the server still reports the running turn, nothing fails.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+
+      // Server wiped: two consecutive polls prove the turn is gone.
+      serverSessions.current = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+
+      expect(screen.getByTestId('invoker-terminal-turn-error'))
+        .toHaveTextContent('The planner session no longer exists on the server. It may have been reset.');
+      expect(screen.getByTestId('invoker-terminal-retry-turn')).toBeInTheDocument();
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('hello planner');
+      expect(screen.queryByTestId('invoker-terminal-send-spinner')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails a hydrated running turn when its server session disappears, keeping the row and transcript', async () => {
+    const serverSessions = {
+      current: [
+        makePlanningSessionSummary({
+          id: 'busy-chat',
+          title: 'Busy chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          messages: [
+            { id: 1, role: 'user', text: 'Draft the plan', createdAt: '2026-07-07T00:00:01.000Z' },
+          ],
+          activeTurnId: 'turn-live',
+          activeTurnStatus: 'running',
+        }),
+      ] as ReturnType<typeof makePlanningSessionSummary>[],
+    };
+    mock.api.planningChatList = vi.fn(async () => ({ ok: true, sessions: serverSessions.current }));
+
+    // Fake timers from the start so the busy poll's interval is fake-timer
+    // driven even though hydration (not a send) flips the session busy.
+    vi.useFakeTimers();
+    try {
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      fireEvent.click(screen.getByTestId('sidebar-home'));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
+
+      serverSessions.current = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+
+      expect(screen.getByTestId('invoker-terminal-turn-error'))
+        .toHaveTextContent('The planner session no longer exists on the server. It may have been reset.');
+      expect(screen.getByTestId('invoker-terminal-retry-turn')).toBeInTheDocument();
+      expect(screen.getAllByText('Busy chat').length).toBeGreaterThan(0);
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Draft the plan');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fail the turn on a transient one-poll miss', async () => {
+    mock.api.planningChatSend = vi.fn((request: { turnId?: string }) => new Promise(() => {
+      void request;
+    })) as typeof mock.api.planningChatSend;
+    const runningServerSession = makePlanningSessionSummary({
+      id: 'server-1',
+      title: 'Server chat',
+      status: 'still_discussing',
+      draftPlanAvailable: false,
+      draftPlanSummary: undefined,
+      draftPlanText: undefined,
+      messages: [
+        { id: 1, role: 'user', text: 'hello planner', createdAt: '2026-07-07T00:00:01.000Z' },
+      ],
+      activeTurnId: 'turn-live',
+      activeTurnStatus: 'running',
+    });
+    const serverSessions = { current: [] as ReturnType<typeof makePlanningSessionSummary>[] };
+    mock.api.planningChatList = vi.fn(async () => ({ ok: true, sessions: serverSessions.current }));
+
+    render(<App />);
+    await openPlanningSurface();
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello planner' } });
+      fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+      serverSessions.current = [runningServerSession];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+
+      // One empty poll: not enough to fail the turn.
+      serverSessions.current = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+
+      // The turn reappears: the gone counter resets.
+      serverSessions.current = [runningServerSession];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+
+      expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+      expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a late send response overwrite the gone-turn failure', async () => {
+    let resolveSend: (() => void) | undefined;
+    mock.api.planningChatSend = vi.fn((request: { turnId?: string }) => new Promise((resolve) => {
+      resolveSend = () => resolve({
+        ok: true,
+        sessionId: 'server-1',
+        turnId: request.turnId,
+        reply: 'Landed after all.',
+        confirmationMode: 'require',
+        draftPlanAvailable: false,
+      });
+    })) as typeof mock.api.planningChatSend;
+    const serverSessions = { current: [] as ReturnType<typeof makePlanningSessionSummary>[] };
+    mock.api.planningChatList = vi.fn(async () => ({ ok: true, sessions: serverSessions.current }));
+
+    render(<App />);
+    await openPlanningSurface();
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello planner' } });
+      fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+      serverSessions.current = [
+        makePlanningSessionSummary({
+          id: 'server-1',
+          title: 'Server chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          messages: [
+            { id: 1, role: 'user', text: 'hello planner', createdAt: '2026-07-07T00:00:01.000Z' },
+          ],
+          activeTurnId: 'turn-live',
+          activeTurnStatus: 'running',
+        }),
+      ];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      serverSessions.current = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5100);
+      });
+      expect(screen.getByTestId('invoker-terminal-turn-error')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The failed turn keeps its activeTurnId, so the genuine reply still lands.
+    await act(async () => {
+      resolveSend?.();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Landed after all.');
+    });
+    expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-retry-turn')).not.toBeInTheDocument();
+  });
 });
