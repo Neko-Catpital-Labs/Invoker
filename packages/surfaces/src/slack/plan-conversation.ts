@@ -513,6 +513,7 @@ export class PlanConversation {
   private _initialized = false;
   private _lastTurnReasoning: string[] = [];
   private _lastTurnDraftPlanText: string | null = null;
+  private _lastTurnDraftFromSidecarFile = false;
   private _lastTurnPlanIntentSignal: PlanIntentSignal | null = null;
   private lastKnownGoodPlanText: string | null = null;
   private harnessSessionDriver?: HarnessSessionDriver;
@@ -656,9 +657,8 @@ export class PlanConversation {
     }
     const fileDraft = this.readPlanDraftFile();
     const inlineDraft = extractYamlPlan(message);
-    let nextDraft = fileDraft && summarizePlanText(fileDraft)
-      ? fileDraft
-      : inlineDraft;
+    const sidecarDraftSelected = Boolean(fileDraft && summarizePlanText(fileDraft));
+    let nextDraft = sidecarDraftSelected ? fileDraft : inlineDraft;
     let finalFormatted = formatted;
     if (nextDraft && this.draftDoctor) {
       const gated = await this.gateDraftForReview(nextDraft, message, formatted, turn);
@@ -667,6 +667,7 @@ export class PlanConversation {
       finalFormatted = gated.formatted;
     }
     this._lastTurnDraftPlanText = nextDraft;
+    this._lastTurnDraftFromSidecarFile = sidecarDraftSelected && Boolean(nextDraft);
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnPlanIntentSignal = this.mode === 'agent' ? this.readPlanIntentSignalFile() : null;
     if (!nextDraft) {
@@ -790,6 +791,14 @@ export class PlanConversation {
     return this._lastTurnDraftPlanText;
   }
 
+  /**
+   * Whether this turn's draft came from the dedicated plan-draft sidecar file
+   * (a deliberate planner act), rather than YAML embedded in the chat reply.
+   */
+  get lastTurnDraftFromSidecarFile(): boolean {
+    return this._lastTurnDraftFromSidecarFile;
+  }
+
   /** The plan-intent signal the model wrote this turn (agent mode only), if any. */
   get lastTurnPlanIntentSignal(): PlanIntentSignal | null {
     return this._lastTurnPlanIntentSignal;
@@ -910,6 +919,7 @@ export class PlanConversation {
     this._submittedPlanText = null;
     this._planSubmitted = false;
     this._lastTurnDraftPlanText = null;
+    this._lastTurnDraftFromSidecarFile = false;
     this._lastTurnPlanIntentSignal = null;
     this.lastKnownGoodPlanText = null;
     if (this.conversationRepo && this.threadTs) {
