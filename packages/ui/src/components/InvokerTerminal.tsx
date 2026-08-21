@@ -4,6 +4,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { SendIcon } from './icons/index.js';
+import { logPlanningEvent } from '../lib/planning-telemetry.js';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -102,12 +103,13 @@ function roundMs(durationMs: number): number {
 }
 
 function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
-  void window.invoker?.reportUiPerf?.(metric, data);
+  logPlanningEvent(metric, data);
 }
 
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
   busy: boolean;
+  binding?: boolean;
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
@@ -129,10 +131,18 @@ interface InvokerTerminalProps {
   terminalError?: string | null;
   terminalActive?: boolean;
   workflowRunning?: boolean;
+  repoValue?: string;
+  repoLocked?: boolean;
+  repoSuggestions?: string[];
+  repoError?: string | null;
+  turnError?: string | null;
+  onRetryTurn?: () => void;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
   onConfirmationModeChange: (confirmationMode: PlanningConfirmationMode) => void;
+  onRepoInputChange?: (value: string) => void;
+  onRepoCommit?: () => void;
   onModeChange?: (mode: PlanningTerminalMode) => void;
   onExpand: () => void;
   onCloseExpanded?: () => void;
@@ -531,6 +541,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
 export function InvokerTerminal({
   lines,
   busy,
+  binding = false,
   value,
   selectedPresetKey,
   presetOptions,
@@ -549,8 +560,16 @@ export function InvokerTerminal({
   workflowRunning = false,
   onValueChange,
   onSubmit,
+  repoValue = '',
+  repoLocked = true,
+  repoSuggestions = [],
+  repoError = null,
+  turnError = null,
+  onRetryTurn,
   onPresetChange,
   onConfirmationModeChange,
+  onRepoInputChange,
+  onRepoCommit,
   onModeChange,
   onExpand,
   onCloseExpanded,
@@ -670,7 +689,7 @@ export function InvokerTerminal({
   };
 
   const composerDisabledCursorClass = busy || readOnly ? 'disabled:cursor-not-allowed' : '';
-  const sendButtonDisabled = busy || readOnly || !value.trim();
+  const sendButtonDisabled = busy || binding || readOnly || !value.trim();
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
   const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
   const selectedPreset = useMemo(
@@ -746,7 +765,7 @@ export function InvokerTerminal({
   };
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !binding && !readOnly && value.trim()) {
       event.preventDefault();
       submitFromComposer('enter');
     }
@@ -886,7 +905,7 @@ export function InvokerTerminal({
                     <button
                       key={chip}
                       type="button"
-                      disabled={busy || readOnly}
+                      disabled={busy || binding || readOnly}
                       onClick={() => {
                         onValueChange(chip);
                         focusComposer();
@@ -902,6 +921,24 @@ export function InvokerTerminal({
               transcriptContent
             )}
           </div>
+
+          {turnError && !readOnly && (
+            <div
+              data-testid="invoker-terminal-turn-error"
+              className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-card/80 px-4 py-3.5 backdrop-blur-sm"
+            >
+              <span className="min-w-0 flex-1 text-xs text-red-400">{turnError}</span>
+              <button
+                type="button"
+                data-testid="invoker-terminal-retry-turn"
+                disabled={busy}
+                onClick={() => onRetryTurn?.()}
+                className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {draftPlanAvailable && !draftReviewOpen && !readOnly && (
             <div
@@ -977,7 +1014,7 @@ export function InvokerTerminal({
                 ref={inputRef}
                 data-testid="invoker-terminal-input"
                 value={value}
-                disabled={busy || readOnly}
+                disabled={busy || binding || readOnly}
                 rows={expanded ? 5 : 1}
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
@@ -1040,6 +1077,33 @@ export function InvokerTerminal({
                           <option value="require">Ask first</option>
                         </select>
                       </label>
+                      {!repoLocked && (
+                        <label className="text-xs text-muted-foreground">
+                          Repo
+                          <input
+                            data-testid="invoker-terminal-repo"
+                            list="invoker-terminal-repo-suggestions"
+                            value={repoValue}
+                            disabled={readOnly || binding}
+                            placeholder="path or URL (default if empty)"
+                            onChange={(event) => onRepoInputChange?.(event.target.value)}
+                            onBlur={() => onRepoCommit?.()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                onRepoCommit?.();
+                              }
+                            }}
+                            className="ml-2 w-56 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                          />
+                          <datalist id="invoker-terminal-repo-suggestions">
+                            {repoSuggestions.map((repo) => <option key={repo} value={repo} />)}
+                          </datalist>
+                        </label>
+                      )}
+                      {repoError && !repoLocked && (
+                        <span data-testid="invoker-terminal-repo-error" className="text-xs text-red-400">{repoError}</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1049,10 +1113,18 @@ export function InvokerTerminal({
                   disabled={sendButtonDisabled}
                   className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
                 >
-                  <SendIcon
-                    data-testid="invoker-terminal-send-icon"
-                    className="h-4 w-4"
-                  />
+                  {busy || binding ? (
+                    <span
+                      data-testid="invoker-terminal-send-spinner"
+                      aria-hidden="true"
+                      className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-500 border-t-gray-100"
+                    />
+                  ) : (
+                    <SendIcon
+                      data-testid="invoker-terminal-send-icon"
+                      className="h-4 w-4"
+                    />
+                  )}
                 </button>
               </div>
             </div>
