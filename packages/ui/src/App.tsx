@@ -342,6 +342,7 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   terminalError?: string | null;
   repoInput?: string;
   repoError?: string | null;
+  repoBinding?: boolean;
 };
 
 function planningSessionFromSummary(
@@ -453,6 +454,7 @@ function reconcileHydratedPlanningSessions(
       terminalError: restored.terminalSession ? null : session.terminalError,
       repoInput: session.repoInput,
       repoError: session.repoError,
+      repoBinding: session.repoBinding,
     };
   });
   const newRestoredSessions = restoredSessions.filter((session) => !currentIds.has(session.id));
@@ -3343,13 +3345,13 @@ export function App() {
 
   const planningRepoCommitInFlightRef = useRef<Promise<{ ok: boolean; sessionId: string | null }> | null>(null);
 
-  const commitPlanningRepo = useCallback((): Promise<{ ok: boolean; sessionId: string | null }> => {
+  const commitPlanningRepo = useCallback((): Promise<{ ok: boolean; sessionId: string | null; error?: string }> => {
     // Clicking Send or Tmux blurs the repo input, so the blur commit and the
     // caller's commit can race; every caller must share one in-flight run.
     const inFlight = planningRepoCommitInFlightRef.current;
     if (inFlight) return inFlight;
 
-    const run = (async (): Promise<{ ok: boolean; sessionId: string | null }> => {
+    const run = (async (): Promise<{ ok: boolean; sessionId: string | null; error?: string }> => {
       // Read the latest view state from refs: render closures go stale across
       // the awaits below and would re-materialize an already-swapped session.
       const viewSessionId = activePlanningSessionIdRef.current;
@@ -3368,10 +3370,14 @@ export function App() {
 
       let sessionId = currentBackendId;
       let viewId = session.id;
+      // A separate flag from `busy`: `busy` gates whether a turn is running
+      // (and blocks handlePlanningSubmit's own re-entry guard), while a repo
+      // bind must still let a concurrent submit ride this same in-flight run.
+      updatePlanningSessionById(viewId, (current) => ({ ...current, repoBinding: true }));
       if (!sessionId) {
         if (!invoker?.planningChatCreate) {
-          updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: 'Planner is not available.' }));
-          return { ok: false, sessionId: null };
+          updatePlanningSessionById(viewId, (current) => ({ ...current, repoBinding: false, repoError: 'Planner is not available.' }));
+          return { ok: false, sessionId: null, error: 'Planner is not available.' };
         }
         try {
           const result = await invoker.planningChatCreate({
@@ -3380,8 +3386,8 @@ export function App() {
             confirmationMode: session.confirmationMode ?? selectedPlanningConfirmationMode,
           });
           if (!result.ok) {
-            updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: result.error }));
-            return { ok: false, sessionId: null };
+            updatePlanningSessionById(viewId, (current) => ({ ...current, repoBinding: false, repoError: result.error }));
+            return { ok: false, sessionId: null, error: result.error };
           }
           const localId = viewId;
           sessionId = result.session.id;
@@ -3391,6 +3397,7 @@ export function App() {
               ? planningSessionFromSummary(result.session, {
                   input: current.input,
                   busy: false,
+                  repoBinding: true,
                   repoInput: current.repoInput,
                   repoError: null,
                 })
@@ -3408,23 +3415,24 @@ export function App() {
           ));
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Failed to create a planning session.';
-          updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: message }));
-          return { ok: false, sessionId: null };
+          updatePlanningSessionById(viewId, (current) => ({ ...current, repoBinding: false, repoError: message }));
+          return { ok: false, sessionId: null, error: message };
         }
       }
 
       if (!invoker?.planningChatRebindRepo) {
-        updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: 'Repo binding is not available.' }));
-        return { ok: false, sessionId };
+        updatePlanningSessionById(viewId, (current) => ({ ...current, repoBinding: false, repoError: 'Repo binding is not available.' }));
+        return { ok: false, sessionId, error: 'Repo binding is not available.' };
       }
       try {
         const result = await invoker.planningChatRebindRepo({ sessionId, repoUrl: pending });
         if (!result.ok) {
-          updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: result.error }));
-          return { ok: false, sessionId };
+          updatePlanningSessionById(viewId, (current) => ({ ...current, repoBinding: false, repoError: result.error }));
+          return { ok: false, sessionId, error: result.error };
         }
         updatePlanningSessionById(viewId, (current) => ({
           ...current,
+          repoBinding: false,
           repoUrl: pending,
           baseCommit: undefined,
           repoInput: undefined,
@@ -3433,8 +3441,8 @@ export function App() {
         return { ok: true, sessionId };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to bind the repository.';
-        updatePlanningSessionById(viewId, (current) => ({ ...current, repoError: message }));
-        return { ok: false, sessionId };
+        updatePlanningSessionById(viewId, (current) => ({ ...current, repoBinding: false, repoError: message }));
+        return { ok: false, sessionId, error: message };
       }
     })();
 
@@ -3462,7 +3470,15 @@ export function App() {
     const pendingRepoInput = (activePlanningSession.repoInput ?? '').trim();
     if (!activePlanningRepoLocked && pendingRepoInput && pendingRepoInput !== (activePlanningSession.repoUrl ?? '')) {
       const bind = await commitPlanningRepo();
-      if (!bind.ok) return;
+      if (!bind.ok) {
+        appendTerminalLine(
+          `Could not bind repository: ${bind.error ?? 'Unknown error'}`,
+          'system',
+          'error',
+          bind.sessionId ?? activeViewId,
+        );
+        return;
+      }
       if (bind.sessionId) {
         sendSessionId = bind.sessionId;
         activeViewId = bind.sessionId;
@@ -5276,6 +5292,7 @@ export function App() {
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
+            repoBindPending={Boolean(activePlanningSession.repoBinding)}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}

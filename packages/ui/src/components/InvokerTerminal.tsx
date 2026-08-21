@@ -108,6 +108,8 @@ function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): 
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
   busy: boolean;
+  // Separate from `busy` so the submit gate below still lets a Send-triggered bind through.
+  repoBindPending?: boolean;
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
@@ -539,6 +541,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
 export function InvokerTerminal({
   lines,
   busy,
+  repoBindPending = false,
   value,
   selectedPresetKey,
   presetOptions,
@@ -685,8 +688,9 @@ export function InvokerTerminal({
     inputRef.current?.focus();
   };
 
-  const composerDisabledCursorClass = busy || readOnly ? 'disabled:cursor-not-allowed' : '';
-  const sendButtonDisabled = busy || readOnly || !value.trim();
+  const composerBusy = busy || repoBindPending;
+  const composerDisabledCursorClass = composerBusy || readOnly ? 'disabled:cursor-not-allowed' : '';
+  const sendButtonDisabled = composerBusy || readOnly || !value.trim();
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
   const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
   const selectedPreset = useMemo(
@@ -1011,7 +1015,7 @@ export function InvokerTerminal({
                 ref={inputRef}
                 data-testid="invoker-terminal-input"
                 value={value}
-                disabled={busy || readOnly}
+                disabled={composerBusy || readOnly}
                 rows={expanded ? 5 : 1}
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
@@ -1110,7 +1114,7 @@ export function InvokerTerminal({
                   disabled={sendButtonDisabled}
                   className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
                 >
-                  {busy ? (
+                  {composerBusy ? (
                     <span
                       data-testid="invoker-terminal-send-spinner"
                       aria-hidden="true"
