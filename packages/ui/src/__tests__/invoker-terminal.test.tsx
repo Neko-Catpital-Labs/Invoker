@@ -747,7 +747,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
@@ -828,6 +828,7 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'try again',
         presetKey: 'codex',
@@ -1038,7 +1039,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
     });
   });
 
@@ -1310,6 +1311,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         sessionId: 'saved-pressure-chat',
         message: 'continue the restored session',
         presetKey: 'codex',
@@ -1525,6 +1527,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'make the plan more detailed',
         presetKey: 'codex',
@@ -1576,7 +1579,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft a plan');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' });
     });
   });
 
@@ -1620,6 +1623,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'submit',
         presetKey: 'codex',
@@ -2192,6 +2196,15 @@ describe('Invoker terminal (component)', () => {
     expect(sendButton).toBeEnabled();
     expect(sendButton).not.toHaveTextContent('Send');
     expect(within(sendButton).getByTestId('invoker-terminal-send-icon')).toBeInTheDocument();
+  });
+
+  it('swaps the send icon for a pending spinner while a turn is running', () => {
+    render(<InvokerTerminal {...terminalProps({ busy: true })} />);
+
+    const sendButton = screen.getByRole('button', { name: 'Send' });
+    expect(sendButton).toBeDisabled();
+    expect(within(sendButton).getByTestId('invoker-terminal-send-spinner')).toBeInTheDocument();
+    expect(within(sendButton).queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
   });
 
   it('uses the amber send-button styling in the enabled state', () => {
