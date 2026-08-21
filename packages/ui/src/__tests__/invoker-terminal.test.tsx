@@ -2198,6 +2198,15 @@ describe('Invoker terminal (component)', () => {
     expect(within(sendButton).getByTestId('invoker-terminal-send-icon')).toBeInTheDocument();
   });
 
+  it('swaps the send icon for a pending spinner while a turn is running', () => {
+    render(<InvokerTerminal {...terminalProps({ busy: true })} />);
+
+    const sendButton = screen.getByRole('button', { name: 'Send' });
+    expect(sendButton).toBeDisabled();
+    expect(within(sendButton).getByTestId('invoker-terminal-send-spinner')).toBeInTheDocument();
+    expect(within(sendButton).queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
+  });
+
   it('uses the amber send-button styling in the enabled state', () => {
     render(<InvokerTerminal {...terminalProps({ value: 'draft a plan' })} />);
 
