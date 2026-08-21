@@ -92,10 +92,6 @@ def _safe_push_task_yaml(
     dependencies: str,
     head_ref: str,
     start_head: str,
-    state_file: Path,
-    json_kind: str,
-    pr_number: int,
-    json_key: str,
     skip_if_prereq: bool,
 ) -> str:
     skip_guard = (
@@ -106,14 +102,14 @@ def _safe_push_task_yaml(
         if skip_if_prereq
         else ""
     )
+    # Owner-side JSONL settlement is recorded by mergify_admin_requeue_workflow_fastpath
+    # from durable workflow/task state. Never pass the owner machine's ledger path into
+    # a remote worker command (Linux workers cannot write /Users/... paths).
     command = (
         "set -euo pipefail\n"
         f"{skip_guard}"
         "python3 scripts/pr_worker_safe_push.py \\\n"
-        f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd . \\\n"
-        f"  --record-json-ledger {_shlex(str(state_file))} \\\n"
-        f"  --json-kind {_shlex(json_kind)} --json-pr {_shlex(str(pr_number))} \\\n"
-        f"  --json-head-sha {_shlex(start_head)} --json-key {_shlex(json_key)}\n"
+        f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd .\n"
     )
     return (
         f"  - id: {task_id}\n"
@@ -215,10 +211,6 @@ def build_repair_check_plan(
         dependencies="normalize",
         head_ref=pr.head_ref_name,
         start_head=start_head,
-        state_file=state_file,
-        json_kind="repair-check-settled",
-        pr_number=pr.number,
-        json_key=check_name,
         skip_if_prereq=True,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
@@ -253,10 +245,6 @@ def build_repair_conflict_plan(
         dependencies="repair",
         head_ref=pr.head_ref_name,
         start_head=start_head,
-        state_file=state_file,
-        json_kind="conflict-repair-settled",
-        pr_number=pr.number,
-        json_key=f"conflict:{pr.number}",
         skip_if_prereq=False,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
@@ -287,10 +275,6 @@ def build_repair_bot_thread_plan(
         dependencies="repair",
         head_ref=pr.head_ref_name,
         start_head=start_head,
-        state_file=state_file,
-        json_kind="repair-bot-thread-settled",
-        pr_number=pr.number,
-        json_key=thread_id,
         skip_if_prereq=False,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)

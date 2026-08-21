@@ -91,7 +91,9 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("dependencies: [repair]", plan.yaml_text)
         self.assertIn("dependencies: [normalize]", plan.yaml_text)
         self.assertIn("mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
-        self.assertIn("--json-kind 'repair-check-settled'", plan.yaml_text)
+        self.assertNotIn("--record-json-ledger", plan.yaml_text)
+        self.assertNotIn("--json-kind", plan.yaml_text)
+        self.assertNotIn("/tmp/ledger.jsonl", plan.yaml_text)
         self.assertIn("Failed check: PR Body", plan.yaml_text)
         self.assertNotIn(
             "executionAgent", plan.yaml_text,
@@ -152,26 +154,49 @@ class AsyncRepairPlanTests(unittest.TestCase):
         )
         self.assertIn("Queue draft PR: #5854", plan.yaml_text)
 
-    def test_repair_conflict_plan_has_two_tasks_and_conflict_key(self):
+    def test_repair_conflict_plan_has_two_tasks_and_no_owner_ledger_path(self):
         plan = async_repair.build_repair_conflict_plan(
             pr(), "GitHub reports merge conflict", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
         self.assertIn("id: repair", plan.yaml_text)
         self.assertIn("id: safe-push", plan.yaml_text)
         self.assertNotIn("id: normalize", plan.yaml_text)
-        self.assertIn("--json-kind 'conflict-repair-settled'", plan.yaml_text)
-        self.assertIn("--json-key 'conflict:2647'", plan.yaml_text)
+        self.assertNotIn("--record-json-ledger", plan.yaml_text)
+        self.assertNotIn("--json-kind", plan.yaml_text)
+        self.assertNotIn("/tmp/ledger.jsonl", plan.yaml_text)
         self.assertIn("commit locally. Do not push.", plan.yaml_text)
         self.assertNotIn("executionAgent", plan.yaml_text)
 
-    def test_repair_bot_thread_plan_uses_thread_id_as_key(self):
+    def test_repair_bot_thread_plan_keeps_thread_id_in_prompt_not_ledger(self):
         plan = async_repair.build_repair_bot_thread_plan(
             pr(), "tbot", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
-        self.assertIn("--json-kind 'repair-bot-thread-settled'", plan.yaml_text)
-        self.assertIn("--json-key 'tbot'", plan.yaml_text)
+        self.assertNotIn("--record-json-ledger", plan.yaml_text)
+        self.assertNotIn("--json-kind", plan.yaml_text)
         self.assertIn("Thread: tbot", plan.yaml_text)
         self.assertNotIn("executionAgent", plan.yaml_text)
+
+    def test_remote_safe_push_never_embeds_macos_owner_ledger_path(self):
+        owner_ledger = Path("/Users/edbertchan/.invoker/mergify-admin-requeue/state.jsonl")
+        for plan in (
+            async_repair.build_repair_check_plan(
+                pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
+                log_path="/tmp/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+                start_head=HEAD, state_file=owner_ledger,
+            ),
+            async_repair.build_repair_conflict_plan(
+                pr(), "GitHub reports merge conflict", repo="owner/repo", start_head=HEAD, state_file=owner_ledger,
+            ),
+            async_repair.build_repair_bot_thread_plan(
+                pr(), "tbot", repo="owner/repo", start_head=HEAD, state_file=owner_ledger,
+            ),
+        ):
+            with self.subTest(plan=plan.plan_name):
+                self.assertNotIn("--record-json-ledger", plan.yaml_text)
+                self.assertNotIn(str(owner_ledger), plan.yaml_text)
+                self.assertNotIn("/Users/", plan.yaml_text)
+                self.assertIn("pr_worker_safe_push.py", plan.yaml_text)
+                self.assertIn("--expected-head", plan.yaml_text)
 
     def test_submit_async_repair_plan_calls_headless_run_and_cleans_up_temp_file(self):
         plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
