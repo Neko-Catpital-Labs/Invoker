@@ -385,6 +385,30 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-model')).not.toBeInTheDocument();
   });
 
+  it('announces the turn error and only renders Retry when a handler is provided', () => {
+    const { rerender } = render(<InvokerTerminal
+      {...terminalProps({
+        turnError: 'Planner was interrupted before it could answer.',
+      })}
+    />);
+
+    const errorBar = screen.getByTestId('invoker-terminal-turn-error');
+    expect(errorBar).toHaveAttribute('role', 'alert');
+    expect(errorBar).toHaveTextContent('Planner was interrupted before it could answer.');
+    expect(screen.queryByTestId('invoker-terminal-retry-turn')).not.toBeInTheDocument();
+
+    const onRetryTurn = vi.fn();
+    rerender(<InvokerTerminal
+      {...terminalProps({
+        turnError: 'Planner was interrupted before it could answer.',
+        onRetryTurn,
+      })}
+    />);
+
+    fireEvent.click(screen.getByTestId('invoker-terminal-retry-turn'));
+    expect(onRetryTurn).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves a still-valid model when switching harnesses', () => {
     const onPresetChange = vi.fn();
     render(<InvokerTerminal
@@ -747,7 +771,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
@@ -828,6 +852,7 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'try again',
         presetKey: 'codex',
@@ -1038,7 +1063,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
     });
   });
 
@@ -1310,6 +1335,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         sessionId: 'saved-pressure-chat',
         message: 'continue the restored session',
         presetKey: 'codex',
@@ -1525,6 +1551,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'make the plan more detailed',
         presetKey: 'codex',
@@ -1576,7 +1603,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft a plan');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' });
     });
   });
 
@@ -1620,6 +1647,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'submit',
         presetKey: 'codex',
