@@ -48,6 +48,7 @@ import {
   BOLD,
   RESET,
   createHeadlessExecutor,
+  createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   buildHeadlessApiServerDeps,
   trackHeadlessWorkflow,
@@ -196,25 +197,7 @@ function printStartReadyOutcomeSummary(result: StartReadyResult, request: StartR
     process.stdout.write(`  workflow outcomes: ${succeeded} succeeded, ${failed} failed\n`);
   }
 }
-function createTrackedHeadlessExecutor(
-  deps: HeadlessDeps,
-  taskHandles: TaskHandleMap,
-) {
-  return createHeadlessExecutor(
-    {
-      ...deps,
-      ownerTaskRunnerProvider: undefined,
-    },
-    {
-      onSpawned: (taskId, handle, executor) => {
-        taskHandles.set(taskId, { handle, executor });
-      },
-      onComplete: (taskId) => {
-        taskHandles.delete(taskId);
-      },
-    },
-  );
-}
+
 
 function startTrackedHeadlessLaunchDispatcher(
   deps: HeadlessDeps,
