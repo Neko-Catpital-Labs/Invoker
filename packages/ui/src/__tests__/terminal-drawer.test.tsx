@@ -85,6 +85,11 @@ const xtermMock = vi.hoisted(() => {
 vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
 vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
 
+// Rendering the full <App /> exceeds Vitest's default 5s on 1-2 vCPU CI
+// runners (observed 7-8s). packages/ui/vite.config.ts does not extend
+// vitest.shared.ts, so raise the timeout for this file only.
+vi.setConfig({ testTimeout: 20_000 });
+
 const { App } = await import('../App.js');
 const { TerminalDrawer } = await import('../components/TerminalDrawer.js');
 
