@@ -249,6 +249,30 @@ class RepairNormalizeTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(normalize.PREREQ_SENTINEL.exists())
 
+    def test_pr_closed_after_real_diff_records_noop_and_writes_sentinel(self):
+        # Incident 2026-08-22 (PR #10200): the repair produced a real,
+        # normalized commit, but the PR closed while the repair was in
+        # flight and GitHub deleted its head branch. Without the sentinel,
+        # the downstream safe-push task still tries to push against a
+        # branch that no longer exists and fails with a stale-head error,
+        # even though there is nothing left to publish.
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=NEW_HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                        gh_cls.return_value.pr_detail.return_value = {"state": "CLOSED", "body": "## Summary\n\nok\n"}
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                        ) as validate:
+                            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root") as reset:
+                                code = normalize.main(self.argv())
+        self.addCleanup(lambda: normalize.PREREQ_SENTINEL.unlink(missing_ok=True))
+        self.assertEqual(code, 0)
+        validate.assert_not_called()
+        reset.assert_called_once_with(Path.cwd(), HEAD)
+        self.assertEqual(len(self.kind_rows("repair-noop")), 1)
+        self.assertTrue(normalize.PREREQ_SENTINEL.exists())
+
     def test_prereq_split_creates_prerequisite_and_writes_sentinel(self):
         with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=("commit-a",)) as git_lines:
             git_lines.side_effect = lambda cwd, *args: ("commit-a",) if args[:1] == ("rev-list",) else ()

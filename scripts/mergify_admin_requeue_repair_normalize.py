@@ -176,6 +176,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         hard_reset_work_root(cwd, start_head)
         _record_queue_only_noop_if_applicable(state_file, args.pr, start_head, args.check)
         Ledger(state_file).record("repair-noop", args.pr, start_head, args.check)
+        # Reuse the prereq sentinel to skip the downstream safe-push task too:
+        # a closed/merged PR's head branch may already be gone from the remote
+        # (e.g. GitHub's auto-delete-on-close), so safe-push's captured-head
+        # lease would correctly refuse the push as a stale/missing head. There
+        # is nothing to publish either way, so skip it the same way the
+        # prerequisite-split path does.
+        PREREQ_SENTINEL.write_text("1", encoding="utf-8")
         print("noop: PR is no longer open")
         return 0
     body = str(detail.get("body") or "")
