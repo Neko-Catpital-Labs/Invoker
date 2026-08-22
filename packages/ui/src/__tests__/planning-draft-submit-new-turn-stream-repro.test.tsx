@@ -94,6 +94,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         message: 'draft the next plan',
         presetKey: 'codex',
         confirmationMode: 'require',
