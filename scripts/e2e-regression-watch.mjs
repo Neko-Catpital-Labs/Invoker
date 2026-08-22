@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Watches default-branch `ci.yml` push runs and files one Invoker repair plan
-// per active (first-bad SHA, CI job) failure. Local state records observed HEAD
-// SHAs and job outcomes; live Invoker workflow state remains the dedup source
-// for repairs in flight.
+// per active (first-bad SHA, CI job, failing test/repro) failure. Local state
+// records observed HEAD SHAs and job outcomes; live Invoker workflow state plus
+// an attempt-scoped repair-filing ledger remain the dedup sources for repairs
+// in flight.
 import { execFileSync, execSync } from 'node:child_process';
 import {
   existsSync,
@@ -45,7 +46,8 @@ export const IGNORED_JOB_CONCLUSIONS = new Set(['cancelled', 'skipped', 'neutral
 export const MARKER_PREFIX = 'invoker-ci-regression-watch: first-bad-sha=';
 export const CI_REGRESSION_REFLECT_ENV = 'INVOKER_CI_REGRESSION_REFLECT';
 export const CATSTACK_REPO_URL = 'https://github.com/EdbertChan/catstack.git';
-export const STATE_SCHEMA_VERSION = 4;
+export const STATE_SCHEMA_VERSION = 5;
+export const JOB_LEVEL_FAILURE_ID = 'job';
 export const DEFAULT_MAX_ATTEMPTS = 3;
 export const MAX_ATTEMPTS = parseNonNegativeInteger(
   process.env.INVOKER_CI_WATCH_MAX_ATTEMPTS,
@@ -158,12 +160,126 @@ function parsePositiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
-export function buildMarker(sha, jobName) {
-  return `${MARKER_PREFIX}${sha}; job=${jobName}`;
+export function buildFailureKey(jobName, failureId = JOB_LEVEL_FAILURE_ID) {
+  const id = typeof failureId === 'string' && failureId.trim()
+    ? failureId.trim()
+    : JOB_LEVEL_FAILURE_ID;
+  if (id === JOB_LEVEL_FAILURE_ID) return jobName;
+  return `${jobName}::${id}`;
 }
 
-export function buildMarkerComment(sha, jobName) {
-  return `<!-- ${buildMarker(sha, jobName)} -->`;
+export function failureStorageKey(failure) {
+  if (!failure || typeof failure !== 'object') return '';
+  if (typeof failure.failureKey === 'string' && failure.failureKey) return failure.failureKey;
+  return buildFailureKey(failure.jobName, failure.failureId ?? JOB_LEVEL_FAILURE_ID);
+}
+
+export function buildMarker(sha, jobName, failureId = JOB_LEVEL_FAILURE_ID) {
+  const base = `${MARKER_PREFIX}${sha}; job=${jobName}`;
+  const id = typeof failureId === 'string' && failureId.trim() ? failureId.trim() : JOB_LEVEL_FAILURE_ID;
+  if (id === JOB_LEVEL_FAILURE_ID) return base;
+  return `${base}; test=${id}`;
+}
+
+export function buildMarkerComment(sha, jobName, failureId = JOB_LEVEL_FAILURE_ID) {
+  return `<!-- ${buildMarker(sha, jobName, failureId)} -->`;
+}
+
+/**
+ * Derive stable per-test / per-repro identities from a CI job log.
+ * Multiple distinct failures under one job must each get their own repair
+ * lifecycle (incident 2026-08-21: Mergify Admin Requeue stayed red on a new
+ * repro after an earlier same-job repair had already been filed).
+ */
+export function extractFailureIdentitiesFromLog(logText) {
+  const text = String(logText ?? '');
+  if (!text.trim()) return [];
+
+  const found = new Map();
+  const add = (id, kind, label, evidence) => {
+    const normalized = slugify(id, 96);
+    if (!normalized || normalized === 'ci-job') return;
+    if (found.has(normalized)) return;
+    found.set(normalized, {
+      failureId: normalized,
+      kind,
+      label: label || normalized,
+      evidence: evidence || '',
+    });
+  };
+
+  for (const match of text.matchAll(/(?:scripts\/repro\/)?(repro-[a-z0-9][a-z0-9._-]*)(?:\.sh)?/gi)) {
+    add(match[1].replace(/\.sh$/i, ''), 'repro', match[1], match[0]);
+  }
+  for (const match of text.matchAll(/\/tmp\/(repro-[a-z0-9][a-z0-9._-]*)\.[A-Za-z0-9]+\b/gi)) {
+    add(match[1], 'repro', match[1], match[0]);
+  }
+  for (const match of text.matchAll(/^(?:FAIL|ERROR):\s+([^\n(]+)/gm)) {
+    add(match[1].trim(), 'unittest', match[1].trim(), match[0]);
+  }
+  for (const match of text.matchAll(/\b(scripts\/test_[a-z0-9_]+\.py)\b/gi)) {
+    add(match[1], 'unittest-file', match[1], match[0]);
+  }
+  for (const match of text.matchAll(/FAIL\s+([^\n]+?\.test\.[jt]sx?[^\n]*)/g)) {
+    add(match[1].trim(), 'vitest', match[1].trim(), match[0]);
+  }
+  for (const match of text.matchAll(/\b((?:e2e|src)\/[^\s:]+\.(?:spec|test)\.[jt]sx?)\b/g)) {
+    add(match[1], 'playwright-or-vitest-file', match[1], match[0]);
+  }
+  for (const match of text.matchAll(/^\s*[×x]\s+(.+)$/gm)) {
+    const label = match[1].trim();
+    if (label.length >= 8 && label.length <= 160) add(label, 'test-title', label, match[0]);
+  }
+
+  if (found.size > 0) return Array.from(found.values());
+
+  const errorLine = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\S+\s+UNKNOWN STEP\s+\S+\s+/, '').trim())
+    .filter((line) => /(?:error|failed|cannot remove|exception)/i.test(line))
+    .at(-1);
+  if (errorLine) {
+    const fingerprint = slugify(errorLine.replace(/\b[0-9a-f]{7,}\b/gi, 'HEX').slice(0, 120), 72);
+    if (fingerprint && fingerprint !== 'ci-job') {
+      return [{
+        failureId: `err-${fingerprint}`,
+        kind: 'error-fingerprint',
+        label: errorLine.slice(0, 160),
+        evidence: errorLine,
+      }];
+    }
+  }
+  return [];
+}
+
+export function resolveJobFailureIdentities(job, opts = {}) {
+  if (Array.isArray(job?.failureIdentities) && job.failureIdentities.length > 0) {
+    return job.failureIdentities.map((entry) => {
+      if (typeof entry === 'string') {
+        const failureId = slugify(entry, 96) || JOB_LEVEL_FAILURE_ID;
+        return { failureId, kind: 'explicit', label: entry, evidence: '' };
+      }
+      const failureId = slugify(entry?.failureId ?? entry?.id ?? JOB_LEVEL_FAILURE_ID, 96)
+        || JOB_LEVEL_FAILURE_ID;
+      return {
+        failureId,
+        kind: entry?.kind ?? 'explicit',
+        label: entry?.label ?? failureId,
+        evidence: entry?.evidence ?? '',
+      };
+    });
+  }
+  const logText = typeof job?.logText === 'string'
+    ? job.logText
+    : (typeof opts.fetchJobLog === 'function' ? opts.fetchJobLog(job) : '');
+  const extracted = extractFailureIdentitiesFromLog(logText);
+  if (extracted.length > 0) return extracted;
+  return [{
+    failureId: JOB_LEVEL_FAILURE_ID,
+    kind: 'job',
+    label: typeof job?.name === 'string' ? job.name : 'job',
+    evidence: '',
+  }];
 }
 
 export function loadEmptyState() {
@@ -175,15 +291,23 @@ export function loadEmptyState() {
   };
 }
 
-function normalizeActiveFailure(failure, fallbackJobName) {
+function normalizeActiveFailure(failure, fallbackKey) {
   if (!failure || typeof failure !== 'object') return null;
   const jobName = typeof failure.jobName === 'string' && failure.jobName
     ? failure.jobName
-    : fallbackJobName;
+    : (typeof fallbackKey === 'string' && !fallbackKey.includes('::') ? fallbackKey : null);
   if (typeof jobName !== 'string' || !jobName) return null;
+  const failureId = typeof failure.failureId === 'string' && failure.failureId.trim()
+    ? slugify(failure.failureId, 96) || JOB_LEVEL_FAILURE_ID
+    : (typeof fallbackKey === 'string' && fallbackKey.startsWith(`${jobName}::`)
+      ? fallbackKey.slice(jobName.length + 2)
+      : JOB_LEVEL_FAILURE_ID);
+  const failureKey = buildFailureKey(jobName, failureId);
   return {
     ...failure,
     jobName,
+    failureId,
+    failureKey,
     attempts: Number.isFinite(Number(failure.attempts))
       ? Math.max(0, Number(failure.attempts))
       : 0,
@@ -197,11 +321,13 @@ function normalizeActiveFailure(failure, fallbackJobName) {
 
 function normalizeActiveFailures(activeFailures) {
   if (!activeFailures || typeof activeFailures !== 'object') return {};
-  return Object.fromEntries(
-    Object.entries(activeFailures)
-      .map(([jobName, failure]) => [jobName, normalizeActiveFailure(failure, jobName)])
-      .filter(([, failure]) => failure !== null),
-  );
+  const out = {};
+  for (const [key, failure] of Object.entries(activeFailures)) {
+    const normalized = normalizeActiveFailure(failure, key);
+    if (!normalized) continue;
+    out[normalized.failureKey] = normalized;
+  }
+  return out;
 }
 
 function normalizeStateForMutation(state) {
@@ -234,7 +360,63 @@ export function classifyJobConclusion(job) {
   return 'ignored';
 }
 
-export function reconcileCiRun(state, run) {
+function listActiveFailuresForJob(activeFailures, jobName) {
+  return Object.values(activeFailures ?? {}).filter((failure) => failure?.jobName === jobName);
+}
+
+function upsertBrokenFailureIdentity(activeFailures, {
+  jobName,
+  identity,
+  sha,
+  run,
+  job,
+  observedAt,
+}) {
+  const failureKey = buildFailureKey(jobName, identity.failureId);
+  const existing = activeFailures[failureKey];
+  if (existing) {
+    activeFailures[failureKey] = {
+      ...existing,
+      ...normalizeActiveFailure(existing, failureKey),
+      lastBadSha: sha,
+      lastBadRunId: run.databaseId,
+      lastJobDatabaseId: job.databaseId,
+      lastJobUrl: job.url ?? '',
+      lastObservedAt: observedAt,
+      occurrences: Number(existing.occurrences ?? 1) + 1,
+      lastObservedState: 'broken',
+      failureLabel: identity.label ?? existing.failureLabel,
+      failureKind: identity.kind ?? existing.failureKind,
+      failureEvidence: identity.evidence || existing.failureEvidence || '',
+    };
+    return;
+  }
+  activeFailures[failureKey] = {
+    jobName,
+    failureId: identity.failureId,
+    failureKey,
+    failureLabel: identity.label ?? identity.failureId,
+    failureKind: identity.kind ?? 'job',
+    failureEvidence: identity.evidence ?? '',
+    firstBadSha: sha,
+    firstBadRunId: run.databaseId,
+    firstBadRunCreatedAt: run.createdAt ?? '',
+    firstJobDatabaseId: job.databaseId,
+    firstJobUrl: job.url ?? '',
+    lastBadSha: sha,
+    lastBadRunId: run.databaseId,
+    lastJobDatabaseId: job.databaseId,
+    lastJobUrl: job.url ?? '',
+    lastObservedAt: observedAt,
+    occurrences: 1,
+    attempts: 0,
+    lastFiledAt: null,
+    needsHuman: false,
+    lastObservedState: 'broken',
+  };
+}
+
+export function reconcileCiRun(state, run, opts = {}) {
   const normalized = normalizeStateForMutation(state);
   const sha = String(run.headSha ?? '').trim();
   if (!sha) return { state: normalized, processedJobs: 0, brokenJobs: 0, okJobs: 0, ignoredJobs: 0 };
@@ -276,26 +458,29 @@ export function reconcileCiRun(state, run) {
     if (classification === 'ok') {
       okJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'ok' };
-      const existing = normalized.activeFailures[jobName];
-      const lastFiledMs = existing?.lastFiledAt ? new Date(existing.lastFiledAt).getTime() : NaN;
-      const observedAtMs = baseObservation.observedAt ? new Date(baseObservation.observedAt).getTime() : NaN;
-      const withinRecoveryCooldown = existing
-        && Number.isFinite(lastFiledMs)
-        && Number.isFinite(observedAtMs)
-        && (observedAtMs - lastFiledMs) < RECOVERY_COOLDOWN_MS;
-      // A flaky job can report green once and then red again shortly after
-      // on the same underlying defect. Keep attempts/occurrences/lastFiledAt
-      // through the cooldown so that flap resumes the existing backoff
-      // instead of starting over; getActionableFailures excludes it via
-      // lastObservedState while it reads as currently green.
-      if (withinRecoveryCooldown) {
-        normalized.activeFailures[jobName] = {
-          ...existing,
-          ...normalizeActiveFailure(existing, jobName),
-          lastObservedState: 'ok',
-        };
-      } else {
-        delete normalized.activeFailures[jobName];
+      const existingForJob = listActiveFailuresForJob(normalized.activeFailures, jobName);
+      for (const existing of existingForJob) {
+        const lastFiledMs = existing?.lastFiledAt ? new Date(existing.lastFiledAt).getTime() : NaN;
+        const observedAtMs = baseObservation.observedAt ? new Date(baseObservation.observedAt).getTime() : NaN;
+        const withinRecoveryCooldown = existing
+          && Number.isFinite(lastFiledMs)
+          && Number.isFinite(observedAtMs)
+          && (observedAtMs - lastFiledMs) < RECOVERY_COOLDOWN_MS;
+        // A flaky job can report green once and then red again shortly after
+        // on the same underlying defect. Keep attempts/occurrences/lastFiledAt
+        // through the cooldown so that flap resumes the existing backoff
+        // instead of starting over; getActionableFailures excludes it via
+        // lastObservedState while it reads as currently green.
+        const key = failureStorageKey(existing);
+        if (withinRecoveryCooldown) {
+          normalized.activeFailures[key] = {
+            ...existing,
+            ...normalizeActiveFailure(existing, key),
+            lastObservedState: 'ok',
+          };
+        } else {
+          delete normalized.activeFailures[key];
+        }
       }
       continue;
     }
@@ -303,38 +488,27 @@ export function reconcileCiRun(state, run) {
     if (classification === 'broken') {
       brokenJobs += 1;
       headRecord.jobs[jobName] = { ...baseObservation, state: 'broken' };
-      const existing = normalized.activeFailures[jobName];
-      if (existing) {
-        normalized.activeFailures[jobName] = {
-          ...existing,
-          ...normalizeActiveFailure(existing, jobName),
-          lastBadSha: sha,
-          lastBadRunId: run.databaseId,
-          lastJobDatabaseId: job.databaseId,
-          lastJobUrl: job.url ?? '',
-          lastObservedAt: baseObservation.observedAt,
-          occurrences: Number(existing.occurrences ?? 1) + 1,
-          lastObservedState: 'broken',
-        };
-      } else {
-        normalized.activeFailures[jobName] = {
+      const identities = resolveJobFailureIdentities(job, opts);
+      const seenKeys = new Set();
+      for (const identity of identities) {
+        const key = buildFailureKey(jobName, identity.failureId);
+        seenKeys.add(key);
+        upsertBrokenFailureIdentity(normalized.activeFailures, {
           jobName,
-          firstBadSha: sha,
-          firstBadRunId: run.databaseId,
-          firstBadRunCreatedAt: run.createdAt ?? '',
-          firstJobDatabaseId: job.databaseId,
-          firstJobUrl: job.url ?? '',
-          lastBadSha: sha,
-          lastBadRunId: run.databaseId,
-          lastJobDatabaseId: job.databaseId,
-          lastJobUrl: job.url ?? '',
-          lastObservedAt: baseObservation.observedAt,
-          occurrences: 1,
-          attempts: 0,
-          lastFiledAt: null,
-          needsHuman: false,
-          lastObservedState: 'broken',
-        };
+          identity,
+          sha,
+          run,
+          job,
+          observedAt: baseObservation.observedAt,
+        });
+      }
+      // When we have concrete test/repro identities, drop a legacy job-level
+      // entry for the same job so retries cannot collapse back onto it.
+      if (![...seenKeys].every((key) => key === jobName)) {
+        const legacy = normalized.activeFailures[jobName];
+        if (legacy && (legacy.failureId ?? JOB_LEVEL_FAILURE_ID) === JOB_LEVEL_FAILURE_ID) {
+          delete normalized.activeFailures[jobName];
+        }
       }
       continue;
     }
@@ -359,7 +533,9 @@ export function getActionableFailures(state) {
     .sort((a, b) => {
       const runDelta = Number(a.firstBadRunId ?? 0) - Number(b.firstBadRunId ?? 0);
       if (runDelta !== 0) return runDelta;
-      return a.jobName.localeCompare(b.jobName);
+      const jobDelta = a.jobName.localeCompare(b.jobName);
+      if (jobDelta !== 0) return jobDelta;
+      return failureStorageKey(a).localeCompare(failureStorageKey(b));
     });
 }
 
@@ -380,6 +556,10 @@ export function groupFailuresBySha(failures) {
   return groups;
 }
 
+function uniqueJobNames(failures) {
+  return [...new Set(failures.map((failure) => failure.jobName).filter(Boolean))];
+}
+
 export function shouldFileFailure(failure, {
   nowMs = Date.now(),
   maxAttempts = MAX_ATTEMPTS,
@@ -396,10 +576,10 @@ export function shouldFileFailure(failure, {
 
 export function markFailureNeedsHuman(state, failure) {
   const normalized = normalizeStateForMutation(state);
-  const jobName = failure.jobName;
-  const existing = normalized.activeFailures[jobName];
+  const key = failureStorageKey(failure);
+  const existing = normalized.activeFailures[key];
   if (!existing) return normalized;
-  normalized.activeFailures[jobName] = {
+  normalized.activeFailures[key] = {
     ...existing,
     needsHuman: true,
   };
@@ -408,10 +588,10 @@ export function markFailureNeedsHuman(state, failure) {
 
 export function markFailureRetired(state, failure, retired = true) {
   const normalized = normalizeStateForMutation(state);
-  const jobName = failure.jobName;
-  const existing = normalized.activeFailures[jobName];
+  const key = failureStorageKey(failure);
+  const existing = normalized.activeFailures[key];
   if (!existing) return normalized;
-  normalized.activeFailures[jobName] = {
+  normalized.activeFailures[key] = {
     ...existing,
     retired: Boolean(retired),
   };
@@ -420,10 +600,10 @@ export function markFailureRetired(state, failure, retired = true) {
 
 export function recordFailureFiled(state, failure, filedAt = new Date()) {
   const normalized = normalizeStateForMutation(state);
-  const jobName = failure.jobName;
-  const existing = normalized.activeFailures[jobName];
+  const key = failureStorageKey(failure);
+  const existing = normalized.activeFailures[key];
   if (!existing) return normalized;
-  normalized.activeFailures[jobName] = {
+  normalized.activeFailures[key] = {
     ...existing,
     attempts: Number(existing.attempts ?? 0) + 1,
     lastFiledAt: filedAt.toISOString(),
@@ -504,6 +684,8 @@ function synthesizeFleetFailure(state, sha, members, jobDefinitions) {
   return {
     ...(existing ?? {}),
     jobName,
+    failureId: JOB_LEVEL_FAILURE_ID,
+    failureKey: jobName,
     markerJobName: 'fleet',
     isFleetEvent: true,
     firstBadSha: sha,
@@ -547,29 +729,34 @@ function prepareFleetCorrelatedFailures(state, failures, {
   );
 
   for (const [sha, members] of groups) {
-    if (members.length < threshold && !existingFleetBySha.has(sha)) continue;
-    const fleetFailure = synthesizeFleetFailure(normalized, sha, members, jobDefinitions);
+    const uniqueJobs = uniqueJobNames(members);
+    if (uniqueJobs.length < threshold && !existingFleetBySha.has(sha)) continue;
+    // Fleet correlation is job-scoped: pick one representative failure per job.
+    const representatives = uniqueJobs.map((jobName) =>
+      members.find((member) => member.jobName === jobName)).filter(Boolean);
+    const fleetFailure = synthesizeFleetFailure(normalized, sha, representatives, jobDefinitions);
     if (!fleetFailure) {
       if (existingFleetBySha.has(sha)) {
         const existingFleetEntry = existingFleetBySha.get(sha);
-        if (normalized.activeFailures[existingFleetEntry.jobName]) {
-          normalized.activeFailures[existingFleetEntry.jobName] = {
-            ...normalized.activeFailures[existingFleetEntry.jobName],
+        if (normalized.activeFailures[failureStorageKey(existingFleetEntry)]) {
+          normalized.activeFailures[failureStorageKey(existingFleetEntry)] = {
+            ...normalized.activeFailures[failureStorageKey(existingFleetEntry)],
             retired: true,
           };
           stateChanged = true;
         }
       }
       for (const member of members) {
-        const existing = normalized.activeFailures[member.jobName];
+        const key = failureStorageKey(member);
+        const existing = normalized.activeFailures[key];
         if (!existing) continue;
-        normalized.activeFailures[member.jobName] = {
+        normalized.activeFailures[key] = {
           ...existing,
           memberOfFleetEvent: sha,
           retired: true,
         };
-        retiredFleetMembers.push(normalized.activeFailures[member.jobName]);
-        correlated.add(member.jobName);
+        retiredFleetMembers.push(normalized.activeFailures[key]);
+        correlated.add(key);
         stateChanged = true;
       }
       continue;
@@ -578,7 +765,7 @@ function prepareFleetCorrelatedFailures(state, failures, {
     const existingFleet = Object.values(normalized.activeFailures)
       .find((failure) => isFleetEventFailure(failure) && failure.firstBadSha === sha);
     if (existingFleet?.jobName && existingFleet.jobName !== fleetFailure.jobName) {
-      delete normalized.activeFailures[existingFleet.jobName];
+      delete normalized.activeFailures[failureStorageKey(existingFleet)];
     }
 
     // When the consolidated fleet key has exhausted its attempt budget,
@@ -586,7 +773,7 @@ function prepareFleetCorrelatedFailures(state, failures, {
     // otherwise those jobs sit forever at attempts:0 with no repair queued.
     const fleetGate = shouldFileFailure(fleetFailure, { nowMs, maxAttempts });
     if (fleetGate.action === 'needs-human') {
-      normalized.activeFailures[fleetFailure.jobName] = {
+      normalized.activeFailures[failureStorageKey(fleetFailure)] = {
         ...fleetFailure,
         needsHuman: true,
       };
@@ -595,25 +782,26 @@ function prepareFleetCorrelatedFailures(state, failures, {
       continue;
     }
 
-    normalized.activeFailures[fleetFailure.jobName] = fleetFailure;
+    normalized.activeFailures[failureStorageKey(fleetFailure)] = fleetFailure;
     fleetFailures.push(fleetFailure);
     stateChanged = true;
 
     for (const member of members) {
-      const existing = normalized.activeFailures[member.jobName];
+      const key = failureStorageKey(member);
+      const existing = normalized.activeFailures[key];
       if (!existing) continue;
-      normalized.activeFailures[member.jobName] = {
+      normalized.activeFailures[key] = {
         ...existing,
         memberOfFleetEvent: sha,
       };
-      correlated.add(member.jobName);
+      correlated.add(key);
       stateChanged = true;
     }
   }
 
   for (const [sha, existingFleet] of existingFleetBySha) {
-    if (!groups.has(sha) && existingFleet?.jobName && normalized.activeFailures[existingFleet.jobName]) {
-      delete normalized.activeFailures[existingFleet.jobName];
+    if (!groups.has(sha) && existingFleet?.jobName && normalized.activeFailures[failureStorageKey(existingFleet)]) {
+      delete normalized.activeFailures[failureStorageKey(existingFleet)];
       stateChanged = true;
     }
   }
@@ -622,20 +810,21 @@ function prepareFleetCorrelatedFailures(state, failures, {
     ...fleetFailures,
     ...failures.filter((failure) => {
       if (isFleetEventFailure(failure)) return false;
-      return !correlated.has(failure.jobName);
+      return !correlated.has(failureStorageKey(failure));
     }),
   ].sort((a, b) => {
     const runDelta = Number(a.firstBadRunId ?? 0) - Number(b.firstBadRunId ?? 0);
     if (runDelta !== 0) return runDelta;
-    return a.jobName.localeCompare(b.jobName);
+    return failureStorageKey(a).localeCompare(failureStorageKey(b));
   });
 
   for (const failure of failures) {
-    if (correlated.has(failure.jobName)) continue;
-    const existing = normalized.activeFailures[failure.jobName];
+    if (correlated.has(failureStorageKey(failure))) continue;
+    const key = failureStorageKey(failure);
+    const existing = normalized.activeFailures[key];
     if (existing?.memberOfFleetEvent) {
       const { memberOfFleetEvent, ...withoutFleetMembership } = existing;
-      normalized.activeFailures[failure.jobName] = withoutFleetMembership;
+      normalized.activeFailures[key] = withoutFleetMembership;
       stateChanged = true;
     }
   }
@@ -806,15 +995,20 @@ export function fallbackVerifyCommand(jobName) {
 
 export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefinitions()) {
   const short = shortSha(failure.firstBadSha);
-  const jobSlug = `${short}-${slugify(failure.jobName)}`;
+  const failureId = failure.failureId ?? JOB_LEVEL_FAILURE_ID;
+  const identitySlug = failureId === JOB_LEVEL_FAILURE_ID ? '' : `-${slugify(failureId, 48)}`;
+  const jobSlug = `${short}-${slugify(failure.jobName)}${identitySlug}`;
   const verifyCommand = getVerifyCommandForFailure(failure, jobDefinitions) || fallbackVerifyCommand(failure.jobName);
   const markerJobName = failure.markerJobName ?? failure.jobName;
+  const identityLine = failureId !== JOB_LEVEL_FAILURE_ID
+    ? `\nFailing test/repro: \`${failure.failureLabel ?? failureId}\`.`
+    : '';
   const failureDescription = typeof failure.description === 'string' && failure.description.trim()
     ? failure.description.trim()
     : [
       `CI job \`${failure.jobName}\` first failed on default-branch push commit ${failure.firstBadSha}`,
       `in run ${failure.firstBadRunId ?? ''}. It was most recently still red at ${failure.lastBadSha ?? failure.firstBadSha}`,
-      `in run ${failure.lastBadRunId ?? failure.firstBadRunId ?? ''}.`,
+      `in run ${failure.lastBadRunId ?? failure.firstBadRunId ?? ''}.${identityLine}`,
       '',
       `First bad job: ${failure.firstJobUrl ?? ''}`,
     ].join('\n');
@@ -831,7 +1025,7 @@ export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefin
     last_bad_sha: failure.lastBadSha ?? failure.firstBadSha,
     last_bad_run_id: String(failure.lastBadRunId ?? failure.firstBadRunId ?? ''),
     verify_command: verifyCommand,
-    marker: buildMarkerComment(failure.firstBadSha, markerJobName),
+    marker: buildMarkerComment(failure.firstBadSha, markerJobName, failureId),
     failure_description: failureDescription.split(/\r?\n/).join('\n  '),
   };
 }
@@ -892,12 +1086,51 @@ function headlessQueryWorkflowsJson() {
   );
 }
 
-export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = headlessQueryWorkflowsJson) {
+function extractReviewIdsFromWorkflow(workflow) {
+  const ids = new Set();
+  if (typeof workflow?.reviewUrl === 'string') {
+    const match = workflow.reviewUrl.match(/\/pull\/(\d+)/);
+    if (match) ids.add(match[1]);
+  }
+  if (typeof workflow?.description === 'string') {
+    for (const match of workflow.description.matchAll(/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/g)) {
+      ids.add(match[1]);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * Returns true when the workflow still has an open GitHub PR. Missing/unknown
+ * PR metadata fails closed (assume open) so we do not double-file.
+ */
+export function isRepairPrOpen(workflow, _failure, opts = {}) {
+  const reviewIds = extractReviewIdsFromWorkflow(workflow);
+  if (reviewIds.length === 0) return true;
+  const fetchPr = opts.fetchPrState ?? ((prNumber) => ghJson([
+    'pr', 'view', String(prNumber), '--repo', TARGET_REPO, '--json', 'state,closedAt,mergedAt',
+  ]));
+  try {
+    return reviewIds.some((prNumber) => {
+      const pr = fetchPr(prNumber);
+      const state = String(pr?.state ?? '').toUpperCase();
+      return state === 'OPEN';
+    });
+  } catch (err) {
+    console.error(`ci-regression-watch: isRepairPrOpen failed for workflow review ids ${reviewIds.join(',')}: ${err instanceof Error ? err.message : String(err)}; assuming PR still open`);
+    return true;
+  }
+}
+
+export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = headlessQueryWorkflowsJson, opts = {}) {
   const sha = typeof failureOrSha === 'object' ? failureOrSha.firstBadSha : failureOrSha;
   const job = typeof failureOrSha === 'object'
     ? (failureOrSha.markerJobName ?? failureOrSha.jobName)
     : jobName;
-  const marker = buildMarker(sha, job);
+  const failureId = typeof failureOrSha === 'object'
+    ? (failureOrSha.failureId ?? JOB_LEVEL_FAILURE_ID)
+    : (opts.failureId ?? JOB_LEVEL_FAILURE_ID);
+  const marker = buildMarker(sha, job, failureId);
   let workflows;
   try {
     workflows = JSON.parse(queryFn());
@@ -922,11 +1155,22 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
     console.error(`ci-regression-watch: liveQueryHasNonTerminalWork received an invalid response shape for marker "${marker}", assuming non-terminal work exists`);
     return true;
   }
-  return items.some(
-    (w) => !TERMINAL_WORKFLOW_STATUSES.has(w.status)
-      && typeof w.description === 'string'
-      && w.description.includes(marker),
+  const matching = items.filter(
+    (w) => typeof w.description === 'string' && w.description.includes(marker),
   );
+  if (matching.length === 0) return false;
+
+  const prOpenCheck = opts.isRepairPrOpen ?? isRepairPrOpen;
+  for (const workflow of matching) {
+    if (!TERMINAL_WORKFLOW_STATUSES.has(workflow.status)) {
+      if (workflow.status === 'review_ready') {
+        const open = prOpenCheck(workflow, failureOrSha);
+        if (open === false) continue;
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -935,17 +1179,25 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
 // ---------------------------------------------------------------------------
 
 /**
- * kind is namespaced per CI job and deliberately excludes the sha (that's
- * stateSha) and, for fleet events, excludes the member-job count (that's
- * metadata only) -- see buildFleetJobName.
+ * kind is namespaced per CI job + failure identity + attempt ordinal.
+ * Attempt scoping lets a later retry after a completed/failed repair claim a
+ * fresh key, while identity scoping keeps two tests under one job independent.
  */
 export function repairFilingKind(failure) {
   const job = failure.markerJobName ?? failure.jobName;
-  return `ci-regression:${slugify(job)}`;
+  const test = failure.failureId && failure.failureId !== JOB_LEVEL_FAILURE_ID
+    ? failure.failureId
+    : JOB_LEVEL_FAILURE_ID;
+  const nextAttempt = Number(failure.attempts ?? 0) + 1;
+  return `ci-regression:${slugify(job)}:${slugify(test)}:a${nextAttempt}`;
 }
 
 export function buildRepairFilingMetadata(failure) {
-  const metadata = { jobName: failure.jobName };
+  const metadata = {
+    jobName: failure.jobName,
+    failureId: failure.failureId ?? JOB_LEVEL_FAILURE_ID,
+    attempt: Number(failure.attempts ?? 0) + 1,
+  };
   if (Array.isArray(failure.memberJobNames)) metadata.memberJobNames = failure.memberJobNames;
   return metadata;
 }
@@ -974,6 +1226,19 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
     console.error(`ci-regression-watch: claimRepairFiling failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}", assuming already claimed: ${err instanceof Error ? err.message : String(err)}`);
     return true;
   }
+}
+
+/**
+ * Returns true when this failure already has in-flight repair work or an open
+ * repair PR, or when the attempt-scoped ledger claim is already held.
+ */
+export function shouldSkipFilingAlreadyAddressed(failure, {
+  hasLiveWork = liveQueryHasNonTerminalWork,
+  claim = claimRepairFiling,
+  isRepairPrOpen,
+} = {}) {
+  if (hasLiveWork(failure, undefined, undefined, { isRepairPrOpen })) return true;
+  return claim(failure);
 }
 
 /**
@@ -1111,7 +1376,7 @@ export function processFailureFilingSweep(state, {
   maxAttempts = MAX_ATTEMPTS,
   capPerSweep = CAP_PER_SWEEP,
   jobDefinitions = null,
-  liveQuery = claimRepairFiling,
+  liveQuery = shouldSkipFilingAlreadyAddressed,
   releaseFiling = releaseRepairFilingClaim,
   fileFailure = () => {},
   save = () => {},
@@ -1251,6 +1516,27 @@ export function appendSweepLog(entry) {
 // Orchestration
 // ---------------------------------------------------------------------------
 
+export function getCiJobLog(runId, jobDatabaseId) {
+  try {
+    return execFileSync(
+      'gh',
+      ['run', 'view', String(runId), '--repo', TARGET_REPO, '--job', String(jobDatabaseId), '--log'],
+      {
+        encoding: 'utf8',
+        cwd: REPO_ROOT,
+        timeout: 120_000,
+        maxBuffer: 20 * 1024 * 1024,
+        killSignal: 'SIGKILL',
+      },
+    );
+  } catch (err) {
+    const stdout = err?.stdout ? String(err.stdout) : '';
+    if (stdout.trim()) return stdout;
+    console.error(`ci-regression-watch: failed to fetch log for run ${runId} job ${jobDatabaseId}: ${err instanceof Error ? err.message : String(err)}`);
+    return '';
+  }
+}
+
 export async function main() {
   const state = loadState();
   const repoUrl = getRepoUrl();
@@ -1266,7 +1552,12 @@ export async function main() {
   let jobsIgnored = 0;
   for (const runSummary of runs) {
     const run = getCiRun(runSummary.databaseId);
-    const result = reconcileCiRun(state, run);
+    const result = reconcileCiRun(state, run, {
+      fetchJobLog: (job) => {
+        if (!job?.databaseId) return '';
+        return getCiJobLog(run.databaseId, job.databaseId);
+      },
+    });
     runsProcessed += 1;
     jobsProcessed += result.processedJobs;
     jobsBroken += result.brokenJobs;
@@ -1283,16 +1574,16 @@ export async function main() {
     fileFailure: (failure) => fileBugfixPlan(failure, { repoUrl, jobDefinitions, dryRun }),
     save: saveState,
     onNeedsHuman: (failure, attemptGate) => {
-      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName, failure.failureId)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
     },
     onRetired: (failure, reason) => {
       const detail = reason === 'stale-observation'
         ? `CI has not reported this job in either direction for over ${Math.round(STALE_OBSERVATION_MS / 86_400_000)}d (last observed ${failure.lastObservedAt}); presumed renamed or removed`
         : 'has no mapped local verify command';
-      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName)}" ${detail}; marking retired and skipping filing`);
+      console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName, failure.failureId)}" ${detail}; marking retired and skipping filing`);
     },
     onFileError: (failure, error) => {
-      console.error(`ci-regression-watch: failed to render/lint/submit a repair plan for "${buildMarker(failure.firstBadSha, failure.jobName)}": ${error.message}; continuing with the rest of the sweep`);
+      console.error(`ci-regression-watch: failed to render/lint/submit a repair plan for "${buildMarker(failure.firstBadSha, failure.jobName, failure.failureId)}": ${error.message}; continuing with the rest of the sweep`);
     },
   });
 

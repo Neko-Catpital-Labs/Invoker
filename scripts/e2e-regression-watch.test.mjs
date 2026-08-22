@@ -5,16 +5,20 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   buildCiJobDefinitions,
+  buildFailureKey,
   buildMarker,
   buildRepairFilingMetadata,
   claimRepairFiling,
   CATSTACK_REPO_URL,
+  extractFailureIdentitiesFromLog,
+  failureStorageKey,
   fileBugfixPlan,
   isCiRegressionReflectEnabled,
   getActionableFailures,
   groupFailuresBySha,
   isAutoFixCircuitBreakerPaused,
   isObservationStale,
+  JOB_LEVEL_FAILURE_ID,
   jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
@@ -24,12 +28,18 @@ import {
   releaseRepairFilingClaim,
   repairFilingKind,
   RECOVERY_COOLDOWN_MS,
+  shouldSkipFilingAlreadyAddressed,
   STALE_OBSERVATION_MS,
 } from './e2e-regression-watch.mjs';
 
 function makeFailure(overrides = {}) {
+  const jobName = overrides.jobName ?? 'playwright / launch-dispatch-stuck-lease';
+  const failureId = overrides.failureId ?? JOB_LEVEL_FAILURE_ID;
+  const failureKey = overrides.failureKey ?? buildFailureKey(jobName, failureId);
   return {
-    jobName: 'playwright / launch-dispatch-stuck-lease',
+    jobName,
+    failureId,
+    failureKey,
     firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
     firstBadRunId: 100,
     firstBadRunCreatedAt: '2026-08-18T00:00:00Z',
@@ -39,24 +49,30 @@ function makeFailure(overrides = {}) {
     lastBadRunId: 100,
     lastJobDatabaseId: 200,
     lastJobUrl: 'https://example.test/job/200',
-    lastObservedAt: '2026-08-18T00:00:00Z',
+    lastObservedAt: '2026-08-21T12:00:00Z',
     occurrences: 1,
     attempts: 0,
     lastFiledAt: null,
     needsHuman: false,
     ...overrides,
+    jobName: overrides.jobName ?? jobName,
+    failureId: overrides.failureId ?? failureId,
+    failureKey: overrides.failureKey ?? buildFailureKey(
+      overrides.jobName ?? jobName,
+      overrides.failureId ?? failureId,
+    ),
   };
 }
 
 function stateWithFailure(failure = makeFailure()) {
   const state = loadEmptyState();
-  state.activeFailures[failure.jobName] = failure;
+  state.activeFailures[failureStorageKey(failure)] = failure;
   return state;
 }
 
 function stateWithFailures(failures) {
   const state = loadEmptyState();
-  for (const failure of failures) state.activeFailures[failure.jobName] = failure;
+  for (const failure of failures) state.activeFailures[failureStorageKey(failure)] = failure;
   return state;
 }
 
@@ -138,14 +154,19 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
     };
   }
 
-  it('kind is namespaced per CI job and excludes the sha and the fleet member count', () => {
+  it('kind is namespaced per CI job, failure identity, and attempt ordinal', () => {
     assert.equal(
       repairFilingKind(makeFailure({ jobName: 'required-fast / Guardrails' })),
-      'ci-regression:required-fast-guardrails',
+      'ci-regression:required-fast-guardrails:job:a1',
     );
     assert.equal(
-      repairFilingKind(makeFailure({ jobName: 'fleet / abc123d', markerJobName: 'fleet' })),
-      'ci-regression:fleet',
+      repairFilingKind(makeFailure({
+        jobName: 'fleet / abc123d',
+        markerJobName: 'fleet',
+        failureId: 'job',
+        attempts: 2,
+      })),
+      'ci-regression:fleet:job:a3',
     );
   });
 
@@ -208,7 +229,7 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
     });
     const metadata = buildRepairFilingMetadata(failure);
     assert.deepEqual(metadata.memberJobNames, failure.memberJobNames);
-    assert.equal(repairFilingKind(failure), 'ci-regression:fleet');
+    assert.equal(repairFilingKind(failure), 'ci-regression:fleet:job:a1');
   });
 
   it('processFailureFilingSweep end-to-end: a second sweep for the same (kind, subject, stateSha) never calls fileFailure again', () => {
@@ -711,7 +732,7 @@ describe('attempt ledger filing gate', () => {
       },
     });
 
-    assert.equal(migrated.schemaVersion, 4);
+    assert.equal(migrated.schemaVersion, 5);
     assert.equal(migrated.lastProcessedRunId, 123);
     assert.equal(migrated.activeFailures.build.attempts, 0);
     assert.equal(migrated.activeFailures.build.lastFiledAt, null);
@@ -1211,5 +1232,209 @@ describe('a poison-pill failure must not abort the whole sweep', () => {
       1,
       'a failed filing attempt must still count toward the cap, or this job would crash-loop every sweep forever',
     );
+  });
+});
+
+describe('per-test failure identity under one CI job', () => {
+  const jobName = 'required-fast / Mergify Admin Requeue';
+
+  it('extracts distinct repro identities from the production Mergify Admin Requeue log shape', () => {
+    const log = [
+      "Cloning into '/tmp/repro-babysit-pr-body-human-split.ERdycn/seed'...",
+      "To /tmp/repro-babysit-pr-body-human-split.ERdycn/origin.git",
+      "rm: cannot remove '/tmp/repro-babysit-pr-body-human-split.ERdycn/seed/.git/objects': Directory not empty",
+      '##[error]Process completed with exit code 1.',
+    ].join('\n');
+    const identities = extractFailureIdentitiesFromLog(log);
+    assert.equal(identities.some((entry) => entry.failureId.includes('repro-babysit-pr-body-human-split')), true);
+  });
+
+  it('reproduces the bug: two distinct repros under one job must each get their own repair lifecycle', () => {
+    // Observed (pre-fix): after filing a repair for the first Mergify Admin
+    // Requeue failure, a later red observation that failed in a different
+    // repro collapsed into the same activeFailures[jobName] key and the
+    // permanent (job, firstBadSha) ledger claim blocked a second filing.
+    // Expected: each test/repro identity files independently.
+    const sha = '22891618af26fc7e3e19227ccc56ed183c0e7e26';
+    const state = loadEmptyState();
+    reconcileCiRun(state, {
+      databaseId: 32534741079,
+      headSha: sha,
+      headBranch: 'master',
+      createdAt: '2026-08-21T23:12:00Z',
+      jobs: [{
+        name: jobName,
+        status: 'completed',
+        conclusion: 'failure',
+        databaseId: 96936670245,
+        url: 'https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/32534741079/job/96936670245',
+        completedAt: '2026-08-21T23:12:45Z',
+        failureIdentities: [
+          'repro-mergify-admin-requeue',
+          'repro-babysit-pr-body-human-split',
+        ],
+      }],
+    });
+
+    const actionable = getActionableFailures(state);
+    assert.deepEqual(
+      actionable.map((failure) => failure.failureId).sort(),
+      ['repro-babysit-pr-body-human-split', 'repro-mergify-admin-requeue'],
+    );
+    assert.equal(actionable.length, 2);
+
+    const filed = [];
+    const ledger = new Map();
+    processFailureFilingSweep(state, {
+      now: new Date('2026-08-21T23:30:00Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      liveQuery: (failure) => claimRepairFiling(failure, ({ kind, subject, stateSha, metadata }) => {
+        const key = `${kind} ${subject} ${stateSha}`;
+        if (ledger.has(key)) return { inserted: false, row: ledger.get(key) };
+        const row = { kind, subject, stateSha, metadata };
+        ledger.set(key, row);
+        return { inserted: true, row };
+      }),
+      fileFailure: (failure) => {
+        filed.push(failure.failureId);
+      },
+    });
+
+    assert.deepEqual(filed.sort(), [
+      'repro-babysit-pr-body-human-split',
+      'repro-mergify-admin-requeue',
+    ]);
+    assert.equal(ledger.size, 2, 'each identity must claim a distinct ledger key');
+  });
+
+  it('does not re-file the same test identity while matching non-terminal work is live', () => {
+    const failure = makeFailure({
+      jobName,
+      failureId: 'repro-babysit-pr-body-human-split',
+    });
+    const queryFn = () => JSON.stringify([{
+      status: 'running',
+      description: `<!-- ${buildMarker(failure.firstBadSha, jobName, failure.failureId)} -->`,
+    }]);
+    assert.equal(liveQueryHasNonTerminalWork(failure, undefined, queryFn), true);
+    assert.equal(
+      shouldSkipFilingAlreadyAddressed(failure, {
+        hasLiveWork: (candidate) => liveQueryHasNonTerminalWork(candidate, undefined, queryFn),
+        claim: () => false,
+      }),
+      true,
+    );
+  });
+
+  it('retries the same identity on a later attempt after backoff once prior repair work is terminal', () => {
+    const failure = makeFailure({
+      jobName,
+      failureId: 'repro-babysit-pr-body-human-split',
+      attempts: 1,
+      lastFiledAt: '2026-08-21T22:00:00.000Z',
+    });
+    const state = stateWithFailure(failure);
+    const ledger = new Map();
+    const insert = ({ kind, subject, stateSha, metadata }) => {
+      const key = `${kind} ${subject} ${stateSha}`;
+      if (ledger.has(key)) return { inserted: false, row: ledger.get(key) };
+      const row = { kind, subject, stateSha, metadata };
+      ledger.set(key, row);
+      return { inserted: true, row };
+    };
+    // Prior attempt-1 claim remains in the ledger, but attempt-2 uses a new kind.
+    ledger.set(
+      `${repairFilingKind({ ...failure, attempts: 0 })} master ${failure.firstBadSha}`,
+      { kept: true },
+    );
+
+    const filed = [];
+    // attempts=1 => backoff = 30m * 2^1 = 60m; file only after that window.
+    processFailureFilingSweep(state, {
+      now: new Date('2026-08-21T23:00:01Z'),
+      jobDefinitions: jobDefinitionsFor([jobName]),
+      liveQuery: (candidate) => shouldSkipFilingAlreadyAddressed(candidate, {
+        hasLiveWork: () => false,
+        claim: (inner) => claimRepairFiling(inner, insert),
+      }),
+      fileFailure: (candidate) => filed.push(repairFilingKind(candidate)),
+    });
+
+    assert.equal(filed.length, 1);
+    assert.equal(filed[0], 'ci-regression:required-fast-mergify-admin-requeue:repro-babysit-pr-body-human-split:a2');
+    assert.equal(state.activeFailures[failureStorageKey(failure)].attempts, 2);
+  });
+
+  it('treats review_ready work whose repair PR is no longer open as finished', () => {
+    const failure = makeFailure({
+      jobName,
+      failureId: 'repro-babysit-pr-body-human-split',
+    });
+    const queryFn = () => JSON.stringify([{
+      status: 'review_ready',
+      description: `<!-- ${buildMarker(failure.firstBadSha, jobName, failure.failureId)} -->`,
+      reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/9923',
+    }]);
+    assert.equal(
+      liveQueryHasNonTerminalWork(failure, undefined, queryFn, { isRepairPrOpen: () => false }),
+      false,
+      'merged/closed repair PR must not block the next attempt',
+    );
+    assert.equal(
+      liveQueryHasNonTerminalWork(failure, undefined, queryFn, { isRepairPrOpen: () => true }),
+      true,
+      'open repair PR must still count as in-flight work',
+    );
+  });
+
+  it('clears every identity for a job once CI reports the job green past recovery cooldown', () => {
+    const state = stateWithFailures([
+      makeFailure({
+        jobName,
+        failureId: 'repro-a',
+        attempts: 1,
+        lastFiledAt: '2026-08-01T00:00:00.000Z',
+      }),
+      makeFailure({
+        jobName,
+        failureId: 'repro-b',
+        attempts: 2,
+        lastFiledAt: '2026-08-01T00:00:00.000Z',
+      }),
+    ]);
+    reconcileCiRun(state, {
+      databaseId: 99,
+      headSha: 'f'.repeat(40),
+      headBranch: 'master',
+      createdAt: '2026-08-20T00:00:00.000Z',
+      jobs: [{
+        name: jobName,
+        status: 'completed',
+        conclusion: 'success',
+        databaseId: 100,
+        url: 'https://example.test/job/100',
+        completedAt: '2026-08-20T00:00:00.000Z',
+      }],
+    });
+    assert.deepEqual(Object.keys(state.activeFailures), []);
+  });
+
+  it('migrates legacy job-only activeFailures into schema v5 with failureId=job', () => {
+    const migrated = normalizeState({
+      schemaVersion: 4,
+      lastProcessedRunId: 1,
+      heads: {},
+      activeFailures: {
+        [jobName]: {
+          jobName,
+          firstBadSha: 'abc1234',
+          attempts: 2,
+        },
+      },
+    });
+    assert.equal(migrated.schemaVersion, 5);
+    assert.equal(migrated.activeFailures[jobName].failureId, JOB_LEVEL_FAILURE_ID);
+    assert.equal(migrated.activeFailures[jobName].failureKey, jobName);
+    assert.equal(migrated.activeFailures[jobName].attempts, 2);
   });
 });
