@@ -5,7 +5,7 @@
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
     "postinstall": "node scripts/electron.cjs --install-only && node scripts/fix-node-pty-spawn-helper.mjs",
-    "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && bash scripts/test-make-pr-skill.sh && bash scripts/test-land-stack-skill.sh && bash scripts/test-visual-proof-skill.sh && bash scripts/test-prove-it-skill.sh && bash scripts/test-fleet-ssh.sh && node scripts/test-pr-body-rollout.mjs && node scripts/test-resolve-pr-body-targets.mjs && node scripts/test-pr-diff-atomicity.mjs && node scripts/test-check-added-comments.mjs && node scripts/test-ci-workflow-merge-queue-policy.mjs && node scripts/test-ci-duration-invariant.mjs && node scripts/test-review-unit-classification.mjs && node scripts/test-check-pr-body-keywords.mjs && node scripts/test-create-pr-stack-workflow.mjs && bash scripts/workspace-test.sh && bash scripts/test-daily-release-workflow.sh && bash scripts/test-daily-e2e-do-submit.sh",
+    "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && bash scripts/test-make-pr-skill.sh && bash scripts/test-land-stack-skill.sh && bash scripts/test-visual-proof-skill.sh && bash scripts/test-prove-it-skill.sh && bash scripts/test-fleet-ssh.sh && node scripts/test-pr-body-rollout.mjs && node scripts/test-resolve-pr-body-targets.mjs && node scripts/test-pr-diff-atomicity.mjs && node scripts/test-check-added-comments.mjs && node scripts/test-ci-workflow-merge-queue-policy.mjs && node scripts/test-ci-duration-invariant.mjs && node scripts/test-review-unit-classification.mjs && node scripts/test-check-pr-body-keywords.mjs && node scripts/test-create-pr-stack-workflow.mjs && node scripts/test-regression-inventory.mjs && bash scripts/workspace-test.sh && bash scripts/test-daily-release-workflow.sh && bash scripts/test-daily-e2e-do-submit.sh",
     "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && bash scripts/test-make-pr-skill.sh && bash scripts/test-land-stack-skill.sh && bash scripts/test-visual-proof-skill.sh && bash scripts/test-prove-it-skill.sh && node scripts/test-pr-body-rollout.mjs && node scripts/test-resolve-pr-body-targets.mjs && node scripts/test-check-pr-body-keywords.mjs && node scripts/test-create-pr-stack-workflow.mjs && INVOKER_VITEST_HIGH_RESOURCE=1 bash scripts/workspace-test.sh",
     "test:low-resource": "pnpm run test",
     "test:low-resource:packages": "bash scripts/workspace-test.sh",
@@ -32,6 +32,7 @@
     "test:all:proof": "env INVOKER_TEST_ALL_PROOF=1 bash scripts/run-all-tests.sh",
     "test:all:proof:extended": "env INVOKER_TEST_ALL_PROOF=1 INVOKER_TEST_ALL_EXTENDED=1 bash scripts/run-all-tests.sh",
     "test:all:proof:destructive": "env INVOKER_TEST_ALL_PROOF=1 INVOKER_TEST_ALL_EXTENDED=1 INVOKER_TEST_ALL_DANGEROUS=1 bash scripts/run-all-tests.sh",
+    "test:all:nightly": "env INVOKER_TEST_ALL_NIGHTLY=1 bash scripts/run-all-tests.sh",
     "setup": "bash scripts/setup-agent-skills.sh",
     "build": "pnpm -r build",
     "dist:desktop": "bash scripts/package-desktop.sh",

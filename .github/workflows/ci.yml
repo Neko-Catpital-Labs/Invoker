@@ -167,70 +167,14 @@ jobs:
 
       - name: Install Node runtime and native build dependencies
         shell: bash
-        run: |
-          set -euo pipefail
-
-          has_libatomic() {
-            if command -v ldconfig >/dev/null 2>&1; then
-              ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'
-              return
-            fi
-            find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
-          }
-
-          missing_native_tools=()
-          for tool in make g++ python3 unzip; do
-            if ! command -v "$tool" >/dev/null 2>&1; then
-              missing_native_tools+=("$tool")
-            fi
-          done
-
-          if has_libatomic && [ "${#missing_native_tools[@]}" -eq 0 ]; then
-            exit 0
-          fi
-
-          if ! command -v apt-get >/dev/null 2>&1; then
-            echo "::error::UI Vitest requires libatomic1, make, g++, python3, and unzip, but apt-get is unavailable."
-            exit 1
-          fi
-
-          if [ "$(id -u)" -eq 0 ]; then
-            apt-get update
-            apt-get install -y libatomic1 make g++ python3 unzip
-            exit 0
-          fi
-
-          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-            sudo -n apt-get update
-            sudo -n apt-get install -y libatomic1 make g++ python3 unzip
-            exit 0
-          fi
-
-          if [ "${#missing_native_tools[@]}" -gt 0 ]; then
-            echo "::error::UI Vitest requires ${missing_native_tools[*]}; run as root or provide passwordless sudo for apt-get."
-            exit 1
-          fi
-
-          libatomic_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/node-runtime-system-deps.XXXXXX")"
-          mkdir -p "$libatomic_dir/apt-state/lists/partial" "$libatomic_dir/apt-cache/archives/partial"
-          (
-            cd "$libatomic_dir"
-            apt_options=(
-              -o "Dir::State=$libatomic_dir/apt-state"
-              -o "Dir::State::status=/var/lib/dpkg/status"
-              -o "Dir::Cache=$libatomic_dir/apt-cache"
-            )
-            apt-get "${apt_options[@]}" update
-            apt-get "${apt_options[@]}" download libatomic1
-            dpkg-deb -x ./*.deb root
-          )
-          libatomic_file="$(find "$libatomic_dir/root" -type f -name 'libatomic.so.1*' -print -quit)"
-          if [ -z "$libatomic_file" ]; then
-            echo "::error::Downloaded libatomic1 package did not contain libatomic.so.1."
-            exit 1
-          fi
-          libatomic_path="${libatomic_file%/*}"
-          echo "LD_LIBRARY_PATH=$libatomic_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 make g++ python3 unzip
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
+          CI_INSTALL_NO_APT_ERROR: UI Vitest requires libatomic1, make, g++, python3, and unzip, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'UI Vitest requires {{MISSING}}; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -537,43 +481,19 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
+      # Electron links against libgtk-3, but `playwright install-deps
+      # chromium` does not install it (Chromium alone does not need
+      # GTK3), so guard scripts that boot Electron directly (see
+      # scripts/test-suites/required/05-delete-all-prod-db-guard.sh and
+      # 09-headless-cli-boots-smoke.sh) fail with "libgtk-3.so.0: cannot
+      # open shared object file" unless it's installed separately.
       - name: Install Electron GUI system libraries
         shell: bash
-        run: |
-          set -euo pipefail
-
-          has_libgtk3() {
-            if command -v ldconfig >/dev/null 2>&1; then
-              ldconfig -p 2>/dev/null | grep -q 'libgtk-3\.so\.0'
-              return
-            fi
-            find /lib /usr/lib -name 'libgtk-3.so.0*' -print -quit 2>/dev/null | grep -q .
-          }
-
-          # Electron links against libgtk-3, but `playwright install-deps
-          # chromium` does not install it (Chromium alone does not need
-          # GTK3), so guard scripts that boot Electron directly (see
-          # scripts/test-suites/required/05-delete-all-prod-db-guard.sh and
-          # 09-headless-cli-boots-smoke.sh) fail with "libgtk-3.so.0: cannot
-          # open shared object file" unless it's installed separately.
-          if has_libgtk3; then
-            exit 0
-          fi
-
-          if [ "$(id -u)" -eq 0 ]; then
-            apt-get update
-            apt-get install -y libgtk-3-0t64
-            exit 0
-          fi
-
-          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-            sudo -n apt-get update
-            sudo -n apt-get install -y libgtk-3-0t64
-            exit 0
-          fi
-
-          echo "::error::Guardrails requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get."
-          exit 1
+        env:
+          CI_INSTALL_PACKAGES: libgtk-3-0t64
+          CI_INSTALL_PROBE_SONAME: libgtk-3.so.0
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'Guardrails requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get.'
+        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Run suite group
         run: ${{ matrix.command }}
@@ -629,67 +549,14 @@ jobs:
       - name: Install system libraries for Node
         if: matrix.runner_label != 'Github_Runner'
         shell: bash
-        run: |
-          set -euo pipefail
-
-          has_libatomic() {
-            if command -v ldconfig >/dev/null 2>&1; then
-              ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'
-              return
-            fi
-            find /lib /usr/lib -name 'libatomic.so.1*' -print -quit 2>/dev/null | grep -q .
-          }
-
-          has_build_tools() {
-            command -v make >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1
-          }
-
-          if has_libatomic && has_build_tools; then
-            exit 0
-          fi
-
-          if ! command -v apt-get >/dev/null 2>&1; then
-            echo "::error::libatomic1, make, g++, python3, and unzip are required for Node ${NODE_VERSION}, but apt-get is unavailable."
-            exit 1
-          fi
-
-          if [ "$(id -u)" -eq 0 ]; then
-            apt-get update
-            apt-get install -y libatomic1 make g++ python3 unzip
-            exit 0
-          fi
-
-          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-            sudo -n apt-get update
-            sudo -n apt-get install -y libatomic1 make g++ python3 unzip
-            exit 0
-          fi
-
-          if ! has_build_tools; then
-            echo "::error::make, g++, python3, and unzip are required for Node ${NODE_VERSION} but cannot be installed without sudo."
-            exit 1
-          fi
-
-          libatomic_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/node-runtime-system-deps.XXXXXX")"
-          mkdir -p "$libatomic_dir/apt-state/lists/partial" "$libatomic_dir/apt-cache/archives/partial"
-          (
-            cd "$libatomic_dir"
-            apt_options=(
-              -o "Dir::State=$libatomic_dir/apt-state"
-              -o "Dir::State::status=/var/lib/dpkg/status"
-              -o "Dir::Cache=$libatomic_dir/apt-cache"
-            )
-            apt-get "${apt_options[@]}" update
-            apt-get "${apt_options[@]}" download libatomic1
-            dpkg-deb -x ./*.deb root
-          )
-          libatomic_file="$(find "$libatomic_dir/root" -type f -name 'libatomic.so.1*' -print -quit)"
-          if [ -z "$libatomic_file" ]; then
-            echo "::error::Downloaded libatomic1 package did not contain libatomic.so.1."
-            exit 1
-          fi
-          libatomic_path="${libatomic_file%/*}"
-          echo "LD_LIBRARY_PATH=$libatomic_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 make g++ python3 unzip
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
+          CI_INSTALL_NO_APT_ERROR: libatomic1, make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }} but cannot be installed without sudo.
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -857,6 +724,41 @@ jobs:
       - name: Run dispatch invariants
         run: pnpm --filter @invoker/app test --run src/__tests__/dispatch-capacity-invariants.test.ts
 
+  nightly-regression:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: scheduled / Nightly Regression Tier
+
+    steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install native build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y make g++
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run nightly regression tier
+        run: pnpm run test:all:nightly
 
   playwright:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
@@ -1100,6 +1002,78 @@ jobs:
             packages/app/test-results
           if-no-files-found: ignore
 
+  # Linux pixel proof for the visual-proof spec, against the committed
+  # packages/app/e2e/__screenshots__/visual-proof.spec.ts/linux/ baselines.
+  # Nightly/dispatch only, and never merge-required: coverage of those
+  # baselines is still partial, so this job may fail on uncovered screenshots
+  # without blocking merges.
+  playwright-nightly-visual-proof:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: build-artifacts
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+    timeout-minutes: 30
+    name: scheduled / Linux Visual Proof
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install native build tools
+        run: apt-get update && apt-get install -y unzip make g++ python3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity for E2E repos
+        run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run Linux visual proof
+        env:
+          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-nightly-visual-proof
+          INVOKER_PLAYWRIGHT_WORKERS: '1'
+          INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+        run: bash scripts/test-suites/optional/40-playwright-app.sh
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-nightly-visual-proof
+          path: |
+            .git/playwright-artifacts
+            packages/app/test-results
+          if-no-files-found: ignore
+
   ssh:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
@@ -1306,43 +1280,19 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
+      # test-docker-comprehensive.sh boots Electron headless on the
+      # runner host (not inside a container). `playwright install-deps
+      # chromium` above does not install libgtk-3 (Chromium alone does
+      # not need GTK3), so Electron fails with "libgtk-3.so.0: cannot
+      # open shared object file" unless it's installed separately (same
+      # gap already covered for required-fast / Guardrails).
       - name: Install Electron GUI system libraries
         shell: bash
-        run: |
-          set -euo pipefail
-
-          has_libgtk3() {
-            if command -v ldconfig >/dev/null 2>&1; then
-              ldconfig -p 2>/dev/null | grep -q 'libgtk-3\.so\.0'
-              return
-            fi
-            find /lib /usr/lib -name 'libgtk-3.so.0*' -print -quit 2>/dev/null | grep -q .
-          }
-
-          # test-docker-comprehensive.sh boots Electron headless on the
-          # runner host (not inside a container). `playwright install-deps
-          # chromium` above does not install libgtk-3 (Chromium alone does
-          # not need GTK3), so Electron fails with "libgtk-3.so.0: cannot
-          # open shared object file" unless it's installed separately (same
-          # gap already covered for required-fast / Guardrails).
-          if has_libgtk3; then
-            exit 0
-          fi
-
-          if [ "$(id -u)" -eq 0 ]; then
-            apt-get update
-            apt-get install -y libgtk-3-0t64
-            exit 0
-          fi
-
-          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-            sudo -n apt-get update
-            sudo -n apt-get install -y libgtk-3-0t64
-            exit 0
-          fi
-
-          echo "::error::docker / comprehensive requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get."
-          exit 1
+        env:
+          CI_INSTALL_PACKAGES: libgtk-3-0t64
+          CI_INSTALL_PROBE_SONAME: libgtk-3.so.0
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get.'
+        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Build invoker agent base image
         run: bash scripts/build-agent-base-image.sh
