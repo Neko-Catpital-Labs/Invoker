@@ -256,6 +256,8 @@ export interface WorkerActionSummary {
   sessionId?: string;
   summary?: string;
   reason?: string;
+  outcomeClass?: string;
+  decisionOutcome?: string;
   decision?: 'act' | 'skip';
   createdAt: string;
   updatedAt: string;
@@ -288,6 +290,8 @@ export interface WorkerStatusEntry {
   policyReason?: string;
   autoStarts: boolean;
   desiredEnabled?: boolean;
+  configuredAutoStart?: boolean;
+  suppressedByPersistedStop?: boolean;
   startable: boolean;
   stoppable: boolean;
   controlDisabledReason?: string;
