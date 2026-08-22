@@ -637,7 +637,7 @@ describe('SlackSurface', () => {
 
       await approveHandler({
         action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
-        body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' } },
+        body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' }, user: { id: 'unknown' } },
         ack: vi.fn().mockResolvedValue(undefined),
         respond: vi.fn().mockResolvedValue(undefined),
       });
