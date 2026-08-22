@@ -6,6 +6,9 @@
  * (used by scripts/ui-visual-proof.sh for merge-gate proof).
  * Always validates UI state via DOM assertions so it doubles as a regression test.
  * Committed PNG baselines are asserted via assertPageScreenshot / toHaveScreenshot.
+ * assertPageScreenshot is DOM-only in CI by default; set INVOKER_VISUAL_PROOF_LINUX=1
+ * to run it against the committed __screenshots__/visual-proof.spec.ts/linux/ baselines
+ * (generated in the pinned mcr.microsoft.com/playwright:v1.58.2-noble environment).
  */
 
 import {
