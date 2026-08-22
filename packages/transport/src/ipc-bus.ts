@@ -270,6 +270,7 @@ const LONG_REQUEST_DEADLINE_CHANNELS = new Set([
   'invoker:plan-from-goal',
   'invoker:planning-chat-send',
   'invoker:planning-chat-submit',
+  'invoker:planning-chat-rebind-repo',
   'invoker:start-ready',
   // start-ready --recreate-all and other bulk mutations run inline on the owner.
   'headless.exec',
