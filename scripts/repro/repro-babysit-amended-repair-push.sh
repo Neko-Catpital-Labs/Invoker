@@ -104,6 +104,9 @@ run_worker() {
 git clone . "$SEED" >/dev/null
 (
   cd "$SEED"
+  # This repository is disposable and removed by the EXIT trap. Keep Git from
+  # racing that cleanup with a background auto-gc process.
+  git config gc.auto 0
   git config user.email repro@example.test
   git config user.name 'Repro Bot'
   git checkout -B master >/dev/null
