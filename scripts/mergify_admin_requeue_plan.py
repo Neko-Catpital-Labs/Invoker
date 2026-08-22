@@ -341,6 +341,75 @@ def repair_crash_reason(
 # the adjusted count and whether an infra crash was found (the caller skips
 # the repair_in_flight TTL wait in that case, since there is nothing left to
 # wait out).
+# Outcomes that must not spend Mergify's code-repair attempt budget.
+CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"infra", "superseded"})
+# After an infra settle, give infra-repair this long to own/retry before Mergify
+# may file another repair for the same unit.
+INFRA_REPAIR_OWNERSHIP_TTL_SECONDS = 30 * 60
+
+
+def count_code_repair_attempts(ledger: Ledger, submit_kind: str, pr_number: int, key: str) -> int:
+    """Count submit rows that should spend the code-repair cap.
+
+    Settled attempts classified as `infra` or `superseded` are excluded.
+    Unsettled submits still count (in-flight is gated separately).
+    """
+    settled_kind = f"{submit_kind}-settled"
+    count = 0
+    for row in ledger.rows:
+        if row.get("kind") != submit_kind:
+            continue
+        if int(row.get("pr", -1)) != pr_number:
+            continue
+        if row.get("key") != key:
+            continue
+        head = str(row.get("headSha") or "")
+        epoch = int(row.get("epoch", 0) or 0)
+        settled = ledger.latest(settled_kind, pr_number, head, key)
+        if settled is not None and int(settled.get("epoch", 0) or 0) >= epoch:
+            outcome = (settled.get("meta") or {}).get("outcomeClass")
+            if outcome in CODE_REPAIR_CAP_EXCLUDED_OUTCOMES:
+                continue
+        count += 1
+    return count
+
+
+def infra_repair_owns_unit(
+    ledger: Ledger,
+    pr_number: int,
+    head_sha: str,
+    submit_kind: str,
+    key: str,
+    now: int,
+    *,
+    workflow_status_fn=None,
+) -> bool:
+    """True when the latest settle for this unit was infra and infra-repair
+    should still own the failed workflow (running/pending, or failed within TTL)."""
+    settled = ledger.latest(f"{submit_kind}-settled", pr_number, head_sha, key)
+    if settled is None:
+        return False
+    meta = settled.get("meta") or {}
+    if meta.get("outcomeClass") != "infra":
+        return False
+    settled_epoch = int(settled.get("epoch", 0) or 0)
+    workflow_id = meta.get("workflowId")
+    if not workflow_id:
+        return now - settled_epoch < INFRA_REPAIR_OWNERSHIP_TTL_SECONDS
+    status_fn = workflow_status_fn
+    if status_fn is None:
+        try:
+            from .mergify_admin_requeue_workflow_fastpath import workflow_status as status_fn
+        except ImportError:
+            from mergify_admin_requeue_workflow_fastpath import workflow_status as status_fn
+    status = status_fn(str(workflow_id))
+    if status in ("running", "pending", "queued"):
+        return True
+    if status == "failed" and now - settled_epoch < INFRA_REPAIR_OWNERSHIP_TTL_SECONDS:
+        return True
+    return False
+
+
 def repair_attempt_count_excluding_infra_crash(
     ledger: Ledger,
     pr_number: int,
@@ -382,16 +451,13 @@ def retry_decision(
     max_attempts: int,
     backoff_base_ms: int = 0,
 ) -> dict:
-    count = ledger.count_by_unit(submit_kind, pr_number, key)
+    count = count_code_repair_attempts(ledger, submit_kind, pr_number, key)
     crashed_on_infra = repair_crash_reason(ledger, pr_number, head_sha, submit_kind, key, plan_name) is not None
     if crashed_on_infra:
-        count -= 1
-        # The crashed attempt never gave the coding agent a chance to run --
-        # same reasoning that already bypasses repair_in_flight's TTL for
-        # this case (see repair_attempt_count_excluding_infra_crash above).
-        # Skip backoff entirely instead of computing it from the crashed
-        # attempt's own timestamp, which would otherwise defer a
-        # resubmission that should happen immediately.
+        # Live OAuth/infra crash on the current unsettled attempt: do not spend
+        # code-cap budget, and skip backoff so infra ownership can reclaim it.
+        if count > 0:
+            count -= 1
         if count >= max_attempts:
             return {"action": "needs-human", "attempts": count, "crashed_on_infra": True}
         return {"action": "file", "attempts": count, "crashed_on_infra": True}
@@ -516,6 +582,8 @@ def mergify_failed_check_actions(
         if decision["action"] == "backoff":
             continue
         if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
+            continue
+        if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
             continue
         if claim_repair_filing is not None and claim_repair_filing(
             repair_filing_kind_for_check(name), str(pr.number), mergify_check_state_sha(pr, latest),
@@ -991,6 +1059,8 @@ def plan_direct_repairs(
                     continue
                 if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
                     continue
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
+                    continue
                 if claim_repair_filing is not None and claim_repair_filing(
                     CONFLICT_REPAIR_FILING_KIND, str(pr.number), pr.head_ref_oid,
                 ):
@@ -1012,6 +1082,8 @@ def plan_direct_repairs(
                 if decision["action"] == "backoff":
                     continue
                 if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
+                    continue
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
                     continue
                 # Same kind formula as mergify_failed_check_actions -- a claim
                 # made via that path (the Mergify-queue-driven view of this
@@ -1054,6 +1126,8 @@ def plan_bot_thread_repairs(
                 continue
             if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
                 continue
+            if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
+                continue
             return Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail)
     return None
 
@@ -1065,16 +1139,24 @@ def has_active_repair_for_current_blocker(facts: StackFacts, ledger: Ledger, now
             for check_name in latest.failing_checks:
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", check_name, now):
                     return True
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", check_name, now):
+                    return True
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
                     return True
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
+                    return True
             elif blocker.kind == "failed_check":
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
                     return True
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
+                    return True
             elif blocker.kind == "bot_review_thread":
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
+                    return True
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
                     return True
     return False
 
