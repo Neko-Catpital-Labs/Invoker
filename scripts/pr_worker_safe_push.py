@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(\S+)\s*$", re.MULTILINE)
 
 
 class SafePushError(RuntimeError):
@@ -75,6 +76,66 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def change_id_in_log(log_args: Sequence[str], *, cwd: Path | str | None = None) -> str:
+    # Commit ranges may include bookkeeping commits stacked on top of the
+    # real content commit (e.g. workflow attempt markers), so scan every
+    # commit in the range rather than only the tip, mirroring
+    # create-pr.mjs's `${baseRef}..HEAD` Change-Id lookup.
+    completed = subprocess.run(
+        ["git", "log", "--format=%B", *log_args],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return ""
+    match = CHANGE_ID_RE.search(completed.stdout)
+    return match.group(1) if match else ""
+
+
+def ensure_commit_fetched(sha: str, *, remote: str = "origin", cwd: Path | str | None = None) -> bool:
+    check = subprocess.run(
+        ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if check.returncode == 0:
+        return True
+    fetch = subprocess.run(
+        ["git", "fetch", "--no-tags", remote, sha],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return fetch.returncode == 0
+
+
+REMOTE_MARKER_LOOKBACK = 20
+
+
+def remote_already_publishes_head_change(
+    live: str,
+    expected: str,
+    *,
+    remote: str = "origin",
+    cwd: Path | str | None = None,
+) -> bool:
+    # A matching Change-Id trailer means another worker already published
+    # this exact logical change under a different SHA; the lease is stale
+    # but nothing would be lost by treating this branch as already safe.
+    head_change_id = change_id_in_log([f"{expected}..HEAD"], cwd=cwd)
+    if not head_change_id:
+        return False
+    if not ensure_commit_fetched(live, remote=remote, cwd=cwd):
+        return False
+    live_change_id = change_id_in_log([f"-{REMOTE_MARKER_LOOKBACK}", live], cwd=cwd)
+    return bool(live_change_id) and live_change_id == head_change_id
+
+
 def safe_push(
     *,
     branch: str,
@@ -82,7 +143,7 @@ def safe_push(
     expect_missing: bool = False,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+) -> tuple[str, bool]:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -97,6 +158,10 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            if live is not None and remote_already_publishes_head_change(
+                live, expected, remote=remote, cwd=cwd
+            ):
+                return live, False
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
@@ -117,7 +182,7 @@ def safe_push(
             f"post-push verification failed: refs/heads/{branch_name} is {verified or 'missing'}; expected {pushed}",
             exit_code=22,
         )
-    return pushed
+    return pushed, True
 
 
 def append_tsv_ledger(path: Path, *, kind: str, key: str, marker: str, epoch: int | None = None) -> None:
@@ -184,7 +249,7 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
+        pushed, did_push = safe_push(
             branch=args.branch,
             expected_head=args.expected_head,
             expect_missing=args.expect_missing,
@@ -224,7 +289,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        if did_push:
+            print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        else:
+            print(
+                f"pr-worker-safe-push: refs/heads/{normalize_branch(args.branch)} already at {pushed} "
+                "(matching Change-Id already published; no push needed)"
+            )
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)

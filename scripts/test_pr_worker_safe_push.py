@@ -111,6 +111,49 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_moved_remote_head_with_matching_change_id_succeeds_without_pushing(self) -> None:
+        # Two independent workers race to fix the same regression (same
+        # Change-Id trailer). The other worker's equivalent, differently
+        # formatted commit already landed by the time this one runs.
+        self.clone_other()
+        change_id = "Ideadbeefcafef00dfeedfacefeedfacefeedfac"
+        other_pushed = self.commit(
+            self.other, f"repair\n\nChange-Id: {change_id}", "other-formatting\n"
+        )
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, f"repair\n\nChange-Id: {change_id}", "local-formatting\n")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no push needed", result.stdout)
+        self.assertEqual(self.remote_head(), other_pushed)
+
+    def test_moved_remote_head_with_change_id_under_bookkeeping_commits_succeeds(self) -> None:
+        # Both sides stack empty workflow-attempt marker commits (no
+        # Change-Id of their own) on top of their real content commit.
+        self.clone_other()
+        change_id = "Ibeadfacecafef00dfeedfacefeedfacefeedfac"
+        self.commit(self.other, f"repair\n\nChange-Id: {change_id}", "other-formatting\n")
+        git(self.other, "commit", "--allow-empty", "-m", "invoker: marker\n\nExit code: 0")
+        other_pushed = git(self.other, "rev-parse", "HEAD")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+
+        self.commit(self.repo, f"repair\n\nChange-Id: {change_id}", "local-formatting\n")
+        git(self.repo, "commit", "--allow-empty", "-m", "invoker: marker\n\nExit code: 20")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no push needed", result.stdout)
+        self.assertEqual(self.remote_head(), other_pushed)
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")
