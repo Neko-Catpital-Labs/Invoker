@@ -1199,6 +1199,7 @@ tasks:
     if (!sent.ok) throw new Error(sent.error);
     expect(sent.draftPlanAvailable).toBe(false);
     expect(sent.reply).toContain('Draft not shown: the plan doctor rejected it.');
+    expect(sent.reply).toContain('Nothing was submitted.');
     const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
 
     await expect(submitPlanningChatDraft({
