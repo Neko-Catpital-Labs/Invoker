@@ -10,7 +10,10 @@ import {
   buildCiJobDefinitions,
   buildMarker,
   buildPlanVars,
+  claimRepairFiling,
   classifyJobConclusion,
+  extractFailureIdentitiesFromLog,
+  failureStorageKey,
   fileBugfixPlan,
   getActionableFailures,
   getCiRun,
@@ -21,6 +24,7 @@ import {
   normalizeState,
   processFailureFilingSweep,
   reconcileCiRun,
+  repairFilingKind,
 } from '../e2e-regression-watch.mjs';
 
 function fail(message) {
@@ -60,6 +64,8 @@ function fakeRun(id, sha, jobs) {
 function fakeFailure(overrides = {}) {
   return {
     jobName: 'playwright / launch-dispatch-stuck-lease',
+    failureId: 'job',
+    failureKey: overrides.jobName ?? 'playwright / launch-dispatch-stuck-lease',
     firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
     firstBadRunId: 500,
     firstBadRunCreatedAt: '2026-08-12T00:00:00Z',
@@ -69,7 +75,7 @@ function fakeFailure(overrides = {}) {
     lastBadRunId: 500,
     lastJobDatabaseId: 501,
     lastJobUrl: 'https://example.test/job/501',
-    lastObservedAt: '2026-08-12T00:00:00Z',
+    lastObservedAt: '2026-08-21T12:00:00Z',
     occurrences: 1,
     attempts: 0,
     lastFiledAt: null,
@@ -80,13 +86,17 @@ function fakeFailure(overrides = {}) {
 
 function stateWithFailure(failure) {
   const state = loadEmptyState();
-  state.activeFailures[failure.jobName] = failure;
+  const key = failureStorageKey(failure) || failure.jobName;
+  state.activeFailures[key] = { ...failure, failureKey: key, failureId: failure.failureId ?? 'job' };
   return state;
 }
 
 function stateWithFailures(failures) {
   const state = loadEmptyState();
-  for (const failure of failures) state.activeFailures[failure.jobName] = failure;
+  for (const failure of failures) {
+    const key = failureStorageKey(failure) || failure.jobName;
+    state.activeFailures[key] = { ...failure, failureKey: key, failureId: failure.failureId ?? 'job' };
+  }
   return state;
 }
 
@@ -362,6 +372,7 @@ function testFleetCorrelationScenario() {
   processFailureFilingSweep(historicalState, {
     fleetEventThreshold: 99,
     jobDefinitions,
+    now: new Date('2026-08-21T12:00:00Z'),
     liveQuery: () => false,
     fileFailure: (failure) => {
       historicalFilings.push(failure.jobName);
@@ -369,6 +380,7 @@ function testFleetCorrelationScenario() {
   });
   const counts = processFailureFilingSweep(fleetState, {
     jobDefinitions,
+    now: new Date('2026-08-21T12:00:00Z'),
     liveQuery: (failure) => {
       const marker = buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName);
       if (marker !== buildMarker(sha, 'fleet')) fail(`fleet sweep used wrong marker: ${marker}`);
@@ -381,7 +393,7 @@ function testFleetCorrelationScenario() {
 
   assertEqual(historicalFilings.length, 11, 'historical 631a0d0 wave would file eleven isolated jobs');
   assertEqual(fleetFilings.length, 1, '631a0d0 wave files one fleet plan');
-  assertEqual(fleetFilings[0].jobName, 'fleet / 631a0d0 (11 jobs)', 'fleet filing has expected synthetic job name');
+  assertEqual(fleetFilings[0].jobName, 'fleet / 631a0d0', 'fleet filing has expected synthetic job name');
   assertEqual(counts.groupsCorrelated, 1, 'fleet sweep counts one correlated group');
   for (const jobName of jobs) {
     if (!fleetFilings[0].description.includes(jobName)) fail(`fleet description omitted ${jobName}`);
@@ -496,6 +508,47 @@ function testLiveGithubSmokeIfRequested() {
   console.log('[repro-e2e-regression-watch] live GitHub smoke: PASS');
 }
 
+function testDistinctIdentitiesUnderOneJob() {
+  const jobName = 'required-fast / Mergify Admin Requeue';
+  const log = "rm: cannot remove '/tmp/repro-babysit-pr-body-human-split.ERdycn/seed/.git/objects': Directory not empty";
+  const extracted = extractFailureIdentitiesFromLog(log);
+  if (!extracted.some((entry) => entry.failureId.includes('repro-babysit-pr-body-human-split'))) {
+    fail('log parser must identify the babysit human-split repro');
+  }
+
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(32534741079, '22891618af26fc7e3e19227ccc56ed183c0e7e26', [{
+    ...fakeJob(jobName, 'failure', 96936670245),
+    failureIdentities: ['repro-mergify-admin-requeue', 'repro-babysit-pr-body-human-split'],
+  }]));
+  const failures = getActionableFailures(state);
+  assertEqual(failures.length, 2, 'two identities under one job are actionable');
+  assertEqual(
+    failures.map((failure) => failure.failureId).sort(),
+    ['repro-babysit-pr-body-human-split', 'repro-mergify-admin-requeue'],
+    'both repro identities are retained',
+  );
+
+  const ledger = new Map();
+  const filed = [];
+  processFailureFilingSweep(state, {
+    now: new Date('2026-08-21T23:30:00Z'),
+    jobDefinitions: new Map([[jobName, { verifyCommand: 'bash scripts/test-suites/required/12-mergify-admin-requeue.sh' }]]),
+    liveQuery: (failure) => claimRepairFiling(failure, ({ kind, subject, stateSha, metadata }) => {
+      const key = `${kind} ${subject} ${stateSha}`;
+      if (ledger.has(key)) return { inserted: false, row: ledger.get(key) };
+      const row = { kind, subject, stateSha, metadata };
+      ledger.set(key, row);
+      return { inserted: true, row };
+    }),
+    fileFailure: (failure) => filed.push(failureStorageKey(failure)),
+  });
+  assertEqual(filed.length, 2, 'each identity files its own repair');
+  assertEqual(ledger.size, 2, 'each identity claims a distinct ledger key');
+  if (!repairFilingKind(failures[0]).includes(':a1')) fail('filing kind must be attempt-scoped');
+  console.log('[repro-e2e-regression-watch] distinct identities under one job: PASS');
+}
+
 function main() {
   testJobClassification();
   testPerHeadFailureDedupAndRecovery();
@@ -508,6 +561,7 @@ function main() {
   testAttemptLedgerScenario();
   testFleetCorrelationScenario();
   testRetiredJobScenario();
+  testDistinctIdentitiesUnderOneJob();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
 }
