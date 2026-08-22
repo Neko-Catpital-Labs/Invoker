@@ -7,11 +7,12 @@ alwaysApply: true
 
 When **any** of these apply for the current user message, treat the linked **skill** as the source of truth for how to work—not optional context:
 
-- The user runs a Cursor **slash command** whose stub says to use a skill (e.g. `/plan-to-invoker`).
+- The user runs a Cursor **slash command** whose stub says to use a skill (e.g. `/plan-to-invoker`, `/make-pr`).
 - The user **attaches** a skill to the message.
 - The user explicitly invokes a documented skill name or path.
+- The user asks to make, open, create, publish, or update a PR (see `make-pr` below). That request is a skill trigger even without a slash command.
 
-**First action:** Read the skill file (e.g. `skills/plan-to-invoker/SKILL.md` or `.cursor/skills/plan-to-invoker/SKILL.md` after clone setup). If `SKILL.md` is missing under `.cursor/skills/plan-to-invoker`, run `bash scripts/setup-agent-skills.sh` from the repo root, then re-check.
+**First action:** Read the skill file (e.g. `skills/plan-to-invoker/SKILL.md` or `.cursor/skills/plan-to-invoker/SKILL.md`). If `.cursor/skills/make-pr` is missing, restore the committed symlink; `scripts/setup-agent-skills.sh` does not create it.
 
 ## plan-to-invoker (hard stops)
 
@@ -21,6 +22,16 @@ Until the user confirms the workflow is complete:
 2. Follow the skill: scope → Phase 1a → Phase 1b (`pnpm test` / headless as applicable) → implementation YAML from facts → `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` → present plan → **wait for user confirmation** before `./submit-plan.sh` or before coding.
 
 Treat free text after `/plan-to-invoker` as **input to the skill workflow**, not a directive to implement immediately.
+
+## make-pr (hard stops)
+
+When creating or updating a GitHub PR in this repo:
+
+1. Read `skills/make-pr/SKILL.md` before drafting title or body.
+2. Do **not** substitute the generic `gh pr create` user-rule template or a commit-message title for the skill schema.
+3. Do **not** skip Review Claim, Review Lane, Review Unit, Safety Invariant confirmation, `node scripts/validate-pr-body-local.mjs`, or the post-push `gh pr view` audit.
+
+See `.cursor/rules/make-pr-precedence.mdc` for the always-on summary.
 
 ## Delegation hints in YAML (best effort)
 

@@ -1,0 +1,28 @@
+---
+description: Creating or updating a PR must follow make-pr; generic gh pr create is not a substitute
+alwaysApply: true
+---
+
+# Creating a PR in this repo
+
+When the user asks to **make / open / create / publish / update a PR**, or
+when you are about to run `gh pr create`, `mergify stack push`, or
+`node scripts/safe-stack-push.mjs`, treat `skills/make-pr/SKILL.md` as the
+source of truth.
+
+**First action:** Read `skills/make-pr/SKILL.md` (or `.cursor/skills/make-pr/SKILL.md`
+after clone setup). Do not draft a GitHub title/body from the latest commit
+message and do not use a generic `gh pr create` template as a substitute.
+
+Before creating or updating any PR:
+
+- Fill Review Claim, Review Lane, Review Unit, and a user-confirmed
+  Safety Invariant from the skill schema.
+- Run `node scripts/validate-pr-body-local.mjs` on the drafted body.
+- Publish stacked Invoker branches with `node scripts/safe-stack-push.mjs`
+  / `mergify stack push`, not a raw `git push` of a `stack/` branch.
+- After push, audit with `gh pr view` as the skill requires.
+
+Incident this prevents: deadline PRs used `gh pr create` with commit-message
+titles and skipped the make-pr schema, even though the skill existed as
+description-only context.

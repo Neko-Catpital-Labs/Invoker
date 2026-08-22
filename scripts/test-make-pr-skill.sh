@@ -179,4 +179,19 @@ must_contain "$SKILL_MD" "scripts/check-pr-body-keywords.mjs" "make-pr skill mus
 must_contain "$SKILL_MD" "Before running the full validator, check the drafted Summary/Non-goals prose against the declared Review Unit" "make-pr skill must require the keyword pre-flight before the full validator"
 [[ -f "$REPO_ROOT/scripts/check-pr-body-keywords.mjs" ]] || fail "scripts/check-pr-body-keywords.mjs referenced by make-pr skill must actually exist"
 
+# Description-only skills lose to always-on user rules. make-pr must be wired
+# the same way land-stack is: an alwaysApply Cursor rule plus a slash-command
+# skill symlink, not only skills/make-pr/SKILL.md in the available-skills list.
+MAKE_PR_RULE="$REPO_ROOT/.cursor/rules/make-pr-precedence.mdc"
+SKILL_PRECEDENCE="$REPO_ROOT/.cursor/rules/skill-command-precedence.mdc"
+MAKE_PR_CURSOR_SKILL="$REPO_ROOT/.cursor/skills/make-pr"
+[[ -f "$MAKE_PR_RULE" ]] || fail "expected always-on Cursor rule $MAKE_PR_RULE"
+must_contain "$MAKE_PR_RULE" "alwaysApply: true" "make-pr Cursor rule must always apply"
+must_contain "$MAKE_PR_RULE" "skills/make-pr/SKILL.md" "make-pr Cursor rule must point at the skill"
+must_contain "$MAKE_PR_RULE" "gh pr create" "make-pr Cursor rule must name gh pr create as a trigger, not a substitute"
+must_contain "$MAKE_PR_RULE" "mergify stack push" "make-pr Cursor rule must name mergify stack push as a trigger"
+must_contain "$SKILL_PRECEDENCE" "## make-pr (hard stops)" "skill-command-precedence must hard-stop make-pr the same way it hard-stops plan-to-invoker"
+[[ -L "$MAKE_PR_CURSOR_SKILL" ]] || fail "expected Cursor slash-command symlink $MAKE_PR_CURSOR_SKILL so /make-pr exists"
+[[ "$(readlink "$MAKE_PR_CURSOR_SKILL")" == "../../skills/make-pr" ]] || fail "expected $MAKE_PR_CURSOR_SKILL to point at ../../skills/make-pr"
+
 echo "OK: make-pr skill contract checks passed"
