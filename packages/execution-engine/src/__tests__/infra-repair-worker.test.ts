@@ -11,6 +11,7 @@ import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from './fixtures/pr-6976-oauth-se
 import {
   buildRepoMirrorRepairScript,
   createInfraRepairTick,
+  deriveCorruptWorktreeAdminPathFromWorkspace,
   extractCorruptMirrorPath,
   extractCorruptWorktreeAdminPath,
   INFRA_REPAIR_RECREATE_TASK_CHANNEL,
@@ -328,6 +329,50 @@ describe('infra-repair worker', () => {
     expect(h.submit).toHaveBeenCalledTimes(1);
     expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
     expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-worktree-corrupt',
+          channel: INFRA_REPAIR_RECREATE_TASK_CHANNEL,
+        }),
+      }),
+    ]));
+  });
+
+  it('classifies finalize-time worktree corruption and derives the admin path from workspacePath when git omits it', async () => {
+    const managedPath = '/home/invoker/.invoker/worktrees/c9d4f5f68faf/'
+      + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23';
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          workspacePath: managedPath,
+          error: 'remote commit or push failed (code 128): fatal: not a git repository: (null)',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(extractCorruptWorktreeAdminPath(
+      'remote commit or push failed (code 128): fatal: not a git repository: (null)',
+    )).toBeUndefined();
+    expect(deriveCorruptWorktreeAdminPathFromWorkspace(managedPath, undefined)).toEqual({
+      adminPath: '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+        + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      worktreeName: 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+    });
+    expect(h.runWorktreeCorruptRepairFn).toHaveBeenCalledTimes(1);
+    expect(h.runWorktreeCorruptRepairFn).toHaveBeenCalledWith(expect.objectContaining({
+      adminPath: '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+        + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      managedWorktreePath: managedPath,
+    }));
     expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
       expect.objectContaining({
         workerKind: INFRA_REPAIR_WORKER_KIND,

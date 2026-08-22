@@ -44,6 +44,18 @@ describe('FailureClassifier.classifyError', () => {
     )).toBe('ssh-worktree-corrupt');
   });
 
+  it('classifies finalize-time worktree corruption when git omits the admin path', () => {
+    expect(FailureClassifier.classifyError(
+      'remote commit or push failed (code 128): fatal: not a git repository: (null)',
+    )).toBe('ssh-worktree-corrupt');
+  });
+
+  it('does not classify a bare "not a git repository" outside the finalize commit/push path', () => {
+    expect(FailureClassifier.classifyError(
+      'fatal: not a git repository: (null)',
+    )).toBeUndefined();
+  });
+
   it('classifies the OAuth-session-expired signature', () => {
     expect(FailureClassifier.classifyError(PR_6976_OAUTH_SESSION_EXPIRED_ERROR))
       .toBe('ssh-oauth-session-expired');
