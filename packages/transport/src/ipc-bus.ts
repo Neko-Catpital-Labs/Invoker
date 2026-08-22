@@ -277,6 +277,15 @@ const LONG_REQUEST_DEADLINE_CHANNELS = new Set([
 ]);
 export const LONG_REQUEST_DEADLINE_MS = 2 * 60 * 60 * 1000;
 export const DEFAULT_REQUEST_DEADLINE_MS = 30_000;
+const PLANNING_CHAT_CHANNEL_PREFIX = 'invoker:planning-chat-';
+
+/** True when a request on this channel (or a gui-mutation inner channel) gets
+ *  the long deadline. Planning-chat channels inherit it so a new clone/send
+ *  sibling cannot ship on the 30s default just because nobody appended a name. */
+export function channelHasLongRequestDeadline(channel: string): boolean {
+  return LONG_REQUEST_DEADLINE_CHANNELS.has(channel)
+    || channel.startsWith(PLANNING_CHAT_CHANNEL_PREFIX);
+}
 
 export interface IpcBusOptions {
   allowServe?: boolean;
@@ -766,8 +775,8 @@ export class IpcBus implements MessageBus {
       // operation name inside the message body, so a long-running operation
       // delegated through one must be recognized there too.
       const innerChannel = (message as { channel?: unknown } | null)?.channel;
-      const isLongRunning = LONG_REQUEST_DEADLINE_CHANNELS.has(channel)
-        || (typeof innerChannel === 'string' && LONG_REQUEST_DEADLINE_CHANNELS.has(innerChannel));
+      const isLongRunning = channelHasLongRequestDeadline(channel)
+        || (typeof innerChannel === 'string' && channelHasLongRequestDeadline(innerChannel));
       const effectiveDeadlineMs = isLongRunning
         ? Math.max(this.requestDeadlineMs, LONG_REQUEST_DEADLINE_MS)
         : this.requestDeadlineMs;
