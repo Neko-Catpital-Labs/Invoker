@@ -124,6 +124,44 @@ describe('planning turn durability', () => {
     expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
   });
 
+  it('reports Retry failure through the error path when the planner is unavailable', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'failed-chat',
+          title: 'Failed chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          messages: [
+            { id: 1, role: 'user', text: 'Draft the plan', createdAt: '2026-07-07T00:00:01.000Z' },
+          ],
+          activeTurnId: 'turn-x',
+          activeTurnStatus: 'failed',
+          activeTurnError: 'Planner was interrupted before it could answer.',
+        }),
+      ],
+    }));
+    // Unavailable planner: the retry handler must surface this via the
+    // error path instead of returning with no state change.
+    mock.api.planningChatSend = undefined as unknown as MockInvoker['api']['planningChatSend'];
+
+    render(<App />);
+    await openPlanningSurface();
+
+    const retryButton = await screen.findByTestId('invoker-terminal-retry-turn');
+    fireEvent.click(retryButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-turn-error')).toHaveTextContent('Planner is not available.');
+    });
+    // The Retry button stays present so the user can try again once the
+    // planner comes back, and the composer is not left silently stuck busy.
+    expect(screen.getByTestId('invoker-terminal-retry-turn')).toBeInTheDocument();
+  });
+
   it('silently ignores a duplicate-turn response and stays busy', async () => {
     mock.api.planningChatSend = vi.fn(async (request: { turnId?: string }) => ({
       ok: false as const,

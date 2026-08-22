@@ -3030,7 +3030,14 @@ export function App() {
     const session = activePlanningSession;
     if (session.activeTurnStatus !== 'failed' || !session.activeTurnId || session.busy) return;
     const lastUserLine = [...session.messages].reverse().find((line) => line.role === 'user');
-    if (!lastUserLine || !invoker?.planningChatSend) return;
+    if (!lastUserLine) return;
+    if (!invoker?.planningChatSend) {
+      applyPlanningTurnOutcome(session.id, session.activeTurnId, {
+        status: 'failed',
+        error: 'Planner is not available.',
+      });
+      return;
+    }
     const turnId = session.activeTurnId;
     const previousSessionId = session.id;
     markPlanningTurnRunning(previousSessionId, turnId);
@@ -3051,6 +3058,7 @@ export function App() {
     }
   }, [
     activePlanningSession,
+    applyPlanningTurnOutcome,
     handlePlanningSendResult,
     invoker,
     markPlanningTurnRunning,
