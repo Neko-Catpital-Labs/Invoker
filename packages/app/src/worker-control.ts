@@ -407,6 +407,8 @@ export function createWorkerRuntimeController(options: {
       throw new Error(`Unknown worker kind: "${kind}"`);
     }
     const desiredEnabled = desiredEnabledForKind(kind);
+    const configuredAutoStart = options.autoStartKinds.includes(kind);
+    const saved = options.persistence.getWorkerDesiredState?.(kind);
     return buildWorkerStatusEntry({
       definitionKind: definition.kind,
       note: definition.note,
@@ -415,6 +417,8 @@ export function createWorkerRuntimeController(options: {
       stoppedAt: stoppedAtByKind.get(kind),
       autoStarts: desiredEnabled,
       desiredEnabled,
+      configuredAutoStart,
+      suppressedByPersistedStop: configuredAutoStart && saved?.desiredEnabled === false,
       policy: policyForKind(kind),
       persistence: options.persistence,
       canControl: options.canControl(),
@@ -532,14 +536,17 @@ export function createLocalWorkerStatusSnapshot(options: {
   return {
     generatedAt: new Date().toISOString(),
     workers: options.registry.list().map((definition) => {
-      const desiredEnabled = options.persistence.getWorkerDesiredState?.(definition.kind)?.desiredEnabled
-        ?? options.autoStartKinds.includes(definition.kind);
+      const saved = options.persistence.getWorkerDesiredState?.(definition.kind);
+      const configuredAutoStart = options.autoStartKinds.includes(definition.kind);
+      const desiredEnabled = saved?.desiredEnabled ?? configuredAutoStart;
       return buildWorkerStatusEntry({
         definitionKind: definition.kind,
         note: definition.note,
         source: sourceForDefinition(definition),
         autoStarts: desiredEnabled,
         desiredEnabled,
+        configuredAutoStart,
+        suppressedByPersistedStop: configuredAutoStart && saved?.desiredEnabled === false,
         policy: 'unknown',
         persistence: options.persistence,
         canControl: false,
@@ -559,6 +566,8 @@ function buildWorkerStatusEntry(args: {
   stoppedAt?: string;
   autoStarts: boolean;
   desiredEnabled: boolean;
+  configuredAutoStart?: boolean;
+  suppressedByPersistedStop?: boolean;
   policy: WorkerPolicyStatus;
   persistence: WorkerStatusPersistence;
   canControl: boolean;
@@ -583,6 +592,8 @@ function buildWorkerStatusEntry(args: {
     policy: args.policy,
     autoStarts: args.autoStarts,
     desiredEnabled: args.desiredEnabled,
+    ...(args.configuredAutoStart !== undefined ? { configuredAutoStart: args.configuredAutoStart } : {}),
+    ...(args.suppressedByPersistedStop ? { suppressedByPersistedStop: true } : {}),
     startable: lifecycle !== 'running' && args.policy !== 'disabled' && args.canControl,
     stoppable: lifecycle === 'running' && args.canControl,
     ...(controlDisabledReason ? { controlDisabledReason } : {}),
@@ -610,10 +621,15 @@ function getControlDisabledReason(canControl: boolean): string | undefined {
 
 export function toWorkerActionSummary(action: WorkerActionRecord): WorkerActionSummary {
   const payload = action.payload;
-  const rawReason = payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>).reason
+  const payloadRecord = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
     : undefined;
+  const rawReason = payloadRecord?.reason;
   const reason = typeof rawReason === 'string' && rawReason.length > 0 ? rawReason : undefined;
+  const outcomeClass = typeof payloadRecord?.outcomeClass === 'string' ? payloadRecord.outcomeClass : undefined;
+  const decisionOutcome = typeof payloadRecord?.decisionOutcome === 'string'
+    ? payloadRecord.decisionOutcome
+    : undefined;
   return {
     id: action.id,
     workerKind: action.workerKind,
@@ -631,6 +647,8 @@ export function toWorkerActionSummary(action: WorkerActionRecord): WorkerActionS
     ...(action.sessionId ? { sessionId: action.sessionId } : {}),
     ...(action.summary ? { summary: action.summary } : {}),
     ...(reason ? { reason } : {}),
+    ...(outcomeClass ? { outcomeClass } : {}),
+    ...(decisionOutcome ? { decisionOutcome } : {}),
     decision: action.status === 'skipped' ? 'skip' : 'act',
     createdAt: action.createdAt,
     updatedAt: action.updatedAt,
