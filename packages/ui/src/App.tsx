@@ -893,24 +893,31 @@ export function App() {
       planningPollFailureCountRef.current = 0;
       return;
     }
+    let inFlight = false;
     const interval = setInterval(() => {
-      void refreshPlanningSessionsNow().then((refreshed) => {
-        if (refreshed) {
-          planningPollFailureCountRef.current = 0;
-          return;
-        }
-        planningPollFailureCountRef.current += 1;
-        if (planningPollFailureCountRef.current < 3) return;
-        planningPollFailureCountRef.current = 0;
-        for (const session of planningSessionsRef.current) {
-          if (session.busy && session.activeTurnId) {
-            applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
-              status: 'failed',
-              error: 'Lost connection to the planner.',
-            });
+      if (inFlight) return;
+      inFlight = true;
+      void refreshPlanningSessionsNow()
+        .then((refreshed) => {
+          if (refreshed) {
+            planningPollFailureCountRef.current = 0;
+            return;
           }
-        }
-      });
+          planningPollFailureCountRef.current += 1;
+          if (planningPollFailureCountRef.current < 3) return;
+          planningPollFailureCountRef.current = 0;
+          for (const session of planningSessionsRef.current) {
+            if (session.busy && session.activeTurnId) {
+              applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
+                status: 'failed',
+                error: 'Lost connection to the planner.',
+              });
+            }
+          }
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     }, 5000);
     return () => clearInterval(interval);
   }, [anyPlanningSessionBusy, refreshPlanningSessionsNow]);
