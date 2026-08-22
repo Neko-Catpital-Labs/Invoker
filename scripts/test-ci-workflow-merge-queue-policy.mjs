@@ -17,10 +17,29 @@ const vitestWorkspaceSuite = readFileSync('scripts/test-suites/required/10-vites
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const jobs = workflow.jobs ?? {};
 
+const INSTALLER_SCRIPT_PATH = 'scripts/ci/install-node-system-libraries.sh';
+const ciWorkflowSource = readFileSync('.github/workflows/ci.yml', 'utf8');
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function assertUsesSharedInstaller(jobName, stepName, expectedEnv) {
+  const step = (jobs[jobName]?.steps ?? []).find((candidate) => candidate.name === stepName);
+  assert(step, `${jobName} must include step "${stepName}"`);
+  assert(
+    String(step.run ?? '').trim() === `bash ${INSTALLER_SCRIPT_PATH}`,
+    `${jobName} / ${stepName} must call the shared ${INSTALLER_SCRIPT_PATH} owner instead of a raw inline copy`,
+  );
+  for (const [key, value] of Object.entries(expectedEnv)) {
+    assert(
+      step.env?.[key] === value,
+      `${jobName} / ${stepName} must set ${key}="${value}" to preserve its existing package/failure contract, got "${step.env?.[key]}"`,
+    );
+  }
+  return step;
 }
 
 function stepNames(jobName) {
@@ -116,7 +135,7 @@ assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/
 const uiVitestDependencyInstallIndex = stepIndex(jobs['ui-vitest'], 'Install dependencies');
 assert(uiVitestDependencyInstallIndex >= 0, 'ui-vitest must install dependencies');
 const uiVitestSystemDependenciesIndex = uiVitestSteps.findIndex(
-  (step) => String(step.run ?? '').includes('apt-get install -y libatomic1'),
+  (step) => step.name === 'Install Node runtime and native build dependencies',
 );
 assert(
   uiVitestSystemDependenciesIndex >= 0
@@ -124,27 +143,14 @@ assert(
     && uiVitestSystemDependenciesIndex < uiVitestDependencyInstallIndex,
   'ui-vitest must install system dependencies before setup-node and dependency installation',
 );
-const uiVitestSystemDependenciesScript = String(uiVitestSteps[uiVitestSystemDependenciesIndex]?.run ?? '');
-assert(
-  uiVitestSystemDependenciesScript.includes('for tool in make g++ python3 unzip; do')
-    && uiVitestSystemDependenciesScript.includes('apt-get install -y libatomic1 make g++ python3 unzip')
-    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get install -y libatomic1 make g++ python3 unzip'),
-  'ui-vitest must install the native build tools and unzip needed by Electron provisioning',
-);
-assert(
-  uiVitestSystemDependenciesScript.includes('sudo -n true')
-    && uiVitestSystemDependenciesScript.includes('sudo -n apt-get')
-    && !uiVitestSystemDependenciesScript.includes('SUDO="sudo"')
-    && !/^\s*sudo\s+(?!-n\b)/m.test(uiVitestSystemDependenciesScript),
-  'ui-vitest libatomic install must prove passwordless sudo and use it noninteractively',
-);
-assert(
-  uiVitestSystemDependenciesScript.includes('download libatomic1')
-    && uiVitestSystemDependenciesScript.includes('Dir::State')
-    && uiVitestSystemDependenciesScript.includes('LD_LIBRARY_PATH=')
-    && uiVitestSystemDependenciesScript.includes('GITHUB_ENV'),
-  'ui-vitest libatomic install must provide a no-root LD_LIBRARY_PATH fallback',
-);
+assertUsesSharedInstaller('ui-vitest', 'Install Node runtime and native build dependencies', {
+  CI_INSTALL_PACKAGES: 'libatomic1 make g++ python3 unzip',
+  CI_INSTALL_PROBE_SONAME: 'libatomic.so.1',
+  CI_INSTALL_PROBE_COMMANDS: 'make g++ python3 unzip',
+  CI_INSTALL_NO_APT_ERROR: 'UI Vitest requires libatomic1, make, g++, python3, and unzip, but apt-get is unavailable.',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'UI Vitest requires {{MISSING}}; run as root or provide passwordless sudo for apt-get.',
+  CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
+});
 
 const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
 const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
@@ -185,32 +191,14 @@ assert(
   requiredFastExtraNodeLibraryStep?.if === "matrix.runner_label != 'Github_Runner'",
   'required-fast-extra must not request sudo package installation on Github_Runner hosts',
 );
-assert(
-  String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('libatomic1'),
-  'required-fast-extra must install libatomic1 before setup-node so Node 26 can start on self-hosted runners',
-);
-assert(
-  String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('make')
-    && String(requiredFastExtraNodeLibraryStep?.run ?? '').includes('g++'),
-  'required-fast-extra must install make and g++ so pnpm can build native dependencies on self-hosted runners',
-);
-const requiredFastExtraNodeLibraryScript = String(requiredFastExtraNodeLibraryStep?.run ?? '');
-assert(
-  requiredFastExtraNodeLibraryScript.includes('sudo -n true')
-    && requiredFastExtraNodeLibraryScript.includes('sudo -n apt-get')
-    && !/^\s*sudo\s+(?!-n\b)/m.test(requiredFastExtraNodeLibraryScript),
-  'required-fast-extra libatomic install must prove passwordless sudo and use it noninteractively, '
-  + 'the same way ui-vitest already does -- raw `sudo apt-get` hangs on "a password is required" '
-  + 'when the self-hosted runner has no passwordless sudo configured',
-);
-assert(
-  requiredFastExtraNodeLibraryScript.includes('unzip'),
-  'required-fast-extra must install unzip so the Electron repair fallback can complete during pnpm install',
-);
-assert(
-  requiredFastExtraNodeLibraryScript.includes('python3'),
-  'required-fast-extra must install python3 for node-gyp native builds on self-hosted runners',
-);
+assertUsesSharedInstaller('required-fast-extra', 'Install system libraries for Node', {
+  CI_INSTALL_PACKAGES: 'libatomic1 make g++ python3 unzip',
+  CI_INSTALL_PROBE_SONAME: 'libatomic.so.1',
+  CI_INSTALL_PROBE_COMMANDS: 'make g++ python3 unzip',
+  CI_INSTALL_NO_APT_ERROR: 'libatomic1, make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }} but cannot be installed without sudo.',
+  CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
+});
 const requiredFastExtraInstallDepsStep = jobs['required-fast-extra'].steps.find(
   (step) => step.name === 'Install dependencies',
 );
@@ -269,11 +257,16 @@ assert(
   dockerSteps.includes('Install Electron GUI system libraries'),
   'docker must provision libgtk-3 before running the suite: test-docker-comprehensive.sh boots Electron headless on the runner host, and self-hosted runners in this pool are not guaranteed to already have libgtk-3/libatk-1.0 installed',
 );
-const dockerElectronLibsStep = jobs.docker.steps.find((step) => step.name === 'Install Electron GUI system libraries');
-assert(
-  String(dockerElectronLibsStep?.run ?? '').includes("libgtk-3-0t64"),
-  'docker Electron GUI system libraries step must install libgtk-3-0t64',
-);
+assertUsesSharedInstaller('docker', 'Install Electron GUI system libraries', {
+  CI_INSTALL_PACKAGES: 'libgtk-3-0t64',
+  CI_INSTALL_PROBE_SONAME: 'libgtk-3.so.0',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get.',
+});
+assertUsesSharedInstaller('required-fast', 'Install Electron GUI system libraries', {
+  CI_INSTALL_PACKAGES: 'libgtk-3-0t64',
+  CI_INSTALL_PROBE_SONAME: 'libgtk-3.so.0',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'Guardrails requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get.',
+});
 
 assert(
   prBodyWorkflow.jobs.validate['runs-on'] === 'ubuntu-latest',
@@ -364,6 +357,29 @@ for (const checkName of requiredChecks) {
   assert(
     jobIf === undefined || jobIf === FULL_CI_GATE,
     `Mergify-required job ${jobName} must run on merge queue refs`,
+  );
+}
+
+assert(existsSync(INSTALLER_SCRIPT_PATH), `Missing shared installer owner ${INSTALLER_SCRIPT_PATH}`);
+const installerScript = readFileSync(INSTALLER_SCRIPT_PATH, 'utf8');
+assert(
+  installerScript.includes('sudo -n true')
+    && installerScript.includes('sudo -n apt-get')
+    && !/^\s*sudo\s+(?!-n\b)/m.test(installerScript),
+  'shared installer must prove passwordless sudo and use it noninteractively, the same way every caller previously did',
+);
+assert(
+  installerScript.includes('Dir::State')
+    && installerScript.includes('LD_LIBRARY_PATH=')
+    && installerScript.includes('GITHUB_ENV'),
+  'shared installer must keep the no-root LD_LIBRARY_PATH fallback for its configured library package',
+);
+
+const rawInstallerPatterns = [/has_libatomic\s*\(\)/, /has_libgtk3\s*\(\)/, /has_build_tools\s*\(\)/, /missing_native_tools=/];
+for (const pattern of rawInstallerPatterns) {
+  assert(
+    !pattern.test(ciWorkflowSource),
+    `ci.yml must not keep a raw inline copy of the capability-check installer (matched ${pattern})`,
   );
 }
 
