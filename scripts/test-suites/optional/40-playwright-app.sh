@@ -8,6 +8,23 @@ sanitize_label() {
   printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
 }
 
+RUN_LABEL="${INVOKER_PLAYWRIGHT_RUN_LABEL:-playwright-app}"
+if [ -n "${INVOKER_PLAYWRIGHT_SHARD:-}" ]; then
+  RUN_LABEL="${RUN_LABEL}-$(sanitize_label "${INVOKER_PLAYWRIGHT_SHARD}")"
+elif [ -n "${INVOKER_PLAYWRIGHT_SHARD_INDEX:-}" ] && [ -n "${INVOKER_PLAYWRIGHT_SHARD_TOTAL:-}" ]; then
+  RUN_LABEL="${RUN_LABEL}-$(sanitize_label "${INVOKER_PLAYWRIGHT_SHARD_INDEX}-of-${INVOKER_PLAYWRIGHT_SHARD_TOTAL}")"
+fi
+RUN_LABEL="$(sanitize_label "$RUN_LABEL")"
+
+if [ -z "${CI:-}" ] && [[ "$RUN_LABEL" == ci-playwright-* ]]; then
+  export CI=true
+fi
+
+if [[ "$RUN_LABEL" == ci-playwright-nightly-visual-proof* ]]; then
+  export INVOKER_VISUAL_PROOF_LINUX="${INVOKER_VISUAL_PROOF_LINUX:-1}"
+  : "${INVOKER_PLAYWRIGHT_FILES:=e2e/visual-proof.spec.ts}"
+fi
+
 PLAYWRIGHT_ARGS=()
 if [ -n "${INVOKER_PLAYWRIGHT_SHARD:-}" ]; then
   PLAYWRIGHT_ARGS+=( "--shard=${INVOKER_PLAYWRIGHT_SHARD}" )
@@ -27,18 +44,6 @@ if [ -n "${INVOKER_PLAYWRIGHT_FILES:-}" ]; then
   # without expanding glob characters inside each file name.
   IFS=' ' read -ra PLAYWRIGHT_FILES <<< "${INVOKER_PLAYWRIGHT_FILES}"
   PLAYWRIGHT_ARGS+=( "${PLAYWRIGHT_FILES[@]}" )
-fi
-
-RUN_LABEL="${INVOKER_PLAYWRIGHT_RUN_LABEL:-playwright-app}"
-if [ -n "${INVOKER_PLAYWRIGHT_SHARD:-}" ]; then
-  RUN_LABEL="${RUN_LABEL}-$(sanitize_label "${INVOKER_PLAYWRIGHT_SHARD}")"
-elif [ -n "${INVOKER_PLAYWRIGHT_SHARD_INDEX:-}" ] && [ -n "${INVOKER_PLAYWRIGHT_SHARD_TOTAL:-}" ]; then
-  RUN_LABEL="${RUN_LABEL}-$(sanitize_label "${INVOKER_PLAYWRIGHT_SHARD_INDEX}-of-${INVOKER_PLAYWRIGHT_SHARD_TOTAL}")"
-fi
-RUN_LABEL="$(sanitize_label "$RUN_LABEL")"
-
-if [ -z "${CI:-}" ] && [[ "$RUN_LABEL" == ci-playwright-* ]]; then
-  export CI=true
 fi
 
 ARTIFACT_ROOT="$(git rev-parse --path-format=absolute --git-path "playwright-artifacts/$RUN_LABEL")"
