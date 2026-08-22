@@ -48,7 +48,7 @@ import { buildAssistantPrompt, parseWorkflowControl } from './workflow-assistant
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 import { SlackPlanDraftRepository } from '@invoker/data-store';
-import { formatCodexPlannerStdout, materializeLocalAgentPrompt } from '@invoker/execution-engine';
+import { buildAgentExitFailureDetail, formatCodexPlannerStdout, materializeLocalAgentPrompt } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
 
 function truncateWords(text: string, maxWords: number): string {
@@ -2679,7 +2679,7 @@ ${text}`;
             reject(new EmptyOutputAttemptError(stderr));
           }
         } else {
-          reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
+          reject(new Error(`${plannerLabel} exited with code ${code}: ${buildAgentExitFailureDetail(stdout, stderr)}`));
         }
       });
       child.on('error', (err) => {

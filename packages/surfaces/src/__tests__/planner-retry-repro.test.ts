@@ -152,6 +152,45 @@ describe('spawnPlanner retries the empty-output case with logging', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
+  it('summarizes repeated Codex authentication failures without retrying', async () => {
+    const conversation = new PlanConversation({
+      tool: 'codex',
+      plannerRetryLimit: 2,
+      plannerRetryBaseDelayMs: 1,
+      planningCommandBuilder: () => ({ command: 'codex', args: ['exec', 'prompt'] }),
+    });
+    queueChildFactories([
+      fakePlannerChildFactory({
+        stderr: [
+          'Reading additional input from stdin...',
+          'ERROR Failed to refresh token: {"code":"refresh_token_reused"}',
+          'ERROR Your refresh token was already used. Please log out and sign in again.',
+          'ERROR failed to connect to websocket: 401 Unauthorized',
+        ].join('\n'),
+        exitCode: 1,
+      }),
+    ]);
+
+    await expect(conversation.sendMessage('Any prompt')).rejects.toThrow(
+      'codex exited with code 1: Codex authentication expired. Run `codex logout`, then `codex login`, and retry.',
+    );
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a successful reply when authentication-like stderr appeared earlier', async () => {
+    const conversation = new PlanConversation({ plannerRetryLimit: 2, plannerRetryBaseDelayMs: 1 });
+    queueChildFactories([
+      fakePlannerChildFactory({
+        stdout: 'Recovered reply',
+        stderr: 'ERROR Failed to refresh token: {"code":"refresh_token_reused"}',
+        exitCode: 0,
+      }),
+    ]);
+
+    await expect(conversation.sendMessage('Any prompt')).resolves.toBe('Recovered reply');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry when the planner subprocess fails to spawn', async () => {
     const conversation = new PlanConversation({
       plannerRetryLimit: 2,

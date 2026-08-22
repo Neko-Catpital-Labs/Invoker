@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
-import { formatCodexPlannerStdout } from '@invoker/execution-engine';
+import { buildAgentExitFailureDetail, formatCodexPlannerStdout } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import {
   buildPlanningHandoffInstructions,
@@ -1128,7 +1128,7 @@ export class PlanConversation {
             reject(new RetryableEmptyPlannerOutputError(stderr));
           }
         } else {
-          const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
+          const errMsg = buildAgentExitFailureDetail(stdout, stderr);
           reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
         }
       });
