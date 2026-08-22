@@ -48,6 +48,7 @@ import {
   formatPlanningHostedTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
+  looksLikeQuestion,
   preparePlanningReview,
   submitPlanningReview,
   summarizePlanText,
@@ -971,13 +972,29 @@ export async function sendPlanningChatMessage(
           messagesBeforeTurn,
           assistantReply: reply,
           immediateDraftPlanText,
-          requireDraftAuthorization: hasDraftPlan(activeSession) || !immediateDraftPlanText,
           hasExistingDraft: hasDraftPlan(activeSession),
         });
-        if (result.kind === 'message') {
+        // Prompt-mode sidecar approval (incident ad665bff): a draft the
+        // planner deliberately wrote to the sidecar file, in a turn where the
+        // user supplied information rather than asking a question, is
+        // review-ready without an explicit "draft it" message. YAML that
+        // merely appears in the chat reply text still needs the user to have
+        // asked for a draft (#5320 draft gate).
+        const sidecarDraftApproved = !deps.plannerReplyOverride
+          && activeSession.conversation.lastTurnDraftFromSidecarFile
+          && !looksLikeQuestion(message);
+        const unauthorizedDraft = result.kind === 'draft_ready'
+          && !result.draftingAuthorized
+          && !sidecarDraftApproved;
+        if (result.kind === 'message' || unauthorizedDraft) {
+          const conversationStatus = result.kind === 'message'
+            ? result.status
+            : reply.includes('?')
+              ? 'waiting_for_answer'
+              : 'still_discussing';
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
-            : result.status;
+            : conversationStatus;
           appendSessionMessage(activeSession, 'assistant', reply);
           return finishTurn({
             ok: true,

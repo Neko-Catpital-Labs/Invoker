@@ -329,9 +329,20 @@ function collectAssertionCalls(file, content, lineNumbers) {
   const walk = (node) => {
     const assertion = analyzeAssertionCall(ts, node);
     if (assertion) {
-      const lineNumber = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-      if (lineNumbers.has(lineNumber)) {
-        assertions.push({ ...assertion, line: lineNumber });
+      // Match on the call's full line RANGE, not just its start line: an
+      // expected-value edit inside a multi-line argument list leaves the
+      // `expect(` line untouched and must still count as a changed assertion.
+      const startLine = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+      const endLine = sourceFile.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
+      let touchesChangedLine = false;
+      for (let line = startLine; line <= endLine; line += 1) {
+        if (lineNumbers.has(line)) {
+          touchesChangedLine = true;
+          break;
+        }
+      }
+      if (touchesChangedLine) {
+        assertions.push({ ...assertion, line: startLine });
       }
     }
     ts.forEachChild(node, walk);
