@@ -189,8 +189,12 @@ function includedWorkText(text) {
     .join('\n');
 }
 
-export function validateSingleReviewUnitFocus({ texts = [], context }) {
+const NON_PRODUCT_REVIEW_UNITS = new Set(['proof', 'docs', 'tooling-policy']);
+
+export function validateSingleReviewUnitFocus({ texts = [], context, declaredReviewUnit = '' }) {
   const errors = [];
+
+  if (NON_PRODUCT_REVIEW_UNITS.has(declaredReviewUnit)) return errors;
 
   const detected = new Set();
   for (const text of texts) {
@@ -243,7 +247,7 @@ export function validateReviewLaneUnitCompatibility({ reviewLane = '', reviewUni
 }
 
 export function validateReviewUnitFocus({ declaredReviewUnit, texts = [], context }) {
-  const errors = validateSingleReviewUnitFocus({ texts, context });
+  const errors = validateSingleReviewUnitFocus({ texts, context, declaredReviewUnit });
   if (!VALID_REVIEW_UNIT_SET.has(declaredReviewUnit)) return errors;
 
   const detected = new Set();

@@ -42,7 +42,7 @@ function main() {
   const { reviewClaim, sliceRationale } = getReviewMetadata(text);
   const texts = [getMarkdownSection(text, '## Summary'), reviewClaim, sliceRationale];
   const errors = [...new Set([
-    ...validateSingleReviewUnitFocus({ texts, context: 'PR body' }),
+    ...validateSingleReviewUnitFocus({ texts, context: 'PR body', declaredReviewUnit: declaredUnit }),
     ...validateReviewUnitFocus({ declaredReviewUnit: declaredUnit, texts, context: 'PR body' }),
   ])];
 
