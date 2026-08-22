@@ -75,6 +75,18 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def tree_sha(commit: str, *, cwd: Path | str | None = None) -> str:
+    return run_git(["rev-parse", f"{commit}^{{tree}}"], cwd=cwd).strip().lower()
+
+
+def _remote_tree_matches_local(live: str, *, remote: str, cwd: Path | str | None = None) -> bool:
+    try:
+        run_git(["fetch", remote, live], cwd=cwd)
+        return tree_sha(live, cwd=cwd) == tree_sha("HEAD", cwd=cwd)
+    except SafePushError:
+        return False
+
+
 def safe_push(
     *,
     branch: str,
@@ -82,7 +94,7 @@ def safe_push(
     expect_missing: bool = False,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+) -> tuple[str, bool]:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -97,6 +109,14 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            # The remote head moved out from under us. That's only safe to
+            # skip -- never to force through -- when it moved to a commit
+            # whose tree already matches what we would have pushed: a
+            # sibling repair attempt landed the same content first (e.g. two
+            # concurrent normalize/safe-push runs racing the same PR), not a
+            # conflicting edit we'd be clobbering.
+            if live is not None and _remote_tree_matches_local(live, remote=remote, cwd=cwd):
+                return live, False
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
@@ -117,7 +137,7 @@ def safe_push(
             f"post-push verification failed: refs/heads/{branch_name} is {verified or 'missing'}; expected {pushed}",
             exit_code=22,
         )
-    return pushed
+    return pushed, True
 
 
 def append_tsv_ledger(path: Path, *, kind: str, key: str, marker: str, epoch: int | None = None) -> None:
@@ -184,7 +204,7 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        pushed = safe_push(
+        pushed, did_push = safe_push(
             branch=args.branch,
             expected_head=args.expected_head,
             expect_missing=args.expect_missing,
@@ -224,7 +244,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        if did_push:
+            print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        else:
+            print(
+                f"pr-worker-safe-push: refs/heads/{normalize_branch(args.branch)} already at {pushed} "
+                "with matching tree; nothing to push"
+            )
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)

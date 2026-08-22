@@ -111,6 +111,31 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_moved_remote_head_with_matching_tree_skips_push_without_forcing(self) -> None:
+        # A sibling repair attempt (e.g. a concurrent normalize/safe-push run
+        # racing the same PR) already landed a commit whose tree matches ours.
+        # That's safe to treat as already-done -- unlike a real conflicting
+        # edit, there is nothing of ours that a push could add or clobber.
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "sibling-repair", "same content\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "our-repair", "same content\n")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("nothing to push", result.stdout)
+        self.assertEqual(self.remote_head(), remote_after_race)
+        self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")
