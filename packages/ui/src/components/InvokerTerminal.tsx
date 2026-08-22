@@ -108,6 +108,7 @@ function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): 
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
   busy: boolean;
+  binding?: boolean;
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
@@ -539,6 +540,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
 export function InvokerTerminal({
   lines,
   busy,
+  binding = false,
   value,
   selectedPresetKey,
   presetOptions,
@@ -686,7 +688,7 @@ export function InvokerTerminal({
   };
 
   const composerDisabledCursorClass = busy || readOnly ? 'disabled:cursor-not-allowed' : '';
-  const sendButtonDisabled = busy || readOnly || !value.trim();
+  const sendButtonDisabled = busy || binding || readOnly || !value.trim();
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
   const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
   const selectedPreset = useMemo(
@@ -762,7 +764,7 @@ export function InvokerTerminal({
   };
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !binding && !readOnly && value.trim()) {
       event.preventDefault();
       submitFromComposer('enter');
     }
@@ -902,7 +904,7 @@ export function InvokerTerminal({
                     <button
                       key={chip}
                       type="button"
-                      disabled={busy || readOnly}
+                      disabled={busy || binding || readOnly}
                       onClick={() => {
                         onValueChange(chip);
                         focusComposer();
@@ -1014,7 +1016,7 @@ export function InvokerTerminal({
                 ref={inputRef}
                 data-testid="invoker-terminal-input"
                 value={value}
-                disabled={busy || readOnly}
+                disabled={busy || binding || readOnly}
                 rows={expanded ? 5 : 1}
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
@@ -1084,7 +1086,7 @@ export function InvokerTerminal({
                             data-testid="invoker-terminal-repo"
                             list="invoker-terminal-repo-suggestions"
                             value={repoValue}
-                            disabled={readOnly}
+                            disabled={readOnly || binding}
                             placeholder="path or URL (default if empty)"
                             onChange={(event) => onRepoInputChange?.(event.target.value)}
                             onBlur={() => onRepoCommit?.()}
@@ -1113,7 +1115,7 @@ export function InvokerTerminal({
                   disabled={sendButtonDisabled}
                   className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
                 >
-                  {busy ? (
+                  {busy || binding ? (
                     <span
                       data-testid="invoker-terminal-send-spinner"
                       aria-hidden="true"
