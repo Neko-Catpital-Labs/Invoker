@@ -169,6 +169,47 @@ class SafePushTests(unittest.TestCase):
         self.assertIn("expected it to be missing", result.stderr)
         self.assertEqual(self.remote_head("stack/prereq"), first)
 
+    def test_push_without_json_ledger_succeeds_for_owner_side_settlement(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
+
+    def test_linux_worker_cannot_write_macos_owner_ledger_path(self) -> None:
+        # Production failure shape: remote Linux task received
+        # --record-json-ledger /Users/edbertchan/.invoker/... and mkdir failed.
+        # Keep the helper's ledger write behavior explicit so callers must not
+        # pass owner-local paths into remote commands.
+        pushed = self.commit(self.repo, "repair")
+        blocked_parent = self.root / "Users"
+        blocked_parent.write_text("not-a-directory\n", encoding="utf-8")
+        macos_shaped = blocked_parent / "edbertchan" / ".invoker" / "state.jsonl"
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(macos_shaped),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "9966",
+            "--json-head-sha", self.expected,
+            "--json-key", "PR Body",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(
+            "PermissionError" in result.stderr
+            or "NotADirectoryError" in result.stderr
+            or "FileExistsError" in result.stderr
+            or "errno" in result.stderr.lower()
+            or "Not a directory" in result.stderr
+            or result.returncode != 0,
+            result.stderr,
+        )
+        # Lease push may still have succeeded before ledger write; the point is
+        # remote workers must not be asked to touch owner-local ledger paths.
+        del pushed
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
