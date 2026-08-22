@@ -7,6 +7,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import pr_worker_safe_push as safe_push
 
@@ -152,6 +153,55 @@ class SafePushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("git push", result.stderr)
         self.assertFalse(ledger.exists())
+
+    def test_missing_branch_with_merged_pr_skips_push_without_error(self) -> None:
+        self.commit(self.repo, "repair")
+        # Simulate the branch being deleted by GitHub on merge: remove it from the remote.
+        git(self.repo, "push", "origin", "--delete", "main")
+
+        with mock.patch.object(safe_push, "pr_is_merged", return_value=True) as mocked:
+            pushed = safe_push.safe_push(
+                branch="main",
+                expected_head=self.expected,
+                remote="origin",
+                cwd=self.repo,
+                pr_number=123,
+            )
+
+        mocked.assert_called_once_with(123, cwd=self.repo)
+        self.assertIsNone(pushed)
+        self.assertIsNone(safe_push.remote_branch_sha("main", remote="origin", cwd=self.repo))
+
+    def test_missing_branch_with_open_pr_still_raises_stale_head(self) -> None:
+        self.commit(self.repo, "repair")
+        git(self.repo, "push", "origin", "--delete", "main")
+
+        with mock.patch.object(safe_push, "pr_is_merged", return_value=False):
+            with self.assertRaises(safe_push.SafePushError) as ctx:
+                safe_push.safe_push(
+                    branch="main",
+                    expected_head=self.expected,
+                    remote="origin",
+                    cwd=self.repo,
+                    pr_number=123,
+                )
+
+        self.assertIn("stale-head", str(ctx.exception))
+        self.assertEqual(ctx.exception.exit_code, 20)
+
+    def test_missing_branch_without_pr_number_still_raises_stale_head(self) -> None:
+        self.commit(self.repo, "repair")
+        git(self.repo, "push", "origin", "--delete", "main")
+
+        with self.assertRaises(safe_push.SafePushError) as ctx:
+            safe_push.safe_push(
+                branch="main",
+                expected_head=self.expected,
+                remote="origin",
+                cwd=self.repo,
+            )
+
+        self.assertIn("stale-head", str(ctx.exception))
 
     def test_new_prerequisite_branch_succeeds_only_when_remote_branch_is_absent(self) -> None:
         git(self.repo, "checkout", "-B", "stack/prereq")

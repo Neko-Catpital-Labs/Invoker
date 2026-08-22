@@ -180,6 +180,7 @@ def build_repair_check_plan(
         "If a code change fixes it: make the change in this checkout. Commit locally if "
         "needed, do not push. If local proof shows the check is already green on the "
         "current head, make no commit and exit 0.\n\n"
+        "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
         f"{_RESTRUCTURE_ESCAPE_HATCH}\n"
         f"Repair the existing pull request #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
         f"PR URL: {pr.url}\n"

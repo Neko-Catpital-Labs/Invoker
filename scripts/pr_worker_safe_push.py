@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -12,6 +13,7 @@ from typing import Mapping, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+GH_MERGED_CHECK_TIMEOUT_SECONDS = 30
 
 
 class SafePushError(RuntimeError):
@@ -75,6 +77,33 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def pr_is_merged(pr_number: int, *, cwd: Path | str | None = None) -> bool | None:
+    """Return True/False for a resolvable PR state, or None if it can't be determined
+    (gh missing, network/auth failure, unexpected output) -- callers must treat None as
+    "unknown" and keep the original stale-head failure rather than guessing."""
+    gh = shutil.which("gh")
+    if gh is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [gh, "pr", "view", str(pr_number), "--json", "state"],
+            cwd=str(cwd) if cwd is not None else None,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=GH_MERGED_CHECK_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        state = json.loads(completed.stdout).get("state")
+    except json.JSONDecodeError:
+        return None
+    return state == "MERGED"
+
+
 def safe_push(
     *,
     branch: str,
@@ -82,7 +111,8 @@ def safe_push(
     expect_missing: bool = False,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+    pr_number: int | None = None,
+) -> str | None:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -97,6 +127,13 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            # A branch that moved to a different SHA is a genuine race and must still
+            # fail. A branch that vanished entirely is different: GitHub deletes head
+            # branches on merge, so a missing branch plus a merged PR means this repair
+            # attempt is moot, not unsafe -- skip the push instead of looping on
+            # stale-head forever (see PR #9965).
+            if live is None and pr_number is not None and pr_is_merged(pr_number, cwd=cwd):
+                return None
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
@@ -190,6 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expect_missing=args.expect_missing,
             remote=args.remote,
             cwd=Path(args.cwd),
+            pr_number=args.json_pr,
         )
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
@@ -224,7 +262,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        if pushed is None:
+            print(
+                f"pr-worker-safe-push: refs/heads/{normalize_branch(args.branch)} is missing "
+                f"and PR #{args.json_pr} is already merged; skipping push"
+            )
+        else:
+            print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)

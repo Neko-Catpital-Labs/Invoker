@@ -104,6 +104,22 @@ class AsyncRepairPlanTests(unittest.TestCase):
         # PR titles with quotes/colons must not corrupt the YAML document.
         self.assertIn('Fix \\"quoted\\" title: with colons', plan.yaml_text)
 
+    def test_repair_check_plan_tells_repair_task_to_bail_out_on_merged_or_closed_pr(self):
+        # build_repair_conflict_plan and build_repair_bot_thread_plan both already tell the
+        # repair agent to make no commit and exit 0 if the PR is closed/merged or its head
+        # branch is gone; this plan builder must match, or its downstream safe-push task
+        # is left racing a branch that GitHub already deleted on merge (see PR #9965).
+        plan = async_repair.build_repair_check_plan(
+            pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
+            log_path="/tmp/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+            start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn(
+            "If the PR is already closed or merged, or the head branch no longer exists, "
+            "make no commit and exit 0.",
+            plan.yaml_text,
+        )
+
     def test_repair_check_plan_runs_normalize_with_bytecode_disabled(self):
         plan = async_repair.build_repair_check_plan(
             pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
