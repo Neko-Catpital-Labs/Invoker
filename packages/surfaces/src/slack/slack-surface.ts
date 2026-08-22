@@ -1594,10 +1594,9 @@ export class SlackSurface implements Surface {
     }
     await this.replacePlanDraftMessage(draft, 'Starting plan execution…', []);
     try {
-      const planText = this.normalizeDraftedPlanRepoUrl(draft.planText, draft.repoUrl);
       const result = await this.onCommand?.({
         type: 'start_plan',
-        planText,
+        planText: draft.planText,
         repoUrl: draft.repoUrl,
         harnessPreset: draft.harnessPreset,
         requestedBy: draft.requestedBy,
