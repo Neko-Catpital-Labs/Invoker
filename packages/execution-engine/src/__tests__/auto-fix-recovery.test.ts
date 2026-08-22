@@ -61,4 +61,39 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
 
     expect(candidates).toEqual([]);
   });
+
+  it('skips every persisted SSH infra failure class so autofix cannot race infra-repair', async () => {
+    const { SSH_INFRA_FAILURE_CLASSES } = await import('@invoker/workflow-core');
+    const { listAutoFixRecoveryScanCandidates } = await import('../auto-fix-recovery.js');
+
+    for (const failureClass of SSH_INFRA_FAILURE_CLASSES) {
+      const task = makeFailedTask({
+        execution: {
+          generation: 2,
+          selectedAttemptId: 'attempt-1',
+          branch: 'feature/build',
+          error: `infra: ${failureClass}`,
+          failureClass,
+        },
+      });
+      const store = {
+        listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+        loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-1' ? [task] : [])),
+        loadTask: vi.fn((taskId: string) => (taskId === task.id ? task : undefined)),
+        listWorkflowMutationIntents: vi.fn(() => []),
+        logEvent: vi.fn(),
+      };
+      const options = {
+        store,
+        submitter: { submit: vi.fn(() => 1) },
+        logger,
+        attemptLedger: createAutoFixAttemptLedger(),
+        defaultAutoFixRetries: 3,
+      };
+      const scanned = listAutoFixRecoveryScanCandidates(options);
+      // Scan may still list failed tasks; validation must drop all SSH infra classes.
+      const validated = collectValidatedAutoFixRecoveryCandidates(options, scanned);
+      expect(validated, failureClass).toEqual([]);
+    }
+  });
 });
