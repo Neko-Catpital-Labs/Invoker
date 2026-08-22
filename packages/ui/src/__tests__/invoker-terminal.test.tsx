@@ -847,12 +847,20 @@ describe('Invoker terminal (component)', () => {
       expect(panel).toHaveTextContent('Planning stopped. Try again when ready.');
     });
 
+    const firstTurnId = vi.mocked(mock.api.planningChatSend).mock.calls[0][0].turnId;
+    expect(typeof firstTurnId).toBe('string');
+
     submitPlanningText('try again');
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      const secondTurnId = vi.mocked(mock.api.planningChatSend).mock.calls[1][0].turnId;
+      // A plain resend after failure is a new turn, not the dedicated Retry
+      // action (which reuses activeTurnId) — it must mint a fresh turnId.
+      expect(typeof secondTurnId).toBe('string');
+      expect(secondTurnId).not.toBe(firstTurnId);
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
-        turnId: expect.any(String),
+        turnId: secondTurnId,
         sessionId: 'session-1',
         message: 'try again',
         presetKey: 'codex',
