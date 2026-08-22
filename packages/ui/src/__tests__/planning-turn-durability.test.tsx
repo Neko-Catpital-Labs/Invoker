@@ -233,6 +233,43 @@ describe('planning turn durability', () => {
     expect(transcriptText.split('I can help draft that.').length - 1).toBe(1);
     expect(screen.getByTestId('invoker-terminal-input')).not.toBeDisabled();
   });
+
+  it('lands a failed turn outcome exactly once when both the response and the stream event deliver it', async () => {
+    mock.api.planningChatSend = vi.fn(async (request: { sessionId?: string; turnId?: string }) => ({
+      ok: false as const,
+      sessionId: request.sessionId ?? 'session-1',
+      turnId: request.turnId,
+      error: 'Planner was interrupted before it could answer.',
+    }));
+
+    render(<App />);
+    await openPlanningSurface();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello planner' } });
+    fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-turn-error'))
+        .toHaveTextContent('Planner was interrupted before it could answer.');
+    });
+
+    const sendRequest = vi.mocked(mock.api.planningChatSend).mock.calls[0]?.[0] as { sessionId?: string; turnId?: string };
+    expect(typeof sendRequest.turnId).toBe('string');
+
+    // A lagging stream event re-delivers the same failure for the same
+    // turnId after the direct response already landed it.
+    await act(async () => {
+      mock.firePlanningChatStream({
+        sessionId: sendRequest.sessionId ?? 'session-1',
+        turnId: sendRequest.turnId,
+        turn: { status: 'failed', error: 'Planner was interrupted before it could answer.' },
+      });
+    });
+
+    const transcriptText = screen.getByTestId('invoker-terminal-transcript').textContent ?? '';
+    expect(transcriptText.split('Planner was interrupted before it could answer.').length - 1).toBe(1);
+    expect(screen.getByTestId('invoker-terminal-retry-turn')).toBeInTheDocument();
+  });
   it('fails a wiped mid-first-send turn into the banner and keeps the chat', async () => {
     mock.api.planningChatSend = vi.fn((request: { turnId?: string }) => new Promise(() => {
       void request; // never resolves: the server was wiped mid-turn

@@ -2493,6 +2493,11 @@ export function App() {
       }
       return;
     }
+    // A failed turn keeps its activeTurnId (Retry re-sends it), so a second
+    // delivery of the same failure — e.g. a lagging poll after the direct
+    // response already landed — must not re-append the error line or the
+    // stopped banner a second time.
+    const wasAlreadyFailed = target.activeTurnStatus === 'failed';
     const applyFailed = (session: PlanningSessionView): PlanningSessionView => (
       session.id === targetId
         ? { ...session, busy: false, activeTurnStatus: 'failed' as const, activeTurnError: outcome.error, updatedAt }
@@ -2500,11 +2505,14 @@ export function App() {
     );
     planningSessionsRef.current = planningSessionsRef.current.map(applyFailed);
     setPlanningSessions((prev) => prev.map(applyFailed));
-    clearPlanningStreamForSessionIds([sessionId, targetId]);
+    if (!wasAlreadyFailed) {
+      appendTerminalLine(outcome.error, 'system', 'error', targetId);
+      keepPlanningStreamFailureForSessionIds([sessionId, targetId], outcome.error);
+    }
     forgetPlanningStreamAliasesForSessionIds([sessionId, targetId]);
     pendingPlanningStreamSessionIdsRef.current.delete(sessionId);
     pendingPlanningStreamSessionIdsRef.current.delete(targetId);
-  }, [clearPlanningStreamForSessionIds, forgetPlanningStreamAliasesForSessionIds]);
+  }, [appendTerminalLine, forgetPlanningStreamAliasesForSessionIds, keepPlanningStreamFailureForSessionIds]);
 
   useEffect(() => {
     applyTurnOutcomeRef.current = applyPlanningTurnOutcome;
