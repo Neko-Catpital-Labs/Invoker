@@ -233,4 +233,76 @@ describe('planning turn durability', () => {
     expect(transcriptText.split('I can help draft that.').length - 1).toBe(1);
     expect(screen.getByTestId('invoker-terminal-input')).not.toBeDisabled();
   });
+
+  it('suppresses an overlapping poll tick while the previous refresh is still pending, then resumes once it settles', async () => {
+    let resolveSend: (() => void) | undefined;
+    mock.api.planningChatSend = vi.fn((request: { turnId?: string }) => new Promise((resolve) => {
+      resolveSend = () => resolve({
+        ok: true,
+        sessionId: 'session-1',
+        turnId: request.turnId,
+        reply: 'Landed.',
+        confirmationMode: 'require',
+        draftPlanAvailable: false,
+      });
+    })) as typeof mock.api.planningChatSend;
+
+    render(<App />);
+    await openPlanningSurface();
+
+    // Swap in a controllable, never-resolving-until-told planningChatList so the
+    // busy poll's refresh call can be held pending across multiple timer ticks.
+    let resolvePoll: (() => void) | undefined;
+    mock.api.planningChatList = vi.fn(() => new Promise((resolve) => {
+      resolvePoll = () => resolve({ ok: true, sessions: [] });
+    })) as typeof mock.api.planningChatList;
+
+    vi.useFakeTimers();
+    try {
+      // Sending a message marks the session busy synchronously (the send
+      // itself is left pending on purpose), which starts the busy poll.
+      fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello planner' } });
+      fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+
+      // First tick starts the poll's refresh call; leave it unresolved.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(mock.api.planningChatList).toHaveBeenCalledTimes(1);
+
+      // Two more ticks land while that call is still pending: the in-flight
+      // guard must suppress both, so the call count stays at 1.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(mock.api.planningChatList).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(mock.api.planningChatList).toHaveBeenCalledTimes(1);
+
+      // Let the pending call settle so the guard clears.
+      await act(async () => {
+        resolvePoll?.();
+        await Promise.resolve();
+      });
+
+      // The next tick now fires a genuinely new call.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(mock.api.planningChatList).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        resolvePoll?.();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await act(async () => {
+      resolveSend?.();
+    });
+  });
 });
