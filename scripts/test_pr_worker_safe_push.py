@@ -153,6 +153,73 @@ class SafePushTests(unittest.TestCase):
         self.assertIn("git push", result.stderr)
         self.assertFalse(ledger.exists())
 
+    def fake_gh(self, state: str) -> Path:
+        gh_dir = self.root / "gh-bin"
+        gh_dir.mkdir(exist_ok=True)
+        gh_stub = gh_dir / "gh"
+        gh_stub.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                echo '{{"state": "{state}"}}'
+                """
+            ),
+            encoding="utf-8",
+        )
+        gh_stub.chmod(0o755)
+        return gh_dir
+
+    def test_missing_remote_branch_skips_push_when_pr_already_merged(self) -> None:
+        git(self.repo, "checkout", "-B", "gone")
+        self.commit(self.repo, "onto-gone", "gone\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/gone")
+        expected = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "push", "origin", "--delete", "gone")
+        self.commit(self.repo, "repair-after-delete", "more\n")
+
+        gh_dir = self.fake_gh("MERGED")
+        ledger = self.root / "ledger.jsonl"
+        result = self.invoke_helper(
+            "--branch", "gone",
+            "--expected-head", expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "999",
+            "--json-head-sha", expected,
+            "--json-key", "check",
+            env={"PATH": f"{gh_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already merged", result.stdout)
+        self.assertIsNone(safe_push.remote_branch_sha("gone", remote="origin", cwd=self.repo))
+        self.assertTrue(ledger.exists())
+
+    def test_missing_remote_branch_still_fails_when_pr_not_merged(self) -> None:
+        git(self.repo, "checkout", "-B", "gone2")
+        self.commit(self.repo, "onto-gone2", "gone2\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/gone2")
+        expected = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "push", "origin", "--delete", "gone2")
+        self.commit(self.repo, "repair-after-delete2", "more2\n")
+
+        gh_dir = self.fake_gh("OPEN")
+        ledger = self.root / "ledger.jsonl"
+        result = self.invoke_helper(
+            "--branch", "gone2",
+            "--expected-head", expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-check-settled",
+            "--json-pr", "999",
+            "--json-head-sha", expected,
+            "--json-key", "check",
+            env={"PATH": f"{gh_dir}:{os.environ['PATH']}"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stale-head", result.stderr)
+        self.assertFalse(ledger.exists())
+
     def test_new_prerequisite_branch_succeeds_only_when_remote_branch_is_absent(self) -> None:
         git(self.repo, "checkout", "-B", "stack/prereq")
         first = self.commit(self.repo, "prereq", "prereq\n")

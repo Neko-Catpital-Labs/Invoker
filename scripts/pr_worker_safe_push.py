@@ -75,6 +75,23 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def pr_is_merged(pr_number: int, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["gh", "pr", "view", str(pr_number), "--json", "state"],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return False
+    try:
+        data = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return False
+    return data.get("state") == "MERGED"
+
+
 def safe_push(
     *,
     branch: str,
@@ -82,7 +99,8 @@ def safe_push(
     expect_missing: bool = False,
     remote: str = "origin",
     cwd: Path | str | None = None,
-) -> str:
+    pr_number: int | None = None,
+) -> str | None:
     branch_name = normalize_branch(branch)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
@@ -97,6 +115,13 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:"
     else:
         if live != expected:
+            # A branch that has gone missing (rather than moved to some other
+            # SHA) usually means its PR was already merged and GitHub deleted
+            # the head branch out from under this queued push -- there is no
+            # longer anything to protect with a lease, and the branch will
+            # never reappear at `expected` for a retry to succeed against.
+            if live is None and pr_number is not None and pr_is_merged(pr_number, cwd=cwd):
+                return None
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
                 exit_code=20,
@@ -190,6 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expect_missing=args.expect_missing,
             remote=args.remote,
             cwd=Path(args.cwd),
+            pr_number=args.json_pr,
         )
         if args.record_tsv_ledger:
             require_all("TSV ledger recording", {
@@ -224,7 +250,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key=args.json_key,
                 meta=meta,
             )
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        branch_name = normalize_branch(args.branch)
+        if pushed is None:
+            print(f"pr-worker-safe-push: skipped refs/heads/{branch_name}; PR #{args.json_pr} already merged")
+        else:
+            print(f"pr-worker-safe-push: pushed refs/heads/{branch_name} to {pushed}")
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
