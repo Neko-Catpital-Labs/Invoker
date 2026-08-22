@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from scripts import pr_worker_safe_push as safe_push
 
 
 REAL_GIT = shutil.which("git") or "git"
+REAL_GH = shutil.which("gh") or "gh"
 
 
 def git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> str:
@@ -151,6 +153,89 @@ class SafePushTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("git push", result.stderr)
+        self.assertFalse(ledger.exists())
+
+    def _fake_github_remote_and_gh(self, *, pr_number: int, state: str) -> dict[str, str]:
+        # Fakes just enough of `git remote get-url` (so repo_slug() sees a
+        # github.com URL) and `gh pr view` (so pr_state() sees a merged/closed
+        # PR) while every other git subcommand still hits the real local
+        # bare-repo remote used by the rest of the test.
+        wrapper_dir = self.root / "bin"
+        wrapper_dir.mkdir(exist_ok=True)
+        git_wrapper = wrapper_dir / "git"
+        git_wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                if [ "${{1:-}}" = "remote" ] && [ "${{2:-}}" = "get-url" ]; then
+                  echo 'git@github.com:acme/widgets.git'
+                  exit 0
+                fi
+                exec {REAL_GIT!r} "$@"
+                """
+            ),
+            encoding="utf-8",
+        )
+        git_wrapper.chmod(0o755)
+        gh_wrapper = wrapper_dir / "gh"
+        gh_wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                if [ "${{1:-}}" = "pr" ] && [ "${{2:-}}" = "view" ] && [ "${{3:-}}" = "{pr_number}" ]; then
+                  echo '{state}'
+                  exit 0
+                fi
+                exec {REAL_GH!r} "$@"
+                """
+            ),
+            encoding="utf-8",
+        )
+        gh_wrapper.chmod(0o755)
+        return {"PATH": f"{wrapper_dir}:{os.environ['PATH']}"}
+
+    def test_missing_branch_settles_as_noop_when_pr_already_merged(self) -> None:
+        env = self._fake_github_remote_and_gh(pr_number=456, state="MERGED")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "gone",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-bot-thread-settled",
+            "--json-pr", "456",
+            "--json-head-sha", self.expected,
+            "--json-key", "thread-1",
+            env=env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertIn("merged", result.stderr)
+        self.assertIsNone(safe_push.remote_branch_sha("gone", remote="origin", cwd=self.repo))
+        recorded = json.loads(ledger.read_text(encoding="utf-8").strip())
+        self.assertEqual(recorded["kind"], "repair-bot-thread-settled")
+        self.assertEqual(recorded["pr"], 456)
+
+    def test_missing_branch_stays_stale_when_pr_still_open(self) -> None:
+        env = self._fake_github_remote_and_gh(pr_number=456, state="OPEN")
+        ledger = self.root / "ledger.jsonl"
+
+        result = self.invoke_helper(
+            "--branch", "gone",
+            "--expected-head", self.expected,
+            "--record-json-ledger", str(ledger),
+            "--json-kind", "repair-bot-thread-settled",
+            "--json-pr", "456",
+            "--json-head-sha", self.expected,
+            "--json-key", "thread-1",
+            env=env,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stale-head", result.stderr)
         self.assertFalse(ledger.exists())
 
     def test_new_prerequisite_branch_succeeds_only_when_remote_branch_is_absent(self) -> None:
