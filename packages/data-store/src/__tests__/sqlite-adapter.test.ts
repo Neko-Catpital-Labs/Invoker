@@ -3995,6 +3995,7 @@ describe('SQLiteAdapter', () => {
       userId: 'U456',
       extractedPlan: null,
       planSubmitted: false,
+      lastKnownGoodPlanText: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       ...overrides,
@@ -5828,6 +5829,7 @@ describe('SQLiteAdapter', () => {
           userId: 'U1',
           extractedPlan: null,
           planSubmitted: false,
+          lastKnownGoodPlanText: null,
           createdAt: old.toISOString(),
           updatedAt: old.toISOString(),
         });
@@ -5840,6 +5842,7 @@ describe('SQLiteAdapter', () => {
           userId: 'U2',
           extractedPlan: null,
           planSubmitted: false,
+          lastKnownGoodPlanText: null,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         });
@@ -5879,6 +5882,7 @@ describe('SQLiteAdapter', () => {
           userId: 'U1',
           extractedPlan: null,
           planSubmitted: false,
+          lastKnownGoodPlanText: null,
           createdAt: old.toISOString(),
           updatedAt: old.toISOString(),
         });
@@ -5952,6 +5956,7 @@ describe('SQLiteAdapter', () => {
         userId: 'U1',
         extractedPlan: null,
         planSubmitted: false,
+        lastKnownGoodPlanText: null,
         createdAt: old.toISOString(),
         updatedAt: old.toISOString(),
       });

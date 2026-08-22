@@ -606,6 +606,7 @@ export class PlanConversation {
       })).filter((m) => m.content.length > 0);
       this._planSubmitted = saved.planSubmitted;
       this.mode = saved.mode ?? this.mode;
+      this.lastKnownGoodPlanText = saved.lastKnownGoodPlanText ?? this.extractLastPlanFromMessages();
 
       this.log('plan-conversation', 'info', `Restored conversation ${this.threadTs}: ${saved.messages.length} messages`);
     } catch (err) {
@@ -1215,6 +1216,7 @@ export class PlanConversation {
         this.channelId,
         undefined,
         this.mode,
+        this.lastKnownGoodPlanText,
       );
     } catch (err) {
       this.log('plan-conversation', 'error', `Failed to save conversation ${this.threadTs}: ${err}`);

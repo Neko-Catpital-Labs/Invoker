@@ -2275,8 +2275,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveConversation(conversation: Conversation): void {
     this.execRun(`
-      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, last_known_good_plan_text, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.threadTs,
       conversation.channelId,
@@ -2284,6 +2284,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       conversation.mode ?? 'plan',
       conversation.extractedPlan,
       conversation.planSubmitted ? 1 : 0,
+      conversation.lastKnownGoodPlanText ?? null,
       conversation.createdAt,
       conversation.updatedAt,
     ]);
@@ -2299,12 +2300,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
       mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
+      lastKnownGoodPlanText: (row.last_known_good_plan_text as string) ?? null,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     };
   }
 
-  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
+  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'lastKnownGoodPlanText' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
@@ -2319,6 +2321,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if ('planSubmitted' in changes) {
       setClauses.push('plan_submitted = ?');
       values.push(changes.planSubmitted ? 1 : 0);
+    }
+    if ('lastKnownGoodPlanText' in changes) {
+      setClauses.push('last_known_good_plan_text = ?');
+      values.push(changes.lastKnownGoodPlanText ?? null);
     }
 
     // Always bump updated_at
@@ -2350,6 +2356,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
+      lastKnownGoodPlanText: (row.last_known_good_plan_text as string) ?? null,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     }));
@@ -2368,6 +2375,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
+      lastKnownGoodPlanText: (row.last_known_good_plan_text as string) ?? null,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     }));

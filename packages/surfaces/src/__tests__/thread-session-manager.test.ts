@@ -178,6 +178,7 @@ describe('SessionManager', () => {
       messages: [],
       extractedPlan: null,
       planSubmitted: false,
+      lastKnownGoodPlanText: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -200,6 +201,7 @@ describe('SessionManager', () => {
       ],
       extractedPlan: null,
       planSubmitted: false,
+      lastKnownGoodPlanText: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -369,6 +371,7 @@ describe('SessionManager', () => {
       messages: [],
       extractedPlan: null,
       planSubmitted: false,
+      lastKnownGoodPlanText: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });

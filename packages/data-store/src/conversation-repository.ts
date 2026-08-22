@@ -19,6 +19,7 @@ export interface ConversationEntry {
   messages: ConversationMessageEntry[];
   extractedPlan: PlanDefinition | null;
   planSubmitted: boolean;
+  lastKnownGoodPlanText: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -65,6 +66,7 @@ export class ConversationRepository {
     channelId?: string,
     userId?: string,
     mode?: ConversationMode,
+    lastKnownGoodPlanText?: string | null,
   ): void {
     const now = new Date().toISOString();
 
@@ -77,6 +79,7 @@ export class ConversationRepository {
         mode: mode ?? existing.mode ?? 'plan',
         extractedPlan: planJson ?? existing.extractedPlan,
         planSubmitted: planSubmitted ?? existing.planSubmitted,
+        lastKnownGoodPlanText: lastKnownGoodPlanText ?? existing.lastKnownGoodPlanText,
         updatedAt: now,
       });
     } else {
@@ -87,6 +90,7 @@ export class ConversationRepository {
         mode: mode ?? 'plan',
         extractedPlan: planJson,
         planSubmitted: planSubmitted ?? false,
+        lastKnownGoodPlanText: lastKnownGoodPlanText ?? null,
         createdAt: now,
         updatedAt: now,
       });
@@ -129,6 +133,7 @@ export class ConversationRepository {
       })),
       extractedPlan: this.parsePlan(conv.extractedPlan),
       planSubmitted: conv.planSubmitted,
+      lastKnownGoodPlanText: conv.lastKnownGoodPlanText,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
     };
@@ -155,6 +160,7 @@ export class ConversationRepository {
       mode: conv.mode ?? 'plan',
       extractedPlan: this.parsePlan(conv.extractedPlan),
       planSubmitted: conv.planSubmitted,
+      lastKnownGoodPlanText: conv.lastKnownGoodPlanText,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
     }));

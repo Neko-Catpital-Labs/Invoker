@@ -168,6 +168,7 @@ export const SCHEMA_DDL = `
         mode TEXT DEFAULT 'plan',
         extracted_plan TEXT,
         plan_submitted INTEGER DEFAULT 0,
+        last_known_good_plan_text TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -647,6 +648,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_id TEXT',
   "ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed'))",
   'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_error TEXT',
+  'ALTER TABLE conversations ADD COLUMN last_known_good_plan_text TEXT',
 ];
 
 /**

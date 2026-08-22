@@ -5,6 +5,9 @@ import { ConversationRepository } from '@invoker/data-store';
 import type { PlanDefinition } from '@invoker/workflow-core';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // ── Mock child_process.spawn ────────────────────────────────
 
@@ -39,6 +42,29 @@ function createMockProcess(stdout: string, exitCode = 0): any {
 function mockCursorResponse(text: string) {
   mockSpawn.mockReturnValueOnce(createMockProcess(text));
 }
+
+/** Like createMockProcess, but runs a callback (e.g. writing the plan-draft sidecar file) before closing. */
+function fakePlannerChild(stdout: string, beforeClose?: () => void): any {
+  const proc = new EventEmitter() as any;
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = vi.fn();
+  setTimeout(() => {
+    beforeClose?.();
+    if (stdout) proc.stdout.emit('data', Buffer.from(stdout));
+    proc.emit('close', 0);
+  }, 0);
+  return proc;
+}
+
+const VALID_PLAN_YAML = `name: "Test Plan"
+onFinish: none
+tasks:
+  - id: implement
+    description: "Implement the change"
+    prompt: "Do the work"
+    dependencies: []
+`;
 
 const silentLogger = {
   info: () => {},
@@ -437,6 +463,78 @@ tasks:
       const conv2 = createConversation(threadTs);
       await conv2.init();
       expect(conv2.history.length).toBe(4);
+    });
+  });
+
+  // ── Plan-doctor repair budget across restart ───────────
+
+  describe('plan-doctor repair budget survives restart', () => {
+    it('does not re-grant the first-draft repair budget after a restart recovers a prior good draft', async () => {
+      const workingDir = mkdtempSync(join(tmpdir(), 'plan-conv-persist-'));
+      try {
+        const threadTs = 'ts-doctor-restart';
+        const passingDoctor = vi.fn().mockResolvedValue({ ok: true, diagnostics: [] });
+
+        const conv1 = new PlanConversation({
+          workingDir,
+          threadTs,
+          conversationRepo: repo,
+          plannerRetryLimit: 0,
+          draftDoctor: passingDoctor,
+        });
+        const draftPath1 = conv1.planDraftFilePath();
+        if (!draftPath1) throw new Error('expected a plan draft path');
+
+        // The good draft is written only to the sidecar file, never inlined in
+        // the chat reply -- the normal shape for the draft-doctor flow, and the
+        // shape that makes scanning saved chat messages insufficient recovery.
+        mockSpawn.mockReturnValueOnce(
+          fakePlannerChild('Drafted the plan.', () => writeFileSync(draftPath1, VALID_PLAN_YAML, 'utf8')),
+        );
+        await conv1.sendMessage('Draft the approved plan');
+        expect(conv1.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
+
+        const saved = repo.loadConversation(threadTs);
+        expect(saved!.messages.every((m) => !String(m.content).includes('Test Plan'))).toBe(true);
+
+        // Restart: a fresh PlanConversation instance for the same thread, as
+        // would happen after a process restart.
+        const rejectingDoctor = vi.fn().mockResolvedValue({ ok: false, diagnostics: ['validate-plan: still invalid'] });
+        const conv2 = new PlanConversation({
+          workingDir,
+          threadTs,
+          conversationRepo: repo,
+          plannerRetryLimit: 0,
+          draftDoctor: rejectingDoctor,
+        });
+        await conv2.init();
+        const draftPath2 = conv2.planDraftFilePath();
+        if (!draftPath2) throw new Error('expected a plan draft path');
+
+        const bad1 = VALID_PLAN_YAML.replace('Test Plan', 'Bad One');
+        const bad2 = VALID_PLAN_YAML.replace('Test Plan', 'Bad Two');
+        const bad3 = VALID_PLAN_YAML.replace('Test Plan', 'Bad Three');
+        mockSpawn
+          .mockReturnValueOnce(fakePlannerChild('Candidate one.', () => writeFileSync(draftPath2, bad1, 'utf8')))
+          .mockReturnValueOnce(fakePlannerChild('Candidate two.', () => writeFileSync(draftPath2, bad2, 'utf8')))
+          .mockReturnValueOnce(fakePlannerChild('Candidate three.', () => writeFileSync(draftPath2, bad3, 'utf8')));
+
+        const reply = await conv2.sendMessage('Revise the plan');
+
+        // Default budgets: 2 repairs once a good draft exists, 10 on a true
+        // first draft. A restart that forgets the prior good draft would treat
+        // this as a first draft and keep repairing past the 3 mocked replies
+        // for conv2's turn (1 from conv1's turn + 3 from conv2's = 4 total).
+        expect(mockSpawn).toHaveBeenCalledTimes(4);
+        expect(rejectingDoctor).toHaveBeenCalledTimes(3);
+        expect(reply).toContain('Draft not shown: the plan doctor rejected it.');
+        expect(reply).toContain('(2 repair turns attempted)');
+
+        // The prior good draft survives the restart and the failed replacement.
+        expect(conv2.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+      }
     });
   });
 });

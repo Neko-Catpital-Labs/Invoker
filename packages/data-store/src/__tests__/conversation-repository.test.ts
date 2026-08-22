@@ -42,6 +42,7 @@ describe('ConversationRepository', () => {
       userId,
       extractedPlan: null,
       planSubmitted: false,
+      lastKnownGoodPlanText: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -267,6 +268,7 @@ describe('ConversationRepository', () => {
         userId: 'U1',
         extractedPlan: null,
         planSubmitted: false,
+        lastKnownGoodPlanText: null,
         createdAt: old.toISOString(),
         updatedAt: old.toISOString(),
       });
@@ -296,6 +298,7 @@ describe('ConversationRepository', () => {
         userId: 'U1',
         extractedPlan: null,
         planSubmitted: false,
+        lastKnownGoodPlanText: null,
         createdAt: old.toISOString(),
         updatedAt: old.toISOString(),
       });
@@ -553,6 +556,7 @@ describe('ConversationRepository', () => {
         userId: 'U1',
         extractedPlan: null,
         planSubmitted: false,
+        lastKnownGoodPlanText: null,
         createdAt: old.toISOString(),
         updatedAt: old.toISOString(),
       });
@@ -569,6 +573,7 @@ describe('ConversationRepository', () => {
         userId: 'U1',
         extractedPlan: null,
         planSubmitted: false,
+        lastKnownGoodPlanText: null,
         createdAt: recent.toISOString(),
         updatedAt: recent.toISOString(),
       });
@@ -603,6 +608,7 @@ describe('ConversationRepository', () => {
         userId: 'U1',
         extractedPlan: JSON.stringify(testPlan),
         planSubmitted: true,
+        lastKnownGoodPlanText: null,
         createdAt: old.toISOString(),
         updatedAt: old.toISOString(),
       });

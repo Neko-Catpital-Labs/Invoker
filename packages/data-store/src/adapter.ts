@@ -20,6 +20,7 @@ export interface Conversation {
   mode?: ConversationMode;
   extractedPlan: string | null;   // JSON-serialized PlanDefinition
   planSubmitted: boolean;
+  lastKnownGoodPlanText: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -432,7 +433,7 @@ export interface PersistenceAdapter {
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;
   loadConversation(threadTs: string): Conversation | undefined;
-  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void;
+  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'lastKnownGoodPlanText' | 'updatedAt'>>): void;
   deleteConversation(threadTs: string): void;
 
   // Conversation queries
