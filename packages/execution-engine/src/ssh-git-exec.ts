@@ -91,6 +91,32 @@ export function sshInteractiveCdFragment(workspacePath: string): string {
   return `cd ${shellPosixSingleQuote(workspacePath)}`;
 }
 
+/**
+ * Some installed git versions drop the resolved admin-dir path from the
+ * "not a git repository" message for a corrupt linked-worktree `.git`
+ * pointer, printing "(null)" instead. Since `extractCorruptWorktreeAdminPath`
+ * depends on that path being present in the error text, this preflight reads
+ * the worktree's `.git` pointer file directly (plain text, readable even
+ * when the target admin dir is corrupt) and re-emits a message that always
+ * includes the path, before any git command can mask it with a version-
+ * dependent one. Run this from inside the worktree directory.
+ */
+export function buildWorktreeAdminPathPreflightScript(): string {
+  return `if [ -f .git ]; then
+  RESOLVED_GITDIR=$(sed -n 's/^gitdir: //p' .git 2>/dev/null | head -n1)
+else
+  RESOLVED_GITDIR=""
+fi
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -n "$RESOLVED_GITDIR" ]; then
+    echo "fatal: not a git repository: $RESOLVED_GITDIR" >&2
+  else
+    echo "fatal: not a git repository: $(pwd)" >&2
+  fi
+  exit 128
+fi`;
+}
+
 export interface GitMirrorCloneOpts {
   /** Repository URL to clone */
   repoUrl: string;
@@ -415,6 +441,7 @@ ${buildPortableBase64DecodeFunction()}
 WT=$(printf '%s' ${shellPosixSingleQuote(wtB)} | invoker_base64_decode)
 ${bashNormalizeTildePath()}
 cd "$WT"
+${buildWorktreeAdminPathPreflightScript()}
 IDEMPOTENCY_KEY=$(printf '%s' ${shellPosixSingleQuote(idempotencyKeyB)} | invoker_base64_decode)
 MARKER=''
 IDEMPOTENCY_FOOTER=''

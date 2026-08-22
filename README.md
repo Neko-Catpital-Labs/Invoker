@@ -126,7 +126,7 @@ Explicit fallback remains available:
 /invoker-plan-to-invoker "help me plan <change>"
 ```
 
-Either path writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, reviews via MCP (`invoker_prepare_plan_review` → one approval → `invoker_submit_plan` with `reviewToken`), then reports status with `invoker_get_workflow` / `invoker_list_tasks` / bounded `invoker_wait_for_workflow`.
+Either path writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, then reviews and submits via MCP (`invoker_prepare_plan_review` → one approval → `invoker_submit_plan` with `reviewToken`) — or `invoker-cli run --live` as the fallback when the Invoker MCP tool isn't available — then reports status with `invoker_get_workflow` / `invoker_list_tasks` / bounded `invoker_wait_for_workflow`.
 ## Docs
 
 - [Getting started](docs/getting-started.md) — prerequisites, install, config, quick start, troubleshooting

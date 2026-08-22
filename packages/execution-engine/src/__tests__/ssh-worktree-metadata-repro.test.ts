@@ -9,6 +9,7 @@ import {
   buildWorktreeCorruptRepairScript,
   extractCorruptWorktreeAdminPath,
 } from '../workers/infra-repair-worker.js';
+import { buildWorktreeAdminPathPreflightScript } from '../ssh-git-exec.js';
 
 function git(cmd: string, cwd: string): string {
   return execSync(cmd, {
@@ -261,10 +262,17 @@ describe('SSH worktree metadata repro', () => {
     rmSync(adminPath, { recursive: true, force: true });
     execSync(`mkdir -p ${JSON.stringify(adminPath)}`);
 
+    // Route through the same admin-path preflight the production finalize
+    // script runs after `cd "$WT"`, since some installed git versions drop
+    // the resolved path from their own "not a git repository" message.
     let failed = false;
     let message = '';
     try {
-      git('git rev-parse HEAD', worktreePath);
+      execSync(buildWorktreeAdminPathPreflightScript(), {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
     } catch (error) {
       failed = true;
       const err = error as { stderr?: Buffer | string; message?: string };
