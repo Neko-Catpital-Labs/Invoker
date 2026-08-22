@@ -902,9 +902,10 @@ test.describe('Visual proof capture', () => {
     });
   });
 
+  // #8536: screenshot claim is non-promotion (no Review bar), not the exact fail-closed heading.
   test('plan doctor rejection stays out of the review UI', async ({ page }) => {
     const rejectedReply = [
-      'Draft not shown: the plan doctor rejected it.',
+      'Draft not shown: the plan doctor rejected it after 2 repair turns.',
       '',
       'Nothing was submitted.',
       '',
@@ -921,7 +922,7 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('button', { name: 'Send' }).click();
 
     const transcript = page.getByTestId('invoker-terminal-transcript');
-    await expect(transcript).toContainText('Draft not shown: the plan doctor rejected it.');
+    await expect(transcript).toContainText('Draft not shown: the plan doctor rejected it after');
     await expect(transcript).toContainText('Nothing was submitted.');
     await expect(transcript).toContainText('uses "autoFix", which is no longer supported');
     await expect(page.getByRole('button', { name: 'Review draft' })).toHaveCount(0);

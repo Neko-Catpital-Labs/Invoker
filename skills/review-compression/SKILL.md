@@ -34,7 +34,11 @@ PR bodies:
 - `Architectural effect:` what changed in control flow, data flow, ownership,
   dependency direction, or public surface.
 - `Alternative considerations:` rejected designs or split shapes.
-- `Non-goals:` what this slice explicitly does not change.
+- `Non-goals:` what this slice explicitly does not change. When stacking
+  slices, a Non-goal that says "leave shared policy X alone" / "do not change
+  doctor policy" means this slice inherits the prior magic number — it is not
+  independent evidence that X was re-validated. If you need to change X, put
+  that in its own claim; do not treat sibling Non-goals as a re-vote.
 
 For mechanical slices, these can be terse. For cross-boundary changes, explain
 the before/after architecture and why the split is acceptable. Each slice must
