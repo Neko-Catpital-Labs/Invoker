@@ -359,6 +359,31 @@ export async function selectFirstWorkflow(page: Page): Promise<void> {
   await selectWorkflowNode(page);
 }
 
+type TasksBridgeResult = {
+  tasks: Array<{ id: string }>;
+  workflows: Array<{ id: string }>;
+};
+
+/**
+ * Poll `window.invoker.getTasks()` from Node until `predicate` is satisfied.
+ * `page.waitForFunction` cannot express this: an in-page predicate that calls
+ * `.then(...)` on a bridge promise returns that (always-truthy) Promise object
+ * to Playwright's polling loop, which resolves on the first tick instead of
+ * waiting for the awaited result (see PR #9267 / #9416).
+ */
+export async function waitForTasksResult(
+  page: Page,
+  predicate: (result: TasksBridgeResult) => boolean,
+  timeoutMs = 10000,
+): Promise<void> {
+  await expect.poll(async () => {
+    const raw = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(raw) ? raw : raw.tasks;
+    const workflows = Array.isArray(raw) ? [] : raw.workflows ?? [];
+    return predicate({ tasks, workflows });
+  }, { timeout: timeoutMs }).toBe(true);
+}
+
 /** Load a plan into the running app via the IPC bridge and wait for its mini-DAG to render. */
 export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<string> {
   const planYaml = yamlStringify(plan);
@@ -376,14 +401,9 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
   if (!workflowId) {
     throw new Error('Loaded plan did not create a workflow');
   }
-  await page.waitForFunction(
-    (expectedTaskCount) => window.invoker.getTasks().then((result) => {
-      const tasks = Array.isArray(result) ? result : result.tasks;
-      const workflows = Array.isArray(result) ? [] : result.workflows ?? [];
-      return tasks.length >= expectedTaskCount && workflows.length > 0;
-    }),
-    plan.tasks.length,
-    { timeout: 10000 },
+  await waitForTasksResult(
+    page,
+    ({ tasks, workflows }) => tasks.length >= plan.tasks.length && workflows.length > 0,
   );
   await page.getByTestId('sidebar-planning').click();
   await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 10000 });
