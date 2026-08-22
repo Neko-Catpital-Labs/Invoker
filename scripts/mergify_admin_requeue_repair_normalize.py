@@ -20,6 +20,7 @@ try:
         invalid_repair_errors,
         is_prereq_split_validation,
         normalize_repair_commit,
+        resolve_validation_base,
         validate_current_pr_body,
     )
     from .mergify_admin_requeue_snapshot import GhClient
@@ -35,6 +36,7 @@ except ImportError:
         invalid_repair_errors,
         is_prereq_split_validation,
         normalize_repair_commit,
+        resolve_validation_base,
         validate_current_pr_body,
     )
     from mergify_admin_requeue_snapshot import GhClient
@@ -106,6 +108,7 @@ def _record_repair_noop_or_invalid_for_pr_body(
         ledger.record("repair-noop", pr_number, start_head, check_name)
         return
     body = str(detail.get("body") or "")
+    base = resolve_validation_base(cwd, base, detail)
     validation = validate_current_pr_body(cwd, body, base)
     if validation.get("valid"):
         ledger.record("repair-noop", pr_number, start_head, check_name)
@@ -167,12 +170,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     gh = GhClient()
     detail = gh.pr_detail(args.repo, args.pr)
     body = str(detail.get("body") or "")
-    validation = validate_current_pr_body(cwd, body, args.base)
+    base = resolve_validation_base(cwd, args.base, detail)
+    validation = validate_current_pr_body(cwd, body, base)
     if validation.get("valid"):
         print(f"repair commit normalized to {end_head}; ready for safe-push")
         return 0
 
-    if is_prereq_split_validation(validation, args.base):
+    if is_prereq_split_validation(validation, base):
         repair_commits = git_lines(cwd, "rev-list", "--reverse", f"{start_head}..{end_head}")
         ledger = Ledger(state_file)
         logger = AdminBypassLogger()
@@ -188,7 +192,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     hard_reset_work_root(cwd, start_head)
-    errors = invalid_repair_errors(validation, args.base)
+    errors = invalid_repair_errors(validation, base)
     print("blocked_invalid: " + "; ".join(errors), file=sys.stderr)
     return 1
 

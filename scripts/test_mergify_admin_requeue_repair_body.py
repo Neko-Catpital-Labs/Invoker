@@ -122,5 +122,43 @@ class RebaseOntoBaseTests(unittest.TestCase):
         self.assertEqual(status, "")
 
 
+class ResolveValidationBaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.remote = self.root / "remote.git"
+        self.repo = self.root / "repo"
+        git(self.root, "init", "--bare", str(self.remote))
+        git(self.root, "clone", str(self.remote), str(self.repo))
+        git(self.repo, "config", "user.email", "worker@example.invalid")
+        git(self.repo, "config", "user.name", "Worker Test")
+        git(self.repo, "checkout", "-B", "master")
+        (self.repo / "shared.txt").write_text("shared\n", encoding="utf-8")
+        git(self.repo, "add", "shared.txt")
+        git(self.repo, "commit", "-m", "shared base")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/master")
+        git(self.repo, "checkout", "-B", "stack/still-here", "master")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/stack/still-here")
+        git(self.repo, "checkout", "master")
+
+    def test_existing_remote_branch_is_kept(self) -> None:
+        base = repair_body.resolve_validation_base(self.repo, "stack/still-here", {"baseRefName": "master"})
+        self.assertEqual(base, "stack/still-here")
+
+    def test_deleted_remote_branch_falls_back_to_live_pr_base(self) -> None:
+        # Simulates a stacked prerequisite PR merging and its branch being
+        # deleted (GitHub auto-retargets the dependent PR) while a sibling
+        # PR's repair is still using the stale --base captured at start.
+        base = repair_body.resolve_validation_base(
+            self.repo, "stack/already-merged-and-deleted", {"baseRefName": "master"},
+        )
+        self.assertEqual(base, "master")
+
+    def test_deleted_remote_branch_with_no_live_base_falls_back_to_original(self) -> None:
+        base = repair_body.resolve_validation_base(self.repo, "stack/already-merged-and-deleted", {})
+        self.assertEqual(base, "stack/already-merged-and-deleted")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

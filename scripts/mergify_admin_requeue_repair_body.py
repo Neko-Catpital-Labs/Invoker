@@ -198,6 +198,32 @@ def validate_current_pr_body(cwd: Path, body: str, base_branch: str) -> dict[str
         return validate_pr_body_from_current_diff(cwd, body, base_branch)
 
 
+def remote_branch_exists(cwd: Path, branch: str) -> bool:
+    completed = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"],
+        cwd=str(cwd),
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return completed.returncode == 0
+
+
+# The --base argument is captured once, at workflow-start time, from the PR's
+# base branch at that moment. If that base is itself a stacked PR's branch
+# and it merges (and GitHub deletes it) while this repair is in flight,
+# --base now names a ref that no longer exists on origin -- but the PR is
+# still OPEN and GitHub has already retargeted it onto its old base's base.
+# Fetching/diffing against the stale name hard-fails instead of validating
+# against the PR's real current base, so fall back to the live baseRefName
+# whenever the literal --base branch is gone.
+def resolve_validation_base(cwd: Path, base_branch: str, detail: Mapping[str, object]) -> str:
+    if remote_branch_exists(cwd, base_branch):
+        return base_branch
+    live_base = str(detail.get("baseRefName") or detail.get("base_ref_name") or "").strip()
+    return live_base or base_branch
+
+
 def is_proof_tooling_policy_validation(value: Mapping[str, object]) -> bool:
     errors = value.get("errors")
     scope_kinds = value.get("scopeKinds")
