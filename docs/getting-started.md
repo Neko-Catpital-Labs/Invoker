@@ -101,13 +101,15 @@ Tagged releases are configured to publish:
 
 Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers by running `invoker-cli setup` (or System Setup in the desktop app).
 
-Then, in Codex, Claude, Cursor, or OMP, run:
+Then, in Codex, Claude, Cursor, or OMP, ask in normal chat to plan and run durable work through Invoker. Setup already installs `invoker-chat-submit` plus MCP review/submit/status tools, so the agent can prepare a review, wait for one approval, submit, and watch without a slash command.
+
+Explicit fallback:
 
 ```text
 /invoker-plan-to-invoker "help me plan <change>"
 ```
 
-The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+Either path writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, reviews via MCP, and submits live after one approval.
 
 Source checkouts can install the repo helpers with `bash scripts/setup-agent-skills.sh`.
 
@@ -273,7 +275,7 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+If you need to turn a product or implementation plan into an Invoker workflow, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers. Prefer normal chat with the installed `invoker-chat-submit` skill and MCP tools; `/invoker-plan-to-invoker "help me plan <change>"` remains the explicit slash-command fallback.
 
 If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
