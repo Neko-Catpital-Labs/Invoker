@@ -75,6 +75,39 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def is_ancestor_of_head(sha: str, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return completed.returncode == 0
+
+
+LEASE_REJECTION_MARKER = "cannot lock ref"
+MAX_LEASE_ATTEMPTS = 3
+
+
+def _resolve_safe_lease_sha(
+    branch_name: str,
+    *,
+    live: str | None,
+    expected: str,
+    cwd: Path | str | None,
+    context: str | None = None,
+) -> str:
+    if live == expected:
+        return expected
+    if live is not None and is_ancestor_of_head(live, cwd=cwd):
+        return live
+    message = f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}"
+    if context:
+        message += f"\n(after push attempt failed: {context})"
+    raise SafePushError(message, exit_code=20)
+
+
 def safe_push(
     *,
     branch: str,
@@ -87,29 +120,41 @@ def safe_push(
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
     expected = None if expect_missing else validate_expected_head(expected_head or "")
+    pushed = local_head(cwd=cwd)
     live = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
+
     if expect_missing:
         if live is not None:
             raise SafePushError(
                 f"stale-head: refs/heads/{branch_name} exists at {live}; expected it to be missing",
                 exit_code=20,
             )
-        lease = f"refs/heads/{branch_name}:"
+        lease_sha = ""
     else:
-        if live != expected:
-            raise SafePushError(
-                f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
-                exit_code=20,
-            )
-        lease = f"refs/heads/{branch_name}:{expected}"
+        lease_sha = _resolve_safe_lease_sha(branch_name, live=live, expected=expected, cwd=cwd)
 
-    pushed = local_head(cwd=cwd)
-    run_git([
-        "push",
-        f"--force-with-lease={lease}",
-        remote,
-        f"HEAD:refs/heads/{branch_name}",
-    ], cwd=cwd)
+    for attempt in range(1, MAX_LEASE_ATTEMPTS + 1):
+        lease = f"refs/heads/{branch_name}:{lease_sha}"
+        try:
+            run_git([
+                "push",
+                f"--force-with-lease={lease}",
+                remote,
+                f"HEAD:refs/heads/{branch_name}",
+            ], cwd=cwd)
+            break
+        except SafePushError as exc:
+            if attempt == MAX_LEASE_ATTEMPTS or LEASE_REJECTION_MARKER not in str(exc):
+                raise
+            live = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
+            if expect_missing:
+                raise SafePushError(
+                    f"stale-head: refs/heads/{branch_name} exists at {live}; expected it to be missing",
+                    exit_code=20,
+                ) from exc
+            lease_sha = _resolve_safe_lease_sha(
+                branch_name, live=live, expected=expected, cwd=cwd, context=str(exc)
+            )
 
     verified = remote_branch_sha(branch_name, remote=remote, cwd=cwd)
     if verified != pushed:
