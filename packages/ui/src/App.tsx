@@ -64,6 +64,7 @@ import {
 import {
   isInitialPlanningSessionPlaceholder,
   makeInitialPlanningSession,
+  maxPlanningMessageId,
   newPlanningTurnId,
   planningNeedsAttention,
   planningRepoStatusText,
@@ -799,7 +800,7 @@ export function App() {
         const restored = response.sessions.map(planningSessionSummaryToView);
         const nextSessions = reconcileHydratedPlanningSessions(currentSessions, restored);
         if (nextSessions === currentSessions) return;
-        const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+        const maxLineId = maxPlanningMessageId(restored);
         nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
         planningSessionsRef.current = nextSessions;
         setPlanningSessions(nextSessions);
@@ -872,7 +873,7 @@ export function App() {
         : nextSessions[0]?.id ?? currentSessionId;
       activePlanningSessionIdRef.current = nextActiveSessionId;
       setActivePlanningSessionId(nextActiveSessionId);
-      const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+      const maxLineId = maxPlanningMessageId(restored);
       nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
       return true;
     } catch (err) {

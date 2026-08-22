@@ -138,6 +138,16 @@ export function planningSessionSummaryToView(session: InAppPlanningSessionSummar
   return planningSessionFromSummary(session);
 }
 
+export function maxPlanningMessageId(sessions: PlanningSessionView[]): number {
+  let max = 1;
+  for (const session of sessions) {
+    for (const message of session.messages) {
+      if (message.id > max) max = message.id;
+    }
+  }
+  return max;
+}
+
 export function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
   return status === 'waiting_for_answer' || status === 'draft_ready';
 }
