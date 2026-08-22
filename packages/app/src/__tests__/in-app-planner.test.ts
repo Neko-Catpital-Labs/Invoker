@@ -1198,7 +1198,9 @@ tasks:
     });
     if (!sent.ok) throw new Error(sent.error);
     expect(sent.draftPlanAvailable).toBe(false);
-    expect(sent.reply).toContain('Draft not shown: the plan doctor rejected it.');
+    // Non-promotion only: invalid drafts never stage. Copy includes repair-turn count (#8533/#8536).
+    expect(sent.reply).toMatch(/Draft not shown: the plan doctor rejected it after \d+ repair turns\./);
+    expect(sent.reply).toContain('Nothing was submitted.');
     const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
 
     await expect(submitPlanningChatDraft({

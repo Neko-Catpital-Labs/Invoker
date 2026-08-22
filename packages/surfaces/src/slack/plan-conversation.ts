@@ -74,7 +74,10 @@ const EMPTY_PLANNER_STDERR_TAIL_LIMIT = 500;
 
 export const DEFAULT_PLANNER_RETRY_LIMIT = 2;
 export const DEFAULT_PLANNER_RETRY_BASE_DELAY_MS = 500;
+/** Replace-draft budget (#8533): leave a prior good draft intact after this many repairs. */
 export const DEFAULT_PLAN_DOCTOR_REPAIR_LIMIT = 2;
+/** First-LGTM budget: keep doctor→repair until pass (or this cap / planning timeout). */
+export const DEFAULT_FIRST_DRAFT_PLAN_DOCTOR_REPAIR_LIMIT = 10;
 
 // Shared with slack-surface.ts so both planner spawn paths surface the same
 // actionable error when the CLI exits 0 but writes nothing to stdout. The
@@ -176,8 +179,13 @@ export interface PlanConversationConfig {
   planDoctorScriptPath?: string;
   /** Test/host injection for the full draft doctor. Takes precedence over planDoctorScriptPath. */
   draftDoctor?: PlanningDraftDoctor;
-  /** Maximum planner repair turns after doctor rejection. Default: 2 (3 candidates total). */
+  /** Maximum planner repair turns after doctor rejection when replacing a prior good draft. Default: 2. */
   planDoctorRepairLimit?: number;
+  /**
+   * Maximum planner repair turns for a first draft (no prior good YAML).
+   * Default: 10. Explicit `planDoctorRepairLimit` overrides both budgets when set.
+   */
+  firstDraftPlanDoctorRepairLimit?: number;
 }
 
 // ── Confirmation Detection ──────────────────────────────────
@@ -502,6 +510,8 @@ export class PlanConversation {
   private plannerRetryBaseDelayMs: number;
   private draftDoctor?: PlanningDraftDoctor;
   private planDoctorRepairLimit: number;
+  private firstDraftPlanDoctorRepairLimit: number;
+  private planDoctorRepairLimitConfigured: boolean;
   // Serializes turns on this conversation. Without this, two concurrent
   // sendMessage calls (e.g. two Slack events for the same thread arriving
   // close together) can interleave their per-turn side-channel files
@@ -546,7 +556,12 @@ export class PlanConversation {
     this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
     this.draftDoctor = config.draftDoctor
       ?? (config.planDoctorScriptPath ? createPlanningDraftDoctor(config.planDoctorScriptPath) : undefined);
+    this.planDoctorRepairLimitConfigured = config.planDoctorRepairLimit !== undefined;
     this.planDoctorRepairLimit = Math.max(0, config.planDoctorRepairLimit ?? DEFAULT_PLAN_DOCTOR_REPAIR_LIMIT);
+    this.firstDraftPlanDoctorRepairLimit = Math.max(
+      0,
+      config.firstDraftPlanDoctorRepairLimit ?? DEFAULT_FIRST_DRAFT_PLAN_DOCTOR_REPAIR_LIMIT,
+    );
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -684,18 +699,35 @@ export class PlanConversation {
     return message;
   }
 
+  private resolvePlanDoctorRepairLimit(isFirstDraft: boolean): number {
+    if (this.planDoctorRepairLimitConfigured) return this.planDoctorRepairLimit;
+    return isFirstDraft ? this.firstDraftPlanDoctorRepairLimit : this.planDoctorRepairLimit;
+  }
+
+  /** Wrap repair/user turns for hosted Slack/in-app sessions the same way. */
+  private formatPlannerTurn(prompt: string): string {
+    if (!this.planningSurface) return prompt;
+    return formatPlanningHostedTurn(this.planningSurface, prompt);
+  }
+
   private async gateDraftForReview(
     initialPlanText: string,
     initialMessage: string,
     initialFormatted: ReturnType<typeof formatCodexPlannerStdout>,
     turn: number,
   ): Promise<{ planText: string | null; message: string; formatted: ReturnType<typeof formatCodexPlannerStdout> }> {
+    const startedAt = Date.now();
+    const isFirstDraft = !this.lastKnownGoodPlanText;
+    const repairLimit = this.resolvePlanDoctorRepairLimit(isFirstDraft);
     let planText = initialPlanText;
     let message = initialMessage;
     let formatted = initialFormatted;
     let lastResult: PlanningDraftDoctorResult = { ok: false, diagnostics: ['skill-doctor did not run'] };
+    let candidateNumber = 0;
+    let repairsAttempted = 0;
 
-    for (let candidateNumber = 1; candidateNumber <= this.planDoctorRepairLimit + 1; candidateNumber += 1) {
+    while (true) {
+      candidateNumber += 1;
       try {
         lastResult = await this.draftDoctor!(planText);
       } catch (error) {
@@ -713,12 +745,17 @@ export class PlanConversation {
       this.log(
         'plan-conversation',
         'warn',
-        `[PLAN_DOCTOR] Candidate ${candidateNumber} rejected (turn=${turn}, infrastructure=${lastResult.infrastructureError === true}): ${lastResult.diagnostics.join(' | ')}`,
+        `[PLAN_DOCTOR] Candidate ${candidateNumber} rejected (turn=${turn}, infrastructure=${lastResult.infrastructureError === true}, firstDraft=${isFirstDraft}): ${lastResult.diagnostics.join(' | ')}`,
       );
       this.resetPlanDraftFile();
-      if (lastResult.infrastructureError || candidateNumber > this.planDoctorRepairLimit) break;
 
-      const repairPrompt = this.buildDoctorRepairPrompt(planText, lastResult.diagnostics, candidateNumber);
+      const timedOut = Date.now() - startedAt >= this.timeoutMs;
+      if (lastResult.infrastructureError || repairsAttempted >= repairLimit || timedOut) break;
+
+      repairsAttempted += 1;
+      const repairPrompt = this.formatPlannerTurn(
+        this.buildDoctorRepairPrompt(planText, lastResult.diagnostics, candidateNumber),
+      );
       const repairResponse = await this.spawnPlanner(repairPrompt, turn);
       formatted = formatCodexPlannerStdout(repairResponse);
       message = formatted.message;
@@ -729,13 +766,21 @@ export class PlanConversation {
         lastResult = { ok: false, diagnostics: ['Planner repair turn did not produce a complete YAML candidate.'] };
         break;
       }
+      // An echoed copy of the rejected fence is not progress — require a real rewrite.
+      if (repairedDraft.trim() === planText.trim()) {
+        lastResult = {
+          ok: false,
+          diagnostics: ['Planner repair turn echoed the rejected candidate without changes.'],
+        };
+        break;
+      }
       planText = repairedDraft;
     }
 
     this.resetPlanDraftFile();
     const heading = lastResult.infrastructureError
       ? 'Draft not shown: plan validation is unavailable.'
-      : 'Draft not shown: the plan doctor rejected it.';
+      : `Draft not shown: the plan doctor rejected it after ${repairsAttempted} repair turns.`;
     const diagnostics = lastResult.diagnostics.slice(0, 8).map((line) => `- ${line}`).join('\n');
     return {
       planText: null,
