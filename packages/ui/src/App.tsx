@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningChatResponse, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnOutcome, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningChatResponse, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnOutcome, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { resolvePlanningSubmitAction } from '@invoker/contracts/planning-surface';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
@@ -52,6 +52,31 @@ import { KeepMounted } from './components/KeepMounted.js';
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
 import { BrowserTaskRow, BrowserWorkflowRow } from './components/BrowserListRows.js';
 import { useTheme } from './lib/theme.js';
+import {
+  freshBaseModeHasVisibleTargets,
+  getStartReadyRailMode,
+  isPendingOrQueuedStatus,
+  START_READY_RAIL_MODES,
+  startReadyPreviewRows,
+  startReadyRequestForMode,
+  type StartReadyRailModeId,
+} from './lib/start-ready-rail-modes.js';
+import {
+  isInitialPlanningSessionPlaceholder,
+  makeInitialPlanningSession,
+  maxPlanningMessageId,
+  newPlanningTurnId,
+  planningNeedsAttention,
+  planningRepoStatusText,
+  planningSessionFromSummary,
+  planningSessionStatusLabel,
+  planningSessionSummaryToView,
+  previewPlanningMessage,
+  reconcileHydratedPlanningSessions,
+  relativePlanningUpdatedAt,
+  type PlanningSessionView,
+  type PlanningStreamState,
+} from './lib/planning-session-view.js';
 import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } from './components/InvokerTerminal.js';
 import { WorkflowContextMenu, type ContextMenuCloseOptions } from './components/WorkflowContextMenu.js';
 import { Toaster, toast } from 'sonner';
@@ -166,351 +191,6 @@ function formatCount(count: number, singular: string, plural = `${singular}s`): 
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-type StartReadyRailModeId =
-  | 'recreateFailed'
-  | 'recreateFailedAndPending'
-  | 'recreateFailedPendingAndRunning'
-  | 'freshBaseFailed'
-  | 'freshBaseFailedAndPending'
-  | 'freshBaseFailedPendingAndRunning';
-
-type StartReadyRailMode = {
-  id: StartReadyRailModeId;
-  kind: 'recreate' | 'freshBase';
-  testId: string;
-  label: string;
-  title: string;
-  confirmLabel: string;
-  request: StartReadyRequest;
-  includesPending: boolean;
-  includesRunning: boolean;
-  freshBaseScope?: StartReadyFreshBaseScope;
-};
-
-const START_READY_RAIL_MODES: readonly StartReadyRailMode[] = [
-  {
-    id: 'recreateFailed',
-    kind: 'recreate',
-    testId: 'rail-start-ready-recreate-failed',
-    label: 'Start and recreate failed…',
-    title: 'Start and recreate failed',
-    confirmLabel: 'Start and recreate',
-    request: { recreateFailed: true },
-    includesPending: false,
-    includesRunning: false,
-  },
-  {
-    id: 'recreateFailedAndPending',
-    kind: 'recreate',
-    testId: 'rail-start-ready-recreate-failed-and-pending',
-    label: 'Start and recreate failed and pending…',
-    title: 'Start and recreate failed and pending',
-    confirmLabel: 'Start and recreate',
-    request: { recreateFailedAndPending: true },
-    includesPending: true,
-    includesRunning: false,
-  },
-  {
-    id: 'recreateFailedPendingAndRunning',
-    kind: 'recreate',
-    testId: 'rail-start-ready-recreate-failed-pending-and-running',
-    label: 'Start and recreate failed, pending, and running…',
-    title: 'Start and recreate failed, pending, and running',
-    confirmLabel: 'Start and recreate',
-    request: { recreateFailedPendingAndRunning: true },
-    includesPending: true,
-    includesRunning: true,
-  },
-  {
-    id: 'freshBaseFailed',
-    kind: 'freshBase',
-    testId: 'rail-start-ready-fresh-base-failed',
-    label: 'Recreate failed from fresh base…',
-    title: 'Start and recreate failed from fresh base',
-    confirmLabel: 'Start and recreate from fresh base',
-    request: { freshBaseScope: 'failed' },
-    includesPending: false,
-    includesRunning: false,
-    freshBaseScope: 'failed',
-  },
-  {
-    id: 'freshBaseFailedAndPending',
-    kind: 'freshBase',
-    testId: 'rail-start-ready-fresh-base-failed-and-pending',
-    label: 'Recreate failed and pending from fresh base…',
-    title: 'Start and recreate failed and pending from fresh base',
-    confirmLabel: 'Start and recreate from fresh base',
-    request: { freshBaseScope: 'failed-and-pending' },
-    includesPending: true,
-    includesRunning: false,
-    freshBaseScope: 'failed-and-pending',
-  },
-  {
-    id: 'freshBaseFailedPendingAndRunning',
-    kind: 'freshBase',
-    testId: 'rail-start-ready-fresh-base-failed-pending-and-running',
-    label: 'Recreate failed, pending, and running from fresh base…',
-    title: 'Start and recreate failed, pending, and running from fresh base',
-    confirmLabel: 'Start and recreate from fresh base',
-    request: { freshBaseScope: 'failed-pending-and-running' },
-    includesPending: true,
-    includesRunning: true,
-    freshBaseScope: 'failed-pending-and-running',
-  },
-];
-
-const START_READY_RAIL_MODE_BY_ID = new Map(
-  START_READY_RAIL_MODES.map((mode) => [mode.id, mode]),
-);
-
-function getStartReadyRailMode(id: StartReadyRailModeId): StartReadyRailMode {
-  return START_READY_RAIL_MODE_BY_ID.get(id) ?? START_READY_RAIL_MODES[0];
-}
-
-function startReadyRequestForMode(mode: StartReadyRailMode, dryRun = false): StartReadyRequest {
-  return dryRun ? { dryRun: true, ...mode.request } : { ...mode.request };
-}
-
-function isPendingOrQueuedStatus(status: TaskState['status']): boolean {
-  return status === 'pending' || (status as string) === 'queued';
-}
-
-function freshBaseModeHasVisibleTargets(
-  mode: StartReadyRailMode,
-  targetCounts: { failed: number; pending: number; running: number },
-): boolean {
-  if (mode.kind !== 'freshBase') return true;
-  switch (mode.freshBaseScope) {
-    case 'failed':
-      return targetCounts.failed > 0;
-    case 'failed-and-pending':
-      return targetCounts.pending > 0;
-    case 'failed-pending-and-running':
-      return targetCounts.running > 0;
-    default:
-      return false;
-  }
-}
-
-function startReadyPreviewRows(mode: StartReadyRailMode, result: StartReadyResult): Array<[string, number]> {
-  const rows: Array<[string, number]> = [
-    ['Ready tasks', result.preview.readyTaskIds.length],
-    ['Recoverable tasks', result.preview.recoverableTaskIds.length],
-    ['Failed workflows', result.preview.failedWorkflowIds.length],
-  ];
-
-  if (mode.includesPending) {
-    rows.push(
-      ['Pending workflows', result.preview.pendingWorkflowIds.length],
-      ['Pending tasks', result.preview.skipped.pendingTasks],
-    );
-  }
-  if (mode.includesRunning) {
-    rows.push(
-      ['Running workflows', result.preview.runningWorkflowIds.length],
-      ['Running tasks', result.preview.skipped.runningTasks],
-    );
-  }
-  if (mode.kind === 'freshBase' && result.preview.freshBase) {
-    rows.push(
-      ['Fresh-base workflows', result.preview.freshBase.workflowIds.length],
-      ['Fresh-base failed workflows', result.preview.freshBase.failedWorkflowIds.length],
-    );
-    if (mode.includesPending) {
-      rows.push(['Fresh-base pending workflows', result.preview.freshBase.pendingWorkflowIds.length]);
-    }
-    if (mode.includesRunning) {
-      rows.push(['Fresh-base running workflows', result.preview.freshBase.runningWorkflowIds.length]);
-    }
-  }
-
-  rows.push(
-    ['Awaiting approval', result.preview.skipped.awaitingApproval],
-    ['Review ready', result.preview.skipped.reviewReady],
-    ['Blocked', result.preview.skipped.blocked],
-  );
-  return rows;
-}
-type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
-  messages: InvokerTerminalLine[];
-  input: string;
-  busy: boolean;
-  conversationKey: string;
-  mode: PlanningTerminalMode;
-  terminalSession?: TerminalSessionDescriptor | null;
-  terminalBusy?: boolean;
-  terminalError?: string | null;
-  repoInput?: string;
-  repoError?: string | null;
-};
-
-function planningSessionFromSummary(
-  summary: InAppPlanningSessionSummary,
-  overrides: Partial<PlanningSessionView> = {},
-): PlanningSessionView {
-  const restoredTerminalSession = summary.terminalSessionId
-    && (summary.terminalStatus === 'running' || summary.terminalStatus === 'exited')
-    ? {
-        sessionId: summary.terminalSessionId,
-        taskId: `planning:${summary.id}`,
-        kind: 'planning' as const,
-        planningSessionId: summary.id,
-        status: summary.terminalStatus,
-        exitCode: summary.terminalExitCode,
-        cwd: undefined,
-        mode: 'spawn' as const,
-        attached: false,
-        createdAt: summary.terminalUpdatedAt ?? summary.updatedAt,
-        outputSnapshot: summary.terminalOutputSnapshot ?? '',
-      }
-    : null;
-  return {
-    ...summary,
-    messages: summary.messages.map((line) => ({
-      id: line.id,
-      text: line.text,
-      role: line.role,
-      tone: line.tone,
-    })),
-    input: '',
-    busy: summary.activeTurnStatus === 'running',
-    conversationKey: summary.id,
-    mode: summary.terminalMode ?? 'chat',
-    terminalSession: restoredTerminalSession,
-    terminalBusy: false,
-    terminalError: null,
-    ...overrides,
-  };
-}
-
-type PlanningStreamState = {
-  text: string;
-  status: 'streaming' | 'failed';
-};
-
-function makeInitialPlanningSession(
-  now: string = new Date().toISOString(),
-  confirmationMode: PlanningConfirmationMode = 'require',
-): PlanningSessionView {
-  return {
-    id: 'local-planning-session-1',
-    title: 'Untitled plan',
-    status: 'still_discussing',
-    presetKey: '',
-    confirmationMode,
-    messages: [],
-    input: '',
-    draftPlanAvailable: false,
-    busy: false,
-    createdAt: now,
-    updatedAt: now,
-    conversationKey: 'local-planning-session-1',
-    mode: 'chat',
-    terminalSession: null,
-    terminalBusy: false,
-    terminalError: null,
-  };
-}
-
-function isInitialPlanningSessionPlaceholder(session: PlanningSessionView | undefined): boolean {
-  if (!session) return false;
-  return session.id === 'local-planning-session-1'
-    && session.title === 'Untitled plan'
-    && session.input === ''
-    && !session.busy
-    && session.messages.length === 0
-    && !session.draftPlanAvailable
-    && !session.terminalSession
-    && !session.terminalBusy
-    && !session.terminalError;
-}
-
-function reconcileHydratedPlanningSessions(
-  currentSessions: PlanningSessionView[],
-  restoredSessions: PlanningSessionView[],
-): PlanningSessionView[] {
-  if (restoredSessions.length === 0) return currentSessions;
-  if (
-    currentSessions.length === 0
-    || (currentSessions.length === 1 && isInitialPlanningSessionPlaceholder(currentSessions[0]))
-  ) {
-    return restoredSessions;
-  }
-
-  const restoredById = new Map(restoredSessions.map((session) => [session.id, session]));
-  const currentIds = new Set(currentSessions.map((session) => session.id));
-  const mergedCurrentSessions = currentSessions.map((session) => {
-    const restored = restoredById.get(session.id);
-    if (!restored) return session;
-    return {
-      ...restored,
-      input: session.input,
-      busy: restored.activeTurnStatus === 'running' ? session.busy : false,
-      conversationKey: session.conversationKey,
-      mode: session.mode === 'tmux' || restored.mode === 'tmux' ? 'tmux' : restored.mode,
-      terminalSession: restored.terminalSession ?? session.terminalSession,
-      terminalBusy: restored.terminalSession ? false : session.terminalBusy,
-      terminalError: restored.terminalSession ? null : session.terminalError,
-      repoInput: session.repoInput,
-      repoError: session.repoError,
-    };
-  });
-  const newRestoredSessions = restoredSessions.filter((session) => !currentIds.has(session.id));
-  return [...mergedCurrentSessions, ...newRestoredSessions];
-}
-
-function planningSessionSummaryToView(session: InAppPlanningSessionSummary): PlanningSessionView {
-  return planningSessionFromSummary(session);
-}
-
-function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
-  return status === 'waiting_for_answer' || status === 'draft_ready';
-}
-
-function planningRepoLabel(repoUrl: string): string {
-  const trimmed = repoUrl.trim().replace(/\.git$/, '');
-  const segments = trimmed.split(/[/:]/).filter(Boolean);
-  return segments.length >= 2 ? segments.slice(-2).join('/') : (segments.at(-1) ?? trimmed);
-}
-
-function planningRepoStatusText(repoUrl: string | undefined, baseCommit: string | undefined): string {
-  if (!repoUrl) return 'No repository bound yet';
-  const label = planningRepoLabel(repoUrl);
-  return baseCommit ? `${label} @ ${baseCommit.slice(0, 7)}` : label;
-}
-
-function newPlanningTurnId(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function previewPlanningMessage(session: PlanningSessionView): string {
-  const last = [...session.messages].reverse().find((line) => line.role !== 'system') ?? session.messages.at(-1);
-  return last?.text.replace(/\s+/g, ' ').trim() || 'No messages yet';
-}
-
-function planningSessionStatusLabel(session: PlanningSessionView): string {
-  if (session.busy) return 'Working';
-  if (session.status === 'draft_ready') return 'Draft ready';
-  if (session.status === 'waiting_for_answer') return 'Waiting for answer';
-  if (session.status === 'submitted') return 'Submitted';
-  return 'Still discussing';
-}
-
-function relativePlanningUpdatedAt(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return 'now';
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return 'now';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d`;
-  const months = Math.round(days / 30);
-  if (months < 12) return `${months}mo`;
-  return `${Math.round(months / 12)}y`;
-}
 const PLANNING_TYPING_LAG_METRIC = 'planning_typing_lag_baseline';
 const PLANNING_TYPING_SCENARIO = 'many-chats-many-messages-typing';
 
@@ -1120,7 +800,7 @@ export function App() {
         const restored = response.sessions.map(planningSessionSummaryToView);
         const nextSessions = reconcileHydratedPlanningSessions(currentSessions, restored);
         if (nextSessions === currentSessions) return;
-        const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+        const maxLineId = maxPlanningMessageId(restored);
         nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
         planningSessionsRef.current = nextSessions;
         setPlanningSessions(nextSessions);
@@ -1193,7 +873,7 @@ export function App() {
         : nextSessions[0]?.id ?? currentSessionId;
       activePlanningSessionIdRef.current = nextActiveSessionId;
       setActivePlanningSessionId(nextActiveSessionId);
-      const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+      const maxLineId = maxPlanningMessageId(restored);
       nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
       return true;
     } catch (err) {
@@ -1213,24 +893,31 @@ export function App() {
       planningPollFailureCountRef.current = 0;
       return;
     }
+    let inFlight = false;
     const interval = setInterval(() => {
-      void refreshPlanningSessionsNow().then((refreshed) => {
-        if (refreshed) {
-          planningPollFailureCountRef.current = 0;
-          return;
-        }
-        planningPollFailureCountRef.current += 1;
-        if (planningPollFailureCountRef.current < 3) return;
-        planningPollFailureCountRef.current = 0;
-        for (const session of planningSessionsRef.current) {
-          if (session.busy && session.activeTurnId) {
-            applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
-              status: 'failed',
-              error: 'Lost connection to the planner.',
-            });
+      if (inFlight) return;
+      inFlight = true;
+      void refreshPlanningSessionsNow()
+        .then((refreshed) => {
+          if (refreshed) {
+            planningPollFailureCountRef.current = 0;
+            return;
           }
-        }
-      });
+          planningPollFailureCountRef.current += 1;
+          if (planningPollFailureCountRef.current < 3) return;
+          planningPollFailureCountRef.current = 0;
+          for (const session of planningSessionsRef.current) {
+            if (session.busy && session.activeTurnId) {
+              applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
+                status: 'failed',
+                error: 'Lost connection to the planner.',
+              });
+            }
+          }
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     }, 5000);
     return () => clearInterval(interval);
   }, [anyPlanningSessionBusy, refreshPlanningSessionsNow]);
