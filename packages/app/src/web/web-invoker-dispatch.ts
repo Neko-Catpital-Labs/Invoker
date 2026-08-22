@@ -206,8 +206,23 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return { ownerMode: true, readOnly: false, mode: 'local-owner' };
       case 'invoker:get-ui-perf-stats':
         return {};
-      case 'invoker:report-ui-perf':
+      case 'invoker:report-ui-perf': {
+        // Mirror the GUI handler (gui-mutation-handlers.ts): persist every
+        // renderer metric to the activity log so web-surface interactions are
+        // diagnosable after the fact. Previously a silent no-op, which left
+        // web incidents with no client-side record at all.
+        const payload = {
+          ts: new Date().toISOString(),
+          metric: String(args[0] ?? ''),
+          ...((args[1] ?? {}) as Record<string, unknown>),
+        };
+        try {
+          persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
+        } catch {
+          // DB might be locked; matching the GUI handler's tolerance.
+        }
         return undefined;
+      }
       case 'invoker:trace-renderer-task-graph-event':
         return undefined;
       case 'invoker:check-pr-statuses':
