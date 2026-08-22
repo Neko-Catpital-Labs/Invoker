@@ -132,7 +132,6 @@ describe.runIf(liveEnabled)('chat-submit + catstack tie-in (stdio MCP)', () => {
       args: [cliPath, 'mcp'],
       cwd: repoRoot,
       env: {
-        ...process.env,
         INVOKER_DB_DIR: workDir,
         INVOKER_IPC_SOCKET: socketPath,
       },
