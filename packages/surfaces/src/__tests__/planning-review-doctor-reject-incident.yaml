@@ -1,0 +1,29 @@
+name: "Workflow origin attribution"
+onFinish: pull_request
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+
+tasks:
+  - id: implement-origin-schema-and-types
+    description: "Add nullable origin column and shared enum"
+    prompt: |
+      Add a nullable origin column via sqlite-schema migration and define the enum.
+    dependencies: []
+  - id: implement-origin-call-sites
+    description: "Pass origin enum at each submission call site"
+    prompt: |
+      Wire the right enum value at each submission point into loadPlan.
+    dependencies:
+      - implement-origin-schema-and-types
+  - id: implement-origin-query-surfacing
+    description: "Expose origin on query workflows"
+    prompt: |
+      Wire origin through the row mapper and serializeWorkflow.
+    dependencies:
+      - implement-origin-schema-and-types
+  - id: implement-origin-pr-body-stamping
+    description: "Stamp Origin line into PR bodies"
+    prompt: |
+      Add an Origin line to buildCanonicalPrBody for workflows with origin set.
+    dependencies:
+      - implement-origin-schema-and-types
