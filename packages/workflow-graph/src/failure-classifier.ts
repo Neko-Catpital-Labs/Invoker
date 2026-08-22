@@ -53,7 +53,10 @@ export class FailureClassifier {
     }
     if (
       errorText.includes('fatal: not a git repository')
-      && errorText.includes('/.git/worktrees/')
+      && (
+        errorText.includes('/.git/worktrees/')
+        || errorText.includes('remote commit or push failed (code')
+      )
     ) {
       return 'ssh-worktree-corrupt';
     }

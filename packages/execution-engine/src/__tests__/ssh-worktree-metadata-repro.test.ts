@@ -7,6 +7,7 @@ import { TaskRunner } from '../task-runner.js';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   buildWorktreeCorruptRepairScript,
+  deriveCorruptWorktreeAdminPathFromWorkspace,
   extractCorruptWorktreeAdminPath,
 } from '../workers/infra-repair-worker.js';
 
@@ -272,7 +273,11 @@ describe('SSH worktree metadata repro', () => {
     }
     expect(failed).toBe(true);
     expect(message).toMatch(/not a git repository/);
-    expect(message).toContain('.git/worktrees/');
+    // git's exact wording for this failure is version-dependent: older git
+    // embeds the corrupt admin path (`.git/worktrees/<name>`), newer git
+    // (observed on git 2.55.0) prints `fatal: not a git repository: (null)`
+    // with no path at all. Both are real, observed shapes of the same failure.
+    expect(message).toMatch(/\.git\/worktrees\/|\(null\)/);
 
     const shapedAdmin = '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/experiment-task';
     const shapedError = `remote commit or push failed (code 128): fatal: not a git repository: ${shapedAdmin}`;
@@ -289,5 +294,18 @@ describe('SSH worktree metadata repro', () => {
     expect(script).toContain('worktree prune');
     expect(script).toContain('Removing stale worktree admin path');
     expect(script).toContain('Removing managed worktree path');
+
+    // On the newer git shape, the error text carries no path at all --
+    // extraction must fall back to the task's own managed workspace path.
+    const pathlessError = 'remote commit or push failed (code 128): fatal: not a git repository: (null)';
+    expect(extractCorruptWorktreeAdminPath(pathlessError)).toBeUndefined();
+    expect(deriveCorruptWorktreeAdminPathFromWorkspace(
+      '/home/invoker/.invoker/worktrees/c9d4f5f68faf/experiment-task',
+      undefined,
+    )).toEqual({
+      adminPath: shapedAdmin,
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      worktreeName: 'experiment-task',
+    });
   });
 });
