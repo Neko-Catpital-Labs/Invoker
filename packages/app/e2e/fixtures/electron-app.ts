@@ -531,14 +531,20 @@ async function ensureScreenshotViewport(page: Page): Promise<void> {
  * Assert a named screenshot matches the committed baseline (toHaveScreenshot).
  * Used by normal regression tests. Viewport capture (not fullPage) to match
  * the Playwright config's toHaveScreenshot defaults.
+ *
+ * Ordinary runs (local macOS dev, and CI) stay DOM-only: the calling test's
+ * DOM assertions still ran before this call, and no pixel comparison happens
+ * here unless INVOKER_VISUAL_PROOF_LINUX=1 is set explicitly, which asserts
+ * against the committed packages/app/e2e/__screenshots__/visual-proof.spec.ts/linux/
+ * baselines instead of the default (macOS) ones.
  */
 export async function assertPageScreenshot(page: Page, name: string): Promise<void> {
-  // Skip pixel-level screenshot comparison on CI (no Linux baselines committed).
-  // DOM assertions in the calling test still run.
-  if (process.env.CI) return;
+  const linuxProof = process.env.INVOKER_VISUAL_PROOF_LINUX === '1';
+  if (process.env.CI && !linuxProof) return;
   await ensureScreenshotViewport(page);
   await waitForStableUI(page);
-  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 0 });
+  const snapshotName = linuxProof ? ['linux', `${name}.png`] : `${name}.png`;
+  await expect(page).toHaveScreenshot(snapshotName, { timeout: 0 });
 }
 
 /**
