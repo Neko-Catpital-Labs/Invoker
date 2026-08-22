@@ -554,6 +554,41 @@ function isPathUnderConfiguredRemoteHome(
   return path === normalizedHome || path.startsWith(`${normalizedHome}/`);
 }
 
+/**
+ * Fallback for git error text that doesn't embed the admin path (some git
+ * versions print `fatal: not a git repository: (null)` instead of the path).
+ * The managed worktree path is always `<remoteInvokerHome>/worktrees/<repoHash>/<name>`,
+ * which mirrors the mirror clone's `<remoteInvokerHome>/repos/<repoHash>` shape
+ * closely enough to derive the admin path directly, without relying on git's
+ * own error formatting.
+ */
+export function deriveCorruptWorktreeAdminPathFromWorkspace(
+  managedWorktreePath: string | undefined,
+  remoteInvokerHome: string | undefined,
+): CorruptWorktreeAdminPaths | undefined {
+  if (typeof managedWorktreePath !== 'string') return undefined;
+  if (!isPathUnderConfiguredRemoteHome(managedWorktreePath, remoteInvokerHome)) return undefined;
+
+  const marker = '/worktrees/';
+  const markerIdx = managedWorktreePath.lastIndexOf(marker);
+  if (markerIdx < 0) return undefined;
+
+  const rest = managedWorktreePath.slice(markerIdx + marker.length);
+  const segments = rest.split('/').filter(Boolean);
+  if (segments.length !== 2) return undefined;
+  const [hash, worktreeName] = segments;
+  if (!hash || hash.includes('..') || !worktreeName || worktreeName.includes('..')) return undefined;
+
+  const remoteClone = `${managedWorktreePath.slice(0, markerIdx)}/repos/${hash}`;
+  if (!isSafeMirrorPath(remoteClone)) return undefined;
+
+  return {
+    adminPath: `${remoteClone}/.git/worktrees/${worktreeName}`,
+    remoteClone,
+    worktreeName,
+  };
+}
+
 export function buildWorktreeCorruptRepairScript(options: {
   remoteClone: string;
   adminPath: string;
@@ -818,7 +853,20 @@ async function handleWorktreeCorruptRecovery(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedGenericSshInfraCandidate,
 ): Promise<void> {
-  const parsed = extractCorruptWorktreeAdminPath(candidate.task.execution.error);
+  const errorText = candidate.task.execution.error;
+  // Only fall back to the task's own workspacePath when the error truly
+  // carries no admin path at all (e.g. git 2.55+'s pathless
+  // `fatal: not a git repository: (null)`). When a path IS present but
+  // fails validation, that is a distinct signal worth refusing on rather
+  // than silently reinterpreting via workspacePath.
+  const hasEmbeddedAdminPath = typeof errorText === 'string' && errorText.includes('/.git/worktrees/');
+  const parsed = extractCorruptWorktreeAdminPath(errorText)
+    ?? (hasEmbeddedAdminPath
+      ? undefined
+      : deriveCorruptWorktreeAdminPathFromWorkspace(
+        candidate.task.execution.workspacePath,
+        candidate.target.remoteInvokerHome,
+      ));
   if (!parsed) {
     recordTaskDecision(options, candidate, candidate.reason, 'failed', 'Could not determine the corrupt worktree admin path from the task error', {
       targetId: candidate.targetId,
