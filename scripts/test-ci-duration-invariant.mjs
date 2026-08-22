@@ -23,6 +23,7 @@ const EXEMPT_JOBS = new Set([
   'optional-other',
   'docker',
   'scheduled-repros',
+  'nightly-regression',
   'playwright',
   'playwright-nightly-perf',
   'reset-rulebook-repro',
