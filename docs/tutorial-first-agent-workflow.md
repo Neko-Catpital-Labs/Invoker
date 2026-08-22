@@ -1,12 +1,10 @@
 # First Agent Workflow Tutorial
 
-This guide walks through a small Invoker workflow on a toy Node.js project. It is meant to answer the first onboarding question: "what do I click, what runs, and how would I adapt this to my own repo?"
-
-The workflow uses an agent task to fix a failing test, then a command task to verify the fix.
+This guide runs a small Invoker workflow against a generated Node.js repository. It covers the current desktop flow: bind a repository, draft and review a plan, create a staged workflow, then start it explicitly.
 
 ## What you will run
 
-The tutorial creates a temporary git repo with this shape:
+The example generator creates a temporary git repository containing:
 
 ```text
 package.json
@@ -17,11 +15,11 @@ invoker-plans/
   first-agent-workflow-claude.yaml
 ```
 
-The starting implementation is intentionally wrong. The tests expect `Hello, Ada!`, but the implementation returns `Hello Ada`.
+The implementation returns `Hello Ada`, while the tests require `Hello, Ada!`. An agent task fixes the implementation and a command task verifies it.
 
 ## Before you start
 
-Install Invoker and build it from the repo root:
+Install dependencies and build Invoker from the repository root:
 
 ```bash
 pnpm install
@@ -29,9 +27,7 @@ bash scripts/setup-agent-skills.sh
 pnpm run build
 ```
 
-For your own changes, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
-
-Make sure at least one supported agent CLI is installed and authenticated:
+Make sure Codex or Claude is installed and authenticated:
 
 ```bash
 codex --version
@@ -39,129 +35,138 @@ codex --version
 claude --version
 ```
 
-If you launch the desktop app from Finder on macOS, it may not inherit your terminal `PATH`. For this tutorial, start Invoker from the terminal so it can find `node`, `npm`, `git`, and your agent CLI.
+If you launch the desktop app from Finder on macOS, it may not inherit your terminal `PATH`. Start Invoker from the terminal for this tutorial.
 
 ## Create the toy project
 
-From the Invoker repo root, run:
+From the Invoker repository root, run:
 
 ```bash
 examples/first-agent-workflow/create-local-project.sh
 ```
 
-The script prints the generated project path and two plan paths. By default, the project is created at:
+The script prints the generated project path. On macOS it will normally be under `$TMPDIR`, for example:
 
 ```text
-/tmp/invoker-first-agent-workflow
+/var/folders/.../T/invoker-first-agent-workflow
 ```
 
-Confirm the initial test failure:
+Do not assume the path is `/tmp`; use the exact path printed by the script.
+
+Confirm the starting failure:
 
 ```bash
-cd /tmp/invoker-first-agent-workflow
+cd <generated-project-path>
 npm test
 ```
 
-You should see a failing `node --test` run. That failure is the work the agent will fix.
+Both tests should fail because the greeting punctuation is missing.
 
-## Open the plan
+## Bind the repository
 
-Start the desktop app from the Invoker repo root:
+The desktop planner does not currently have a repository picker. Set the generated path as the default planning repository in `~/.invoker/config.json`, preserving any other settings already in that file:
 
-```bash
-invoker-ui
+```json
+{
+  "defaultRepoUrl": "<generated-project-path>",
+  "defaultBranch": "main"
+}
 ```
 
-In the left rail, click `Open`.
+Restart Invoker after changing backend configuration. If you are developing Invoker itself, `pnpm dev:hot` hot reloads renderer changes, but backend and configuration changes still require restarting the command.
 
-Choose one generated plan:
+Create a new planning chat after restarting. Existing chats retain their original repository binding.
+
+Checkpoint: the right sidebar's **Repo** section should show `invoker-first-agent-workflow`, not Invoker's own repository.
+
+## Draft the workflow
+
+In **Home**, ask the planner:
 
 ```text
-/tmp/invoker-first-agent-workflow/invoker-plans/first-agent-workflow-codex.yaml
+Fix the failing greeting tests in this repository. Draft a workflow with an agent task that fixes the implementation and a dependent command task that runs npm test. Make sure you set onFinish: none, mergeMode: automatic, and baseBranch: main. Do not create a pull request.
 ```
 
-or:
+The planner should use the repository shown in the sidebar. If it silently generates a different `repoUrl`, Invoker rejects that draft and asks the planner to correct it automatically.
 
-```text
-/tmp/invoker-first-agent-workflow/invoker-plans/first-agent-workflow-claude.yaml
+When the draft is ready, click **Review draft**. The review sidebar renders task descriptions as Markdown; use **Raw YAML** to inspect the complete plan.
+
+Verify these top-level values before continuing:
+
+```yaml
+repoUrl: <generated-project-path>
+baseBranch: main
+onFinish: none
+mergeMode: automatic
 ```
 
-Checkpoint: the left rail should show the plan name, and a `Start` button should appear.
+`automatic` plus `none` lets this local-only tutorial finish as completed. `manual` plus `none` intentionally stops at `review_ready` for human inspection and has no merge action.
 
-## Start the workflow
+## Create and review the workflow
 
-Click `Start`.
+Click **Create workflow**.
 
-Checkpoint: the `Home` view should show one workflow node. Select it to open the workflow task DAG.
+This loads the workflow in a staged state. It does not start tasks.
 
-The DAG has two tasks:
+Click **Open graph** and select the workflow node. The task DAG should show the implementation and verification tasks as pending. You can inspect their prompts, commands, dependencies, and repository metadata before execution.
 
-- `fix-greeter`: an agent prompt task that edits the toy project.
-- `verify`: a command task that runs `npm test` after `fix-greeter` completes.
+Checkpoint: no task should be running yet, and the Home message should say to review the graph and then use **Start ready work**.
 
-Select `fix-greeter` to see details in the inspector. Its status should move through running states while the selected agent works in an isolated Invoker worktree.
+## Start ready work
 
-After `fix-greeter` completes, `verify` should become runnable and then run `npm test`.
+Click **Start ready work** and confirm the action.
 
-Checkpoint: when the workflow is done, both tasks should be `COMPLETED`.
+Invoker activates the staged workflow and runs its ready tasks:
+
+- The agent task edits the greeter in an isolated worktree.
+- The verification task runs `npm test` after the agent task completes.
+- With `mergeMode: automatic` and `onFinish: none`, the workflow gate completes without requiring a merge or pull request action for you to approve.
+
+Checkpoint: the workflow graph should finish green.
 
 ## Inspect what happened
 
 Use these views while or after the workflow runs:
 
-- `Home`: workflow graph and selected workflow task DAG.
-- `Timeline`: ordered lifecycle events.
-- `History`: completed and previous task attempts.
-- `Queue`: runnable/running task queue.
-- `Action Graph`: lower-level action state for debugging.
+- **Home**: planning chat and selected workflow graph.
+- **Workflows**: submitted workflows and their task DAGs.
+- **Timeline**: ordered lifecycle events.
+- **History**: completed and previous task attempts.
+- **Queue**: runnable and running tasks.
+- **Action Graph**: lower-level action state for debugging.
 
-Click a task in the DAG to inspect status, timing, command or prompt text, workspace metadata, and errors.
+Click a task in the DAG to inspect status, timing, command or prompt text, workspace metadata, output, and errors.
 
-Double-click a task, or right-click it and choose `Open Terminal`, to open a terminal session for that task when a managed workspace is available.
+Double-click a task, or use its context menu, to open a managed terminal when a workspace is available.
+
+## Generated YAML plans
+
+The generator also writes Codex and Claude YAML plans under `invoker-plans/`. They are useful as small reference plans or for testing the CLI.
+
+The desktop app does not currently import plan files. Running a generated file through the CLI submits and starts it immediately. The reference files use `mergeMode: manual`, so they intentionally stop at `review_ready` after their tasks pass:
+
+```bash
+invoker-cli run <generated-project-path>/invoker-plans/first-agent-workflow-codex.yaml --live
+```
+
+Use the in-app planning flow above when you want to review the graph before starting work.
 
 ## If something fails
 
-If the agent task fails because the agent CLI is missing or unauthenticated, install or log in to the CLI, then retry the task or rerun the workflow.
+- If the temporary repository no longer exists, rerun the generator. Operating-system cleanup may remove `$TMPDIR` contents.
+- If the Repo sidebar shows the wrong repository, update `~/.invoker/config.json`, restart Invoker, and create a new planning chat.
+- If Codex reports an expired refresh token, run `codex logout`, then `codex login`, and retry.
+- If a plan targets GitHub unexpectedly, check its `repoUrl` in Raw YAML before creating the workflow.
+- For a local repository, keep `onFinish: none`; `pull_request` requires a parseable GitHub remote and push permissions.
+- If the app cannot find `npm`, `node`, `git`, `codex`, or `claude`, restart it from a terminal.
 
-If `verify` fails, select the failed task and read the inspector error. You can right-click the workflow and choose `Retry Workflow`, or right-click an individual failed task and choose a task action such as retry or open terminal.
+## Adapt the pattern
 
-If the desktop app cannot find `npm`, `node`, `git`, `codex`, or `claude`, quit it and restart with `invoker-ui` from your terminal.
+For another repository:
 
-## Use the same pattern on your own repo
-
-The generated YAML is intentionally small:
-
-```yaml
-name: First agent workflow (codex)
-repoUrl: /tmp/invoker-first-agent-workflow
-baseBranch: master
-onFinish: none
-mergeMode: manual
-tasks:
-  - id: fix-greeter
-    description: Fix the greeter implementation so the Node test suite passes.
-    prompt: |
-      You are working in a small Node.js project.
-      Make the existing test suite pass.
-    executionAgent: codex
-    dependencies: []
-
-  - id: verify
-    description: Run the test suite after the agent fix.
-    command: npm test
-    dependencies: [fix-greeter]
-```
-
-To adapt it:
-
-- Change `repoUrl` to your repo URL or local repo path.
-- Set `baseBranch` to the branch or remote-qualified ref you want, such as `master`, `origin/master`, or `upstream/main`.
-- Replace the prompt with the concrete change you want.
-- Replace `npm test` with your real verification command.
-- Use `executionAgent: codex` or `executionAgent: claude`, depending on the agent you want.
-
-Keep `onFinish: none` while learning. Once you want Invoker to converge branches into review or merge flow, use a remote-backed repo and switch to `onFinish: pull_request` or `onFinish: merge` with an appropriate merge mode.
-
-## Why this exists
-
-Invoker has architecture and reference docs, but a first-time user needs a procedural path before they need the internals. This tutorial is that path: create a repo, open a plan, start a workflow, inspect the graph, and map the same workflow shape back to a real project.
+- Bind the intended repository and branch before starting a new planning chat.
+- Give the agent one concrete implementation task.
+- Add deterministic command tasks for verification.
+- Use `onFinish: none` while learning or when no remote publication is required.
+- Use `mergeMode: automatic` for unattended completion, or `manual` when `review_ready` is the desired terminal review state.
+- Use `onFinish: pull_request` or `merge` only with a remote-backed repository and appropriate credentials.
