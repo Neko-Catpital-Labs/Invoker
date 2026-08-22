@@ -20,6 +20,10 @@ class SafePushError(RuntimeError):
         self.exit_code = exit_code
 
 
+class BranchMissingError(SafePushError):
+    """The expected branch has no remote ref at all (as opposed to one that moved)."""
+
+
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -75,6 +79,33 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def repo_slug(remote: str, *, cwd: Path | str | None = None) -> str | None:
+    completed = subprocess.run(
+        ["git", "remote", "get-url", remote],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return None
+    match = re.search(r"github\.com[:/](?P<slug>[^/]+/[^/]+?)(?:\.git)?/?$", completed.stdout.strip())
+    return match.group("slug") if match else None
+
+
+def pr_state(pr_number: int, *, repo: str, cwd: Path | str | None = None) -> str | None:
+    completed = subprocess.run(
+        ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "state", "-q", ".state"],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
 def safe_push(
     *,
     branch: str,
@@ -96,9 +127,14 @@ def safe_push(
             )
         lease = f"refs/heads/{branch_name}:"
     else:
+        if live is None:
+            raise BranchMissingError(
+                f"stale-head: refs/heads/{branch_name} is missing; expected {expected}",
+                exit_code=20,
+            )
         if live != expected:
             raise SafePushError(
-                f"stale-head: refs/heads/{branch_name} is {live or 'missing'}; expected {expected}",
+                f"stale-head: refs/heads/{branch_name} is {live}; expected {expected}",
                 exit_code=20,
             )
         lease = f"refs/heads/{branch_name}:{expected}"
@@ -181,6 +217,59 @@ def require_all(label: str, values: Mapping[str, object | None]) -> None:
         raise SafePushError(f"{label} requires {', '.join(missing)}", exit_code=2)
 
 
+def _record_ledgers(args: argparse.Namespace) -> None:
+    if args.record_tsv_ledger:
+        require_all("TSV ledger recording", {
+            "--tsv-kind": args.tsv_kind,
+            "--tsv-key": args.tsv_key,
+            "--tsv-marker": args.tsv_marker,
+        })
+        append_tsv_ledger(
+            Path(args.record_tsv_ledger).expanduser(),
+            kind=args.tsv_kind,
+            key=args.tsv_key,
+            marker=args.tsv_marker,
+        )
+    if args.record_json_ledger:
+        require_all("JSONL ledger recording", {
+            "--json-kind": args.json_kind,
+            "--json-pr": args.json_pr,
+            "--json-head-sha": args.json_head_sha,
+            "--json-key": args.json_key,
+        })
+        meta = None
+        if args.json_meta:
+            decoded = json.loads(args.json_meta)
+            if not isinstance(decoded, dict):
+                raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
+            meta = decoded
+        append_json_ledger(
+            Path(args.record_json_ledger).expanduser(),
+            kind=args.json_kind,
+            pr_number=args.json_pr,
+            head_sha=args.json_head_sha,
+            key=args.json_key,
+            meta=meta,
+        )
+
+
+# A branch can go missing between the caller capturing --expected-head and this
+# script running because the PR it belongs to merged (GitHub deletes the head
+# branch on merge) or was closed out-of-band -- not just because of a genuine
+# race with another writer. In that case there is nothing left to push and no
+# unsafe write to guard against, so settle quietly instead of failing the same
+# way a real stale-head race would (mirrors mergify_admin_requeue_repair_normalize.py's
+# handling of a PR merged/closed mid-repair).
+def _settled_via_pr_merge_or_close(args: argparse.Namespace) -> str | None:
+    if args.json_pr is None:
+        return None
+    repo = repo_slug(args.remote, cwd=Path(args.cwd))
+    if repo is None:
+        return None
+    state = pr_state(args.json_pr, repo=repo, cwd=Path(args.cwd))
+    return state if state in ("MERGED", "CLOSED") else None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
@@ -191,40 +280,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             remote=args.remote,
             cwd=Path(args.cwd),
         )
-        if args.record_tsv_ledger:
-            require_all("TSV ledger recording", {
-                "--tsv-kind": args.tsv_kind,
-                "--tsv-key": args.tsv_key,
-                "--tsv-marker": args.tsv_marker,
-            })
-            append_tsv_ledger(
-                Path(args.record_tsv_ledger).expanduser(),
-                kind=args.tsv_kind,
-                key=args.tsv_key,
-                marker=args.tsv_marker,
-            )
-        if args.record_json_ledger:
-            require_all("JSONL ledger recording", {
-                "--json-kind": args.json_kind,
-                "--json-pr": args.json_pr,
-                "--json-head-sha": args.json_head_sha,
-                "--json-key": args.json_key,
-            })
-            meta = None
-            if args.json_meta:
-                decoded = json.loads(args.json_meta)
-                if not isinstance(decoded, dict):
-                    raise SafePushError("--json-meta must decode to a JSON object", exit_code=2)
-                meta = decoded
-            append_json_ledger(
-                Path(args.record_json_ledger).expanduser(),
-                kind=args.json_kind,
-                pr_number=args.json_pr,
-                head_sha=args.json_head_sha,
-                key=args.json_key,
-                meta=meta,
-            )
+        _record_ledgers(args)
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        return 0
+    except BranchMissingError as exc:
+        state = _settled_via_pr_merge_or_close(args)
+        if state is None:
+            print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
+            return exc.exit_code or 1
+        _record_ledgers(args)
+        print(
+            f"pr-worker-safe-push: noop: PR #{args.json_pr} is already {state.lower()}; "
+            f"refs/heads/{normalize_branch(args.branch)} no longer exists, nothing to push",
+            file=sys.stderr,
+        )
         return 0
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
