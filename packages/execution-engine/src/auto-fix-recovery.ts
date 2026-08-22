@@ -29,6 +29,7 @@ import {
   normalizeAutoFixRetryBudget,
   shouldSkipAutoFixForError,
   isLivenessFailureTask,
+  isSshInfraFailureTask,
 } from './auto-fix-gating.js';
 import {
   autoFixBareRetryExternalKey,
@@ -228,6 +229,8 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   // Liveness stalls (executor stopped heartbeating) are re-run by the requeue
   // worker, not "fixed" by the AI — auto-fix would loop on a non-defect.
   if (isLivenessFailureTask(task)) return false;
+  // SSH infra buckets are owned by infra-repair; generic autofix must not race it.
+  if (isSshInfraFailureTask(task)) return false;
   const max = retryBudgetForTask(task, options);
   if (max <= 0) return false;
   return true;
