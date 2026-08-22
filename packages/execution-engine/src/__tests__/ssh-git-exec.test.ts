@@ -579,6 +579,30 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('printf "%s" "$HASH"');
   });
 
+  it('never embeds macOS owner or Homebrew paths after remote home canonicalization', async () => {
+    const { canonicalizeRemoteManagedWorkspacePath } = await import('../conflict-resolver.js');
+    const { base64Encode } = await import('../ssh-git-exec.js');
+    const macOwnerPath = '/Users/edbertchan/.invoker/worktrees/c9d4f5f68faf/experiment-task';
+    const linuxPath = canonicalizeRemoteManagedWorkspacePath(macOwnerPath, '/home/invoker/.invoker');
+    expect(linuxPath).toBe('/home/invoker/.invoker/worktrees/c9d4f5f68faf/experiment-task');
+
+    const script = buildRecordAndPushScript({
+      worktreePath: linuxPath,
+      branch: 'experiment/task',
+      commitMessageChanges: 'msg',
+      commitMessageEmpty: 'empty',
+      gitUserName: 'Invoker Bot',
+      gitUserEmail: 'invoker@local',
+      idempotencyKey: 'exec-linux',
+    });
+
+    expect(script).toContain(base64Encode(linuxPath));
+    expect(script).not.toContain(base64Encode(macOwnerPath));
+    expect(script).not.toContain('/Users/');
+    expect(script).not.toContain('/opt/homebrew');
+    expect(script).not.toContain('Homebrew');
+  });
+
   it('includes tilde path normalization', () => {
     const script = buildRecordAndPushScript({
       worktreePath: '~/worktree',
