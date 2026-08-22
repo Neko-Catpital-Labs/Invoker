@@ -156,6 +156,27 @@ class RepairNormalizeTests(unittest.TestCase):
         self.assertEqual(len(self.kind_rows("repair-noop")), 1)
         validate.assert_not_called()
 
+    def test_commit_on_merged_pr_records_repair_noop_without_diffing(self):
+        # Same race as test_no_commit_on_merged_pr_records_repair_noop_without_diffing,
+        # but the repair task did leave a commit before the PR merged/closed out
+        # from under it. args.base ("stack/base") may no longer exist on the
+        # remote at all (e.g. a stacked branch deleted once its own PR merged),
+        # so validate_current_pr_body must never be reached here either.
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=NEW_HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                        gh_cls.return_value.pr_detail.return_value = {"state": "MERGED", "body": "## Summary\n\nok\n"}
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                        ) as validate:
+                            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root") as reset:
+                                code = normalize.main(self.argv(**{"--base": "stack/base"}))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.kind_rows("repair-noop")), 1)
+        validate.assert_not_called()
+        reset.assert_called_once_with(Path.cwd(), HEAD)
+
     def test_no_commit_on_invalid_pr_body_records_repair_invalid_and_comments_once(self):
         with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
             with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=HEAD):

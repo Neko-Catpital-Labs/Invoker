@@ -166,6 +166,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     gh = GhClient()
     detail = gh.pr_detail(args.repo, args.pr)
+    if str(detail.get("state") or "OPEN") != "OPEN":
+        # Same race _record_repair_noop_or_invalid_for_pr_body handles for the
+        # no-commit path, but here the repair task did leave a commit: the PR
+        # merged/closed out from under it before normalize ran. args.base was
+        # captured at submission time and may no longer resolve at all (e.g. a
+        # stacked branch deleted once its own PR merged), so it must never be
+        # diffed against below.
+        Ledger(state_file).record("repair-noop", args.pr, start_head, args.check)
+        hard_reset_work_root(cwd, start_head)
+        print("noop: PR is no longer open; nothing left to fix")
+        return 0
     body = str(detail.get("body") or "")
     validation = validate_current_pr_body(cwd, body, args.base)
     if validation.get("valid"):
