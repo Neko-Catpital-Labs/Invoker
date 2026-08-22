@@ -424,11 +424,11 @@ tasks:
     });
   });
 
-  it('tells MCP handoff users to call invoker_prepare_plan_review before approval', () => {
+  it('requires exclusive planPath or sessionId in the MCP handoff prompt', () => {
     const prompt = handoffPrompt('ship this change');
 
-    expect(prompt).toContain('Call `invoker_prepare_plan_review` on that exact YAML file');
-    expect(prompt).toContain('show the returned ordered steps and confirmation text to the user');
+    expect(prompt.includes('Call `invoker_prepare_plan_review` with exactly one of `planPath` or `sessionId`')).toBe(true);
+    expect(prompt.includes('show the returned ordered steps and confirmation text to the user')).toBe(true);
   });
 
   it('documents the auto-submit branch in the MCP handoff prompt', () => {
