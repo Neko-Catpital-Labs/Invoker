@@ -2569,9 +2569,14 @@ export function App() {
     appendTerminalLine(result.error, 'system', 'error', previousSessionId);
     if (result.sessionId) {
       const failedSessionId = result.sessionId;
-      setPlanningSessions((prev) => prev.map((session) => (
+      const swapFailedId = (sessions: PlanningSessionView[]): PlanningSessionView[] => sessions.map((session) => (
         session.id === previousSessionId ? { ...session, id: failedSessionId } : session
-      )));
+      ));
+      planningSessionsRef.current = swapFailedId(planningSessionsRef.current);
+      activePlanningSessionIdRef.current = activePlanningSessionIdRef.current === previousSessionId
+        ? failedSessionId
+        : activePlanningSessionIdRef.current;
+      setPlanningSessions((prev) => swapFailedId(prev));
       setActivePlanningSessionId((currentSessionId) => (
         currentSessionId === previousSessionId ? failedSessionId : currentSessionId
       ));
