@@ -514,6 +514,31 @@ describe('IpcBus', () => {
     expect(winner).toBe(stillPending);
   });
 
+  it('REGRESSION: a slow invoker:planning-chat-rebind-repo delegated over headless.gui-mutation is killed by the default deadline instead of getting the long-deadline protection planning-chat-send gets', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest('headless.gui-mutation', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(client);
+    await client.ready();
+    await sleep(20);
+
+    const pending = client.request('headless.gui-mutation', {
+      channel: 'invoker:planning-chat-rebind-repo',
+      args: [{ sessionId: 'session-1', repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/' }],
+    });
+
+    const stillPending = Symbol('still-pending');
+    const winner = await Promise.race([pending, sleep(300).then(() => stillPending)]);
+
+    expect(winner).toBe(stillPending);
+  });
+
   it('REGRESSION: a slow invoker:start-ready delegated over headless.gui-mutation is killed by the default deadline instead of getting the long-deadline protection headless.exec gets', async () => {
     const sock = tempSocketPath();
 
