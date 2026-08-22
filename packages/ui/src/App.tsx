@@ -583,6 +583,7 @@ export function App() {
   const nextTerminalLineIdRef = useRef(1);
   const applyTurnOutcomeRef = useRef<(sessionId: string, turnId: string, outcome: InAppPlanningTurnOutcome) => void>(() => {});
   const planningPollFailureCountRef = useRef(0);
+  const planningTurnGoneCountsRef = useRef<Map<string, number>>(new Map());
   const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
   const [planningPresetOptions, setPlanningPresetOptions] = useState<PlanningPresetOption[]>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
@@ -841,7 +842,6 @@ export function App() {
         window.invoker?.planningTerminalList?.().catch(() => [] as TerminalSessionDescriptor[]) ?? Promise.resolve([] as TerminalSessionDescriptor[]),
       ]);
       if (!chatList.ok) return false;
-      if (chatList.sessions.length === 0) return true;
       const terminalsByPlanningSession = new Map(
         terminalList
           .filter((session) => session.kind === 'planning' && session.planningSessionId)
@@ -875,6 +875,41 @@ export function App() {
       setActivePlanningSessionId(nextActiveSessionId);
       const maxLineId = maxPlanningMessageId(restored);
       nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
+      const serverIds = new Set(chatList.sessions.map((session) => session.id));
+      const serverHasUnknownRunningTurn = chatList.sessions.some(
+        (session) => session.activeTurnStatus === 'running' && !currentIds.has(session.id),
+      );
+      const goneCounts = planningTurnGoneCountsRef.current;
+      const liveIds = new Set(planningSessionsRef.current.map((session) => session.id));
+      for (const key of goneCounts.keys()) {
+        if (!liveIds.has(key)) goneCounts.delete(key);
+      }
+      for (const session of planningSessionsRef.current) {
+        if (!session.busy || !session.activeTurnId) {
+          goneCounts.delete(session.id);
+          continue;
+        }
+        // A busy local view's backend twin is unknown by id; any unknown running
+        // turn may be it, so its absence across polls is the "gone" signal. With
+        // several busy local views this under-fails (never false-fails).
+        const gone = session.id.startsWith('local-')
+          ? !serverHasUnknownRunningTurn
+          : !serverIds.has(session.id);
+        if (!gone) {
+          goneCounts.delete(session.id);
+          continue;
+        }
+        const count = (goneCounts.get(session.id) ?? 0) + 1;
+        if (count < 2) {
+          goneCounts.set(session.id, count);
+          continue;
+        }
+        goneCounts.delete(session.id);
+        applyTurnOutcomeRef.current(session.id, session.activeTurnId, {
+          status: 'failed',
+          error: 'The planner session no longer exists on the server. It may have been reset.',
+        });
+      }
       return true;
     } catch (err) {
       console.error('[planning] planning session refresh failed', err);
