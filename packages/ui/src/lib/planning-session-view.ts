@@ -120,7 +120,7 @@ export function reconcileHydratedPlanningSessions(
     return {
       ...restored,
       input: session.input,
-      busy: restored.activeTurnStatus === 'running' ? session.busy : false,
+      busy: restored.activeTurnStatus === 'running',
       conversationKey: session.conversationKey,
       mode: session.mode === 'tmux' || restored.mode === 'tmux' ? 'tmux' : restored.mode,
       terminalSession: restored.terminalSession ?? session.terminalSession,
