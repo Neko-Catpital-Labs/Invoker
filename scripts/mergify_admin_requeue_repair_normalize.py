@@ -166,6 +166,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     gh = GhClient()
     detail = gh.pr_detail(args.repo, args.pr)
+    if str(detail.get("state") or "OPEN") != "OPEN":
+        # The PR was merged or closed (e.g. superseded by a duplicate PR that
+        # landed the same fix directly) while the repair was in flight. There
+        # is no longer anything to push the normalized commit to, and
+        # validating a stale remote body against it would only ever block on
+        # content nobody will read -- see _record_repair_noop_or_invalid_for_pr_body,
+        # which already applies this same check on the empty-diff paths.
+        hard_reset_work_root(cwd, start_head)
+        _record_queue_only_noop_if_applicable(state_file, args.pr, start_head, args.check)
+        Ledger(state_file).record("repair-noop", args.pr, start_head, args.check)
+        print("noop: PR is no longer open")
+        return 0
     body = str(detail.get("body") or "")
     validation = validate_current_pr_body(cwd, body, args.base)
     if validation.get("valid"):
