@@ -427,7 +427,7 @@ tasks:
   it('tells MCP handoff users to call invoker_prepare_plan_review before approval', () => {
     const prompt = handoffPrompt('ship this change');
 
-    expect(prompt).toContain('Call `invoker_prepare_plan_review` on that exact YAML file');
+    expect(prompt).toContain('Call `invoker_prepare_plan_review` with exactly one of `planPath` or `sessionId`');
     expect(prompt).toContain('show the returned ordered steps and confirmation text to the user');
   });
 
