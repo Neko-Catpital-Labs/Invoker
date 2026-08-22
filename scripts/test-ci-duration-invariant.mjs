@@ -26,6 +26,7 @@ const EXEMPT_JOBS = new Set([
   'nightly-regression',
   'playwright',
   'playwright-nightly-perf',
+  'playwright-nightly-visual-proof',
   'reset-rulebook-repro',
 ]);
 
