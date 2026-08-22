@@ -191,7 +191,7 @@ describe('plan draft file - activation side', () => {
     ));
     const reply = await conversation.sendMessage('Draft the approved plan');
 
-    expect(reply).toContain('Draft not shown: the plan doctor rejected it after 0 repair turns.');
+    expect(reply).toContain('Draft not shown: the plan doctor rejected it.');
     expect(reply).toContain('uses "autoFix", which is no longer supported');
     expect(existsSync(path)).toBe(false);
     expect(conversation.lastTurnDraftPlanText).toBeNull();
@@ -368,7 +368,7 @@ describe('plan draft file - activation side', () => {
 
     const reply = await conversation.sendMessage('Revise the plan');
 
-    expect(reply).toContain('Draft not shown: the plan doctor rejected it after 2 repair turns.');
+    expect(reply).toContain('Draft not shown: the plan doctor rejected it.');
     expect(reply).toContain('Nothing was submitted.');
     expect(conversation.lastTurnDraftPlanText).toBeNull();
     expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
@@ -396,7 +396,7 @@ describe('plan draft file - activation side', () => {
 
     const reply = await conversation.sendMessage('Draft the approved plan');
 
-    expect(reply).toContain('Draft not shown: the plan doctor rejected it after 2 repair turns.');
+    expect(reply).toContain('Draft not shown: the plan doctor rejected it.');
     expect(reply).toContain('Nothing was submitted.');
     expect(mockSpawn).toHaveBeenCalledTimes(3);
     expect(doctor).toHaveBeenCalledTimes(3);

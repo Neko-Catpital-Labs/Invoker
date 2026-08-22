@@ -780,7 +780,7 @@ export class PlanConversation {
     this.resetPlanDraftFile();
     const heading = lastResult.infrastructureError
       ? 'Draft not shown: plan validation is unavailable.'
-      : `Draft not shown: the plan doctor rejected it after ${repairsAttempted} repair turns.`;
+      : `Draft not shown: the plan doctor rejected it. (${repairsAttempted} repair turn${repairsAttempted === 1 ? '' : 's'} attempted)`;
     const diagnostics = lastResult.diagnostics.slice(0, 8).map((line) => `- ${line}`).join('\n');
     return {
       planText: null,
