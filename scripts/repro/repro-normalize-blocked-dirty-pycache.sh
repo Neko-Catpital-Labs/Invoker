@@ -18,9 +18,22 @@ git -C "$WORK" -c user.name=repro -c user.email=repro@example.invalid commit -q 
 START_HEAD="$(git -C "$WORK" rev-parse HEAD)"
 STATE_FILE="$TMP/ledger.jsonl"
 
+# The clean-noop path calls _record_repair_noop_or_invalid_for_pr_body, which
+# looks up the PR over `gh`. Use the same fake-gh fixture its sibling repros
+# use (e.g. repro-babysit-pr-body-valid-noop.sh) instead of the real `gh`
+# CLI, so this repro stays hermetic and doesn't depend on network access, an
+# installed `gh` binary, or a real PR #7560 existing in Neko-Catpital-Labs/Invoker.
+FAKE_GH_STATE_DIR="$TMP/state"
+mkdir -p "$FAKE_GH_STATE_DIR"
+cat > "$FAKE_GH_STATE_DIR/state.json" <<'EOF'
+{"prs": [{"number": 7560, "state": "MERGED"}]}
+EOF
+
 run_normalize() {
   (
     cd "$WORK"
+    PATH="$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH" \
+    FAKE_GH_STATE_DIR="$FAKE_GH_STATE_DIR" \
     env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX python3 \
       scripts/mergify_admin_requeue_repair_normalize.py \
       --repo Neko-Catpital-Labs/Invoker \
