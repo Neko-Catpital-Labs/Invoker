@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
+import { E2E_REPO_URL, injectTaskStates, waitForTasksResult } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
@@ -96,10 +96,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
 
 async function loadPlan(page: Page): Promise<void> {
   await page.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(TERMINAL_RESTART_PLAN));
-  await page.waitForFunction(() => window.invoker.getTasks().then((result) => {
-    const tasks = Array.isArray(result) ? result : result.tasks;
-    return tasks.some((task: { id: string }) => task.id.endsWith('/terminal-task'));
-  }), null, { timeout: 10000 });
+  await waitForTasksResult(page, ({ tasks }) => tasks.some((task) => task.id.endsWith('/terminal-task')));
   await page.getByTestId('sidebar-planning').click();
   await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10000 });
   await page.getByRole('button', { name: 'Refresh' }).click();
