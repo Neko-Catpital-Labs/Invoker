@@ -203,9 +203,11 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
 
   const startDbPolling = (): RendererTaskFeedStopHandle => {
     const interval = setInterval(() => {
-      const mainWindow = deps.getMainWindow();
-      if (!mainWindow || mainWindow.isDestroyed()) return;
+      // Headless owners have no BrowserWindow. Still run liveness/stall
+      // reaping and launch-dispatcher poll; only UI delta publish needs a window.
       try {
+        const mainWindow = deps.getMainWindow();
+        const canPublishUi = !!mainWindow && !mainWindow.isDestroyed();
         const workflows = deps.persistence.listWorkflows();
 
         if (workflows.length !== lastKnownWorkflowCount) {
@@ -213,7 +215,9 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
           deps.logger.info(msg, { module: 'db-poll' });
           try { deps.persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
           lastKnownWorkflowCount = workflows.length;
-          deps.requestWorkflowMetadataPublish('db-poll-count');
+          if (canPublishUi) {
+            deps.requestWorkflowMetadataPublish('db-poll-count');
+          }
 
           deps.getOrchestrator().syncAllFromDb();
           deps.logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
@@ -351,6 +355,10 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
                 );
                 continue;
               }
+            }
+
+            if (!canPublishUi) {
+              continue;
             }
 
             const snapshot = JSON.stringify(task);
