@@ -95,7 +95,7 @@ run_capture() {
 
   if [[ "${skip_build}" == "false" ]]; then
     echo "[visual-proof] Building UI and app..." >&2
-    pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build || {
+    pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build || {
       echo "[visual-proof] ERROR: Build failed" >&2
       exit 1
     }
