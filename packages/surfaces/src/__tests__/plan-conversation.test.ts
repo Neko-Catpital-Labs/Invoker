@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, buildPlanSystemPrompt, extractYamlPlan, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
+import { PlanConversation, buildPlanSystemPrompt, extractYamlPlan, globToRegex, isDangerousCommand, isConfirmation, redactEmbeddedPlanFence } from '../slack/plan-conversation.js';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -598,7 +598,11 @@ describe('PlanConversation', () => {
 
     const reply = await conversational.sendMessage('yes');
 
-    expect(reply).toBe(VALID_YAML_PLAN);
+    // The raw ```yaml fence is redacted from the reply text (it would
+    // otherwise get posted verbatim to Slack); the draft itself is still
+    // fully captured via lastTurnDraftPlanText for the review-card flow.
+    expect(reply).toBe(redactEmbeddedPlanFence(VALID_YAML_PLAN));
+    expect(conversational.lastTurnDraftPlanText).toContain('Test Plan');
     expect(conversational.planSubmitted).toBe(false);
     expect(conversational.submittedPlanText).toBeNull();
     expect(mockSpawn).toHaveBeenCalledTimes(1);
