@@ -33,6 +33,20 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export type PlanningDraftStatus = 'current' | 'superseded' | 'submitted';
+
+export interface PlanningDraft {
+  id: string;
+  conversationId: string;
+  version: number;
+  planText: string;
+  contentHash: string;
+  status: PlanningDraftStatus;
+  createdAt: string;
+  supersededAt?: string;
+  submittedAt?: string;
+}
+
 export interface SlackLaunchContext {
   threadTs: string;
   repoUrl: string;
@@ -56,6 +70,7 @@ export type SlackPlanDraftStatus =
 export interface SlackPlanDraft {
   draftId: string;
   version: number;
+  planningDraftId?: string;
   channelId: string;
   threadTs: string;
   messageTs?: string;
@@ -329,6 +344,8 @@ export interface InAppPlanningSessionRecord {
   messages: InAppPlanningChatLine[];
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
+  planningDraftId?: string;
+  planningDraftHash?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
@@ -358,6 +375,8 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'messages'
   | 'draftPlanSummary'
   | 'draftPlanText'
+  | 'planningDraftId'
+  | 'planningDraftHash'
   | 'submittedWorkflowId'
   | 'submittedPlanName'
   | 'terminalMode'
@@ -444,6 +463,14 @@ export interface PersistenceAdapter {
   appendMessage(threadTs: string, role: 'user' | 'assistant', content: string): void;
   countMessages(threadTs: string): number;
   loadMessages(threadTs: string): ConversationMessage[];
+
+  // Immutable doctor-approved planning drafts
+  createCurrentPlanningDraft(input: Omit<PlanningDraft, 'version' | 'status' | 'supersededAt' | 'submittedAt'>): PlanningDraft;
+  loadCurrentPlanningDraft(conversationId: string): PlanningDraft | undefined;
+  loadPlanningDraft(id: string): PlanningDraft | undefined;
+  supersedePlanningDraft(id: string, supersededAt: string): void;
+  supersedeCurrentPlanningDraft(conversationId: string, supersededAt: string): void;
+  markPlanningDraftSubmitted(id: string, submittedAt: string): void;
 
   // Slack plan submission session state
   saveSlackLaunchContext(context: SlackLaunchContext): void;

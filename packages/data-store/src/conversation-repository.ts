@@ -8,6 +8,7 @@
 
 import type { PlanDefinition } from '@invoker/workflow-core';
 import type { PersistenceAdapter, Conversation, ConversationMessage, ConversationMode } from './adapter.js';
+import { PlanningDraftRepository } from './planning-draft-repository.js';
 
 // ── Public Types ─────────────────────────────────────────────
 
@@ -47,10 +48,12 @@ const defaultLogger: Logger = {
 export class ConversationRepository {
   private adapter: PersistenceAdapter;
   private log: Logger;
+  readonly planningDrafts: PlanningDraftRepository;
 
   constructor(adapter: PersistenceAdapter, logger?: Logger) {
     this.adapter = adapter;
     this.log = logger ?? defaultLogger;
+    this.planningDrafts = new PlanningDraftRepository(adapter);
   }
 
   /**
