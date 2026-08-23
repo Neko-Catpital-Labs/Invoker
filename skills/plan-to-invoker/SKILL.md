@@ -69,6 +69,15 @@ Use this mode when invoked by the installed command or MCP prompt.
 - Later PR publication is a separate explicit action. When the user separately asks about creating, updating, publishing, or splitting pull requests or PR stacks after workflow handoff, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
+### Self-triggered delegation routing (agents and subagents)
+
+Use `confirmationMode` to distinguish who decided the hand-off should happen:
+
+- **Self-triggered delegation: confirmationMode: auto_submit** — the agent or subagent itself decided, mid-task and without a direct human instruction, that a chunk of work should be handed off to Invoker. No human message asked for this specific hand-off; it's the agent's own routing choice. In this case, skip the Slack review-card wait and call `invoker_submit_plan` once `invoker_prepare_plan_review` reports `confirmationMode: auto_submit`.
+- **Human-triggered delegation: confirmationMode: require** — a human's message is the direct request to hand off or send work to Invoker. Today's `require` + human-approval flow is unchanged: show the ordered steps and `confirmationText`, and wait for explicit approval before calling `invoker_submit_plan`.
+
+In both paths, the delegating agent chooses `poolId` best-effort per `references/schema.md` (an existing field) — omit it for the local default when unsure. `skill-doctor.sh` still runs against the generated plan in both paths; self-triggered delegation changes who approves the submission, not the validation gate.
+
 ## Intended flow (do not skip steps)
 
 **Current auto-fix schema:** Never emit `autoFix` or `autoFixRetries` at the plan, workflow, or task level. Those YAML fields are obsolete. Auto-fix retries are configured only with `autoFixRetries` in `~/.invoker/config.json`. A draft containing either YAML field must be corrected and re-run through `skill-doctor.sh`; do not present or submit it.
