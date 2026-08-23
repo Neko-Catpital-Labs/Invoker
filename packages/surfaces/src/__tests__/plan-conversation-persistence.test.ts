@@ -439,4 +439,38 @@ tasks:
       expect(conv2.history.length).toBe(4);
     });
   });
+
+  describe('approved-draft repair budget restart repro', () => {
+    it.fails('keeps the replacement budget after restoring a prior doctor-approved draft', async () => {
+      const threadTs = 'ts-restart-doctor-budget';
+      const first = new PlanConversation({
+        threadTs,
+        conversationRepo: repo,
+        draftDoctor: vi.fn().mockResolvedValue({ ok: true, diagnostics: [] }),
+      });
+      mockCursorResponse(VALID_YAML_PLAN);
+      await first.sendMessage('Draft the plan');
+
+      const rejectingDoctor = vi.fn().mockResolvedValue({
+        ok: false,
+        diagnostics: ['validate-plan: still invalid'],
+      });
+      const recovered = new PlanConversation({
+        threadTs,
+        conversationRepo: repo,
+        draftDoctor: rejectingDoctor,
+        firstDraftPlanDoctorRepairLimit: 3,
+      });
+      await recovered.init();
+      mockCursorResponse(VALID_YAML_PLAN.replace('Test Plan', 'Candidate One'));
+      mockCursorResponse(VALID_YAML_PLAN.replace('Test Plan', 'Candidate Two'));
+      mockCursorResponse(VALID_YAML_PLAN.replace('Test Plan', 'Candidate Three'));
+      mockCursorResponse(VALID_YAML_PLAN.replace('Test Plan', 'Candidate Four'));
+
+      const reply = await recovered.sendMessage('Replace the plan');
+
+      expect(rejectingDoctor).toHaveBeenCalledTimes(3);
+      expect(reply).toContain('(2 repair turns attempted)');
+    });
+  });
 });
