@@ -46,7 +46,7 @@ import type { LobbyControl } from './lobby-control.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt, parseWorkflowControl } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
-import type { ConversationRepository, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
+import type { ConversationRepository, PlanningDraft, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 import { SlackPlanDraftRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout, materializeLocalAgentPrompt } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
@@ -537,6 +537,8 @@ interface ConversationLike {
   getDraftedPlan(): string | null;
   readonly history: readonly { role: 'user' | 'assistant'; content: string }[];
   readonly lastTurnDraftPlanText: string | null;
+  readonly approvedPlanningDraft: PlanningDraft | null;
+  readonly draftDoctorEnabled: boolean;
   readonly lastTurnPlanIntentSignal: PlanIntentSignal | null;
   readonly conversationMode: ConversationMode;
   readonly planSubmitted: boolean;
@@ -1359,11 +1361,18 @@ export class SlackSurface implements Surface {
       });
       return { staged: false, reason: 'no_context' };
     }
-    const normalizedPlanText = this.normalizeDraftedPlanRepoUrl(draftReview.planText, context.repoUrl);
+    const approvedDraft = conversation.approvedPlanningDraft;
+    const reviewPlanText = approvedDraft?.planText ?? draftReview.planText;
+    const normalizedPlanText = this.normalizeDraftedPlanRepoUrl(reviewPlanText, context.repoUrl);
+    if (conversation.draftDoctorEnabled
+      && (!approvedDraft || approvedDraft.planText !== normalizedPlanText)) {
+      throw new Error('The review text does not exactly match the immutable doctor-approved draft.');
+    }
     const normalizedSummary = summarizePlanText(normalizedPlanText) ?? draftReview.summary;
     const draft = this.slackPlanDraftRepo.create({
       channelId: channel,
       threadTs,
+      planningDraftId: approvedDraft?.id,
       planText: normalizedPlanText,
       summaryJson: JSON.stringify(normalizedSummary),
       repoUrl: context.repoUrl,
@@ -1584,20 +1593,27 @@ export class SlackSurface implements Surface {
     if (draft.status !== 'ready') {
       throw new Error(`This plan review is ${draft.status}.`);
     }
-    if (!draft.messageTs || !draft.slackFileId
-      || createHash('sha256').update(draft.planText).digest('hex') !== draft.contentHash) {
+    if (!draft.messageTs || !draft.slackFileId) {
       throw new Error('This plan review failed its integrity check and cannot be approved.');
     }
+    const approvedPlanText = this.slackPlanDraftRepo?.resolvePlanText(draft);
+    if (!approvedPlanText) {
+      throw new Error('This plan review has no resolvable immutable draft.');
+    }
+    const normalizedPlanText = this.normalizeDraftedPlanRepoUrl(approvedPlanText, draft.repoUrl);
+    if (draft.planningDraftId && normalizedPlanText !== approvedPlanText) {
+      throw new Error('This plan review would change during submission and cannot be approved.');
+    }
+    const planTextForSubmit = draft.planningDraftId ? approvedPlanText : normalizedPlanText;
     const executionKey = this.slackPlanDraftRepo?.claim(draft);
     if (!executionKey) {
       throw new Error('This plan is already being submitted.');
     }
     await this.replacePlanDraftMessage(draft, 'Starting plan execution…', []);
     try {
-      const planText = this.normalizeDraftedPlanRepoUrl(draft.planText, draft.repoUrl);
       const result = await this.onCommand?.({
         type: 'start_plan',
-        planText,
+        planText: planTextForSubmit,
         repoUrl: draft.repoUrl,
         harnessPreset: draft.harnessPreset,
         requestedBy: draft.requestedBy,
