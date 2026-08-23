@@ -114,6 +114,8 @@ export interface InAppPlanningChatSession {
   worktreeBranch?: string;
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
+  planningDraftId?: string;
+  planningDraftHash?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
@@ -451,6 +453,8 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     messages: session.messages,
     draftPlanSummary: session.draftPlanSummary,
     draftPlanText: session.draftPlanText,
+    planningDraftId: session.planningDraftId,
+    planningDraftHash: session.planningDraftHash,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
     terminalMode: session.terminalMode ?? 'chat',
@@ -1038,8 +1042,22 @@ export async function sendPlanningChatMessage(
           } as Extract<InAppPlanningChatResponse, { ok: true }>);
         }
 
+        let planningDraftId: string | undefined;
+        let planningDraftHash: string | undefined;
+        let reviewedPlanText = review.planText;
+        if (!deps.plannerReplyOverride && activeSession.conversation.draftDoctorEnabled) {
+          const approvedDraft = activeSession.conversation.approvedPlanningDraft;
+          if (!approvedDraft) {
+            throw new Error('The in-app review has no immutable doctor-approved draft.');
+          }
+          planningDraftId = approvedDraft.id;
+          planningDraftHash = approvedDraft.contentHash;
+          reviewedPlanText = approvedDraft.planText;
+        }
         activeSession.draftPlanSummary = review.summary;
-        activeSession.draftPlanText = review.planText;
+        activeSession.draftPlanText = reviewedPlanText;
+        activeSession.planningDraftId = planningDraftId;
+        activeSession.planningDraftHash = planningDraftHash;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
         return finishTurn({
@@ -1109,8 +1127,19 @@ export async function submitPlanningChatDraft(
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
     try {
+      let planText = session.draftPlanText!;
+      if (session.planningDraftId) {
+        const approvedDraft = session.conversation.approvedPlanningDraft;
+        if (!approvedDraft
+          || approvedDraft.id !== session.planningDraftId
+          || approvedDraft.contentHash !== session.planningDraftHash
+          || approvedDraft.planText !== session.draftPlanText) {
+          return { ok: false, error: 'This plan review no longer matches its immutable approved draft.' };
+        }
+        planText = approvedDraft.planText;
+      }
       const approved = await submitPlanningReview({
-        planText: session.draftPlanText,
+        planText,
         loadPlan: deps.loadGeneratedPlan,
       });
       if (!approved.ok) {
@@ -1119,6 +1148,9 @@ export async function submitPlanningChatDraft(
       session.status = 'submitted';
       session.submittedPlanName = approved.planName;
       session.submittedWorkflowId = approved.workflowId;
+      if (session.planningDraftId) {
+        session.conversation.markApprovedPlanningDraftSubmitted();
+      }
       session.updatedAt = new Date().toISOString();
       appendSessionMessage(
         session,
@@ -1164,6 +1196,9 @@ export function discardPlanningChatDraft(
   session.status = 'still_discussing';
   session.draftPlanSummary = undefined;
   session.draftPlanText = undefined;
+  session.planningDraftId = undefined;
+  session.planningDraftHash = undefined;
+  session.conversation.discardApprovedPlanningDraft();
   appendSessionMessage(session, 'system', 'Draft discarded. Ask Invoker to draft it again.');
   persistPlanningSession(session, deps.planningSessionStore, false);
   return { ok: true };
@@ -1173,6 +1208,7 @@ export function resetPlanningChat(
   request: InAppPlanningResetRequest,
   deps: { sessions: InAppPlanningChatSessions; planningSessionStore?: InAppPlanningSessionStore },
 ): InAppPlanningResetResponse {
+  deps.sessions.get(request.sessionId)?.conversation.reset();
   deps.sessions.delete(request.sessionId);
   deps.planningSessionStore?.deleteInAppPlanningSession(request.sessionId);
   return { ok: true };
@@ -1299,8 +1335,11 @@ export async function rebindPlanningChatRepo(
     session.conversation = conversation;
 
     if (decision.action === 'invalidate_and_block_submit') {
+      session.conversation.discardApprovedPlanningDraft();
       session.draftPlanSummary = undefined;
       session.draftPlanText = undefined;
+      session.planningDraftId = undefined;
+      session.planningDraftHash = undefined;
       if (session.status === 'draft_ready') {
         session.status = 'still_discussing';
       }
@@ -1429,6 +1468,8 @@ export async function restorePlanningChatSessions(
       worktreeBranch: record.worktreeBranch,
       draftPlanSummary: record.draftPlanSummary,
       draftPlanText: record.draftPlanText,
+      planningDraftId: record.planningDraftId,
+      planningDraftHash: record.planningDraftHash,
       submittedWorkflowId: record.submittedWorkflowId,
       submittedPlanName: record.submittedPlanName,
       terminalMode: record.terminalMode ?? 'chat',
@@ -1462,9 +1503,18 @@ export async function restorePlanningChatSessions(
     }
 
     if (session.status === 'draft_ready') {
-      if (!session.draftPlanText) {
+      const restoredApproved = conversation.approvedPlanningDraft;
+      const immutableDraftMissing = Boolean(session.planningDraftId)
+        && (!restoredApproved
+          || restoredApproved.id !== session.planningDraftId
+          || restoredApproved.contentHash !== session.planningDraftHash
+          || restoredApproved.planText !== session.draftPlanText);
+      if (!session.draftPlanText || immutableDraftMissing) {
         session.status = 'still_discussing';
         session.draftPlanSummary = undefined;
+        session.draftPlanText = undefined;
+        session.planningDraftId = undefined;
+        session.planningDraftHash = undefined;
         appendSessionMessage(
           session,
           'system',

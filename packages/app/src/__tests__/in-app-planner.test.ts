@@ -2701,6 +2701,63 @@ describe('plan draft sidecar mirror', () => {
   });
 });
 
+describe('immutable in-app planning draft submission', () => {
+  it('submits the exact doctor-approved draft id and rejects a mismatched review copy', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const conversation = new PlanConversation({
+        threadTs: 'immutable-in-app',
+        conversationRepo,
+        draftDoctor: vi.fn().mockResolvedValue({ ok: true, diagnostics: [] }),
+      });
+      vi.spyOn(conversation, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+      await conversation.sendMessage('draft the plan');
+      const approved = conversation.approvedPlanningDraft;
+      if (!approved) throw new Error('expected immutable approved draft');
+
+      const now = new Date().toISOString();
+      const session: InAppPlanningChatSession = {
+        id: 'immutable-in-app',
+        title: 'Immutable plan',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+        status: 'draft_ready',
+        messages: [],
+        conversation,
+        draftPlanText: approved.planText,
+        draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+        planningDraftId: approved.id,
+        planningDraftHash: approved.contentHash,
+        createdAt: now,
+        updatedAt: now,
+        nextMessageId: 1,
+      };
+      const sessions = new Map([[session.id, session]]);
+      const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Mock Plan', workflowId: 'wf-1' });
+
+      const submitted = await submitPlanningChatDraft({ sessionId: session.id }, {
+        sessions,
+        loadGeneratedPlan,
+      });
+
+      expect(submitted.ok).toBe(true);
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(approved.planText);
+      expect(conversation.approvedPlanningDraft?.status).toBe('submitted');
+
+      session.status = 'draft_ready';
+      session.draftPlanText = `${approved.planText}\n# changed`;
+      const rejected = await submitPlanningChatDraft({ sessionId: session.id }, {
+        sessions,
+        loadGeneratedPlan,
+      });
+      expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining('immutable approved draft') });
+    } finally {
+      adapter.close();
+    }
+  });
+});
+
 describe('createPlanningCommandBuilderFromRegistry', () => {
   it('delegates planning command construction to the selected registry tool', () => {
     const buildPlanningCommand = vi.fn(() => ({ command: 'codex', args: ['--model', 'fast', 'prompt'] }));
