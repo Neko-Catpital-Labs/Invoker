@@ -172,6 +172,26 @@ export const SCHEMA_DDL = `
         updated_at TEXT DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS planning_drafts (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        plan_text TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('current', 'superseded', 'submitted')),
+        created_at TEXT NOT NULL,
+        superseded_at TEXT,
+        submitted_at TEXT,
+        UNIQUE(conversation_id, version)
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_planning_drafts_current
+        ON planning_drafts(conversation_id)
+        WHERE status = 'current';
+
+      CREATE INDEX IF NOT EXISTS idx_planning_drafts_conversation_version
+        ON planning_drafts(conversation_id, version DESC);
+
       CREATE TABLE IF NOT EXISTS conversation_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         thread_ts TEXT NOT NULL,
@@ -199,6 +219,7 @@ export const SCHEMA_DDL = `
       CREATE TABLE IF NOT EXISTS slack_plan_drafts (
         draft_id TEXT NOT NULL,
         version INTEGER NOT NULL,
+        planning_draft_id TEXT,
         channel_id TEXT NOT NULL,
         thread_ts TEXT NOT NULL,
         message_ts TEXT,
@@ -245,6 +266,8 @@ export const SCHEMA_DDL = `
         confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
         draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
         draft_plan_text TEXT,
+        planning_draft_id TEXT,
+        planning_draft_hash TEXT,
         submitted_workflow_id TEXT,
         submitted_plan_name TEXT,
         terminal_mode TEXT NOT NULL DEFAULT 'chat' CHECK (terminal_mode IN ('chat', 'tmux')),
@@ -647,6 +670,9 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_id TEXT',
   "ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed'))",
   'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_error TEXT',
+  'ALTER TABLE slack_plan_drafts ADD COLUMN planning_draft_id TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_id TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_hash TEXT',
 ];
 
 /**

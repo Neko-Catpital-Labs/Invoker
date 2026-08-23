@@ -466,6 +466,8 @@ describe('SQLiteAdapter', () => {
         'confirmation_mode',
         'draft_plan_summary_json',
         'draft_plan_text',
+        'planning_draft_id',
+        'planning_draft_hash',
         'submitted_workflow_id',
         'submitted_plan_name',
         'terminal_mode',

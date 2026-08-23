@@ -54,6 +54,7 @@ import type {
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
+  PlanningDraft,
   SlackLaunchContext,
   SlackPlanDraft,
   SlackPendingConfirmation,
@@ -635,6 +636,8 @@ type InAppPlanningSessionRow = {
   worktree_branch?: unknown;
   draft_plan_summary_json?: unknown;
   draft_plan_text?: unknown;
+  planning_draft_id?: unknown;
+  planning_draft_hash?: unknown;
   submitted_workflow_id?: unknown;
   submitted_plan_name?: unknown;
   terminal_mode?: unknown;
@@ -1398,6 +1401,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
           worktree_branch,
           draft_plan_summary_json,
           draft_plan_text,
+          planning_draft_id,
+          planning_draft_hash,
           submitted_workflow_id,
           submitted_plan_name,
           terminal_mode,
@@ -1412,7 +1417,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           active_turn_error,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
@@ -1425,6 +1430,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
           worktree_branch = excluded.worktree_branch,
           draft_plan_summary_json = excluded.draft_plan_summary_json,
           draft_plan_text = excluded.draft_plan_text,
+          planning_draft_id = excluded.planning_draft_id,
+          planning_draft_hash = excluded.planning_draft_hash,
           submitted_workflow_id = excluded.submitted_workflow_id,
           submitted_plan_name = excluded.submitted_plan_name,
           terminal_mode = excluded.terminal_mode,
@@ -1452,6 +1459,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.worktreeBranch ?? null,
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
           record.draftPlanText ?? null,
+          record.planningDraftId ?? null,
+          record.planningDraftHash ?? null,
           record.submittedWorkflowId ?? null,
           record.submittedPlanName ?? null,
           record.terminalMode ?? 'chat',
@@ -1533,6 +1542,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'draftPlanText')) {
         setClauses.push('draft_plan_text = ?');
         values.push(patch.draftPlanText ?? null);
+      }
+      if (Object.hasOwn(patch, 'planningDraftId')) {
+        setClauses.push('planning_draft_id = ?');
+        values.push(patch.planningDraftId ?? null);
+      }
+      if (Object.hasOwn(patch, 'planningDraftHash')) {
+        setClauses.push('planning_draft_hash = ?');
+        values.push(patch.planningDraftHash ?? null);
       }
       if (Object.hasOwn(patch, 'submittedWorkflowId')) {
         setClauses.push('submitted_workflow_id = ?');
@@ -2335,6 +2352,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
       this.db.run('DELETE FROM slack_pending_confirmations WHERE thread_ts = ?', [threadTs]);
       this.db.run('DELETE FROM conversation_messages WHERE thread_ts = ?', [threadTs]);
+      this.db.run('DELETE FROM planning_drafts WHERE conversation_id = ?', [threadTs]);
       this.db.run('DELETE FROM conversations WHERE thread_ts = ?', [threadTs]);
     });
   }
@@ -2390,12 +2408,106 @@ export class SQLiteAdapter implements PersistenceAdapter {
           SELECT thread_ts FROM conversations WHERE updated_at < ?
         )
       `, [cutoffIso]);
+      this.db.run(`
+        DELETE FROM planning_drafts WHERE conversation_id IN (
+          SELECT thread_ts FROM conversations WHERE updated_at < ?
+        )
+      `, [cutoffIso]);
       this.db.run(
         'DELETE FROM conversations WHERE updated_at < ?',
         [cutoffIso],
       );
       return this.db.getRowsModified();
     });
+  }
+
+  private mapPlanningDraftRow(row: Record<string, unknown>): PlanningDraft {
+    return {
+      id: row.id as string,
+      conversationId: row.conversation_id as string,
+      version: Number(row.version),
+      planText: row.plan_text as string,
+      contentHash: row.content_hash as string,
+      status: row.status as PlanningDraft['status'],
+      createdAt: row.created_at as string,
+      ...(typeof row.superseded_at === 'string' ? { supersededAt: row.superseded_at } : {}),
+      ...(typeof row.submitted_at === 'string' ? { submittedAt: row.submitted_at } : {}),
+    };
+  }
+
+  createCurrentPlanningDraft(
+    input: Omit<PlanningDraft, 'version' | 'status' | 'supersededAt' | 'submittedAt'>,
+  ): PlanningDraft {
+    return this.runTransaction(() => {
+      const previous = this.queryOne(
+        `SELECT COALESCE(MAX(version), 0) AS version
+         FROM planning_drafts
+         WHERE conversation_id = ?`,
+        [input.conversationId],
+      );
+      const version = Number(previous?.version ?? 0) + 1;
+      this.execRun(
+        `UPDATE planning_drafts
+         SET status = 'superseded', superseded_at = ?
+         WHERE conversation_id = ? AND status = 'current'`,
+        [input.createdAt, input.conversationId],
+      );
+      this.execRun(
+        `INSERT INTO planning_drafts (
+           id, conversation_id, version, plan_text, content_hash, status, created_at
+         ) VALUES (?, ?, ?, ?, ?, 'current', ?)`,
+        [
+          input.id,
+          input.conversationId,
+          version,
+          input.planText,
+          input.contentHash,
+          input.createdAt,
+        ],
+      );
+      return { ...input, version, status: 'current' };
+    });
+  }
+
+  loadCurrentPlanningDraft(conversationId: string): PlanningDraft | undefined {
+    const row = this.queryOne(
+      `SELECT * FROM planning_drafts
+       WHERE conversation_id = ? AND status = 'current'`,
+      [conversationId],
+    );
+    return row ? this.mapPlanningDraftRow(row) : undefined;
+  }
+
+  loadPlanningDraft(id: string): PlanningDraft | undefined {
+    const row = this.queryOne('SELECT * FROM planning_drafts WHERE id = ?', [id]);
+    return row ? this.mapPlanningDraftRow(row) : undefined;
+  }
+
+  supersedePlanningDraft(id: string, supersededAt: string): void {
+    this.execRun(
+      `UPDATE planning_drafts
+       SET status = 'superseded', superseded_at = ?
+       WHERE id = ? AND status = 'current'`,
+      [supersededAt, id],
+    );
+  }
+
+  supersedeCurrentPlanningDraft(conversationId: string, supersededAt: string): void {
+    this.execRun(
+      `UPDATE planning_drafts
+       SET status = 'superseded', superseded_at = ?
+       WHERE conversation_id = ? AND status = 'current'`,
+      [supersededAt, conversationId],
+    );
+  }
+
+  markPlanningDraftSubmitted(id: string, submittedAt: string): void {
+    this.execRun(
+      `UPDATE planning_drafts
+       SET status = 'submitted', submitted_at = ?
+       WHERE id = ? AND status = 'current'`,
+      [submittedAt, id],
+    );
   }
 
   // ── Conversation Messages ──────────────────────────────
@@ -2480,12 +2592,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
   saveSlackPlanDraft(draft: SlackPlanDraft): void {
     this.execRun(`
       INSERT OR REPLACE INTO slack_plan_drafts
-        (draft_id, version, channel_id, thread_ts, message_ts, slack_file_id, plan_text, content_hash, summary_json,
+        (draft_id, version, planning_draft_id, channel_id, thread_ts, message_ts, slack_file_id, plan_text, content_hash, summary_json,
          status, repo_url, harness_preset, working_dir, requested_by, confirmation_mode, created_at, decided_at, decided_by, execution_key, workflow_ids_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       draft.draftId,
       draft.version,
+      draft.planningDraftId ?? null,
       draft.channelId,
       draft.threadTs,
       draft.messageTs ?? null,
@@ -2594,6 +2707,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return {
       draftId: row.draft_id as string,
       version: Number(row.version),
+      planningDraftId: typeof row.planning_draft_id === 'string' ? row.planning_draft_id : undefined,
       channelId: row.channel_id as string,
       threadTs: row.thread_ts as string,
       messageTs: typeof row.message_ts === 'string' ? row.message_ts : undefined,
@@ -3351,6 +3465,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         messages,
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
         ...(typeof row.draft_plan_text === 'string' ? { draftPlanText: row.draft_plan_text } : {}),
+        ...(typeof row.planning_draft_id === 'string' ? { planningDraftId: row.planning_draft_id } : {}),
+        ...(typeof row.planning_draft_hash === 'string' ? { planningDraftHash: row.planning_draft_hash } : {}),
         ...(typeof row.submitted_workflow_id === 'string' ? { submittedWorkflowId: row.submitted_workflow_id } : {}),
         ...(typeof row.submitted_plan_name === 'string' ? { submittedPlanName: row.submitted_plan_name } : {}),
         terminalMode,
