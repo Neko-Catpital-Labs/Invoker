@@ -441,7 +441,7 @@ tasks:
   });
 
   describe('approved-draft repair budget restart repro', () => {
-    it.fails('keeps the replacement budget after restoring a prior doctor-approved draft', async () => {
+    it('keeps the replacement budget after restoring a prior doctor-approved draft', async () => {
       const threadTs = 'ts-restart-doctor-budget';
       const first = new PlanConversation({
         threadTs,
@@ -471,6 +471,107 @@ tasks:
 
       expect(rejectingDoctor).toHaveBeenCalledTimes(3);
       expect(reply).toContain('(2 repair turns attempted)');
+    });
+  });
+
+  describe('immutable doctor-approved drafts', () => {
+    it('restores the exact doctor-approved draft without recovering YAML from chat', async () => {
+      const doctor = vi.fn().mockResolvedValue({ ok: true, diagnostics: [] });
+      const first = new PlanConversation({
+        threadTs: 'ts-approved-restart',
+        conversationRepo: repo,
+        draftDoctor: doctor,
+      });
+      mockCursorResponse(VALID_YAML_PLAN);
+      await first.sendMessage('Draft the plan');
+      const stored = first.approvedPlanningDraft;
+
+      const recovered = new PlanConversation({
+        threadTs: 'ts-approved-restart',
+        conversationRepo: repo,
+        draftDoctor: doctor,
+      });
+      await recovered.init();
+
+      expect(recovered.approvedPlanningDraft?.id).toBe(stored?.id);
+      expect(recovered.getDraftedPlan()).toBe(stored?.planText);
+    });
+
+    it('does not classify unvalidated YAML recovered from chat as doctor-approved', async () => {
+      repo.saveConversation('ts-unvalidated-chat-yaml', [
+        { role: 'assistant', content: VALID_YAML_PLAN },
+      ]);
+      const recovered = new PlanConversation({
+        threadTs: 'ts-unvalidated-chat-yaml',
+        conversationRepo: repo,
+        draftDoctor: vi.fn().mockResolvedValue({ ok: true, diagnostics: [] }),
+      });
+
+      await recovered.init();
+
+      expect(recovered.approvedPlanningDraft).toBeNull();
+      expect(recovered.getDraftedPlan()).toBeNull();
+    });
+
+    it('keeps the current approved draft when a replacement is rejected', async () => {
+      const doctor = vi.fn()
+        .mockResolvedValueOnce({ ok: true, diagnostics: [] })
+        .mockResolvedValueOnce({ ok: false, diagnostics: ['still invalid'] });
+      const conversation = new PlanConversation({
+        threadTs: 'ts-rejected-replacement',
+        conversationRepo: repo,
+        draftDoctor: doctor,
+        planDoctorRepairLimit: 0,
+      });
+      mockCursorResponse(VALID_YAML_PLAN);
+      await conversation.sendMessage('Draft the plan');
+      const approved = conversation.approvedPlanningDraft;
+
+      mockCursorResponse(VALID_YAML_PLAN.replace('Test Plan', 'Rejected Plan'));
+      const reply = await conversation.sendMessage('Replace it');
+
+      expect(reply).toContain('Draft not shown: the plan doctor rejected it.');
+      expect(conversation.approvedPlanningDraft?.id).toBe(approved?.id);
+      expect(conversation.getDraftedPlan()).toBe(approved?.planText);
+    });
+
+    it('fails closed when an approved draft cannot be persisted', async () => {
+      const conversation = new PlanConversation({
+        threadTs: 'ts-draft-write-failure',
+        conversationRepo: repo,
+        draftDoctor: vi.fn().mockResolvedValue({ ok: true, diagnostics: [] }),
+      });
+      vi.spyOn(repo.planningDrafts, 'createCurrent').mockImplementation(() => {
+        throw new Error('database unavailable');
+      });
+      mockCursorResponse(VALID_YAML_PLAN);
+
+      const reply = await conversation.sendMessage('Draft the plan');
+
+      expect(reply).toContain('approved plan could not be persisted');
+      expect(conversation.lastTurnDraftPlanText).toBeNull();
+      expect(conversation.approvedPlanningDraft).toBeNull();
+    });
+
+    it('preserves the current approved draft when replacement persistence fails', async () => {
+      const conversation = new PlanConversation({
+        threadTs: 'ts-replacement-write-failure',
+        conversationRepo: repo,
+        draftDoctor: vi.fn().mockResolvedValue({ ok: true, diagnostics: [] }),
+      });
+      mockCursorResponse(VALID_YAML_PLAN);
+      await conversation.sendMessage('Draft the plan');
+      const approved = conversation.approvedPlanningDraft;
+      vi.spyOn(repo.planningDrafts, 'createCurrent').mockImplementation(() => {
+        throw new Error('database unavailable');
+      });
+      mockCursorResponse(VALID_YAML_PLAN.replace('Test Plan', 'Lost Replacement'));
+
+      const reply = await conversation.sendMessage('Replace it');
+
+      expect(reply).toContain('approved plan could not be persisted');
+      expect(conversation.approvedPlanningDraft?.id).toBe(approved?.id);
+      expect(conversation.getDraftedPlan()).toBe(approved?.planText);
     });
   });
 });
