@@ -19,35 +19,35 @@
 
   --radius: 10px;
 
-  --background: 10 10 10;
-  --foreground: 250 250 250;
-  --card: 23 23 23;
-  --card-foreground: 250 250 250;
-  --popover: 23 23 23;
-  --popover-foreground: 250 250 250;
-  --primary: 229 229 229;
-  --primary-foreground: 23 23 23;
-  --secondary: 38 38 38;
-  --secondary-foreground: 250 250 250;
-  --muted: 38 38 38;
-  --muted-foreground: 161 161 161;
-  --accent: 64 64 64;
-  --accent-foreground: 250 250 250;
+  --background: 33 12 24;
+  --foreground: 253 242 248;
+  --card: 48 20 36;
+  --card-foreground: 253 242 248;
+  --popover: 48 20 36;
+  --popover-foreground: 253 242 248;
+  --primary: 236 72 153;
+  --primary-foreground: 255 241 248;
+  --secondary: 66 30 50;
+  --secondary-foreground: 253 242 248;
+  --muted: 66 30 50;
+  --muted-foreground: 216 180 200;
+  --accent: 96 44 72;
+  --accent-foreground: 253 242 248;
   --destructive: 255 101 104;
   --destructive-foreground: 254 226 226;
-  --ring: 115 115 115;
-  --sidebar: 23 23 23;
-  --sidebar-foreground: 250 250 250;
-  --sidebar-accent: 38 38 38;
-  --sidebar-accent-foreground: 250 250 250;
-  --sidebar-ring: 82 82 82;
+  --ring: 236 72 153;
+  --sidebar: 48 20 36;
+  --sidebar-foreground: 253 242 248;
+  --sidebar-accent: 66 30 50;
+  --sidebar-accent-foreground: 253 242 248;
+  --sidebar-ring: 219 39 119;
 
-  --border-color: rgb(255 255 255 / 0.07);
-  --border-color-strong: rgb(255 255 255 / 0.12);
-  --input-color: rgb(255 255 255 / 0.15);
+  --border-color: rgb(255 192 220 / 0.10);
+  --border-color-strong: rgb(255 192 220 / 0.16);
+  --input-color: rgb(255 192 220 / 0.18);
 
   --graph-canvas: var(--background);
-  --graph-grid: rgb(255 255 255 / 0.06);
+  --graph-grid: rgb(255 192 220 / 0.07);
   --graph-controls: rgb(var(--card));
   --graph-controls-border: var(--border-color);
 }
