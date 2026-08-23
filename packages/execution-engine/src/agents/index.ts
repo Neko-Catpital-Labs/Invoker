@@ -11,6 +11,7 @@ export { CursorExecutionAgent, type CursorExecutionAgentConfig } from './cursor-
 export { CursorPlanningAgent, type CursorPlanningAgentConfig } from './cursor-planning-agent.js';
 export { OmpPlanningAgent, type OmpPlanningAgentConfig } from './omp-planning-agent.js';
 export { CodexPlanningAgent, type CodexPlanningAgentConfig } from './codex-planning-agent.js';
+export { ClaudePlanningAgent, type ClaudePlanningAgentConfig } from './claude-planning-agent.js';
 
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent, type ClaudeExecutionAgentConfig } from './claude-execution-agent.js';
@@ -22,6 +23,7 @@ import { CursorExecutionAgent, type CursorExecutionAgentConfig } from './cursor-
 import { CursorPlanningAgent, type CursorPlanningAgentConfig } from './cursor-planning-agent.js';
 import { OmpPlanningAgent, type OmpPlanningAgentConfig } from './omp-planning-agent.js';
 import { CodexPlanningAgent, type CodexPlanningAgentConfig } from './codex-planning-agent.js';
+import { ClaudePlanningAgent, type ClaudePlanningAgentConfig } from './claude-planning-agent.js';
 import { CodexSessionDriver } from '../codex-session-driver.js';
 import { ClaudeSessionDriver } from '../claude-session-driver.js';
 import { OmpSessionDriver } from '../omp-session-driver.js';
@@ -39,6 +41,7 @@ export function registerBuiltinAgents(opts?: {
   cursor?: CursorPlanningAgentConfig;
   ompPlanning?: OmpPlanningAgentConfig;
   codexPlanning?: CodexPlanningAgentConfig;
+  claudePlanning?: ClaudePlanningAgentConfig;
 }): AgentRegistry {
   const registry = new AgentRegistry();
   registry.registerExecution(new ClaudeExecutionAgent(opts?.claude), new ClaudeSessionDriver());
@@ -50,5 +53,6 @@ export function registerBuiltinAgents(opts?: {
   registry.registerPlanning(new CursorPlanningAgent(opts?.cursor));
   registry.registerPlanning(new OmpPlanningAgent(opts?.ompPlanning));
   registry.registerPlanning(new CodexPlanningAgent(opts?.codexPlanning));
+  registry.registerPlanning(new ClaudePlanningAgent(opts?.claudePlanning));
   return registry;
 }
