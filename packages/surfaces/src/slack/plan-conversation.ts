@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import type { ConversationRepository } from '@invoker/data-store';
+import type { ConversationRepository, PlanningDraft } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import {
@@ -526,6 +526,7 @@ export class PlanConversation {
   private _lastTurnDraftFromSidecarFile = false;
   private _lastTurnPlanIntentSignal: PlanIntentSignal | null = null;
   private lastKnownGoodPlanText: string | null = null;
+  private _approvedPlanningDraft: PlanningDraft | null = null;
   private harnessSessionDriver?: HarnessSessionDriver;
   private _harnessSessionId?: string;
   private onHarnessSessionId?: (sessionId: string) => void;
@@ -606,6 +607,8 @@ export class PlanConversation {
       })).filter((m) => m.content.length > 0);
       this._planSubmitted = saved.planSubmitted;
       this.mode = saved.mode ?? this.mode;
+      this._approvedPlanningDraft = this.conversationRepo.planningDrafts.getCurrent(this.threadTs) ?? null;
+      this.lastKnownGoodPlanText = this._approvedPlanningDraft?.planText ?? null;
 
       this.log('plan-conversation', 'info', `Restored conversation ${this.threadTs}: ${saved.messages.length} messages`);
     } catch (err) {
@@ -681,6 +684,25 @@ export class PlanConversation {
       message = gated.message;
       finalFormatted = gated.formatted;
     }
+    if (nextDraft && this.draftDoctor && this.conversationRepo && this.threadTs) {
+      try {
+        this._approvedPlanningDraft = this.conversationRepo.planningDrafts.createCurrent(
+          this.threadTs,
+          nextDraft,
+        );
+        nextDraft = this._approvedPlanningDraft.planText;
+      } catch (error) {
+        this.log(
+          'plan-conversation',
+          'error',
+          `Failed to persist approved planning draft ${this.threadTs}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        nextDraft = null;
+        message = 'Draft not shown: the approved plan could not be persisted.\n\nNothing was submitted.';
+      }
+    }
     this._lastTurnDraftPlanText = nextDraft;
     this._lastTurnDraftFromSidecarFile = sidecarDraftSelected && Boolean(nextDraft);
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
@@ -717,7 +739,7 @@ export class PlanConversation {
     turn: number,
   ): Promise<{ planText: string | null; message: string; formatted: ReturnType<typeof formatCodexPlannerStdout> }> {
     const startedAt = Date.now();
-    const isFirstDraft = !this.lastKnownGoodPlanText;
+    const isFirstDraft = !(this._approvedPlanningDraft || this.lastKnownGoodPlanText);
     const repairLimit = this.resolvePlanDoctorRepairLimit(isFirstDraft);
     let planText = initialPlanText;
     let message = initialMessage;
@@ -836,6 +858,31 @@ export class PlanConversation {
     return this._lastTurnDraftPlanText;
   }
 
+  get approvedPlanningDraft(): PlanningDraft | null {
+    return this._approvedPlanningDraft;
+  }
+
+  get draftDoctorEnabled(): boolean {
+    return Boolean(this.draftDoctor);
+  }
+
+  markApprovedPlanningDraftSubmitted(): void {
+    if (!this._approvedPlanningDraft || !this.conversationRepo) return;
+    this.conversationRepo.planningDrafts.markSubmitted(this._approvedPlanningDraft.id);
+    this._approvedPlanningDraft = this.conversationRepo.planningDrafts.get(
+      this._approvedPlanningDraft.id,
+    ) ?? this._approvedPlanningDraft;
+  }
+
+  discardApprovedPlanningDraft(): void {
+    if (this._approvedPlanningDraft && this.conversationRepo) {
+      this.conversationRepo.planningDrafts.supersede(this._approvedPlanningDraft.id);
+    }
+    this._approvedPlanningDraft = null;
+    this._lastTurnDraftPlanText = null;
+    this.lastKnownGoodPlanText = null;
+  }
+
   /**
    * Whether this turn's draft came from the dedicated plan-draft sidecar file
    * (a deliberate planner act), rather than YAML embedded in the chat reply.
@@ -872,7 +919,11 @@ export class PlanConversation {
   getDraftedPlan(): string | null {
     // Only sendMessage may promote a candidate after its configured doctor
     // passes. Re-reading the sidecar here would bypass that review gate.
-    if (this.draftDoctor) return this._lastTurnDraftPlanText ?? this.lastKnownGoodPlanText;
+    if (this.draftDoctor) {
+      return this._lastTurnDraftPlanText
+        ?? this._approvedPlanningDraft?.planText
+        ?? this.lastKnownGoodPlanText;
+    }
     const fileDraft = this.readPlanDraftFile();
     if (fileDraft && summarizePlanText(fileDraft)) return fileDraft;
     return this._lastTurnDraftPlanText ?? this.extractLastPlanFromMessages() ?? this.lastKnownGoodPlanText;
@@ -967,6 +1018,7 @@ export class PlanConversation {
     this._lastTurnDraftFromSidecarFile = false;
     this._lastTurnPlanIntentSignal = null;
     this.lastKnownGoodPlanText = null;
+    this._approvedPlanningDraft = null;
     if (this.conversationRepo && this.threadTs) {
       this.conversationRepo.deleteConversation(this.threadTs);
     }
