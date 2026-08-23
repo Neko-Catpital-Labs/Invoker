@@ -2049,8 +2049,9 @@ function startHeadlessMode(): void {
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
           const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone', headlessExecMutationContext);
           if (acknowledgement) return acknowledgement;
+          let commandResult: unknown;
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
-            await runHeadless(args, {
+            commandResult = await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
@@ -2058,6 +2059,12 @@ function startHeadlessMode(): void {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
           });
+          if (!workflowId) {
+            return {
+              ok: true,
+              ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
+            };
+          }
           return { ok: true };
         });
         messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
