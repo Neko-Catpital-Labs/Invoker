@@ -121,11 +121,12 @@ describe('registerBuiltinAgents', () => {
   });
 
 
-  it('registers cursor, omp, and codex planning agents', () => {
+  it('registers cursor, omp, codex, and claude planning agents', () => {
     const registry = registerBuiltinAgents();
     expect(registry.getPlanningOrThrow('cursor').name).toBe('cursor');
     expect(registry.getPlanningOrThrow('omp').name).toBe('omp');
     expect(registry.getPlanningOrThrow('codex').name).toBe('codex');
+    expect(registry.getPlanningOrThrow('claude').name).toBe('claude');
   });
 
   it('threads the planning model into the cursor command', () => {
