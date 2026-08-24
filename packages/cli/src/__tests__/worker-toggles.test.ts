@@ -121,6 +121,14 @@ describe('desired-state worker toggles', () => {
     expect(readDesiredStateWorkerToggleValue(store, spec)).toBe(false);
   });
 
+  it('returns undefined for a missing row even after an earlier disabled row', () => {
+    const spec = findWorkerToggle('pr-maintenance')!;
+    const partialWithEarlyDisabled = memoryStore({
+      [PR_MAINTENANCE_TOGGLE_WORKER_KINDS[0]]: false,
+    });
+    expect(readDesiredStateWorkerToggleValue(partialWithEarlyDisabled, spec)).toBeUndefined();
+  });
+
   it('policy toggles are not desired-state toggles', () => {
     expect(isPolicyWorkerToggle(findWorkerToggle('auto-approve')!)).toBe(true);
     expect(isDesiredStateWorkerToggle(findWorkerToggle('auto-approve')!)).toBe(false);

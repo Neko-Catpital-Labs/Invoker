@@ -199,13 +199,14 @@ export function readDesiredStateWorkerToggleValue(
   spec: Extract<WorkerToggleSpec, { workerKinds: readonly string[] }>,
 ): boolean | undefined {
   let sawAny = false;
+  let allEnabled = true;
   for (const workerKind of spec.workerKinds) {
     const row = store.getWorkerDesiredState(workerKind);
     if (!row) return undefined;
     sawAny = true;
-    if (!row.desiredEnabled) return false;
+    if (!row.desiredEnabled) allEnabled = false;
   }
-  return sawAny ? true : undefined;
+  return sawAny ? allEnabled : undefined;
 }
 
 /** Writes desiredEnabled for every worker kind in a start-preset toggle. */
