@@ -718,7 +718,7 @@ export class PlanConversation {
     const tSave = Date.now();
 
     this.log('plan-conversation', 'info', `[PERF] sendMessage: init=${tInit - t0}ms, buildPrompt=${tPrompt - tInit}ms, cursor=${tCursor - tPrompt}ms, saveState=${tSave - tCursor}ms, total=${tSave - t0}ms`);
-    return message;
+    return nextDraft ? redactEmbeddedPlanFence(message) : message;
   }
 
   private resolvePlanDoctorRepairLimit(isFirstDraft: boolean): number {
@@ -1366,4 +1366,28 @@ export function extractYamlPlan(text: string): string | null {
     console.warn(`extractYamlPlan: YAML parse error: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
+}
+
+const PLAN_DRAFT_PLACEHOLDER = '_(Plan drafted — see the review card for the full plan.)_';
+
+/**
+ * Once a turn's plan draft is captured (lastTurnDraftPlanText), the raw
+ * ```yaml fence in the reply text is redundant: the review-card flow reads
+ * the draft from lastTurnDraftPlanText directly (see
+ * preparePlanningReview's extractDraftPlanText in slack-surface.ts), not by
+ * re-parsing this text. Leaving the fence in means Slack posts the entire
+ * plan as chunked chat text in addition to the review card.
+ */
+export function redactEmbeddedPlanFence(text: string): string {
+  const fenceStart = text.lastIndexOf('```yaml\n');
+  if (fenceStart === -1) return text;
+  const contentStart = fenceStart + '```yaml\n'.length;
+  const rest = text.slice(contentStart);
+  const closeMatch = rest.match(/^```\s*$/m);
+  const fenceEnd = closeMatch && closeMatch.index !== undefined
+    ? contentStart + closeMatch.index + closeMatch[0].length
+    : text.length;
+  const before = text.slice(0, fenceStart).trimEnd();
+  const after = text.slice(fenceEnd).trimStart();
+  return [before, PLAN_DRAFT_PLACEHOLDER, after].filter(Boolean).join('\n\n');
 }
