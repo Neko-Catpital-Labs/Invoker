@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { buildStandaloneHeadlessExecAcknowledgement } from '../ipc/gui-mutation-handlers.js';
 
 const MAIN = path.resolve(__dirname, '..', 'main.ts');
 
@@ -37,5 +38,21 @@ describe('standalone owner handler ordering', () => {
     expect(handler).toMatch(/commandResult = await runHeadless/);
     expect(handler).toMatch(/if \(!workflowId\)/);
     expect(handler).toMatch(/\.\.\.\(commandResult && typeof commandResult === 'object'/);
+  });
+
+  it('merges the runHeadless return into the unscoped message-bus ack', () => {
+    const commandResult = { inserted: true, row: { id: 'task-1' } };
+
+    expect(buildStandaloneHeadlessExecAcknowledgement(undefined, commandResult)).toEqual({
+      ok: true,
+      inserted: true,
+      row: { id: 'task-1' },
+    });
+  });
+
+  it('keeps the workflow-scoped ack as { ok: true } even when runHeadless returned data', () => {
+    const commandResult = { inserted: true, row: { id: 'task-1' } };
+
+    expect(buildStandaloneHeadlessExecAcknowledgement('workflow-123', commandResult)).toEqual({ ok: true });
   });
 });

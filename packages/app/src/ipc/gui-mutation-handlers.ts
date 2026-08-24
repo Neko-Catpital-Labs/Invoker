@@ -240,6 +240,19 @@ export function acknowledgeNoTrackHeadlessExec(
   throw new Error(`Fire-and-forget headless.exec could not be queued: ${reason}`);
 }
 
+export function buildStandaloneHeadlessExecAcknowledgement(
+  workflowId: string | undefined,
+  commandResult: unknown,
+): { ok: true } & Record<string, unknown> {
+  if (!workflowId) {
+    return {
+      ok: true,
+      ...(commandResult && typeof commandResult === 'object' ? (commandResult as Record<string, unknown>) : {}),
+    };
+  }
+  return { ok: true };
+}
+
 function isOwnerReadHandlerMissingError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '');
   const code = typeof error === 'object' && error !== null && 'code' in error
