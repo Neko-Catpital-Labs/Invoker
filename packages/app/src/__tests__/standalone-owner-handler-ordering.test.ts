@@ -26,17 +26,19 @@ describe('standalone owner handler ordering', () => {
     ).toBeLessThan(dispatcherIdx);
   });
 
-  it('standalone headless.exec merges runHeadless return into the message-bus ack when unscoped', () => {
+  it('routes standalone exec through executeHeadlessExec instead of a local runHeadless wrapper', () => {
     const source = readFileSync(MAIN, 'utf8');
-    const execIdx = source.indexOf("messageBus.onRequest('headless.exec'");
-    const nextHandler = source.indexOf("messageBus.onRequest('headless.gui-mutation'");
-    expect(execIdx, 'standalone headless.exec handler not found').toBeGreaterThan(-1);
-    expect(nextHandler, 'headless.gui-mutation handler not found after headless.exec').toBeGreaterThan(execIdx);
+    const ownerBlockStart = source.indexOf('if (standaloneMode && messageBus)');
+    const cliRunIdx = source.indexOf('await runHeadless(cliArgs, headlessDeps);');
+    expect(ownerBlockStart, 'standalone owner block not found').toBeGreaterThan(-1);
+    expect(cliRunIdx, 'CLI runHeadless(cliArgs) not found').toBeGreaterThan(ownerBlockStart);
 
-    const handler = source.slice(execIdx, nextHandler);
-    expect(handler).toMatch(/commandResult = await runHeadless/);
-    expect(handler).toMatch(/if \(!workflowId\)/);
-    expect(handler).toMatch(/\.\.\.\(commandResult && typeof commandResult === 'object'/);
+    const ownerBlock = source.slice(ownerBlockStart, cliRunIdx);
+    expect(ownerBlock).toContain('createGuiMutationTaskActions');
+    expect(ownerBlock).toContain('standaloneMutationActions.executeHeadlessExec');
+    expect(ownerBlock).not.toContain('standaloneRunHeadlessCommand');
+    expect(ownerBlock).not.toContain('classifyStandaloneHeadlessExecMutation');
+    expect(ownerBlock).not.toMatch(/await runHeadless\(/);
   });
 
   it('guards standalone startup worker writes behind readOnlyMode', () => {
