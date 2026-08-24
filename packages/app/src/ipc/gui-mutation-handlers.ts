@@ -804,8 +804,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     });
     if (!workflowId) {
       return {
-        ok: true,
         ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
+        ok: true,
       };
     }
     orchestrator.syncFromDb(workflowId);
