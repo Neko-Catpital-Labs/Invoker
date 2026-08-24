@@ -35,12 +35,22 @@ import {
 import { SLACK_BUG_SCAN_WORKER_KIND } from '@invoker/slack-bug-scan';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
-/** Worker kinds auto-started on every owner boot, regardless of config. */
+/**
+ * Worker kinds auto-started on every owner boot.
+ * Per-worker SQLite `worker_desired_states` still overrides in both directions.
+ * InvokerConfig must not contain a boolean that auto-starts or stops a worker.
+ */
 export const ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS = [
   PR_STATUS_WORKER_KIND,
+  CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+  DISK_HEADROOM_WORKER_KIND,
+  AUTO_APPROVE_WORKER_KIND,
 ] as const;
 
-/** PR-maintenance worker kind auto-started only when `prMaintenance.enabled` is true. */
+/**
+ * PR-maintenance worker kinds written by the onboarding / `worker toggles`
+ * `pr-maintenance` preset. Not part of the code always-on boot list.
+ */
 export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
@@ -52,25 +62,13 @@ export const SLACK_BUG_SCAN_AUTO_STARTED_WORKER_KINDS = [
   SLACK_BUG_SCAN_WORKER_KIND,
 ] as const;
 
-type AutoStartedOwnerWorkerKindOptions = {
-  prMaintenanceEnabled?: boolean;
-  slackBugScanEnabled?: boolean;
-  diskHeadroomCleanupEnabled?: boolean;
-  autoApproveAIFixes?: boolean;
-  infraRepairEnabled?: boolean;
-  autofixEnabled?: boolean;
-  reaperEnabled?: boolean;
-  workflowResumeEnabled?: boolean;
-  requeueEnabled?: boolean;
-  staleTaskCleanupEnabled?: boolean;
-  claudeOauthRefreshEnabled?: boolean;
-};
-
-type AutoStartedOwnerWorkerKindConfig = {
+/**
+ * Legacy config booleans that used to gate worker auto-start. Read only by
+ * one-shot migration into `worker_desired_states`; ignored for boot thereafter.
+ */
+export type LegacyWorkerStartConfigFlags = {
   prMaintenance?: { enabled?: boolean };
   slackBugScan?: { enabled?: boolean };
-  diskHeadroom?: { cleanupEnabled?: boolean };
-  autoApproveAIFixes?: boolean;
   infraRepair?: { enabled?: boolean };
   autofix?: { enabled?: boolean };
   e2eAutoFixEnabled?: boolean;
@@ -81,87 +79,96 @@ type AutoStartedOwnerWorkerKindConfig = {
   claudeOauthRefresh?: { enabled?: boolean };
 };
 
+type WorkerDesiredStatePersistence = Pick<
+  SQLiteAdapter,
+  'getWorkerDesiredState' | 'setWorkerDesiredState'
+>;
+
 /**
- * Compute the owner worker kinds that auto-start on boot. The PR-maintenance
- * and Slack bug-scan workers are gated on their own `enabled` flags. Saved
- * per-worker desired state still overrides in both directions.
+ * Map leftover config start flags onto worker kinds for one-shot migration.
+ * Policy flags (`autoApproveAIFixes`, `diskHeadroom.cleanupEnabled`) are not
+ * start flags and are not included.
  */
-export function autoStartedOwnerWorkerKinds(
-  options: AutoStartedOwnerWorkerKindOptions = {},
-): readonly string[] {
-  const workerKinds: string[] = [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS];
-  const hasWorkerGateOverrides = [
-    options.diskHeadroomCleanupEnabled,
-    options.autoApproveAIFixes,
-    options.infraRepairEnabled,
-    options.autofixEnabled,
-    options.reaperEnabled,
-    options.workflowResumeEnabled,
-    options.requeueEnabled,
-    options.slackBugScanEnabled,
-    options.staleTaskCleanupEnabled,
-    options.claudeOauthRefreshEnabled,
-  ].some((value) => value !== undefined);
-  if (options.prMaintenanceEnabled && !hasWorkerGateOverrides) {
-    workerKinds.push(PR_ADMIN_BYPASS_LAND_WORKER_KIND, INFRA_REPAIR_WORKER_KIND);
-    return workerKinds;
+export function legacyWorkerStartFlagSeeds(
+  config: LegacyWorkerStartConfigFlags,
+): ReadonlyArray<{ workerKind: string; desiredEnabled: boolean }> {
+  const seeds: Array<{ workerKind: string; desiredEnabled: boolean }> = [];
+  const push = (workerKind: string, desiredEnabled: boolean): void => {
+    seeds.push({ workerKind, desiredEnabled });
+  };
+
+  if (config.prMaintenance?.enabled === true) {
+    for (const workerKind of PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS) {
+      push(workerKind, true);
+    }
   }
-  if (options.prMaintenanceEnabled) {
-    workerKinds.push(...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS);
+  if (config.slackBugScan?.enabled === true) {
+    push(SLACK_BUG_SCAN_WORKER_KIND, true);
   }
-  if (options.diskHeadroomCleanupEnabled) {
-    workerKinds.push(DISK_HEADROOM_WORKER_KIND);
+  if (config.infraRepair?.enabled === true) {
+    push(INFRA_REPAIR_WORKER_KIND, true);
   }
-  if (options.autoApproveAIFixes) {
-    workerKinds.push(AUTO_APPROVE_WORKER_KIND);
+  if (config.autofix?.enabled === true) {
+    push(AUTO_FIX_WORKER_KIND, true);
   }
-  if (options.infraRepairEnabled) {
-    workerKinds.push(INFRA_REPAIR_WORKER_KIND);
+  if (config.e2eAutoFixEnabled === true) {
+    push(E2E_AUTOFIX_WORKER_KIND, true);
   }
-  if (options.autofixEnabled) {
-    workerKinds.push(AUTO_FIX_WORKER_KIND);
+  if (config.reaper?.enabled === true) {
+    push(REAPER_WORKER_KIND, true);
   }
-  if (options.reaperEnabled) {
-    workerKinds.push(REAPER_WORKER_KIND);
+  if (config.workflowResume?.enabled === true) {
+    push(WORKFLOW_RESUME_WORKER_KIND, true);
   }
-  if (options.workflowResumeEnabled) {
-    workerKinds.push(WORKFLOW_RESUME_WORKER_KIND);
+  if (config.requeueEnabled === true) {
+    push(REQUEUE_WORKER_KIND, true);
   }
-  if (options.requeueEnabled) {
-    workerKinds.push(REQUEUE_WORKER_KIND);
+  if (config.staleTaskCleanup?.enabled === true) {
+    push(IDLE_TASK_CLEANUP_WORKER_KIND, true);
   }
-  if (options.slackBugScanEnabled) {
-    workerKinds.push(...SLACK_BUG_SCAN_AUTO_STARTED_WORKER_KINDS);
+  // Default was on (`!== false`); only an explicit false needs a desired-state row.
+  if (config.claudeOauthRefresh?.enabled === false) {
+    push(CLAUDE_OAUTH_REFRESH_WORKER_KIND, false);
   }
-  if (options.staleTaskCleanupEnabled) {
-    workerKinds.push(IDLE_TASK_CLEANUP_WORKER_KIND);
-  }
-  if (options.claudeOauthRefreshEnabled) {
-    workerKinds.push(CLAUDE_OAUTH_REFRESH_WORKER_KIND);
-  }
-  return workerKinds;
+
+  return seeds;
 }
 
-/** Convenience wrapper: derive the auto-start list straight from Invoker config. */
+/**
+ * One-shot: seed missing `worker_desired_states` rows from leftover config
+ * start flags so existing owners keep the workers they already had enabled.
+ * Never overwrites an existing desired-state row. Config flags are ignored
+ * for auto-start after this runs.
+ */
+export function migrateWorkerDesiredStateFromLegacyConfig(
+  persistence: WorkerDesiredStatePersistence,
+  config: LegacyWorkerStartConfigFlags,
+): ReadonlyArray<{ workerKind: string; desiredEnabled: boolean }> {
+  const seeded: Array<{ workerKind: string; desiredEnabled: boolean }> = [];
+  for (const seed of legacyWorkerStartFlagSeeds(config)) {
+    if (persistence.getWorkerDesiredState(seed.workerKind) !== undefined) {
+      continue;
+    }
+    persistence.setWorkerDesiredState(seed.workerKind, seed.desiredEnabled);
+    seeded.push(seed);
+  }
+  return seeded;
+}
+
+/** Code always-on boot list. Desired state remains the overlay. */
+export function autoStartedOwnerWorkerKinds(): readonly string[] {
+  return [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS];
+}
+
+/**
+ * Boot auto-start list. Config booleans are ignored — on/off lives in
+ * `worker_desired_states` (plus the code always-on list). The unused
+ * `_config` parameter is kept so existing call sites compile unchanged.
+ */
 export function autoStartedOwnerWorkerKindsForConfig(
-  config?: AutoStartedOwnerWorkerKindConfig,
+  _config?: unknown,
 ): readonly string[] {
-  const workerKinds = autoStartedOwnerWorkerKinds({
-    prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled),
-    diskHeadroomCleanupEnabled: Boolean(config?.diskHeadroom?.cleanupEnabled),
-    autoApproveAIFixes: Boolean(config?.autoApproveAIFixes),
-    infraRepairEnabled: Boolean(config?.infraRepair?.enabled),
-    autofixEnabled: Boolean(config?.autofix?.enabled),
-    reaperEnabled: Boolean(config?.reaper?.enabled),
-    workflowResumeEnabled: Boolean(config?.workflowResume?.enabled),
-    requeueEnabled: Boolean(config?.requeueEnabled),
-    slackBugScanEnabled: Boolean(config?.slackBugScan?.enabled),
-    staleTaskCleanupEnabled: Boolean(config?.staleTaskCleanup?.enabled),
-    claudeOauthRefreshEnabled: config?.claudeOauthRefresh?.enabled !== false,
-  });
-  return config?.e2eAutoFixEnabled
-    ? [...workerKinds, E2E_AUTOFIX_WORKER_KIND]
-    : workerKinds;
+  return autoStartedOwnerWorkerKinds();
 }
 
 export interface WorkerRuntimeController {
