@@ -38,4 +38,26 @@ describe('standalone owner handler ordering', () => {
     expect(handler).toMatch(/if \(!workflowId\)/);
     expect(handler).toMatch(/\.\.\.\(commandResult && typeof commandResult === 'object'/);
   });
+
+  it('guards standalone startup worker writes behind readOnlyMode', () => {
+    const source = readFileSync(MAIN, 'utf8');
+
+    const dispatcherIdx = source.indexOf('startStandaloneLaunchDispatcher({');
+    const migrateIdx = source.lastIndexOf('migrateWorkerDesiredStateFromLegacyConfig(', dispatcherIdx);
+    const reconcileIdx = source.lastIndexOf('reconcileTerminalWorkerActionsOnStartup(persistence)', dispatcherIdx);
+
+    expect(migrateIdx, 'standalone migrateWorkerDesiredStateFromLegacyConfig call not found').toBeGreaterThan(-1);
+    expect(reconcileIdx, 'standalone reconcileTerminalWorkerActionsOnStartup call not found').toBeGreaterThan(-1);
+    expect(dispatcherIdx, 'startStandaloneLaunchDispatcher call not found').toBeGreaterThan(-1);
+    expect(reconcileIdx).toBeLessThan(dispatcherIdx);
+
+    const migrateGuardStart = source.lastIndexOf('if (!readOnlyMode) {', migrateIdx);
+    const reconcileGuardStart = source.lastIndexOf('if (!readOnlyMode) {', reconcileIdx);
+
+    expect(migrateGuardStart, 'migrateWorkerDesiredStateFromLegacyConfig must be guarded by readOnlyMode').toBeGreaterThan(-1);
+    expect(reconcileGuardStart, 'reconcileTerminalWorkerActionsOnStartup must be guarded by readOnlyMode').toBeGreaterThan(-1);
+
+    expect(source.slice(migrateGuardStart, migrateIdx)).not.toMatch(/\n\s*}\n/);
+    expect(source.slice(reconcileGuardStart, reconcileIdx)).not.toMatch(/\n\s*}\n/);
+  });
 });

@@ -2087,18 +2087,20 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
-        const seededDesiredStates = migrateWorkerDesiredStateFromLegacyConfig(
-          persistence,
-          invokerConfig as LegacyWorkerStartConfigFlags,
-        );
-        if (seededDesiredStates.length > 0) {
-          logger.info(
-            `migrated ${seededDesiredStates.length} legacy worker start flag(s) into desired state`,
-            {
-              module: 'init',
-              seeded: seededDesiredStates.map((seed) => `${seed.workerKind}=${seed.desiredEnabled}`),
-            },
+        if (!readOnlyMode) {
+          const seededDesiredStates = migrateWorkerDesiredStateFromLegacyConfig(
+            persistence,
+            invokerConfig as LegacyWorkerStartConfigFlags,
           );
+          if (seededDesiredStates.length > 0) {
+            logger.info(
+              `migrated ${seededDesiredStates.length} legacy worker start flag(s) into desired state`,
+              {
+                module: 'init',
+                seeded: seededDesiredStates.map((seed) => `${seed.workerKind}=${seed.desiredEnabled}`),
+              },
+            );
+          }
         }
         workerRuntimeController = createWorkerRuntimeController({
           registry: createRegisteredWorkerRegistry(),
@@ -2115,12 +2117,14 @@ function startHeadlessMode(): void {
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
-        const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
-        if (reconciledWorkerActions > 0) {
-          logger.info(
-            `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
-            { module: 'init' },
-          );
+        if (!readOnlyMode) {
+          const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
+          if (reconciledWorkerActions > 0) {
+            logger.info(
+              `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
+              { module: 'init' },
+            );
+          }
         }
         workerRuntimeController.startAutoStartedWorkers();
         // Owner discovery and exec handlers must exist before dispatch polling starts.
