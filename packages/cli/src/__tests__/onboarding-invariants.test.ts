@@ -4,7 +4,7 @@ import {
   assertNoSecretPrinted,
   assertOptionalToolPromptedBeforeInstall,
   assertRemoteTargetOnlyPersistedAfterAllChecksPass,
-  assertWorkerToggleHasSingleConfigSource,
+  assertWorkerToggleHasSingleSource,
 } from '../onboarding-invariants.js';
 
 describe('assertOptionalToolPromptedBeforeInstall', () => {
@@ -102,23 +102,41 @@ describe('assertNoSecretPrinted', () => {
   });
 });
 
-describe('assertWorkerToggleHasSingleConfigSource', () => {
-  it('passes for a real dotted InvokerConfig path', () => {
-    expect(() => assertWorkerToggleHasSingleConfigSource({ id: 'pr-maintenance', configPath: 'prMaintenance.enabled' })).not.toThrow();
+describe('assertWorkerToggleHasSingleSource', () => {
+  it('passes for a desired-state start preset', () => {
+    expect(() => assertWorkerToggleHasSingleSource({
+      id: 'pr-maintenance',
+      workerKinds: ['pr-admin-bypass-land', 'pr-orphan-repair'],
+    })).not.toThrow();
   });
 
-  it('passes for a real top-level InvokerConfig field', () => {
-    expect(() => assertWorkerToggleHasSingleConfigSource({ id: 'e2e-autofix', configPath: 'e2eAutoFixEnabled' })).not.toThrow();
+  it('passes for a policy config path', () => {
+    expect(() => assertWorkerToggleHasSingleSource({
+      id: 'auto-approve',
+      configPath: 'autoApproveAIFixes',
+    })).not.toThrow();
   });
 
   it('rejects a bare env var name — the exact disk-headroom-cleanup regression', () => {
-    expect(() => assertWorkerToggleHasSingleConfigSource({
+    expect(() => assertWorkerToggleHasSingleSource({
       id: 'disk-headroom-cleanup',
       configPath: 'INVOKER_DISK_CLEANUP_ENABLED',
     })).toThrow(/bare env var name/);
   });
 
-  it('rejects a malformed configPath', () => {
-    expect(() => assertWorkerToggleHasSingleConfigSource({ id: 'bad', configPath: 'foo..bar' })).toThrow(/malformed configPath/);
+  it('rejects a config start flag path', () => {
+    expect(() => assertWorkerToggleHasSingleSource({
+      id: 'pr-maintenance',
+      configPath: 'prMaintenance.enabled',
+    })).toThrow(/worker start flag/);
+  });
+
+  it('rejects declaring both or neither source', () => {
+    expect(() => assertWorkerToggleHasSingleSource({ id: 'bad' })).toThrow(/exactly one/);
+    expect(() => assertWorkerToggleHasSingleSource({
+      id: 'bad',
+      workerKinds: ['x'],
+      configPath: 'autoApproveAIFixes',
+    })).toThrow(/exactly one/);
   });
 });
