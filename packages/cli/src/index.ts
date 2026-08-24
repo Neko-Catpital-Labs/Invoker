@@ -51,7 +51,18 @@ import {
 } from './live-owner-bus.js';
 import { runMcpServer } from './mcp-server.js';
 import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
-import { applyWorkerToggle, findWorkerToggle, ONBOARDING_WORKER_TOGGLES, readWorkerToggleValue } from './worker-toggles.js';
+import {
+  applyDesiredStateWorkerToggle,
+  applyWorkerToggle,
+  findWorkerToggle,
+  isDesiredStateWorkerToggle,
+  isPolicyWorkerToggle,
+  ONBOARDING_WORKER_TOGGLES,
+  WORKER_TOGGLES,
+  openWorkerDesiredStateStore,
+  readDesiredStateWorkerToggleValue,
+  readWorkerToggleValue,
+} from './worker-toggles.js';
 import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
 
 const VERSION = '0.0.12';
@@ -198,7 +209,7 @@ function usage(): string {
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
-    '  worker toggles      Show or set the on/off state of optional owner workers (PR maintenance, e2e auto-fix, auto-approve, disk-headroom cleanup).',
+    '  worker toggles      Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
     '  auto-approve-authors  Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
     '',
     'Options:',
@@ -911,11 +922,11 @@ function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
 
 /**
  * `invoker-cli worker toggles [--enable <id>|--disable <id> ...]`
- * With no flags, prints each toggle's current state. Each flag applies
- * immediately, writing to ~/.invoker/config.json (or INVOKER_REPO_CONFIG_PATH).
+ * Start presets write SQLite desired state; policy toggles write config.
+ * When an owner is live, start presets also request live start/stop.
  */
-function runWorkerTogglesCommand(args: string[]): number {
-  const changes: Array<{ spec: ReturnType<typeof findWorkerToggle>; enabled: boolean }> = [];
+async function runWorkerTogglesCommand(args: string[]): Promise<number> {
+  const changes: Array<{ spec: NonNullable<ReturnType<typeof findWorkerToggle>>; enabled: boolean }> = [];
   for (let i = 0; i < args.length; i += 1) {
     const flag = args[i];
     if (flag !== '--enable' && flag !== '--disable') {
@@ -924,7 +935,7 @@ function runWorkerTogglesCommand(args: string[]): number {
     const id = args[++i];
     const spec = id ? findWorkerToggle(id) : undefined;
     if (!spec) {
-      const knownIds = ONBOARDING_WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
+      const knownIds = WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
       throw new Error(`Unknown worker toggle id: "${id ?? ''}". Known ids: ${knownIds}`);
     }
     changes.push({ spec, enabled: flag === '--enable' });
@@ -932,26 +943,78 @@ function runWorkerTogglesCommand(args: string[]): number {
 
   if (changes.length > 0) {
     const configPath = defaultConfigPath();
-    updateInvokerConfigFile(configPath, (config) => {
-      for (const { spec, enabled } of changes) {
-        Object.assign(config, applyWorkerToggle(config, spec!, enabled));
+    const policyChanges = changes.filter((change) => isPolicyWorkerToggle(change.spec));
+    const desiredChanges = changes.filter((change) => isDesiredStateWorkerToggle(change.spec));
+
+    if (policyChanges.length > 0) {
+      updateInvokerConfigFile(configPath, (config) => {
+        for (const { spec, enabled } of policyChanges) {
+          Object.assign(config, applyWorkerToggle(config, spec, enabled));
+        }
+      });
+    }
+
+    if (desiredChanges.length > 0) {
+      const store = await openWorkerDesiredStateStore();
+      try {
+        for (const { spec, enabled } of desiredChanges) {
+          applyDesiredStateWorkerToggle(store, spec, enabled);
+        }
+      } finally {
+        store.close?.();
       }
-    });
+      await tryLiveDesiredStateWorkerControl(desiredChanges);
+    }
+
     for (const { spec, enabled } of changes) {
-      process.stdout.write(`${spec!.label}: ${enabled ? 'on' : 'off'}\n`);
+      process.stdout.write(`${spec.label}: ${enabled ? 'on' : 'off'}\n`);
     }
     return 0;
   }
 
   const config = readInvokerConfigFile(defaultConfigPath());
-  process.stdout.write('Worker toggles\n');
-  for (const spec of ONBOARDING_WORKER_TOGGLES) {
-    const value = readWorkerToggleValue(config, spec);
-    const enabled = value ?? spec.defaultEnabled ?? false;
-    const state = enabled ? 'on' : 'off';
-    process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+  const store = await openWorkerDesiredStateStore();
+  try {
+    process.stdout.write('Worker toggles\n');
+    for (const spec of WORKER_TOGGLES) {
+      let value: boolean | undefined;
+      if (isDesiredStateWorkerToggle(spec)) {
+        value = readDesiredStateWorkerToggleValue(store, spec);
+      } else {
+        value = readWorkerToggleValue(config, spec);
+      }
+      const enabled = value ?? spec.defaultEnabled ?? false;
+      const state = enabled ? 'on' : 'off';
+      process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+    }
+  } finally {
+    store.close?.();
   }
   return 0;
+}
+
+async function tryLiveDesiredStateWorkerControl(
+  changes: ReadonlyArray<{ spec: Extract<NonNullable<ReturnType<typeof findWorkerToggle>>, { workerKinds: readonly string[] }>; enabled: boolean }>,
+): Promise<void> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await createDefaultMessageBus();
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) return;
+    for (const { spec, enabled } of changes) {
+      for (const kind of spec.workerKinds) {
+        await bus.request('headless.gui-mutation', {
+          channel: enabled ? 'invoker:start-worker' : 'invoker:stop-worker',
+          args: [kind],
+        });
+      }
+    }
+  } catch {
+    // Desired state is already persisted; live apply is best-effort.
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) disconnect.call(bus);
+  }
 }
 
 function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorkerRuntime {
@@ -1081,7 +1144,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       if (subcommand === 'toggles') {
-        return runWorkerTogglesCommand(argv.slice(2));
+        return await runWorkerTogglesCommand(argv.slice(2));
       }
       const registry = registerExternalWorkers(
         registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
