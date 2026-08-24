@@ -27,7 +27,7 @@ import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
 import { installBundledSkills } from './bundled-skills.js';
 import { runRemoteDoctorChecks } from './remote-doctor.js';
-import { applyWorkerToggle, ONBOARDING_WORKER_TOGGLES, readWorkerToggleValue } from './worker-toggles.js';
+import { applyWorkerToggle, isDesiredStateWorkerToggle, isPolicyWorkerToggle, ONBOARDING_WORKER_TOGGLES, openWorkerDesiredStateStore, applyDesiredStateWorkerToggle, readDesiredStateWorkerToggleValue, readWorkerToggleValue } from './worker-toggles.js';
 
 // ── Paths ────────────────────────────────────────────────────
 
@@ -1085,21 +1085,35 @@ async function runMachinesSetupJson(io: SetupIO, options: SetupDeps): Promise<nu
 async function runWorkerTogglesInteractive(io: SetupIO, assumeYes: boolean): Promise<void> {
   const configPath = defaultConfigPath();
   let config = readInvokerConfigFile(configPath);
-  let changed = false;
+  let configChanged = false;
   const summary: string[] = [];
+  const desiredStore = await openWorkerDesiredStateStore();
 
-  for (const spec of ONBOARDING_WORKER_TOGGLES) {
-    io.print(`\n${spec.label}: ${spec.description}`);
-    const current = readWorkerToggleValue(config, spec) ?? spec.defaultEnabled ?? false;
-    const enable = assumeYes ? current : await promptYes(io, `Enable ${spec.label}? [y/N] `);
-    if (enable !== current) {
-      config = applyWorkerToggle(config, spec, enable);
-      changed = true;
+  try {
+    for (const spec of ONBOARDING_WORKER_TOGGLES) {
+      io.print(`\n${spec.label}: ${spec.description}`);
+      let current: boolean;
+      if (isDesiredStateWorkerToggle(spec)) {
+        current = readDesiredStateWorkerToggleValue(desiredStore, spec) ?? spec.defaultEnabled ?? false;
+      } else {
+        current = readWorkerToggleValue(config, spec) ?? spec.defaultEnabled ?? false;
+      }
+      const enable = assumeYes ? current : await promptYes(io, `Enable ${spec.label}? [y/N] `);
+      if (enable !== current) {
+        if (isDesiredStateWorkerToggle(spec)) {
+          applyDesiredStateWorkerToggle(desiredStore, spec, enable);
+        } else if (isPolicyWorkerToggle(spec)) {
+          config = applyWorkerToggle(config, spec, enable);
+          configChanged = true;
+        }
+      }
+      summary.push(`${spec.label}: ${enable ? 'on' : 'off'}`);
     }
-    summary.push(`${spec.label}: ${enable ? 'on' : 'off'}`);
+  } finally {
+    desiredStore.close?.();
   }
 
-  if (changed) {
+  if (configChanged) {
     writeInvokerConfigFile(configPath, config);
   }
 
