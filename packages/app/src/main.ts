@@ -242,7 +242,7 @@ import {
   type GuiMutationRegistrationContext,
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
-import { acknowledgeNoTrackHeadlessExec, createGuiMutationTaskActions, logHeadlessExecReceived, registerGuiMutationIpcHandlers } from './ipc/gui-mutation-handlers.js';
+import { acknowledgeNoTrackHeadlessExec, buildStandaloneHeadlessExecAcknowledgement, createGuiMutationTaskActions, logHeadlessExecReceived, registerGuiMutationIpcHandlers } from './ipc/gui-mutation-handlers.js';
 import type { GuiMutationTaskActions, HeadlessExecMutationContext, HeadlessRunMutationPayload, HeadlessResumeMutationPayload } from './ipc/gui-mutation-handlers.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import {
@@ -2049,8 +2049,9 @@ function startHeadlessMode(): void {
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
           const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone', headlessExecMutationContext);
           if (acknowledgement) return acknowledgement;
+          let commandResult: unknown;
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
-            await runHeadless(args, {
+            commandResult = await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
@@ -2058,7 +2059,7 @@ function startHeadlessMode(): void {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
           });
-          return { ok: true };
+          return buildStandaloneHeadlessExecAcknowledgement(workflowId, commandResult);
         });
         messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
           noteStandaloneOwnerActivity();
