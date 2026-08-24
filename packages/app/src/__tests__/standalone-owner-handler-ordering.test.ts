@@ -27,7 +27,17 @@ describe('standalone owner handler ordering', () => {
     ).toBeLessThan(dispatcherIdx);
   });
 
-  it.todo('standalone headless.exec wires runHeadless into buildStandaloneHeadlessExecAcknowledgement');
+  it('standalone headless.exec wires runHeadless into buildStandaloneHeadlessExecAcknowledgement', () => {
+    const source = readFileSync(MAIN, 'utf8');
+    const execIdx = source.indexOf("messageBus.onRequest('headless.exec'");
+    const nextHandler = source.indexOf("messageBus.onRequest('headless.gui-mutation'");
+    expect(execIdx, 'standalone headless.exec handler not found').toBeGreaterThan(-1);
+    expect(nextHandler, 'headless.gui-mutation handler not found after headless.exec').toBeGreaterThan(execIdx);
+
+    const handler = source.slice(execIdx, nextHandler);
+    expect(handler).toMatch(/commandResult = await runHeadless/);
+    expect(handler).toMatch(/buildStandaloneHeadlessExecAcknowledgement\(workflowId, commandResult\)/);
+  });
 
   it('merges the runHeadless return into the unscoped message-bus ack', () => {
     const commandResult = { inserted: true, row: { id: 'task-1' } };
