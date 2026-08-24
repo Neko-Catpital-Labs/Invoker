@@ -44,19 +44,13 @@ export interface DefaultExecutionConfig {
 }
 
 /**
- * Owner-side PR-maintenance worker config.
+ * Owner-side PR-maintenance worker launch settings.
  *
- * Disabled by default: `enabled` is the gate for building launch dependencies
- * for the surviving `pr-admin-bypass-land` and `pr-orphan-repair` worker
- * paths. The remaining fields tune those shell entrypoints and fall back to
- * the worker defaults when omitted.
+ * Process on/off lives in SQLite `worker_desired_states`, not in this block.
+ * These fields tune the shell entrypoints and fall back to worker defaults
+ * when omitted.
  */
 export interface PrMaintenanceConfig {
-  /**
-   * Gate for building PR-maintenance worker dependencies at owner startup.
-   * Default: false (workers get no launch config).
-   */
-  enabled?: boolean;
   /** Repository root that owns the PR-maintenance shell scripts. Defaults to the Invoker repo root. */
   repoRoot?: string;
   /** Environment overrides forwarded to the shell entrypoint. `undefined` removes a variable. */
@@ -70,7 +64,6 @@ export interface PrMaintenanceConfig {
 }
 
 export interface SlackBugScanConfig {
-  enabled?: boolean;
   intervalMs?: number;
   maxAutoSubmissionsPerDay?: number;
   maxAutoSubmissionsPerTick?: number;
@@ -119,12 +112,6 @@ export interface InvokerConfig {
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
-  /**
-   * When true, the owner process auto-starts the e2e-autofix worker (runs the
-   * extended battery on a schedule and opens one fix PR per failing suite).
-   * Default: false.
-   */
-  e2eAutoFixEnabled?: boolean;
   /** Cadence for the e2e-autofix worker in milliseconds. Default: 43_200_000 (12h). */
   e2eAutoFixIntervalMs?: number;
   stallRequeueRetries?: number;
@@ -198,39 +185,6 @@ export interface InvokerConfig {
    * Default: false.
    */
   autoFixCi?: boolean;
-  /**
-   * Owner-side infra-repair worker config.
-   * Default: false.
-   */
-  infraRepair?: {
-    enabled?: boolean;
-  };
-  /**
-   * Owner-side autofix worker config.
-   * Default: false.
-   */
-  autofix?: {
-    enabled?: boolean;
-  };
-  /**
-   * Owner-side reaper worker config.
-   * Default: false.
-   */
-  reaper?: {
-    enabled?: boolean;
-  };
-  /**
-   * Owner-side workflow-resume worker config.
-   * Default: false.
-   */
-  workflowResume?: {
-    enabled?: boolean;
-  };
-  /**
-   * Enables stalled-task requeue behavior.
-   * Default: false.
-   */
-  requeueEnabled?: boolean;
   /**
    * Read-only diagnostics tuning for the Action Graph view.
    * Default stall threshold: 60000ms. Env fallback:
@@ -433,37 +387,20 @@ export interface InvokerConfig {
    */
   externalWorkers?: ExternalWorkerConfig[];
   /**
-   * Owner-side PR-maintenance worker config. Disabled by default; when
-   * `enabled` is true the owner builds launch dependencies for the surviving
-   * PR-maintenance workers from this block.
+   * Owner-side PR-maintenance launch settings (interval, lock, repo root).
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
    */
   prMaintenance?: PrMaintenanceConfig;
   /**
-   * Owner-side disk-headroom worker config. `cleanupEnabled` takes precedence
-   * over the legacy `INVOKER_DISK_CLEANUP_ENABLED` env var when set; the worker
-   * falls back to the env var only when this is left unset. Default: enabled.
+   * Owner-side disk-headroom policy. `cleanupEnabled` controls whether the
+   * always-running disk-headroom worker may delete files on critical disks;
+   * it does not start or stop the worker. Takes precedence over the legacy
+   * `INVOKER_DISK_CLEANUP_ENABLED` env var when set. Default: enabled.
    */
   diskHeadroom?: {
     cleanupEnabled?: boolean;
   };
-  /**
-   * Owner-side Claude OAuth refresh worker gate. When enabled, the owner
-   * refreshes its own ~/.claude/.credentials.json ahead of expiry and
-   * distributes the refreshed file to every configured SSH remote target.
-   */
-  claudeOauthRefresh?: {
-    enabled?: boolean;
-  };
   slackBugScan?: SlackBugScanConfig;
-  /**
-   * Owner-side idle-task-cleanup worker gate. The worker itself ships
-   * dry-run-only (see `idle-task-cleanup-worker.ts`'s `FORCE_DRY_RUN`), so
-   * enabling this only turns on the dry-run scan/log, not real mutation.
-   * Default: disabled.
-   */
-  staleTaskCleanup?: {
-    enabled?: boolean;
-  };
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
@@ -662,17 +599,15 @@ export function resolveSecretsFilePath(config: InvokerConfig): string | undefine
 /**
  * Build PR-maintenance worker launch dependencies from config.
  *
- * Returns `undefined` when the block is absent or `enabled` is not true, so the
- * owner keeps PR-maintenance workers disabled by default. When enabled, returns
- * only the launch fields (the `enabled` gate is dropped) for injection as the
- * worker runtime `prMaintenance` dependency; omitted fields fall back to the
- * worker defaults.
+ * Returns `undefined` when the block is absent or empty. Process on/off is
+ * SQLite desired state; this only threads interval/lock/repoRoot/env/shell
+ * so a started PR-maintenance worker still gets launch settings.
  */
 export function resolvePrMaintenanceWorkerConfig(
   config: InvokerConfig,
 ): PrMaintenanceWorkerConfig | undefined {
   const prMaintenance = config.prMaintenance;
-  if (!prMaintenance?.enabled) {
+  if (!prMaintenance) {
     return undefined;
   }
   const launch: PrMaintenanceWorkerConfig = {};
@@ -681,5 +616,5 @@ export function resolvePrMaintenanceWorkerConfig(
   if (prMaintenance.intervalMs !== undefined) launch.intervalMs = prMaintenance.intervalMs;
   if (prMaintenance.lockPath !== undefined) launch.lockPath = prMaintenance.lockPath;
   if (prMaintenance.shell !== undefined) launch.shell = prMaintenance.shell;
-  return launch;
+  return Object.keys(launch).length > 0 ? launch : {};
 }

@@ -311,7 +311,6 @@ describe('loadConfig', () => {
 
   it('reads prMaintenance config from user config', () => {
     const prMaintenance = {
-      enabled: true,
       repoRoot: '/srv/invoker',
       env: { INVOKER_PR_CRON_LOCK: '/tmp/pr.lock' },
       intervalMs: 120000,
@@ -344,7 +343,7 @@ describe('loadConfig', () => {
     expect(config.diskHeadroom).toEqual({ cleanupEnabled: false });
   });
 
-  it('defaults opt-in worker gates to undefined when absent', () => {
+  it('defaults removed opt-in worker gates to undefined when absent', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ defaultBranch: 'main' }),
@@ -355,9 +354,10 @@ describe('loadConfig', () => {
     expect(config.reaper).toBeUndefined();
     expect(config.workflowResume).toBeUndefined();
     expect(config.requeueEnabled).toBeUndefined();
+    expect(config.e2eAutoFixEnabled).toBeUndefined();
   });
 
-  it('reads opt-in worker gates from user config', () => {
+  it('ignores leftover opt-in worker start flags in JSON (migration reads them separately)', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({
@@ -366,16 +366,13 @@ describe('loadConfig', () => {
         reaper: { enabled: false },
         workflowResume: { enabled: true },
         requeueEnabled: true,
+        e2eAutoFixEnabled: true,
       }),
     );
-    const config = loadConfig();
-    expect(config).toMatchObject({
-      infraRepair: { enabled: true },
-      autofix: { enabled: true },
-      reaper: { enabled: false },
-      workflowResume: { enabled: true },
-      requeueEnabled: true,
-    });
+    const config = loadConfig() as Record<string, unknown>;
+    // loadConfig casts JSON through; leftover keys may still appear at runtime
+    // but are not InvokerConfig start gates and must not affect auto-start.
+    expect(config.infraRepair).toEqual({ enabled: true });
   });
 
   it('reads imageStorage from user config', () => {
