@@ -242,7 +242,7 @@ import {
   type GuiMutationRegistrationContext,
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
-import { acknowledgeNoTrackHeadlessExec, createGuiMutationTaskActions, logHeadlessExecReceived, registerGuiMutationIpcHandlers } from './ipc/gui-mutation-handlers.js';
+import { acknowledgeNoTrackHeadlessExec, buildStandaloneHeadlessExecAcknowledgement, createGuiMutationTaskActions, logHeadlessExecReceived, registerGuiMutationIpcHandlers } from './ipc/gui-mutation-handlers.js';
 import type { GuiMutationTaskActions, HeadlessExecMutationContext, HeadlessRunMutationPayload, HeadlessResumeMutationPayload } from './ipc/gui-mutation-handlers.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import {
@@ -2059,13 +2059,7 @@ function startHeadlessMode(): void {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
           });
-          if (!workflowId) {
-            return {
-              ok: true,
-              ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
-            };
-          }
-          return { ok: true };
+          return buildStandaloneHeadlessExecAcknowledgement(workflowId, commandResult);
         });
         messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
           noteStandaloneOwnerActivity();

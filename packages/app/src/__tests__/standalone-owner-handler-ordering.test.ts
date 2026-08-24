@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { buildStandaloneHeadlessExecAcknowledgement } from '../ipc/gui-mutation-handlers.js';
 
 const MAIN = path.resolve(__dirname, '..', 'main.ts');
 
@@ -26,7 +27,7 @@ describe('standalone owner handler ordering', () => {
     ).toBeLessThan(dispatcherIdx);
   });
 
-  it('standalone headless.exec merges runHeadless return into the message-bus ack when unscoped', () => {
+  it('standalone headless.exec wires runHeadless into buildStandaloneHeadlessExecAcknowledgement', () => {
     const source = readFileSync(MAIN, 'utf8');
     const execIdx = source.indexOf("messageBus.onRequest('headless.exec'");
     const nextHandler = source.indexOf("messageBus.onRequest('headless.gui-mutation'");
@@ -35,7 +36,22 @@ describe('standalone owner handler ordering', () => {
 
     const handler = source.slice(execIdx, nextHandler);
     expect(handler).toMatch(/commandResult = await runHeadless/);
-    expect(handler).toMatch(/if \(!workflowId\)/);
-    expect(handler).toMatch(/\.\.\.\(commandResult && typeof commandResult === 'object'/);
+    expect(handler).toMatch(/buildStandaloneHeadlessExecAcknowledgement\(workflowId, commandResult\)/);
+  });
+
+  it('merges the runHeadless return into the unscoped message-bus ack', () => {
+    const commandResult = { inserted: true, row: { id: 'task-1' } };
+
+    expect(buildStandaloneHeadlessExecAcknowledgement(undefined, commandResult)).toEqual({
+      ok: true,
+      inserted: true,
+      row: { id: 'task-1' },
+    });
+  });
+
+  it('keeps the workflow-scoped ack as { ok: true } even when runHeadless returned data', () => {
+    const commandResult = { inserted: true, row: { id: 'task-1' } };
+
+    expect(buildStandaloneHeadlessExecAcknowledgement('workflow-123', commandResult)).toEqual({ ok: true });
   });
 });
