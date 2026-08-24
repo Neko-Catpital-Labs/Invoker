@@ -188,6 +188,39 @@ describe('acknowledgeNoTrackHeadlessExec start-ready', () => {
     ).toBeUndefined();
   });
 
+  it('falls through for unscoped repair-filing insert instead of requiring a workflow id', () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    };
+    const result = acknowledgeNoTrackHeadlessExec(
+      {
+        args: ['repair-filing', 'insert', '--kind', 'K', '--subject', 'S', '--state-sha', 'SHA'],
+        noTrack: true,
+      },
+      undefined,
+      'normal',
+      'standalone',
+      {
+        ownerId: 'owner-1',
+        getWorkflowMutationCoordinator: () => ({
+          submit: vi.fn(),
+        }) as never,
+        workflowExists: () => false,
+        logger: logger as never,
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('headless.exec start-ready noTrack fallthrough'),
+      expect.objectContaining({ module: 'ipc-delegate' }),
+    );
+  });
+
   it('still rejects other no-track commands without a workflow id', () => {
     const logger = {
       info: vi.fn(),
