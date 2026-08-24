@@ -243,4 +243,42 @@ describe('planning composer repo binding', () => {
 
     expect(screen.queryByTestId('invoker-terminal-repo')).not.toBeInTheDocument();
   });
+
+  it('clears the local placeholder repo binding when a later refresh reports no server binding', async () => {
+    // Mount fires two independent hydrate calls before this test's own
+    // interaction (a legacy startup hydrate, which no-ops on an empty
+    // session list, and refreshPlanningSessionsNow's own mount effect,
+    // which is the one that binds the local placeholder's repo).
+    let listCallCount = 0;
+    mock.api.planningChatList = vi.fn(async () => {
+      listCallCount += 1;
+      return {
+        ok: true as const,
+        sessions: [],
+        ...(listCallCount === 2 ? { repoBinding: { repoUrl: '/tmp/repo-a', baseBranch: 'main' } } : {}),
+      };
+    });
+    mock.api.planningChatSend = vi.fn(async () => {
+      throw new Error('transport failure');
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(listCallCount).toBe(2);
+    });
+
+    await openComposerOptions();
+    fireEvent.click(screen.getByTestId('planning-context-toggle'));
+    expect(await screen.findByTestId('planning-repo-status')).toHaveTextContent('tmp/repo-a');
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello planner' } });
+    fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+
+    await waitFor(() => {
+      expect(listCallCount).toBe(3);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('planning-repo-status')).toHaveTextContent('No repository bound yet');
+    });
+  });
 });
