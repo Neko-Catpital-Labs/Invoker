@@ -141,7 +141,6 @@ import { openMainProcessDatabase } from './viewer-db-boundary.js';
 import {
   isHeadlessMutatingCommand,
   isHeadlessReadOnlyCommand,
-  resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import {
   isHeadlessHelpCommand,
@@ -168,7 +167,7 @@ import {
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
 import { writeStdoutFlushAndExit, flushStdoutAndStderr } from './headless-stdout-flush.js';
-import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
+import { repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
@@ -1017,6 +1016,28 @@ async function tryDelegateHeadlessMutationToExistingOwner(
   }
 }
 
+function createNoopRendererTaskFeed(): RendererTaskFeed {
+  const stopHandle = { stop() {} };
+  return {
+    enqueueTaskOutput() {},
+    flushTaskOutput() {},
+    seedUiSnapshotCache() {},
+    getDetachedViewerTasks: () => [],
+    publishTaskDeltaToRenderer() {},
+    getLastKnownWorkflowCount: () => 0,
+    setLastKnownWorkflowCount() {},
+    getTaskSnapshot: () => undefined,
+    listKnownTaskIds: () => [],
+    clearTaskSnapshots() {},
+    replaceWorkflowRollups() {},
+    rememberTaskState() {},
+    resetSnapshotState() {},
+    receiveTaskDelta() {},
+    startDbPolling: () => stopHandle,
+    startActivityPolling: () => stopHandle,
+  };
+}
+
 function startHeadlessMode(): void {
   const runHeadlessMain = async (): Promise<void> => {
     const agentRegistry = registerBuiltinAgents();
@@ -1673,108 +1694,45 @@ function startHeadlessMode(): void {
           );
         };
 
-        const classifyStandaloneHeadlessExecMutation = (
-          payload: HeadlessExecMutationPayload,
-        ): { workflowId?: string; priority: WorkflowMutationPriority } => {
-          const [command, arg0] = payload.args;
-          if (!command) return { priority: 'normal' };
-
-          switch (command) {
-            case 'set': {
-              const [, subCommand, targetArg] = payload.args;
-              switch (subCommand) {
-                case 'workflow':
-                case 'merge-mode':
-                  return {
-                    workflowId: targetArg === undefined ? undefined : String(targetArg),
-                    priority: 'high',
-                  };
-                case 'command':
-                case 'prompt':
-                case 'executor':
-                case 'agent':
-                case 'fix-prompt':
-                case 'fix-context':
-                case 'gate-policy':
-                case 'task':
-                  return {
-                    workflowId: targetArg === undefined ? undefined : standaloneWorkflowIdForTaskArg(targetArg),
-                    priority: 'high',
-                  };
-                default:
-                  return { priority: 'normal' };
-              }
-            }
-            case 'resume':
-            case 'retry':
-              return {
-                workflowId: arg0 === undefined ? undefined : standaloneWorkflowIdForTaskArg(arg0),
-                priority: 'high',
-              };
-            case 'recreate':
-            case 'cancel-workflow':
-              return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
-            case 'rebase-retry':
-            case 'rebase-recreate':
-              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
-            case 'cancel':
-            case 'retry-task':
-            case 'recreate-task':
-            case 'delete-task':
-              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
-            case 'delete':
-            case 'delete-workflow':
-            case 'detach-workflow':
-              return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
-            case 'approve':
-            case 'reject':
-            case 'select':
-            case 'fix':
-            case 'resolve-conflict':
-              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
-            case 'repair-review-gate-ci':
-              return { workflowId: standaloneWorkflowIdForReviewGatePrArg(arg0), priority: 'normal' };
-            default:
-              return { priority: 'normal' };
-          }
-        };
-
-        const standaloneWorkflowIdForTaskArg = (taskIdArg: unknown): string => {
-          return resolveHeadlessTargetWorkflowId(taskIdArg, persistence);
-        };
-        const standaloneWorkflowIdForReviewGatePrArg = (prArg: unknown): string | undefined => {
-          const raw = prArg === undefined ? undefined : String(prArg);
-          if (!raw) return undefined;
-          const prNumber = parseReviewGatePrNumber(raw);
-          if (!prNumber) return undefined;
-          return persistence.findReviewGateByPr(prNumber)?.workflowId;
-        };
-
-        const runStandaloneWorkflowMutation = async <T>(
-          workflowId: string | undefined,
-          priority: WorkflowMutationPriority,
-          channel: string,
-          args: unknown[],
-          op: () => Promise<T>,
-        ): Promise<T> => {
-          if (!workflowId) return op();
-          if (!workflowMutationCoordinator || !workflowMutationDispatcher.has(channel)) {
-            return op();
-          }
-          return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
-        };
+        const standaloneMutationActions = createGuiMutationTaskActions({
+          logger,
+          persistence,
+          messageBus,
+          executorRegistry,
+          agentRegistry,
+          repoRoot,
+          invokerConfig,
+          effectiveMaxConcurrency,
+          taskHandles: standaloneTaskHandles,
+          getOrchestrator: () => orchestrator,
+          setOrchestrator: (nextOrchestrator) => { orchestrator = nextOrchestrator; },
+          getCommandService: () => commandService,
+          setCommandService: (nextCommandService) => { commandService = nextCommandService; },
+          getWorkflowMutationCoordinator: () => workflowMutationCoordinator,
+          workflowMutationDispatcher,
+          getActiveMutationContext: () => activeMutationContext,
+          getRendererTaskFeed: createNoopRendererTaskFeed,
+          getStartupWorkflowId: () => null,
+          getLaunchDispatcher: () => null,
+          requireTaskExecutor: createStandaloneTaskExecutor,
+          getTaskExecutor: () => createStandaloneTaskExecutor(),
+          rebuildTaskRunner: () => {},
+          initServices,
+          requestWorkflowMetadataPublish: () => {},
+          cancelDeferredWorkflowLaunch: () => {},
+          killRunningTask: async (taskId) => {
+            await killRunningTaskExecution({
+              getTaskRunner: createStandaloneTaskExecutor,
+              logger,
+              taskHandles: standaloneTaskHandles,
+            }, taskId);
+          },
+          buildCommandServiceInvalidationDeps,
+        });
 
         if (!workflowMutationDispatcher.has('headless.exec')) {
           workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
-            const payload = payloadArg as HeadlessExecMutationPayload;
-            await runHeadless(payload.args, {
-              ...headlessDeps,
-              waitForApproval: payload.waitForApproval,
-              noTrack: payload.noTrack,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-            return { ok: true };
+            return standaloneMutationActions.executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);
           });
         }
         if (!workflowMutationDispatcher.has('invoker:start-ready')) {
@@ -1850,21 +1808,15 @@ function startHeadlessMode(): void {
           });
         }
         {
-          const standaloneRunHeadlessCommand = async (args: string[]): Promise<unknown> => {
-            await runHeadless(args, {
-              ...headlessDeps,
-              waitForApproval: false,
-              noTrack: true,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-            return { ok: true };
-          };
           const standaloneWorkerHandlers = buildWorkerMutationHandlers({
             orchestrator,
             commandService,
             logger,
-            runHeadlessCommand: standaloneRunHeadlessCommand,
+            runHeadlessCommand: (args) => standaloneMutationActions.executeHeadlessExec({
+              args,
+              waitForApproval: false,
+              noTrack: true,
+            }),
             getTaskExecutor: createStandaloneTaskExecutor,
             getMutationTiming: () => activeMutationContext?.mutationTiming,
             contextLabel: 'standalone',
@@ -2047,26 +1999,16 @@ function startHeadlessMode(): void {
             traceId,
           };
           logHeadlessExecReceived(payload, 'standalone', headlessExecMutationContext);
-          const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
+          const { workflowId, priority } = standaloneMutationActions.classifyHeadlessExecMutation(payload);
           const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone', headlessExecMutationContext);
           if (acknowledgement) return acknowledgement;
-          let commandResult: unknown;
-          await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
-            commandResult = await runHeadless(args, {
-              ...headlessDeps,
-              waitForApproval: delegatedWait,
-              noTrack: delegatedNoTrack,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-          });
-          if (!workflowId) {
-            return {
-              ok: true,
-              ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
-            };
-          }
-          return { ok: true };
+          return standaloneMutationActions.runWorkflowMutation(
+            workflowId,
+            priority,
+            'headless.exec',
+            [payload],
+            async () => standaloneMutationActions.executeHeadlessExec(payload),
+          );
         });
         messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
           noteStandaloneOwnerActivity();

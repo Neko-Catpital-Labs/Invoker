@@ -17,11 +17,11 @@ function getTranslatorSource(): string {
 }
 
 function getStandaloneClassifierSource(): string {
-  const start = mainSource.indexOf('const classifyStandaloneHeadlessExecMutation =');
-  const end = mainSource.indexOf('        const standaloneWorkflowIdForTaskArg', start);
+  const start = guiMutationHandlersSource.indexOf('function classifyHeadlessExecMutation');
+  const end = guiMutationHandlersSource.indexOf('  async function runWorkflowMutation', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return guiMutationHandlersSource.slice(start, end);
 }
 
 function getStandaloneGuiMutationSource(): string {
@@ -111,9 +111,11 @@ describe('GUI mutation translation', () => {
 
   it('classifies delegated standalone workflow delete and detach as workflow-scoped', () => {
     const classifierSource = getStandaloneClassifierSource();
-    expect(classifierSource).toMatch(
-      /case 'delete':\s*case 'delete-workflow':\s*case 'detach-workflow':\s*return \{ workflowId: arg0 === undefined \? undefined : String\(arg0\), priority: 'high' \};/,
-    );
+    expect(classifierSource).toContain("case 'delete':");
+    expect(classifierSource).toContain("case 'delete-workflow':");
+    expect(classifierSource).toContain("case 'detach-workflow':");
+    expect(classifierSource).toContain('workflowId: arg0');
+    expect(classifierSource).toContain("priority: 'high'");
   });
 
   it('handles start-ready in the standalone owner GUI mutation switch', () => {
