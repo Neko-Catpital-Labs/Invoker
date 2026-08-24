@@ -227,6 +227,8 @@ import {
   createLocalWorkerStatusSnapshot,
   createOwnerWorkerStatusReader,
   createWorkerRuntimeController,
+  migrateWorkerDesiredStateFromLegacyConfig,
+  type LegacyWorkerStartConfigFlags,
   type WorkerRuntimeController,
 } from './worker-control.js';
 import { runStartReady } from './start-ready.js';
@@ -339,7 +341,6 @@ function buildSlackBugScanWorkerConfig(
   planningCommandBuilder: PlanningCommandBuilder,
   executionAgentRegistry: AgentRegistry,
 ): WorkerRuntimeDependencies['slackBugScan'] {
-  if (!invokerConfig.slackBugScan?.enabled) return undefined;
   const client = createRealSlackBugScanClient();
   if (!client) return undefined;
   return {
@@ -354,9 +355,9 @@ function buildSlackBugScanWorkerConfig(
       executionAgentRegistry,
       logger,
     }),
-    intervalMs: invokerConfig.slackBugScan.intervalMs,
-    maxAutoSubmissionsPerDay: invokerConfig.slackBugScan.maxAutoSubmissionsPerDay,
-    maxAutoSubmissionsPerTick: invokerConfig.slackBugScan.maxAutoSubmissionsPerTick,
+    intervalMs: invokerConfig.slackBugScan?.intervalMs,
+    maxAutoSubmissionsPerDay: invokerConfig.slackBugScan?.maxAutoSubmissionsPerDay,
+    maxAutoSubmissionsPerTick: invokerConfig.slackBugScan?.maxAutoSubmissionsPerTick,
   };
 }
 
@@ -2086,6 +2087,19 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
+        const seededDesiredStates = migrateWorkerDesiredStateFromLegacyConfig(
+          persistence,
+          invokerConfig as LegacyWorkerStartConfigFlags,
+        );
+        if (seededDesiredStates.length > 0) {
+          logger.info(
+            `migrated ${seededDesiredStates.length} legacy worker start flag(s) into desired state`,
+            {
+              module: 'init',
+              seeded: seededDesiredStates.map((seed) => `${seed.workerKind}=${seed.desiredEnabled}`),
+            },
+          );
+        }
         workerRuntimeController = createWorkerRuntimeController({
           registry: createRegisteredWorkerRegistry(),
           deps: buildRegisteredOwnerWorkerDeps(
@@ -3254,6 +3268,19 @@ startMainProcessBootstrap({
     }
 
     if (ownerMode) {
+      const seededDesiredStates = migrateWorkerDesiredStateFromLegacyConfig(
+        persistence,
+        invokerConfig as LegacyWorkerStartConfigFlags,
+      );
+      if (seededDesiredStates.length > 0) {
+        logger.info(
+          `migrated ${seededDesiredStates.length} legacy worker start flag(s) into desired state`,
+          {
+            module: 'init',
+            seeded: seededDesiredStates.map((seed) => `${seed.workerKind}=${seed.desiredEnabled}`),
+          },
+        );
+      }
       workerRuntimeController = createWorkerRuntimeController({
         registry: createRegisteredWorkerRegistry(),
         deps: buildRegisteredOwnerWorkerDeps(
