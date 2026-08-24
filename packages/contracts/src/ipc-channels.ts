@@ -530,6 +530,7 @@ export type InAppPlanningCreateSessionResponse =
 export type InAppPlanningListSessionsResponse = {
   ok: true;
   sessions: InAppPlanningSessionSummary[];
+  repoBinding?: InAppPlanningRepoBinding;
 };
 
 export type InAppPlanningTurnStatus = 'running' | 'failed';
@@ -553,12 +554,18 @@ export interface InAppPlanningStreamEvent {
   turn?: InAppPlanningTurnOutcome;
 }
 
+export interface InAppPlanningRepoBinding {
+  repoUrl: string;
+  baseBranch: string;
+}
+
 export interface InAppPlanningChatRequest {
   sessionId?: string;
   message: string;
   presetKey?: string;
   confirmationMode?: PlanningConfirmationMode;
   turnId?: string;
+  repoBinding?: InAppPlanningRepoBinding;
 }
 
 export type InAppPlanningChatResponse =
