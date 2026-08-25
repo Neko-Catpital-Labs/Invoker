@@ -301,8 +301,26 @@ export function collectInvokerConfigDiagnostics(config: unknown): ConfigDiagnost
 
   checkRoutingRules(collector, config, poolIds);
   checkHeavyweightRouting(collector, config, poolIds);
+  checkInfraRepairVisibility(collector, config, remoteTargetIds);
 
   return collector.diagnostics;
+}
+
+function checkInfraRepairVisibility(
+  collector: DiagnosticCollector,
+  config: UnknownRecord,
+  remoteTargetIds: Set<string>,
+): void {
+  if (remoteTargetIds.size === 0) return;
+  const infraRepair = config.infraRepair;
+  const enabled = isRecord(infraRepair) && infraRepair.enabled === true;
+  if (enabled) return;
+  collector.warning(
+    'infraRepair.enabled',
+    'SSH remoteTargets are configured but infraRepair.enabled is not true; '
+      + 'SSH infra failures will burn Mergify/autofix budgets instead of being machine-repaired. '
+      + 'Enable infraRepair.enabled and start the infra-repair worker explicitly when ready.',
+  );
 }
 
 export function hasBlockingConfigDiagnostic(diagnostics: readonly ConfigDiagnostic[]): boolean {
