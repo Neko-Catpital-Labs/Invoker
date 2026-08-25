@@ -285,7 +285,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await recreateFence;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent #3/i);
 
     expect(order).toEqual([
       'set command wf-1/task-0 hold-work',
@@ -298,6 +298,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(invalidatedIntent?.status).toBe('failed');
     expect(invalidatedIntent?.error).toContain('Superseded by recreate intent #3');
     expect(evictedIntent?.status).toBe('failed');
+    // Persisted DB reason still records the raw queue-fence boundary; the
+    // "Superseded by recreate intent #N" wording above is what the in-flight
+    // caller (e.g. a tracked CLI command) actually observes as its rejection.
     expect(evictedIntent?.error).toContain('queue fence');
     gate.resolve();
   });
@@ -488,7 +491,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await recreateTask;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -527,7 +530,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await rebaseRecreate;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -620,7 +623,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await rebaseRecreate;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -661,7 +664,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await running;
     await retryFence;
     await newerQueued;
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by retry intent/i);
 
     expect(order).toEqual([
       'invoker:edit-task-command:hold-work',
@@ -1091,7 +1094,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteWf;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -1183,7 +1186,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteFence;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'set command wf-1/task-0 hold-work',
@@ -1278,7 +1281,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteAll;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -1370,7 +1373,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteAllFence;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'set command wf-1/task-0 hold-work',
@@ -1467,7 +1470,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteAllBulk;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
