@@ -4,6 +4,16 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.13
+
+- Bring planning chat to the web surfaces: bind a repo before the conversation starts, wire planning and task terminals through web dispatch, persist and retry turns, and keep Send from racing a repo bind or an in-flight turn (#9955-#9981, #9995).
+- Let the in-app planning chat switch harness and model per turn, and keep first-draft plan-doctor repair running until the draft passes (#8543-#8546, #10217). Persist approved drafts and bind review identity in-app and in Slack so a restart no longer burns the repair budget (#10244-#10249).
+- Stop Slack plan review from breaking on size or formatting: clamp the review card to Slack's 3000-character block limit, stop dumping full plan YAML as raw chat text, and stage doctor-approved plan bytes so Approve still works after YAML stringify (#9882, #9883, #10242, #10465, #10466). Standalone `invoker-cli` / `invoker-slack` installs now ship plan-doctor skills (#9688-#9722).
+- Make owner workers boot from an always-on set plus SQLite desired state instead of start booleans in config (#10276-#10279). Add `autoApproveAuthors` (fail closed when the mapped PR author is not allowlisted) and `prMaintenance.targetRepos` for multi-repo PR scans (#10408-#10412, #10422-#10424).
+- Add idle-task cleanup (`closeIdleTask` / `close-task`), infra-repair hardening for SSH/disk-full failures, a default-on Claude OAuth refresh worker, and `install-skills` always-on harness helpers with an uninstall mode (#9251-#9257, #9376-#9378, #9834, #10071-#10078, #10358-#10369).
+- Recover a crashed Electron renderer instead of leaving a blank window (#8564-#8567). Reap expired-lease headless tasks without a BrowserWindow, yield during stale worktree cleanup so the owner stays responsive, fail fast on a build-mismatched owner, and stop `@Invoker restart` from spawning a duplicate owner-serve (#8605, #8606, #9151, #9179, #10260).
+- Add a general alert channel (headless query plus Slack lobby posts) and register a `ClaudePlanningAgent` so Slack's `claude` preset resolves (#8547-#8551, #10253). Unvendor the personal `/reflect` skill from this repo; CI reflect is an opt-in to catstack (#9887, #9888).
+
 ## 0.0.12
 
 - Fix an owner-startup incident: the scheduler reloaded every active workflow's tasks from the database once per ready task on every scheduling pass instead of once per pass, so a large ready-task backlog could make the owner process's boot effectively never finish (confirmed live: the same query firing thousands of times with zero deceleration). A cold boot against a real 900-task/300-workflow database dropped from 12.4s to well under a second. Covered by a repro test and a real cold-boot-against-a-large-persisted-DB test (#8502, #8504, INV-279).
