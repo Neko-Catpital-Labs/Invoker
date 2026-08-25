@@ -119,24 +119,27 @@ run_worker() {
   python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 6201 "$@" 2>&1
 }
 
+# Since #10337 ("Stop blind rebase; unify onto master"), a bottom PR whose
+# base pointer already equals trunk is never locally force-pushed just for
+# stale/diverged content -- see test_stale_base_content_requeues_without_rebase
+# in scripts/test_mergify_admin_requeue_plan.py. The worker must requeue
+# without touching the remote branch, even for this exact #7727 shape.
 if ! out1="$(run_worker)"; then
   fail 'tick 1: worker failed' "$out1"
 fi
 printf '%s\n' "$out1"
 
-echo "$out1" | grep -q 'rebase-onto-base PR #6201 onto=master' || fail 'tick 1 did not plan a rebase-onto-base action' "$out1"
-! echo "$out1" | grep -q 'requeue PR #6201' || fail 'tick 1 requeued a PR whose content was never rebased' "$out1"
-! echo "$out1" | grep -q 'repair-check PR #6201' || fail 'tick 1 spent an agent-repair attempt instead of rebasing' "$out1"
+echo "$out1" | grep -q "requeue PR #6201 head=$STALE_HEAD reason=eligible-when-ready" \
+  || fail 'tick 1 did not requeue the stale-based PR without rebasing' "$out1"
+! echo "$out1" | grep -q 'rebase-onto-base PR #6201' || fail 'tick 1 planned a legacy local rebase-onto-base force-push' "$out1"
+! echo "$out1" | grep -q 'rebase-onto-master PR #6201' || fail 'tick 1 planned an Invoker rebase-onto-master job for stale-base-alone' "$out1"
 
 NEW_REMOTE_HEAD="$(git --git-dir="$REMOTE" rev-parse stack/rebase-onto-base)"
-export NEW_REMOTE_HEAD
-if [ "$NEW_REMOTE_HEAD" = "$STALE_HEAD" ]; then
-  fail 'tick 1 did not push a real rebase to the remote branch'
+if [ "$NEW_REMOTE_HEAD" != "$STALE_HEAD" ]; then
+  fail 'requeue must never force-push; remote branch moved' "$NEW_REMOTE_HEAD"
 fi
-git --git-dir="$REMOTE" merge-base --is-ancestor "$MASTER_HEAD" "$NEW_REMOTE_HEAD" \
-  || fail 'rebased remote head is still not a descendant of master'
 
-python3 - <<'PY' || fail 'expected a rebase-onto-base ledger row, not repair-check' "$(cat "$LEDGER_PATH")"
+python3 - <<'PY' || fail 'expected a requeue ledger row, not a rebase' "$(cat "$LEDGER_PATH")"
 import json
 import os
 from pathlib import Path
@@ -148,36 +151,14 @@ rows = [
 ]
 matches = [
     row for row in rows
-    if row.get("kind") == "rebase-onto-base"
-    and row.get("key") == "master"
+    if row.get("kind") == "requeue"
+    and row.get("key") == "ready"
     and int(row.get("pr", 0)) == 6201
 ]
 if len(matches) != 1:
-    raise SystemExit(f"expected 1 rebase-onto-base row, saw {len(matches)}")
-if any(row.get("kind") == "repair-check" and int(row.get("pr", 0)) == 6201 for row in rows):
-    raise SystemExit("repair-check must not be attempted for a structural stale-base failure")
+    raise SystemExit(f"expected 1 requeue row, saw {len(matches)}")
+if any(row.get("kind") in {"rebase-onto-base", "rebase-onto-master"} and int(row.get("pr", 0)) == 6201 for row in rows):
+    raise SystemExit("a rebase must not be filed for stale-base-alone content")
 PY
-
-# Tick 2: simulate the loader now observing the rebased head (a real cycle
-# would see this via a fresh `gh pr view`). Ancestry is clean now, so the
-# planner must fall through to a normal requeue instead of rebasing again.
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-state = json.loads(Path(os.environ["STATE_PATH"]).read_text(encoding="utf-8"))
-state["prs"][0]["headRefOid"] = os.environ["NEW_REMOTE_HEAD"]
-state["compare_status"][f"master...{os.environ['NEW_REMOTE_HEAD']}"] = "ahead"
-Path(os.environ["STATE_PATH"]).write_text(json.dumps(state, indent=2), encoding="utf-8")
-PY
-
-if ! out2="$(run_worker --dry-run)"; then
-  fail 'tick 2: worker failed' "$out2"
-fi
-printf '%s\n' "$out2"
-
-echo "$out2" | grep -q 'DRY-RUN requeue PR #6201' || fail 'tick 2 did not requeue the now-clean PR' "$out2"
-! echo "$out2" | grep -q 'rebase-onto-base PR #6201' || fail 'tick 2 planned another rebase despite clean ancestry' "$out2"
 
 echo '[repro] passed'
