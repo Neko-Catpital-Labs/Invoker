@@ -170,18 +170,34 @@ describe('invoker-cli', () => {
     const dir = makeTempDir('invoker-worker-toggles-');
     const configPath = join(dir, 'config.json');
     const saved = process.env.INVOKER_REPO_CONFIG_PATH;
+    const savedDb = process.env.INVOKER_DB_DIR;
     process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+    process.env.INVOKER_DB_DIR = dir;
+    writeFileSync(configPath, '{}');
     const output = captureProcessOutput();
     try {
       const code = await main(['worker', 'toggles', '--enable', 'e2e-autofix']);
 
       expect(code).toBe(0);
       expect(output.stdout).toContain('E2E auto-fix: on');
-      expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({ e2eAutoFixEnabled: true });
+      const writtenConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+      expect(writtenConfig).toEqual({});
+      const { SQLiteAdapter } = await import('@invoker/data-store');
+      const db = await SQLiteAdapter.create(join(dir, 'invoker.db'), {
+        outputDir: join(dir, 'outputs'),
+        ownerCapability: true,
+      });
+      try {
+        expect(db.getWorkerDesiredState('e2e-autofix')?.desiredEnabled).toBe(true);
+      } finally {
+        db.close();
+      }
     } finally {
       output.restore();
       if (saved === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
       else process.env.INVOKER_REPO_CONFIG_PATH = saved;
+      if (savedDb === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = savedDb;
     }
   });
 
