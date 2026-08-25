@@ -399,8 +399,11 @@ export interface PersistenceAdapter {
   loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined;
   listWorkflows(options?: WorkflowReadOptions): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
-  /** Resolve a GitHub PR number back to its Invoker workflow via the merge node. */
-  findReviewGateByPr(pr: string): ReviewGateLookup | undefined;
+  /** Resolve a GitHub PR number back to its Invoker workflow via the merge node.
+   * When `repo` is set (owner/repo), prefer URL matches for that repo; bare
+   * review_id matches are allowed only for the default Invoker repo (or when
+   * `repo` is omitted). */
+  findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined;
 
   // Tasks
   saveTask(workflowId: string, task: TaskState): void;

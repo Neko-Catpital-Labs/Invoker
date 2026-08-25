@@ -232,16 +232,16 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
     }
     case 'review-gate': {
       const arg = flags.positional[0];
-      if (!arg) throw new Error('Usage: --headless query review-gate <prNumber|prUrl> [--output text|json|jsonl|label]');
-      const prNumber = parsePrNumber(arg);
-      if (!prNumber) throw new Error(`Could not parse a PR number from "${arg}".`);
-      const record = deps.persistence.findReviewGateByPr(prNumber);
+      if (!arg) throw new Error('Usage: --headless query review-gate <prNumber|owner/repo#pr|prUrl> [--output text|json|jsonl|label]');
+      const parsed = parseReviewGatePrArg(arg);
+      if (!parsed) throw new Error(`Could not parse a PR number from "${arg}".`);
+      const record = deps.persistence.findReviewGateByPr(parsed.prNumber, parsed.repo);
       switch (flags.output) {
         case 'label': writeOut(`${record?.workflowId ?? ''}\n`); break;
         case 'json':  writeOut(formatAsJson(record ?? {}) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(record ? [record] : []) + '\n'); break;
         default:      if (!record) {
-          writeOut(`No Invoker workflow found for PR ${prNumber}.\n`);
+          writeOut(`No Invoker workflow found for PR ${parsed.prNumber}.\n`);
           break;
         }
         {
@@ -250,7 +250,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
           const gate = buildReviewGateQueryResponse({ workflowId: record.workflowId, workflow, tasks });
           const substate = gate.substate ?? 'null';
           writeOut(
-            `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\tsubstate=${substate}\t${record.branch ?? ''}\n`,
+            `${record.workflowId}\t${record.reviewId ?? parsed.prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\tsubstate=${substate}\t${record.branch ?? ''}\n`,
           );
         }
         break;
@@ -600,15 +600,25 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
 }
 
 /**
- * Parse a PR number from either a bare number (`999`, `#999`) or a full PR URL
- * (`https://github.com/owner/repo/pull/999`). Returns undefined when neither
- * shape matches.
+ * Parse a PR number from either a bare number (`999`, `#999`), `owner/repo#999`,
+ * or a full PR URL (`https://github.com/owner/repo/pull/999`). Returns undefined
+ * when none of those shapes match.
  */
 function parsePrNumber(arg: string): string | undefined {
-  const fromUrl = arg.match(/\/pull\/(\d+)/);
-  if (fromUrl) return fromUrl[1];
+  return parseReviewGatePrArg(arg)?.prNumber;
+}
+
+function parseReviewGatePrArg(arg: string): { prNumber: string; repo?: string } | undefined {
+  const fromUrl = arg.match(/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/i);
+  if (fromUrl) {
+    return { prNumber: fromUrl[3], repo: `${fromUrl[1]}/${fromUrl[2]}` };
+  }
+  const fromNwo = arg.match(/^([^/\s#]+)\/([^/\s#]+)#(\d+)$/);
+  if (fromNwo) {
+    return { prNumber: fromNwo[3], repo: `${fromNwo[1]}/${fromNwo[2]}` };
+  }
   const bare = arg.replace(/^#/, '');
-  return /^\d+$/.test(bare) ? bare : undefined;
+  return /^\d+$/.test(bare) ? { prNumber: bare } : undefined;
 }
 
 async function headlessCosts(
