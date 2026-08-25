@@ -845,14 +845,6 @@ export function App() {
       if (!chatList.ok) return false;
       const repoBinding = chatList.repoBinding;
       planningRepoBindingRef.current = { repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch };
-      if (chatList.sessions.length === 0) {
-        const nextSessions = planningSessionsRef.current.map((session) => (session.id.startsWith('local-')
-          ? { ...session, repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch }
-          : session));
-        planningSessionsRef.current = nextSessions;
-        setPlanningSessions(nextSessions);
-        return true;
-      }
       const terminalsByPlanningSession = new Map(
         terminalList
           .filter((session) => session.kind === 'planning' && session.planningSessionId)
@@ -875,7 +867,15 @@ export function App() {
         if (aliasedBackendIds.has(session.id)) return false;
         return !(hasBusyLocalView && session.activeTurnStatus === 'running');
       });
-      const nextSessions = reconcileHydratedPlanningSessions(planningSessionsRef.current, admissibleRestored);
+      // An empty session list still needs to reach the turn-reconciliation
+      // logic below so a busy local view's transport-failed turn gets
+      // resolved instead of staying busy forever; it just has no restored
+      // sessions to merge in, so only the repo-binding fields are patched.
+      const nextSessions = chatList.sessions.length === 0
+        ? planningSessionsRef.current.map((session) => (session.id.startsWith('local-')
+          ? { ...session, repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch }
+          : session))
+        : reconcileHydratedPlanningSessions(planningSessionsRef.current, admissibleRestored);
       planningSessionsRef.current = nextSessions;
       setPlanningSessions(nextSessions);
       const currentSessionId = activePlanningSessionIdRef.current;
