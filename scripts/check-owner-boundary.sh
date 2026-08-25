@@ -19,6 +19,7 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!**/node_modules/**' \
     --glob '!packages/app/src/viewer-db-boundary.ts' \
     --glob '!packages/cli/src/index.ts' \
+    --glob '!packages/cli/src/worker-toggles.ts' \
     --glob '!packages/persistence/src/sqlite-adapter.ts' \
     --glob '!packages/slack-manager/src/index.ts' \
     --glob '!packages/slack-manager/src/complaint-scout-bridge.ts' \
@@ -36,7 +37,8 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!packages/app/src/viewer-db-boundary.ts' \
     --glob '!packages/slack-manager/src/index.ts' \
     --glob '!packages/slack-manager/src/complaint-scout-bridge.ts' \
-    --glob '!packages/cli/src/index.ts' || true)"
+    --glob '!packages/cli/src/index.ts' \
+    --glob '!packages/cli/src/worker-toggles.ts' || true)"
 
   raw_memory_violations="$(rg -n "SQLiteAdapter\\.create\\(['\"]:memory:" packages \
     --glob '!**/__tests__/**' \
@@ -69,6 +71,7 @@ else
     --exclude="*.test.ts" \
     | grep -v '^packages/app/src/viewer-db-boundary.ts:' \
     | grep -v '^packages/cli/src/index.ts:' \
+    | grep -v '^packages/cli/src/worker-toggles.ts:' \
     | grep -v '^packages/persistence/src/sqlite-adapter.ts:' \
     | grep -v '^packages/slack-manager/src/index.ts:' \
     | grep -v '^packages/slack-manager/src/complaint-scout-bridge.ts:' \
@@ -84,7 +87,8 @@ else
     | grep -v '^packages/app/src/viewer-db-boundary.ts:' \
     | grep -v '^packages/slack-manager/src/index.ts:' \
     | grep -v '^packages/slack-manager/src/complaint-scout-bridge.ts:' \
-    | grep -v '^packages/cli/src/index.ts:' || true)"
+    | grep -v '^packages/cli/src/index.ts:' \
+    | grep -v '^packages/cli/src/worker-toggles.ts:' || true)"
 
   raw_memory_violations="$(grep -RInE "SQLiteAdapter\\.create\\(['\"]:memory:" packages \
     --exclude-dir="__tests__" \
