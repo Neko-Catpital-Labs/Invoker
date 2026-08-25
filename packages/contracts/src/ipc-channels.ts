@@ -799,6 +799,16 @@ export interface HarnessMcpConfigState {
   serverName: string;
 }
 
+export interface HarnessInstructionConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  installedInstructionNames: string[];
+}
+
 export interface BundledSkillsStatus {
   available: boolean;
   promptRecommended: boolean;
@@ -810,9 +820,10 @@ export interface BundledSkillsStatus {
   targets: BundledSkillTargetStatus[];
   commandTargets: HarnessConfigState[];
   mcpTargets: HarnessMcpConfigState[];
+  instructionTargets?: HarnessInstructionConfigState[];
 }
 
-export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
+export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall' | 'uninstall';
 
 export interface CliInstallerStatus {
   /** Packaged app + bundled binary present + darwin/linux. */
