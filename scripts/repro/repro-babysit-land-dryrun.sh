@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Battle-test: the mergify admin-bypass landing brain plans the right action
 # per scenario against a fake GitHub, in dry-run (no mutations):
-#   pr-dirty.json       -> repair_conflict (merge conflict)
+#   pr-dirty.json       -> rebase_onto_master (merge conflict)
 #   pr-ci-failed.json   -> repair_check (failed required check after dequeue)
 #   stack-landable.json -> requeue (clean dequeued bottom PR)
 set -euo pipefail
@@ -40,8 +40,8 @@ run_land() {
 }
 
 out="$(run_land pr-dirty.json)"
-echo "$out" | grep -q "DRY-RUN repair-conflict PR #501" \
-  || fail "pr-dirty: expected repair_conflict plan" "$out"
+echo "$out" | grep -q "DRY-RUN rebase-onto-master PR #501" \
+  || fail "pr-dirty: expected rebase_onto_master plan" "$out"
 
 out="$(run_land pr-ci-failed.json)"
 echo "$out" | grep -q 'DRY-RUN repair-check PR #601 check="PR Body"' \
