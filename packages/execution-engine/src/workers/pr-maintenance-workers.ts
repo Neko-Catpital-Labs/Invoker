@@ -545,6 +545,7 @@ interface MergifyCommentBlockedLedgerRow {
   headSha: string;
   key: string;
   detail: string;
+  repo?: string;
 }
 
 function recordAdminBypassBlockedPrRows(
@@ -566,16 +567,18 @@ function recordBlockedPrDecisionRow(
   ledgerPath: string,
 ): void {
   if (!options.store) return;
+  const subjectId = row.repo ? `${row.repo}#${row.pr}` : String(row.pr);
   recordWorkerDecisionRow(options.store, {
     workerKind: options.entrypoint.kind,
     actionType: 'mergify-blocked-pr',
     externalKey: blockedPrDecisionExternalKey(row),
     subjectType: 'pr',
-    subjectId: String(row.pr),
+    subjectId,
     status: 'needs_input',
     summary: row.detail,
     payload: {
       pr: row.pr,
+      ...(row.repo ? { repo: row.repo } : {}),
       ledgerKey: row.key,
       headSha: row.headSha,
       ledgerPath,
@@ -589,17 +592,19 @@ function recordBlockedPrAlertSend(
   ledgerPath: string,
 ): void {
   if (!options.store) return;
+  const subjectId = row.repo ? `${row.repo}#${row.pr}` : String(row.pr);
   recordWorkerDecisionRow(options.store, {
     workerKind: options.entrypoint.kind,
     actionType: 'alert-send',
     externalKey: blockedPrAlertExternalKey(row),
     subjectType: 'pr',
-    subjectId: String(row.pr),
+    subjectId,
     status: 'completed',
     summary: row.detail,
     payload: {
       message: row.detail,
       pr: row.pr,
+      ...(row.repo ? { repo: row.repo } : {}),
       ledgerKey: row.key,
       headSha: row.headSha,
       ledgerPath,
@@ -661,7 +666,11 @@ function parseCommentBlockedLedgerRow(value: unknown): MergifyCommentBlockedLedg
     ? meta.detail.trim()
     : `Mergify repair stopped for PR #${pr}: ${key}`;
 
-  return { pr, headSha, key, detail };
+  const repo = typeof row.repo === 'string' && row.repo.trim().length > 0
+    ? row.repo.trim()
+    : undefined;
+
+  return { pr, headSha, key, detail, ...(repo ? { repo } : {}) };
 }
 
 function parseLedgerPrNumber(value: unknown): number | undefined {
@@ -692,7 +701,8 @@ function resolveHomePath(path: string, env: NodeJS.ProcessEnv): string {
 }
 
 function blockedPrLedgerExternalKey(row: MergifyCommentBlockedLedgerRow): string {
-  return `pr:${row.pr}:ledger:${row.key}:head:${row.headSha}`;
+  const repoPart = row.repo ? `repo:${row.repo}:` : '';
+  return `${repoPart}pr:${row.pr}:ledger:${row.key}:head:${row.headSha}`;
 }
 
 function blockedPrDecisionExternalKey(row: MergifyCommentBlockedLedgerRow): string {
