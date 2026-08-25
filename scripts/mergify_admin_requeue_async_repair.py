@@ -35,7 +35,12 @@ def repair_check_plan_name(pr_number: int, check_name: str, start_head: str) -> 
 
 
 def repair_conflict_plan_name(pr_number: int, start_head: str) -> str:
+    # Legacy name kept for settling pre-unification conflict-repair ledger rows.
     return f"admin-bypass-repair-conflict-pr-{pr_number}-{start_head[:7]}"
+
+
+def rebase_onto_master_plan_name(pr_number: int, start_head: str) -> str:
+    return f"admin-bypass-rebase-onto-master-pr-{pr_number}-{start_head[:7]}"
 
 
 def repair_bot_thread_plan_name(pr_number: int, start_head: str) -> str:
@@ -216,7 +221,25 @@ def build_repair_check_plan(
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
-def build_repair_conflict_plan(
+def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, trunk: str = "master") -> str:
+    return (
+        f"Rebase this pull request onto `{trunk}`.\n\n"
+        f"Checkout the PR head branch, rebase it onto origin/{trunk} while preserving the PR's intended "
+        "changes, resolve any conflicts if they appear, then commit locally. Do not push.\n\n"
+        "If the real fix requires restructuring this PR instead of a straightforward rebase, do not force that "
+        "into a single local commit here. Instead, submit an Invoker plan to do the restructuring, the same way "
+        "a human would via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). "
+        "Then make no commit in this checkout and exit 0.\n\n"
+        "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
+        f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
+        f"Head SHA: {start_head}\nTrunk: {trunk}\nReason: {reason}\n"
+        f"Work directly on its branch:\n"
+        f"  git fetch origin {pr.head_ref_name} {trunk} && git checkout {pr.head_ref_name}\n"
+        f"  git rebase origin/{trunk}\n"
+    )
+
+
+def build_rebase_onto_master_plan(
     pr: PrSnapshot,
     reason: str,
     *,
@@ -224,21 +247,13 @@ def build_repair_conflict_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
-    name = repair_conflict_plan_name(pr.number, start_head)
-    prompt = (
-        "This PR has a merge conflict blocking it from merging. Diagnose why, then fix it.\n\n"
-        "If rebasing the head branch onto its base branch (preserving the PR's intended changes) resolves it: "
-        "do that, run the narrow proof for the conflict resolution, then commit locally. Do not push.\n\n"
-        "If the real fix requires restructuring this PR instead of a straightforward rebase, do not force that "
-        "into a single local commit here. Instead, submit an Invoker plan to do the restructuring, the same way "
-        "a human would via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). "
-        "Then make no commit in this checkout and exit 0.\n\n"
-        "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
-        f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
-        f"Head SHA: {start_head}\nReason: {reason}\n"
-    )
+    name = rebase_onto_master_plan_name(pr.number, start_head)
+    prompt = _rebase_onto_master_prompt(pr, reason, start_head)
     yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
-    yaml_text += _repair_task_yaml(description=f"Repair merge conflict on PR #{pr.number}", prompt=prompt)
+    yaml_text += _repair_task_yaml(
+        description=f"Rebase PR #{pr.number} onto master",
+        prompt=prompt,
+    )
     yaml_text += _safe_push_task_yaml(
         task_id="safe-push",
         description=f"Safely push PR #{pr.number} only if its head did not move",
