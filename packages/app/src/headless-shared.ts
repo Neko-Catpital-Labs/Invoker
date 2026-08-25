@@ -26,6 +26,10 @@ import {
 } from '@invoker/execution-engine';
 import { loadConfig, resolveAutoFixExecutionModel, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
+import {
+  buildPersistedAutoApproveAuthorGate,
+  type AutoApproveAuthorGateResult,
+} from './auto-approve-author-gate.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { trackWorkflow } from './headless-watch.js';
 import {
@@ -98,6 +102,8 @@ export interface HeadlessDeps {
    * only delegated here to run one command and exit).
    */
   getWorkerRuntimeController?: () => WorkerRuntimeController | null;
+  /** Fail-closed PR-author gate for auto-approve. Reads config.json autoApproveAuthors. */
+  autoApproveAuthorGate?: (taskId: string) => Promise<AutoApproveAuthorGateResult>;
 }
 
 export const RESET = '\x1b[0m';
@@ -126,6 +132,8 @@ export function buildHeadlessApiServerDeps(
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
+      autoApproveAuthorGate: deps.autoApproveAuthorGate
+        ?? buildPersistedAutoApproveAuthorGate(deps.persistence),
       allowGraphMutation: deps.invokerConfig?.allowGraphMutation,
       defaultAutoFixRetries: deps.invokerConfig ? resolveAutoFixRetries(deps.invokerConfig) : undefined,
       getAutoFixAgent: () => deps.invokerConfig?.autoFixAgent,
