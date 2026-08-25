@@ -70,7 +70,7 @@ export interface PrMaintenanceConfig {
 
 export const DEFAULT_PR_MAINTENANCE_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
 
-const GITHUB_OWNER_REPO_RE = /^[^/\s]+\/[^/\s]+$/;
+const GITHUB_OWNER_REPO_RE = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 
 /** Normalize and validate a GitHub `owner/repo` string; returns null when invalid. */
 export function normalizeGithubOwnerRepo(value: string): string | null {

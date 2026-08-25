@@ -649,4 +649,16 @@ describe('prMaintenance.targetRepos', () => {
       prMaintenance: { targetRepos: ['not-a-repo'] },
     })).toThrow(/owner\/repo/);
   });
+
+  it('rejects targetRepos entries with disallowed punctuation', () => {
+    expect(() => validateInvokerConfig({
+      prMaintenance: { targetRepos: ['owner/bad?name'] },
+    })).toThrow(/owner\/repo/);
+  });
+
+  it('rejects targetRepos entries containing a comma', () => {
+    expect(() => validateInvokerConfig({
+      prMaintenance: { targetRepos: ['owner,other/repo'] },
+    })).toThrow(/owner\/repo/);
+  });
 });
