@@ -58,8 +58,8 @@ class RepairCheckLedgerOrderingTests(unittest.TestCase):
     def repairer(self, ledger):
         gh = object()  # no pr_detail attribute -> terminal_repair_outcome is a no-op
         logger = AdminBypassLogger()
-        executor = AdminBypassGhExecutor(gh, ledger, logger, "owner/repo")
-        return AdminBypassRepairer(gh, executor, logger, ledger, "owner/repo")
+        executor = AdminBypassGhExecutor(gh, ledger, logger, "Neko-Catpital-Labs/Invoker")
+        return AdminBypassRepairer(gh, executor, logger, ledger, "Neko-Catpital-Labs/Invoker")
 
     def test_a_submitted_repair_is_always_countable_by_the_retry_cap_ledger(self):
         ledger = self.ledger()

@@ -577,7 +577,7 @@ def mergify_failed_check_actions(
         detail = f"Mergify queue check failed: {name}"
         decision = retry_decision(
             ledger, pr.number, pr.head_ref_oid, "repair-check", name,
-            repair_check_plan_name(pr.number, name, pr.head_ref_oid), now, max_repair_attempts,
+            repair_check_plan_name(pr.number, name, pr.head_ref_oid, getattr(ledger, "repo", None)), now, max_repair_attempts,
         )
         if decision["action"] == "needs-human":
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, detail), detail),)
@@ -1087,7 +1087,7 @@ def plan_direct_repairs(
             if blocker.kind == "failed_check":
                 decision = retry_decision(
                     ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
-                    repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid), now, max_repair_attempts,
+                    repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid, getattr(ledger, "repo", None)), now, max_repair_attempts,
                 )
                 if decision["action"] == "needs-human":
                     return cap_action(pr, blocker, blocker.detail)
@@ -1130,7 +1130,7 @@ def plan_bot_thread_repairs(
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
             decision = retry_decision(
                 ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key,
-                repair_bot_thread_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
+                repair_bot_thread_plan_name(pr.number, pr.head_ref_oid, getattr(ledger, "repo", None)), now, max_repair_attempts,
             )
             if decision["action"] == "needs-human":
                 return cap_action(pr, blocker, blocker.detail)
@@ -1246,7 +1246,7 @@ def plan_invoker_rebase_onto_master(
     key = f"rebase-onto-master:{pr.number}"
     decision = retry_decision(
         ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key,
-        rebase_onto_master_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
+        rebase_onto_master_plan_name(pr.number, pr.head_ref_oid, getattr(ledger, "repo", None)), now, max_repair_attempts,
     )
     if decision["action"] == "needs-human":
         return cap_action(
