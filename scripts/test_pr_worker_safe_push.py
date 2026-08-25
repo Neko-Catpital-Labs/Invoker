@@ -113,6 +113,57 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_moved_remote_head_replays_cleanly_and_pushes_when_diff_does_not_conflict(self) -> None:
+        # The remote can move for a reason unrelated to our own pending commit
+        # -- e.g. an unrelated rebase-onto-base maintenance pass -- in which
+        # case our diff still applies cleanly on top of the new remote head
+        # and should be replayed there rather than refused outright.
+        self.clone_other()
+        (self.other / "other.txt").write_text("other\n", encoding="utf-8")
+        git(self.other, "add", "other.txt")
+        git(self.other, "commit", "-m", "unrelated rebase-forward change")
+        rebased_head = git(self.other, "rev-parse", "HEAD")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        new_remote = self.remote_head()
+        self.assertNotEqual(new_remote, rebased_head)
+        self.assertTrue(safe_push._is_ancestor(rebased_head, new_remote, cwd=self.repo))
+        self.assertEqual(git(self.repo, "show", f"{new_remote}:file.txt"), "base\nchange")
+        self.assertEqual(git(self.repo, "show", f"{new_remote}:other.txt"), "other")
+        self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
+
+    def test_moved_remote_head_with_no_local_work_settles_as_noop(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertEqual(self.remote_head(), remote_after_race)
+        self.assertFalse(ledger.exists())
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")
