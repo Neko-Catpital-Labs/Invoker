@@ -110,8 +110,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   assert(leg, has(leg, '[worker:pr-admin-bypass-land] spawning scripts/cron-pr-admin-bypass-land.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
-  assert(leg, has(leg, 'DRY-RUN repair-conflict PR #501'),
-    'conflicted PR triggered the admin-bypass repair-conflict path');
+  assert(leg, has(leg, 'DRY-RUN rebase-onto-master PR #501'),
+    'conflicted PR triggered the admin-bypass rebase-onto-master path');
 }
 
 // ---------------------------------------------------------------------------
