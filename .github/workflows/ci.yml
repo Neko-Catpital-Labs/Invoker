@@ -766,6 +766,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
+      options: --ipc=host
     timeout-minutes: 30
     strategy:
       fail-fast: false
