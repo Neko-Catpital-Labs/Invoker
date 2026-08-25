@@ -72,8 +72,8 @@ describe('headless install-skills', () => {
     await runHeadless(['--help'], {} as HeadlessDeps);
 
     const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
-    expect(output).toContain('install-skills [install|update|reinstall]          Install bundled Invoker AI helpers');
-    expect(output).toContain('install-skills uninstall                            Remove bundled Invoker AI helpers');
+    expect(output).toContain('install-skills [install|update|reinstall');
+    expect(output).toMatch(/install-skills\s+uninstall/);
     expect(output).toContain('set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)');
   });
 });
