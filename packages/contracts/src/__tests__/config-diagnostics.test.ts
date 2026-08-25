@@ -265,7 +265,7 @@ describe('collectInvokerConfigDiagnostics', () => {
     expect(diagnostics.filter((entry) => entry.severity === 'error').length).toBeGreaterThan(3);
   });
 
-  it('does not warn about removed infraRepair.enabled config gate', () => {
+  it('warns when SSH remoteTargets exist but infraRepair is not enabled', () => {
     const sshTarget = {
       host: '203.0.113.10',
       user: 'invoker',
@@ -273,6 +273,16 @@ describe('collectInvokerConfigDiagnostics', () => {
     };
     expect(warnings({
       remoteTargets: { box: sshTarget },
-    }).filter((entry) => entry.path === 'infraRepair.enabled')).toEqual([]);
+    })).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: 'warning',
+        path: 'infraRepair.enabled',
+        message: expect.stringContaining('infraRepair.enabled is not true'),
+      }),
+    ]));
+    expect(warnings({
+      remoteTargets: { box: sshTarget },
+      infraRepair: { enabled: true },
+    })).toEqual([]);
   });
 });
