@@ -845,14 +845,6 @@ export function App() {
       if (!chatList.ok) return false;
       const repoBinding = chatList.repoBinding;
       planningRepoBindingRef.current = { repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch };
-      if (chatList.sessions.length === 0) {
-        const nextSessions = planningSessionsRef.current.map((session) => (session.id.startsWith('local-')
-          ? { ...session, repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch }
-          : session));
-        planningSessionsRef.current = nextSessions;
-        setPlanningSessions(nextSessions);
-        return true;
-      }
       const terminalsByPlanningSession = new Map(
         terminalList
           .filter((session) => session.kind === 'planning' && session.planningSessionId)
@@ -875,7 +867,12 @@ export function App() {
         if (aliasedBackendIds.has(session.id)) return false;
         return !(hasBusyLocalView && session.activeTurnStatus === 'running');
       });
-      const nextSessions = reconcileHydratedPlanningSessions(planningSessionsRef.current, admissibleRestored);
+      const reconciledSessions = reconcileHydratedPlanningSessions(planningSessionsRef.current, admissibleRestored);
+      const nextSessions = chatList.sessions.length === 0
+        ? reconciledSessions.map((session) => (session.id.startsWith('local-')
+          ? { ...session, repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch }
+          : session))
+        : reconciledSessions;
       planningSessionsRef.current = nextSessions;
       setPlanningSessions(nextSessions);
       const currentSessionId = activePlanningSessionIdRef.current;
