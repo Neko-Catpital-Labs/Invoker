@@ -298,6 +298,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(invalidatedIntent?.status).toBe('failed');
     expect(invalidatedIntent?.error).toContain('Superseded by recreate intent #3');
     expect(evictedIntent?.status).toBe('failed');
+    // Persisted DB reason still records the raw queue-fence boundary; the
+    // "Superseded by recreate intent #N" wording above is what the in-flight
+    // caller (e.g. a tracked CLI command) actually observes as its rejection.
     expect(evictedIntent?.error).toContain('queue fence');
     gate.resolve();
   });
