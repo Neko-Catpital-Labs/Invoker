@@ -202,14 +202,15 @@ class AdminBypassRepairer:
         async_repair.submit_async_repair_plan(plan)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
-    def repair_conflict(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
-        check_name = "conflict"
+    def rebase_onto_master(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
+        check_name = "rebase-onto-master"
         start_head = pr.head_ref_oid
-        plan = async_repair.build_repair_conflict_plan(
+        key = f"rebase-onto-master:{pr.number}"
+        plan = async_repair.build_rebase_onto_master_plan(
             pr, reason, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
         )
         self.logger.trace(
-            "admin-bypass-repair-conflict-start",
+            "admin-bypass-rebase-onto-master-start",
             repo=self.repo,
             pr_number=pr.number,
             reason=reason,
@@ -220,7 +221,7 @@ class AdminBypassRepairer:
         )
         # See repair_check: record before submitting so a broken ledger write
         # blocks the submission instead of orphaning a real, running repair.
-        self.ledger.record("conflict-repair", pr.number, start_head, f"conflict:{pr.number}", now)
+        self.ledger.record("rebase-onto-master", pr.number, start_head, key, now)
         async_repair.submit_async_repair_plan(plan)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 

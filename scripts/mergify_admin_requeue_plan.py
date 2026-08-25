@@ -39,9 +39,9 @@ except ImportError:
 try:
     from .mergify_admin_requeue_async_repair import (
         _slugify,
+        rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
         repair_check_plan_name,
-        repair_conflict_plan_name,
     )
     from .mergify_admin_requeue_infra_signal import (
         SSH_OAUTH_INFRA_SIGNATURE,
@@ -51,9 +51,9 @@ try:
 except ImportError:
     from mergify_admin_requeue_async_repair import (
         _slugify,
+        rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
         repair_check_plan_name,
-        repair_conflict_plan_name,
     )
     from mergify_admin_requeue_infra_signal import (
         SSH_OAUTH_INFRA_SIGNATURE,
@@ -95,10 +95,12 @@ def mergify_check_state_sha(pr: PrSnapshot, latest: MergifyQueueEvent) -> str:
 
 
 REBASE_CONFLICT_REPAIR_FILING_KIND = "admin-requeue:rebase-conflict"
-CONFLICT_REPAIR_FILING_KIND = "admin-requeue:conflict"
+# Shared by GitHub DIRTY conflicts and no-CI Mergify dequeue-while-behind.
+REBASE_ONTO_MASTER_FILING_KIND = "admin-requeue:rebase-onto-master"
+REBASE_ONTO_MASTER_LEDGER_KIND = "rebase-onto-master"
 
 # Every claim_repair_filing call site below uses `subject=str(pr.number)` --
-# the raw PR number, same shape as repair_check_plan_name/repair_conflict_plan_name
+# the raw PR number, same shape as repair_check_plan_name/rebase_onto_master_plan_name
 # in mergify_admin_requeue_async_repair.py (see that module's plan-naming
 # functions), which have no lineage concept either. PRs get recreated with a
 # new number on retarget under this repo's own `stack/` convention (see
@@ -1020,18 +1022,40 @@ def plan_mergify_queue_repairs(
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
-        if facts.stale_base_by_pr.get(pr.number) and pr.latest_mergify and pr.latest_mergify.failing_checks:
-            return plan_rebase_onto_base(
-                pr, facts.trunk, ledger, max_repair_attempts,
-                "structural stale base is blocking its failing check(s), not a code problem",
-                claim_repair_filing,
-            )
+        # Named CI failures always go to repair_check — never rebase because
+        # the branch is also behind master (see #10242 rewrite incident).
         actions = mergify_failed_check_actions(
             pr, ledger, max_repair_attempts, now, facts.suppressed_failed_checks_by_pr.get(pr.number, ()),
             claim_repair_filing,
         )
         if actions:
             return actions[0]
+        # Dequeued with no named required-check failure AND behind master →
+        # Invoker rebase (timeout / speculative merge onto moved trunk). A green
+        # dequeue that is already based on current master still falls through to
+        # plan_bottom_progress's requeue path.
+        latest = pr.latest_mergify
+        if (
+            latest
+            and latest.state == "dequeued"
+            and latest.head_sha == pr.head_ref_oid
+            and not latest.failing_checks
+            and not any(b.kind == "failed_check" for b in facts.blockers_by_pr[pr.number])
+            and not any(b.kind == "pending_check" for b in facts.blockers_by_pr[pr.number])
+            and not any(b.kind in {"bot_review_thread", "outdated_bot_review_thread"} for b in facts.blockers_by_pr[pr.number])
+            and not (facts.prereq_status and facts.prereq_status.needs_followup_requeue)
+            and facts.stale_base_by_pr.get(pr.number)
+        ):
+            action = plan_invoker_rebase_onto_master(
+                pr,
+                ledger,
+                max_repair_attempts,
+                now,
+                "Mergify dequeued with no named required-check failure while behind master",
+                claim_repair_filing,
+            )
+            if action is not None:
+                return action
     return None
 
 
@@ -1048,31 +1072,19 @@ def plan_direct_repairs(
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
-                key = f"conflict:{pr.number}"
-                decision = retry_decision(
-                    ledger, pr.number, pr.head_ref_oid, "conflict-repair", key,
-                    repair_conflict_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
+                # Legacy conflict-repair filings may still be in flight.
+                legacy_key = f"conflict:{pr.number}"
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
+                    continue
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
+                    continue
+                action = plan_invoker_rebase_onto_master(
+                    pr, ledger, max_repair_attempts, now, blocker.detail, claim_repair_filing,
                 )
-                if decision["action"] == "needs-human":
-                    return cap_action(pr, blocker, blocker.detail)
-                if decision["action"] == "backoff":
-                    continue
-                if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
-                    continue
-                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
-                    continue
-                if claim_repair_filing is not None and claim_repair_filing(
-                    CONFLICT_REPAIR_FILING_KIND, str(pr.number), pr.head_ref_oid,
-                ):
-                    continue
-                return Action("repair_conflict", pr.number, key, blocker.detail)
+                if action is not None:
+                    return action
+                continue
             if blocker.kind == "failed_check":
-                if facts.stale_base_by_pr.get(pr.number):
-                    return plan_rebase_onto_base(
-                        pr, facts.trunk, ledger, max_repair_attempts,
-                        "structural stale base is blocking its failing check(s), not a code problem",
-                        claim_repair_filing,
-                    )
                 decision = retry_decision(
                     ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
                     repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid), now, max_repair_attempts,
@@ -1141,12 +1153,23 @@ def has_active_repair_for_current_blocker(facts: StackFacts, ledger: Ledger, now
                     return True
                 if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", check_name, now):
                     return True
+            if not latest.failing_checks:
+                key = f"rebase-onto-master:{pr.number}"
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now):
+                    return True
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now):
+                    return True
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
-                key = f"conflict:{pr.number}"
-                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
+                key = f"rebase-onto-master:{pr.number}"
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now):
                     return True
-                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now):
+                    return True
+                legacy_key = f"conflict:{pr.number}"
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
+                    return True
+                if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
                     return True
             elif blocker.kind == "failed_check":
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
@@ -1211,6 +1234,43 @@ def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
     return None
 
 
+def plan_invoker_rebase_onto_master(
+    pr: PrSnapshot,
+    ledger: Ledger,
+    max_repair_attempts: int,
+    now: int,
+    reason: str,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+) -> Action | None:
+    """File an Invoker prompt job to rebase the PR onto master (no local force-push)."""
+    key = f"rebase-onto-master:{pr.number}"
+    decision = retry_decision(
+        ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key,
+        rebase_onto_master_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
+    )
+    if decision["action"] == "needs-human":
+        return cap_action(
+            pr,
+            Blocker(key, "rebase_onto_master", pr.number, reason),
+            reason,
+        )
+    if decision["action"] == "backoff":
+        return None
+    if not decision["crashed_on_infra"] and repair_in_flight(
+        ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now,
+    ):
+        return None
+    if infra_repair_owns_unit(
+        ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now,
+    ):
+        return None
+    if claim_repair_filing is not None and claim_repair_filing(
+        REBASE_ONTO_MASTER_FILING_KIND, str(pr.number), pr.head_ref_oid,
+    ):
+        return None
+    return Action("rebase_onto_master", pr.number, key, reason)
+
+
 def plan_rebase_onto_base(
     pr: PrSnapshot,
     trunk: str,
@@ -1219,6 +1279,9 @@ def plan_rebase_onto_base(
     reason: str,
     claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> Action | None:
+    # Retained for unit tests that pin the legacy Python force-push path.
+    # Production planners no longer call this for behind-master or CI failures;
+    # conflicts and no-CI Mergify dequeues use plan_invoker_rebase_onto_master.
     # Persistent count (count_by_unit), not the head_sha-scoped count() --
     # a rebase attempt changes head_sha by definition, so the head_sha-scoped
     # count could never accumulate past 1 no matter how many times it
@@ -1309,11 +1372,8 @@ def plan_bottom_progress(
                 detail,
             )
         return Action("refresh_stale_queue", bottom.number, STALE_QUEUE_EVENT_REFRESH_KEY, detail)
-    if bottom.base_ref_name == facts.trunk and facts.stale_base_by_pr.get(bottom.number):
-        return plan_rebase_onto_base(
-            bottom, facts.trunk, ledger, max_requeue_attempts,
-            "base pointer moved but content was never rebased", claim_repair_filing,
-        )
+    # Behind master alone is not a rebase trigger: wait / requeue. Rebases are
+    # Invoker jobs for GitHub conflicts and no-CI Mergify dequeues only.
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
     if latest and latest.state == "dequeued":
