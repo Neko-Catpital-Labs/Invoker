@@ -5,10 +5,10 @@
 //   node scripts/bump-version.mjs 0.0.7
 //
 // Covers the root + publishable package.json files (app, cli, slack-manager,
-// npm-cli, npm-ui, npm-slack), the VERSION constants baked into the CLI and
-// Slack manager sources, and CHANGELOG.md (renames "## Unreleased" to the
-// new version and starts a fresh "## Unreleased"). After this, commit and tag
-// (vX.Y.Z) to trigger the release workflow.
+// watcher, npm-cli, npm-ui, npm-slack, npm-watcher), the VERSION constants
+// baked into the CLI and Slack manager sources, and CHANGELOG.md (renames
+// "## Unreleased" to the new version and starts a fresh "## Unreleased").
+// After this, commit and tag (vX.Y.Z) to trigger the release workflow.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -44,9 +44,11 @@ function main() {
     'packages/app/package.json',
     'packages/cli/package.json',
     'packages/slack-manager/package.json',
+    'packages/watcher/package.json',
     'packages/npm-cli/package.json',
     'packages/npm-ui/package.json',
     'packages/npm-slack/package.json',
+    'packages/npm-watcher/package.json',
   ];
 
   for (const relPath of packageJsonPaths) {
