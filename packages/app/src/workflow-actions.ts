@@ -22,7 +22,7 @@ import {
   parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger, formatAgentFailureForTask } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger, type AutoApproveAuthorGateResult, formatAgentFailureForTask } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
@@ -144,6 +144,8 @@ export interface ActionDeps {
   mutationTiming?: WorkflowMutationTiming;
   /** When true, successful AI-applied fixes are approved immediately. */
   autoApproveAIFixes?: boolean;
+  /** Fail-closed PR-author allowlist. Missing/denied means do not auto-approve. */
+  autoApproveAuthorGate?: (taskId: string) => Promise<AutoApproveAuthorGateResult>;
 }
 
 export interface CommandActionDeps extends ActionDeps {
@@ -838,7 +840,7 @@ export async function setTaskFixContext(
 
 export async function resolveConflictAction(
   taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'autoApproveAuthorGate'> & { taskExecutor: TaskRunner },
   agentName?: string,
   signal?: AbortSignal,
   options?: { pathDefaultAgent?: string },
@@ -882,7 +884,7 @@ function resolveTaskRunnerDefaultExecutionAgent(taskExecutor: TaskRunner): strin
 
 export async function fixWithAgentAction(
   taskId: string,
-  deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },
+  deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'autoApproveAuthorGate' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },
   options: {
     agentName?: string;
     recoveryRoute?: FailureRecoveryRoute;
@@ -990,7 +992,7 @@ export async function fixWithAgentAction(
 export async function finalizeAppliedFix(
   taskId: string,
   savedError: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
+  deps: Pick<ActionDeps, 'orchestrator' | 'autoApproveAIFixes' | 'autoApproveAuthorGate'> & { taskExecutor: TaskRunner },
   signal?: AbortSignal,
   lineage?: TaskLineageSnapshot,
 ): Promise<{ autoApproved: boolean; started: TaskState[] }> {
@@ -1002,6 +1004,12 @@ export async function finalizeAppliedFix(
   if (lineage) assertLineageCurrent(lineage, deps.orchestrator, signal);
   deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
   if (!deps.autoApproveAIFixes) {
+    return { autoApproved: false, started: [] };
+  }
+  const authorGate = deps.autoApproveAuthorGate
+    ? await deps.autoApproveAuthorGate(taskId)
+    : { allowed: false as const, reason: 'allowlist-missing' as const };
+  if (!authorGate.allowed) {
     return { autoApproved: false, started: [] };
   }
 
@@ -1215,6 +1223,7 @@ export async function autoFixOnFailure(
     mutationTiming?: WorkflowMutationTiming;
     getAutoFixAgent?: () => string | undefined;
     getAutoApproveAIFixes?: () => boolean | undefined;
+    autoApproveAuthorGate?: (taskId: string) => Promise<AutoApproveAuthorGateResult>;
     signal?: AbortSignal;
   },
   inlineRetryDepth = 0,
@@ -1344,6 +1353,7 @@ export async function autoFixOnFailure(
         orchestrator,
         taskExecutor,
         autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
+        autoApproveAuthorGate: deps.autoApproveAuthorGate,
       }, deps.signal, lineage);
       persistence.logEvent?.(taskId, 'debug.auto-fix', {
         phase: 'auto-fix-post-route-finalize',

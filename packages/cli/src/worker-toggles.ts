@@ -37,7 +37,7 @@ export const ONBOARDING_WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
   {
     id: 'auto-approve',
     label: 'Auto-approve AI fixes',
-    description: 'Skips the manual "Approve Fix" step for fix-with-agent and resolve-conflict flows. The worker itself always runs; this only controls whether it acts automatically.',
+    description: 'Skips the manual "Approve Fix" step for fix-with-agent and resolve-conflict flows, but only for GitHub PRs whose author is listed in config.json autoApproveAuthors (missing/empty means nobody). The worker itself always runs; this only controls whether it acts automatically.',
     configPath: 'autoApproveAIFixes',
   },
   {

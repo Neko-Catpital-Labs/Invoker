@@ -51,12 +51,8 @@ import {
 } from './live-owner-bus.js';
 import { runMcpServer } from './mcp-server.js';
 import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
-import {
-  applyWorkerToggle,
-  findWorkerToggle,
-  ONBOARDING_WORKER_TOGGLES,
-  readWorkerToggleValue,
-} from './worker-toggles.js';
+import { applyWorkerToggle, findWorkerToggle, ONBOARDING_WORKER_TOGGLES, readWorkerToggleValue } from './worker-toggles.js';
+import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
 
 const VERSION = '0.0.12';
 
@@ -185,6 +181,7 @@ function usage(): string {
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli worker toggles [--enable <id>|--disable <id> ...]',
+    '  invoker-cli auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
@@ -202,6 +199,7 @@ function usage(): string {
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
     '  worker toggles      Show or set the on/off state of optional owner workers (PR maintenance, e2e auto-fix, auto-approve, disk-headroom cleanup).',
+    '  auto-approve-authors  Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
     '',
     'Options:',
     '  --planner-url <url>   Planner service URL for `setup planner`.',
@@ -1070,6 +1068,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'mcp') {
       await (deps.runMcpServer ?? runMcpServer)();
       return 0;
+    }
+    if (argv[0] === 'auto-approve-authors') {
+      return await runAutoApproveAuthorsCommand(argv.slice(1), { configPath: defaultConfigPath() });
     }
     if (argv[0] === 'owner') {
       if (argv[1] !== 'serve') {

@@ -527,6 +527,12 @@ describe('finalizeAppliedFix', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       taskExecutor: taskExecutor as unknown as TaskRunner,
       autoApproveAIFixes: true,
+      autoApproveAuthorGate: async () => ({
+        allowed: true,
+        author: 'EdbertChan',
+        prNumber: '1',
+        repo: 'Neko-Catpital-Labs/Invoker',
+      }),
     });
 
     expect(result).toEqual({ autoApproved: true, started });
@@ -563,6 +569,12 @@ describe('finalizeAppliedFix', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       taskExecutor: taskExecutor as unknown as TaskRunner,
       autoApproveAIFixes: true,
+      autoApproveAuthorGate: async () => ({
+        allowed: true,
+        author: 'EdbertChan',
+        prNumber: '1',
+        repo: 'Neko-Catpital-Labs/Invoker',
+      }),
     });
 
     expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
@@ -570,6 +582,29 @@ describe('finalizeAppliedFix', () => {
     );
     expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
+  });
+
+  it('leaves the fix awaiting approval when the PR author is not allowlisted', async () => {
+    const orchestrator = {
+      setFixAwaitingApproval: vi.fn(),
+      approve: vi.fn(),
+    };
+    const taskExecutor = {
+      commitApprovedFix: vi.fn(),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const result = await finalizeAppliedFix('task-a', 'saved-error', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      autoApproveAIFixes: true,
+      autoApproveAuthorGate: async () => ({ allowed: false, reason: 'author-not-allowlisted' }),
+    });
+
+    expect(result).toEqual({ autoApproved: false, started: [] });
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');
+    expect(orchestrator.approve).not.toHaveBeenCalled();
   });
 });
 
@@ -909,6 +944,12 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
       commandService: makeCommandService(),
       getAutoApproveAIFixes: () => true,
+      autoApproveAuthorGate: async () => ({
+        allowed: true,
+        author: 'EdbertChan',
+        prNumber: '1',
+        repo: 'Neko-Catpital-Labs/Invoker',
+      }),
     });
 
     expect(taskExecutor.execGitIn).toHaveBeenCalledWith(['rev-parse', 'HEAD'], '/tmp/merge-a');
@@ -1003,6 +1044,12 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
       commandService: makeCommandService(),
       getAutoApproveAIFixes: () => true,
+      autoApproveAuthorGate: async () => ({
+        allowed: true,
+        author: 'EdbertChan',
+        prNumber: '1',
+        repo: 'Neko-Catpital-Labs/Invoker',
+      }),
     });
 
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(2);
