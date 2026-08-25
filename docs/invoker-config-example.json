@@ -105,13 +105,16 @@
   "autoFixCi": false,
 
   "prMaintenance": {
-    "comment": "Built-in owner-host PR maintenance workers. Enable on the host that owns the Invoker database; start/stop from Workers or run one scan with ./run.sh --headless worker <kind>.",
+    "comment": "Built-in owner-host PR maintenance workers. Enable on the host that owns the Invoker database; start/stop from Workers or run one scan with ./run.sh --headless worker <kind>. Set targetRepos to every GitHub owner/repo to scan for admin-bypass (and related) PR maintenance; omit to scan only Neko-Catpital-Labs/Invoker.",
     "enabled": true,
     "repoRoot": "/srv/invoker",
     "intervalMs": 300000,
     "lockPath": "/tmp/invoker-pr-maintenance.lock",
+    "targetRepos": [
+      "Neko-Catpital-Labs/Invoker",
+      "EdbertChan/catstack"
+    ],
     "env": {
-      "INVOKER_GITHUB_TARGET_REPO": "acme/web",
       "INVOKER_CODERABBIT_LOGIN": "coderabbitai[bot]"
     }
   },
