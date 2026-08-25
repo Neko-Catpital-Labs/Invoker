@@ -3,6 +3,9 @@
 # checkout to origin/master, run the FULL extended e2e battery, and for every
 # still-failing suite submit ONE single-task Invoker plan.
 #
+# Related DO1 cron (Linear → Invoker intake, not e2e):
+#   scripts/install-linear-ticket-intake-cron.sh  (docs/linear-ticket-intake.md)
+#
 # This script does NOT fix anything or open PRs itself. It hands each failing
 # suite to Invoker as a plan with `onFinish: pull_request`. Invoker's own
 # auto-fix then repairs the suite with the configured agent and opens exactly
