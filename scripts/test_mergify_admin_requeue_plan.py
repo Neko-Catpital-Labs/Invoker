@@ -382,7 +382,7 @@ class PlanStackActions(PlannerTestCase):
 
     def test_conflict_triggers_claude_repair(self):
         actions = self._plan(pr(merge_state_status="DIRTY"))
-        self.assertEqual((actions[0].kind, actions[0].pr_number), ("repair_conflict", 1))
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_master", 1))
 
     def test_repair_invalid_conflict_stops_retrying(self):
         ledger = self._ledger()
@@ -492,38 +492,58 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
         self.assertEqual(actions[0].kind, "repair_check")
 
-    def test_failed_check_with_stale_base_skips_agent_repair(self):
-        # PR #7727 incident: no coding-agent repair can fix a git-history
-        # problem. Once the base is known to be structurally stale, the
-        # direct-repair ladder must route to rebase_onto_base, never
-        # repair_check, and must not spend a repair-check ledger attempt.
+    def test_failed_check_with_stale_base_still_repairs_via_agent(self):
+        # Behind master must not steal a named CI failure into a blind rebase.
+        # File repair_check so the failing test/linter can be fixed in place.
         ledger = self._ledger()
         snapshot = pr(number=42, checks={"build": check("failure")})
         actions = self._plan(snapshot, ledger=ledger, stale_base_by_pr={42: True})
-        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("rebase_onto_base", 42, "master"))
-        self.assertEqual(ledger.count("repair-check", 42, HEAD, "build"), 0)
+        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("repair_check", 42, "build"))
 
-    def test_failed_check_with_stale_base_skips_agent_repair_via_mergify_dequeue(self):
+    def test_failed_check_with_stale_base_still_repairs_via_mergify_dequeue(self):
         ledger = self._ledger()
         snapshot = pr(number=43, latest_mergify=event(failing=("build",)))
         actions = self._plan(snapshot, ledger=ledger, stale_base_by_pr={43: True})
-        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("rebase_onto_base", 43, "master"))
-        self.assertEqual(ledger.count("repair-check", 43, HEAD, "build"), 0)
+        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("repair_check", 43, "build"))
+
+    def test_failed_pr_body_with_stale_base_still_repairs_not_rebases(self):
+        actions = self._plan(
+            pr(number=10242, checks={"PR Body": check("failure", "PR Body")}),
+            required_checks={"PR Body"},
+            stale_base_by_pr={10242: True},
+        )
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "PR Body"))
+        self.assertNotEqual(actions[0].kind, "rebase_onto_base")
+        self.assertNotEqual(actions[0].kind, "rebase_onto_master")
 
     def test_failed_check_with_clean_base_still_repairs_via_agent(self):
         actions = self._plan(pr(checks={"build": check("failure")}), stale_base_by_pr={1: False})
         self.assertEqual(actions[0].kind, "repair_check")
 
-
     def test_clean_bottom_missing_label_nudges_human(self):
         actions = self._plan(pr())  # green, no admin-bypass label
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_admin_bypass_nudge", "admin-bypass"))
 
-    def test_clean_bottom_dequeued_gets_requeued(self):
+    def test_clean_bottom_dequeued_with_no_ci_failure_rebases_via_invoker(self):
+        # Green Mergify dequeue that is also behind master → Invoker rebase,
+        # not a blind Python force-push and not a bare requeue.
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
-        actions = self._plan(snapshot)
+        actions = self._plan(snapshot, stale_base_by_pr={1: True})
+        self.assertEqual(actions[0].kind, "rebase_onto_master")
+        self.assertIn("no named required-check failure", actions[0].detail)
+
+    def test_clean_bottom_dequeued_up_to_date_still_requeues(self):
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
+        actions = self._plan(snapshot, stale_base_by_pr={1: False})
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-after-dequeue"))
 
+    def test_clean_bottom_dequeued_with_named_ci_failure_still_repairs(self):
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", failing=("build",)),
+        )
+        actions = self._plan(snapshot, stale_base_by_pr={1: True})
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
     def test_queued_label_with_headless_active_queue_event_waits(self):
         snapshot = pr(labels=frozenset({"admin-bypass", "queued"}), latest_mergify=event(state="queued", head=""))
         actions = self._plan(snapshot)
@@ -597,17 +617,13 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(snapshot)
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
 
-    def test_stale_base_content_rebases_before_requeue(self):
-        # PR #7727 incident: retarget_base already moved the base pointer to
-        # `master`, but the branch content was never rebased. Once the loader
-        # reports the base as `master` again (bottom_topology is now
-        # "current_bottom", not "stale_unowned_base"), the planner must not
-        # requeue a PR whose content still isn't an ancestor of master.
+    def test_stale_base_content_requeues_without_rebase(self):
+        # Behind master alone must not force-push. Requeue (or wait) instead.
         snapshot = pr(number=5885, labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot, stale_base_by_pr={5885: True})
         self.assertEqual(
-            (actions[0].kind, actions[0].pr_number, actions[0].key),
-            ("rebase_onto_base", 5885, "master"),
+            (actions[0].kind, actions[0].pr_number, actions[0].detail),
+            ("requeue", 5885, "eligible-when-ready"),
         )
 
     def test_clean_ancestry_bottom_still_requeues_normally(self):
@@ -619,6 +635,34 @@ class PlanStackActions(PlannerTestCase):
         snapshot = pr(number=5885, labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot, stale_base_by_pr={9999: True})
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
+
+    def test_dirty_conflict_plans_invoker_rebase_onto_master(self):
+        actions = self._plan(
+            pr(
+                number=77,
+                labels=frozenset({"admin-bypass"}),
+                merge_state_status="DIRTY",
+                mergeable="CONFLICTING",
+            ),
+        )
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_master", 77))
+        self.assertEqual(actions[0].key, "rebase-onto-master:77")
+
+    def test_conflict_and_dequeue_share_rebase_onto_master_retry_budget(self):
+        ledger = self._ledger()
+        for epoch in range(3):
+            ledger.record("rebase-onto-master", 1, HEAD, "rebase-onto-master:1", epoch)
+        dirty = self._plan(
+            pr(labels=frozenset({"admin-bypass"}), merge_state_status="DIRTY"),
+            ledger=ledger,
+        )
+        self.assertEqual(dirty[0].kind, "comment_blocked")
+        dequeue = self._plan(
+            pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued")),
+            ledger=ledger,
+            stale_base_by_pr={1: True},
+        )
+        self.assertEqual(dequeue[0].kind, "comment_blocked")
 
     def test_upper_human_decision_does_not_block_clean_bottom_requeue(self):
         bottom = pr(number=10, head_ref_name="stack/bottom", labels=frozenset({"admin-bypass"}))
@@ -896,7 +940,8 @@ class ClaimRepairFilingGate(PlannerTestCase):
         self.assertEqual(p.repair_filing_kind_for_check("build"), "admin-requeue:check:build")
         self.assertEqual(p.repair_filing_kind_for_check("quality / Dependency Cruise"), "admin-requeue:check:quality-dependency-cruise")
 
-    def test_rebase_conflict_kind_matches_the_spec_worked_example(self):
+    def test_rebase_onto_master_kind_matches_the_spec_worked_example(self):
+        self.assertEqual(p.REBASE_ONTO_MASTER_FILING_KIND, "admin-requeue:rebase-onto-master")
         self.assertEqual(p.REBASE_CONFLICT_REPAIR_FILING_KIND, "admin-requeue:rebase-conflict")
 
     def test_duplicate_claim_suppresses_repair_check_action(self):
@@ -936,16 +981,13 @@ class ClaimRepairFilingGate(PlannerTestCase):
         # MergifyRequeueAttemptStateShaCollisionRepro for why.
         self.assertEqual(calls, [("admin-requeue:check:build", "1", f"{HEAD}:cm1")])
 
-    def test_duplicate_claim_suppresses_rebase_onto_base_action(self):
-        # Same fixture as test_failed_check_with_stale_base_skips_agent_repair
-        # in PlanStackActions, which proves the un-gated (claim_repair_filing=None)
-        # case returns the rebase_onto_base Action -- this proves a duplicate
-        # claim suppresses it instead.
+    def test_duplicate_claim_suppresses_stale_failed_check_repair(self):
+        # Stale + failed check now plans repair_check (not rebase_onto_base).
         snapshot = pr(number=42, checks={"build": check("failure")})
         actions = self._plan(snapshot, lambda kind, subject, sha: True, stale_base_by_pr={42: True})
         self.assertEqual(actions, ())
 
-    def test_fresh_claim_lets_rebase_onto_base_action_through(self):
+    def test_fresh_claim_lets_stale_failed_check_repair_through(self):
         snapshot = pr(number=42, checks={"build": check("failure")})
         calls = []
         actions = self._plan(
@@ -953,8 +995,34 @@ class ClaimRepairFilingGate(PlannerTestCase):
             lambda kind, subject, sha: calls.append((kind, subject, sha)) or False,
             stale_base_by_pr={42: True},
         )
-        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_base", 42))
-        self.assertEqual(calls, [("admin-requeue:rebase-conflict", "42", HEAD)])
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("repair_check", 42))
+        self.assertEqual(calls, [("admin-requeue:check:build", "42", HEAD)])
+
+    def test_duplicate_claim_suppresses_no_ci_dequeue_rebase(self):
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
+        actions = self._plan(snapshot, lambda kind, subject, sha: True, stale_base_by_pr={1: True})
+        self.assertNotEqual(actions[0].kind if actions else None, "rebase_onto_master")
+
+    def test_fresh_claim_lets_no_ci_dequeue_rebase_through(self):
+        calls = []
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
+        actions = self._plan(
+            snapshot,
+            lambda kind, subject, sha: calls.append((kind, subject, sha)) or False,
+            stale_base_by_pr={1: True},
+        )
+        self.assertEqual(actions[0].kind, "rebase_onto_master")
+        self.assertEqual(calls, [(p.REBASE_ONTO_MASTER_FILING_KIND, "1", HEAD)])
+
+    def test_fresh_claim_lets_dirty_conflict_rebase_through(self):
+        calls = []
+        snapshot = pr(labels=frozenset({"admin-bypass"}), merge_state_status="DIRTY")
+        actions = self._plan(
+            snapshot,
+            lambda kind, subject, sha: calls.append((kind, subject, sha)) or False,
+        )
+        self.assertEqual(actions[0].kind, "rebase_onto_master")
+        self.assertEqual(calls, [(p.REBASE_ONTO_MASTER_FILING_KIND, "1", HEAD)])
 
     def test_claim_does_not_consume_a_repair_check_ledger_attempt(self):
         # A duplicate claim is a cross-system dedup skip, not a real attempt
@@ -1044,10 +1112,10 @@ class PlanDirectRepairsUnguardedSecondPathRepro(PlannerTestCase):
     def test_duplicate_claim_is_not_honored_by_plan_direct_repairs_conflict_path(self):
         snapshot = pr(mergeable="CONFLICTING")
         actions = self._plan(snapshot, claim_repair_filing=lambda kind, subject, sha: True)
-        repair_conflict_actions = [a for a in actions if a.kind == "repair_conflict"]
+        rebase_actions = [a for a in actions if a.kind == "rebase_onto_master"]
         self.assertEqual(
-            repair_conflict_actions, [],
-            "plan_direct_repairs' own conflict path refiled a repair_conflict the ledger "
+            rebase_actions, [],
+            "plan_direct_repairs' own conflict path refiled a rebase_onto_master the ledger "
             "already said was claimed elsewhere -- it is not gated by claim_repair_filing",
         )
 
@@ -1310,13 +1378,13 @@ class InfraCrashDoesNotCountAgainstCap(PlannerTestCase):
 
     def test_plan_direct_repairs_conflict_resubmits_instead_of_blocking(self):
         ledger = self._ledger()
-        key = "conflict:1"
-        ledger.record("conflict-repair", 1, HEAD, key, epoch=NOW - 100)
+        key = "rebase-onto-master:1"
+        ledger.record("rebase-onto-master", 1, HEAD, key, epoch=NOW - 100)
         snapshot = pr(labels=frozenset({"admin-bypass"}), merge_state_status="DIRTY", mergeable="CONFLICTING")
         facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
         with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
             action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
-        self.assertEqual((action.kind, action.key), ("repair_conflict", key))
+        self.assertEqual((action.kind, action.key), ("rebase_onto_master", key))
 
     def test_plan_bot_thread_repairs_resubmits_instead_of_blocking(self):
         ledger = self._ledger()
