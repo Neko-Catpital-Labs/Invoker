@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { resolveInvokerHomeRoot, type IsInstalled } from '@invoker/contracts';
 import type {
   HarnessConfigState,
+  HarnessInstructionConfigState,
   HarnessMcpConfigState,
   BundledSkillsInstallMode,
   BundledSkillsStatus,
@@ -13,12 +14,17 @@ import type {
 } from '@invoker/contracts';
 
 import { commandExists } from './command-exists.js';
+import { CLAUDE_HOOK_SCRIPT, CURSOR_RULE_CONTENTS, EXECUTION_ROUTING_FRAGMENT } from './always-on/fragments.js';
 
 const MANAGED_PREFIX = 'invoker-';
 const MANIFEST_FILE = 'bundled-skills.json';
 const OMP_MCP_SCHEMA_URL = 'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json';
 const INVOKER_MCP_SERVER = { type: 'stdio', command: 'invoker-cli', args: ['mcp'] } as const;
 const INVOKER_MCP_SERVER_NAME = 'invoker';
+const INSTRUCTION_BEGIN = '<!-- invoker-execution -->';
+const INSTRUCTION_END = '<!-- /invoker-execution -->';
+const CURSOR_RULE_FILE = 'invoker-execution-precedence.mdc';
+const CLAUDE_HOOK_MARKER = 'invoker-execution/claude_prompt_submit';
 
 interface BundledSkillsManifest {
   bundledHash: string;
@@ -28,6 +34,8 @@ interface BundledSkillsManifest {
   targets: Record<string, { path: string; installedSkillNames: string[] }>;
   commandTargets?: Record<string, { path: string; installedCommandNames: string[] }>;
   mcpTargets?: Record<string, { path: string; serverName: string }>;
+  instructionTargets?: Record<string, { path: string; installedInstructionNames: string[] }>;
+  instructionHash?: string;
   /**
    * The Invoker source checkout these skills were bundled from (unset for
    * packaged Electron builds, whose resources dir isn't a real checkout).
@@ -150,7 +158,7 @@ function resolveCursorTarget(): BundledSkillTargetStatus {
   return {
     id: 'cursor',
     name: 'Cursor',
-    path: path.join(homedir(), '.cursor', 'skills-cursor'),
+    path: path.join(homedir(), '.cursor', 'skills'),
     available: true,
     installed: false,
     upToDate: false,
@@ -600,10 +608,299 @@ function installMcpTarget(target: McpTargetCandidate): void {
   installJsonMcpTarget(target, defaultConfig);
 }
 
+function uninstallJsonMcpTarget(target: McpTargetCandidate): void {
+  if (!existsSync(target.path)) return;
+  const config = readMutableJsonMcpConfig(target.path, {});
+  if (!isJsonRecord(config.mcpServers) || !(target.serverName in config.mcpServers)) return;
+  const { [target.serverName]: _removed, ...rest } = config.mcpServers;
+  config.mcpServers = rest;
+  writeFileAtomic(target.path, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function uninstallTomlMcpTarget(target: McpTargetCandidate): void {
+  if (!existsSync(target.path)) return;
+  const existing = readFileSync(target.path, 'utf-8');
+  const range = findTomlInvokerServerBlockRange(existing, target.serverName);
+  if (!range) return;
+  const lines = existing.split('\n');
+  const next = [...lines.slice(0, range.start), ...lines.slice(range.end)].join('\n').replace(/\n{3,}/g, '\n\n');
+  writeFileAtomic(target.path, next.endsWith('\n') ? next : `${next}\n`);
+}
+
+function uninstallMcpTarget(target: McpTargetCandidate): void {
+  if (target.format === 'toml') {
+    uninstallTomlMcpTarget(target);
+    return;
+  }
+  uninstallJsonMcpTarget(target);
+}
+
+function hashAlwaysOnFragments(): string {
+  const hash = createHash('sha256');
+  hash.update(CURSOR_RULE_CONTENTS);
+  hash.update('\0');
+  hash.update(EXECUTION_ROUTING_FRAGMENT);
+  hash.update('\0');
+  hash.update(CLAUDE_HOOK_SCRIPT);
+  return hash.digest('hex');
+}
+
+function resolveCursorRulePath(): string {
+  return path.join(homedir(), '.cursor', 'rules', CURSOR_RULE_FILE);
+}
+
+function resolveCodexAgentsPath(): string {
+  return path.join(homedir(), '.codex', 'AGENTS.md');
+}
+
+function resolveClaudeSettingsPath(): string {
+  return path.join(homedir(), '.claude', 'settings.json');
+}
+
+function resolveLegacyCursorSkillsPath(): string {
+  return path.join(homedir(), '.cursor', 'skills-cursor');
+}
+
+function resolveHookInstallDir(invokerHomeRoot: string): string {
+  return path.join(invokerHomeRoot, 'hooks', 'invoker-execution');
+}
+
+function assertNotSymlink(filePath: string): void {
+  if (existsSync(filePath) && lstatSync(filePath).isSymbolicLink()) {
+    throw new Error(`Refusing to write through symlink: ${filePath}`);
+  }
+}
+
+function wrapInstructionFragment(fragment: string): string {
+  return `${INSTRUCTION_BEGIN}\n${fragment.trim()}\n${INSTRUCTION_END}\n`;
+}
+
+function mergeMarkedBlock(existing: string, fragment: string): string {
+  const block = wrapInstructionFragment(fragment);
+  if (existing.includes(INSTRUCTION_BEGIN)) {
+    const start = existing.indexOf(INSTRUCTION_BEGIN);
+    let end = existing.indexOf(INSTRUCTION_END, start);
+    if (end === -1) return `${existing.slice(0, start)}${block}`;
+    end += INSTRUCTION_END.length;
+    if (existing[end] === '\n') end += 1;
+    return `${existing.slice(0, start)}${block}${existing.slice(end)}`;
+  }
+  const sep = existing && !existing.endsWith('\n') ? '\n' : '';
+  const extra = existing ? '\n' : '';
+  return `${existing}${sep}${extra}${block}`;
+}
+
+function removeMarkedBlock(existing: string): string {
+  const start = existing.indexOf(INSTRUCTION_BEGIN);
+  if (start === -1) return existing;
+  let end = existing.indexOf(INSTRUCTION_END, start);
+  if (end === -1) return existing.slice(0, start);
+  end += INSTRUCTION_END.length;
+  if (existing[end] === '\n') end += 1;
+  return `${existing.slice(0, start)}${existing.slice(end)}`.replace(/\n{3,}/g, '\n\n');
+}
+
+function isClaudeHookEntry(entry: unknown): boolean {
+  if (!isJsonRecord(entry) || !Array.isArray(entry.hooks)) return false;
+  return entry.hooks.some((hook) => isJsonRecord(hook) && typeof hook.command === 'string' && hook.command.includes(CLAUDE_HOOK_MARKER));
+}
+
+function installCursorRule(): string {
+  const rulePath = resolveCursorRulePath();
+  assertNotSymlink(rulePath);
+  mkdirSync(path.dirname(rulePath), { recursive: true });
+  writeFileSync(rulePath, CURSOR_RULE_CONTENTS);
+  return rulePath;
+}
+
+function installCodexAgentsBlock(): string {
+  const agentsPath = resolveCodexAgentsPath();
+  assertNotSymlink(agentsPath);
+  mkdirSync(path.dirname(agentsPath), { recursive: true });
+  const existing = existsSync(agentsPath) ? readFileSync(agentsPath, 'utf8') : '';
+  writeFileAtomic(agentsPath, mergeMarkedBlock(existing, EXECUTION_ROUTING_FRAGMENT));
+  return agentsPath;
+}
+
+function installClaudeHook(invokerHomeRoot: string): string {
+  const hookDir = resolveHookInstallDir(invokerHomeRoot);
+  mkdirSync(hookDir, { recursive: true });
+  const destScript = path.join(hookDir, 'claude_prompt_submit.mjs');
+  writeFileSync(destScript, CLAUDE_HOOK_SCRIPT);
+  chmodSync(destScript, 0o755);
+
+  const settingsPath = resolveClaudeSettingsPath();
+  assertNotSymlink(settingsPath);
+  let settings: JsonRecord = {};
+  if (existsSync(settingsPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8')) as unknown;
+      if (!isJsonRecord(parsed)) throw new Error('not object');
+      settings = parsed;
+    } catch {
+      throw new Error(`Invalid Claude settings at ${settingsPath}: expected a JSON object`);
+    }
+  }
+  const hooksRoot = isJsonRecord(settings.hooks) ? settings.hooks : {};
+  const existingEntries = Array.isArray(hooksRoot.UserPromptSubmit) ? hooksRoot.UserPromptSubmit : [];
+  const kept = existingEntries.filter((entry) => !isClaudeHookEntry(entry));
+  kept.push({
+    hooks: [
+      {
+        type: 'command',
+        command: `node ${destScript}`,
+        timeout: 10,
+      },
+    ],
+  });
+  settings.hooks = { ...hooksRoot, UserPromptSubmit: kept };
+  mkdirSync(path.dirname(settingsPath), { recursive: true });
+  writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  return settingsPath;
+}
+
+function uninstallCursorRule(): void {
+  const rulePath = resolveCursorRulePath();
+  if (!existsSync(rulePath)) return;
+  if (lstatSync(rulePath).isSymbolicLink()) return;
+  rmSync(rulePath);
+}
+
+function uninstallCodexAgentsBlock(): void {
+  const agentsPath = resolveCodexAgentsPath();
+  if (!existsSync(agentsPath) || lstatSync(agentsPath).isSymbolicLink()) return;
+  const next = removeMarkedBlock(readFileSync(agentsPath, 'utf8')).trim();
+  if (!next) {
+    rmSync(agentsPath);
+    return;
+  }
+  writeFileAtomic(agentsPath, `${next}\n`);
+}
+
+function uninstallClaudeHook(invokerHomeRoot: string): void {
+  const settingsPath = resolveClaudeSettingsPath();
+  if (existsSync(settingsPath) && !lstatSync(settingsPath).isSymbolicLink()) {
+    let settings: JsonRecord;
+    try {
+      const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8')) as unknown;
+      if (!isJsonRecord(parsed)) throw new Error('not object');
+      settings = parsed;
+    } catch {
+      throw new Error(`Invalid Claude settings at ${settingsPath}: expected a JSON object`);
+    }
+    if (isJsonRecord(settings.hooks) && Array.isArray(settings.hooks.UserPromptSubmit)) {
+      settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter((entry) => !isClaudeHookEntry(entry));
+      writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    }
+  }
+  rmSync(resolveHookInstallDir(invokerHomeRoot), { recursive: true, force: true });
+}
+
+function cursorRuleInstalled(): boolean {
+  return existsSync(resolveCursorRulePath()) && readFileSync(resolveCursorRulePath(), 'utf8').includes('Invoker execution routing');
+}
+
+function codexAgentsInstalled(): boolean {
+  const agentsPath = resolveCodexAgentsPath();
+  return existsSync(agentsPath) && readFileSync(agentsPath, 'utf8').includes(INSTRUCTION_BEGIN);
+}
+
+function claudeHookInstalled(): boolean {
+  const settingsPath = resolveClaudeSettingsPath();
+  if (!existsSync(settingsPath)) return false;
+  try {
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as unknown;
+    if (!isJsonRecord(settings) || !isJsonRecord(settings.hooks) || !Array.isArray(settings.hooks.UserPromptSubmit)) return false;
+    return settings.hooks.UserPromptSubmit.some((entry) => isClaudeHookEntry(entry));
+  } catch {
+    return false;
+  }
+}
+
+function resolveInstructionTargets(): HarnessInstructionConfigState[] {
+  return [
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      path: resolveCursorRulePath(),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedInstructionNames: [],
+    },
+    {
+      id: 'codex',
+      name: 'Codex',
+      path: resolveCodexAgentsPath(),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedInstructionNames: [],
+    },
+    {
+      id: 'claude',
+      name: 'Claude',
+      path: resolveClaudeSettingsPath(),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedInstructionNames: [],
+    },
+  ].map((target) => {
+    const installed = target.id === 'cursor'
+      ? cursorRuleInstalled()
+      : target.id === 'codex'
+        ? codexAgentsInstalled()
+        : claudeHookInstalled();
+    return { ...target, installed, installedInstructionNames: installed ? ['invoker-execution'] : [] };
+  });
+}
+
+function buildInstructionTargetStatus(
+  target: HarnessInstructionConfigState,
+  instructionHash: string,
+  manifest: BundledSkillsManifest | null,
+): HarnessInstructionConfigState {
+  const manifestTarget = manifest?.instructionTargets?.[target.id];
+  const upToDate = target.installed
+    && manifest?.instructionHash === instructionHash
+    && manifestTarget?.path === target.path
+    && (manifestTarget.installedInstructionNames ?? []).includes('invoker-execution');
+  return { ...target, upToDate };
+}
+
+function installInstructionTargets(invokerHomeRoot: string): BundledSkillsManifest['instructionTargets'] {
+  return {
+    cursor: { path: installCursorRule(), installedInstructionNames: ['invoker-execution'] },
+    codex: { path: installCodexAgentsBlock(), installedInstructionNames: ['invoker-execution'] },
+    claude: { path: installClaudeHook(invokerHomeRoot), installedInstructionNames: ['invoker-execution'] },
+  };
+}
+
+function removeManagedSkillDirs(targetPath: string, names: string[]): void {
+  if (!existsSync(targetPath)) return;
+  for (const name of names) {
+    rmSync(path.join(targetPath, name), { recursive: true, force: true });
+  }
+}
+
+function removeManagedCommandFiles(targetPath: string, fileNames: string[]): void {
+  if (!existsSync(targetPath)) return;
+  for (const fileName of fileNames) {
+    const filePath = path.join(targetPath, fileName);
+    if (existsSync(filePath) && !lstatSync(filePath).isSymbolicLink()) rmSync(filePath);
+  }
+}
+
 export function resolveBundledSkillsStatus(context: BundledSkillsContext): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
   const isInstalled = context.isInstalled ?? commandExists;
   const sourceRoot = resolveBundledSkillsSourceRoot(context);
+  const instructionHash = hashAlwaysOnFragments();
+  const manifest = readManifest(invokerHomeRoot);
+  const instructionTargets = resolveInstructionTargets().map((target) =>
+    buildInstructionTargetStatus(target, instructionHash, manifest),
+  );
   if (!sourceRoot) {
     return {
       available: false,
@@ -613,13 +910,13 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
       targets: resolveManagedTargets(),
       commandTargets: resolveManagedCommandTargets(),
       mcpTargets: resolveManagedMcpTargets(isInstalled),
+      instructionTargets,
     };
   }
 
   const bundledSkillNames = listBundledSkillNames(sourceRoot);
   const installedNames = prefixedSkillNames(bundledSkillNames);
   const bundledHash = hashDirectory(sourceRoot);
-  const manifest = readManifest(invokerHomeRoot);
   const targets = resolveManagedTargets().map((target) =>
     buildTargetStatus(target, installedNames, bundledHash, manifest),
   );
@@ -637,6 +934,7 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
       targets.some((target) => !target.upToDate)
       || commandTargets.some((target) => !target.upToDate)
       || mcpTargets.some((target) => !target.upToDate)
+      || instructionTargets.some((target) => !target.upToDate)
     ),
     sourcePath: sourceRoot,
     managedPrefix: MANAGED_PREFIX,
@@ -646,6 +944,7 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
     targets,
     commandTargets,
     mcpTargets,
+    instructionTargets,
   };
 }
 
@@ -655,6 +954,9 @@ export function installBundledSkills(
 ): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
   const isInstalled = context.isInstalled ?? commandExists;
+  if (mode === 'uninstall') {
+    return uninstallBundledSkills(context);
+  }
   const sourceRoot = resolveBundledSkillsSourceRoot(context);
   if (!sourceRoot) {
     throw new Error('Bundled skills are not available in this app build.');
@@ -714,6 +1016,9 @@ export function installBundledSkills(
     }
   }
 
+  const instructionHash = hashAlwaysOnFragments();
+  const manifestInstructionTargets = installInstructionTargets(invokerHomeRoot);
+
   const manifest: BundledSkillsManifest = {
     bundledHash,
     bundledSkillNames,
@@ -722,6 +1027,8 @@ export function installBundledSkills(
     targets: manifestTargets,
     commandTargets: manifestCommandTargets,
     mcpTargets: manifestMcpTargets,
+    instructionTargets: manifestInstructionTargets,
+    instructionHash,
     sourceRepoRoot: context.isPackaged ? undefined : context.repoRoot,
   };
 
@@ -736,6 +1043,61 @@ export function installBundledSkills(
     ...status,
     promptRecommended: context.isPackaged && mode === 'install' ? false : status.promptRecommended,
   };
+}
+
+function managedNamesFromManifestOrPrefix(manifest: BundledSkillsManifest | null, targetPath: string): string[] {
+  const recorded = manifest?.targets
+    ? Object.values(manifest.targets).find((entry) => entry.path === targetPath)?.installedSkillNames
+    : undefined;
+  if (recorded && recorded.length > 0) return recorded;
+  if (!existsSync(targetPath)) return [];
+  return readdirSync(targetPath, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(MANAGED_PREFIX))
+    .map((entry) => entry.name);
+}
+
+function managedCommandFilesFromManifestOrPrefix(manifest: BundledSkillsManifest | null, targetPath: string): string[] {
+  const recorded = manifest?.commandTargets
+    ? Object.values(manifest.commandTargets).find((entry) => entry.path === targetPath)?.installedCommandNames
+    : undefined;
+  if (recorded && recorded.length > 0) return recorded.map((name) => name.endsWith('.md') ? name : `${name}.md`);
+  if (!existsSync(targetPath)) return [];
+  return readdirSync(targetPath).filter((name) => name.startsWith(MANAGED_PREFIX) && name.endsWith('.md'));
+}
+
+function uninstallBundledSkills(context: BundledSkillsContext): BundledSkillsStatus {
+  const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
+  const isInstalled = context.isInstalled ?? commandExists;
+  const manifest = readManifest(invokerHomeRoot);
+  const sourceRoot = resolveBundledSkillsSourceRoot(context);
+  const expectedNames = sourceRoot ? prefixedSkillNames(listBundledSkillNames(sourceRoot)) : [];
+  const commandFiles = sourceRoot ? listCommandNames(sourceRoot) : [];
+
+  for (const target of resolveManagedTargets()) {
+    const names = managedNamesFromManifestOrPrefix(manifest, target.path);
+    removeManagedSkillDirs(target.path, names.length > 0 ? names : expectedNames);
+  }
+  removeManagedSkillDirs(resolveLegacyCursorSkillsPath(), expectedNames.length > 0 ? expectedNames : managedNamesFromManifestOrPrefix(manifest, resolveLegacyCursorSkillsPath()));
+
+  for (const target of resolveManagedCommandTargets()) {
+    const files = managedCommandFilesFromManifestOrPrefix(manifest, target.path);
+    removeManagedCommandFiles(target.path, files.length > 0 ? files : commandFiles);
+  }
+
+  for (const target of resolveManagedMcpTargets(isInstalled)) {
+    try {
+      uninstallMcpTarget(target);
+    } catch {
+      continue;
+    }
+  }
+
+  uninstallCursorRule();
+  uninstallCodexAgentsBlock();
+  uninstallClaudeHook(invokerHomeRoot);
+  rmSync(resolveManifestPath(invokerHomeRoot), { force: true });
+
+  return resolveBundledSkillsStatus(context);
 }
 
 export function resolveInstalledBundledSkillDir(skillName: string): string {
