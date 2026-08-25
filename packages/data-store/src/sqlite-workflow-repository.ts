@@ -230,9 +230,13 @@ export class SqliteWorkflowRepository {
     return rows.map((row) => this.rowToWorkflow(row, rollups.get(String(row.id))));
   }
 
-  findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
+  findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined {
     // The PR↔workflow link lives only on the merge node, as either the bare PR
     // number (review_id) or the full PR URL (review_url ending in /pull/<pr>).
+    // Bare-number matches are Invoker-only: other repos must match on URL so
+    // catstack #999 cannot attach to an Invoker workflow whose review_id is 999.
+    const DEFAULT_INVOKER_REPO = 'Neko-Catpital-Labs/Invoker';
+    const allowBareId = !repo || repo === DEFAULT_INVOKER_REPO;
     const rows = this.exec.queryAll(
       `SELECT t.id AS mergeTaskId,
               t.workflow_id AS workflowId,
@@ -252,14 +256,27 @@ export class SqliteWorkflowRepository {
     );
     if (rows.length === 0) return undefined;
 
+    const filtered = rows.filter((row) => {
+      const reviewUrl = row.reviewUrl == null ? '' : String(row.reviewUrl);
+      if (repo) {
+        const needle = `github.com/${repo}/`;
+        if (reviewUrl.toLowerCase().includes(needle.toLowerCase())) return true;
+        // Bare review_id only for Invoker (or when URL is missing on an Invoker lookup).
+        if (allowBareId && (!reviewUrl || String(row.reviewId) === pr)) return true;
+        return false;
+      }
+      return true;
+    });
+    if (filtered.length === 0) return undefined;
+
     // workflows has no status column — status is a derived rollup. Compute it
     // per candidate so re-published PRs (multiple merge nodes) can prefer the
     // live workflow, then the highest generation.
-    const workflowIds = [...new Set(rows.map((row) => String(row.workflowId)))];
+    const workflowIds = [...new Set(filtered.map((row) => String(row.workflowId)))];
     const rollups = this.loadWorkflowRollups(workflowIds);
     const TERMINAL = new Set<WorkflowDerivedStatus>(['completed', 'failed', 'closed']);
 
-    const candidates = rows.map((row) => {
+    const candidates = filtered.map((row) => {
       const workflowStatus = rollups.get(String(row.workflowId))?.status ?? 'pending';
       return { row, workflowStatus, terminal: TERMINAL.has(workflowStatus) };
     });

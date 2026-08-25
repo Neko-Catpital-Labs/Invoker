@@ -1220,8 +1220,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.listWorkflows(options);
   }
 
-  findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
-    return this.workflowRepo.findReviewGateByPr(pr);
+  findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined {
+    return this.workflowRepo.findReviewGateByPr(pr, repo);
   }
 
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[] {
