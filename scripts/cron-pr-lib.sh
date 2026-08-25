@@ -9,11 +9,10 @@
 #
 # Provides:
 #   Variables: REPO_ROOT, RUNNER, IPC_HELPER (from headless-lib.sh),
-#              TARGET_REPO, TARGET_REPOS, PR_AUTHOR, CRON_LOCK, DRY_RUN
+#              TARGET_REPO, PR_AUTHOR, CRON_LOCK, DRY_RUN
 #   Functions: log_line, cron_lock, ledger_init, ledger_record, ledger_count,
 #              ledger_marker_seen, ledger_max_marker, gh_json,
-#              resolve_workflow_for_pr, prune_stale_pr_workdirs,
-#              for_each_target_repo
+#              resolve_workflow_for_pr, prune_stale_pr_workdirs
 #
 # Each job runs its scan or submission pass while holding a single shared lock,
 # so only one PR-maintenance operation runs at a time (the others exit this tick
@@ -31,21 +30,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/headless-lib.sh"
 # Configuration (all overridable via env)
 # ---------------------------------------------------------------------------
 
-# Scan list comes from config `prMaintenance.targetRepos`, injected by the
-# worker launcher as INVOKER_GITHUB_TARGET_REPOS (comma-separated). Manual
-# script runs without that injection default to the Invoker repo only.
 TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
 PR_AUTHOR="${INVOKER_PR_CRON_AUTHOR:-EdbertChan}"
 CRON_LOCK="${INVOKER_PR_CRON_LOCK:-${TMPDIR:-/tmp}/invoker-pr-crons.lock}"
 DRY_RUN="${INVOKER_PR_CRON_DRY_RUN:-0}"
-
-if [ -n "${INVOKER_GITHUB_TARGET_REPOS:-}" ]; then
-  TARGET_REPOS="$(printf '%s' "$INVOKER_GITHUB_TARGET_REPOS" | tr ',;' '  ' | xargs)"
-else
-  TARGET_REPOS="$TARGET_REPO"
-fi
-# Keep TARGET_REPO as the first listed repo for any leftover single-repo caller.
-TARGET_REPO="$(printf '%s' "$TARGET_REPOS" | awk '{print $1}')"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -53,22 +41,6 @@ TARGET_REPO="$(printf '%s' "$TARGET_REPOS" | awk '{print $1}')"
 
 log_line() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
-}
-
-# Run a command once per TARGET_REPOS entry. Sets TARGET_REPO for each
-# iteration. Failures are logged and the loop continues (fail-soft).
-# Usage: for_each_target_repo <callback-fn-name>
-# The callback is invoked with no args; it should read $TARGET_REPO.
-for_each_target_repo() {
-  local callback="${1:?callback required}"
-  local repo
-  for repo in $TARGET_REPOS; do
-    TARGET_REPO="$repo"
-    log_line "scanning repo $TARGET_REPO"
-    if ! "$callback"; then
-      log_line "repo $TARGET_REPO failed; continuing with remaining repos"
-    fi
-  done
 }
 
 shell_quote() {
@@ -206,15 +178,11 @@ gh_json() {
 
 resolve_workflow_for_pr() {
   local pr="$1"
-  local query_arg="$pr"
-  if [ -n "${TARGET_REPO:-}" ]; then
-    query_arg="${TARGET_REPO}#${pr}"
-  fi
   if [ -n "${INVOKER_PR_CRON_REVIEW_GATE_CMD:-}" ]; then
-    "$INVOKER_PR_CRON_REVIEW_GATE_CMD" "$query_arg"
+    "$INVOKER_PR_CRON_REVIEW_GATE_CMD" "$pr"
     return
   fi
-  headless_query query review-gate "$query_arg" --output json
+  headless_query query review-gate "$pr" --output json
 }
 
 # ---------------------------------------------------------------------------
