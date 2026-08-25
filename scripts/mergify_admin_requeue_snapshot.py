@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -186,6 +187,37 @@ class GhClient:
         out = run_logged(["gh", "api", f"repos/{repo}/compare/{base}...{head}"])
         return str(json.loads(out).get("status") or "")
 
+    def default_branch(self, repo: str) -> str:
+        value = self._run_json(["gh", "repo", "view", repo, "--json", "defaultBranchRef"])
+        if isinstance(value, dict):
+            ref = value.get("defaultBranchRef")
+            if isinstance(ref, dict):
+                name = str(ref.get("name") or "").strip()
+                if name:
+                    return name
+            elif isinstance(ref, str) and ref.strip():
+                return ref.strip()
+        return "master"
+
+    def fetch_file_contents(self, repo: str, path: str) -> str | None:
+        try:
+            value = self._run_json(["gh", "api", f"repos/{repo}/contents/{path}"])
+        except Exception:
+            return None
+        if not isinstance(value, dict):
+            return None
+        content = value.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return None
+        encoding = str(value.get("encoding") or "base64")
+        if encoding != "base64":
+            return content
+        try:
+            import base64
+            return base64.b64decode(content).decode("utf-8")
+        except Exception:
+            return None
+
     def resolve_review_thread(self, thread_id: str) -> None:
         query = "mutation($threadId:ID!) { resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } } }"
         run_logged(["gh", "api", "graphql", "-f", f"threadId={thread_id}", "-f", f"query={query}"])
@@ -266,6 +298,14 @@ def checkout_pr_head(repo: str, pr: PrSnapshot, work_root: Path) -> None:
     run_logged(["git", "checkout", "-B", pr.head_ref_name, remote_ref], cwd=work_root)
     run_logged(["git", "reset", "--hard", remote_ref], cwd=work_root)
     run_logged(["git", "clean", "-fd"], cwd=work_root)
+
+
+def pr_work_root(repo: str, pr_number: int) -> Path:
+    """Checkout root namespaced by owner/repo so PR numbers cannot collide across repos."""
+    owner, name = repo.split("/", 1) if "/" in repo else ("_", repo)
+    root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / owner / name / str(pr_number)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def parse_mergify_queue_event(comment: Mapping[str, object]) -> MergifyQueueEvent | None:

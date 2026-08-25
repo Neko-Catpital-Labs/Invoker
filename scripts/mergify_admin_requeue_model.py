@@ -13,6 +13,7 @@ BOT_OR_SELF_AUTHORS = {"coderabbitai", "coderabbitai[bot]", "EdbertChan"}
 STACK_MARKER_RE = re.compile(r"<!--\s*mergify-stack-data:\s*(\{.*?\})\s*-->", re.DOTALL)
 SHA_RE = re.compile(r"`([0-9a-fA-F]{40})`")
 GH_ACTIONS_JOB_RE = re.compile(r"/actions/runs/\d+/job/(\d+)")
+DEFAULT_INVOKER_REPO = "Neko-Catpital-Labs/Invoker"
 
 
 @dataclass(frozen=True)
@@ -132,8 +133,9 @@ class StackExecutionPlan:
     queue_only_noop_check: str | None = None
 
 class Ledger:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, repo: str | None = None):
         self.path = path
+        self.repo = repo
         self.rows: list[dict[str, object]] = []
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
@@ -146,10 +148,25 @@ class Ledger:
                 if isinstance(row, dict):
                     self.rows.append(row)
 
+    def _row_matches_repo(self, row: Mapping[str, object]) -> bool:
+        """Scope reads to this ledger's repo.
+
+        - Unscoped ledger (`repo=None`): see every row (tests / full-file views).
+        - Legacy rows without `repo`: match only the default Invoker repo.
+        - New rows: match exact `owner/repo`.
+        """
+        if self.repo is None:
+            return True
+        row_repo = row.get("repo")
+        if row_repo is None or row_repo == "":
+            return self.repo == DEFAULT_INVOKER_REPO
+        return row_repo == self.repo
+
     def count(self, kind: str, pr: int, head_sha: str, key: str) -> int:
         return sum(
             1 for row in self.rows
-            if row.get("kind") == kind
+            if self._row_matches_repo(row)
+            and row.get("kind") == kind
             and int(row.get("pr", -1)) == pr
             and row.get("headSha") == head_sha
             and row.get("key") == key
@@ -159,6 +176,8 @@ class Ledger:
         latest_row: dict[str, object] | None = None
         latest_epoch = float("-inf")
         for row in self.rows:
+            if not self._row_matches_repo(row):
+                continue
             if row.get("kind") != kind:
                 continue
             if int(row.get("pr", -1)) != pr:
@@ -182,7 +201,8 @@ class Ledger:
         # which genuinely needs "is *this* submission still running".
         return sum(
             1 for row in self.rows
-            if row.get("kind") == kind
+            if self._row_matches_repo(row)
+            and row.get("kind") == kind
             and int(row.get("pr", -1)) == pr
             and row.get("key") == key
         )
@@ -191,6 +211,8 @@ class Ledger:
         latest_row: dict[str, object] | None = None
         latest_epoch = float("-inf")
         for row in self.rows:
+            if not self._row_matches_repo(row):
+                continue
             if row.get("kind") != kind:
                 continue
             if int(row.get("pr", -1)) != pr:
@@ -205,6 +227,8 @@ class Ledger:
 
     def has_different_head(self, kind: str, pr: int, current_head: str, key: str) -> bool:
         for row in self.rows:
+            if not self._row_matches_repo(row):
+                continue
             if row.get("kind") != kind:
                 continue
             if int(row.get("pr", -1)) != pr:
@@ -217,13 +241,15 @@ class Ledger:
 
     def record(self, kind: str, pr: int, head_sha: str, key: str, epoch: int | None = None, meta: Mapping[str, object] | None = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        row = {
+        row: dict[str, object] = {
             "kind": kind,
             "pr": pr,
             "headSha": head_sha,
             "key": key,
             "epoch": epoch if epoch is not None else int(time.time()),
         }
+        if self.repo:
+            row["repo"] = self.repo
         if meta:
             row["meta"] = dict(meta)
         with self.path.open("a", encoding="utf-8") as f:
@@ -260,9 +286,14 @@ def _resolve_required_check_alias(lines: list[str], anchor_name: str) -> set[str
 
 def load_mergify_rules(path: Path) -> tuple[str, frozenset[str], frozenset[str]]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        text = path.read_text(encoding="utf-8")
     except OSError:
         raise ValueError("failed to load admin-bypass Mergify rule")
+    return parse_mergify_admin_bypass_rules(text)
+
+
+def parse_mergify_admin_bypass_rules(text: str) -> tuple[str, frozenset[str], frozenset[str]]:
+    lines = text.splitlines()
 
     start = -1
     start_indent = 0
@@ -303,6 +334,16 @@ def load_mergify_rules(path: Path) -> tuple[str, frozenset[str], frozenset[str]]
     if not trunk or not labels or not required:
         raise ValueError("failed to load admin-bypass Mergify rule")
     return trunk, frozenset(labels), frozenset(required)
+
+
+@dataclass(frozen=True)
+class RepoMergePolicy:
+    """Per-repo merge/trunk policy for admin-bypass babysitting."""
+
+    trunk: str
+    labels: frozenset[str]
+    required_checks: frozenset[str]
+    has_admin_bypass_queue: bool
 
 
 def latest_contexts_by_required_check(raw_contexts: list[Mapping[str, object]], head_sha: str, required_checks: Collection[str]) -> dict[str, CheckContext]:

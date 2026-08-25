@@ -10,10 +10,10 @@ from pathlib import Path
 
 try:
     from .mergify_admin_requeue_headless_shell import run_headless
-    from .mergify_admin_requeue_model import MergifyQueueEvent, PrSnapshot
+    from .mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, MergifyQueueEvent, PrSnapshot
 except ImportError:
     from mergify_admin_requeue_headless_shell import run_headless
-    from mergify_admin_requeue_model import MergifyQueueEvent, PrSnapshot
+    from mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, MergifyQueueEvent, PrSnapshot
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,25 +26,32 @@ def _slugify(value: str, *, max_len: int = 40) -> str:
     return (slug or "check")[:max_len].strip("-") or "check"
 
 
+def _plan_repo_token(repo: str | None) -> str:
+    """Empty for the default Invoker repo (legacy plan names); otherwise `owner-repo-`."""
+    if not repo or repo == DEFAULT_INVOKER_REPO:
+        return ""
+    return _slugify(repo.replace("/", "-"), max_len=60) + "-"
+
+
 # Shared with mergify_admin_requeue_infra_signal.py, which needs the exact
 # plan_name a build_repair_*_plan call below already produced, to look up that
 # same submission's Invoker workflow by name before deciding whether to submit
 # another one.
-def repair_check_plan_name(pr_number: int, check_name: str, start_head: str) -> str:
-    return f"admin-bypass-repair-check-pr-{pr_number}-{_slugify(check_name)}-{start_head[:7]}"
+def repair_check_plan_name(pr_number: int, check_name: str, start_head: str, repo: str | None = None) -> str:
+    return f"admin-bypass-repair-check-{_plan_repo_token(repo)}pr-{pr_number}-{_slugify(check_name)}-{start_head[:7]}"
 
 
-def repair_conflict_plan_name(pr_number: int, start_head: str) -> str:
+def repair_conflict_plan_name(pr_number: int, start_head: str, repo: str | None = None) -> str:
     # Legacy name kept for settling pre-unification conflict-repair ledger rows.
-    return f"admin-bypass-repair-conflict-pr-{pr_number}-{start_head[:7]}"
+    return f"admin-bypass-repair-conflict-{_plan_repo_token(repo)}pr-{pr_number}-{start_head[:7]}"
 
 
-def rebase_onto_master_plan_name(pr_number: int, start_head: str) -> str:
-    return f"admin-bypass-rebase-onto-master-pr-{pr_number}-{start_head[:7]}"
+def rebase_onto_master_plan_name(pr_number: int, start_head: str, repo: str | None = None) -> str:
+    return f"admin-bypass-rebase-onto-master-{_plan_repo_token(repo)}pr-{pr_number}-{start_head[:7]}"
 
 
-def repair_bot_thread_plan_name(pr_number: int, start_head: str) -> str:
-    return f"admin-bypass-repair-bot-thread-pr-{pr_number}-{start_head[:7]}"
+def repair_bot_thread_plan_name(pr_number: int, start_head: str, repo: str | None = None) -> str:
+    return f"admin-bypass-repair-bot-thread-{_plan_repo_token(repo)}pr-{pr_number}-{start_head[:7]}"
 
 
 def _yaml_str(value: str) -> str:
@@ -173,8 +180,9 @@ def build_repair_check_plan(
     latest: MergifyQueueEvent | None,
     start_head: str,
     state_file: Path,
+    trunk: str = "master",
 ) -> AsyncRepairPlan:
-    name = repair_check_plan_name(pr.number, check_name, start_head)
+    name = repair_check_plan_name(pr.number, check_name, start_head, repo=repo)
     prompt = (
         "This PR's CI check is failing. Diagnose why it is failing, then fix it. Add or "
         "update a repro if the failure is reproducible.\n\n"
@@ -201,7 +209,7 @@ def build_repair_check_plan(
         "set -euo pipefail\n"
         "python3 -B scripts/mergify_admin_requeue_repair_normalize.py \\\n"
         f"  --repo {_shlex(repo)} --pr {pr.number} --check {_shlex(check_name)} \\\n"
-        f"  --start-head {_shlex(start_head)} --base {_shlex(pr.base_ref_name)} --trunk master\n"
+        f"  --start-head {_shlex(start_head)} --base {_shlex(pr.base_ref_name)} --trunk {_shlex(trunk)}\n"
     )
     yaml_text += (
         "  - id: normalize\n"
@@ -246,12 +254,13 @@ def build_rebase_onto_master_plan(
     repo: str,
     start_head: str,
     state_file: Path,
+    trunk: str = "master",
 ) -> AsyncRepairPlan:
-    name = rebase_onto_master_plan_name(pr.number, start_head)
-    prompt = _rebase_onto_master_prompt(pr, reason, start_head)
+    name = rebase_onto_master_plan_name(pr.number, start_head, repo=repo)
+    prompt = _rebase_onto_master_prompt(pr, reason, start_head, trunk=trunk)
     yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
     yaml_text += _repair_task_yaml(
-        description=f"Rebase PR #{pr.number} onto master",
+        description=f"Rebase PR #{pr.number} onto {trunk}",
         prompt=prompt,
     )
     yaml_text += _safe_push_task_yaml(
@@ -273,12 +282,12 @@ def build_repair_bot_thread_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
-    name = repair_bot_thread_plan_name(pr.number, start_head)
+    name = repair_bot_thread_plan_name(pr.number, start_head, repo=repo)
     prompt = (
         f"Resolve the unresolved review thread {thread_id}. Address the reviewer's feedback with "
         "real code changes, run the narrow proof for the fix, then commit locally. Do not push. "
         "If the thread is already resolved, or the PR is closed or merged, make no commit and exit 0.\n\n"
-        f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {start_head}\nThread: {thread_id}\n"
+        f"PR: #{pr.number} on {repo}\nHead branch: {pr.head_ref_name}\nHead SHA: {start_head}\nThread: {thread_id}\n"
     )
     yaml_text = _write_plan_header(
         name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review"

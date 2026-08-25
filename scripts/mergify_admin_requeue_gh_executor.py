@@ -9,12 +9,12 @@ try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
     from .mergify_admin_requeue_repair_body import rebase_onto_base as run_rebase_onto_base
-    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
+    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, pr_work_root, run_logged
 except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
     from mergify_admin_requeue_repair_body import rebase_onto_base as run_rebase_onto_base
-    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
+    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, pr_work_root, run_logged
 
 
 ADMIN_BYPASS_NUDGE_LEDGER_KIND = "comment-admin-bypass-nudge"
@@ -84,8 +84,7 @@ class AdminBypassGhExecutor:
         self.ledger.record("retarget-base", pr.number, pr.head_ref_oid, f"{pr.base_ref_name}->{new_base}", now)
 
     def rebase_onto_base(self, pr: PrSnapshot, new_base: str, now: int) -> bool:
-        work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
-        work_root.parent.mkdir(parents=True, exist_ok=True)
+        work_root = pr_work_root(self.repo, pr.number)
         checkout_pr_head(self.repo, pr, work_root)
         new_head = run_rebase_onto_base(work_root, new_base, pr.head_ref_name, pr.head_ref_oid)
         if new_head is None:
