@@ -303,17 +303,17 @@ describe('runSetup', () => {
     }
   });
 
-  it('writes only the worker toggle the user says yes to, leaving the rest unset', async () => {
+  it('writes start toggles to desired state and policy toggles to config', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-toggles-'));
     const saved = { HOME: process.env.HOME };
     const lines: string[] = [];
     try {
       process.env.HOME = home;
 
-      // Prompt order: Slack, machines, then the 4 worker toggles in
-      // ONBOARDING_WORKER_TOGGLES order (PR maintenance, e2e auto-fix,
-      // auto-approve, disk-headroom cleanup).
-      const answers = ['n', 'n', 'n', 'y', 'n', 'y'];
+      // Prompt order: Slack, machines, then ONBOARDING_WORKER_TOGGLES
+      // (PR maintenance, e2e auto-fix, auto-approve, disk-headroom cleanup,
+      // idle-task cleanup).
+      const answers = ['n', 'n', 'n', 'y', 'y', 'y', 'n'];
       const code = await runSetup([], {
         print: (line) => lines.push(line),
         prompt: async () => answers.shift() ?? 'n',
@@ -321,8 +321,23 @@ describe('runSetup', () => {
 
       expect(code).toBe(0);
       const configPath = join(home, '.invoker', 'config.json');
-      const config = JSON.parse(readFileSync(configPath, 'utf8'));
-      expect(config).toEqual({ e2eAutoFixEnabled: true });
+      const writtenOnboardingConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+      expect(writtenOnboardingConfig).toEqual({ autoApproveAIFixes: true });
+      expect(writtenOnboardingConfig).not.toHaveProperty('e2eAutoFixEnabled');
+      expect(writtenOnboardingConfig).not.toHaveProperty('prMaintenance');
+
+      const { SQLiteAdapter } = await import('@invoker/data-store');
+      const db = await SQLiteAdapter.create(join(home, '.invoker', 'invoker.db'), {
+        outputDir: join(home, '.invoker', 'outputs'),
+        ownerCapability: true,
+      });
+      try {
+        expect(db.getWorkerDesiredState('e2e-autofix')?.desiredEnabled).toBe(true);
+        expect(db.getWorkerDesiredState('pr-admin-bypass-land')).toBeUndefined();
+        expect(db.getWorkerDesiredState('idle-task-cleanup')).toBeUndefined();
+      } finally {
+        db.close();
+      }
       expect(lines.join('\n')).toContain('Worker toggles');
     } finally {
       restoreEnv('HOME', saved.HOME);
@@ -953,6 +968,7 @@ describe('runSetup in a non-interactive shell', () => {
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('Worker toggles');
     expect(lines.join('\n')).toContain('PR maintenance: off');
+    expect(lines.join('\n')).toMatch(/Worker toggles — .*PR maintenance: off/);
   });
 
   it('skips Slack under --yes rather than starting a flow it cannot finish', async () => {
