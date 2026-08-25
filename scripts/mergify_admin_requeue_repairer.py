@@ -11,14 +11,14 @@ try:
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import is_queue_only_required_check
     from .mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
-    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, pr_work_root
+    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import is_queue_only_required_check
     from mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
-    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, pr_work_root
+    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
     import mergify_admin_requeue_async_repair as async_repair
 
 
@@ -39,14 +39,12 @@ class AdminBypassRepairer:
         logger: AdminBypassLogger,
         ledger: Ledger,
         repo: str,
-        trunk: str = "master",
     ):
         self.gh = gh
         self.executor = executor
         self.logger = logger
         self.ledger = ledger
         self.repo = repo
-        self.trunk = trunk
 
     def blocked_outcome(
         self,
@@ -137,7 +135,8 @@ class AdminBypassRepairer:
         # local checkout before submitting anything: validate_current_pr_body
         # has no API-only equivalent. Every other check name never checks out.
         if check_name == "PR Body" and self.job_log_is_empty(log_path):
-            work_root = pr_work_root(self.repo, pr.number)
+            work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
+            work_root.parent.mkdir(parents=True, exist_ok=True)
             checkout_pr_head(self.repo, pr, work_root)
             checked_out_head = git_output(work_root, "rev-parse", "HEAD").strip()
             terminal = self.terminal_repair_outcome(pr, check_name, checked_out_head, checked_out_head, work_root)
@@ -183,7 +182,6 @@ class AdminBypassRepairer:
             latest=latest,
             start_head=start_head,
             state_file=self.ledger.path,
-            trunk=self.trunk,
         )
         self.logger.trace(
             "admin-bypass-repair-check-start",
@@ -209,7 +207,7 @@ class AdminBypassRepairer:
         start_head = pr.head_ref_oid
         key = f"rebase-onto-master:{pr.number}"
         plan = async_repair.build_rebase_onto_master_plan(
-            pr, reason, repo=self.repo, start_head=start_head, state_file=self.ledger.path, trunk=self.trunk,
+            pr, reason, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
         )
         self.logger.trace(
             "admin-bypass-rebase-onto-master-start",

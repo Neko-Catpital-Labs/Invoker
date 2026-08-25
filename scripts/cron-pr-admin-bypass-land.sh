@@ -6,10 +6,7 @@ source "$(dirname "$0")/cron-pr-lib.sh"
 
 cron_lock
 
-args=(--once --author "$PR_AUTHOR")
-for repo in $TARGET_REPOS; do
-  args+=(--repo "$repo")
-done
+args=(--once --repo "$TARGET_REPO" --author "$PR_AUTHOR")
 if [ "$DRY_RUN" = "1" ]; then
   args+=(--dry-run)
 fi

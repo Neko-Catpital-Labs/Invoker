@@ -6,22 +6,18 @@ source "$(dirname "$0")/cron-pr-lib.sh"
 
 cron_lock
 
-scan_one_duplicate_repo() {
-  local args=(--once --repo "$TARGET_REPO" --author "$PR_AUTHOR")
-  if [ "$DRY_RUN" = "1" ]; then
-    args+=(--dry-run)
-  fi
-  if [ -n "${INVOKER_PR_DUP_STATE_FILE:-}" ]; then
-    args+=(--state-file "$INVOKER_PR_DUP_STATE_FILE")
-  fi
-  if [ -n "${INVOKER_PR_DUP_GIT_CWD:-}" ]; then
-    args+=(--git-cwd "$INVOKER_PR_DUP_GIT_CWD")
-  fi
+args=(--once --repo "$TARGET_REPO" --author "$PR_AUTHOR")
+if [ "$DRY_RUN" = "1" ]; then
+  args+=(--dry-run)
+fi
+if [ -n "${INVOKER_PR_DUP_STATE_FILE:-}" ]; then
+  args+=(--state-file "$INVOKER_PR_DUP_STATE_FILE")
+fi
+if [ -n "${INVOKER_PR_DUP_GIT_CWD:-}" ]; then
+  args+=(--git-cwd "$INVOKER_PR_DUP_GIT_CWD")
+fi
 
-  (
-    cd "$REPO_ROOT"
-    python3 scripts/pr_duplicate_close.py "${args[@]}"
-  )
-}
-
-for_each_target_repo scan_one_duplicate_repo
+(
+  cd "$REPO_ROOT"
+  python3 scripts/pr_duplicate_close.py "${args[@]}"
+)
