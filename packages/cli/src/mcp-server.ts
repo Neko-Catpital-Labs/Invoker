@@ -1,10 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { InAppPlanningSubmitResponse } from '@invoker/contracts';
+import { resolveInvokerConfigPath } from '@invoker/contracts';
 import type { MessageBus } from '@invoker/transport';
 import type { PlanningConfirmationMode, PlanningReviewDraft } from '../../planning-core/src/planning-review.js';
 import { buildPlanningHandoffInstructions } from '../../planning-core/src/planning-handoff-prompt.js';
@@ -13,6 +15,10 @@ import type { PlanSummary } from '../../planning-core/src/plan-summary.js';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { z } from 'zod';
 import { createDefaultMessageBus, discoverLiveOwner } from './live-owner-bus.js';
+import {
+  applyAutoApproveAuthorsAction,
+  type GithubLoginLookup,
+} from './auto-approve-authors-config.js';
 import {
   assertPlanUnchanged,
   createReviewTokenStore,
@@ -339,6 +345,8 @@ export interface McpServerOptions {
   createMessageBus?: () => Promise<MessageBus>;
   reviewTokens?: ReviewTokenStore;
   sleep?: (ms: number) => Promise<void>;
+  configPath?: string;
+  lookupGithubLogin?: GithubLoginLookup;
 }
 
 export function createMcpServer(options: McpServerOptions = {}): McpServer {
@@ -346,6 +354,8 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
   const createBus = options.createMessageBus ?? createDefaultMessageBus;
   const reviewTokens = options.reviewTokens ?? createReviewTokenStore();
   const sleep = options.sleep;
+  const configPath = options.configPath ?? resolveInvokerConfigPath(process.env, homedir());
+  const lookupGithubLogin = options.lookupGithubLogin;
   const server = new McpServer({ name: 'invoker', version: '0.0.6' });
 
   server.registerTool(
@@ -558,6 +568,38 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
           loadTasks: () => loadWorkflowTasks(workflowId, createBus),
         });
         return mcpJson({ ok: true, ...result });
+      } catch (err) {
+        return mcpError(err instanceof Error ? err.message : String(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'invoker_auto_approve_authors',
+    {
+      description: 'Read or write GitHub logins in ~/.invoker/config.json autoApproveAuthors. Auto-approve only acts on PRs by those logins. Missing/empty means nobody. Does not enable the auto-approve toggle. Use add_current_github_user when setting this up for the person whose gh is logged in on this machine.',
+      inputSchema: {
+        action: z.enum(['get', 'set', 'add', 'add_current_github_user', 'clear']),
+        authors: z.array(z.string()).optional(),
+        login: z.string().optional(),
+      },
+    },
+    async ({ action, authors, login }) => {
+      try {
+        const result = await applyAutoApproveAuthorsAction({
+          configPath,
+          action,
+          authors,
+          login,
+          lookupGithubLogin,
+        });
+        return mcpJson({
+          ok: true,
+          autoApproveAuthors: result.authors,
+          allowlistOk: result.allowlistOk,
+          reason: result.reason ?? null,
+          autoApproveToggleUnchanged: true,
+        });
       } catch (err) {
         return mcpError(err instanceof Error ? err.message : String(err));
       }
