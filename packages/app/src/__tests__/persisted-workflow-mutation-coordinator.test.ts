@@ -252,7 +252,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     });
   });
 
-  it.fails('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
+  it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -458,7 +458,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when internal recreate-task fence starts', async () => {
+  it('evicts older queued workflow intents when internal recreate-task fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -497,7 +497,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when rebase-recreate fence starts', async () => {
+  it('evicts older queued workflow intents when rebase-recreate fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -584,7 +584,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('treats headless rebase-recreate as a recreate fence', async () => {
+  it('treats headless rebase-recreate as a recreate fence', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -629,7 +629,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when retry-workflow fence starts', async () => {
+  it('evicts older queued workflow intents when retry-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -1061,7 +1061,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when internal delete-workflow fence starts', async () => {
+  it('evicts older queued workflow intents when internal delete-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -1150,7 +1150,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when delegated headless delete fence starts', async () => {
+  it('evicts older queued workflow intents when delegated headless delete fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -1248,7 +1248,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when internal delete-all-workflows fence starts', async () => {
+  it('evicts older queued workflow intents when internal delete-all-workflows fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -1337,7 +1337,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when delegated headless delete-all fence starts', async () => {
+  it('evicts older queued workflow intents when delegated headless delete-all fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -1437,7 +1437,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it.fails('evicts older queued workflow intents when internal bulk delete-all-workflows fence starts', async () => {
+  it('evicts older queued workflow intents when internal bulk delete-all-workflows fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
