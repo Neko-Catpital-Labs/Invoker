@@ -576,6 +576,7 @@ export function App() {
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const planningSessionsRef = useRef<PlanningSessionView[]>(planningSessions);
   const activePlanningSessionIdRef = useRef('local-planning-session-1');
+  const planningRepoBindingRef = useRef<Pick<PlanningSessionView, 'repoUrl' | 'baseBranch'>>({});
   const pendingPlanningStreamSessionIdsRef = useRef<Set<string>>(new Set());
   const planningStreamSessionAliasesRef = useRef<Map<string, string>>(new Map());
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
@@ -842,6 +843,8 @@ export function App() {
         window.invoker?.planningTerminalList?.().catch(() => [] as TerminalSessionDescriptor[]) ?? Promise.resolve([] as TerminalSessionDescriptor[]),
       ]);
       if (!chatList.ok) return false;
+      const repoBinding = chatList.repoBinding;
+      planningRepoBindingRef.current = { repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch };
       const terminalsByPlanningSession = new Map(
         terminalList
           .filter((session) => session.kind === 'planning' && session.planningSessionId)
@@ -864,7 +867,12 @@ export function App() {
         if (aliasedBackendIds.has(session.id)) return false;
         return !(hasBusyLocalView && session.activeTurnStatus === 'running');
       });
-      const nextSessions = reconcileHydratedPlanningSessions(planningSessionsRef.current, admissibleRestored);
+      const reconciledSessions = reconcileHydratedPlanningSessions(planningSessionsRef.current, admissibleRestored);
+      const nextSessions = chatList.sessions.length === 0
+        ? reconciledSessions.map((session) => (session.id.startsWith('local-')
+          ? { ...session, repoUrl: repoBinding?.repoUrl, baseBranch: repoBinding?.baseBranch }
+          : session))
+        : reconciledSessions;
       planningSessionsRef.current = nextSessions;
       setPlanningSessions(nextSessions);
       const currentSessionId = activePlanningSessionIdRef.current;
@@ -2955,6 +2963,7 @@ export function App() {
 
     let sendSessionId = planningSessionId;
     let activeViewId = activePlanningSessionId;
+    let explicitRepoBindingApplied = false;
     const pendingRepoInput = (activePlanningSession.repoInput ?? '').trim();
     if (!activePlanningRepoLocked && pendingRepoInput && pendingRepoInput !== (activePlanningSession.repoUrl ?? '')) {
       const bind = await commitPlanningRepo();
@@ -2962,6 +2971,7 @@ export function App() {
       if (bind.sessionId) {
         sendSessionId = bind.sessionId;
         activeViewId = bind.sessionId;
+        explicitRepoBindingApplied = true;
       }
     }
 
@@ -3027,6 +3037,9 @@ export function App() {
       confirmationMode: selectedPlanningConfirmationMode,
       turnId,
       ...(sendSessionId ? { sessionId: sendSessionId } : {}),
+      ...(!explicitRepoBindingApplied && !sendSessionId && activePlanningSession.repoUrl && activePlanningSession.baseBranch
+        ? { repoBinding: { repoUrl: activePlanningSession.repoUrl, baseBranch: activePlanningSession.baseBranch } }
+        : {}),
     };
     const previousSessionId = activeViewId;
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
@@ -3062,6 +3075,7 @@ export function App() {
     activePlanningSession.messages.length,
     activePlanningSession.repoInput,
     activePlanningSession.repoUrl,
+    activePlanningSession.baseBranch,
     activePlanningSession.status,
     planningInput,
     planningSessionId,

@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -22,6 +23,10 @@ class SafePushError(RuntimeError):
 
 class BranchMissingError(SafePushError):
     """The expected branch has no remote ref at all (as opposed to one that moved)."""
+
+
+class NothingToPushError(SafePushError):
+    """Remote moved past --expected-head, but local HEAD has no work beyond it either."""
 
 
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
@@ -79,6 +84,65 @@ def local_head(*, cwd: Path | str | None = None) -> str:
     return head
 
 
+def _is_ancestor(ancestor: str, descendant: str, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return completed.returncode == 0
+
+
+# The remote branch can move between the caller capturing --expected-head and
+# this script running for a reason unrelated to the local repair itself --
+# e.g. an unrelated rebase-onto-base maintenance pass rewinding the branch
+# onto a newer trunk (see rebase_onto_base in mergify_admin_requeue_repair_body.py,
+# which does the same thing from the other direction). When that's what
+# happened, the diff since `expected` still applies cleanly on top of `live`;
+# replay it there instead of refusing outright. Returns the new local HEAD on
+# success, or None if the diff does not apply cleanly -- a real content
+# conflict, which the caller must still refuse rather than force over.
+def _replay_onto_moved_remote_head(
+    expected: str,
+    live: str,
+    head_before: str,
+    branch_name: str,
+    *,
+    remote: str,
+    cwd: Path | str | None = None,
+) -> str | None:
+    if run_git(["status", "--porcelain"], cwd=cwd):
+        return None
+    diff = run_git(["diff", "--binary", expected, head_before], cwd=cwd)
+    if not diff.strip():
+        return None
+    try:
+        run_git(["fetch", remote, f"refs/heads/{branch_name}"], cwd=cwd)
+        run_git(["checkout", "--quiet", "--detach", live], cwd=cwd)
+    except SafePushError:
+        return None
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        # run_git() strips trailing whitespace from command output; restore
+        # the single trailing newline `git apply` requires, or it rejects the
+        # patch as corrupt.
+        handle.write(diff + "\n")
+        patch_path = Path(handle.name)
+    try:
+        run_git(["apply", "--index", str(patch_path)], cwd=cwd)
+    except SafePushError:
+        run_git(["checkout", "--quiet", head_before], cwd=cwd)
+        return None
+    finally:
+        patch_path.unlink(missing_ok=True)
+    run_git(
+        ["commit", "-m", f"Replay local repair onto {live[:12]} after remote head moved"],
+        cwd=cwd,
+    )
+    return local_head(cwd=cwd)
+
+
 def repo_slug(remote: str, *, cwd: Path | str | None = None) -> str | None:
     completed = subprocess.run(
         ["git", "remote", "get-url", remote],
@@ -133,10 +197,24 @@ def safe_push(
                 exit_code=20,
             )
         if live != expected:
-            raise SafePushError(
-                f"stale-head: refs/heads/{branch_name} is {live}; expected {expected}",
-                exit_code=20,
-            )
+            head_before = local_head(cwd=cwd)
+            if head_before == expected:
+                raise NothingToPushError(
+                    f"noop: refs/heads/{branch_name} moved to {live} while local HEAD has no "
+                    f"work beyond the captured {expected}; nothing to push",
+                    exit_code=0,
+                )
+            replayed = None
+            if _is_ancestor(expected, head_before, cwd=cwd):
+                replayed = _replay_onto_moved_remote_head(
+                    expected, live, head_before, branch_name, remote=remote, cwd=cwd,
+                )
+            if replayed is None:
+                raise SafePushError(
+                    f"stale-head: refs/heads/{branch_name} is {live}; expected {expected}",
+                    exit_code=20,
+                )
+            expected = live
         lease = f"refs/heads/{branch_name}:{expected}"
 
     pushed = local_head(cwd=cwd)
@@ -282,6 +360,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _record_ledgers(args)
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        return 0
+    except NothingToPushError as exc:
+        print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return 0
     except BranchMissingError as exc:
         state = _settled_via_pr_merge_or_close(args)
