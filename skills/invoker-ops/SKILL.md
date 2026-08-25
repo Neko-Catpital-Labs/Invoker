@@ -99,6 +99,12 @@ After submitting, verify with query commands, not database reads.
 3. Report accepted and failed submission counts from command output.
 4. Verify remaining tasks with `query tasks` commands when the user asks for current state.
 
+## Auto-approve authors
+
+Auto-approve is gated by `config.json` `autoApproveAuthors`. Setup and MCP own writes
+(`invoker_auto_approve_authors` / `invoker-cli auto-approve-authors`). Do not enable the
+auto-approve toggle when that list is empty. See `skills/invoker-setup/SKILL.md`.
+
 ## If a command is missing
 
 Do not invent SQL as the fallback.
