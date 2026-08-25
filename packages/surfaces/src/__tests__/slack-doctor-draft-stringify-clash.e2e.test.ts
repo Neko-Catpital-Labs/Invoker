@@ -158,9 +158,7 @@ describe('Slack doctor-draft stringify clash (DO1 1787644363)', () => {
     nextReply = 'Draft ready.';
   });
 
-  // it.fails: asserts the desired behavior; stage+submit still drop the
-  // immutable doctor bytes today. A later fix slice removes `.fails`.
-  it.fails('stages and Approves the exact doctor-approved bytes when stringify would drop a blank line', async () => {
+  it('stages and Approves the exact doctor-approved bytes when stringify would drop a blank line', async () => {
     const onCommand = vi.fn(async () => ({ workflowIds: ['wf-doctor-1'] }));
     const { surface, slackPlanDraftRepo, conversationRepo } = await buildSurface(onCommand);
     const say = vi.fn().mockResolvedValue({ ts: 'card-ts' });

@@ -1362,19 +1362,22 @@ export class SlackSurface implements Surface {
       return { staged: false, reason: 'no_context' };
     }
     const approvedDraft = conversation.approvedPlanningDraft;
-    const reviewPlanText = approvedDraft?.planText ?? draftReview.planText;
-    const normalizedPlanText = this.normalizeDraftedPlanRepoUrl(reviewPlanText, context.repoUrl);
-    if (conversation.draftDoctorEnabled
-      && (!approvedDraft || approvedDraft.planText !== normalizedPlanText)) {
+    if (conversation.draftDoctorEnabled && !approvedDraft) {
       throw new Error('The review text does not exactly match the immutable doctor-approved draft.');
     }
-    const normalizedSummary = summarizePlanText(normalizedPlanText) ?? draftReview.summary;
+    const planTextForStage = approvedDraft && conversation.draftDoctorEnabled
+      ? approvedDraft.planText
+      : this.normalizeDraftedPlanRepoUrl(
+        approvedDraft?.planText ?? draftReview.planText,
+        context.repoUrl,
+      );
+    const planSummary = summarizePlanText(planTextForStage) ?? draftReview.summary;
     const draft = this.slackPlanDraftRepo.create({
       channelId: channel,
       threadTs,
       planningDraftId: approvedDraft?.id,
-      planText: normalizedPlanText,
-      summaryJson: JSON.stringify(normalizedSummary),
+      planText: planTextForStage,
+      summaryJson: JSON.stringify(planSummary),
       repoUrl: context.repoUrl,
       harnessPreset: context.presetKey,
       workingDir: context.workingDir,
@@ -1382,7 +1385,7 @@ export class SlackSurface implements Surface {
       confirmationMode: draftReview.confirmationMode,
     });
     try {
-      await this.postSlackPlanDraft(draft, normalizedSummary, say);
+      await this.postSlackPlanDraft(draft, planSummary, say);
       return { staged: true };
     } catch (error) {
       // The draft row already exists at this point and postSlackPlanDraft has
@@ -1600,11 +1603,9 @@ export class SlackSurface implements Surface {
     if (!approvedPlanText) {
       throw new Error('This plan review has no resolvable immutable draft.');
     }
-    const normalizedPlanText = this.normalizeDraftedPlanRepoUrl(approvedPlanText, draft.repoUrl);
-    if (draft.planningDraftId && normalizedPlanText !== approvedPlanText) {
-      throw new Error('This plan review would change during submission and cannot be approved.');
-    }
-    const planTextForSubmit = draft.planningDraftId ? approvedPlanText : normalizedPlanText;
+    const planTextForSubmit = draft.planningDraftId
+      ? approvedPlanText
+      : this.normalizeDraftedPlanRepoUrl(approvedPlanText, draft.repoUrl);
     const executionKey = this.slackPlanDraftRepo?.claim(draft);
     if (!executionKey) {
       throw new Error('This plan is already being submitted.');
