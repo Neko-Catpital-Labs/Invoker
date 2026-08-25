@@ -596,12 +596,8 @@ describe('PlanConversation', () => {
     });
     mockCursorResponse(VALID_YAML_PLAN);
 
-    const reply = await conversational.sendMessage('yes');
+    await conversational.sendMessage('yes');
 
-    // The raw ```yaml fence is redacted from the reply text (it would
-    // otherwise get posted verbatim to Slack); the draft itself is still
-    // fully captured via lastTurnDraftPlanText for the review-card flow.
-    expect(reply).toBe(redactEmbeddedPlanFence(VALID_YAML_PLAN));
     expect(conversational.lastTurnDraftPlanText).toContain('Test Plan');
     expect(conversational.planSubmitted).toBe(false);
     expect(conversational.submittedPlanText).toBeNull();
@@ -613,6 +609,23 @@ describe('PlanConversation', () => {
     expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
     expect(prompt).not.toContain('name: "Plan Name"');
     expect(prompt).not.toContain('tasks:\n  - id: task-1');
+  });
+
+  it('redacts the raw yaml fence from the conversational reply once a draft is captured', async () => {
+    const conversational = new PlanConversation({ conversationalPlanning: true, planningSurface: 'in_app' });
+    (conversational as any).messages.push({
+      role: 'assistant',
+      content: 'I understand the scope. Would you like me to draft the YAML plan?',
+    });
+    mockCursorResponse(VALID_YAML_PLAN);
+
+    const reply = await conversational.sendMessage('yes');
+
+    // The review-card flow reads the draft from lastTurnDraftPlanText
+    // directly, so the raw ```yaml fence would be pure duplication if left
+    // in the chat reply that Slack posts verbatim.
+    expect(reply).toBe(redactEmbeddedPlanFence(VALID_YAML_PLAN));
+    expect(conversational.lastTurnDraftPlanText).toContain('Test Plan');
   });
 
   it('submittedPlanText is null before confirmation', async () => {
