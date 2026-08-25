@@ -57,6 +57,7 @@ ${BOLD}Respond:${RESET}
 
 ${BOLD}Configure:${RESET}
   install-skills [install|update|reinstall]          Install bundled Invoker AI helpers
+  install-skills uninstall                            Remove bundled Invoker AI helpers
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
