@@ -73,7 +73,7 @@ describe('headless install-skills', () => {
 
     const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(output).toContain('install-skills [install|update|reinstall');
-    expect(output).toContain('uninstall');
+    expect(output).toMatch(/install-skills\s+uninstall/);
     expect(output).toContain('set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)');
   });
 });
