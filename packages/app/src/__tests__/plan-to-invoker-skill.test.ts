@@ -20,7 +20,7 @@ describe('plan-to-invoker skill contract', () => {
     expect(skill).toContain('a Codex AGENTS.md marked block');
     expect(skill).toContain('a Claude UserPromptSubmit hook');
     expect(skill).toContain(
-      'clean-tree edits stay local; feature work and dirty trees go through this',
+      'One-slice same-repo edits stay local; multi-layer or multi-PR work goes through this',
     );
     expect(skill).toContain('unless the user says "do it locally"');
     expect(skill).toContain('`install-skills uninstall`. Trigger: "convert to invoker",');

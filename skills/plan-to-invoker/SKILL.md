@@ -3,17 +3,16 @@ name: plan-to-invoker
 description: >
   Convert a plan into an Invoker YAML plan file. After `install-skills`, this
   routing is always on via Cursor `~/.cursor/rules/invoker-execution-precedence.mdc`,
-  a Codex AGENTS.md marked block, and a Claude UserPromptSubmit hook. Tiny
-  clean-tree edits stay local; feature work and dirty trees go through this
-  skill unless the user says "do it locally". Uninstall with
-  `install-skills uninstall`. Trigger: "convert to invoker",
-  "submit to invoker", "create invoker plan", "invoker-plan-to-invoker",
-  "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
-  Invoker tasks. For benchmark/direct-output prompts with "Required output path",
-  write a complete YAML document directly to that literal path; it must start
-  with top-level name, onFinish, mergeMode,
-  repoUrl (or scratch: true for no-repo mode), and tasks, never version or metadata wrappers,
-  and must not scan, validate, submit, or discover env vars.
+  a Codex AGENTS.md marked block, and a Claude UserPromptSubmit hook.
+  One-slice same-repo edits stay local; multi-layer or multi-PR work goes through this
+  skill (then chat-submit / auto_submit after the completeness gate) unless the user says "do it locally". Uninstall with `install-skills uninstall`. Trigger: "convert to invoker",
+  "submit to invoker", "create invoker plan",
+  "invoker-plan-to-invoker", "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
+  Invoker tasks. For benchmark/direct-output
+  prompts with "Required output path", write a complete YAML document directly
+  to that literal path; it must start with top-level name, onFinish, mergeMode,
+  repoUrl (or scratch: true for no-repo mode), and tasks, never version or
+  metadata wrappers, and must not scan, validate, submit, or discover env vars.
 ---
 
 # plan-to-invoker
@@ -68,6 +67,7 @@ Use this mode when invoked by the installed command or MCP prompt.
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
+- Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
 - Plain approval stops after workflow handoff: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only, then report the submitted workflow status and stop. Stop after `invoker_submit_plan` or the documented `invoker-cli run ... --live` fallback; do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
@@ -78,8 +78,8 @@ Use this mode when invoked by the installed command or MCP prompt.
 
 Use `confirmationMode` to distinguish who decided the hand-off should happen:
 
-- **Self-triggered delegation: confirmationMode: auto_submit** — the agent or subagent itself decided, mid-task and without a direct human instruction, that a chunk of work should be handed off to Invoker. No human message asked for this specific hand-off; it's the agent's own routing choice. In this case, skip the Slack review-card wait and call `invoker_submit_plan` once `invoker_prepare_plan_review` reports `confirmationMode: auto_submit`.
-- **Human-triggered delegation: confirmationMode: require** — a human's message is the direct request to hand off or send work to Invoker. Today's `require` + human-approval flow is unchanged: show the ordered steps and `confirmationText`, and wait for explicit approval before calling `invoker_submit_plan`.
+- **Self-triggered delegation: confirmationMode: auto_submit** — the agent or subagent itself decided, mid-task and without a direct human instruction, that a chunk of work should be handed off to Invoker. No human message asked for this specific hand-off; it's the agent's own routing choice. In this case, skip the Slack review-card wait and call `invoker_submit_plan` once `invoker_prepare_plan_review` reports `confirmationMode: auto_submit` **and** `check-planning-completeness.sh` passed. Incomplete plans stay on the native surface (AskQuestion / Slack question / Linear comment).
+- **Human-triggered delegation: confirmationMode: require** — a human's message is the direct request to hand off or send work to Invoker. Today's `require` + human-approval flow is unchanged: show the ordered steps and `confirmationText`, and wait for explicit approval before calling `invoker_submit_plan`. Completeness still must pass first.
 
 In both paths, the delegating agent chooses `poolId` best-effort per `references/schema.md` (an existing field) — omit it for the local default when unsure. `skill-doctor.sh` still runs against the generated plan in both paths; self-triggered delegation changes who approves the submission, not the validation gate.
 
