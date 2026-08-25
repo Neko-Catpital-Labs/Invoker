@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 export function normalizeComplaintText(text: string): string {
   return text
-    .replace(/<[^>]+>/g, ' ')
+    .replace(/<[^<>]+>/g, ' ')
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

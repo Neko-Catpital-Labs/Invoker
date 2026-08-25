@@ -15,6 +15,13 @@ describe('normalizeComplaintText', () => {
   it('collapses whitespace and lowercases', () => {
     expect(normalizeComplaintText('  The   Login  Button\nIs Broken  ')).toBe('the login button is broken');
   });
+
+  it('does not backtrack catastrophically on a long run of unmatched "<"', () => {
+    const adversarial = '<'.repeat(60_000);
+    const start = Date.now();
+    normalizeComplaintText(adversarial);
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
 });
 
 describe('issueFingerprint', () => {
