@@ -52,7 +52,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
             log_path="/tmp/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
             start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
-        conflict_plan = async_repair.build_repair_conflict_plan(
+        rebase_plan = async_repair.build_rebase_onto_master_plan(
             pr(), "GitHub reports merge conflict", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
         bot_thread_plan = async_repair.build_repair_bot_thread_plan(
@@ -60,7 +60,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
         )
         for plan, expected_task_ids, expected_merge_mode in (
             (checks_plan, ["repair", "normalize", "safe-push"], "manual"),
-            (conflict_plan, ["repair", "safe-push"], "manual"),
+            (rebase_plan, ["repair", "safe-push"], "manual"),
             (bot_thread_plan, ["repair", "safe-push"], "external_review"),
         ):
             with self.subTest(plan=plan.plan_name):
@@ -154,18 +154,34 @@ class AsyncRepairPlanTests(unittest.TestCase):
         )
         self.assertIn("Queue draft PR: #5854", plan.yaml_text)
 
-    def test_repair_conflict_plan_has_two_tasks_and_no_owner_ledger_path(self):
-        plan = async_repair.build_repair_conflict_plan(
+    def test_rebase_onto_master_plan_has_two_tasks_and_no_owner_ledger_path(self):
+        plan = async_repair.build_rebase_onto_master_plan(
             pr(), "GitHub reports merge conflict", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
+        self.assertTrue(plan.plan_name.startswith("admin-bypass-rebase-onto-master-pr-"))
         self.assertIn("id: repair", plan.yaml_text)
         self.assertIn("id: safe-push", plan.yaml_text)
         self.assertNotIn("id: normalize", plan.yaml_text)
         self.assertNotIn("--record-json-ledger", plan.yaml_text)
         self.assertNotIn("--json-kind", plan.yaml_text)
         self.assertNotIn("/tmp/ledger.jsonl", plan.yaml_text)
+        self.assertIn("Rebase this pull request onto `master`", plan.yaml_text)
         self.assertIn("commit locally. Do not push.", plan.yaml_text)
         self.assertNotIn("executionAgent", plan.yaml_text)
+
+    def test_rebase_onto_master_plan_includes_dequeue_reason(self):
+        plan = async_repair.build_rebase_onto_master_plan(
+            pr(),
+            "Mergify dequeued with no named required-check failure",
+            repo="owner/repo",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertTrue(plan.plan_name.startswith("admin-bypass-rebase-onto-master-pr-"))
+        self.assertIn("Rebase this pull request onto `master`", plan.yaml_text)
+        self.assertIn("id: repair", plan.yaml_text)
+        self.assertIn("id: safe-push", plan.yaml_text)
+        self.assertNotIn("id: normalize", plan.yaml_text)
 
     def test_repair_bot_thread_plan_keeps_thread_id_in_prompt_not_ledger(self):
         plan = async_repair.build_repair_bot_thread_plan(
@@ -184,7 +200,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
                 log_path="/tmp/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
                 start_head=HEAD, state_file=owner_ledger,
             ),
-            async_repair.build_repair_conflict_plan(
+            async_repair.build_rebase_onto_master_plan(
                 pr(), "GitHub reports merge conflict", repo="owner/repo", start_head=HEAD, state_file=owner_ledger,
             ),
             async_repair.build_repair_bot_thread_plan(
