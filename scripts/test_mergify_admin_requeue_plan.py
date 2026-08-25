@@ -41,6 +41,7 @@ def event(
     conditions=(),
     queue_rule_name="admin-bypass",
     queued_at="2026-07-07T05:00:00Z",
+    waiting_for=(),
 ):
     return m.MergifyQueueEvent(
         comment_id=comment_id,
@@ -48,7 +49,7 @@ def event(
         queue_rule_name=queue_rule_name,
         queued_at=queued_at,
         head_sha=head,
-        waiting_for=(),
+        waiting_for=waiting_for,
         failing_checks=failing,
         comment_url="u",
         condition_states=conditions,
@@ -647,6 +648,70 @@ class PlanStackActions(PlannerTestCase):
         )
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_master", 77))
         self.assertEqual(actions[0].key, "rebase-onto-master:77")
+
+    def test_dirty_conflict_waiting_dequeued_plans_rebase_despite_waiting(self):
+        # PR #10278 shape: Mergify state=waiting with empty SHA and conflict
+        # waiting_for must not be treated as productively queued.
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+            latest_mergify=event(
+                state="waiting",
+                head="",
+                queue_rule_name="",
+                waiting_for=("-conflict` [queue requirement]",),
+            ),
+        )
+        self.assertFalse(p.has_active_queue_event(snapshot, NOW))
+        actions = self._plan(snapshot)
+        self.assertEqual(actions[0].kind, "rebase_onto_master")
+
+    def test_held_claim_after_terminal_settle_reclaims_conflict_rebase(self):
+        ledger = self._ledger()
+        key = "rebase-onto-master:1"
+        ledger.record("rebase-onto-master", 1, HEAD, key, NOW - 120)
+        ledger.record(
+            "rebase-onto-master-settled",
+            1,
+            HEAD,
+            key,
+            NOW - 60,
+            meta={"outcomeClass": "success", "workflowStatus": "completed"},
+        )
+        claimed = {"held": True}
+        released = {"n": 0}
+
+        def claim(_kind, _subject, _sha):
+            return claimed["held"]
+
+        def release(_kind, _subject, _sha):
+            released["n"] += 1
+            claimed["held"] = False
+
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+            latest_mergify=event(
+                state="waiting",
+                head="",
+                queue_rule_name="",
+                waiting_for=("-conflict` [queue requirement]",),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=NOW,
+            open_pr_numbers={snapshot.number},
+            open_pr_numbers_by_head={},
+            claim_repair_filing=claim,
+            release_repair_filing=release,
+        )
+        self.assertEqual(plan.actions[0].kind, "rebase_onto_master")
+        self.assertGreaterEqual(released["n"], 1)
 
     def test_conflict_and_dequeue_share_rebase_onto_master_retry_budget(self):
         ledger = self._ledger()

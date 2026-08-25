@@ -135,16 +135,16 @@ def classify_repair_outcome(workflow_id: str, status: str) -> str:
 
     `infra` and `superseded` must not spend the code-repair attempt budget.
     Unknown/code failures still count so thrash cannot loop forever.
+    Inspect tasks before treating `completed` as success — a merge-gate
+    workflow can complete while safe-push failed with stale-head (PR #10278).
     """
-    if status == "completed":
-        return "success"
     tasks = list_workflow_tasks(workflow_id) or []
     for task in tasks:
         execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
         failure_class = execution.get("failureClass")
         if isinstance(failure_class, str) and failure_class in _SSH_INFRA_FAILURE_CLASSES:
             return "infra"
-        error = str(execution.get("error") or "")
+        error = str(execution.get("error") or execution.get("pendingFixError") or "")
         if "stale-head" in error:
             return "superseded"
         if "fatal: not a git repository" in error and "/.git/worktrees/" in error:
@@ -155,6 +155,8 @@ def classify_repair_outcome(workflow_id: str, status: str) -> str:
             return "infra"
         if "/Users/" in error and ("PermissionError" in error or "Permission denied" in error):
             return "infra"
+    if status == "completed":
+        return "success"
     if status in _TERMINAL_WORKFLOW_STATUSES:
         return "code"
     return "unknown"

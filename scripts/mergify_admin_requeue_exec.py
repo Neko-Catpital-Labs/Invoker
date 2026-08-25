@@ -180,6 +180,7 @@ def run_cycle(
     # closed (ledger/owner unreachable) would silently drop the action from
     # the printed plan instead.
     dry_run_claim_repair_filing = None if args.dry_run else claim_repair_filing
+    dry_run_release_repair_filing = None if args.dry_run else release_repair_filing
     for stack in stacks:
         plan = plan_stack_execution(
             stack,
@@ -193,6 +194,7 @@ def run_cycle(
             trunk,
             stale_base_by_pr,
             dry_run_claim_repair_filing,
+            dry_run_release_repair_filing,
         )
         queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)

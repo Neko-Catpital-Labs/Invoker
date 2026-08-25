@@ -53,6 +53,7 @@ try:
         extract_first_json_object,
         failing_check_urls,
         latest_contexts_by_required_check,
+        payload_head_sha,
         payload_rule,
         payload_state,
         reason_failed_checks,
@@ -70,6 +71,7 @@ except ImportError:
         extract_first_json_object,
         failing_check_urls,
         latest_contexts_by_required_check,
+        payload_head_sha,
         payload_rule,
         payload_state,
         reason_failed_checks,
@@ -281,8 +283,7 @@ def parse_mergify_queue_event(comment: Mapping[str, object]) -> MergifyQueueEven
     if "-*- Mergify Payload -*-" not in body:
         return None
     payload = extract_first_json_object(body[body.find("-*- Mergify Payload -*-"):]) or {}
-    sha_match = re.search(r"Left the queue.*?`([0-9a-fA-F]{40})`", body, re.I | re.S)
-    head_sha = sha_match.group(1) if sha_match else ""
+    head_sha = payload_head_sha(payload, body)
     queue_pr_match = re.search(r"on draft #(\d+)", body, re.I)
     queue_pr_number = int(queue_pr_match.group(1)) if queue_pr_match else 0
     failing_checks = section_items(body, "Failing checks")
