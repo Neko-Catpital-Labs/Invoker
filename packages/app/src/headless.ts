@@ -295,7 +295,8 @@ async function headlessInstallSkills(
     throw new Error('Bundled AI helper installation is not available in this runtime.');
   }
   const status = deps.installBundledSkills(mode ?? 'install');
-  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
+  const verb = mode === 'uninstall' ? 'Uninstalled' : 'Installed';
+  process.stdout.write(`${verb} ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
   for (const target of status.targets) {
     process.stdout.write(`Skill target (${target.name}): ${target.path}\n`);
   }
@@ -304,6 +305,9 @@ async function headlessInstallSkills(
   }
   for (const target of status.mcpTargets) {
     process.stdout.write(`MCP target (${target.name}): ${target.path}\n`);
+  }
+  for (const target of status.instructionTargets ?? []) {
+    process.stdout.write(`Instruction target (${target.name}): ${target.path}\n`);
   }
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
@@ -338,7 +342,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<u
       return headlessRepairFiling(args.slice(1), deps);
     case 'install-skills':
       await headlessInstallSkills(
-        args[1] === 'reinstall' || args[1] === 'update' ? args[1] : 'install',
+        args[1] === 'reinstall' || args[1] === 'update' || args[1] === 'uninstall' ? args[1] : 'install',
         deps,
       );
       break;
