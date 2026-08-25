@@ -27,16 +27,17 @@ except ImportError:
     )
 
 
-def resolve_workflow_for_pr(pr_number: int) -> str | None:
+def resolve_workflow_for_pr(pr_number: int, repo: str | None = None) -> str | None:
     # See cron-pr-lib.sh's resolve_workflow_for_pr comment: review-gate exits 0
     # with `{}` for a genuine miss (no local workflow mapping). A non-zero exit
     # means the lookup mechanism itself is broken, which must propagate as an
     # exception rather than silently falling back to ad-hoc repair.
     review_gate_cmd = os.environ.get("INVOKER_PR_CRON_REVIEW_GATE_CMD")
+    query_arg = f"{repo}#{pr_number}" if repo else str(pr_number)
     if review_gate_cmd:
         try:
             completed = subprocess.run(
-                [review_gate_cmd, str(pr_number)],
+                [review_gate_cmd, query_arg],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -44,13 +45,13 @@ def resolve_workflow_for_pr(pr_number: int) -> str | None:
             )
         except subprocess.TimeoutExpired:
             completed = subprocess.CompletedProcess(
-                [review_gate_cmd, str(pr_number)],
+                [review_gate_cmd, query_arg],
                 returncode=124,
                 stdout="",
                 stderr=f"timed out after {DEFAULT_TIMEOUT_SECONDS}s",
             )
     else:
-        completed = _run_headless('headless_query query review-gate "$2" --output json', str(pr_number))
+        completed = _run_headless('headless_query query review-gate "$2" --output json', query_arg)
     if completed.returncode != 0:
         raise RuntimeError(
             f"resolve_workflow_for_pr failed for PR #{pr_number}: "
@@ -65,6 +66,13 @@ def resolve_workflow_for_pr(pr_number: int) -> str | None:
         raise RuntimeError(f"resolve_workflow_for_pr produced invalid JSON for PR #{pr_number}: {stdout!r}") from exc
     if not isinstance(record, dict):
         raise RuntimeError(f"resolve_workflow_for_pr produced non-object JSON for PR #{pr_number}: {stdout!r}")
+    if repo:
+        review_url = str(record.get("reviewUrl") or "")
+        # Bare reviewId matches are Invoker-only; other repos must match on URL.
+        if review_url and f"github.com/{repo}/" not in review_url and f"github.com/{repo.lower()}/" not in review_url.lower():
+            return None
+        if not review_url and repo != "Neko-Catpital-Labs/Invoker":
+            return None
     workflow_id = record.get("workflowId")
     return str(workflow_id) if workflow_id else None
 
@@ -203,6 +211,8 @@ def settle_workflow_fastpath_rows(ledger, now: int) -> int:
         kind = row.get("kind")
         if kind not in _FASTPATH_SETTLE_KINDS:
             continue
+        if not getattr(ledger, "_row_matches_repo", lambda _r: True)(row):
+            continue
         meta = row.get("meta") or {}
         workflow_id = meta.get("workflowId")
         if not workflow_id:
@@ -268,21 +278,25 @@ def list_workflows() -> list[dict] | None:
 _REPAIRER_PLAN_SETTLE_KINDS = ("repair-check", "conflict-repair", "rebase-onto-master", "repair-bot-thread")
 
 
-def _repairer_plan_name(kind: str, pr: int, head: str, key: str) -> str:
+def _repairer_plan_name(kind: str, pr: int, head: str, key: str, repo: str | None = None) -> str:
     if kind == "repair-check":
-        return repair_check_plan_name(pr, key, head)
+        return repair_check_plan_name(pr, key, head, repo=repo)
     if kind == "conflict-repair":
-        return repair_conflict_plan_name(pr, head)
+        return repair_conflict_plan_name(pr, head, repo=repo)
     if kind == "rebase-onto-master":
-        return rebase_onto_master_plan_name(pr, head)
-    return repair_bot_thread_plan_name(pr, head)
+        return rebase_onto_master_plan_name(pr, head, repo=repo)
+    return repair_bot_thread_plan_name(pr, head, repo=repo)
 
 
 def settle_repairer_plan_rows(ledger, now: int) -> int:
     """Write `<kind>-settled` rows for repairer.py's ad-hoc repair plans whose
     workflow reached a terminal status but whose own safe-push task never ran
     to write it. Returns how many rows were settled."""
-    pending = [row for row in ledger.rows if row.get("kind") in _REPAIRER_PLAN_SETTLE_KINDS]
+    pending = [
+        row for row in ledger.rows
+        if row.get("kind") in _REPAIRER_PLAN_SETTLE_KINDS
+        and getattr(ledger, "_row_matches_repo", lambda _r: True)(row)
+    ]
     if not pending:
         return 0
     workflows: list[dict] | None = None
@@ -297,7 +311,8 @@ def settle_repairer_plan_rows(ledger, now: int) -> int:
             continue
         if workflows is None:
             workflows = list_workflows() or []
-        plan_name = _repairer_plan_name(kind, pr, head, key)
+        row_repo = str(row.get("repo") or "") or getattr(ledger, "repo", None)
+        plan_name = _repairer_plan_name(kind, pr, head, key, repo=row_repo)
         match = next((w for w in workflows if w.get("name") == plan_name), None)
         if match is None:
             continue

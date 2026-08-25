@@ -11,7 +11,7 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
+    from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepoMergePolicy, load_mergify_rules, parse_mergify_admin_bypass_rules, DEFAULT_INVOKER_REPO
     from .mergify_admin_requeue_plan import (
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
@@ -36,7 +36,7 @@ except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
+    from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepoMergePolicy, load_mergify_rules, parse_mergify_admin_bypass_rules, DEFAULT_INVOKER_REPO
     from mergify_admin_requeue_plan import (
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
@@ -117,18 +117,72 @@ def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClie
     return stale_base_by_pr
 
 
+def resolve_repo_merge_policy(gh: GhClient, repo: str) -> RepoMergePolicy:
+    """Load admin-bypass Mergify rule for `repo`, falling back to GitHub default branch."""
+    local_path = REPO_ROOT / ".mergify.yml"
+    # Invoker scans go through load_mergify_rules so existing tests can patch it.
+    if repo == DEFAULT_INVOKER_REPO:
+        try:
+            trunk, labels, required = load_mergify_rules(local_path)
+            return RepoMergePolicy(
+                trunk=trunk,
+                labels=labels,
+                required_checks=required,
+                has_admin_bypass_queue=True,
+            )
+        except (ValueError, OSError):
+            pass
+
+    text: str | None = None
+    can_fetch = hasattr(gh, "fetch_file_contents")
+    if can_fetch:
+        try:
+            text = gh.fetch_file_contents(repo, ".mergify.yml")
+        except Exception:
+            text = None
+    elif local_path.exists():
+        # Test mocks / offline GhClient without fetch: reuse the Invoker checkout.
+        try:
+            text = local_path.read_text(encoding="utf-8")
+        except OSError:
+            text = None
+    if text:
+        try:
+            trunk, labels, required = parse_mergify_admin_bypass_rules(text)
+            return RepoMergePolicy(
+                trunk=trunk,
+                labels=labels,
+                required_checks=required,
+                has_admin_bypass_queue=True,
+            )
+        except ValueError:
+            pass
+    trunk = "master"
+    if hasattr(gh, "default_branch"):
+        try:
+            trunk = gh.default_branch(repo) or "master"
+        except Exception:
+            trunk = "master"
+    return RepoMergePolicy(
+        trunk=trunk,
+        labels=frozenset({"admin-bypass"}),
+        required_checks=frozenset(),
+        has_admin_bypass_queue=False,
+    )
+
+
+_MERGIFY_QUEUE_ONLY_ACTIONS = frozenset({
+    "requeue",
+    "restore_admin_bypass_label",
+    "comment_admin_bypass_nudge",
+})
+
+
 def run_cycle(
     args: argparse.Namespace,
     claim_repair_filing: ClaimRepairFiling | None = None,
     release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> bool:
-    rule_path = REPO_ROOT / ".mergify.yml"
-    try:
-        trunk, _labels, required_checks = load_mergify_rules(rule_path)
-    except ValueError as exc:
-        print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
-        raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
-
     logger = AdminBypassLogger()
     logger.trace(
         "admin-bypass-scan-start",
@@ -139,10 +193,20 @@ def run_cycle(
         json_output=args.json,
     )
     gh = GhClient()
-    ledger = Ledger(Path(args.state_file).expanduser())
+    policy = resolve_repo_merge_policy(gh, args.repo)
+    trunk = policy.trunk
+    required_checks = policy.required_checks
+    logger.trace(
+        "admin-bypass-repo-policy",
+        repo=args.repo,
+        trunk=trunk,
+        required_checks=sorted(required_checks),
+        has_admin_bypass_queue=policy.has_admin_bypass_queue,
+    )
+    ledger = Ledger(Path(args.state_file).expanduser(), repo=args.repo)
     loader = AdminBypassStackLoader(gh)
     executor = AdminBypassGhExecutor(gh, ledger, logger, args.repo)
-    repairer = AdminBypassRepairer(gh, executor, logger, ledger, args.repo)
+    repairer = AdminBypassRepairer(gh, executor, logger, ledger, args.repo, trunk=trunk)
     loaded = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
     stacks = loaded.stacks
     now = int(time.time())
@@ -194,6 +258,14 @@ def run_cycle(
             stale_base_by_pr,
             dry_run_claim_repair_filing,
         )
+        if not policy.has_admin_bypass_queue and plan.actions:
+            filtered = tuple(
+                action for action in plan.actions
+                if action.kind not in _MERGIFY_QUEUE_ONLY_ACTIONS
+            )
+            if filtered != plan.actions:
+                from dataclasses import replace
+                plan = replace(plan, actions=filtered)
         queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
         if not plan.actions:
@@ -224,7 +296,7 @@ def run_cycle(
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                     else:
                         check_name = action.key
-                        workflow_id = resolve_workflow_for_pr(action.pr_number)
+                        workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                         if workflow_id:
                             submit_repair_review_gate_ci(action.pr_number)
                             ledger.record(
@@ -306,7 +378,7 @@ def run_cycle(
                 continue
             elif action.kind == "rebase_onto_master":
                 try:
-                    workflow_id = resolve_workflow_for_pr(action.pr_number)
+                    workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                     if workflow_id:
                         submit_rebase_recreate(workflow_id)
                         ledger.record(
@@ -412,11 +484,21 @@ def run_once(
     claim_repair_filing: ClaimRepairFiling | None = None,
     release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> int:
-    try:
-        run_cycle(args, claim_repair_filing, release_repair_filing)
-    except RuntimeError:
-        return 2
-    return 0
+    repos = list(getattr(args, "repos", None) or [args.repo])
+    any_ok = False
+    any_hard_fail = False
+    for repo in repos:
+        repo_args = argparse.Namespace(**vars(args))
+        repo_args.repo = repo
+        try:
+            run_cycle(repo_args, claim_repair_filing, release_repair_filing)
+            any_ok = True
+        except RuntimeError as exc:
+            any_hard_fail = True
+            print(f"ERROR: admin-bypass scan failed for {repo}: {exc}", file=sys.stderr)
+    if any_ok:
+        return 0
+    return 2 if any_hard_fail else 0
 
 
 def run_loop(
@@ -424,8 +506,20 @@ def run_loop(
     claim_repair_filing: ClaimRepairFiling | None = None,
     release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> int:
+    repos = list(getattr(args, "repos", None) or [args.repo])
     try:
-        while run_cycle(args, claim_repair_filing, release_repair_filing):
+        while True:
+            any_progress = False
+            for repo in repos:
+                repo_args = argparse.Namespace(**vars(args))
+                repo_args.repo = repo
+                try:
+                    if run_cycle(repo_args, claim_repair_filing, release_repair_filing):
+                        any_progress = True
+                except RuntimeError as exc:
+                    print(f"ERROR: admin-bypass scan failed for {repo}: {exc}", file=sys.stderr)
+            if not any_progress:
+                break
             time.sleep(args.poll_seconds)
     except RuntimeError:
         return 2
@@ -439,11 +533,21 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     mode.add_argument("--loop", action="store_true", help="Poll until no actionable stack remains.")
     parser.add_argument("--poll-seconds", type=float, default=60, help="Seconds to wait between loop scans. Default: 60.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions; perform no GitHub mutations.")
-    parser.add_argument("--repo", default="Neko-Catpital-Labs/Invoker", help="Default: Neko-Catpital-Labs/Invoker.")
+    parser.add_argument(
+        "--repo",
+        action="append",
+        dest="repos",
+        default=None,
+        help="GitHub owner/repo to scan. Repeatable. Default: Neko-Catpital-Labs/Invoker.",
+    )
     parser.add_argument("--author", help="Limit scan to one author. Default: all authors.")
     parser.add_argument("--state-file", default=str(Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"), help="Ledger JSONL path.")
     parser.add_argument("--pr", type=int, action="append", default=[], help="Limit to a PR; repeatable.")
     parser.add_argument("--max-requeue-attempts", type=int, default=2, help="Default: 2 per PR/head/dequeue event.")
     parser.add_argument("--max-repair-attempts", type=int, default=3, help="Default: 3 per PR/head/blocker.")
     parser.add_argument("--json", action="store_true", help="Emit one JSON object per decision/action.")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not args.repos:
+        args.repos = [DEFAULT_INVOKER_REPO]
+    args.repo = args.repos[0]
+    return args
