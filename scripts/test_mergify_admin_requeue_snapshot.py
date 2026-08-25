@@ -126,6 +126,30 @@ class ParseMergifyQueueEvent(unittest.TestCase):
         self.assertEqual(event.queue_rule_name, "")
         self.assertEqual(event.head_sha, "")
 
+    def test_parses_waiting_payload_head_sha_without_left_the_queue_prose(self):
+        comment = {
+            "user": {"login": "mergify[bot]"},
+            "id": "c-payload-sha",
+            "created_at": "2026-08-25T06:09:00Z",
+            "updated_at": "2026-08-25T06:09:00Z",
+            "html_url": "https://github.com/o/r/pull/10278#issuecomment-1",
+            "body": (
+                "<!---\n"
+                "DO NOT EDIT\n"
+                "-*- Mergify Payload -*-\n"
+                '{"version": 1, "state": "waiting", "queue_rule_name": null,'
+                f' "head_sha": "{HEAD}"}}\n'
+                "-*- Mergify Payload End -*-\n"
+                "-->\n\n"
+                "# Merge Queue Status\n\n"
+                "- Waiting for queue conditions\n"
+            ),
+        }
+        event = s.parse_mergify_queue_event(comment)
+        assert event is not None
+        self.assertEqual(event.state, "waiting")
+        self.assertEqual(event.head_sha, HEAD)
+
     def test_edited_stale_dequeue_comment_does_not_outrank_newer_waiting_comment(self):
         # Incident 2026-08-04 (PR #7420): Mergify edited the old "dequeued"
         # status comment one second after posting the new "waiting" comment,

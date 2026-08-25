@@ -108,10 +108,6 @@ class SubmitClosePr(unittest.TestCase):
         self.assertIn('headless_mutation run "$2"', script)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FastpathSettleObserver(unittest.TestCase):
     def _ledger(self, tmpdir):
         from mergify_admin_requeue_model import Ledger
@@ -276,3 +272,30 @@ class RepairerPlanSettleObserver(unittest.TestCase):
             with mock.patch.object(f, "list_workflows", return_value=[]):
                 self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 0)
             self.assertIsNone(ledger.latest("repair-bot-thread-settled", 9172, head, "PRRT_thread1"))
+
+
+class ClassifyRepairOutcome(unittest.TestCase):
+    def test_completed_with_stale_head_is_superseded_not_success(self):
+        tasks = [
+            {
+                "id": "wf/safe-push",
+                "status": "completed",
+                "execution": {
+                    "pendingFixError": (
+                        "pr-worker-safe-push: stale-head: refs/heads/stack/x "
+                        "is b7a44e5d; expected 1cc00e13\n"
+                        "[worktree] Process exited: exitCode=20"
+                    ),
+                },
+            }
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1", "completed"), "superseded")
+
+    def test_completed_without_task_failures_is_success(self):
+        with mock.patch.object(f, "list_workflow_tasks", return_value=[{"id": "wf/repair", "status": "completed", "execution": {}}]):
+            self.assertEqual(f.classify_repair_outcome("wf-1", "completed"), "success")
+
+
+if __name__ == "__main__":
+    unittest.main()

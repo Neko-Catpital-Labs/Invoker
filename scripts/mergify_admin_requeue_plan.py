@@ -241,7 +241,17 @@ def has_active_queue_event(pr: PrSnapshot, now: int) -> bool:
     # A pending `queue` command reports state "waiting" with a null queue
     # rule while Mergify evaluates its conditions; requeueing on top of it is
     # a duplicate Mergify ignores but the retry-cap ledger still counts.
+    # Exception: Mergify also reports "waiting" when the PR is blocked on a
+    # conflict queue requirement (DIRTY / CONFLICTING / dequeued / waiting_for
+    # conflict). That is not a productive in-flight queue — treat it as idle
+    # so conflict repair can file (PR #10278).
     if latest.state == "waiting":
+        if pr.merge_state_status == "DIRTY" or pr.mergeable == "CONFLICTING":
+            return False
+        if "dequeued" in pr.labels:
+            return False
+        if any("conflict" in item.lower() for item in latest.waiting_for):
+            return False
         if latest.head_sha and latest.head_sha != pr.head_ref_oid:
             return "queued" in pr.labels
         return True
@@ -1016,6 +1026,7 @@ def plan_mergify_queue_repairs(
     now: int,
     pr_numbers: Collection[int] | None = None,
     claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> Action | None:
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
@@ -1053,6 +1064,7 @@ def plan_mergify_queue_repairs(
                 now,
                 "Mergify dequeued with no named required-check failure while behind master",
                 claim_repair_filing,
+                release_repair_filing,
             )
             if action is not None:
                 return action
@@ -1066,6 +1078,7 @@ def plan_direct_repairs(
     now: int,
     pr_numbers: Collection[int] | None = None,
     claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> Action | None:
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
@@ -1080,6 +1093,7 @@ def plan_direct_repairs(
                     continue
                 action = plan_invoker_rebase_onto_master(
                     pr, ledger, max_repair_attempts, now, blocker.detail, claim_repair_filing,
+                    release_repair_filing,
                 )
                 if action is not None:
                     return action
@@ -1241,6 +1255,7 @@ def plan_invoker_rebase_onto_master(
     now: int,
     reason: str,
     claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> Action | None:
     """File an Invoker prompt job to rebase the PR onto master (no local force-push)."""
     key = f"rebase-onto-master:{pr.number}"
@@ -1264,11 +1279,56 @@ def plan_invoker_rebase_onto_master(
         ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now,
     ):
         return None
+    legacy_key = f"conflict:{pr.number}"
+    if not decision["crashed_on_infra"] and repair_in_flight(
+        ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now,
+    ):
+        return None
     if claim_repair_filing is not None and claim_repair_filing(
         REBASE_ONTO_MASTER_FILING_KIND, str(pr.number), pr.head_ref_oid,
     ):
-        return None
+        if not _release_stale_rebase_filing_claim(
+            ledger, pr, key, legacy_key, now, claim_repair_filing, release_repair_filing,
+        ):
+            return None
     return Action("rebase_onto_master", pr.number, key, reason)
+
+
+def _release_stale_rebase_filing_claim(
+    ledger: Ledger,
+    pr: PrSnapshot,
+    key: str,
+    legacy_key: str,
+    now: int,
+    claim_repair_filing: ClaimRepairFiling,
+    release_repair_filing: ReleaseRepairFiling | None,
+) -> bool:
+    """Release a held filing claim when a prior attempt already settled.
+
+    Returns True when the caller may proceed (claim re-acquired). Returns False
+    when the claim is still held for a live attempt or release is unavailable.
+    """
+    if release_repair_filing is None:
+        return False
+    if repair_in_flight(ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key, now):
+        return False
+    if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
+        return False
+    settled = ledger.latest(
+        f"{REBASE_ONTO_MASTER_LEDGER_KIND}-settled", pr.number, pr.head_ref_oid, key,
+    )
+    if settled is None:
+        settled = ledger.latest("conflict-repair-settled", pr.number, pr.head_ref_oid, legacy_key)
+    if settled is None:
+        settled = ledger.latest_by_unit(
+            f"{REBASE_ONTO_MASTER_LEDGER_KIND}-settled", pr.number, key,
+        )
+    if settled is None:
+        settled = ledger.latest_by_unit("conflict-repair-settled", pr.number, legacy_key)
+    if settled is None:
+        return False
+    release_repair_filing(REBASE_ONTO_MASTER_FILING_KIND, str(pr.number), pr.head_ref_oid)
+    return not claim_repair_filing(REBASE_ONTO_MASTER_FILING_KIND, str(pr.number), pr.head_ref_oid)
 
 
 def plan_rebase_onto_base(
@@ -1394,13 +1454,18 @@ def plan_actions_from_facts(
     max_repair_attempts: int,
     now: int,
     claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> tuple[Action, ...]:
     if facts.bottom:
         bottom_pr_numbers = (facts.bottom.number,)
-        action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers, claim_repair_filing)
+        action = plan_mergify_queue_repairs(
+            facts, ledger, max_repair_attempts, now, bottom_pr_numbers, claim_repair_filing, release_repair_filing,
+        )
         if action is not None:
             return (action,)
-        action = plan_direct_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers, claim_repair_filing)
+        action = plan_direct_repairs(
+            facts, ledger, max_repair_attempts, now, bottom_pr_numbers, claim_repair_filing, release_repair_filing,
+        )
         if action is not None:
             return (action,)
         action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers)
@@ -1416,10 +1481,16 @@ def plan_actions_from_facts(
         action = plan_bottom_progress(facts, ledger, max_requeue_attempts, now, claim_repair_filing)
         if action is not None:
             return (action,)
-    action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now, claim_repair_filing=claim_repair_filing)
+    action = plan_mergify_queue_repairs(
+        facts, ledger, max_repair_attempts, now,
+        claim_repair_filing=claim_repair_filing, release_repair_filing=release_repair_filing,
+    )
     if action is not None:
         return (action,)
-    action = plan_direct_repairs(facts, ledger, max_repair_attempts, now, claim_repair_filing=claim_repair_filing)
+    action = plan_direct_repairs(
+        facts, ledger, max_repair_attempts, now,
+        claim_repair_filing=claim_repair_filing, release_repair_filing=release_repair_filing,
+    )
     if action is not None:
         return (action,)
     action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, now)
@@ -1452,6 +1523,7 @@ def plan_stack_actions(
     suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
     open_pr_numbers_by_head: Mapping[str, Collection[int]] | None = None,
     claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> tuple[Action, ...]:
     del suppressed_failed_checks_by_pr
     facts = build_stack_facts(
@@ -1462,7 +1534,10 @@ def plan_stack_actions(
         open_pr_numbers_by_head=open_pr_numbers_by_head or {},
         trunk=TRUNK,
     )
-    return plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch, claim_repair_filing)
+    return plan_actions_from_facts(
+        facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch,
+        claim_repair_filing, release_repair_filing,
+    )
 
 
 def plan_stack_execution(
@@ -1477,6 +1552,7 @@ def plan_stack_execution(
     trunk: str = TRUNK,
     stale_base_by_pr: Mapping[int, bool] | None = None,
     claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
 ) -> StackExecutionPlan:
     facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head, trunk, stale_base_by_pr=stale_base_by_pr)
     summary = summarize_stack(facts)
@@ -1488,7 +1564,10 @@ def plan_stack_execution(
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
         )
-    actions = plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch, claim_repair_filing)
+    actions = plan_actions_from_facts(
+        facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch,
+        claim_repair_filing, release_repair_filing,
+    )
     if actions:
         return StackExecutionPlan(
             summary=summary,

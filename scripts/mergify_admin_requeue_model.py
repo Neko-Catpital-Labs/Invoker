@@ -388,6 +388,30 @@ def payload_rule(payload: Mapping[str, object], body: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def payload_head_sha(payload: Mapping[str, object], body: str) -> str:
+    """Prefer Mergify payload SHA fields; fall back to Left-the-queue prose.
+
+    Waiting comments never contain the Left-the-queue SHA markup, so without
+    payload SHA the planner cannot detect HEAD movement against a waiting event.
+    """
+    for key in ("head_sha", "sha", "pull_request_head_sha", "current_sha"):
+        value = payload.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+            return value
+    pull_request = payload.get("pull_request")
+    if isinstance(pull_request, Mapping):
+        head = pull_request.get("head")
+        if isinstance(head, Mapping):
+            value = head.get("sha")
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+                return value
+        value = pull_request.get("sha")
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+            return value
+    sha_match = re.search(r"Left the queue.*?`([0-9a-fA-F]{40})`", body, re.I | re.S)
+    return sha_match.group(1) if sha_match else ""
+
+
 def clean_markdown(text: str) -> str:
     clean = re.sub(r"<[^>]+>", "", text)
     clean = re.sub(r"[*_]", "", clean)
