@@ -1,5 +1,5 @@
 import { assertExecutionModelSupported, registerBuiltinAgents } from '@invoker/execution-engine';
-import type { InvokerConfig } from './config.js';
+import { normalizeGithubOwnerRepo, type InvokerConfig } from './config.js';
 
 const builtinAgents = registerBuiltinAgents();
 
@@ -10,6 +10,21 @@ function validateConfiguredModel(agentName: string | undefined, executionModel: 
   const agent = builtinAgents.get(normalizedAgent);
   if (!agent) return;
   assertExecutionModelSupported(agent, normalizedModel);
+}
+
+function validatePrMaintenanceTargetRepos(config: InvokerConfig): void {
+  const targetRepos = config.prMaintenance?.targetRepos;
+  if (targetRepos === undefined) return;
+  if (!Array.isArray(targetRepos)) {
+    throw new Error('prMaintenance.targetRepos must be an array of "owner/repo" strings');
+  }
+  for (const entry of targetRepos) {
+    if (typeof entry !== 'string' || !normalizeGithubOwnerRepo(entry)) {
+      throw new Error(
+        `prMaintenance.targetRepos entries must be "owner/repo" strings; got ${JSON.stringify(entry)}`,
+      );
+    }
+  }
 }
 
 export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
@@ -38,5 +53,6 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
 
   validateConfiguredModel(config.defaultExecution?.executionAgent, config.defaultExecution?.executionModel);
   validateConfiguredModel(config.defaultExecutionAgent, config.defaultExecutionModel);
+  validatePrMaintenanceTargetRepos(config);
   return config;
 }

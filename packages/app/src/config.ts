@@ -61,6 +61,40 @@ export interface PrMaintenanceConfig {
   lockPath?: string;
   /** Shell executable used to run the entrypoint. Defaults to bash. */
   shell?: string;
+  /**
+   * GitHub `owner/repo` list scanned each PR-maintenance tick (admin-bypass,
+   * orphan repair, duplicate close). When omitted, defaults to the Invoker repo.
+   */
+  targetRepos?: string[];
+}
+
+export const DEFAULT_PR_MAINTENANCE_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
+
+const GITHUB_OWNER_REPO_RE = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+
+/** Normalize and validate a GitHub `owner/repo` string; returns null when invalid. */
+export function normalizeGithubOwnerRepo(value: string): string | null {
+  const trimmed = value.trim();
+  if (!GITHUB_OWNER_REPO_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
+ * Resolve the PR-maintenance scan list from `prMaintenance.targetRepos`.
+ * When omitted or empty, defaults to the Invoker repo only.
+ */
+export function resolvePrMaintenanceTargetRepos(config: InvokerConfig): string[] {
+  const fromConfig = config.prMaintenance?.targetRepos;
+  if (Array.isArray(fromConfig) && fromConfig.length > 0) {
+    const repos: string[] = [];
+    for (const entry of fromConfig) {
+      if (typeof entry !== 'string') continue;
+      const normalized = normalizeGithubOwnerRepo(entry);
+      if (normalized && !repos.includes(normalized)) repos.push(normalized);
+    }
+    if (repos.length > 0) return repos;
+  }
+  return [DEFAULT_PR_MAINTENANCE_TARGET_REPO];
 }
 
 export interface SlackBugScanConfig {
@@ -612,9 +646,18 @@ export function resolvePrMaintenanceWorkerConfig(
   }
   const launch: PrMaintenanceWorkerConfig = {};
   if (prMaintenance.repoRoot !== undefined) launch.repoRoot = prMaintenance.repoRoot;
-  if (prMaintenance.env !== undefined) launch.env = prMaintenance.env;
   if (prMaintenance.intervalMs !== undefined) launch.intervalMs = prMaintenance.intervalMs;
   if (prMaintenance.lockPath !== undefined) launch.lockPath = prMaintenance.lockPath;
   if (prMaintenance.shell !== undefined) launch.shell = prMaintenance.shell;
+
+  const targetRepos = resolvePrMaintenanceTargetRepos(config);
+  // Config is authoritative; always inject the scan list for the shell entrypoints.
+  const env: Record<string, string | undefined> = {
+    ...(prMaintenance.env ?? {}),
+    INVOKER_GITHUB_TARGET_REPOS: targetRepos.join(','),
+    INVOKER_GITHUB_TARGET_REPO: targetRepos[0],
+  };
+  launch.env = env;
+
   return Object.keys(launch).length > 0 ? launch : {};
 }
