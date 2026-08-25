@@ -11,6 +11,7 @@ try:
     from .mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from .mergify_admin_requeue_headless_shell import run_headless as _run_headless
     from .mergify_admin_requeue_async_repair import (
+        rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
         repair_check_plan_name,
         repair_conflict_plan_name,
@@ -19,6 +20,7 @@ except ImportError:
     from mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from mergify_admin_requeue_headless_shell import run_headless as _run_headless
     from mergify_admin_requeue_async_repair import (
+        rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
         repair_check_plan_name,
         repair_conflict_plan_name,
@@ -90,7 +92,7 @@ def submit_rebase_recreate(workflow_id: str) -> None:
 # machinery already understands (PR #7484, 2026-08-05: an accepted-but-starved
 # recreate looked "handled" while its three predecessors had already failed).
 
-_FASTPATH_SETTLE_KINDS = ("conflict-repair", "repair-check")
+_FASTPATH_SETTLE_KINDS = ("conflict-repair", "rebase-onto-master", "repair-check")
 _TERMINAL_WORKFLOW_STATUSES = frozenset({"completed", "failed", "cancelled", "review_ready", "merged"})
 _SSH_INFRA_FAILURE_CLASSES = frozenset({
     "ssh-env-invalid-export",
@@ -250,19 +252,20 @@ def list_workflows() -> list[dict] | None:
     return None
 
 
-# repairer.py's ad-hoc repair plans (repair-check, conflict-repair,
-# repair-bot-thread) settle via their own plan's `safe-push` task, which only
-# runs if the upstream `repair` task succeeds. When `repair` itself fails,
-# `safe-push` never runs and the `-settled` row is never written -- the row
-# repairer.py records before submission (see AdminBypassRepairer) carries no
-# meta.workflowId, so settle_workflow_fastpath_rows's lookup can't find it
-# either. Unlike a fast-path rebase-recreate, these plan names are fully
-# deterministic from (pr, headSha, key) via the same *_plan_name() helpers
-# used to build the plan, so the matching workflow can be found by name
-# instead of by a recorded id (PR #9172: a failed repair-bot-thread attempt
-# left `repair_in_flight` believing a repair was still running for the rest
-# of its 90-minute TTL, even though the workflow had already failed).
-_REPAIRER_PLAN_SETTLE_KINDS = ("repair-check", "conflict-repair", "repair-bot-thread")
+# repairer.py's ad-hoc repair plans (repair-check, rebase-onto-master,
+# repair-bot-thread; plus legacy conflict-repair) settle via their own plan's
+# `safe-push` task, which only runs if the upstream `repair` task succeeds.
+# When `repair` itself fails, `safe-push` never runs and the `-settled` row is
+# never written -- the row repairer.py records before submission (see
+# AdminBypassRepairer) carries no meta.workflowId, so
+# settle_workflow_fastpath_rows's lookup can't find it either. Unlike a
+# fast-path rebase-recreate, these plan names are fully deterministic from
+# (pr, headSha, key) via the same *_plan_name() helpers used to build the plan,
+# so the matching workflow can be found by name instead of by a recorded id
+# (PR #9172: a failed repair-bot-thread attempt left `repair_in_flight`
+# believing a repair was still running for the rest of its 90-minute TTL, even
+# though the workflow had already failed).
+_REPAIRER_PLAN_SETTLE_KINDS = ("repair-check", "conflict-repair", "rebase-onto-master", "repair-bot-thread")
 
 
 def _repairer_plan_name(kind: str, pr: int, head: str, key: str) -> str:
@@ -270,6 +273,8 @@ def _repairer_plan_name(kind: str, pr: int, head: str, key: str) -> str:
         return repair_check_plan_name(pr, key, head)
     if kind == "conflict-repair":
         return repair_conflict_plan_name(pr, head)
+    if kind == "rebase-onto-master":
+        return rebase_onto_master_plan_name(pr, head)
     return repair_bot_thread_plan_name(pr, head)
 
 
