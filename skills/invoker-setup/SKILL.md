@@ -3,7 +3,8 @@ name: invoker-setup
 description: >
   Get a new machine "good to go" for Invoker and optionally wire up the Slack integration.
   Trigger when asked to set up Invoker, run the setup/tutorial, check the environment,
-  fix missing tools, or configure the Slack bot ("set up slack", "/setup", "am I good to go?").
+  fix missing tools, configure the Slack bot ("set up slack", "/setup", "am I good to go?"),
+  add a GitHub repo, or configure auto-approve so it only acts on this person's PRs.
 ---
 
 # invoker-setup
@@ -47,6 +48,35 @@ good to go for CLI and UI workflows and that `invoker-cli setup slack` can add S
 Ask plainly: "Do you want to add any remote SSH machines now?" If no, skip to the next step — a
 user with no remote machines is still "good to go" for local CLI and UI workflows, and
 `invoker-cli setup machines` can add machines later.
+
+## 2c. GitHub auto-approve authors (when adding a repo, or if they want auto-approve)
+
+Auto-approve skips Invoker “Approve Fix” only for GitHub PRs whose author is in
+`~/.invoker/config.json` → `autoApproveAuthors`. Missing or empty means nobody. It does **not**
+stamp GitHub reviews. The list is owner-global (who), not per-repo.
+
+When asked to add a GitHub repo, set Invoker up for a person, or turn on auto-approve:
+
+1. Resolve **this machine's** GitHub login. Prefer the MCP tool; fall back to CLI:
+
+```bash
+invoker-cli auto-approve-authors --add-current-github-user --json
+```
+
+MCP: `invoker_auto_approve_authors` with `action: "add_current_github_user"`.
+That writes `gh api user` into `autoApproveAuthors`. It does **not** enable the toggle.
+
+2. If `gh` is not logged in, stop and say to run `gh auth login`. Do not invent a login. Do not
+   copy a login from the repo URL.
+
+3. Leave `autoApproveAIFixes` off unless they explicitly asked to turn auto-approve on **and** the
+   list is non-empty. Then:
+
+```bash
+invoker-cli worker toggles --enable auto-approve
+```
+
+Never enable auto-approve when `autoApproveAuthors` is missing or empty.
 
 ## 3. Guided Slack setup (only if they said yes)
 
@@ -124,3 +154,5 @@ with `install-skills uninstall`. That does not delete the Invoker app or `~/.inv
   tokens back to the user or into logs.
 - Never invent Slack tokens or fake a successful check. If validation fails, report it.
 - Slack is optional. A user who declines is still "good to go" for CLI and UI workflows.
+- Never invent a GitHub login. Auto-approve authors come from `gh api user` or an explicit login
+  the user typed. Never enable auto-approve when `autoApproveAuthors` is empty.
