@@ -7,7 +7,7 @@ import {
   type AutoApproveAuthorGateResult,
 } from '@invoker/execution-engine';
 
-import { DEFAULT_PR_MAINTENANCE_TARGET_REPO, loadConfig } from './config.js';
+import { loadConfig } from './config.js';
 
 export type { AutoApproveAuthorGateResult };
 
@@ -15,7 +15,7 @@ export type { AutoApproveAuthorGateResult };
 export function buildPersistedAutoApproveAuthorGate(
   persistence: Pick<SQLiteAdapter, 'loadTask' | 'loadTasks'>,
 ): (taskId: string) => Promise<AutoApproveAuthorGateResult> {
-  const defaultRepo = process.env.INVOKER_GITHUB_TARGET_REPO?.trim() || DEFAULT_PR_MAINTENANCE_TARGET_REPO;
+  const defaultRepo = process.env.INVOKER_GITHUB_TARGET_REPO?.trim() || 'Neko-Catpital-Labs/Invoker';
   return createPersistedAutoApproveAuthorGate({
     readAllowlist: () => {
       try {
