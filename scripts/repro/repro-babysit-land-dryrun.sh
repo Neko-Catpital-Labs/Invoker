@@ -40,7 +40,7 @@ run_land() {
 }
 
 out="$(run_land pr-dirty.json)"
-echo "$out" | grep -q "DRY-RUN rebase-onto-master PR #501" \
+echo "$out" | grep -q "DRY-RUN rebase-onto-master PR #501 GitHub reports merge conflict" \
   || fail "pr-dirty: expected rebase_onto_master plan" "$out"
 
 out="$(run_land pr-ci-failed.json)"
