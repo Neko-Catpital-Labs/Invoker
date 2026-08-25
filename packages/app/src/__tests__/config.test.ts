@@ -14,7 +14,11 @@ import {
   resolveConflictResolutionSettings,
   resolveEmbeddedTerminalBackendConfig,
   resolveEnabledExecutionAgents,
+  resolvePrMaintenanceTargetRepos,
+  resolvePrMaintenanceWorkerConfig,
+  DEFAULT_PR_MAINTENANCE_TARGET_REPO,
 } from '../config.js';
+import { validateInvokerConfig } from '../config-validation.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -605,5 +609,56 @@ describe('filterPlanningPresets', () => {
   it('normalizes allowlist whitespace and case', () => {
     expect(filterPlanningPresets(presets, { enabledExecutionAgents: [' Claude '] }).map((p) => p.key))
       .toEqual(['claude', 'cursor+claude', 'omp+claude']);
+  });
+});
+
+describe('prMaintenance.targetRepos', () => {
+  it('reads targetRepos from config', () => {
+    expect(resolvePrMaintenanceTargetRepos({
+      prMaintenance: {
+        targetRepos: ['Neko-Catpital-Labs/Invoker', 'EdbertChan/catstack'],
+      },
+    })).toEqual(['Neko-Catpital-Labs/Invoker', 'EdbertChan/catstack']);
+  });
+
+  it('defaults to the Invoker repo when targetRepos is omitted', () => {
+    expect(resolvePrMaintenanceTargetRepos({})).toEqual([DEFAULT_PR_MAINTENANCE_TARGET_REPO]);
+    expect(resolvePrMaintenanceTargetRepos({
+      prMaintenance: { targetRepos: [] },
+    })).toEqual([DEFAULT_PR_MAINTENANCE_TARGET_REPO]);
+  });
+
+  it('forwards config targetRepos into worker env for shell entrypoints', () => {
+    const launch = resolvePrMaintenanceWorkerConfig({
+      prMaintenance: {
+        targetRepos: ['Neko-Catpital-Labs/Invoker', 'EdbertChan/catstack'],
+        env: {
+          INVOKER_GITHUB_TARGET_REPOS: 'should/not-win',
+          INVOKER_GITHUB_TARGET_REPO: 'should/not-win',
+        },
+      },
+    });
+    expect(launch?.env?.INVOKER_GITHUB_TARGET_REPOS).toBe(
+      'Neko-Catpital-Labs/Invoker,EdbertChan/catstack',
+    );
+    expect(launch?.env?.INVOKER_GITHUB_TARGET_REPO).toBe('Neko-Catpital-Labs/Invoker');
+  });
+
+  it('rejects invalid targetRepos entries', () => {
+    expect(() => validateInvokerConfig({
+      prMaintenance: { targetRepos: ['not-a-repo'] },
+    })).toThrow(/owner\/repo/);
+  });
+
+  it('rejects targetRepos entries with disallowed punctuation', () => {
+    expect(() => validateInvokerConfig({
+      prMaintenance: { targetRepos: ['owner/bad?name'] },
+    })).toThrow(/owner\/repo/);
+  });
+
+  it('rejects targetRepos entries containing a comma', () => {
+    expect(() => validateInvokerConfig({
+      prMaintenance: { targetRepos: ['owner,other/repo'] },
+    })).toThrow(/owner\/repo/);
   });
 });
