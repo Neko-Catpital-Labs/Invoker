@@ -28,9 +28,9 @@ Use Invoker commands first. Direct database reads are only allowed when the user
 
 Admin-bypass babysitting (`pr-admin-bypass-land` / `mergify_admin_requeue`, repair-filing claims, retry-cap ledger clears, and requeue for a named admin-bypass PR) is host-sticky for the session.
 
-If this session already named Digital Ocean 1 / `remote_digital_ocean_1` / DO1 for that class of work, or already ran deploy/reset/repair against DO1 for admin-bypass PRs, later reset-retries / repair / requeue / ledger edits for those PRs must target DO1 unless the user explicitly says local / this Mac.
+If this session already named a remote host for that class of work, or already ran deploy/reset/repair against that host for admin-bypass PRs, later reset-retries / repair / requeue / ledger edits for those PRs must target the same host unless the user explicitly says local / this machine.
 
-Do not clear `~/.invoker/mergify-admin-requeue-state.jsonl` on the Mac and submit repair via the local owner when the live babysitter ledger and cron live on DO1 — that is the wrong machine even when the local dry-run plans the same action.
+Do not clear `~/.invoker/mergify-admin-requeue-state.jsonl` on a different machine and submit repair via that owner when the live babysitter ledger and cron live on the session's chosen host — that is the wrong machine even when a local dry-run plans the same action.
 
 Require an explicit "local" / "this machine" to switch hosts mid-session.
 
