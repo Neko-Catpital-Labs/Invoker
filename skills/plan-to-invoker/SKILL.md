@@ -1,7 +1,12 @@
 ---
 name: plan-to-invoker
 description: >
-  Convert a plan into an Invoker YAML plan file. Trigger: "convert to invoker",
+  Convert a plan into an Invoker YAML plan file. After `install-skills`, this
+  routing is always on via Cursor `~/.cursor/rules/invoker-execution-precedence.mdc`,
+  a Codex AGENTS.md marked block, and a Claude UserPromptSubmit hook. Tiny
+  clean-tree edits stay local; feature work and dirty trees go through this
+  skill unless the user says "do it locally". Uninstall with
+  `install-skills uninstall`. Trigger: "convert to invoker",
   "submit to invoker", "create invoker plan", "invoker-plan-to-invoker",
   "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
   Invoker tasks. For benchmark/direct-output prompts with "Required output path",
