@@ -23,6 +23,9 @@ describe('plan-to-invoker skill contract', () => {
       'clean-tree edits stay local; feature work and dirty trees go through this',
     );
     expect(skill).toContain('unless the user says "do it locally"');
-    expect(skill).toContain('`install-skills uninstall`');
+    expect(skill).toContain('`install-skills uninstall`. Trigger: "convert to invoker",');
+    expect(skill).toContain(
+      '"/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into',
+    );
   });
 });
