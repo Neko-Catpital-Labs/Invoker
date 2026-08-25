@@ -127,6 +127,12 @@ describe('resolveConflictAction', () => {
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutorWithApprove as unknown as TaskRunner,
       autoApproveAIFixes: true,
+      autoApproveAuthorGate: async () => ({
+        allowed: true,
+        author: 'EdbertChan',
+        prNumber: '1',
+        repo: 'Neko-Catpital-Labs/Invoker',
+      }),
     });
 
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');

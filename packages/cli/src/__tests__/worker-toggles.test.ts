@@ -46,6 +46,11 @@ describe('applyWorkerToggle / readWorkerToggleValue', () => {
     expect(readWorkerToggleValue({}, spec)).toBeUndefined();
   });
 
+  it('auto-approve toggle names config.json autoApproveAuthors', () => {
+    const spec = findWorkerToggle('auto-approve')!;
+    expect(spec.description).toContain('autoApproveAuthors');
+  });
+
   it('does not mutate the input config object', () => {
     const spec = findWorkerToggle('e2e-autofix')!;
     const original = { defaultBranch: 'main' };
