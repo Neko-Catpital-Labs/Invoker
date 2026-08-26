@@ -34,7 +34,12 @@ export function resolveClaudeWorkerConfigDir(): string {
  * Does not rewrite interactive ~/.claude or ~/.claude.json.
  */
 export function ensureClaudeWorkerConfigDir(configDir: string): void {
-  mkdirSync(configDir, { recursive: true });
+  try {
+    mkdirSync(configDir, { recursive: true });
+  } catch {
+    // Unwritable override paths (e.g. fixture '/test/.claude') still mount by string.
+    return;
+  }
   const workerJson = join(configDir, '.claude.json');
   const interactiveJson = join(homedir(), '.claude.json');
   if (!existsSync(workerJson) && existsSync(interactiveJson)) {
