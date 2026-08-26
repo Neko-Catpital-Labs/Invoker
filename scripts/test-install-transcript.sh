@@ -34,14 +34,17 @@ must_contain 'Workers on: pr-status, autofix, auto-approve'
 must_contain 'Quick-install complete'
 must_contain 'auto-approve-authors --add-current-github-user'
 
-if [[ -f "$CLI_DIST" ]]; then
-  actual="$(mktemp)"
-  node "$CLI_DIST" install --demo >"$actual"
-  if ! diff -u "$GOLDEN" "$actual"; then
-    rm -f "$actual"
-    fail "golden transcript drift — re-run bash scripts/capture-install-transcript.sh"
-  fi
-  rm -f "$actual"
+if [[ ! -f "$CLI_DIST" ]]; then
+  pnpm --filter @invoker/cli run build
+  [[ -f "$CLI_DIST" ]] || fail "missing $CLI_DIST after build"
 fi
+
+actual="$(mktemp)"
+node "$CLI_DIST" install --demo >"$actual"
+if ! diff -u "$GOLDEN" "$actual"; then
+  rm -f "$actual"
+  fail "golden transcript drift — re-run bash scripts/capture-install-transcript.sh"
+fi
+rm -f "$actual"
 
 echo "OK: install transcript contract"

@@ -14,16 +14,11 @@ fail() {
 
 mkdir -p "$(dirname "$OUT")"
 
-if [[ -f "$CLI_DIST" ]]; then
-  node "$CLI_DIST" install --demo >"$OUT"
-elif command -v invoker-cli >/dev/null 2>&1; then
-  invoker-cli install --demo >"$OUT"
-else
-  # Build cli first so dist exists, then capture.
+if [[ ! -f "$CLI_DIST" ]]; then
   pnpm --filter @invoker/cli run build
   [[ -f "$CLI_DIST" ]] || fail "missing $CLI_DIST after build"
-  node "$CLI_DIST" install --demo >"$OUT"
 fi
+node "$CLI_DIST" install --demo >"$OUT"
 
 grep -qF 'Slack: skipped' "$OUT" || fail "transcript missing Slack skip"
 grep -qF 'Remote machines: skipped' "$OUT" || fail "transcript missing machines skip"
