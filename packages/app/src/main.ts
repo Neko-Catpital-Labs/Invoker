@@ -119,6 +119,7 @@ import {
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
   resolveConfigFileState,
+  resolveE2eAutoFixWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
   type InvokerConfig,
 } from './config.js';
@@ -426,7 +427,7 @@ function buildRegisteredOwnerWorkerDeps(
         ]),
       ),
     },
-    e2eAutoFix: { intervalMs: invokerConfig.e2eAutoFixIntervalMs },
+    e2eAutoFix: resolveE2eAutoFixWorkerConfig(invokerConfig),
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
       authorGate: buildPersistedAutoApproveAuthorGate(persistence),
