@@ -65,6 +65,8 @@ export interface WorkRequestInputs {
   executionAgent?: string;
   /** Agent-specific model selector. The selected CLI owns validation. */
   executionModel?: string;
+  /** Finite agent turn budget (Claude `--max-turns`) when set. */
+  maxTurns?: number;
   /** When true, executors must not reuse existing task worktrees for this run. */
   freshWorkspace?: boolean;
   /**
