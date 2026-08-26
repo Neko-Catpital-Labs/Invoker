@@ -254,6 +254,7 @@ export function extractCodexUsage(raw: string): SessionUsageEvent[] {
           inputTokens: input,
           outputTokens: output,
           cachedTokens: cached,
+          cacheCreationTokens: 0,
           totalTokens: input + output,
           confidence: 'exact',
         });
@@ -273,6 +274,7 @@ export function extractCodexUsage(raw: string): SessionUsageEvent[] {
           inputTokens: input,
           outputTokens: output,
           cachedTokens: cached,
+          cacheCreationTokens: 0,
           totalTokens: input + output,
           confidence: 'exact',
         });
@@ -293,6 +295,7 @@ export function extractCodexUsage(raw: string): SessionUsageEvent[] {
           inputTokens: 0,
           outputTokens: 0,
           cachedTokens: 0,
+          cacheCreationTokens: 0,
           totalTokens: payload.count,
           confidence: 'estimated',
         });

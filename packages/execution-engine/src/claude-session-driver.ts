@@ -147,6 +147,9 @@ export class ClaudeSessionDriver implements SessionDriver {
         const cached = typeof u.cache_read_input_tokens === 'number'
           ? u.cache_read_input_tokens
           : 0;
+        const cacheCreation = typeof u.cache_creation_input_tokens === 'number'
+          ? u.cache_creation_input_tokens
+          : 0;
         const modelFromMessage = typeof message?.model === 'string' ? message.model : '';
         const model = typeof entry.model === 'string' && entry.model
           ? entry.model
@@ -159,6 +162,7 @@ export class ClaudeSessionDriver implements SessionDriver {
           inputTokens: input,
           outputTokens: output,
           cachedTokens: cached,
+          cacheCreationTokens: cacheCreation,
           totalTokens: input + output,
           confidence: 'exact',
         });
