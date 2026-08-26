@@ -209,6 +209,30 @@ export const DEFAULT_MERGIFY_QUEUE_RESEARCH_INTERVAL_DAYS = 14;
 /** Default max Mergify queue candidates mined per source per tick. */
 export const DEFAULT_MERGIFY_QUEUE_RESEARCH_MAX_CANDIDATES_PER_SOURCE = 5;
 
+/**
+ * Opt-in catstack-deploy worker settings. Process on/off is SQLite
+ * `worker_desired_states`, not a config boolean.
+ */
+export interface CatstackDeployConfig {
+  /** Poll cadence in minutes. Default: 15. */
+  intervalMinutes?: number;
+  /** Git clone URL. Default: https://github.com/EdbertChan/catstack.git */
+  repoUrl?: string;
+  /** Local checkout path. Default: ~/Documents/GitHub/catstack */
+  localRepoPath?: string;
+  /** Remote checkout path on each SSH host. Default: ~/Documents/GitHub/catstack */
+  remoteRepoPath?: string;
+}
+
+/** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
+export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
+
+/** Default catstack clone URL. */
+export const DEFAULT_CATSTACK_DEPLOY_REPO_URL = 'https://github.com/EdbertChan/catstack.git';
+
+/** Default local/remote checkout path for catstack. */
+export const DEFAULT_CATSTACK_DEPLOY_REPO_PATH = '~/Documents/GitHub/catstack';
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -557,6 +581,12 @@ export interface InvokerConfig {
    * Process on/off is SQLite `worker_desired_states`, not a config boolean.
    */
   mergifyQueueResearch?: MergifyQueueResearchConfig;
+  /**
+   * Catstack deploy worker: clone/pull/install cadence and paths.
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
+   * Remotes always come from top-level `remoteTargets`.
+   */
+  catstackDeploy?: CatstackDeployConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
