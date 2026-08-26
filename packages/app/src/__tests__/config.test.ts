@@ -822,6 +822,35 @@ describe('mergifyQueueResearch config', () => {
   });
 });
 
+describe('catstackDeploy config', () => {
+  it('accepts omitted catstackDeploy block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts a valid intervalMinutes and paths', () => {
+    const config = validateInvokerConfig({
+      catstackDeploy: {
+        intervalMinutes: 15,
+        repoUrl: 'https://github.com/EdbertChan/catstack.git',
+        localRepoPath: '~/Documents/GitHub/catstack',
+        remoteRepoPath: '~/Documents/GitHub/catstack',
+      },
+    });
+    expect(config.catstackDeploy?.intervalMinutes).toBe(15);
+  });
+
+  it('rejects intervalMinutes of 0', () => {
+    expect(() => validateInvokerConfig({
+      catstackDeploy: { intervalMinutes: 0 },
+    })).toThrow(/catstackDeploy.intervalMinutes must be an integer > 0/);
+  });
+
+  it('rejects non-integer intervalMinutes', () => {
+    expect(() => validateInvokerConfig({
+      catstackDeploy: { intervalMinutes: 1.5 },
+    })).toThrow(/catstackDeploy.intervalMinutes must be an integer > 0/);
+  });
+});
 
 describe('e2eAutoFix.targetRepos', () => {
   it('reads targetRepos from config', () => {
