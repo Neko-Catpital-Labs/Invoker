@@ -36,10 +36,15 @@ const stillToolingPolicy = [
   'scripts/review-unit-rules.mjs',
   '.github/workflows/ci.yml',
   'skills/make-pr/SKILL.md',
+  'skills/chat-submit/SKILL.md',
+  'skills/chat-submit/scripts/check-contract.sh',
   'skills/plan-to-invoker/SKILL.md',
+  'skills/plan-to-invoker/references/local-vs-remote-mcp.md',
   'skills/land-stack/SKILL.md',
   'skills/visual-proof/SKILL.md',
   'skills/prove-it/SKILL.md',
+  'scripts/bootstrap.sh',
+  'scripts/test-bootstrap.sh',
 ];
 for (const path of stillToolingPolicy) {
   assert.deepEqual(
