@@ -118,10 +118,11 @@ export class ClaudeSessionDriver implements SessionDriver {
   /**
    * Extract usage events from Claude session JSONL.
    *
-   * Claude CLI assistant entries may carry a top-level `usage` object with
-   * input_tokens / output_tokens / cache_read_input_tokens. When usage
-   * metadata is absent the entry is skipped (callers may synthesize an
-   * unknown-confidence placeholder upstream).
+   * Claude Code assistant entries historically put usage on the entry root;
+   * current Claude Code JSONL nests it under `message.usage` (and model under
+   * `message.model`). Accept either shape. When usage metadata is absent the
+   * entry is skipped (callers may synthesize an unknown-confidence placeholder
+   * upstream).
    */
   extractUsage(raw: string): SessionUsageEvent[] {
     const events: SessionUsageEvent[] = [];
@@ -132,26 +133,35 @@ export class ClaudeSessionDriver implements SessionDriver {
       lineIndex++;
       try {
         const entry = JSON.parse(line);
+        if (entry.type !== 'assistant') continue;
 
-        // Claude JSONL assistant entries may include usage metadata
-        if (entry.type === 'assistant' && entry.usage) {
-          const u = entry.usage;
-          const input = typeof u.input_tokens === 'number' ? u.input_tokens : 0;
-          const output = typeof u.output_tokens === 'number' ? u.output_tokens : 0;
-          const cached = typeof u.cache_read_input_tokens === 'number'
-            ? u.cache_read_input_tokens
-            : 0;
-          events.push({
-            eventId: `claude-assistant-${lineIndex}`,
-            timestamp: entry.timestamp ?? '',
-            model: typeof entry.model === 'string' ? entry.model : '',
-            inputTokens: input,
-            outputTokens: output,
-            cachedTokens: cached,
-            totalTokens: input + output,
-            confidence: 'exact',
-          });
-        }
+        const message = entry.message && typeof entry.message === 'object'
+          ? entry.message as Record<string, unknown>
+          : null;
+        const usageRaw = entry.usage ?? message?.usage;
+        if (!usageRaw || typeof usageRaw !== 'object') continue;
+        const u = usageRaw as Record<string, unknown>;
+
+        const input = typeof u.input_tokens === 'number' ? u.input_tokens : 0;
+        const output = typeof u.output_tokens === 'number' ? u.output_tokens : 0;
+        const cached = typeof u.cache_read_input_tokens === 'number'
+          ? u.cache_read_input_tokens
+          : 0;
+        const modelFromMessage = typeof message?.model === 'string' ? message.model : '';
+        const model = typeof entry.model === 'string' && entry.model
+          ? entry.model
+          : modelFromMessage;
+
+        events.push({
+          eventId: `claude-assistant-${lineIndex}`,
+          timestamp: entry.timestamp ?? '',
+          model,
+          inputTokens: input,
+          outputTokens: output,
+          cachedTokens: cached,
+          totalTokens: input + output,
+          confidence: 'exact',
+        });
       } catch {
         // Skip malformed lines
       }
