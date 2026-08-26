@@ -28,7 +28,90 @@ function resolveYamlModulePath() {
 }
 const { parse: parseYaml } = await import(resolveYamlModulePath());
 
-export const TARGET_REPO = process.env.INVOKER_GITHUB_TARGET_REPO ?? 'Neko-Catpital-Labs/Invoker';
+export const DEFAULT_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
+
+export function parseTargetRepoFlag(argv = []) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--target-repo') return argv[i + 1];
+    if (arg.startsWith('--target-repo=')) return arg.slice('--target-repo='.length);
+  }
+  return undefined;
+}
+
+export function parseWatchConfigFlag(argv = []) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--config') return argv[i + 1];
+    if (arg.startsWith('--config=')) return arg.slice('--config='.length);
+  }
+  return undefined;
+}
+
+export function loadWatchConfigFile(configPath, { readFile = readFileSync, exists = existsSync } = {}) {
+  if (!configPath) return {};
+  if (!exists(configPath)) {
+    throw new Error(`ci-regression-watch: config file not found: ${configPath}`);
+  }
+  const parsed = JSON.parse(readFile(configPath, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`ci-regression-watch: config file must contain a JSON object: ${configPath}`);
+  }
+  return parsed;
+}
+
+/**
+ * Resolution order for the watched GitHub repo: CLI flag, then env var, then
+ * a JSON config file's `targetRepo` key, then the Invoker default. Omitting
+ * all three keeps today's behavior (and default state path) unchanged.
+ */
+export function resolveTargetRepo({
+  argv = [],
+  env = {},
+  readFile = readFileSync,
+  exists = existsSync,
+} = {}) {
+  const cliRepo = parseTargetRepoFlag(argv);
+  if (typeof cliRepo === 'string' && cliRepo.trim()) return cliRepo.trim();
+
+  const envRepo = env.INVOKER_GITHUB_TARGET_REPO;
+  if (typeof envRepo === 'string' && envRepo.trim()) return envRepo.trim();
+
+  const configPath = parseWatchConfigFlag(argv) ?? env.INVOKER_CI_WATCH_CONFIG_FILE;
+  const config = loadWatchConfigFile(configPath, { readFile, exists });
+  if (typeof config.targetRepo === 'string' && config.targetRepo.trim()) return config.targetRepo.trim();
+
+  return DEFAULT_TARGET_REPO;
+}
+
+/**
+ * Per-repo state isolation: any target repo other than the Invoker default
+ * gets its own state dir nested under `-targets/<slug>`, so its observed-SHA
+ * and attempt history can never collide with -- or get silently mixed into --
+ * Invoker's own `~/.invoker/e2e-regression-watch` history. An explicit
+ * INVOKER_CI_WATCH_STATE_DIR/INVOKER_E2E_WATCH_STATE_DIR always wins.
+ */
+export function resolveStateDir(targetRepo, { env = {}, homeDir = homedir() } = {}) {
+  const explicit = env.INVOKER_CI_WATCH_STATE_DIR ?? env.INVOKER_E2E_WATCH_STATE_DIR;
+  if (typeof explicit === 'string' && explicit.trim()) return explicit;
+  if (targetRepo === DEFAULT_TARGET_REPO) {
+    return join(homeDir, '.invoker', 'e2e-regression-watch');
+  }
+  return join(homeDir, '.invoker', 'e2e-regression-watch-targets', slugify(targetRepo, 128));
+}
+
+/**
+ * Per-repo repair_filings ledger subject: the Invoker default keeps its
+ * existing 'master' subject exactly as-is (dedup history already lives under
+ * that key), while any other target repo claims its own namespaced subject
+ * so a same-named job/sha in two different repos can never collapse onto the
+ * same ledger row.
+ */
+export function resolveRepairFilingSubject(targetRepo) {
+  return targetRepo === DEFAULT_TARGET_REPO ? 'master' : `${targetRepo}:master`;
+}
+
+export const TARGET_REPO = resolveTargetRepo({ argv: process.argv.slice(2), env: process.env });
 export const WORKFLOW_FILE = process.env.INVOKER_CI_WATCH_WORKFLOW_FILE
   ?? process.env.INVOKER_E2E_WATCH_WORKFLOW_FILE
   ?? 'ci.yml';
@@ -88,9 +171,7 @@ export function isObservationStale(failure, nowMs, staleMs = STALE_OBSERVATION_M
   return isStale({ lastObservedAt: failure?.lastObservedAt, nowMs, staleMs });
 }
 
-const STATE_DIR = process.env.INVOKER_CI_WATCH_STATE_DIR
-  ?? process.env.INVOKER_E2E_WATCH_STATE_DIR
-  ?? join(homedir(), '.invoker', 'e2e-regression-watch');
+const STATE_DIR = resolveStateDir(TARGET_REPO, { env: process.env });
 const STATE_FILE = join(STATE_DIR, 'state.json');
 const SWEEP_LOG_FILE = join(STATE_DIR, 'sweep-log.jsonl');
 const WORKFLOW_PATH = join(REPO_ROOT, '.github', 'workflows', WORKFLOW_FILE);
@@ -1217,7 +1298,7 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
   try {
     const result = insert({
       kind: repairFilingKind(failure),
-      subject: 'master',
+      subject: resolveRepairFilingSubject(TARGET_REPO),
       stateSha: failure.firstBadSha,
       metadata: buildRepairFilingMetadata(failure),
     });
@@ -1250,7 +1331,7 @@ export function shouldSkipFilingAlreadyAddressed(failure, {
  */
 export function releaseRepairFilingClaim(failure, release = releaseRepairFiling) {
   try {
-    release({ kind: repairFilingKind(failure), subject: 'master', stateSha: failure.firstBadSha });
+    release({ kind: repairFilingKind(failure), subject: resolveRepairFilingSubject(TARGET_REPO), stateSha: failure.firstBadSha });
   } catch (err) {
     console.error(`ci-regression-watch: releaseRepairFilingClaim failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}"; this key stays claimed until manually cleared: ${err instanceof Error ? err.message : String(err)}`);
   }
