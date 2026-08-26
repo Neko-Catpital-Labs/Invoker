@@ -12,7 +12,8 @@ Worker: [`scripts/linear-ticket-intake.sh`](../scripts/linear-ticket-intake.sh) 
 
 UI / interaction tickets stay unlabeled. You keep those.
 
-`idea-skip` is written by the [cross-repo-research worker](cross-repo-research-worker.md) for
+`idea-skip` is written by the [cross-repo-research worker](cross-repo-research-worker.md)
+and the [mergify-queue-research worker](mergify-queue-research-worker.md) for
 research verdicts that should not become Invoker work.
 
 ## Ticket body contract
