@@ -85,6 +85,17 @@ if [ "$NEED_NODE" = true ]; then
     echo "    ERROR: Node.js installation failed." >&2
     exit 1
   fi
+  INSTALLED_NODE_MAJOR="$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))")"
+  if [ "$INSTALLED_NODE_MAJOR" != "$REQUIRED_NODE_MAJOR" ]; then
+    echo "    ERROR: Node.js $REQUIRED_NODE_MAJOR.x was installed, but 'node' on PATH is still v$(node --version | tr -d v)." >&2
+    if [ "$OS" = "Darwin" ]; then
+      echo "    Homebrew likely failed to link node@$REQUIRED_NODE_MAJOR ahead of another Node on PATH." >&2
+      echo "    Run: brew link --overwrite node@$REQUIRED_NODE_MAJOR" >&2
+    else
+      echo "    Another Node.js install earlier on PATH is shadowing the new one; fix PATH and re-run." >&2
+    fi
+    exit 1
+  fi
   echo "    Installed: Node.js $(node --version)"
 fi
 echo ""
