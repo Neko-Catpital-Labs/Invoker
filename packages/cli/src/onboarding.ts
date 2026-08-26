@@ -1141,7 +1141,7 @@ function resolveStandaloneSkillsRoot(): string | null {
   return existsSync(join(candidate, 'skills')) ? candidate : null;
 }
 
-function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
+export function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
   const resolveSkillsRepoRoot = options.resolveSkillsRepoRoot ?? resolveRepoRoot;
   const resolveStandaloneRoot = options.resolveStandaloneSkillsRoot ?? resolveStandaloneSkillsRoot;
   const install = options.bundledSkillsInstall ?? installBundledSkills;
@@ -1168,7 +1168,7 @@ function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
   }
 }
 
-async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<PrerequisiteCheck[]> {
+export async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<PrerequisiteCheck[]> {
   const isInstalled = options.isInstalled ?? commandExists;
   const commandRunner = options.commandRunner ?? defaultCommandRunner;
   const runGithubAuth = options.githubAuthCheck ?? checkGithubAuth;
