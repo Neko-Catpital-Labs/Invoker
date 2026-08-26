@@ -1,6 +1,7 @@
 import { assertExecutionModelSupported, registerBuiltinAgents } from '@invoker/execution-engine';
 import {
   normalizeGithubOwnerRepo,
+  type CatstackDeployConfig,
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
   type InvokerConfig,
@@ -221,6 +222,39 @@ export function normalizeMergifyQueueResearchSource(
   };
 }
 
+function validateCatstackDeployConfig(config: InvokerConfig): void {
+  const catstackDeploy = config.catstackDeploy;
+  if (catstackDeploy === undefined) return;
+  if (typeof catstackDeploy !== 'object' || catstackDeploy === null || Array.isArray(catstackDeploy)) {
+    throw new Error('catstackDeploy must be an object');
+  }
+  const typed = catstackDeploy as CatstackDeployConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('catstackDeploy.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.repoUrl !== undefined) {
+    if (typeof typed.repoUrl !== 'string' || typed.repoUrl.trim().length === 0) {
+      throw new Error('catstackDeploy.repoUrl must be a non-empty string when set');
+    }
+  }
+  if (typed.localRepoPath !== undefined) {
+    if (typeof typed.localRepoPath !== 'string' || typed.localRepoPath.trim().length === 0) {
+      throw new Error('catstackDeploy.localRepoPath must be a non-empty string when set');
+    }
+  }
+  if (typed.remoteRepoPath !== undefined) {
+    if (typeof typed.remoteRepoPath !== 'string' || typed.remoteRepoPath.trim().length === 0) {
+      throw new Error('catstackDeploy.remoteRepoPath must be a non-empty string when set');
+    }
+  }
+}
+
 export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   const nestedExecutionAgent = config.defaultExecution?.executionAgent;
   const hasNestedExecutionAgent = typeof nestedExecutionAgent === 'string' && nestedExecutionAgent.trim().length > 0;
@@ -251,5 +285,6 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateE2eAutoFixTargetRepos(config);
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
+  validateCatstackDeployConfig(config);
   return config;
 }
