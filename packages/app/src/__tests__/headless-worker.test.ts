@@ -3,6 +3,7 @@ import { E2E_AUTOFIX_WORKER_KIND, INFRA_REPAIR_WORKER_KIND } from '@invoker/exec
 import {
   resolveHeadlessDiskHeadroomConfig,
   resolveHeadlessInfraRepairConfig,
+  resolveHeadlessCatstackDeployConfig,
   runHeadless,
 } from '../headless.js';
 
@@ -102,6 +103,47 @@ describe('headless worker registry', () => {
         },
       },
     });
+  });
+
+  it('maps configured SSH targets and intervalMinutes into catstack-deploy worker dependencies', () => {
+    const config = resolveHeadlessCatstackDeployConfig({
+      catstackDeploy: {
+        intervalMinutes: 30,
+        repoUrl: 'https://github.com/EdbertChan/catstack.git',
+        localRepoPath: '~/Documents/GitHub/catstack',
+        remoteRepoPath: '~/src/catstack',
+      },
+      remoteTargets: {
+        digitalOcean: {
+          host: '203.0.113.10',
+          user: 'invoker',
+          sshKeyPath: '/tmp/test-key',
+          port: 2222,
+        },
+      },
+    });
+
+    expect(config).toEqual({
+      intervalMs: 30 * 60_000,
+      repoUrl: 'https://github.com/EdbertChan/catstack.git',
+      localRepoPath: '~/Documents/GitHub/catstack',
+      remoteRepoPath: '~/src/catstack',
+      remoteTargets: [{
+        name: 'digitalOcean',
+        connection: {
+          host: '203.0.113.10',
+          user: 'invoker',
+          sshKeyPath: '/tmp/test-key',
+          port: 2222,
+        },
+      }],
+    });
+  });
+
+  it('defaults catstack-deploy interval to 15 minutes when config is omitted', () => {
+    const config = resolveHeadlessCatstackDeployConfig({});
+    expect(config.intervalMs).toBe(15 * 60_000);
+    expect(config.remoteTargets).toEqual([]);
   });
 });
 
