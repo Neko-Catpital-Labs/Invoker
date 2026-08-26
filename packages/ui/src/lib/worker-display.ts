@@ -127,6 +127,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No mergify-queue-research runs recorded yet.',
     };
   }
+  if (kind === 'catstack-deploy') {
+    return {
+      name: 'Catstack deploy',
+      idleText: 'Idle. Clone/pulls catstack and runs ./install.sh on this machine and every remoteTargets host when turned on.',
+      noActionText: 'No catstack-deploy runs recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',
