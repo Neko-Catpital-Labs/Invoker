@@ -23,6 +23,7 @@ import {
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
+import { loadLinearEnv } from './remote-agent-env.js';
 
 // Re-export for backward compatibility
 export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
@@ -54,6 +55,11 @@ export interface WorktreeExecutorConfig {
   maxDurationMs?: number;
   /** Optional DB-backed lease authority for worktree slots (see RepoPoolConfig). */
   leasePersistence?: RepoPoolLeasePersistence;
+  /**
+   * Optional secrets file. LINEAR_API_KEY / INVOKER_LINEAR_API_KEY are merged
+   * into local task env whenever set (independent of agent API-key export).
+   */
+  secretsFile?: string;
 }
 
 
@@ -87,11 +93,16 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private readonly worktreeBaseDir: string;
   private readonly claudeCommand: string;
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  private readonly secretsFile: string | undefined;
   private pool: RepoPool;
   constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
+    this.secretsFile = config.secretsFile
+      ?? (existsSync(join(homedir(), '.config', 'invoker', 'secrets.env'))
+        ? join(homedir(), '.config', 'invoker', 'secrets.env')
+        : undefined);
     this.setProvisionCommand(config.provisionCommand, DEFAULT_WORKTREE_PROVISION_COMMAND);
     this.setRepoProvisionCommands(config.repoProvisionCommands);
     this.worktreeBaseDir =
@@ -501,7 +512,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       stdio: [stdinMode, 'pipe', 'pipe'],
       cwd: acquired.worktreePath,
       detached: true,
-      env: cleanElectronEnv(),
+      env: {
+        ...cleanElectronEnv(),
+        ...loadLinearEnv(this.secretsFile),
+      },
     });
     bench('WorktreeExecutor.spawn.after');
 
