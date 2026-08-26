@@ -148,6 +148,8 @@ export interface InvokerConfig {
   autoFixRetries?: number;
   /** Cadence for the e2e-autofix worker in milliseconds. Default: 43_200_000 (12h). */
   e2eAutoFixIntervalMs?: number;
+  /** Cadence for the worker-session-mine worker in milliseconds. Default: 3_600_000 (1h). */
+  workerSessionMineIntervalMs?: number;
   stallRequeueRetries?: number;
   stallRequeueBackoffMs?: number;
   /**
