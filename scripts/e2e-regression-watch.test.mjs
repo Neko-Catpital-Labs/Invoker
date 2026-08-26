@@ -10,6 +10,7 @@ import {
   buildRepairFilingMetadata,
   claimRepairFiling,
   CATSTACK_REPO_URL,
+  DEFAULT_TARGET_REPO,
   extractFailureIdentitiesFromLog,
   failureStorageKey,
   fileBugfixPlan,
@@ -22,11 +23,17 @@ import {
   jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
+  loadWatchConfigFile,
   normalizeState,
+  parseTargetRepoFlag,
+  parseWatchConfigFlag,
   processFailureFilingSweep,
   reconcileCiRun,
   releaseRepairFilingClaim,
   repairFilingKind,
+  resolveRepairFilingSubject,
+  resolveStateDir,
+  resolveTargetRepo,
   RECOVERY_COOLDOWN_MS,
   shouldSkipFilingAlreadyAddressed,
   STALE_OBSERVATION_MS,
@@ -1436,5 +1443,133 @@ describe('per-test failure identity under one CI job', () => {
     assert.equal(migrated.activeFailures[jobName].failureId, JOB_LEVEL_FAILURE_ID);
     assert.equal(migrated.activeFailures[jobName].failureKey, jobName);
     assert.equal(migrated.activeFailures[jobName].attempts, 2);
+  });
+});
+
+describe('watch-target-repo config resolution', () => {
+  const CATSTACK_TARGET_REPO = 'EdbertChan/catstack';
+
+  it('resolves the Invoker default when no CLI flag, env var, or config file is set', () => {
+    assert.equal(resolveTargetRepo({ argv: [], env: {} }), DEFAULT_TARGET_REPO);
+  });
+
+  it('parseTargetRepoFlag reads both "--target-repo value" and "--target-repo=value" forms', () => {
+    assert.equal(parseTargetRepoFlag(['--target-repo', CATSTACK_TARGET_REPO]), CATSTACK_TARGET_REPO);
+    assert.equal(parseTargetRepoFlag([`--target-repo=${CATSTACK_TARGET_REPO}`]), CATSTACK_TARGET_REPO);
+    assert.equal(parseTargetRepoFlag([]), undefined);
+  });
+
+  it('parseWatchConfigFlag reads both "--config value" and "--config=value" forms', () => {
+    assert.equal(parseWatchConfigFlag(['--config', '/tmp/watch.json']), '/tmp/watch.json');
+    assert.equal(parseWatchConfigFlag(['--config=/tmp/watch.json']), '/tmp/watch.json');
+    assert.equal(parseWatchConfigFlag([]), undefined);
+  });
+
+  it('CLI flag wins over env var and config file', () => {
+    const repo = resolveTargetRepo({
+      argv: ['--target-repo', CATSTACK_TARGET_REPO],
+      env: { INVOKER_GITHUB_TARGET_REPO: 'someone/else', INVOKER_CI_WATCH_CONFIG_FILE: '/tmp/unused.json' },
+      exists: () => { throw new Error('config file must not be read when a CLI flag is present'); },
+    });
+    assert.equal(repo, CATSTACK_TARGET_REPO);
+  });
+
+  it('env var wins over config file when no CLI flag is present', () => {
+    const repo = resolveTargetRepo({
+      argv: [],
+      env: { INVOKER_GITHUB_TARGET_REPO: CATSTACK_TARGET_REPO, INVOKER_CI_WATCH_CONFIG_FILE: '/tmp/unused.json' },
+      exists: () => { throw new Error('config file must not be read when an env var is present'); },
+    });
+    assert.equal(repo, CATSTACK_TARGET_REPO);
+  });
+
+  it('falls back to a JSON config file\'s targetRepo when no CLI flag or env var is set', () => {
+    const repo = resolveTargetRepo({
+      argv: ['--config', '/tmp/watch.json'],
+      env: {},
+      exists: (path) => path === '/tmp/watch.json',
+      readFile: () => JSON.stringify({ targetRepo: CATSTACK_TARGET_REPO }),
+    });
+    assert.equal(repo, CATSTACK_TARGET_REPO);
+  });
+
+  it('loadWatchConfigFile returns {} when no config path is given, and throws on a missing file or non-object JSON', () => {
+    assert.deepEqual(loadWatchConfigFile(undefined), {});
+    assert.throws(() => loadWatchConfigFile('/tmp/missing.json', { exists: () => false }));
+    assert.throws(() => loadWatchConfigFile('/tmp/array.json', {
+      exists: () => true,
+      readFile: () => '[1,2,3]',
+    }));
+  });
+
+  it('resolveStateDir keeps the default Invoker state path unchanged for the default target repo', () => {
+    const dir = resolveStateDir(DEFAULT_TARGET_REPO, { env: {}, homeDir: '/home/tester' });
+    assert.equal(dir, join('/home/tester', '.invoker', 'e2e-regression-watch'));
+  });
+
+  it('resolveStateDir isolates a non-default target repo under its own slugged subdirectory', () => {
+    const dir = resolveStateDir(CATSTACK_TARGET_REPO, { env: {}, homeDir: '/home/tester' });
+    assert.equal(dir, join('/home/tester', '.invoker', 'e2e-regression-watch-targets', 'edbertchan-catstack'));
+    assert.notEqual(dir, resolveStateDir(DEFAULT_TARGET_REPO, { env: {}, homeDir: '/home/tester' }));
+  });
+
+  it('resolveStateDir lets an explicit state-dir env var override isolation for any target repo', () => {
+    const explicit = '/custom/state/dir';
+    assert.equal(resolveStateDir(DEFAULT_TARGET_REPO, { env: { INVOKER_CI_WATCH_STATE_DIR: explicit } }), explicit);
+    assert.equal(resolveStateDir(CATSTACK_TARGET_REPO, { env: { INVOKER_CI_WATCH_STATE_DIR: explicit } }), explicit);
+  });
+
+  it('resolveRepairFilingSubject keeps the default repo\'s existing "master" subject unchanged', () => {
+    assert.equal(resolveRepairFilingSubject(DEFAULT_TARGET_REPO), 'master');
+  });
+
+  it('resolveRepairFilingSubject namespaces a non-default target repo so its ledger rows can never collapse onto Invoker\'s own', () => {
+    const catstackSubject = resolveRepairFilingSubject(CATSTACK_TARGET_REPO);
+    assert.notEqual(catstackSubject, 'master');
+    assert.equal(catstackSubject, `${CATSTACK_TARGET_REPO}:master`);
+  });
+
+  it('claimRepairFiling on the default-target process claims the unmodified "master" subject', () => {
+    // TARGET_REPO is resolved once at module load from this test process's
+    // own argv/env (neither is set to a non-default repo here), so this
+    // exercises the real exported claimRepairFiling end-to-end rather than
+    // resolveRepairFilingSubject in isolation.
+    const rows = new Map();
+    const insert = ({ kind, subject, stateSha, metadata }) => {
+      const key = `${kind} ${subject} ${stateSha}`;
+      if (rows.has(key)) return { inserted: false, row: rows.get(key) };
+      const row = { kind, subject, stateSha, metadata };
+      rows.set(key, row);
+      return { inserted: true, row };
+    };
+    const failure = makeFailure({ firstBadSha: 'shaSharedAcrossRepos' });
+
+    assert.equal(claimRepairFiling(failure, insert), false, 'claim must succeed');
+    assert.equal(rows.size, 1);
+    const [[, row]] = rows;
+    assert.equal(row.subject, 'master', 'default repo keeps the unmodified "master" subject');
+  });
+
+  it('a catstack-scoped subject and the default-repo subject can never collapse onto the same ledger row for an identical (kind, sha)', () => {
+    // claimRepairFiling itself can't be re-targeted per-call (TARGET_REPO is
+    // resolved once at module load), so this simulates two isolated watcher
+    // processes -- one on the Invoker default, one on catstack -- racing the
+    // same underlying (kind, sha) against one shared ledger, using the same
+    // composite-key shape claimRepairFiling builds internally.
+    const rows = new Map();
+    const insertUnderSubject = (subject, failure) => {
+      const key = `${repairFilingKind(failure)} ${subject} ${failure.firstBadSha}`;
+      if (rows.has(key)) return { inserted: false };
+      rows.set(key, { subject });
+      return { inserted: true };
+    };
+    const failure = makeFailure({ firstBadSha: 'shaSharedAcrossRepos' });
+
+    const defaultResult = insertUnderSubject(resolveRepairFilingSubject(DEFAULT_TARGET_REPO), failure);
+    const catstackResult = insertUnderSubject(resolveRepairFilingSubject(CATSTACK_TARGET_REPO), failure);
+
+    assert.equal(defaultResult.inserted, true);
+    assert.equal(catstackResult.inserted, true, 'catstack must claim its own row, not collide with the default repo\'s');
+    assert.equal(rows.size, 2);
   });
 });
