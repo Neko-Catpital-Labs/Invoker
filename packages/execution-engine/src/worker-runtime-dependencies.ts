@@ -21,6 +21,7 @@ import type { DiskHeadroomWorkerStore } from './workers/disk-headroom-reclaim.js
 import type { SlackBugScanWorkerConfig } from './workers/slack-bug-scan-worker.js';
 import type { CrossRepoResearchWorkerConfig } from './workers/cross-repo-research-worker.js';
 import type { CatstackDeployWorkerConfig } from './workers/catstack-deploy-worker.js';
+import type { MergifyQueueResearchWorkerConfig } from './workers/mergify-queue-research-worker.js';
 import type {
   InfraRepairWorkerConfig,
   InfraRepairWorkerStore,
@@ -88,6 +89,8 @@ export interface WorkerRuntimeDependencies {
   crossRepoResearch?: CrossRepoResearchWorkerConfig;
   /** Catstack deploy worker configuration (local + remoteTargets clone/pull/install). */
   catstackDeploy?: CatstackDeployWorkerConfig;
+  /** Mergify queue research worker configuration. */
+  mergifyQueueResearch?: MergifyQueueResearchWorkerConfig;
   /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
 }
