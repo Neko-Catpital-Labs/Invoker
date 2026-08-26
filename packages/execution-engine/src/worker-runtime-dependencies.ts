@@ -19,6 +19,7 @@ import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js
 import type { ClaudeOauthRefreshWorkerConfig } from './workers/claude-oauth-refresh-worker.js';
 import type { DiskHeadroomWorkerStore } from './workers/disk-headroom-reclaim.js';
 import type { SlackBugScanWorkerConfig } from './workers/slack-bug-scan-worker.js';
+import type { CrossRepoResearchWorkerConfig } from './workers/cross-repo-research-worker.js';
 import type {
   InfraRepairWorkerConfig,
   InfraRepairWorkerStore,
@@ -82,6 +83,8 @@ export interface WorkerRuntimeDependencies {
   /** e2e auto-fix/default-branch CI watcher configuration. */
   e2eAutoFix?: E2eAutoFixWorkerConfig;
   slackBugScan?: SlackBugScanWorkerConfig;
+  /** Cross-repo research worker configuration. */
+  crossRepoResearch?: CrossRepoResearchWorkerConfig;
   /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
 }
