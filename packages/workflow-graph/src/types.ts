@@ -47,6 +47,8 @@ export interface BaseTaskConfig {
   readonly executionAgent?: string;
   /** Agent-specific model selector passed through without central validation. */
   readonly executionModel?: string;
+  /** Finite agent turn budget (Claude `--max-turns`) when set. */
+  readonly maxTurns?: number;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
