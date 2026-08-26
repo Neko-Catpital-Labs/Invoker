@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
+  WORKER_SESSION_MINE_WORKER_KIND,
   createWorkerRegistry,
   registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { resolvePrMaintenanceWorkerConfig, type InvokerConfig } from '../config.js';
+import { ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, BUILT_IN_WORKER_KINDS } from '../worker-control.js';
 
 const silentLogger = {
   debug: () => {},
@@ -99,5 +101,24 @@ describe('registered owner PR-maintenance worker dependencies', () => {
     expect(adminBypass?.isRunning()).toBe(false);
     expect(orphanRepair?.identity.kind).toBe(PR_ORPHAN_REPAIR_WORKER_KIND);
     expect(orphanRepair?.isRunning()).toBe(false);
+  });
+});
+
+describe('registered worker-session-mine worker', () => {
+  it('registers the off-by-default session miner and builds a stopped runtime', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+    const entry = registry.get(WORKER_SESSION_MINE_WORKER_KIND);
+    expect(entry).toBeDefined();
+
+    const runtime = entry!.factory({
+      store: emptyStore,
+      submitter: noopSubmitter,
+      logger: silentLogger,
+      workerSessionMine: { intervalMs: 60_000 },
+    });
+    expect(runtime.identity.kind).toBe(WORKER_SESSION_MINE_WORKER_KIND);
+    expect(runtime.isRunning()).toBe(false);
+    expect([...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS]).not.toContain(WORKER_SESSION_MINE_WORKER_KIND);
+    expect(BUILT_IN_WORKER_KINDS.has(WORKER_SESSION_MINE_WORKER_KIND)).toBe(true);
   });
 });
