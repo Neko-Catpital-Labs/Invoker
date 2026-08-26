@@ -170,6 +170,26 @@ def pr_state(pr_number: int, *, repo: str, cwd: Path | str | None = None) -> str
     return completed.stdout.strip() or None
 
 
+def pr_state_by_branch(branch: str, *, repo: str, cwd: Path | str | None = None) -> str | None:
+    completed = subprocess.run(
+        [
+            "gh", "pr", "list",
+            "--repo", repo,
+            "--head", branch,
+            "--state", "all",
+            "--json", "state",
+            "-q", ".[0].state",
+        ],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
 def safe_push(
     *,
     branch: str,
@@ -337,14 +357,18 @@ def _record_ledgers(args: argparse.Namespace) -> None:
 # race with another writer. In that case there is nothing left to push and no
 # unsafe write to guard against, so settle quietly instead of failing the same
 # way a real stale-head race would (mirrors mergify_admin_requeue_repair_normalize.py's
-# handling of a PR merged/closed mid-repair).
-def _settled_via_pr_merge_or_close(args: argparse.Namespace) -> str | None:
-    if args.json_pr is None:
-        return None
+# handling of a PR merged/closed mid-repair). This check must not depend on the
+# caller passing --json-pr: safe-push is invoked with only --branch/--expected-head
+# in the common case, so look the PR up by its head branch name when no PR
+# number was supplied.
+def _settled_via_pr_merge_or_close(args: argparse.Namespace, branch_name: str) -> str | None:
     repo = repo_slug(args.remote, cwd=Path(args.cwd))
     if repo is None:
         return None
-    state = pr_state(args.json_pr, repo=repo, cwd=Path(args.cwd))
+    if args.json_pr is not None:
+        state = pr_state(args.json_pr, repo=repo, cwd=Path(args.cwd))
+    else:
+        state = pr_state_by_branch(branch_name, repo=repo, cwd=Path(args.cwd))
     return state if state in ("MERGED", "CLOSED") else None
 
 
@@ -365,14 +389,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return 0
     except BranchMissingError as exc:
-        state = _settled_via_pr_merge_or_close(args)
+        branch_name = normalize_branch(args.branch)
+        state = _settled_via_pr_merge_or_close(args, branch_name)
         if state is None:
             print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
             return exc.exit_code or 1
         _record_ledgers(args)
+        pr_label = f"PR #{args.json_pr}" if args.json_pr is not None else f"the PR for refs/heads/{branch_name}"
         print(
-            f"pr-worker-safe-push: noop: PR #{args.json_pr} is already {state.lower()}; "
-            f"refs/heads/{normalize_branch(args.branch)} no longer exists, nothing to push",
+            f"pr-worker-safe-push: noop: {pr_label} is already {state.lower()}; "
+            f"refs/heads/{branch_name} no longer exists, nothing to push",
             file=sys.stderr,
         )
         return 0
