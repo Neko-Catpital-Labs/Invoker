@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # Guardrail: every path that builds the Electron app must compile
-# packages/surfaces/dist first. @invoker/surfaces stays external in
-# packages/app/tsup.config.ts (not bundled), so a missing dist makes
-# packages/app's verify-workspace-imports.cjs throw
+# packages/surfaces/dist first, and packages/app must bundle @invoker/surfaces
+# (noExternal) so the packaged asar does not depend on pnpm-nested bolt deps.
+# A missing dist still makes packages/app's verify-workspace-imports.cjs throw
 # "Unresolvable workspace dependency @invoker/surfaces".
 #
 # Siblings:
 # - CI build-artifacts "Build UI and app" step (app-build-dist.tgz)
 # - scripts/package-desktop.sh (tagged + daily GitHub Release cuts)
+# - packages/app/tsup.config.ts noExternal (desktop asar)
 #
 # Regression: build-artifacts only tarred packages/ui/dist and packages/app/dist.
 # required-fast/ssh/e2e-proof/playwright jobs then crashed with
 # "Cannot find module '.../@invoker/surfaces/dist/index.js'" and hung until
 # CI timeout (#5845). package-desktop.sh was not updated, so tagged/daily
 # desktop jobs hit the same class later.
+#
+# Separate regression (npm 0.0.13): surfaces/dist was inside app.asar, but
+# loading it pulled @slack/bolt → axios → form-data, and form-data was omitted
+# from the asar. owner-serve then reported "Unable to load @invoker/surfaces".
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -50,4 +55,15 @@ if [[ -z "$surfaces_line" || -z "$app_line" || "$surfaces_line" -ge "$app_line" 
   exit 1
 fi
 
-echo "PASS: app-build-dist.tgz and package-desktop.sh both build packages/surfaces/dist"
+TSUP_CONFIG="$ROOT/packages/app/tsup.config.ts"
+NOEXTERNAL_BLOCK="$(awk '/noExternal: \[/{flag=1} flag{print} flag && /\]/{exit}' "$TSUP_CONFIG")"
+if ! grep -q "'@invoker/surfaces'" <<<"$NOEXTERNAL_BLOCK"; then
+  echo "FAIL: packages/app/tsup.config.ts noExternal must include @invoker/surfaces (desktop asar omits nested form-data)" >&2
+  exit 1
+fi
+if ! grep -q "'@slack/bolt'" <<<"$NOEXTERNAL_BLOCK"; then
+  echo "FAIL: packages/app/tsup.config.ts noExternal must include @slack/bolt (nested dep of @invoker/surfaces)" >&2
+  exit 1
+fi
+
+echo "PASS: app-build-dist.tgz and package-desktop.sh both build packages/surfaces/dist; app tsup bundles @invoker/surfaces"
