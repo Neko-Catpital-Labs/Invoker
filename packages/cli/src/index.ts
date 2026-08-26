@@ -51,6 +51,7 @@ import {
 } from './live-owner-bus.js';
 import { runMcpServer } from './mcp-server.js';
 import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
+import { runInstall } from './quick-install.js';
 import {
   applyDesiredStateWorkerToggle,
   applyWorkerToggle,
@@ -188,6 +189,7 @@ function usage(): string {
     '  invoker-cli delete-all',
     '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli install [--demo]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
@@ -206,6 +208,7 @@ function usage(): string {
     '  delete-all      Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
+    '  install         Quick-install: global cli+ui, doctor --fix, skills+MCP, default workers. Skips Slack/machines.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
@@ -1124,6 +1127,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
   try {
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'install') {
+      return await runInstall(argv.slice(1));
     }
     if (argv[0] === 'setup') {
       return await runSetup(argv.slice(1));
