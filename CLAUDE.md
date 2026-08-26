@@ -59,7 +59,7 @@ Concrete incidents that motivate the class-search rule above — each is a case 
 
 ## Testing Architecture
 
-All packages use standard `vitest run` via `pnpm test`. The persistence layer uses `sql.js` (WASM-based SQLite), so tests run under system Node with no native SQLite addon or Electron test runtime.
+All packages use standard `vitest run` via `pnpm test`. The persistence layer uses Node's built-in `node:sqlite`, so tests run under system Node with no native SQLite addon or Electron test runtime.
 
 ### How it works
 
