@@ -561,6 +561,11 @@ def effective_blockers(
     )
 
 
+def is_non_repairable_check_state(state: str) -> bool:
+    """Cancelled/skipped/neutral checks are not code failures to repair."""
+    return state in {"skipped", "cancelled", "neutral"}
+
+
 def mergify_failed_check_actions(
     pr: PrSnapshot,
     ledger: Ledger,
@@ -583,6 +588,9 @@ def mergify_failed_check_actions(
     )
     for name in ordered_failing_checks:
         if name in suppressed:
+            continue
+        ctx = pr.checks.get(name)
+        if ctx is not None and is_non_repairable_check_state(ctx.state):
             continue
         detail = f"Mergify queue check failed: {name}"
         decision = retry_decision(
@@ -1032,6 +1040,31 @@ def plan_mergify_queue_repairs(
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
+            continue
+        # GitHub CONFLICTING/DIRTY beats named CI (#10514): leftover parent
+        # commits after a squash+retarget make CI repair unable to push.
+        # Mergeable-but-behind named CI still never rebases (#10242).
+        conflict = next(
+            (blocker for blocker in facts.blockers_by_pr[pr.number] if blocker.kind == "conflict"),
+            None,
+        )
+        if conflict is not None:
+            legacy_key = f"conflict:{pr.number}"
+            if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
+                continue
+            if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
+                continue
+            action = plan_invoker_rebase_onto_master(
+                pr,
+                ledger,
+                max_repair_attempts,
+                now,
+                conflict.detail,
+                claim_repair_filing,
+                release_repair_filing,
+            )
+            if action is not None:
+                return action
             continue
         # Named CI failures always go to repair_check — never rebase because
         # the branch is also behind master (see #10242 rewrite incident).

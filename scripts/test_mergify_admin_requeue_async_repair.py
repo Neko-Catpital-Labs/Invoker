@@ -167,6 +167,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertNotIn("/tmp/ledger.jsonl", plan.yaml_text)
         self.assertIn("Rebase this pull request onto `master`", plan.yaml_text)
         self.assertIn("commit locally. Do not push.", plan.yaml_text)
+        self.assertIn("--expected-head", plan.yaml_text)
         self.assertNotIn("executionAgent", plan.yaml_text)
 
     def test_rebase_onto_master_plan_includes_dequeue_reason(self):
@@ -182,6 +183,21 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("id: repair", plan.yaml_text)
         self.assertIn("id: safe-push", plan.yaml_text)
         self.assertNotIn("id: normalize", plan.yaml_text)
+
+    def test_rebase_plan_targets_stack_parent_base_not_master(self):
+        parent = "stack/EdbertChan/parent--aaaa"
+        plan = async_repair.build_rebase_onto_master_plan(
+            pr(base_ref_name=parent),
+            "GitHub reports merge conflict",
+            repo="owner/repo",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn(f"Rebase this pull request onto `{parent}`", plan.yaml_text)
+        self.assertIn(f"git rebase origin/{parent}", plan.yaml_text)
+        self.assertIn(f"Rebase PR #2647 onto {parent}", plan.yaml_text)
+        self.assertNotIn("Rebase this pull request onto `master`", plan.yaml_text)
+        self.assertIn("--expected-head", plan.yaml_text)
 
     def test_repair_bot_thread_plan_keeps_thread_id_in_prompt_not_ledger(self):
         plan = async_repair.build_repair_bot_thread_plan(

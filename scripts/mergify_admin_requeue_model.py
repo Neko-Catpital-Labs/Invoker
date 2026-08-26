@@ -517,9 +517,9 @@ def norm_check_state(node: Mapping[str, object]) -> tuple[str, str, str, str, st
     status = str(node.get("status") or "").upper()
     if conclusion in {"SUCCESS"}:
         state = "success"
-    elif conclusion in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE"}:
+    elif conclusion in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "STARTUP_FAILURE"}:
         state = "failure"
-    elif conclusion == "SKIPPED":
+    elif conclusion in {"SKIPPED", "CANCELLED"}:
         state = "skipped"
     elif conclusion == "NEUTRAL":
         state = "neutral"

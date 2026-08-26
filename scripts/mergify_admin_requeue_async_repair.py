@@ -221,10 +221,11 @@ def build_repair_check_plan(
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
-def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, trunk: str = "master") -> str:
+def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, onto: str | None = None) -> str:
+    onto_ref = onto or pr.base_ref_name or "master"
     return (
-        f"Rebase this pull request onto `{trunk}`.\n\n"
-        f"Checkout the PR head branch, rebase it onto origin/{trunk} while preserving the PR's intended "
+        f"Rebase this pull request onto `{onto_ref}`.\n\n"
+        f"Checkout the PR head branch, rebase it onto origin/{onto_ref} while preserving the PR's intended "
         "changes, resolve any conflicts if they appear, then commit locally. Do not push.\n\n"
         "If the real fix requires restructuring this PR instead of a straightforward rebase, do not force that "
         "into a single local commit here. Instead, submit an Invoker plan to do the restructuring, the same way "
@@ -232,10 +233,10 @@ def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, 
         "Then make no commit in this checkout and exit 0.\n\n"
         "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
-        f"Head SHA: {start_head}\nTrunk: {trunk}\nReason: {reason}\n"
+        f"Head SHA: {start_head}\nRebase onto: {onto_ref}\nReason: {reason}\n"
         f"Work directly on its branch:\n"
-        f"  git fetch origin {pr.head_ref_name} {trunk} && git checkout {pr.head_ref_name}\n"
-        f"  git rebase origin/{trunk}\n"
+        f"  git fetch origin {pr.head_ref_name} {onto_ref} && git checkout {pr.head_ref_name}\n"
+        f"  git rebase origin/{onto_ref}\n"
     )
 
 
@@ -247,11 +248,12 @@ def build_rebase_onto_master_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
+    onto_ref = pr.base_ref_name or "master"
     name = rebase_onto_master_plan_name(pr.number, start_head)
-    prompt = _rebase_onto_master_prompt(pr, reason, start_head)
+    prompt = _rebase_onto_master_prompt(pr, reason, start_head, onto=onto_ref)
     yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
     yaml_text += _repair_task_yaml(
-        description=f"Rebase PR #{pr.number} onto master",
+        description=f"Rebase PR #{pr.number} onto {onto_ref}",
         prompt=prompt,
     )
     yaml_text += _safe_push_task_yaml(
