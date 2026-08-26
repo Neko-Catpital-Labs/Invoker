@@ -1095,6 +1095,10 @@ jobs:
     name: ssh / ${{ matrix.name }}
 
     steps:
+      - name: Reclaim disk space
+        run: find /tmp -maxdepth 1 -name 'invoker-*' -mmin +360 -exec rm -rf {} + 2>/dev/null || true
+        shell: bash
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
