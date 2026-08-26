@@ -64,6 +64,10 @@ Use this mode when invoked by the installed command or MCP prompt.
 
 > **Not this mode:** Slack `plan:` and agent threads use a separate, orchestrator-owned Slack plan submission path. Do not invoke the CLI or MCP handoff tools from those threads.
 
+### Local vs remote Invoker
+
+Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP, or SSH alias, follow [references/local-vs-remote-mcp.md](references/local-vs-remote-mcp.md) before prepare/submit: probe SSH, rewrite harness MCP only on success, never clobber local on failure. “Local” / “this machine” restores local MCP. Do not invent HTTP/SSE MCP.
+
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
