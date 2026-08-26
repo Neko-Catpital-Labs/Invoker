@@ -450,6 +450,16 @@ function buildRegisteredOwnerWorkerDeps(
         INVOKER_LINEAR_TEAM_ID: invokerConfig.mergifyQueueResearch?.linearTeamId,
       },
     },
+    catstackDeploy: {
+      intervalMs: (invokerConfig.catstackDeploy?.intervalMinutes ?? 15) * 60_000,
+      repoUrl: invokerConfig.catstackDeploy?.repoUrl,
+      localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
+      remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+      remoteTargets: remoteTargets.map((target) => ({
+        name: target.name,
+        connection: target.connection,
+      })),
+    },
     idleTaskCleanup: {
       github: createPrMaintenanceGitHub({
         run: spawnPrMaintenanceCommand,
