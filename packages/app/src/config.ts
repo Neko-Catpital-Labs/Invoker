@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
-import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
+import type { E2eAutoFixWorkerConfig, PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
 
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
@@ -70,6 +70,24 @@ export interface PrMaintenanceConfig {
 
 export const DEFAULT_PR_MAINTENANCE_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
 
+/**
+ * Owner-side e2e-autofix worker target settings.
+ *
+ * Cadence lives in the flat `e2eAutoFixIntervalMs`; this block only carries
+ * the GitHub scan list and env overrides forwarded to the shell entrypoint.
+ */
+export interface E2eAutoFixConfig {
+  /** Environment overrides forwarded to the shell entrypoint. `undefined` removes a variable. */
+  env?: Record<string, string | undefined>;
+  /**
+   * GitHub `owner/repo` list watched by the e2e-autofix worker (CI regression
+   * watch + repair filing). When omitted, defaults to the Invoker repo only.
+   */
+  targetRepos?: string[];
+}
+
+export const DEFAULT_E2E_AUTOFIX_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
+
 const GITHUB_OWNER_REPO_RE = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 
 /** Normalize and validate a GitHub `owner/repo` string; returns null when invalid. */
@@ -95,6 +113,24 @@ export function resolvePrMaintenanceTargetRepos(config: InvokerConfig): string[]
     if (repos.length > 0) return repos;
   }
   return [DEFAULT_PR_MAINTENANCE_TARGET_REPO];
+}
+
+/**
+ * Resolve the e2e-autofix scan list from `e2eAutoFix.targetRepos`.
+ * When omitted or empty, defaults to the Invoker repo only.
+ */
+export function resolveE2eAutoFixTargetRepos(config: InvokerConfig): string[] {
+  const fromConfig = config.e2eAutoFix?.targetRepos;
+  if (Array.isArray(fromConfig) && fromConfig.length > 0) {
+    const repos: string[] = [];
+    for (const entry of fromConfig) {
+      if (typeof entry !== 'string') continue;
+      const normalized = normalizeGithubOwnerRepo(entry);
+      if (normalized && !repos.includes(normalized)) repos.push(normalized);
+    }
+    if (repos.length > 0) return repos;
+  }
+  return [DEFAULT_E2E_AUTOFIX_TARGET_REPO];
 }
 
 export interface SlackBugScanConfig {
@@ -184,6 +220,11 @@ export interface InvokerConfig {
   autoFixRetries?: number;
   /** Cadence for the e2e-autofix worker in milliseconds. Default: 43_200_000 (12h). */
   e2eAutoFixIntervalMs?: number;
+  /**
+   * Owner-side e2e-autofix worker target settings (GitHub scan list, env overrides).
+   * Cadence stays in the flat `e2eAutoFixIntervalMs` above.
+   */
+  e2eAutoFix?: E2eAutoFixConfig;
   stallRequeueRetries?: number;
   stallRequeueBackoffMs?: number;
   /**
@@ -701,4 +742,26 @@ export function resolvePrMaintenanceWorkerConfig(
   launch.env = env;
 
   return Object.keys(launch).length > 0 ? launch : {};
+}
+
+/**
+ * Build e2e-autofix worker launch dependencies from config.
+ *
+ * Always returns `intervalMs` and `env` (with the resolved target-repo scan
+ * list injected), so the worker keeps watching only Invoker by default when
+ * `e2eAutoFix` is absent or `targetRepos` is omitted/empty.
+ */
+export function resolveE2eAutoFixWorkerConfig(
+  config: InvokerConfig,
+): E2eAutoFixWorkerConfig {
+  const targetRepos = resolveE2eAutoFixTargetRepos(config);
+  const env: Record<string, string | undefined> = {
+    ...(config.e2eAutoFix?.env ?? {}),
+    INVOKER_GITHUB_TARGET_REPOS: targetRepos.join(','),
+    INVOKER_GITHUB_TARGET_REPO: targetRepos[0],
+  };
+  return {
+    intervalMs: config.e2eAutoFixIntervalMs,
+    env,
+  };
 }

@@ -16,7 +16,10 @@ import {
   resolveEnabledExecutionAgents,
   resolvePrMaintenanceTargetRepos,
   resolvePrMaintenanceWorkerConfig,
+  resolveE2eAutoFixTargetRepos,
+  resolveE2eAutoFixWorkerConfig,
   DEFAULT_PR_MAINTENANCE_TARGET_REPO,
+  DEFAULT_E2E_AUTOFIX_TARGET_REPO,
 } from '../config.js';
 import { validateInvokerConfig } from '../config-validation.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -752,5 +755,62 @@ describe('crossRepoResearch config', () => {
         },
       },
     })).toThrow(/must be a git URL string/);
+  });
+});
+
+describe('e2eAutoFix.targetRepos', () => {
+  it('reads targetRepos from config', () => {
+    expect(resolveE2eAutoFixTargetRepos({
+      e2eAutoFix: {
+        targetRepos: ['Neko-Catpital-Labs/Invoker', 'EdbertChan/catstack'],
+      },
+    })).toEqual(['Neko-Catpital-Labs/Invoker', 'EdbertChan/catstack']);
+  });
+
+  it('defaults to the Invoker repo when targetRepos is omitted', () => {
+    expect(resolveE2eAutoFixTargetRepos({})).toEqual([DEFAULT_E2E_AUTOFIX_TARGET_REPO]);
+    expect(resolveE2eAutoFixTargetRepos({
+      e2eAutoFix: { targetRepos: [] },
+    })).toEqual([DEFAULT_E2E_AUTOFIX_TARGET_REPO]);
+  });
+
+  it('forwards config targetRepos into worker env for the shell entrypoint', () => {
+    const launch = resolveE2eAutoFixWorkerConfig({
+      e2eAutoFix: {
+        targetRepos: ['Neko-Capital-Labs/Invoker', 'EdbertChan/catstack'],
+        env: {
+          INVOKER_GITHUB_TARGET_REPOS: 'should/not-win',
+          INVOKER_GITHUB_TARGET_REPO: 'should/not-win',
+        },
+      },
+    });
+    expect(launch.env?.INVOKER_GITHUB_TARGET_REPOS).toBe(
+      'Neko-Capital-Labs/Invoker,EdbertChan/catstack',
+    );
+    expect(launch.env?.INVOKER_GITHUB_TARGET_REPO).toBe('Neko-Capital-Labs/Invoker');
+  });
+
+  it('defaults to watching only Invoker when e2eAutoFix is omitted', () => {
+    const launch = resolveE2eAutoFixWorkerConfig({});
+    expect(launch.env?.INVOKER_GITHUB_TARGET_REPOS).toBe(DEFAULT_E2E_AUTOFIX_TARGET_REPO);
+    expect(launch.env?.INVOKER_GITHUB_TARGET_REPO).toBe(DEFAULT_E2E_AUTOFIX_TARGET_REPO);
+    expect(launch.intervalMs).toBeUndefined();
+  });
+
+  it('carries the flat e2eAutoFixIntervalMs through unchanged', () => {
+    const launch = resolveE2eAutoFixWorkerConfig({ e2eAutoFixIntervalMs: 60_000 });
+    expect(launch.intervalMs).toBe(60_000);
+  });
+
+  it('rejects invalid targetRepos entries', () => {
+    expect(() => validateInvokerConfig({
+      e2eAutoFix: { targetRepos: ['not-a-repo'] },
+    })).toThrow(/owner\/repo/);
+  });
+
+  it('rejects targetRepos entries containing a comma', () => {
+    expect(() => validateInvokerConfig({
+      e2eAutoFix: { targetRepos: ['owner,other/repo'] },
+    })).toThrow(/owner\/repo/);
   });
 });

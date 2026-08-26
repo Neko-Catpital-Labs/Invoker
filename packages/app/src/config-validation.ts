@@ -67,6 +67,21 @@ function validateCrossRepoResearchSource(entry: unknown, path: string): void {
   }
 }
 
+function validateE2eAutoFixTargetRepos(config: InvokerConfig): void {
+  const targetRepos = config.e2eAutoFix?.targetRepos;
+  if (targetRepos === undefined) return;
+  if (!Array.isArray(targetRepos)) {
+    throw new Error('e2eAutoFix.targetRepos must be an array of "owner/repo" strings');
+  }
+  for (const entry of targetRepos) {
+    if (typeof entry !== 'string' || !normalizeGithubOwnerRepo(entry)) {
+      throw new Error(
+        `e2eAutoFix.targetRepos entries must be "owner/repo" strings; got ${JSON.stringify(entry)}`,
+      );
+    }
+  }
+}
+
 function validateCrossRepoResearchConfig(config: InvokerConfig): void {
   const crossRepoResearch = config.crossRepoResearch;
   if (crossRepoResearch === undefined) return;
@@ -150,6 +165,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateConfiguredModel(config.defaultExecution?.executionAgent, config.defaultExecution?.executionModel);
   validateConfiguredModel(config.defaultExecutionAgent, config.defaultExecutionModel);
   validatePrMaintenanceTargetRepos(config);
+  validateE2eAutoFixTargetRepos(config);
   validateCrossRepoResearchConfig(config);
   return config;
 }
