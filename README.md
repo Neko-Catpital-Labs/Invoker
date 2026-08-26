@@ -125,7 +125,7 @@ npm install -g @neko-catpital-labs/invoker-cli
 invoker-cli install
 ```
 
-If you need Node installed first, optional wrapper: `curl -fsSL …/scripts/bootstrap.sh | bash` (ensures Node 26, then runs the same `npx … install`). Desktop packages only: `curl …/scripts/install.sh | bash`. Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
+If you need Node installed first, optional wrapper: `curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/bootstrap.sh | bash` (ensures Node 26, then runs the same `npx @neko-catpital-labs/invoker-cli@latest install`). Desktop packages only: `curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash`. Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
 
 `invoker-cli install` (and interactive `invoker-cli setup`) installs the first-party Invoker AI helper skills and registers the Invoker MCP server with Codex, Claude, Cursor, and OMP. Interactive `setup` still walks Slack and machines when you want them.
 
