@@ -10,6 +10,24 @@ Install, configure, and run Invoker. For the product overview, see the [README](
 
 ## Installation
 
+**Recommended (packaged):** Node.js 26.x required. One command installs `invoker-cli` + `invoker-ui`, runs `doctor --fix`, installs skills + local MCP, and enables `pr-status` / `autofix` / `auto-approve`. It does not write Slack tokens or remote machines.
+
+```bash
+npx @neko-catpital-labs/invoker-cli@latest install
+```
+
+Expected output shape: [install-transcript.txt](install-transcript.txt) (from `invoker-cli install --demo`).
+
+Default Invoker owner is local (`invoker-cli mcp`). In Claude / Cursor / Codex / OMP chat, name a host or IP to use a remote Invoker — the agent probes SSH and retargets MCP only after a successful probe.
+
+**Need Node first?** Optional wrapper installs Node 26 when missing, then runs the same CLI install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/bootstrap.sh | bash
+```
+
+**Source checkout** (contributors):
+
 ```bash
 git clone https://github.com/Neko-Catpital-Labs/Invoker.git invoker && cd invoker
 pnpm install
@@ -27,17 +45,16 @@ For packaged installs, the repo includes npm launchers, direct GitHub Release do
 
 The downloaded standalone CLI binary does not require Node after installation. It can run plans directly, or delegate to a running Invoker desktop owner when one is available. The npm package is a launcher that installs and runs that bundled binary as `invoker-cli`.
 
-Install with npm:
+Prefer the [npx install one-liner](#installation) above. Manual npm path:
 
 ```bash
 npm install -g @neko-catpital-labs/invoker-cli
 invoker-cli --version
-invoker-cli doctor
-invoker-cli setup
+invoker-cli install
 invoker-cli run plans/fixtures/hello-world.yaml --standalone
 ```
 
-`invoker-cli setup` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and walks through the rest of onboarding (Slack integration, GitHub auth, a smoke-test plan run) — one command for the full standalone install.
+`invoker-cli install` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and enables default workers (`pr-status`, `autofix`, `auto-approve`). It skips Slack/machines. Interactive `invoker-cli setup` still walks those when you want them.
 
 Or download the platform binary from GitHub Releases:
 
@@ -88,20 +105,22 @@ The macOS npm launcher uses the `.zip` app bundle asset so it does not need to m
 
 For a local maintainer build from the latest `master` commit, including Apple Silicon `.dmg` generation, the standalone `invoker-slack` binary, and unsigned-build quarantine removal, see [local-macos-release-build.md](local-macos-release-build.md) (`bash scripts/local-macos-release-build.sh`).
 
-For source-based packaged installs, the repo includes an installer script:
+For desktop binary packages only (no npm/skills), the repo includes an installer script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash
 ```
+
+For CLI + UI + skills/MCP in one step, use `npx @neko-catpital-labs/invoker-cli@latest install` (or the optional Node wrapper [`scripts/bootstrap.sh`](../scripts/bootstrap.sh)).
 
 Tagged releases are configured to publish:
 - standalone CLI binaries and `.tar.gz` archives for macOS and Linux on x64 and arm64
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers by running `invoker-cli setup` (or System Setup in the desktop app).
+Packaged installs bundle the first-party Invoker AI helpers inside the app. `invoker-cli install` already installs the helper skills and MCP server; run `invoker-cli setup` (or System Setup in the desktop app) only if you also want optional Slack and remote machine configuration.
 
-Then, in Codex, Claude, Cursor, or OMP, ask in normal chat to plan and run durable work through Invoker. Setup already installs `invoker-chat-submit` plus MCP review/submit/status tools, so the agent can prepare a review, wait for one approval, submit, and watch without a slash command.
+Then, in Codex, Claude, Cursor, or OMP, ask in normal chat to plan and run durable work through Invoker. Install already installs `invoker-chat-submit` plus MCP review/submit/status tools, so the agent can prepare a review, wait for one approval, submit, and watch without a slash command.
 
 Explicit fallback:
 
