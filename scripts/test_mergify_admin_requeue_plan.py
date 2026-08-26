@@ -494,20 +494,27 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(actions[0].kind, "repair_check")
 
     def test_failed_check_with_stale_base_still_repairs_via_agent(self):
-        # Behind master must not steal a named CI failure into a blind rebase.
-        # File repair_check so the failing test/linter can be fixed in place.
+        # #10337 / #10242 invariant: behind master must not steal a named CI
+        # failure into a blind rebase. File repair_check so the failing
+        # test/linter can be fixed in place.
         ledger = self._ledger()
         snapshot = pr(number=42, checks={"build": check("failure")})
         actions = self._plan(snapshot, ledger=ledger, stale_base_by_pr={42: True})
         self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("repair_check", 42, "build"))
+        self.assertNotEqual(actions[0].kind, "rebase_onto_base")
+        self.assertNotEqual(actions[0].kind, "rebase_onto_master")
 
     def test_failed_check_with_stale_base_still_repairs_via_mergify_dequeue(self):
+        # #10337 invariant: mergeable + Mergify-named CI failure → repair_check.
         ledger = self._ledger()
         snapshot = pr(number=43, latest_mergify=event(failing=("build",)))
         actions = self._plan(snapshot, ledger=ledger, stale_base_by_pr={43: True})
         self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("repair_check", 43, "build"))
+        self.assertNotEqual(actions[0].kind, "rebase_onto_master")
 
     def test_failed_pr_body_with_stale_base_still_repairs_not_rebases(self):
+        # #10242 invariant: MERGEABLE + stale + PR Body fail → repair_check,
+        # never Python rebase_onto_base / Invoker rebase_onto_master.
         actions = self._plan(
             pr(number=10242, checks={"PR Body": check("failure", "PR Body")}),
             required_checks={"PR Body"},
@@ -526,25 +533,30 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_admin_bypass_nudge", "admin-bypass"))
 
     def test_clean_bottom_dequeued_with_no_ci_failure_rebases_via_invoker(self):
-        # Green Mergify dequeue that is also behind master → Invoker rebase,
-        # not a blind Python force-push and not a bare requeue.
+        # #10337 invariant: green Mergify dequeue that is also behind master →
+        # Invoker rebase, not a blind Python force-push and not a bare requeue.
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
         actions = self._plan(snapshot, stale_base_by_pr={1: True})
         self.assertEqual(actions[0].kind, "rebase_onto_master")
         self.assertIn("no named required-check failure", actions[0].detail)
+        self.assertNotEqual(actions[0].kind, "rebase_onto_base")
 
     def test_clean_bottom_dequeued_up_to_date_still_requeues(self):
+        # #10337 invariant: green dequeue already on current master → requeue.
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
         actions = self._plan(snapshot, stale_base_by_pr={1: False})
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-after-dequeue"))
 
     def test_clean_bottom_dequeued_with_named_ci_failure_still_repairs(self):
+        # #10337 invariant: dequeued + named CI + behind → repair_check, not rebase.
         snapshot = pr(
             labels=frozenset({"admin-bypass"}),
             latest_mergify=event(state="dequeued", failing=("build",)),
         )
         actions = self._plan(snapshot, stale_base_by_pr={1: True})
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
+        self.assertNotEqual(actions[0].kind, "rebase_onto_master")
+        self.assertNotEqual(actions[0].kind, "rebase_onto_base")
     def test_queued_label_with_headless_active_queue_event_waits(self):
         snapshot = pr(labels=frozenset({"admin-bypass", "queued"}), latest_mergify=event(state="queued", head=""))
         actions = self._plan(snapshot)
@@ -648,6 +660,102 @@ class PlanStackActions(PlannerTestCase):
         )
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_master", 77))
         self.assertEqual(actions[0].key, "rebase-onto-master:77")
+
+    def test_conflicting_master_base_with_named_ci_rebases_not_repairs(self):
+        # #10514: CONFLICTING after parent squash+retarget + named CI listed →
+        # rebase onto master, never burn repair_check attempts.
+        actions = self._plan(
+            pr(
+                number=10514,
+                labels=frozenset({"admin-bypass", "dequeued"}),
+                base_ref_name="master",
+                merge_state_status="DIRTY",
+                mergeable="CONFLICTING",
+                checks={"build": check("failure"), "quality / TypeScript Types": check("failure", "quality / TypeScript Types")},
+                latest_mergify=event(
+                    state="dequeued",
+                    failing=("build-artifacts", "quality / TypeScript Types", "UI Vitest"),
+                ),
+            ),
+            required_checks={"build", "quality / TypeScript Types"},
+        )
+        self.assertEqual(actions[0].kind, "rebase_onto_master")
+        self.assertEqual(actions[0].pr_number, 10514)
+        self.assertNotEqual(actions[0].kind, "repair_check")
+        self.assertNotEqual(actions[0].kind, "rebase_onto_base")
+
+    def test_conflicting_stack_parent_base_with_named_ci_rebases_not_repairs(self):
+        # Active stack: CONFLICTING against parent stack branch + named CI →
+        # Invoker rebase (onto GitHub base), not repair_check.
+        parent = "stack/EdbertChan/parent--aaaa"
+        actions = self._plan(
+            pr(
+                number=10515,
+                labels=frozenset({"admin-bypass"}),
+                base_ref_name=parent,
+                merge_state_status="DIRTY",
+                mergeable="CONFLICTING",
+                checks={"build": check("failure")},
+                latest_mergify=event(state="dequeued", failing=("build",)),
+            ),
+        )
+        self.assertEqual(actions[0].kind, "rebase_onto_master")
+        self.assertEqual(actions[0].pr_number, 10515)
+        self.assertNotEqual(actions[0].kind, "repair_check")
+        self.assertNotEqual(actions[0].kind, "rebase_onto_base")
+
+    def test_conflicting_stack_bottom_rebases_before_upper_this_tick(self):
+        # One PR per tick: conflicting bottom on master is rebased; upper that
+        # is also CONFLICTING is not actioned in the same plan.
+        bottom = pr(
+            number=10514,
+            head_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass"}),
+            base_ref_name="master",
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+            checks={"build": check("failure")},
+            latest_mergify=event(state="dequeued", failing=("build",)),
+        )
+        upper = pr(
+            number=10515,
+            base_ref_name="stack/bottom",
+            head_ref_name="stack/upper",
+            head_ref_oid="b" * 40,
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+            checks={"build": check("failure")},
+            latest_mergify=event(state="dequeued", failing=("build",), head="b" * 40),
+        )
+        actions = self._plan(
+            m.StackGroup("s", (bottom, upper)),
+            open_pr_numbers={10514, 10515},
+            open_pr_numbers_by_head={"stack/bottom": (10514,), "stack/upper": (10515,)},
+        )
+        self.assertEqual(len(actions), 1)
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_onto_master", 10514))
+        self.assertNotEqual(actions[0].pr_number, 10515)
+
+    def test_inflight_repair_check_on_mergeable_pr_does_not_rebase(self):
+        # #10242 race: mergeable PR with an in-flight CI repair must not be
+        # stolen into a rebase just because it is also behind master.
+        ledger = self._ledger()
+        ledger.record("repair-check", 10242, HEAD, "PR Body", NOW - 30)
+        actions = self._plan(
+            pr(
+                number=10242,
+                labels=frozenset({"admin-bypass"}),
+                checks={"PR Body": check("failure", "PR Body")},
+                latest_mergify=event(state="dequeued", failing=("PR Body",)),
+            ),
+            ledger=ledger,
+            required_checks={"PR Body"},
+            stale_base_by_pr={10242: True},
+        )
+        self.assertEqual(actions, ())
+        self.assertNotIn("rebase_onto_master", {a.kind for a in actions})
+        self.assertNotIn("rebase_onto_base", {a.kind for a in actions})
 
     def test_dirty_conflict_waiting_dequeued_plans_rebase_despite_waiting(self):
         # PR #10278 shape: Mergify state=waiting with empty SHA and conflict
@@ -1504,6 +1612,37 @@ class InfraCrashDoesNotCountAgainstCap(PlannerTestCase):
             actions = p.mergify_failed_check_actions(snapshot, ledger, max_repair_attempts=3, now=NOW)
         self.assertEqual(len(actions), 1)
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "UI Vitest"))
+
+    def test_mergify_failed_check_actions_skips_cancelled_checks(self):
+        # #10514: Mergify listed cancelled build-artifacts alongside a real
+        # TypeScript failure. Cancelled must not burn a repair_check attempt.
+        ledger = self._ledger()
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={
+                "quality / TypeScript Types": check("failure", "quality / TypeScript Types"),
+                "build-artifacts": check("skipped", "build-artifacts"),
+            },
+            latest_mergify=event(
+                state="dequeued",
+                failing=("build-artifacts", "quality / TypeScript Types"),
+            ),
+        )
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            actions = p.mergify_failed_check_actions(snapshot, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "quality / TypeScript Types"))
+
+    def test_cancelled_only_failing_checks_do_not_repair(self):
+        ledger = self._ledger()
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={"build-artifacts": check("skipped", "build-artifacts")},
+            latest_mergify=event(state="dequeued", failing=("build-artifacts",)),
+        )
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            actions = p.mergify_failed_check_actions(snapshot, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual(actions, ())
 
     def test_cap_still_applies_once_genuine_non_infra_attempts_reach_it(self):
         # Three genuinely-attempted (not infra-crashed) repairs plus one more

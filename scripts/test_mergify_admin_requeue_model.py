@@ -226,6 +226,7 @@ class CheckNormalisation(unittest.TestCase):
             )[1]
 
         self.assertEqual(state("TIMED_OUT"), "failure")
+        self.assertEqual(state("CANCELLED"), "skipped")
         self.assertEqual(state("SKIPPED"), "skipped")
         self.assertEqual(state("NEUTRAL"), "neutral")
         self.assertEqual(state("", status="IN_PROGRESS"), "pending")
