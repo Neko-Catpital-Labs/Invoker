@@ -145,6 +145,43 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
       expect(validated, failureClass).toEqual([]);
     }
   });
+
+  it('skips admin-bypass-* workflows so normalize gates are not rubber-stamped', () => {
+    const task = makeFailedTask({
+      id: 'wf-admin/normalize',
+      config: { workflowId: 'wf-admin', command: 'python3 scripts/mergify_admin_requeue_repair_normalize.py' },
+      execution: {
+        generation: 1,
+        selectedAttemptId: 'attempt-1',
+        error: 'blocked_invalid: Review Unit routing',
+        failureClass: undefined,
+      },
+    });
+    const store = {
+      listWorkflows: vi.fn(() => [{
+        id: 'wf-admin',
+        name: 'admin-bypass-repair-check-pr-10514-build-artifacts-d1f1cf5',
+      }]),
+      loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-admin' ? [task] : [])),
+      loadTask: vi.fn((taskId: string) => (taskId === task.id ? task : undefined)),
+      listWorkflowMutationIntents: vi.fn(() => []),
+      logEvent: vi.fn(),
+    };
+    const options = {
+      store,
+      submitter: { submit: vi.fn(() => 1) },
+      logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 3,
+    };
+
+    expect(collectValidatedAutoFixRecoveryCandidates(options)).toEqual([]);
+    expect(store.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'debug.auto-fix',
+      expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'admin-bypass-excluded' }),
+    );
+  });
 });
 
 describe('shouldRecreateMergeGateInsteadOfAutoFix', () => {
