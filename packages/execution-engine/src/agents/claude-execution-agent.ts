@@ -37,7 +37,6 @@ export function ensureClaudeWorkerConfigDir(configDir: string): void {
   try {
     mkdirSync(configDir, { recursive: true });
   } catch {
-    // Unwritable override paths (e.g. fixture '/test/.claude') still mount by string.
     return;
   }
   const workerJson = join(configDir, '.claude.json');
