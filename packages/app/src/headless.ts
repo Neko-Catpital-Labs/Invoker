@@ -521,6 +521,26 @@ export function resolveHeadlessClaudeOauthRefreshConfig(
   };
 }
 
+export function resolveHeadlessCatstackDeployConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['catstackDeploy']> {
+  return {
+    intervalMs: (invokerConfig.catstackDeploy?.intervalMinutes ?? 15) * 60_000,
+    repoUrl: invokerConfig.catstackDeploy?.repoUrl,
+    localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
+    remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
+    })),
+  };
+}
+
 export function resolveHeadlessInfraRepairConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
   repoRoot: string,
@@ -667,6 +687,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       diskHeadroom: resolveHeadlessDiskHeadroomConfig(deps.invokerConfig),
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
+      catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');
