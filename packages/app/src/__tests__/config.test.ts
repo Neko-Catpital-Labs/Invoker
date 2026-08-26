@@ -662,3 +662,95 @@ describe('prMaintenance.targetRepos', () => {
     })).toThrow(/owner\/repo/);
   });
 });
+
+describe('crossRepoResearch config', () => {
+  it('accepts omitted crossRepoResearch block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts empty maps without linearTeamId', () => {
+    expect(validateInvokerConfig({
+      crossRepoResearch: { maps: {} },
+    }).crossRepoResearch?.maps).toEqual({});
+  });
+
+  it('requires linearTeamId when maps are non-empty', () => {
+    expect(() => validateInvokerConfig({
+      crossRepoResearch: {
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [
+            'https://github.com/stablyai/orca',
+          ],
+        },
+      },
+    })).toThrow(/linearTeamId is required/);
+  });
+
+  it('rejects lookbackDays of 0', () => {
+    expect(() => validateInvokerConfig({
+      crossRepoResearch: {
+        linearTeamId: 'team-1',
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [
+            { repoUrl: 'https://github.com/stablyai/orca', lookbackDays: 0 },
+          ],
+        },
+      },
+    })).toThrow(/lookbackDays must be an integer > 0/);
+  });
+
+  it('accepts string sources and object sources with lookbackDays', () => {
+    const config = validateInvokerConfig({
+      crossRepoResearch: {
+        intervalDays: 14,
+        linearTeamId: 'team-1',
+        maxCandidatesPerSource: 5,
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [
+            'https://github.com/stablyai/orca',
+            { repoUrl: 'https://github.com/example/other', lookbackDays: 7 },
+          ],
+        },
+      },
+    });
+    expect(config.crossRepoResearch?.linearTeamId).toBe('team-1');
+    expect(config.crossRepoResearch?.maps?.['https://github.com/Neko-Catpital-Labs/Invoker.git']).toHaveLength(2);
+  });
+
+  it('rejects non-git map keys', () => {
+    expect(() => validateInvokerConfig({
+      crossRepoResearch: {
+        linearTeamId: 'team-1',
+        maps: { 'not-a-url': ['https://github.com/stablyai/orca'] },
+      },
+    })).toThrow(/maps key must be a git URL/);
+  });
+
+  it.each([
+    'https://github.com/owner',
+    'git@example.com',
+    'ssh://example.com',
+  ])('rejects map keys with no repository path (%s)', (targetUrl) => {
+    expect(() => validateInvokerConfig({
+      crossRepoResearch: {
+        linearTeamId: 'team-1',
+        maps: { [targetUrl]: ['https://github.com/stablyai/orca'] },
+      },
+    })).toThrow(/maps key must be a git URL/);
+  });
+
+  it.each([
+    'https://github.com/owner',
+    'git@example.com',
+    'ssh://example.com',
+  ])('rejects string sources with no repository path (%s)', (sourceUrl) => {
+    expect(() => validateInvokerConfig({
+      crossRepoResearch: {
+        linearTeamId: 'team-1',
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [sourceUrl],
+        },
+      },
+    })).toThrow(/must be a git URL string/);
+  });
+});
