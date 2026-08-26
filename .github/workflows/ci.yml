@@ -303,6 +303,10 @@ jobs:
     name: e2e-proof / shard ${{ matrix.shard }}
 
     steps:
+      - name: Reclaim disk space
+        run: find "$RUNNER_TEMP" -maxdepth 1 -name 'invoker-*' -mmin +360 -exec rm -rf {} + 2>/dev/null || true
+        shell: bash
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -353,8 +357,8 @@ jobs:
           INVOKER_TEST_ALL_SHARD_INDEX: ${{ matrix.shard }}
           INVOKER_TEST_ALL_SHARD_TOTAL: '4'
           INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/proof-state.tsv
-          TMPDIR: /tmp/invoker-tmp
         run: |
+          export TMPDIR="$RUNNER_TEMP/invoker-tmp"
           mkdir -p "$TMPDIR"
           chmod 1777 "$TMPDIR"
           bash scripts/run-all-tests.sh
