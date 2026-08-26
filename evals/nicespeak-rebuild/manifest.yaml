@@ -1,0 +1,53 @@
+name: nicespeak-rebuild-eval
+sourceRepo: https://github.com/Neko-Catpital-Labs/NiceSpeak
+sourceSha: b4c28368c1f592032172f0bceef1bcd2bc8683e2
+targetRepo: https://github.com/Neko-Catpital-Labs/nicespeak_invoker.git
+targetDefaultBranch: main
+pricingTableVersion: nicespeak-eval-2026-08-21
+sourceAccess: specs-and-docs-only
+correctnessOracle: human-final-result-comparison
+localOnly: true
+budgets:
+  perAttempt:
+    maxTokens: 250000
+    maxToolCalls: 100
+    maxDurationMs: 2700000
+  maxAutofixAttempts: 1
+  totalEquivalentCostUsd: 250
+lineages:
+  - id: claude
+    executionAgent: claude
+    executionModel: opus
+    premium: true
+  - id: codex
+    executionAgent: codex
+    executionModel: gpt-5.5
+    premium: true
+  - id: kimi
+    executionAgent: kimi
+    executionModel: kimi-code/kimi-for-coding
+    premium: false
+  - id: qwen
+    executionAgent: qwen
+    executionModel: qwen/qwen3-coder-plus
+    premium: false
+pilotFeatureIds:
+  - 01-repo-bootstrap
+  - 02-rewrite-contract
+  - 03-personas-policy
+  - 04-claude-code-provider
+  - 05-encrypted-persistence
+  - 06-durable-lifecycle
+  - 07-http-api-runtime
+  - 08-browser-review-state
+  - 09-slack-web-adapter
+  - 10-chrome-review-ux
+pools:
+  agentPoolId: nicespeak-eval-agent-local
+  verifyPoolId: nicespeak-eval-verify-local
+prohibitedSourcePaths:
+  - NiceSpeak/
+  - Neko-Catpital-Labs/NiceSpeak
+  - github.com/Neko-Catpital-Labs/NiceSpeak
+onFinish: pull_request
+mergeMode: external_review

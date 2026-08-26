@@ -1,0 +1,440 @@
+{
+  "pricingTableVersion": "nicespeak-eval-2026-08-21",
+  "pricingNote": "estimatedCostUsd is 0 because persisted events have model=unknown / unknownConfidence; raw token counts are authoritative.",
+  "globalTotals": {
+    "inputTokens": 27361696,
+    "outputTokens": 319754,
+    "cachedTokens": 783616,
+    "totalTokens": 27681450,
+    "cacheHitRate": 0.028639160379532028,
+    "totalCostUsd": 0,
+    "unknownConfidenceCount": 20,
+    "missingUsageCount": 0,
+    "eventCount": 20
+  },
+  "byLineage": {
+    "claude": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cachedTokens": 0,
+      "totalTokens": 0,
+      "estimatedCostUsd": 0.0,
+      "eventCount": 0,
+      "unknownConfidenceCount": 0,
+      "reviewReadyFeatures": 10,
+      "failedOrOtherFeatures": 0,
+      "features": {
+        "01-repo-bootstrap": {
+          "workflowId": "wf-1787451960504-1",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "02-rewrite-contract": {
+          "workflowId": "wf-1787451962533-2",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "03-personas-policy": {
+          "workflowId": "wf-1787451964554-3",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "04-claude-code-provider": {
+          "workflowId": "wf-1787451966578-4",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "05-encrypted-persistence": {
+          "workflowId": "wf-1787451968651-5",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "06-durable-lifecycle": {
+          "workflowId": "wf-1787451971536-6",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "07-http-api-runtime": {
+          "workflowId": "wf-1787451973525-7",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "08-browser-review-state": {
+          "workflowId": "wf-1787451975601-8",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "09-slack-web-adapter": {
+          "workflowId": "wf-1787451977618-9",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "10-chrome-review-ux": {
+          "workflowId": "wf-1787451980031-10",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        }
+      }
+    },
+    "codex": {
+      "inputTokens": 6900753,
+      "outputTokens": 130586,
+      "cachedTokens": 0,
+      "totalTokens": 7031339,
+      "estimatedCostUsd": 0.0,
+      "eventCount": 10,
+      "unknownConfidenceCount": 10,
+      "reviewReadyFeatures": 10,
+      "failedOrOtherFeatures": 0,
+      "features": {
+        "01-repo-bootstrap": {
+          "workflowId": "wf-1787337307563-14",
+          "status": "review_ready",
+          "inputTokens": 194888,
+          "outputTokens": 5145,
+          "cachedTokens": 0,
+          "totalTokens": 200033,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "02-rewrite-contract": {
+          "workflowId": "wf-1787337310888-15",
+          "status": "review_ready",
+          "inputTokens": 367413,
+          "outputTokens": 8477,
+          "cachedTokens": 0,
+          "totalTokens": 375890,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "03-personas-policy": {
+          "workflowId": "wf-1787337312669-16",
+          "status": "review_ready",
+          "inputTokens": 268580,
+          "outputTokens": 8157,
+          "cachedTokens": 0,
+          "totalTokens": 276737,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "04-claude-code-provider": {
+          "workflowId": "wf-1787337314430-17",
+          "status": "review_ready",
+          "inputTokens": 474488,
+          "outputTokens": 11676,
+          "cachedTokens": 0,
+          "totalTokens": 486164,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "05-encrypted-persistence": {
+          "workflowId": "wf-1787337316499-18",
+          "status": "review_ready",
+          "inputTokens": 865382,
+          "outputTokens": 14076,
+          "cachedTokens": 0,
+          "totalTokens": 879458,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "06-durable-lifecycle": {
+          "workflowId": "wf-1787337319996-19",
+          "status": "review_ready",
+          "inputTokens": 1086578,
+          "outputTokens": 18089,
+          "cachedTokens": 0,
+          "totalTokens": 1104667,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "07-http-api-runtime": {
+          "workflowId": "wf-1787337321763-20",
+          "status": "review_ready",
+          "inputTokens": 892338,
+          "outputTokens": 18200,
+          "cachedTokens": 0,
+          "totalTokens": 910538,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "08-browser-review-state": {
+          "workflowId": "wf-1787337323784-21",
+          "status": "review_ready",
+          "inputTokens": 415470,
+          "outputTokens": 9859,
+          "cachedTokens": 0,
+          "totalTokens": 425329,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "09-slack-web-adapter": {
+          "workflowId": "wf-1787337325623-22",
+          "status": "review_ready",
+          "inputTokens": 562147,
+          "outputTokens": 12675,
+          "cachedTokens": 0,
+          "totalTokens": 574822,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "10-chrome-review-ux": {
+          "workflowId": "wf-1787337327465-23",
+          "status": "review_ready",
+          "inputTokens": 1773469,
+          "outputTokens": 24232,
+          "cachedTokens": 0,
+          "totalTokens": 1797701,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        }
+      }
+    },
+    "kimi": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cachedTokens": 0,
+      "totalTokens": 0,
+      "estimatedCostUsd": 0.0,
+      "eventCount": 0,
+      "unknownConfidenceCount": 0,
+      "reviewReadyFeatures": 0,
+      "failedOrOtherFeatures": 1,
+      "features": {
+        "01-repo-bootstrap": {
+          "workflowId": "wf-1787337164803-2",
+          "status": "failed",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        }
+      }
+    },
+    "qwen": {
+      "inputTokens": 847083,
+      "outputTokens": 10027,
+      "cachedTokens": 783616,
+      "totalTokens": 857110,
+      "estimatedCostUsd": 0.0,
+      "eventCount": 3,
+      "unknownConfidenceCount": 3,
+      "reviewReadyFeatures": 10,
+      "failedOrOtherFeatures": 0,
+      "features": {
+        "01-repo-bootstrap": {
+          "workflowId": "wf-1787454199131-11",
+          "status": "review_ready",
+          "inputTokens": 297011,
+          "outputTokens": 2366,
+          "cachedTokens": 278592,
+          "totalTokens": 299377,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "02-rewrite-contract": {
+          "workflowId": "wf-1787454201231-12",
+          "status": "review_ready",
+          "inputTokens": 420212,
+          "outputTokens": 6369,
+          "cachedTokens": 398208,
+          "totalTokens": 426581,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        },
+        "03-personas-policy": {
+          "workflowId": "wf-1787454203300-13",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "04-claude-code-provider": {
+          "workflowId": "wf-1787454205557-14",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "05-encrypted-persistence": {
+          "workflowId": "wf-1787454207675-15",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "06-durable-lifecycle": {
+          "workflowId": "wf-1787454209777-16",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "07-http-api-runtime": {
+          "workflowId": "wf-1787454211873-17",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "08-browser-review-state": {
+          "workflowId": "wf-1787454213975-18",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "09-slack-web-adapter": {
+          "workflowId": "wf-1787454216122-19",
+          "status": "review_ready",
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedTokens": 0,
+          "totalTokens": 0,
+          "estimatedCostUsd": 0,
+          "eventCount": 0,
+          "unknownConfidenceCount": 0
+        },
+        "10-chrome-review-ux": {
+          "workflowId": "wf-1787454218281-20",
+          "status": "review_ready",
+          "inputTokens": 129860,
+          "outputTokens": 1292,
+          "cachedTokens": 106816,
+          "totalTokens": 131152,
+          "estimatedCostUsd": 0,
+          "eventCount": 1,
+          "unknownConfidenceCount": 1
+        }
+      }
+    }
+  },
+  "correctness": {
+    "claude": {
+      "reviewReady": 10,
+      "other": 0,
+      "completionRate": 1.0
+    },
+    "codex": {
+      "reviewReady": 10,
+      "other": 0,
+      "completionRate": 1.0
+    },
+    "kimi": {
+      "reviewReady": 0,
+      "other": 1,
+      "completionRate": 0.0
+    },
+    "qwen": {
+      "reviewReady": 10,
+      "other": 0,
+      "completionRate": 1.0
+    }
+  },
+  "humanInterventions": [
+    {
+      "lineage": "qwen",
+      "feature": "09-slack-web-adapter",
+      "note": "Human hotfix for open-handle test hang + send-click assert; verify passed on patched tree."
+    }
+  ],
+  "kimi": "skipped (no membership)"
+}

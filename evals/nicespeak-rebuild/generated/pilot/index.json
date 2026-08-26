@@ -1,0 +1,367 @@
+{
+  "generatedAt": "2026-08-23T03:02:44.023Z",
+  "sourceSha": "b4c28368c1f592032172f0bceef1bcd2bc8683e2",
+  "pricingTableVersion": "nicespeak-eval-2026-08-21",
+  "lineages": [
+    {
+      "id": "claude",
+      "executionAgent": "claude",
+      "executionModel": "opus",
+      "chain": [
+        {
+          "featureId": "01-repo-bootstrap",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/01-01-repo-bootstrap.yaml",
+          "workflowName": "nicespeak-eval/claude/01-repo-bootstrap",
+          "branch": "eval/claude/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035"
+        },
+        {
+          "featureId": "02-rewrite-contract",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/02-02-rewrite-contract.template.yaml",
+          "workflowName": "nicespeak-eval/claude/02-rewrite-contract",
+          "branch": "eval/claude/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/claude/feature-01-01-repo-bootstrap",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f"
+        },
+        {
+          "featureId": "03-personas-policy",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/03-03-personas-policy.template.yaml",
+          "workflowName": "nicespeak-eval/claude/03-personas-policy",
+          "branch": "eval/claude/feature-03-03-personas-policy",
+          "baseBranch": "eval/claude/feature-02-02-rewrite-contract",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb"
+        },
+        {
+          "featureId": "04-claude-code-provider",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/04-04-claude-code-provider.template.yaml",
+          "workflowName": "nicespeak-eval/claude/04-claude-code-provider",
+          "branch": "eval/claude/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/claude/feature-03-03-personas-policy",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532"
+        },
+        {
+          "featureId": "05-encrypted-persistence",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/05-05-encrypted-persistence.template.yaml",
+          "workflowName": "nicespeak-eval/claude/05-encrypted-persistence",
+          "branch": "eval/claude/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/claude/feature-04-04-claude-code-provider",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd"
+        },
+        {
+          "featureId": "06-durable-lifecycle",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/06-06-durable-lifecycle.template.yaml",
+          "workflowName": "nicespeak-eval/claude/06-durable-lifecycle",
+          "branch": "eval/claude/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/claude/feature-05-05-encrypted-persistence",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0"
+        },
+        {
+          "featureId": "07-http-api-runtime",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/07-07-http-api-runtime.template.yaml",
+          "workflowName": "nicespeak-eval/claude/07-http-api-runtime",
+          "branch": "eval/claude/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/claude/feature-06-06-durable-lifecycle",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af"
+        },
+        {
+          "featureId": "08-browser-review-state",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/08-08-browser-review-state.template.yaml",
+          "workflowName": "nicespeak-eval/claude/08-browser-review-state",
+          "branch": "eval/claude/feature-08-08-browser-review-state",
+          "baseBranch": "eval/claude/feature-07-07-http-api-runtime",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154"
+        },
+        {
+          "featureId": "09-slack-web-adapter",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/09-09-slack-web-adapter.template.yaml",
+          "workflowName": "nicespeak-eval/claude/09-slack-web-adapter",
+          "branch": "eval/claude/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/claude/feature-08-08-browser-review-state",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88"
+        },
+        {
+          "featureId": "10-chrome-review-ux",
+          "file": "evals/nicespeak-rebuild/generated/pilot/claude/10-10-chrome-review-ux.template.yaml",
+          "workflowName": "nicespeak-eval/claude/10-chrome-review-ux",
+          "branch": "eval/claude/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/claude/feature-09-09-slack-web-adapter",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7"
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "executionAgent": "codex",
+      "executionModel": "gpt-5.5",
+      "chain": [
+        {
+          "featureId": "01-repo-bootstrap",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/01-01-repo-bootstrap.yaml",
+          "workflowName": "nicespeak-eval/codex/01-repo-bootstrap",
+          "branch": "eval/codex/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035"
+        },
+        {
+          "featureId": "02-rewrite-contract",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/02-02-rewrite-contract.template.yaml",
+          "workflowName": "nicespeak-eval/codex/02-rewrite-contract",
+          "branch": "eval/codex/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/codex/feature-01-01-repo-bootstrap",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f"
+        },
+        {
+          "featureId": "03-personas-policy",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/03-03-personas-policy.template.yaml",
+          "workflowName": "nicespeak-eval/codex/03-personas-policy",
+          "branch": "eval/codex/feature-03-03-personas-policy",
+          "baseBranch": "eval/codex/feature-02-02-rewrite-contract",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb"
+        },
+        {
+          "featureId": "04-claude-code-provider",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/04-04-claude-code-provider.template.yaml",
+          "workflowName": "nicespeak-eval/codex/04-claude-code-provider",
+          "branch": "eval/codex/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/codex/feature-03-03-personas-policy",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532"
+        },
+        {
+          "featureId": "05-encrypted-persistence",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/05-05-encrypted-persistence.template.yaml",
+          "workflowName": "nicespeak-eval/codex/05-encrypted-persistence",
+          "branch": "eval/codex/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/codex/feature-04-04-claude-code-provider",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd"
+        },
+        {
+          "featureId": "06-durable-lifecycle",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/06-06-durable-lifecycle.template.yaml",
+          "workflowName": "nicespeak-eval/codex/06-durable-lifecycle",
+          "branch": "eval/codex/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/codex/feature-05-05-encrypted-persistence",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0"
+        },
+        {
+          "featureId": "07-http-api-runtime",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/07-07-http-api-runtime.template.yaml",
+          "workflowName": "nicespeak-eval/codex/07-http-api-runtime",
+          "branch": "eval/codex/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/codex/feature-06-06-durable-lifecycle",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af"
+        },
+        {
+          "featureId": "08-browser-review-state",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/08-08-browser-review-state.template.yaml",
+          "workflowName": "nicespeak-eval/codex/08-browser-review-state",
+          "branch": "eval/codex/feature-08-08-browser-review-state",
+          "baseBranch": "eval/codex/feature-07-07-http-api-runtime",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154"
+        },
+        {
+          "featureId": "09-slack-web-adapter",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/09-09-slack-web-adapter.template.yaml",
+          "workflowName": "nicespeak-eval/codex/09-slack-web-adapter",
+          "branch": "eval/codex/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/codex/feature-08-08-browser-review-state",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88"
+        },
+        {
+          "featureId": "10-chrome-review-ux",
+          "file": "evals/nicespeak-rebuild/generated/pilot/codex/10-10-chrome-review-ux.template.yaml",
+          "workflowName": "nicespeak-eval/codex/10-chrome-review-ux",
+          "branch": "eval/codex/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/codex/feature-09-09-slack-web-adapter",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7"
+        }
+      ]
+    },
+    {
+      "id": "kimi",
+      "executionAgent": "kimi",
+      "executionModel": "kimi-code/kimi-for-coding",
+      "chain": [
+        {
+          "featureId": "01-repo-bootstrap",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/01-01-repo-bootstrap.yaml",
+          "workflowName": "nicespeak-eval/kimi/01-repo-bootstrap",
+          "branch": "eval/kimi/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035"
+        },
+        {
+          "featureId": "02-rewrite-contract",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/02-02-rewrite-contract.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/02-rewrite-contract",
+          "branch": "eval/kimi/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/kimi/feature-01-01-repo-bootstrap",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f"
+        },
+        {
+          "featureId": "03-personas-policy",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/03-03-personas-policy.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/03-personas-policy",
+          "branch": "eval/kimi/feature-03-03-personas-policy",
+          "baseBranch": "eval/kimi/feature-02-02-rewrite-contract",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb"
+        },
+        {
+          "featureId": "04-claude-code-provider",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/04-04-claude-code-provider.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/04-claude-code-provider",
+          "branch": "eval/kimi/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/kimi/feature-03-03-personas-policy",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532"
+        },
+        {
+          "featureId": "05-encrypted-persistence",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/05-05-encrypted-persistence.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/05-encrypted-persistence",
+          "branch": "eval/kimi/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/kimi/feature-04-04-claude-code-provider",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd"
+        },
+        {
+          "featureId": "06-durable-lifecycle",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/06-06-durable-lifecycle.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/06-durable-lifecycle",
+          "branch": "eval/kimi/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/kimi/feature-05-05-encrypted-persistence",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0"
+        },
+        {
+          "featureId": "07-http-api-runtime",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/07-07-http-api-runtime.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/07-http-api-runtime",
+          "branch": "eval/kimi/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/kimi/feature-06-06-durable-lifecycle",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af"
+        },
+        {
+          "featureId": "08-browser-review-state",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/08-08-browser-review-state.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/08-browser-review-state",
+          "branch": "eval/kimi/feature-08-08-browser-review-state",
+          "baseBranch": "eval/kimi/feature-07-07-http-api-runtime",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154"
+        },
+        {
+          "featureId": "09-slack-web-adapter",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/09-09-slack-web-adapter.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/09-slack-web-adapter",
+          "branch": "eval/kimi/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/kimi/feature-08-08-browser-review-state",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88"
+        },
+        {
+          "featureId": "10-chrome-review-ux",
+          "file": "evals/nicespeak-rebuild/generated/pilot/kimi/10-10-chrome-review-ux.template.yaml",
+          "workflowName": "nicespeak-eval/kimi/10-chrome-review-ux",
+          "branch": "eval/kimi/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/kimi/feature-09-09-slack-web-adapter",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7"
+        }
+      ]
+    },
+    {
+      "id": "qwen",
+      "executionAgent": "qwen",
+      "executionModel": "qwen/qwen3-coder-plus",
+      "chain": [
+        {
+          "featureId": "01-repo-bootstrap",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/01-01-repo-bootstrap.yaml",
+          "workflowName": "nicespeak-eval/qwen/01-repo-bootstrap",
+          "branch": "eval/qwen/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035"
+        },
+        {
+          "featureId": "02-rewrite-contract",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/02-02-rewrite-contract.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/02-rewrite-contract",
+          "branch": "eval/qwen/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/qwen/feature-01-01-repo-bootstrap",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f"
+        },
+        {
+          "featureId": "03-personas-policy",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/03-03-personas-policy.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/03-personas-policy",
+          "branch": "eval/qwen/feature-03-03-personas-policy",
+          "baseBranch": "eval/qwen/feature-02-02-rewrite-contract",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb"
+        },
+        {
+          "featureId": "04-claude-code-provider",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/04-04-claude-code-provider.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/04-claude-code-provider",
+          "branch": "eval/qwen/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/qwen/feature-03-03-personas-policy",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532"
+        },
+        {
+          "featureId": "05-encrypted-persistence",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/05-05-encrypted-persistence.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/05-encrypted-persistence",
+          "branch": "eval/qwen/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/qwen/feature-04-04-claude-code-provider",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd"
+        },
+        {
+          "featureId": "06-durable-lifecycle",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/06-06-durable-lifecycle.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/06-durable-lifecycle",
+          "branch": "eval/qwen/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/qwen/feature-05-05-encrypted-persistence",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0"
+        },
+        {
+          "featureId": "07-http-api-runtime",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/07-07-http-api-runtime.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/07-http-api-runtime",
+          "branch": "eval/qwen/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/qwen/feature-06-06-durable-lifecycle",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af"
+        },
+        {
+          "featureId": "08-browser-review-state",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/08-08-browser-review-state.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/08-browser-review-state",
+          "branch": "eval/qwen/feature-08-08-browser-review-state",
+          "baseBranch": "eval/qwen/feature-07-07-http-api-runtime",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154"
+        },
+        {
+          "featureId": "09-slack-web-adapter",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/09-09-slack-web-adapter.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/09-slack-web-adapter",
+          "branch": "eval/qwen/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/qwen/feature-08-08-browser-review-state",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88"
+        },
+        {
+          "featureId": "10-chrome-review-ux",
+          "file": "evals/nicespeak-rebuild/generated/pilot/qwen/10-10-chrome-review-ux.template.yaml",
+          "workflowName": "nicespeak-eval/qwen/10-chrome-review-ux",
+          "branch": "eval/qwen/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/qwen/feature-09-09-slack-web-adapter",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7"
+        }
+      ]
+    }
+  ],
+  "crossModelPromptHashes": {
+    "01-repo-bootstrap": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035",
+    "02-rewrite-contract": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f",
+    "03-personas-policy": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb",
+    "04-claude-code-provider": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532",
+    "05-encrypted-persistence": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd",
+    "06-durable-lifecycle": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0",
+    "07-http-api-runtime": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af",
+    "08-browser-review-state": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154",
+    "09-slack-web-adapter": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88",
+    "10-chrome-review-ux": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7"
+  }
+}

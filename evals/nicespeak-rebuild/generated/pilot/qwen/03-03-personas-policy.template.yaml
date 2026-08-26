@@ -1,0 +1,114 @@
+name: "nicespeak-eval/qwen/03-personas-policy"
+description: |
+  NiceSpeak rebuild eval pilot slice.
+  Review claim: Implement 03-personas-policy for lineage qwen.
+  Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+  Spec content hash: bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb
+  Cross-model prompt hash: bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: "https://github.com/Neko-Catpital-Labs/nicespeak_invoker.git"
+baseBranch: "eval/qwen/feature-02-02-rewrite-contract"
+featureBranch: "eval/qwen/feature-03-03-personas-policy"
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: impl-03-personas-policy
+    description: |
+      Implement 03-personas-policy (03 — Versioned personas and server-owned policy).
+      Review claim: Implement only this feature slice for lineage comparison.
+      Review lane: behavior
+      Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+      Slice rationale: One independently reviewable feature per model lineage.
+      Architectural effect: Adds 03-personas-policy on the cumulative lineage branch.
+      Goal: Meet the feature acceptance criteria.
+      Motivation: Compare premium vs cheap coding agents on equivalent prompts.
+      Alternative considerations: Porting NiceSpeak source/tests is forbidden.
+      Implementation details: Follow the attached zero-context prompt.
+      Non-goals: Other pilot features and expansion surfaces.
+      Files: package.json, README.md, .gitignore, apps/, test/
+      Change types: feature
+      Acceptance criteria: Feature specification 03-personas-policy must pass and verification must exit 0
+      Layer: domain
+      Feature state: active
+    prompt: |
+      EVAL_LINEAGE=qwen
+      EVAL_EXECUTION_AGENT=qwen
+      EVAL_EXECUTION_MODEL=qwen/qwen3-coder-plus
+      EVAL_FEATURE_ID=03-personas-policy
+      EVAL_FEATURE_INDEX=3
+      EVAL_FEATURE_BRANCH=eval/qwen/feature-03-03-personas-policy
+      EVAL_BASE_BRANCH=eval/qwen/feature-02-02-rewrite-contract
+      EVAL_SPEC_CONTENT_HASH=bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb
+      EVAL_SOURCE_SHA=b4c28368c1f592032172f0bceef1bcd2bc8683e2
+      Assume no prior context. Execute this prompt as a zero-context remote task.
+      You are rebuilding NiceSpeak into a new empty repository through Invoker.
+      Hard isolation rules:
+      - Use ONLY the feature specification below and any docs already present in THIS target repository.
+      - Do NOT read, clone, fetch, or browse NiceSpeak source or NiceSpeak tests.
+      - Do NOT access host GitHub credentials, SSH agents, or paths outside this worktree.
+      - Write new tests from the acceptance criteria; do not port NiceSpeak tests.
+      Feature specification:
+      # 03 — Versioned personas and server-owned policy
+      .
+      ## Goal
+      Implement server-owned persona configs `corporate@v1` and `personable@v1` with clamped overlays.
+      .
+      ## Acceptance criteria
+      - Persona catalog resolves versioned prompts for corporate and personable.
+      - Request overlays only mutate allowlisted knobs; free-text prompt injection is rejected.
+      - Fake-door persona IDs never resolve to executable prompts.
+      - Policy merge order: persona defaults → allowlisted overlays.
+      - Unit tests cover defaults, overlays, and rejection.
+      .
+      ## Non-goals
+      - No empathy feature-flag gate yet unless required by shared contract stubs.
+      - No provider network calls.
+      .
+      Review claim: Implement only this feature slice.
+      Review lane: behavior
+      Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+      Slice rationale: One reviewable feature for multi-model comparison.
+      Architectural effect: Adds the capability described above on top of prior lineage commits.
+      Goal: Satisfy the acceptance criteria in the specification.
+      Motivation: Multi-model rebuild eval comparing premium and cheaper coding agents.
+      Alternative considerations: Porting NiceSpeak source or tests is forbidden; reconstruct from this spec only.
+      Implementation details: Follow the acceptance criteria literally and touch only files required by this slice (for example package.json, README.md, .gitignore, apps/, test/, and related .js/.ts/.md files).
+      Non-goals: Later pilot features and expansion surfaces.
+      Files: package.json, README.md, .gitignore, apps/, test/, and any new files required by this feature
+      Change types: feature
+      Acceptance criteria: Implement every must/ensure/verify item in the specification so npm test or the stated verify command exits with exit code 0.
+      Layer: domain
+      Feature state: active
+      When finished, ensure the slice verification exits with exit code 0 and summarize the PR-ready commit on branch eval/qwen/feature-03-03-personas-policy.
+    executionAgent: qwen
+    executionModel: "qwen/qwen3-coder-plus"
+    poolId: nicespeak-eval-agent-local
+    dependencies: []
+  - id: verify-03-personas-policy
+    description: |
+      Verify 03-personas-policy with a deterministic local check.
+      Review claim: Prove the slice still builds/tests locally.
+      Review lane: proof
+      Safety invariant: Verification is command-only and does not mutate lineage identity.
+      Slice rationale: Every implementation step needs a pass/fail command.
+      Architectural effect: None beyond validation.
+      Goal: Exit 0 on package checks when present.
+      Motivation: Keep lineages comparable.
+      Alternative considerations: Full suite gates are out of scope.
+      Implementation details: Run npm test when package.json exists, otherwise a no-op success.
+      Non-goals: Cross-lineage scoring.
+      Files: package.json
+      Change types: verification
+      Acceptance criteria: Command exits 0
+      Layer: app_regression
+      Feature state: active
+    command: "npm test"
+    poolId: nicespeak-eval-verify-local
+    dependencies:
+      - impl-03-personas-policy

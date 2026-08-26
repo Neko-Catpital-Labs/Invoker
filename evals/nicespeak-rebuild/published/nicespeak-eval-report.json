@@ -1,0 +1,4920 @@
+{
+  "generatedAt": "content-hash:fd00c0f45c3ed7065e8eaf5f7934ac3c085cf0b01160145cf533dea4a4f60d56",
+  "frozenContentHash": "fd00c0f45c3ed7065e8eaf5f7934ac3c085cf0b01160145cf533dea4a4f60d56",
+  "sourceSha": "b4c28368c1f592032172f0bceef1bcd2bc8683e2",
+  "pricingTableVersion": "nicespeak-eval-2026-08-21",
+  "targetRepo": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker.git",
+  "features": {
+    "01-repo-bootstrap": {
+      "pairwise": {
+        "claude__codex": 0.15639810426540285,
+        "claude__kimi": null,
+        "claude__qwen": 0.18269230769230768,
+        "codex__kimi": null,
+        "codex__qwen": 0.34065934065934067,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.8,
+        "claude__kimi": null,
+        "claude__qwen": 0.8,
+        "codex__kimi": null,
+        "codex__qwen": 1,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "scripts/check.mjs"
+          ],
+          "onlyB": [],
+          "shared": [
+            ".gitignore",
+            "README.md",
+            "package.json",
+            "test/smoke.test.js"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "scripts/check.mjs"
+          ],
+          "onlyB": [],
+          "shared": [
+            ".gitignore",
+            "README.md",
+            "package.json",
+            "test/smoke.test.js"
+          ]
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [],
+          "onlyB": [],
+          "shared": [
+            ".gitignore",
+            "README.md",
+            "package.json",
+            "test/smoke.test.js"
+          ]
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.18269230769230768
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.34065934065934067
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "workflowName": "nicespeak-eval/claude/01-repo-bootstrap",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 5,
+            "additions": 246,
+            "deletions": 0,
+            "files": [
+              {
+                "path": ".gitignore",
+                "additions": 34,
+                "deletions": 0
+              },
+              {
+                "path": "README.md",
+                "additions": 58,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 15,
+                "deletions": 0
+              },
+              {
+                "path": "scripts/check.mjs",
+                "additions": 94,
+                "deletions": 0
+              },
+              {
+                "path": "test/smoke.test.js",
+                "additions": 45,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".gitignore",
+            "README.md",
+            "package.json",
+            "scripts/check.mjs",
+            "test/smoke.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "type_module",
+                "ok": true,
+                "detail": "type=module"
+              },
+              {
+                "id": "engines_node_gte_22",
+                "ok": true,
+                "detail": "engines.node=>=22"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "scripts_check",
+                "ok": true,
+                "detail": "check=node scripts/check.mjs"
+              },
+              {
+                "id": "gitignore_exists",
+                "ok": true,
+                "detail": ""
+              },
+              {
+                "id": "readme_exists",
+                "ok": true,
+                "detail": ""
+              },
+              {
+                "id": "smoke_test_exists",
+                "ok": true,
+                "detail": "test/smoke.test.*"
+              },
+              {
+                "id": "smoke_asserts_bootstrap_contract",
+                "ok": true,
+                "detail": "contract asserts present"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451960504-1",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "workflowName": "nicespeak-eval/codex/01-repo-bootstrap",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 4,
+            "additions": 70,
+            "deletions": 0,
+            "files": [
+              {
+                "path": ".gitignore",
+                "additions": 10,
+                "deletions": 0
+              },
+              {
+                "path": "README.md",
+                "additions": 35,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 13,
+                "deletions": 0
+              },
+              {
+                "path": "test/smoke.test.js",
+                "additions": 12,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".gitignore",
+            "README.md",
+            "package.json",
+            "test/smoke.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "type_module",
+                "ok": true,
+                "detail": "type=module"
+              },
+              {
+                "id": "engines_node_gte_22",
+                "ok": true,
+                "detail": "engines.node=>=22"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "scripts_check",
+                "ok": true,
+                "detail": "check=node --check test/smoke.test.js"
+              },
+              {
+                "id": "gitignore_exists",
+                "ok": true,
+                "detail": ""
+              },
+              {
+                "id": "readme_exists",
+                "ok": true,
+                "detail": ""
+              },
+              {
+                "id": "smoke_test_exists",
+                "ok": true,
+                "detail": "test/smoke.test.*"
+              },
+              {
+                "id": "smoke_asserts_bootstrap_contract",
+                "ok": true,
+                "detail": "contract asserts present"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337307563-14",
+            "status": "review_ready",
+            "inputTokens": 194888,
+            "outputTokens": 5145,
+            "cachedTokens": 0,
+            "totalTokens": 200033,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "workflowName": "nicespeak-eval/kimi/01-repo-bootstrap",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337164803-2",
+            "status": "failed",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-01-01-repo-bootstrap",
+          "baseBranch": "main",
+          "workflowName": "nicespeak-eval/qwen/01-repo-bootstrap",
+          "crossModelPromptHash": "4238adab68e02272d3ed8e29d34146b45a14553489288d2a327779bb878d3035",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 4,
+            "additions": 68,
+            "deletions": 0,
+            "files": [
+              {
+                "path": ".gitignore",
+                "additions": 30,
+                "deletions": 0
+              },
+              {
+                "path": "README.md",
+                "additions": 17,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 14,
+                "deletions": 0
+              },
+              {
+                "path": "test/smoke.test.js",
+                "additions": 7,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".gitignore",
+            "README.md",
+            "package.json",
+            "test/smoke.test.js"
+          ],
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "smoke_asserts_bootstrap_contract"
+            ],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "type_module",
+                "ok": true,
+                "detail": "type=module"
+              },
+              {
+                "id": "engines_node_gte_22",
+                "ok": true,
+                "detail": "engines.node=>=22"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "scripts_check",
+                "ok": true,
+                "detail": "check=npm audit"
+              },
+              {
+                "id": "gitignore_exists",
+                "ok": true,
+                "detail": ""
+              },
+              {
+                "id": "readme_exists",
+                "ok": true,
+                "detail": ""
+              },
+              {
+                "id": "smoke_test_exists",
+                "ok": true,
+                "detail": "test/smoke.test.*"
+              },
+              {
+                "id": "smoke_asserts_bootstrap_contract",
+                "ok": false,
+                "detail": "trivial 1+1 smoke"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454199131-11",
+            "status": "review_ready",
+            "inputTokens": 297011,
+            "outputTokens": 2366,
+            "cachedTokens": 278592,
+            "totalTokens": 299377,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        }
+      }
+    },
+    "02-rewrite-contract": {
+      "pairwise": {
+        "claude__codex": 0.04205607476635514,
+        "claude__kimi": null,
+        "claude__qwen": 0.03244495944380069,
+        "codex__kimi": null,
+        "codex__qwen": 0.03455723542116631,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.2,
+        "claude__kimi": null,
+        "claude__qwen": 0,
+        "codex__kimi": null,
+        "codex__qwen": 0,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "apps/rewrite/gate.js",
+            "apps/rewrite/index.js",
+            "apps/rewrite/validate.js",
+            "test/rewrite-gate.test.js",
+            "test/rewrite-request-validation.test.js",
+            "test/rewrite-result-validation.test.js"
+          ],
+          "onlyB": [
+            "package.json",
+            "test/rewrite-contract.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "apps/rewrite/contract.js"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/rewrite/contract.js",
+            "apps/rewrite/gate.js",
+            "apps/rewrite/index.js",
+            "apps/rewrite/validate.js",
+            "test/rewrite-gate.test.js",
+            "test/rewrite-request-validation.test.js",
+            "test/rewrite-result-validation.test.js"
+          ],
+          "onlyB": [
+            "apps/validation/contract.js",
+            "test/validation.test.js"
+          ],
+          "shared": []
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/rewrite/contract.js",
+            "package.json",
+            "test/rewrite-contract.test.js"
+          ],
+          "onlyB": [
+            "apps/validation/contract.js",
+            "test/validation.test.js"
+          ],
+          "shared": []
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.03244495944380069
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.03455723542116631
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/claude/feature-01-01-repo-bootstrap",
+          "workflowName": "nicespeak-eval/claude/02-rewrite-contract",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 8,
+            "additions": 956,
+            "deletions": 4,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 53,
+                "deletions": 4
+              },
+              {
+                "path": "apps/rewrite/contract.js",
+                "additions": 88,
+                "deletions": 0
+              },
+              {
+                "path": "apps/rewrite/gate.js",
+                "additions": 82,
+                "deletions": 0
+              },
+              {
+                "path": "apps/rewrite/index.js",
+                "additions": 4,
+                "deletions": 0
+              },
+              {
+                "path": "apps/rewrite/validate.js",
+                "additions": 297,
+                "deletions": 0
+              },
+              {
+                "path": "test/rewrite-gate.test.js",
+                "additions": 127,
+                "deletions": 0
+              },
+              {
+                "path": "test/rewrite-request-validation.test.js",
+                "additions": 194,
+                "deletions": 0
+              },
+              {
+                "path": "test/rewrite-result-validation.test.js",
+                "additions": 111,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/rewrite/contract.js",
+            "apps/rewrite/gate.js",
+            "apps/rewrite/index.js",
+            "apps/rewrite/validate.js",
+            "test/rewrite-gate.test.js",
+            "test/rewrite-request-validation.test.js",
+            "test/rewrite-result-validation.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "4 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451962533-2",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/codex/feature-01-01-repo-bootstrap",
+          "workflowName": "nicespeak-eval/codex/02-rewrite-contract",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 4,
+            "additions": 364,
+            "deletions": 5,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 13,
+                "deletions": 4
+              },
+              {
+                "path": "apps/rewrite/contract.js",
+                "additions": 179,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/rewrite-contract.test.js",
+                "additions": 171,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/rewrite/contract.js",
+            "package.json",
+            "test/rewrite-contract.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "2 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337310888-15",
+            "status": "review_ready",
+            "inputTokens": 367413,
+            "outputTokens": 8477,
+            "cachedTokens": 0,
+            "totalTokens": 375890,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/kimi/feature-01-01-repo-bootstrap",
+          "workflowName": "nicespeak-eval/kimi/02-rewrite-contract",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-02-02-rewrite-contract",
+          "baseBranch": "eval/qwen/feature-01-01-repo-bootstrap",
+          "workflowName": "nicespeak-eval/qwen/02-rewrite-contract",
+          "crossModelPromptHash": "4d37d86741f347ecba51d551e3f7a06e022a8686c1d4ff202e2f1a403a72018f",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 2,
+            "additions": 424,
+            "deletions": 0,
+            "files": [
+              {
+                "path": "apps/validation/contract.js",
+                "additions": 131,
+                "deletions": 0
+              },
+              {
+                "path": "test/validation.test.js",
+                "additions": 293,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "apps/validation/contract.js",
+            "test/validation.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "2 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454201231-12",
+            "status": "review_ready",
+            "inputTokens": 420212,
+            "outputTokens": 6369,
+            "cachedTokens": 398208,
+            "totalTokens": 426581,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        }
+      }
+    },
+    "03-personas-policy": {
+      "pairwise": {
+        "claude__codex": 0.03535353535353535,
+        "claude__kimi": null,
+        "claude__qwen": 0.026217228464419477,
+        "codex__kimi": null,
+        "codex__qwen": 0.023668639053254437,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.2,
+        "claude__kimi": null,
+        "claude__qwen": 0.09090909090909091,
+        "codex__kimi": null,
+        "codex__qwen": 0,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "apps/personas/catalog.js",
+            "apps/personas/index.js",
+            "apps/personas/policy.js",
+            "test/personas-catalog.test.js"
+          ],
+          "onlyB": [
+            "apps/rewrite/contract.js",
+            "apps/rewrite/personas.js",
+            "package.json",
+            "test/rewrite-contract.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "test/personas-policy.test.js"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/personas/index.js",
+            "apps/personas/policy.js",
+            "test/personas-catalog.test.js",
+            "test/personas-policy.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/versioned-personas-policy/SKILL.md",
+            "apps/personas/service.js",
+            "apps/validation/contract.js",
+            "test/personas.test.js",
+            "test/validation.test.js"
+          ],
+          "shared": [
+            "apps/personas/catalog.js"
+          ]
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/rewrite/contract.js",
+            "apps/rewrite/personas.js",
+            "package.json",
+            "test/personas-policy.test.js",
+            "test/rewrite-contract.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/versioned-personas-policy/SKILL.md",
+            "apps/personas/catalog.js",
+            "apps/personas/service.js",
+            "apps/validation/contract.js",
+            "test/personas.test.js",
+            "test/validation.test.js"
+          ],
+          "shared": []
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.026217228464419477
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.023668639053254437
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-03-03-personas-policy",
+          "baseBranch": "eval/claude/feature-02-02-rewrite-contract",
+          "workflowName": "nicespeak-eval/claude/03-personas-policy",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 6,
+            "additions": 869,
+            "deletions": 3,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 62,
+                "deletions": 3
+              },
+              {
+                "path": "apps/personas/catalog.js",
+                "additions": 249,
+                "deletions": 0
+              },
+              {
+                "path": "apps/personas/index.js",
+                "additions": 3,
+                "deletions": 0
+              },
+              {
+                "path": "apps/personas/policy.js",
+                "additions": 159,
+                "deletions": 0
+              },
+              {
+                "path": "test/personas-catalog.test.js",
+                "additions": 159,
+                "deletions": 0
+              },
+              {
+                "path": "test/personas-policy.test.js",
+                "additions": 237,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/personas/catalog.js",
+            "apps/personas/index.js",
+            "apps/personas/policy.js",
+            "test/personas-catalog.test.js",
+            "test/personas-policy.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "6 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451964554-3",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-03-03-personas-policy",
+          "baseBranch": "eval/codex/feature-02-02-rewrite-contract",
+          "workflowName": "nicespeak-eval/codex/03-personas-policy",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 6,
+            "additions": 217,
+            "deletions": 15,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 7,
+                "deletions": 2
+              },
+              {
+                "path": "apps/rewrite/contract.js",
+                "additions": 13,
+                "deletions": 8
+              },
+              {
+                "path": "apps/rewrite/personas.js",
+                "additions": 103,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/personas-policy.test.js",
+                "additions": 89,
+                "deletions": 0
+              },
+              {
+                "path": "test/rewrite-contract.test.js",
+                "additions": 4,
+                "deletions": 4
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/rewrite/contract.js",
+            "apps/rewrite/personas.js",
+            "package.json",
+            "test/personas-policy.test.js",
+            "test/rewrite-contract.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "3 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337312669-16",
+            "status": "review_ready",
+            "inputTokens": 268580,
+            "outputTokens": 8157,
+            "cachedTokens": 0,
+            "totalTokens": 276737,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-03-03-personas-policy",
+          "baseBranch": "eval/kimi/feature-02-02-rewrite-contract",
+          "workflowName": "nicespeak-eval/kimi/03-personas-policy",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-03-03-personas-policy",
+          "baseBranch": "eval/qwen/feature-02-02-rewrite-contract",
+          "workflowName": "nicespeak-eval/qwen/03-personas-policy",
+          "crossModelPromptHash": "bfd62dcbfc057e8cd9698708ded2bf02241698570ac01bdad14e4bb8fc16f8cb",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 6,
+            "additions": 684,
+            "deletions": 15,
+            "files": [
+              {
+                "path": ".qwen/skills/versioned-personas-policy/SKILL.md",
+                "additions": 57,
+                "deletions": 0
+              },
+              {
+                "path": "apps/personas/catalog.js",
+                "additions": 142,
+                "deletions": 0
+              },
+              {
+                "path": "apps/personas/service.js",
+                "additions": 78,
+                "deletions": 0
+              },
+              {
+                "path": "apps/validation/contract.js",
+                "additions": 51,
+                "deletions": 6
+              },
+              {
+                "path": "test/personas.test.js",
+                "additions": 347,
+                "deletions": 0
+              },
+              {
+                "path": "test/validation.test.js",
+                "additions": 9,
+                "deletions": 9
+              }
+            ]
+          },
+          "paths": [
+            ".qwen/skills/versioned-personas-policy/SKILL.md",
+            "apps/personas/catalog.js",
+            "apps/personas/service.js",
+            "apps/validation/contract.js",
+            "test/personas.test.js",
+            "test/validation.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "3 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454203300-13",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      }
+    },
+    "04-claude-code-provider": {
+      "pairwise": {
+        "claude__codex": 0.03800904977375565,
+        "claude__kimi": null,
+        "claude__qwen": 0.018808777429467086,
+        "codex__kimi": null,
+        "codex__qwen": 0.04066265060240964,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.08333333333333333,
+        "claude__kimi": null,
+        "claude__qwen": 0.07692307692307693,
+        "codex__kimi": null,
+        "codex__qwen": 0.1,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "apps/providers/claude-code.js",
+            "apps/providers/contract.js",
+            "apps/providers/index.js",
+            "apps/providers/prompt.js",
+            "test/providers-claude-code.test.js",
+            "test/providers-contract.test.js",
+            "test/providers-selection.test.js"
+          ],
+          "onlyB": [
+            "apps/rewrite/providers.js",
+            "apps/rewrite/providers/claude-code.js",
+            "package.json",
+            "test/claude-code-provider.test.js"
+          ],
+          "shared": [
+            "README.md"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/providers/contract.js",
+            "apps/providers/index.js",
+            "apps/providers/prompt.js",
+            "test/providers-claude-code.test.js",
+            "test/providers-contract.test.js",
+            "test/providers-selection.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/claude-code-provider-implementation/SKILL.md",
+            "apps/config/provider-config.js",
+            "apps/providers/interface.js",
+            "package.json",
+            "test/providers.test.js"
+          ],
+          "shared": [
+            "apps/providers/claude-code.js"
+          ]
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/rewrite/providers.js",
+            "apps/rewrite/providers/claude-code.js",
+            "test/claude-code-provider.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/claude-code-provider-implementation/SKILL.md",
+            "apps/config/provider-config.js",
+            "apps/providers/claude-code.js",
+            "apps/providers/interface.js",
+            "test/providers.test.js"
+          ],
+          "shared": [
+            "package.json"
+          ]
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.018808777429467086
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.04066265060240964
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/claude/feature-03-03-personas-policy",
+          "workflowName": "nicespeak-eval/claude/04-claude-code-provider",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 8,
+            "additions": 1336,
+            "deletions": 4,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 69,
+                "deletions": 4
+              },
+              {
+                "path": "apps/providers/claude-code.js",
+                "additions": 333,
+                "deletions": 0
+              },
+              {
+                "path": "apps/providers/contract.js",
+                "additions": 228,
+                "deletions": 0
+              },
+              {
+                "path": "apps/providers/index.js",
+                "additions": 107,
+                "deletions": 0
+              },
+              {
+                "path": "apps/providers/prompt.js",
+                "additions": 63,
+                "deletions": 0
+              },
+              {
+                "path": "test/providers-claude-code.test.js",
+                "additions": 253,
+                "deletions": 0
+              },
+              {
+                "path": "test/providers-contract.test.js",
+                "additions": 152,
+                "deletions": 0
+              },
+              {
+                "path": "test/providers-selection.test.js",
+                "additions": 131,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/providers/claude-code.js",
+            "apps/providers/contract.js",
+            "apps/providers/index.js",
+            "apps/providers/prompt.js",
+            "test/providers-claude-code.test.js",
+            "test/providers-contract.test.js",
+            "test/providers-selection.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "9 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451966578-4",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/codex/feature-03-03-personas-policy",
+          "workflowName": "nicespeak-eval/codex/04-claude-code-provider",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 5,
+            "additions": 403,
+            "deletions": 2,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 25,
+                "deletions": 1
+              },
+              {
+                "path": "apps/rewrite/providers.js",
+                "additions": 26,
+                "deletions": 0
+              },
+              {
+                "path": "apps/rewrite/providers/claude-code.js",
+                "additions": 160,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/claude-code-provider.test.js",
+                "additions": 191,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/rewrite/providers.js",
+            "apps/rewrite/providers/claude-code.js",
+            "package.json",
+            "test/claude-code-provider.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "4 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337314430-17",
+            "status": "review_ready",
+            "inputTokens": 474488,
+            "outputTokens": 11676,
+            "cachedTokens": 0,
+            "totalTokens": 486164,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/kimi/feature-03-03-personas-policy",
+          "workflowName": "nicespeak-eval/kimi/04-claude-code-provider",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-04-04-claude-code-provider",
+          "baseBranch": "eval/qwen/feature-03-03-personas-policy",
+          "workflowName": "nicespeak-eval/qwen/04-claude-code-provider",
+          "crossModelPromptHash": "4fee243b54624f68e6a397ae4e53d40203a1879b5c05ccce69088dc9dd82f532",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 6,
+            "additions": 659,
+            "deletions": 0,
+            "files": [
+              {
+                "path": ".qwen/skills/claude-code-provider-implementation/SKILL.md",
+                "additions": 72,
+                "deletions": 0
+              },
+              {
+                "path": "apps/config/provider-config.js",
+                "additions": 33,
+                "deletions": 0
+              },
+              {
+                "path": "apps/providers/claude-code.js",
+                "additions": 226,
+                "deletions": 0
+              },
+              {
+                "path": "apps/providers/interface.js",
+                "additions": 27,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 0
+              },
+              {
+                "path": "test/providers.test.js",
+                "additions": 300,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".qwen/skills/claude-code-provider-implementation/SKILL.md",
+            "apps/config/provider-config.js",
+            "apps/providers/claude-code.js",
+            "apps/providers/interface.js",
+            "package.json",
+            "test/providers.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "4 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454205557-14",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      }
+    },
+    "05-encrypted-persistence": {
+      "pairwise": {
+        "claude__codex": 0.022287390029325515,
+        "claude__kimi": null,
+        "claude__qwen": 0.013822688274547188,
+        "codex__kimi": null,
+        "codex__qwen": 0.031578947368421054,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.058823529411764705,
+        "claude__kimi": null,
+        "claude__qwen": 0.045454545454545456,
+        "codex__kimi": null,
+        "codex__qwen": 0.18181818181818182,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            ".env.example",
+            "apps/storage/crypto.js",
+            "apps/storage/errors.js",
+            "apps/storage/index.js",
+            "apps/storage/memory-db.js",
+            "apps/storage/postgres-db.js",
+            "apps/storage/redact.js",
+            "apps/storage/runs.js",
+            "apps/storage/schema.js",
+            "test/storage-crypto.test.js",
+            "test/storage-postgres.test.js",
+            "test/storage-runs.test.js",
+            "test/storage-schema.test.js"
+          ],
+          "onlyB": [
+            "apps/rewrite/persistence.js",
+            "package.json",
+            "test/encrypted-persistence.test.js"
+          ],
+          "shared": [
+            "README.md"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            ".env.example",
+            "apps/storage/crypto.js",
+            "apps/storage/errors.js",
+            "apps/storage/index.js",
+            "apps/storage/memory-db.js",
+            "apps/storage/postgres-db.js",
+            "apps/storage/redact.js",
+            "apps/storage/runs.js",
+            "apps/storage/schema.js",
+            "test/storage-crypto.test.js",
+            "test/storage-postgres.test.js",
+            "test/storage-runs.test.js",
+            "test/storage-schema.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/encrypted-persistence-implementation/SKILL.md",
+            "apps/persistence/db.js",
+            "apps/persistence/encryption.js",
+            "apps/persistence/schema.js",
+            "package-lock.json",
+            "package.json",
+            "test/persistence-db.test.js",
+            "test/persistence.test.js"
+          ],
+          "shared": [
+            "README.md"
+          ]
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "apps/rewrite/persistence.js",
+            "test/encrypted-persistence.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/encrypted-persistence-implementation/SKILL.md",
+            "apps/persistence/db.js",
+            "apps/persistence/encryption.js",
+            "apps/persistence/schema.js",
+            "package-lock.json",
+            "test/persistence-db.test.js",
+            "test/persistence.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.013822688274547188
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.031578947368421054
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/claude/feature-04-04-claude-code-provider",
+          "workflowName": "nicespeak-eval/claude/05-encrypted-persistence",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 14,
+            "additions": 2207,
+            "deletions": 6,
+            "files": [
+              {
+                "path": ".env.example",
+                "additions": 12,
+                "deletions": 0
+              },
+              {
+                "path": "README.md",
+                "additions": 93,
+                "deletions": 6
+              },
+              {
+                "path": "apps/storage/crypto.js",
+                "additions": 303,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/errors.js",
+                "additions": 12,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/index.js",
+                "additions": 8,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/memory-db.js",
+                "additions": 90,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/postgres-db.js",
+                "additions": 106,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/redact.js",
+                "additions": 88,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/runs.js",
+                "additions": 291,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/schema.js",
+                "additions": 283,
+                "deletions": 0
+              },
+              {
+                "path": "test/storage-crypto.test.js",
+                "additions": 200,
+                "deletions": 0
+              },
+              {
+                "path": "test/storage-postgres.test.js",
+                "additions": 165,
+                "deletions": 0
+              },
+              {
+                "path": "test/storage-runs.test.js",
+                "additions": 343,
+                "deletions": 0
+              },
+              {
+                "path": "test/storage-schema.test.js",
+                "additions": 213,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".env.example",
+            "README.md",
+            "apps/storage/crypto.js",
+            "apps/storage/errors.js",
+            "apps/storage/index.js",
+            "apps/storage/memory-db.js",
+            "apps/storage/postgres-db.js",
+            "apps/storage/redact.js",
+            "apps/storage/runs.js",
+            "apps/storage/schema.js",
+            "test/storage-crypto.test.js",
+            "test/storage-postgres.test.js",
+            "test/storage-runs.test.js",
+            "test/storage-schema.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "13 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451968651-5",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/codex/feature-04-04-claude-code-provider",
+          "workflowName": "nicespeak-eval/codex/05-encrypted-persistence",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 4,
+            "additions": 445,
+            "deletions": 2,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 30,
+                "deletions": 1
+              },
+              {
+                "path": "apps/rewrite/persistence.js",
+                "additions": 264,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/encrypted-persistence.test.js",
+                "additions": 150,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/rewrite/persistence.js",
+            "package.json",
+            "test/encrypted-persistence.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "5 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337316499-18",
+            "status": "review_ready",
+            "inputTokens": 865382,
+            "outputTokens": 14076,
+            "cachedTokens": 0,
+            "totalTokens": 879458,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/kimi/feature-04-04-claude-code-provider",
+          "workflowName": "nicespeak-eval/kimi/05-encrypted-persistence",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-05-05-encrypted-persistence",
+          "baseBranch": "eval/qwen/feature-04-04-claude-code-provider",
+          "workflowName": "nicespeak-eval/qwen/05-encrypted-persistence",
+          "crossModelPromptHash": "0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 9,
+            "additions": 1274,
+            "deletions": 2,
+            "files": [
+              {
+                "path": ".qwen/skills/encrypted-persistence-implementation/SKILL.md",
+                "additions": 305,
+                "deletions": 0
+              },
+              {
+                "path": "README.md",
+                "additions": 23,
+                "deletions": 0
+              },
+              {
+                "path": "apps/persistence/db.js",
+                "additions": 206,
+                "deletions": 0
+              },
+              {
+                "path": "apps/persistence/encryption.js",
+                "additions": 139,
+                "deletions": 0
+              },
+              {
+                "path": "apps/persistence/schema.js",
+                "additions": 35,
+                "deletions": 0
+              },
+              {
+                "path": "package-lock.json",
+                "additions": 164,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 5,
+                "deletions": 2
+              },
+              {
+                "path": "test/persistence-db.test.js",
+                "additions": 263,
+                "deletions": 0
+              },
+              {
+                "path": "test/persistence.test.js",
+                "additions": 134,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".qwen/skills/encrypted-persistence-implementation/SKILL.md",
+            "README.md",
+            "apps/persistence/db.js",
+            "apps/persistence/encryption.js",
+            "apps/persistence/schema.js",
+            "package-lock.json",
+            "package.json",
+            "test/persistence-db.test.js",
+            "test/persistence.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "6 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454207675-15",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      }
+    },
+    "06-durable-lifecycle": {
+      "pairwise": {
+        "claude__codex": 0.02301410541945063,
+        "claude__kimi": null,
+        "claude__qwen": 0.013726835964310227,
+        "codex__kimi": null,
+        "codex__qwen": 0.01958955223880597,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.0625,
+        "claude__kimi": null,
+        "claude__qwen": 0.06666666666666667,
+        "codex__kimi": null,
+        "codex__qwen": 0,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "apps/lifecycle/executor.js",
+            "apps/lifecycle/index.js",
+            "apps/lifecycle/states.js",
+            "apps/storage/memory-db.js",
+            "apps/storage/postgres-db.js",
+            "apps/storage/runs.js",
+            "apps/storage/schema.js",
+            "test/lifecycle-executor.test.js",
+            "test/lifecycle-postgres-claim.test.js",
+            "test/lifecycle-states.test.js"
+          ],
+          "onlyB": [
+            "apps/rewrite/lifecycle.js",
+            "apps/rewrite/persistence.js",
+            "package.json",
+            "test/encrypted-persistence.test.js",
+            "test/rewrite-lifecycle.test.js"
+          ],
+          "shared": [
+            "README.md"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/lifecycle/executor.js",
+            "apps/lifecycle/states.js",
+            "apps/storage/memory-db.js",
+            "apps/storage/postgres-db.js",
+            "apps/storage/runs.js",
+            "apps/storage/schema.js",
+            "test/lifecycle-executor.test.js",
+            "test/lifecycle-postgres-claim.test.js",
+            "test/lifecycle-states.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/durable-lifecycle-implementation/SKILL.md",
+            ".qwen/skills/test-fix-approach/SKILL.md",
+            "test/lifecycle.test.js",
+            "test/persistence-db.test.js"
+          ],
+          "shared": [
+            "apps/lifecycle/index.js"
+          ]
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/rewrite/lifecycle.js",
+            "apps/rewrite/persistence.js",
+            "package.json",
+            "test/encrypted-persistence.test.js",
+            "test/rewrite-lifecycle.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/durable-lifecycle-implementation/SKILL.md",
+            ".qwen/skills/test-fix-approach/SKILL.md",
+            "apps/lifecycle/index.js",
+            "test/lifecycle.test.js",
+            "test/persistence-db.test.js"
+          ],
+          "shared": []
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.013726835964310227
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.01958955223880597
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/claude/feature-05-05-encrypted-persistence",
+          "workflowName": "nicespeak-eval/claude/06-durable-lifecycle",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 11,
+            "additions": 1134,
+            "deletions": 17,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 76,
+                "deletions": 8
+              },
+              {
+                "path": "apps/lifecycle/executor.js",
+                "additions": 220,
+                "deletions": 0
+              },
+              {
+                "path": "apps/lifecycle/index.js",
+                "additions": 3,
+                "deletions": 0
+              },
+              {
+                "path": "apps/lifecycle/states.js",
+                "additions": 78,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/memory-db.js",
+                "additions": 45,
+                "deletions": 1
+              },
+              {
+                "path": "apps/storage/postgres-db.js",
+                "additions": 34,
+                "deletions": 0
+              },
+              {
+                "path": "apps/storage/runs.js",
+                "additions": 89,
+                "deletions": 6
+              },
+              {
+                "path": "apps/storage/schema.js",
+                "additions": 12,
+                "deletions": 2
+              },
+              {
+                "path": "test/lifecycle-executor.test.js",
+                "additions": 400,
+                "deletions": 0
+              },
+              {
+                "path": "test/lifecycle-postgres-claim.test.js",
+                "additions": 95,
+                "deletions": 0
+              },
+              {
+                "path": "test/lifecycle-states.test.js",
+                "additions": 82,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/lifecycle/executor.js",
+            "apps/lifecycle/index.js",
+            "apps/lifecycle/states.js",
+            "apps/storage/memory-db.js",
+            "apps/storage/postgres-db.js",
+            "apps/storage/runs.js",
+            "apps/storage/schema.js",
+            "test/lifecycle-executor.test.js",
+            "test/lifecycle-postgres-claim.test.js",
+            "test/lifecycle-states.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "16 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451971536-6",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/codex/feature-05-05-encrypted-persistence",
+          "workflowName": "nicespeak-eval/codex/06-durable-lifecycle",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 6,
+            "additions": 719,
+            "deletions": 8,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 16,
+                "deletions": 4
+              },
+              {
+                "path": "apps/rewrite/lifecycle.js",
+                "additions": 281,
+                "deletions": 0
+              },
+              {
+                "path": "apps/rewrite/persistence.js",
+                "additions": 12,
+                "deletions": 3
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/encrypted-persistence.test.js",
+                "additions": 2,
+                "deletions": 0
+              },
+              {
+                "path": "test/rewrite-lifecycle.test.js",
+                "additions": 407,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/rewrite/lifecycle.js",
+            "apps/rewrite/persistence.js",
+            "package.json",
+            "test/encrypted-persistence.test.js",
+            "test/rewrite-lifecycle.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "6 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337319996-19",
+            "status": "review_ready",
+            "inputTokens": 1086578,
+            "outputTokens": 18089,
+            "cachedTokens": 0,
+            "totalTokens": 1104667,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/kimi/feature-05-05-encrypted-persistence",
+          "workflowName": "nicespeak-eval/kimi/06-durable-lifecycle",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-06-06-durable-lifecycle",
+          "baseBranch": "eval/qwen/feature-05-05-encrypted-persistence",
+          "workflowName": "nicespeak-eval/qwen/06-durable-lifecycle",
+          "crossModelPromptHash": "871835c977e762d983769b3e960f5ade2023be0eb8980a42f4c366cddcc0fea0",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 5,
+            "additions": 918,
+            "deletions": 5,
+            "files": [
+              {
+                "path": ".qwen/skills/durable-lifecycle-implementation/SKILL.md",
+                "additions": 162,
+                "deletions": 0
+              },
+              {
+                "path": ".qwen/skills/test-fix-approach/SKILL.md",
+                "additions": 24,
+                "deletions": 0
+              },
+              {
+                "path": "apps/lifecycle/index.js",
+                "additions": 328,
+                "deletions": 0
+              },
+              {
+                "path": "test/lifecycle.test.js",
+                "additions": 397,
+                "deletions": 0
+              },
+              {
+                "path": "test/persistence-db.test.js",
+                "additions": 7,
+                "deletions": 5
+              }
+            ]
+          },
+          "paths": [
+            ".qwen/skills/durable-lifecycle-implementation/SKILL.md",
+            ".qwen/skills/test-fix-approach/SKILL.md",
+            "apps/lifecycle/index.js",
+            "test/lifecycle.test.js",
+            "test/persistence-db.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "7 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454209777-16",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      }
+    },
+    "07-http-api-runtime": {
+      "pairwise": {
+        "claude__codex": 0.030759573132454487,
+        "claude__kimi": null,
+        "claude__qwen": 0.01990049751243781,
+        "codex__kimi": null,
+        "codex__qwen": 0.031487513572204126,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.1111111111111111,
+        "claude__kimi": null,
+        "claude__qwen": 0.1,
+        "codex__kimi": null,
+        "codex__qwen": 0.16666666666666666,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            ".env.example",
+            "apps/api/cors.js",
+            "apps/api/index.js",
+            "apps/api/main.js",
+            "apps/api/router.js",
+            "apps/api/runtime.js",
+            "apps/api/server.js",
+            "test/api-cors-routing.test.js",
+            "test/api-cors.test.js",
+            "test/api-routing.test.js",
+            "test/api-server.test.js",
+            "test/api-validation.test.js"
+          ],
+          "onlyB": [
+            "apps/http/memory-rewrite-db.js",
+            "apps/http/runtime.js",
+            "apps/http/server.js",
+            "test/http-api-runtime.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            ".env.example",
+            "apps/api/cors.js",
+            "apps/api/index.js",
+            "apps/api/main.js",
+            "apps/api/router.js",
+            "apps/api/runtime.js",
+            "apps/api/server.js",
+            "test/api-cors-routing.test.js",
+            "test/api-cors.test.js",
+            "test/api-routing.test.js",
+            "test/api-server.test.js",
+            "test/api-validation.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/http-api-server-implementation/SKILL.md",
+            ".qwen/skills/mock-client-object-reference-issue/SKILL.md",
+            "apps/server/index.js",
+            "package-lock.json",
+            "test/persistence-db.test.js",
+            "test/server.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "apps/http/memory-rewrite-db.js",
+            "apps/http/runtime.js",
+            "apps/http/server.js",
+            "test/http-api-runtime.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/http-api-server-implementation/SKILL.md",
+            ".qwen/skills/mock-client-object-reference-issue/SKILL.md",
+            "apps/server/index.js",
+            "package-lock.json",
+            "test/persistence-db.test.js",
+            "test/server.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.01990049751243781
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.031487513572204126
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/claude/feature-06-06-durable-lifecycle",
+          "workflowName": "nicespeak-eval/claude/07-http-api-runtime",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 14,
+            "additions": 1682,
+            "deletions": 12,
+            "files": [
+              {
+                "path": ".env.example",
+                "additions": 14,
+                "deletions": 1
+              },
+              {
+                "path": "README.md",
+                "additions": 112,
+                "deletions": 10
+              },
+              {
+                "path": "apps/api/cors.js",
+                "additions": 207,
+                "deletions": 0
+              },
+              {
+                "path": "apps/api/index.js",
+                "additions": 5,
+                "deletions": 0
+              },
+              {
+                "path": "apps/api/main.js",
+                "additions": 57,
+                "deletions": 0
+              },
+              {
+                "path": "apps/api/router.js",
+                "additions": 329,
+                "deletions": 0
+              },
+              {
+                "path": "apps/api/runtime.js",
+                "additions": 66,
+                "deletions": 0
+              },
+              {
+                "path": "apps/api/server.js",
+                "additions": 184,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 3,
+                "deletions": 1
+              },
+              {
+                "path": "test/api-cors-routing.test.js",
+                "additions": 126,
+                "deletions": 0
+              },
+              {
+                "path": "test/api-cors.test.js",
+                "additions": 102,
+                "deletions": 0
+              },
+              {
+                "path": "test/api-routing.test.js",
+                "additions": 189,
+                "deletions": 0
+              },
+              {
+                "path": "test/api-server.test.js",
+                "additions": 154,
+                "deletions": 0
+              },
+              {
+                "path": "test/api-validation.test.js",
+                "additions": 134,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".env.example",
+            "README.md",
+            "apps/api/cors.js",
+            "apps/api/index.js",
+            "apps/api/main.js",
+            "apps/api/router.js",
+            "apps/api/runtime.js",
+            "apps/api/server.js",
+            "package.json",
+            "test/api-cors-routing.test.js",
+            "test/api-cors.test.js",
+            "test/api-routing.test.js",
+            "test/api-server.test.js",
+            "test/api-validation.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "21 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451973525-7",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/codex/feature-06-06-durable-lifecycle",
+          "workflowName": "nicespeak-eval/codex/07-http-api-runtime",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 6,
+            "additions": 693,
+            "deletions": 6,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 31,
+                "deletions": 5
+              },
+              {
+                "path": "apps/http/memory-rewrite-db.js",
+                "additions": 126,
+                "deletions": 0
+              },
+              {
+                "path": "apps/http/runtime.js",
+                "additions": 254,
+                "deletions": 0
+              },
+              {
+                "path": "apps/http/server.js",
+                "additions": 33,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 2,
+                "deletions": 1
+              },
+              {
+                "path": "test/http-api-runtime.test.js",
+                "additions": 247,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/http/memory-rewrite-db.js",
+            "apps/http/runtime.js",
+            "apps/http/server.js",
+            "package.json",
+            "test/http-api-runtime.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "7 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337321763-20",
+            "status": "review_ready",
+            "inputTokens": 892338,
+            "outputTokens": 18200,
+            "cachedTokens": 0,
+            "totalTokens": 910538,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/kimi/feature-06-06-durable-lifecycle",
+          "workflowName": "nicespeak-eval/kimi/07-http-api-runtime",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-07-07-http-api-runtime",
+          "baseBranch": "eval/qwen/feature-06-06-durable-lifecycle",
+          "workflowName": "nicespeak-eval/qwen/07-http-api-runtime",
+          "crossModelPromptHash": "f397ea614d7283eccd12a749dc660fe6d88a5be04e6d34149447e381c2d3f6af",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 8,
+            "additions": 524,
+            "deletions": 38,
+            "files": [
+              {
+                "path": ".qwen/skills/http-api-server-implementation/SKILL.md",
+                "additions": 95,
+                "deletions": 0
+              },
+              {
+                "path": ".qwen/skills/mock-client-object-reference-issue/SKILL.md",
+                "additions": 45,
+                "deletions": 0
+              },
+              {
+                "path": "README.md",
+                "additions": 39,
+                "deletions": 2
+              },
+              {
+                "path": "apps/server/index.js",
+                "additions": 173,
+                "deletions": 0
+              },
+              {
+                "path": "package-lock.json",
+                "additions": 36,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 3,
+                "deletions": 0
+              },
+              {
+                "path": "test/persistence-db.test.js",
+                "additions": 36,
+                "deletions": 36
+              },
+              {
+                "path": "test/server.test.js",
+                "additions": 97,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".qwen/skills/http-api-server-implementation/SKILL.md",
+            ".qwen/skills/mock-client-object-reference-issue/SKILL.md",
+            "README.md",
+            "apps/server/index.js",
+            "package-lock.json",
+            "package.json",
+            "test/persistence-db.test.js",
+            "test/server.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "8 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454211873-17",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      }
+    },
+    "08-browser-review-state": {
+      "pairwise": {
+        "claude__codex": 0.01990632318501171,
+        "claude__kimi": null,
+        "claude__qwen": 0.012429378531073447,
+        "codex__kimi": null,
+        "codex__qwen": 0.012526096033402923,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.2222222222222222,
+        "claude__kimi": null,
+        "claude__qwen": 0,
+        "codex__kimi": null,
+        "codex__qwen": 0,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "apps/review/index.js",
+            "apps/review/machine.js",
+            "apps/review/states.js",
+            "test/review-machine.test.js",
+            "test/review-states.test.js"
+          ],
+          "onlyB": [
+            "apps/browser-review/state-machine.js",
+            "test/browser-review-state-machine.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/review/index.js",
+            "apps/review/machine.js",
+            "apps/review/states.js",
+            "package.json",
+            "test/review-machine.test.js",
+            "test/review-states.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/browser-review-state-machine-implementation/SKILL.md",
+            "apps/browser-review-state-machine.js",
+            "test/browser-review-state.test.js"
+          ],
+          "shared": []
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/browser-review/state-machine.js",
+            "package.json",
+            "test/browser-review-state-machine.test.js"
+          ],
+          "onlyB": [
+            ".qwen/skills/browser-review-state-machine-implementation/SKILL.md",
+            "apps/browser-review-state-machine.js",
+            "test/browser-review-state.test.js"
+          ],
+          "shared": []
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.012429378531073447
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.012526096033402923
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-08-08-browser-review-state",
+          "baseBranch": "eval/claude/feature-07-07-http-api-runtime",
+          "workflowName": "nicespeak-eval/claude/08-browser-review-state",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 7,
+            "additions": 928,
+            "deletions": 4,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 84,
+                "deletions": 3
+              },
+              {
+                "path": "apps/review/index.js",
+                "additions": 3,
+                "deletions": 0
+              },
+              {
+                "path": "apps/review/machine.js",
+                "additions": 306,
+                "deletions": 0
+              },
+              {
+                "path": "apps/review/states.js",
+                "additions": 123,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/review-machine.test.js",
+                "additions": 303,
+                "deletions": 0
+              },
+              {
+                "path": "test/review-states.test.js",
+                "additions": 108,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/review/index.js",
+            "apps/review/machine.js",
+            "apps/review/states.js",
+            "package.json",
+            "test/review-machine.test.js",
+            "test/review-states.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "23 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451975601-8",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-08-08-browser-review-state",
+          "baseBranch": "eval/codex/feature-07-07-http-api-runtime",
+          "workflowName": "nicespeak-eval/codex/08-browser-review-state",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 4,
+            "additions": 333,
+            "deletions": 1,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 13,
+                "deletions": 0
+              },
+              {
+                "path": "apps/browser-review/state-machine.js",
+                "additions": 188,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/browser-review-state-machine.test.js",
+                "additions": 131,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/browser-review/state-machine.js",
+            "package.json",
+            "test/browser-review-state-machine.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "8 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337323784-21",
+            "status": "review_ready",
+            "inputTokens": 415470,
+            "outputTokens": 9859,
+            "cachedTokens": 0,
+            "totalTokens": 425329,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-08-08-browser-review-state",
+          "baseBranch": "eval/kimi/feature-07-07-http-api-runtime",
+          "workflowName": "nicespeak-eval/kimi/08-browser-review-state",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-08-08-browser-review-state",
+          "baseBranch": "eval/qwen/feature-07-07-http-api-runtime",
+          "workflowName": "nicespeak-eval/qwen/08-browser-review-state",
+          "crossModelPromptHash": "d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 3,
+            "additions": 456,
+            "deletions": 0,
+            "files": [
+              {
+                "path": ".qwen/skills/browser-review-state-machine-implementation/SKILL.md",
+                "additions": 83,
+                "deletions": 0
+              },
+              {
+                "path": "apps/browser-review-state-machine.js",
+                "additions": 198,
+                "deletions": 0
+              },
+              {
+                "path": "test/browser-review-state.test.js",
+                "additions": 175,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            ".qwen/skills/browser-review-state-machine-implementation/SKILL.md",
+            "apps/browser-review-state-machine.js",
+            "test/browser-review-state.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "9 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454213975-18",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      }
+    },
+    "09-slack-web-adapter": {
+      "pairwise": {
+        "claude__codex": 0.025389497980380843,
+        "claude__kimi": null,
+        "claude__qwen": 0.01328740157480315,
+        "codex__kimi": null,
+        "codex__qwen": 0.02433862433862434,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.14285714285714285,
+        "claude__kimi": null,
+        "claude__qwen": 0.13333333333333333,
+        "codex__kimi": null,
+        "codex__qwen": 0.5,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "apps/surfaces/index.js",
+            "apps/surfaces/slack/adapter.js",
+            "apps/surfaces/slack/context.js",
+            "apps/surfaces/slack/detect.js",
+            "apps/surfaces/slack/index.js",
+            "test/helpers/fake-dom.js",
+            "test/helpers/slack-page.js",
+            "test/slack-adapter.test.js",
+            "test/slack-context.test.js",
+            "test/slack-detect.test.js"
+          ],
+          "onlyB": [
+            "apps/browser-review/slack-web-adapter.js",
+            "test/slack-web-adapter.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "apps/surfaces/index.js",
+            "apps/surfaces/slack/adapter.js",
+            "apps/surfaces/slack/context.js",
+            "apps/surfaces/slack/detect.js",
+            "apps/surfaces/slack/index.js",
+            "test/helpers/fake-dom.js",
+            "test/helpers/slack-page.js",
+            "test/slack-adapter.test.js",
+            "test/slack-context.test.js",
+            "test/slack-detect.test.js"
+          ],
+          "onlyB": [
+            "apps/slack-web-adapter.js",
+            "package-lock.json",
+            "test/slack-web-adapter.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "apps/browser-review/slack-web-adapter.js"
+          ],
+          "onlyB": [
+            "apps/slack-web-adapter.js",
+            "package-lock.json"
+          ],
+          "shared": [
+            "README.md",
+            "package.json",
+            "test/slack-web-adapter.test.js"
+          ]
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.01328740157480315
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.02433862433862434
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/claude/feature-08-08-browser-review-state",
+          "workflowName": "nicespeak-eval/claude/09-slack-web-adapter",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 12,
+            "additions": 2246,
+            "deletions": 5,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 102,
+                "deletions": 4
+              },
+              {
+                "path": "apps/surfaces/index.js",
+                "additions": 2,
+                "deletions": 0
+              },
+              {
+                "path": "apps/surfaces/slack/adapter.js",
+                "additions": 355,
+                "deletions": 0
+              },
+              {
+                "path": "apps/surfaces/slack/context.js",
+                "additions": 237,
+                "deletions": 0
+              },
+              {
+                "path": "apps/surfaces/slack/detect.js",
+                "additions": 237,
+                "deletions": 0
+              },
+              {
+                "path": "apps/surfaces/slack/index.js",
+                "additions": 4,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/helpers/fake-dom.js",
+                "additions": 365,
+                "deletions": 0
+              },
+              {
+                "path": "test/helpers/slack-page.js",
+                "additions": 82,
+                "deletions": 0
+              },
+              {
+                "path": "test/slack-adapter.test.js",
+                "additions": 444,
+                "deletions": 0
+              },
+              {
+                "path": "test/slack-context.test.js",
+                "additions": 241,
+                "deletions": 0
+              },
+              {
+                "path": "test/slack-detect.test.js",
+                "additions": 176,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/surfaces/index.js",
+            "apps/surfaces/slack/adapter.js",
+            "apps/surfaces/slack/context.js",
+            "apps/surfaces/slack/detect.js",
+            "apps/surfaces/slack/index.js",
+            "package.json",
+            "test/helpers/fake-dom.js",
+            "test/helpers/slack-page.js",
+            "test/slack-adapter.test.js",
+            "test/slack-context.test.js",
+            "test/slack-detect.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "28 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451977618-9",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/codex/feature-08-08-browser-review-state",
+          "workflowName": "nicespeak-eval/codex/09-slack-web-adapter",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 4,
+            "additions": 533,
+            "deletions": 3,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 12,
+                "deletions": 2
+              },
+              {
+                "path": "apps/browser-review/slack-web-adapter.js",
+                "additions": 277,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/slack-web-adapter.test.js",
+                "additions": 243,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/browser-review/slack-web-adapter.js",
+            "package.json",
+            "test/slack-web-adapter.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "9 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337325623-22",
+            "status": "review_ready",
+            "inputTokens": 562147,
+            "outputTokens": 12675,
+            "cachedTokens": 0,
+            "totalTokens": 574822,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/kimi/feature-08-08-browser-review-state",
+          "workflowName": "nicespeak-eval/kimi/09-slack-web-adapter",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-09-09-slack-web-adapter",
+          "baseBranch": "eval/qwen/feature-08-08-browser-review-state",
+          "workflowName": "nicespeak-eval/qwen/09-slack-web-adapter",
+          "crossModelPromptHash": "f2213e568b07f19d1248c03e779f613b8fa4b17ffd6f22b61e564e9373bbbf88",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 5,
+            "additions": 1211,
+            "deletions": 1,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 10,
+                "deletions": 0
+              },
+              {
+                "path": "apps/slack-web-adapter.js",
+                "additions": 308,
+                "deletions": 0
+              },
+              {
+                "path": "package-lock.json",
+                "additions": 542,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 4,
+                "deletions": 1
+              },
+              {
+                "path": "test/slack-web-adapter.test.js",
+                "additions": 347,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/slack-web-adapter.js",
+            "package-lock.json",
+            "package.json",
+            "test/slack-web-adapter.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=NODE_ENV=test node --test --test-force-exit"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "10 test path(s)"
+              }
+            ]
+          },
+          "intervention": {
+            "kind": "human_hotfix",
+            "note": "Human hotfix on Qwen 09: unref timers + NODE_ENV=test / --test-force-exit so verify could exit after an open-handle hang."
+          },
+          "cost": {
+            "workflowId": "wf-1787454216122-19",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      }
+    },
+    "10-chrome-review-ux": {
+      "pairwise": {
+        "claude__codex": 0.02410979228486647,
+        "claude__kimi": null,
+        "claude__qwen": 0.009117082533589251,
+        "codex__kimi": null,
+        "codex__qwen": 0.02097902097902098,
+        "kimi__qwen": null
+      },
+      "pathPairwise": {
+        "claude__codex": 0.05555555555555555,
+        "claude__kimi": null,
+        "claude__qwen": 0,
+        "codex__kimi": null,
+        "codex__qwen": 0,
+        "kimi__qwen": null
+      },
+      "pathHighlights": {
+        "claude__codex": {
+          "onlyA": [
+            "apps/extension/api.js",
+            "apps/extension/chrome/background.js",
+            "apps/extension/chrome/content-main.js",
+            "apps/extension/chrome/content.js",
+            "apps/extension/chrome/manifest.json",
+            "apps/extension/chrome/options.css",
+            "apps/extension/chrome/options.html",
+            "apps/extension/chrome/options.js",
+            "apps/extension/chrome/panel.css",
+            "apps/extension/controller.js",
+            "apps/extension/hosts.js",
+            "apps/extension/index.js",
+            "apps/extension/panel.js",
+            "apps/extension/settings.js",
+            "apps/extension/ui-state.js",
+            "scripts/build-extension.mjs",
+            "test/extension-api.test.js",
+            "test/extension-controller.test.js",
+            "test/extension-entry.test.js",
+            "test/extension-hosts.test.js",
+            "test/extension-manifest.test.js",
+            "test/extension-panel.test.js",
+            "test/extension-settings.test.js",
+            "test/extension-ui-state.test.js",
+            "test/helpers/fake-dom.js"
+          ],
+          "onlyB": [
+            "apps/browser-review/chrome-review-ui.js",
+            "apps/browser-review/extension/content-script.js",
+            "apps/browser-review/manifest.json",
+            "apps/browser-review/settings.js",
+            "apps/browser-review/slack-web-adapter.js",
+            "apps/browser-review/state-machine.js",
+            "test/browser-review-state-machine.test.js",
+            "test/chrome-review-ux.test.js",
+            "test/slack-web-adapter.test.js"
+          ],
+          "shared": [
+            "README.md",
+            "package.json"
+          ]
+        },
+        "claude__kimi": null,
+        "claude__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/extension/api.js",
+            "apps/extension/chrome/background.js",
+            "apps/extension/chrome/content-main.js",
+            "apps/extension/chrome/content.js",
+            "apps/extension/chrome/manifest.json",
+            "apps/extension/chrome/options.css",
+            "apps/extension/chrome/options.html",
+            "apps/extension/chrome/options.js",
+            "apps/extension/chrome/panel.css",
+            "apps/extension/controller.js",
+            "apps/extension/hosts.js",
+            "apps/extension/index.js",
+            "apps/extension/panel.js",
+            "apps/extension/settings.js",
+            "apps/extension/ui-state.js",
+            "package.json",
+            "scripts/build-extension.mjs",
+            "test/extension-api.test.js",
+            "test/extension-controller.test.js",
+            "test/extension-entry.test.js",
+            "test/extension-hosts.test.js",
+            "test/extension-manifest.test.js",
+            "test/extension-panel.test.js",
+            "test/extension-settings.test.js",
+            "test/extension-ui-state.test.js",
+            "test/helpers/fake-dom.js"
+          ],
+          "onlyB": [
+            "apps/chrome-extension/manifest.json"
+          ],
+          "shared": []
+        },
+        "codex__kimi": null,
+        "codex__qwen": {
+          "onlyA": [
+            "README.md",
+            "apps/browser-review/chrome-review-ui.js",
+            "apps/browser-review/extension/content-script.js",
+            "apps/browser-review/manifest.json",
+            "apps/browser-review/settings.js",
+            "apps/browser-review/slack-web-adapter.js",
+            "apps/browser-review/state-machine.js",
+            "package.json",
+            "test/browser-review-state-machine.test.js",
+            "test/chrome-review-ux.test.js",
+            "test/slack-web-adapter.test.js"
+          ],
+          "onlyB": [
+            "apps/chrome-extension/manifest.json"
+          ],
+          "shared": []
+        },
+        "kimi__qwen": null
+      },
+      "cheapVsPremium": [
+        {
+          "cheap": "kimi",
+          "premium": "claude",
+          "similarity": null
+        },
+        {
+          "cheap": "kimi",
+          "premium": "codex",
+          "similarity": null
+        },
+        {
+          "cheap": "qwen",
+          "premium": "claude",
+          "similarity": 0.009117082533589251
+        },
+        {
+          "cheap": "qwen",
+          "premium": "codex",
+          "similarity": 0.02097902097902098
+        }
+      ],
+      "availableLineages": [
+        "claude",
+        "codex",
+        "qwen"
+      ],
+      "missingLineages": [
+        "kimi"
+      ],
+      "lineages": {
+        "claude": {
+          "branch": "eval/claude/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/claude/feature-09-09-slack-web-adapter",
+          "workflowName": "nicespeak-eval/claude/10-chrome-review-ux",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 27,
+            "additions": 3337,
+            "deletions": 2,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 87,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/api.js",
+                "additions": 65,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/background.js",
+                "additions": 15,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/content-main.js",
+                "additions": 68,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/content.js",
+                "additions": 17,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/manifest.json",
+                "additions": 57,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/options.css",
+                "additions": 46,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/options.html",
+                "additions": 38,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/options.js",
+                "additions": 47,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/chrome/panel.css",
+                "additions": 95,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/controller.js",
+                "additions": 237,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/hosts.js",
+                "additions": 69,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/index.js",
+                "additions": 11,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/panel.js",
+                "additions": 216,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/settings.js",
+                "additions": 212,
+                "deletions": 0
+              },
+              {
+                "path": "apps/extension/ui-state.js",
+                "additions": 200,
+                "deletions": 0
+              },
+              {
+                "path": "package.json",
+                "additions": 3,
+                "deletions": 2
+              },
+              {
+                "path": "scripts/build-extension.mjs",
+                "additions": 130,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-api.test.js",
+                "additions": 143,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-controller.test.js",
+                "additions": 554,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-entry.test.js",
+                "additions": 204,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-hosts.test.js",
+                "additions": 63,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-manifest.test.js",
+                "additions": 128,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-panel.test.js",
+                "additions": 225,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-settings.test.js",
+                "additions": 195,
+                "deletions": 0
+              },
+              {
+                "path": "test/extension-ui-state.test.js",
+                "additions": 205,
+                "deletions": 0
+              },
+              {
+                "path": "test/helpers/fake-dom.js",
+                "additions": 7,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/extension/api.js",
+            "apps/extension/chrome/background.js",
+            "apps/extension/chrome/content-main.js",
+            "apps/extension/chrome/content.js",
+            "apps/extension/chrome/manifest.json",
+            "apps/extension/chrome/options.css",
+            "apps/extension/chrome/options.html",
+            "apps/extension/chrome/options.js",
+            "apps/extension/chrome/panel.css",
+            "apps/extension/controller.js",
+            "apps/extension/hosts.js",
+            "apps/extension/index.js",
+            "apps/extension/panel.js",
+            "apps/extension/settings.js",
+            "apps/extension/ui-state.js",
+            "package.json",
+            "scripts/build-extension.mjs",
+            "test/extension-api.test.js",
+            "test/extension-controller.test.js",
+            "test/extension-entry.test.js",
+            "test/extension-hosts.test.js",
+            "test/extension-manifest.test.js",
+            "test/extension-panel.test.js",
+            "test/extension-settings.test.js",
+            "test/extension-ui-state.test.js",
+            "test/helpers/fake-dom.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test \"test/**/*.test.js\""
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "36 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787451980031-10",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        },
+        "codex": {
+          "branch": "eval/codex/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/codex/feature-09-09-slack-web-adapter",
+          "workflowName": "nicespeak-eval/codex/10-chrome-review-ux",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 11,
+            "additions": 865,
+            "deletions": 32,
+            "files": [
+              {
+                "path": "README.md",
+                "additions": 26,
+                "deletions": 10
+              },
+              {
+                "path": "apps/browser-review/chrome-review-ui.js",
+                "additions": 232,
+                "deletions": 0
+              },
+              {
+                "path": "apps/browser-review/extension/content-script.js",
+                "additions": 18,
+                "deletions": 0
+              },
+              {
+                "path": "apps/browser-review/manifest.json",
+                "additions": 37,
+                "deletions": 0
+              },
+              {
+                "path": "apps/browser-review/settings.js",
+                "additions": 77,
+                "deletions": 0
+              },
+              {
+                "path": "apps/browser-review/slack-web-adapter.js",
+                "additions": 25,
+                "deletions": 6
+              },
+              {
+                "path": "apps/browser-review/state-machine.js",
+                "additions": 74,
+                "deletions": 7
+              },
+              {
+                "path": "package.json",
+                "additions": 1,
+                "deletions": 1
+              },
+              {
+                "path": "test/browser-review-state-machine.test.js",
+                "additions": 15,
+                "deletions": 3
+              },
+              {
+                "path": "test/chrome-review-ux.test.js",
+                "additions": 306,
+                "deletions": 0
+              },
+              {
+                "path": "test/slack-web-adapter.test.js",
+                "additions": 54,
+                "deletions": 5
+              }
+            ]
+          },
+          "paths": [
+            "README.md",
+            "apps/browser-review/chrome-review-ui.js",
+            "apps/browser-review/extension/content-script.js",
+            "apps/browser-review/manifest.json",
+            "apps/browser-review/settings.js",
+            "apps/browser-review/slack-web-adapter.js",
+            "apps/browser-review/state-machine.js",
+            "package.json",
+            "test/browser-review-state-machine.test.js",
+            "test/chrome-review-ux.test.js",
+            "test/slack-web-adapter.test.js"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=node --test"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "10 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787337327465-23",
+            "status": "review_ready",
+            "inputTokens": 1773469,
+            "outputTokens": 24232,
+            "cachedTokens": 0,
+            "totalTokens": 1797701,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        },
+        "kimi": {
+          "branch": "eval/kimi/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/kimi/feature-09-09-slack-web-adapter",
+          "workflowName": "nicespeak-eval/kimi/10-chrome-review-ux",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7",
+          "missing": true,
+          "diffStats": null,
+          "paths": null,
+          "acceptance": {
+            "passed": false,
+            "failed": [
+              "diff_missing"
+            ],
+            "checks": [
+              {
+                "id": "diff_missing",
+                "ok": false,
+                "detail": "could not read base...head"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": null
+        },
+        "qwen": {
+          "branch": "eval/qwen/feature-10-10-chrome-review-ux",
+          "baseBranch": "eval/qwen/feature-09-09-slack-web-adapter",
+          "workflowName": "nicespeak-eval/qwen/10-chrome-review-ux",
+          "crossModelPromptHash": "055f28ad297acbf626c21600588aad3805bb4805e43309f93285945087bf5bf7",
+          "missing": false,
+          "diffStats": {
+            "filesChanged": 1,
+            "additions": 35,
+            "deletions": 0,
+            "files": [
+              {
+                "path": "apps/chrome-extension/manifest.json",
+                "additions": 35,
+                "deletions": 0
+              }
+            ]
+          },
+          "paths": [
+            "apps/chrome-extension/manifest.json"
+          ],
+          "acceptance": {
+            "passed": true,
+            "failed": [],
+            "checks": [
+              {
+                "id": "package_json_exists",
+                "ok": true,
+                "detail": "parsed"
+              },
+              {
+                "id": "scripts_test",
+                "ok": true,
+                "detail": "test=NODE_ENV=test node --test --test-force-exit"
+              },
+              {
+                "id": "has_test_files",
+                "ok": true,
+                "detail": "10 test path(s)"
+              }
+            ]
+          },
+          "intervention": null,
+          "cost": {
+            "workflowId": "wf-1787454218281-20",
+            "status": "review_ready",
+            "inputTokens": 129860,
+            "outputTokens": 1292,
+            "cachedTokens": 106816,
+            "totalTokens": 131152,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        }
+      }
+    }
+  },
+  "costs": {
+    "pricingTableVersion": "nicespeak-eval-2026-08-21",
+    "pricingNote": "estimatedCostUsd is 0 because persisted events have model=unknown / unknownConfidence; raw token counts are authoritative.",
+    "globalTotals": {
+      "inputTokens": 27361696,
+      "outputTokens": 319754,
+      "cachedTokens": 783616,
+      "totalTokens": 27681450,
+      "cacheHitRate": 0.028639160379532028,
+      "totalCostUsd": 0,
+      "unknownConfidenceCount": 20,
+      "missingUsageCount": 0,
+      "eventCount": 20
+    },
+    "byLineage": {
+      "claude": {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cachedTokens": 0,
+        "totalTokens": 0,
+        "estimatedCostUsd": 0,
+        "eventCount": 0,
+        "unknownConfidenceCount": 0,
+        "reviewReadyFeatures": 10,
+        "failedOrOtherFeatures": 0,
+        "features": {
+          "01-repo-bootstrap": {
+            "workflowId": "wf-1787451960504-1",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "02-rewrite-contract": {
+            "workflowId": "wf-1787451962533-2",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "03-personas-policy": {
+            "workflowId": "wf-1787451964554-3",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "04-claude-code-provider": {
+            "workflowId": "wf-1787451966578-4",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "05-encrypted-persistence": {
+            "workflowId": "wf-1787451968651-5",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "06-durable-lifecycle": {
+            "workflowId": "wf-1787451971536-6",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "07-http-api-runtime": {
+            "workflowId": "wf-1787451973525-7",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "08-browser-review-state": {
+            "workflowId": "wf-1787451975601-8",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "09-slack-web-adapter": {
+            "workflowId": "wf-1787451977618-9",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "10-chrome-review-ux": {
+            "workflowId": "wf-1787451980031-10",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      },
+      "codex": {
+        "inputTokens": 6900753,
+        "outputTokens": 130586,
+        "cachedTokens": 0,
+        "totalTokens": 7031339,
+        "estimatedCostUsd": 0,
+        "eventCount": 10,
+        "unknownConfidenceCount": 10,
+        "reviewReadyFeatures": 10,
+        "failedOrOtherFeatures": 0,
+        "features": {
+          "01-repo-bootstrap": {
+            "workflowId": "wf-1787337307563-14",
+            "status": "review_ready",
+            "inputTokens": 194888,
+            "outputTokens": 5145,
+            "cachedTokens": 0,
+            "totalTokens": 200033,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "02-rewrite-contract": {
+            "workflowId": "wf-1787337310888-15",
+            "status": "review_ready",
+            "inputTokens": 367413,
+            "outputTokens": 8477,
+            "cachedTokens": 0,
+            "totalTokens": 375890,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "03-personas-policy": {
+            "workflowId": "wf-1787337312669-16",
+            "status": "review_ready",
+            "inputTokens": 268580,
+            "outputTokens": 8157,
+            "cachedTokens": 0,
+            "totalTokens": 276737,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "04-claude-code-provider": {
+            "workflowId": "wf-1787337314430-17",
+            "status": "review_ready",
+            "inputTokens": 474488,
+            "outputTokens": 11676,
+            "cachedTokens": 0,
+            "totalTokens": 486164,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "05-encrypted-persistence": {
+            "workflowId": "wf-1787337316499-18",
+            "status": "review_ready",
+            "inputTokens": 865382,
+            "outputTokens": 14076,
+            "cachedTokens": 0,
+            "totalTokens": 879458,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "06-durable-lifecycle": {
+            "workflowId": "wf-1787337319996-19",
+            "status": "review_ready",
+            "inputTokens": 1086578,
+            "outputTokens": 18089,
+            "cachedTokens": 0,
+            "totalTokens": 1104667,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "07-http-api-runtime": {
+            "workflowId": "wf-1787337321763-20",
+            "status": "review_ready",
+            "inputTokens": 892338,
+            "outputTokens": 18200,
+            "cachedTokens": 0,
+            "totalTokens": 910538,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "08-browser-review-state": {
+            "workflowId": "wf-1787337323784-21",
+            "status": "review_ready",
+            "inputTokens": 415470,
+            "outputTokens": 9859,
+            "cachedTokens": 0,
+            "totalTokens": 425329,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "09-slack-web-adapter": {
+            "workflowId": "wf-1787337325623-22",
+            "status": "review_ready",
+            "inputTokens": 562147,
+            "outputTokens": 12675,
+            "cachedTokens": 0,
+            "totalTokens": 574822,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "10-chrome-review-ux": {
+            "workflowId": "wf-1787337327465-23",
+            "status": "review_ready",
+            "inputTokens": 1773469,
+            "outputTokens": 24232,
+            "cachedTokens": 0,
+            "totalTokens": 1797701,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        }
+      },
+      "kimi": {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cachedTokens": 0,
+        "totalTokens": 0,
+        "estimatedCostUsd": 0,
+        "eventCount": 0,
+        "unknownConfidenceCount": 0,
+        "reviewReadyFeatures": 0,
+        "failedOrOtherFeatures": 1,
+        "features": {
+          "01-repo-bootstrap": {
+            "workflowId": "wf-1787337164803-2",
+            "status": "failed",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          }
+        }
+      },
+      "qwen": {
+        "inputTokens": 847083,
+        "outputTokens": 10027,
+        "cachedTokens": 783616,
+        "totalTokens": 857110,
+        "estimatedCostUsd": 0,
+        "eventCount": 3,
+        "unknownConfidenceCount": 3,
+        "reviewReadyFeatures": 10,
+        "failedOrOtherFeatures": 0,
+        "features": {
+          "01-repo-bootstrap": {
+            "workflowId": "wf-1787454199131-11",
+            "status": "review_ready",
+            "inputTokens": 297011,
+            "outputTokens": 2366,
+            "cachedTokens": 278592,
+            "totalTokens": 299377,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "02-rewrite-contract": {
+            "workflowId": "wf-1787454201231-12",
+            "status": "review_ready",
+            "inputTokens": 420212,
+            "outputTokens": 6369,
+            "cachedTokens": 398208,
+            "totalTokens": 426581,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          },
+          "03-personas-policy": {
+            "workflowId": "wf-1787454203300-13",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "04-claude-code-provider": {
+            "workflowId": "wf-1787454205557-14",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "05-encrypted-persistence": {
+            "workflowId": "wf-1787454207675-15",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "06-durable-lifecycle": {
+            "workflowId": "wf-1787454209777-16",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "07-http-api-runtime": {
+            "workflowId": "wf-1787454211873-17",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "08-browser-review-state": {
+            "workflowId": "wf-1787454213975-18",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "09-slack-web-adapter": {
+            "workflowId": "wf-1787454216122-19",
+            "status": "review_ready",
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "totalTokens": 0,
+            "estimatedCostUsd": 0,
+            "eventCount": 0,
+            "unknownConfidenceCount": 0
+          },
+          "10-chrome-review-ux": {
+            "workflowId": "wf-1787454218281-20",
+            "status": "review_ready",
+            "inputTokens": 129860,
+            "outputTokens": 1292,
+            "cachedTokens": 106816,
+            "totalTokens": 131152,
+            "estimatedCostUsd": 0,
+            "eventCount": 1,
+            "unknownConfidenceCount": 1
+          }
+        }
+      }
+    },
+    "correctness": {
+      "claude": {
+        "reviewReady": 10,
+        "other": 0,
+        "completionRate": 1
+      },
+      "codex": {
+        "reviewReady": 10,
+        "other": 0,
+        "completionRate": 1
+      },
+      "kimi": {
+        "reviewReady": 0,
+        "other": 1,
+        "completionRate": 0
+      },
+      "qwen": {
+        "reviewReady": 10,
+        "other": 0,
+        "completionRate": 1
+      }
+    },
+    "humanInterventions": [
+      {
+        "lineage": "qwen",
+        "feature": "09-slack-web-adapter",
+        "note": "Human hotfix for open-handle test hang + send-click assert; verify passed on patched tree."
+      }
+    ],
+    "kimi": "skipped (no membership)"
+  },
+  "notes": [
+    "Missing/failed diffs remain null — never scored as zero similarity.",
+    "Similarity uses canonical git textual diff Jaccard over path/content lines.",
+    "Path Jaccard compares touched-file sets only.",
+    "Acceptance heuristics are mechanical aids; correctnessOracle remains human-final-result-comparison.",
+    "Costs are equivalent-API estimates with explicit confidence; raw tokens are authoritative.",
+    "Qwen 09 includes a documented human hotfix (see intervention flags); do not treat that feature as pure model output."
+  ],
+  "liveMetadata": {
+    "fetchedAt": "2026-08-26T02:02:06.292Z",
+    "prsByLineage": {
+      "qwen": {
+        "10-chrome-review-ux": {
+          "number": 30,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/30",
+          "title": "nicespeak-eval/qwen/10-chrome-review-ux",
+          "headRefName": "eval/qwen/feature-10-10-chrome-review-ux"
+        },
+        "09-slack-web-adapter": {
+          "number": 29,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/29",
+          "title": "nicespeak-eval/qwen/09-slack-web-adapter",
+          "headRefName": "eval/qwen/feature-09-09-slack-web-adapter"
+        },
+        "08-browser-review-state": {
+          "number": 28,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/28",
+          "title": "nicespeak-eval/qwen/08-browser-review-state",
+          "headRefName": "eval/qwen/feature-08-08-browser-review-state"
+        },
+        "07-http-api-runtime": {
+          "number": 27,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/27",
+          "title": "nicespeak-eval/qwen/07-http-api-runtime",
+          "headRefName": "eval/qwen/feature-07-07-http-api-runtime"
+        },
+        "06-durable-lifecycle": {
+          "number": 26,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/26",
+          "title": "nicespeak-eval/qwen/06-durable-lifecycle",
+          "headRefName": "eval/qwen/feature-06-06-durable-lifecycle"
+        },
+        "05-encrypted-persistence": {
+          "number": 25,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/25",
+          "title": "nicespeak-eval/qwen/05-encrypted-persistence",
+          "headRefName": "eval/qwen/feature-05-05-encrypted-persistence"
+        },
+        "04-claude-code-provider": {
+          "number": 20,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/20",
+          "title": "nicespeak-eval/qwen/04-claude-code-provider",
+          "headRefName": "eval/qwen/feature-04-04-claude-code-provider"
+        },
+        "03-personas-policy": {
+          "number": 18,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/18",
+          "title": "nicespeak-eval/qwen/03-personas-policy",
+          "headRefName": "eval/qwen/feature-03-03-personas-policy"
+        },
+        "02-rewrite-contract": {
+          "number": 16,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/16",
+          "title": "nicespeak-eval/qwen/02-rewrite-contract",
+          "headRefName": "eval/qwen/feature-02-02-rewrite-contract"
+        },
+        "01-repo-bootstrap": {
+          "number": 15,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/15",
+          "title": "nicespeak-eval/qwen/01-repo-bootstrap",
+          "headRefName": "eval/qwen/feature-01-01-repo-bootstrap"
+        }
+      },
+      "claude": {
+        "10-chrome-review-ux": {
+          "number": 24,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/24",
+          "title": "nicespeak-eval/claude/10-chrome-review-ux",
+          "headRefName": "eval/claude/feature-10-10-chrome-review-ux"
+        },
+        "09-slack-web-adapter": {
+          "number": 23,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/23",
+          "title": "nicespeak-eval/claude/09-slack-web-adapter",
+          "headRefName": "eval/claude/feature-09-09-slack-web-adapter"
+        },
+        "08-browser-review-state": {
+          "number": 22,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/22",
+          "title": "nicespeak-eval/claude/08-browser-review-state",
+          "headRefName": "eval/claude/feature-08-08-browser-review-state"
+        },
+        "07-http-api-runtime": {
+          "number": 21,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/21",
+          "title": "nicespeak-eval/claude/07-http-api-runtime",
+          "headRefName": "eval/claude/feature-07-07-http-api-runtime"
+        },
+        "06-durable-lifecycle": {
+          "number": 19,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/19",
+          "title": "nicespeak-eval/claude/06-durable-lifecycle",
+          "headRefName": "eval/claude/feature-06-06-durable-lifecycle"
+        },
+        "05-encrypted-persistence": {
+          "number": 17,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/17",
+          "title": "nicespeak-eval/claude/05-encrypted-persistence",
+          "headRefName": "eval/claude/feature-05-05-encrypted-persistence"
+        },
+        "04-claude-code-provider": {
+          "number": 14,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/14",
+          "title": "nicespeak-eval/claude/04-claude-code-provider",
+          "headRefName": "eval/claude/feature-04-04-claude-code-provider"
+        },
+        "03-personas-policy": {
+          "number": 13,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/13",
+          "title": "nicespeak-eval/claude/03-personas-policy",
+          "headRefName": "eval/claude/feature-03-03-personas-policy"
+        },
+        "02-rewrite-contract": {
+          "number": 12,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/12",
+          "title": "nicespeak-eval/claude/02-rewrite-contract",
+          "headRefName": "eval/claude/feature-02-02-rewrite-contract"
+        },
+        "01-repo-bootstrap": {
+          "number": 11,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/11",
+          "title": "nicespeak-eval/claude/01-repo-bootstrap",
+          "headRefName": "eval/claude/feature-01-01-repo-bootstrap"
+        }
+      },
+      "codex": {
+        "10-chrome-review-ux": {
+          "number": 10,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/10",
+          "title": "nicespeak-eval/codex/10-chrome-review-ux",
+          "headRefName": "eval/codex/feature-10-10-chrome-review-ux"
+        },
+        "09-slack-web-adapter": {
+          "number": 9,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/9",
+          "title": "nicespeak-eval/codex/09-slack-web-adapter",
+          "headRefName": "eval/codex/feature-09-09-slack-web-adapter"
+        },
+        "08-browser-review-state": {
+          "number": 8,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/8",
+          "title": "nicespeak-eval/codex/08-browser-review-state",
+          "headRefName": "eval/codex/feature-08-08-browser-review-state"
+        },
+        "07-http-api-runtime": {
+          "number": 7,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/7",
+          "title": "nicespeak-eval/codex/07-http-api-runtime",
+          "headRefName": "eval/codex/feature-07-07-http-api-runtime"
+        },
+        "06-durable-lifecycle": {
+          "number": 6,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/6",
+          "title": "nicespeak-eval/codex/06-durable-lifecycle",
+          "headRefName": "eval/codex/feature-06-06-durable-lifecycle"
+        },
+        "05-encrypted-persistence": {
+          "number": 5,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/5",
+          "title": "nicespeak-eval/codex/05-encrypted-persistence",
+          "headRefName": "eval/codex/feature-05-05-encrypted-persistence"
+        },
+        "04-claude-code-provider": {
+          "number": 4,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/4",
+          "title": "nicespeak-eval/codex/04-claude-code-provider",
+          "headRefName": "eval/codex/feature-04-04-claude-code-provider"
+        },
+        "03-personas-policy": {
+          "number": 3,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/3",
+          "title": "nicespeak-eval/codex/03-personas-policy",
+          "headRefName": "eval/codex/feature-03-03-personas-policy"
+        },
+        "02-rewrite-contract": {
+          "number": 2,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/2",
+          "title": "nicespeak-eval/codex/02-rewrite-contract",
+          "headRefName": "eval/codex/feature-02-02-rewrite-contract"
+        },
+        "01-repo-bootstrap": {
+          "number": 1,
+          "url": "https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/1",
+          "title": "nicespeak-eval/codex/01-repo-bootstrap",
+          "headRefName": "eval/codex/feature-01-01-repo-bootstrap"
+        }
+      }
+    },
+    "error": null,
+    "repo": "Neko-Catpital-Labs/nicespeak_invoker"
+  }
+}

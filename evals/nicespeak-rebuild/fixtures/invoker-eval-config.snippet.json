@@ -1,0 +1,42 @@
+{
+  "defaultPoolId": "nicespeak-eval-verify-local",
+  "maxConcurrency": 4,
+  "autoFixRetries": 1,
+  "defaultExecutionAgent": "codex",
+  "defaultBranch": "main",
+  "executionPools": {
+    "nicespeak-eval-agent-local": {
+      "selectionStrategy": "roundRobin",
+      "comment": "Local worktree agents so host claude/codex/kimi/qwen CLIs work; docker image only has Claude.",
+      "members": [
+        {
+          "type": "worktree",
+          "id": "nicespeak-eval-agent-worktree",
+          "maxConcurrentTasks": 2
+        }
+      ]
+    },
+    "nicespeak-eval-verify-local": {
+      "selectionStrategy": "roundRobin",
+      "members": [
+        {
+          "type": "worktree",
+          "id": "nicespeak-eval-verify-worktree",
+          "maxConcurrentTasks": 4
+        }
+      ]
+    }
+  },
+  "worktreeTargets": {
+    "nicespeak-eval-agent-worktree": {
+      "maxConcurrentTasks": 2
+    },
+    "nicespeak-eval-verify-worktree": {
+      "maxConcurrentTasks": 4
+    }
+  },
+  "repoProvisionCommands": {
+    "https://github.com/Neko-Catpital-Labs/nicespeak_invoker.git": "npm install"
+  },
+  "autoApproveAIFixes": true
+}
