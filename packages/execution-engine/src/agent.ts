@@ -7,6 +7,7 @@ export interface AgentCommandSpec {
 
 export interface AgentCommandBuildOptions {
   executionModel?: string;
+  maxTurns?: number;
 }
 export interface ExecutionModelOption {
   id: string;
