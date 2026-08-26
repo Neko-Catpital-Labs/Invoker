@@ -30,17 +30,24 @@ export class ClaudeSessionDriver implements SessionDriver {
    * Search ~/.claude/projects/<dir>/<sessionId>.jsonl.
    */
   loadSession(sessionId: string): string | null {
-    const claudeProjectsDir = join(homedir(), '.claude', 'projects');
-    if (!existsSync(claudeProjectsDir)) return null;
+    const roots: string[] = [];
+    const configDir = process.env.CLAUDE_CONFIG_DIR?.trim()
+      || process.env.INVOKER_CLAUDE_CONFIG_DIR?.trim()
+      || join(homedir(), '.invoker', 'claude-worker');
+    roots.push(join(configDir, 'projects'));
+    const legacy = join(homedir(), '.claude', 'projects');
+    if (!roots.includes(legacy)) roots.push(legacy);
 
-    const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-
-    for (const dir of projectDirs) {
-      const candidate = join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-      if (existsSync(candidate)) {
-        return readFileSync(candidate, 'utf-8');
+    for (const claudeProjectsDir of roots) {
+      if (!existsSync(claudeProjectsDir)) continue;
+      const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+      for (const dir of projectDirs) {
+        const candidate = join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+        if (existsSync(candidate)) {
+          return readFileSync(candidate, 'utf-8');
+        }
       }
     }
     return null;

@@ -453,6 +453,7 @@ export interface PlanDefinition {
     poolId?: string;
     executionAgent?: string;
     executionModel?: string;
+    maxTurns?: number;
   }>;
 }
 
@@ -566,6 +567,7 @@ export interface TaskReplacementDef {
   runnerKind?: RunnerKind;
   executionAgent?: string;
   executionModel?: string;
+    maxTurns?: number;
 }
 
 export interface ExternalGatePolicyUpdate {
@@ -1470,6 +1472,7 @@ export class Orchestrator {
         featureBranch: taskDef.featureBranch,
         executionAgent: taskDef.executionAgent,
         executionModel: taskDef.executionModel,
+        maxTurns: taskDef.maxTurns,
         poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
@@ -2757,6 +2760,7 @@ export class Orchestrator {
         prompt: rt.prompt,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
         executionModel: rt.executionModel ?? task.config.executionModel,
+        maxTurns: rt.maxTurns ?? task.config.maxTurns,
         poolId: task.config.poolId,
       } as const;
       // Replacement tasks inherit executor config from the parent task.
