@@ -81,6 +81,7 @@ export * from './workers/pr-maintenance-command.js';
 export * from './workers/idle-task-cleanup-policy.js';
 export * from './workers/idle-task-cleanup-worker.js';
 export * from './workers/e2e-autofix-worker.js';
+export * from './workers/cross-repo-research-worker.js';
 export * from './workers/reaper-worker.js';
 export * from './workers/requeue-worker.js';
 export * from './workers/workflow-resume-worker.js';

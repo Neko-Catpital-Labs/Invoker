@@ -13,6 +13,7 @@ import { registerReaperWorker } from './workers/reaper-worker.js';
 import { registerRequeueWorker } from './workers/requeue-worker.js';
 import { registerSlackBugScanWorker } from './workers/slack-bug-scan-worker.js';
 import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
+import { registerCrossRepoResearchWorker } from './workers/cross-repo-research-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -31,5 +32,6 @@ export function registerBuiltinWorkers(
   registerE2eAutoFixWorker(registry);
   registerSlackBugScanWorker(registry);
   registerIdleTaskCleanupWorker(registry);
+  registerCrossRepoResearchWorker(registry);
   return registry;
 }
