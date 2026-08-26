@@ -428,6 +428,7 @@ function buildRegisteredOwnerWorkerDeps(
       ),
     },
     e2eAutoFix: resolveE2eAutoFixWorkerConfig(invokerConfig),
+    workerSessionMine: {},
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
       authorGate: buildPersistedAutoApproveAuthorGate(persistence),
