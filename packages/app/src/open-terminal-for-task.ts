@@ -20,7 +20,7 @@ import {
   type PersistedTaskMeta,
   type TerminalSpec,
 } from '@invoker/execution-engine';
-import { loadConfig } from './config.js';
+import { loadConfig, resolveSecretsFilePath } from './config.js';
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
@@ -249,6 +249,7 @@ export function resolveTaskTerminalSpec(
         cacheDir: path.resolve(invokerHome, 'repos'),
         maxWorktrees,
         agentRegistry: opts.executionAgentRegistry,
+        secretsFile: resolveSecretsFilePath(loadConfig()),
       });
       executorRegistry.register('worktree', worktree);
       executor = worktree;
