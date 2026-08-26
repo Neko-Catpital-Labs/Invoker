@@ -206,11 +206,13 @@ class SafePushTests(unittest.TestCase):
         self.assertIn("git push", result.stderr)
         self.assertFalse(ledger.exists())
 
-    def _fake_github_remote_and_gh(self, *, pr_number: int, state: str) -> dict[str, str]:
+    def _fake_github_remote_and_gh(self, *, pr_identifier: int | str, state: str) -> dict[str, str]:
         # Fakes just enough of `git remote get-url` (so repo_slug() sees a
         # github.com URL) and `gh pr view` (so pr_state() sees a merged/closed
         # PR) while every other git subcommand still hits the real local
-        # bare-repo remote used by the rest of the test.
+        # bare-repo remote used by the rest of the test. `gh pr view` accepts
+        # either a PR number or a head branch name as its identifier, so the
+        # wrapper matches on whichever this test passes.
         wrapper_dir = self.root / "bin"
         wrapper_dir.mkdir(exist_ok=True)
         git_wrapper = wrapper_dir / "git"
@@ -235,7 +237,7 @@ class SafePushTests(unittest.TestCase):
                 f"""\
                 #!/usr/bin/env bash
                 set -euo pipefail
-                if [ "${{1:-}}" = "pr" ] && [ "${{2:-}}" = "view" ] && [ "${{3:-}}" = "{pr_number}" ]; then
+                if [ "${{1:-}}" = "pr" ] && [ "${{2:-}}" = "view" ] && [ "${{3:-}}" = "{pr_identifier}" ]; then
                   echo '{state}'
                   exit 0
                 fi
@@ -248,7 +250,7 @@ class SafePushTests(unittest.TestCase):
         return {"PATH": f"{wrapper_dir}:{os.environ['PATH']}"}
 
     def test_missing_branch_settles_as_noop_when_pr_already_merged(self) -> None:
-        env = self._fake_github_remote_and_gh(pr_number=456, state="MERGED")
+        env = self._fake_github_remote_and_gh(pr_identifier=456, state="MERGED")
         ledger = self.root / "ledger.jsonl"
 
         result = self.invoke_helper(
@@ -270,8 +272,27 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(recorded["kind"], "repair-bot-thread-settled")
         self.assertEqual(recorded["pr"], 456)
 
+    def test_missing_branch_settles_as_noop_when_pr_merged_and_no_json_pr_given(self) -> None:
+        # Reproduces the safe-push worker command: only --branch/--expected-head
+        # (no ledger flags, so no --json-pr) is passed when the branch's PR
+        # merged and GitHub deleted the head branch out from under the worker.
+        # Without a PR number, the merge/close settle check must fall back to
+        # looking the PR up by its head branch name.
+        env = self._fake_github_remote_and_gh(pr_identifier="gone", state="MERGED")
+
+        result = self.invoke_helper(
+            "--branch", "gone",
+            "--expected-head", self.expected,
+            env=env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertIn("merged", result.stderr)
+        self.assertIsNone(safe_push.remote_branch_sha("gone", remote="origin", cwd=self.repo))
+
     def test_missing_branch_stays_stale_when_pr_still_open(self) -> None:
-        env = self._fake_github_remote_and_gh(pr_number=456, state="OPEN")
+        env = self._fake_github_remote_and_gh(pr_identifier=456, state="OPEN")
         ledger = self.root / "ledger.jsonl"
 
         result = self.invoke_helper(
