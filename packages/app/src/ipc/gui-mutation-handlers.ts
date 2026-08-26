@@ -1305,6 +1305,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       logLabel: options?.logLabel ?? 'plan-from-goal',
       preserveTaskHandles: options?.preserveTaskHandles,
       taskHandles,
+      staged: true,
     });
   }
 
