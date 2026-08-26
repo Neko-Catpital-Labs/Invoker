@@ -433,6 +433,14 @@ function buildRegisteredOwnerWorkerDeps(
       authorGate: buildPersistedAutoApproveAuthorGate(persistence),
     },
     slackBugScan: buildSlackBugScanWorkerConfig(planningCommandBuilder, executionAgentRegistry),
+    crossRepoResearch: {
+      intervalMs: (invokerConfig.crossRepoResearch?.intervalDays
+        ?? 14) * 86_400_000,
+      hasMaps: Object.keys(invokerConfig.crossRepoResearch?.maps ?? {}).length > 0,
+      env: {
+        INVOKER_LINEAR_TEAM_ID: invokerConfig.crossRepoResearch?.linearTeamId,
+      },
+    },
     idleTaskCleanup: {
       github: createPrMaintenanceGitHub({
         run: spawnPrMaintenanceCommand,

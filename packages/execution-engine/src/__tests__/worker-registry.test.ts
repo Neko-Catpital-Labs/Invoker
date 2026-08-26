@@ -28,6 +28,7 @@ import { WORKFLOW_RESUME_WORKER_KIND } from '../workers/workflow-resume-worker.j
 import { E2E_AUTOFIX_WORKER_KIND } from '../workers/e2e-autofix-worker.js';
 import { SLACK_BUG_SCAN_WORKER_KIND } from '../workers/slack-bug-scan-worker.js';
 import { IDLE_TASK_CLEANUP_WORKER_KIND } from '../workers/idle-task-cleanup-worker.js';
+import { CROSS_REPO_RESEARCH_WORKER_KIND } from '../workers/cross-repo-research-worker.js';
 
 const silentLogger = {
   debug: () => {},
@@ -91,6 +92,7 @@ describe('worker registry', () => {
       E2E_AUTOFIX_WORKER_KIND,
       SLACK_BUG_SCAN_WORKER_KIND,
       IDLE_TASK_CLEANUP_WORKER_KIND,
+      CROSS_REPO_RESEARCH_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(REQUEUE_WORKER_KIND)).toBeDefined();
@@ -109,6 +111,7 @@ describe('worker registry', () => {
     expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(SLACK_BUG_SCAN_WORKER_KIND)).toBeDefined();
     expect(registry.get(IDLE_TASK_CLEANUP_WORKER_KIND)).toBeDefined();
+    expect(registry.get(CROSS_REPO_RESEARCH_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
