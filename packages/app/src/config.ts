@@ -103,6 +103,42 @@ export interface SlackBugScanConfig {
   maxAutoSubmissionsPerTick?: number;
 }
 
+/** One source repo to mine for stealable ideas. */
+export interface CrossRepoResearchSource {
+  /** GitHub repo URL (https or git@). */
+  repoUrl: string;
+  /** Days of source activity to consider. Must be > 0. Default: 30. */
+  lookbackDays?: number;
+}
+
+/**
+ * Opt-in cross-repo-research worker settings. Process on/off is SQLite
+ * `worker_desired_states`, not a config boolean.
+ */
+export interface CrossRepoResearchConfig {
+  /** Poll cadence in days. Default: 14. */
+  intervalDays?: number;
+  /** Linear team id required when maps are non-empty. */
+  linearTeamId?: string;
+  /** Cap candidate ideas per source per tick. Default: 5. */
+  maxCandidatesPerSource?: number;
+  /**
+   * Target repo URL → list of sources to mine.
+   * Source entries may be a URL string (lookbackDays defaults to 30) or
+   * `{ repoUrl, lookbackDays }`.
+   */
+  maps?: Record<string, Array<string | CrossRepoResearchSource>>;
+}
+
+/** Default lookback when a source omits lookbackDays. */
+export const DEFAULT_CROSS_REPO_RESEARCH_LOOKBACK_DAYS = 30;
+
+/** Default worker poll cadence when intervalDays is unset. */
+export const DEFAULT_CROSS_REPO_RESEARCH_INTERVAL_DAYS = 14;
+
+/** Default max candidates mined per source per tick. */
+export const DEFAULT_CROSS_REPO_RESEARCH_MAX_CANDIDATES_PER_SOURCE = 5;
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -435,6 +471,11 @@ export interface InvokerConfig {
     cleanupEnabled?: boolean;
   };
   slackBugScan?: SlackBugScanConfig;
+  /**
+   * Cross-repo research worker: maps target repos to source repos to mine.
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
+   */
+  crossRepoResearch?: CrossRepoResearchConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
