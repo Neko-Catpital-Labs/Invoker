@@ -118,9 +118,9 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers by running `invoker-cli setup` (or System Setup in the desktop app).
+Packaged installs bundle the first-party Invoker AI helpers inside the app. `invoker-cli install` already installs the helper skills and MCP server; run `invoker-cli setup` (or System Setup in the desktop app) only if you also want optional Slack and remote machine configuration.
 
-Then, in Codex, Claude, Cursor, or OMP, ask in normal chat to plan and run durable work through Invoker. Setup already installs `invoker-chat-submit` plus MCP review/submit/status tools, so the agent can prepare a review, wait for one approval, submit, and watch without a slash command.
+Then, in Codex, Claude, Cursor, or OMP, ask in normal chat to plan and run durable work through Invoker. Install already installs `invoker-chat-submit` plus MCP review/submit/status tools, so the agent can prepare a review, wait for one approval, submit, and watch without a slash command.
 
 Explicit fallback:
 
