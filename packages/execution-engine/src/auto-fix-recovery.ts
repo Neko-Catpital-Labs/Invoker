@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type { Logger } from '@invoker/contracts';
 import type {
   WorkerActionRecord,
@@ -19,6 +22,7 @@ import {
 import {
   buildFixWithAgentMutationArgs,
   listOpenFixIntentsForTask,
+  listOpenRecreateIntentsForTask,
 } from './auto-fix-intents.js';
 import {
   autoFixAttemptLedgerKeyFromTask,
@@ -52,8 +56,15 @@ const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 export const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
 /** Owner-worker mutation channel the recovery worker submits its free bare retry through. Must have a registered `workflowMutationDispatcher` handler in `packages/app/src/main.ts`. */
 export const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
+/**
+ * Owner-worker mutation channel used when a merge gate cannot be fixed in-place
+ * because its saved workspace is missing or is not a git repository.
+ * Must have a registered `workflowMutationDispatcher` handler in `packages/app/src/main.ts`.
+ */
+export const AUTO_FIX_RECREATE_CHANNEL = 'invoker:recreate-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
+const AUTO_FIX_RECREATE_ACTION_TYPE = 'auto-recreate';
 /**
  * A failed task's auto-fix attempt is a real, capacity-limited agent
  * dispatch, not a free retry. If the provider itself is out of quota, every
@@ -64,9 +75,16 @@ const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
  */
 export const DEFAULT_CIRCUIT_BREAKER_PAUSE_MS = 6 * 60 * 60 * 1000;
 
+/** Substrings that indicate a prior fix attempt already diagnosed an invalid merge workspace. */
+export const INVALID_MERGE_WORKSPACE_ERROR_MARKERS = [
+  "Cannot apply a fix because this merge gate's saved workspace",
+  'Recreate this merge-gate task from a fresh base',
+] as const;
+
 const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 'submit' | 'skip' }> = {
   'worker-autofix-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
   'worker-autofix-bare-retry-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
+  'worker-autofix-recreate-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
   'worker-autofix-skip': { eventType: 'recovery.worker.skip', action: 'skip' },
 };
 
@@ -83,11 +101,16 @@ export interface AutoFixRecoveryStore {
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
+export type AutoFixRecoverySubmitChannel =
+  | typeof AUTO_FIX_COMMAND_CHANNEL
+  | typeof AUTO_FIX_BARE_RETRY_CHANNEL
+  | typeof AUTO_FIX_RECREATE_CHANNEL;
+
 export interface AutoFixRecoverySubmitter {
   submit(
     workflowId: string,
     priority: WorkflowMutationPriority,
-    channel: typeof AUTO_FIX_COMMAND_CHANNEL | typeof AUTO_FIX_BARE_RETRY_CHANNEL,
+    channel: AutoFixRecoverySubmitChannel,
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
@@ -234,6 +257,27 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   const max = retryBudgetForTask(task, options);
   if (max <= 0) return false;
   return true;
+}
+
+export function isInvalidMergeWorkspaceErrorText(error: string | undefined): boolean {
+  if (!error) return false;
+  return INVALID_MERGE_WORKSPACE_ERROR_MARKERS.some((marker) => error.includes(marker));
+}
+
+/**
+ * True when a merge-gate task cannot be fixed in-place because its saved
+ * workspace is missing / not a git repo, or a prior attempt already reported that.
+ */
+export function shouldRecreateMergeGateInsteadOfAutoFix(task: TaskState): boolean {
+  if (!task.config.isMergeNode) return false;
+  if (isInvalidMergeWorkspaceErrorText(task.execution.error)) return true;
+
+  const workspacePath = task.execution.workspacePath?.trim();
+  if (!workspacePath) return true;
+  if (!existsSync(workspacePath)) return true;
+  // Linked worktrees store `.git` as a file; bare/missing trees have neither.
+  if (!existsSync(join(workspacePath, '.git'))) return true;
+  return false;
 }
 
 function loadLatestTask(
@@ -474,6 +518,14 @@ function validateAutoFixCandidate(
     return undefined;
   }
 
+  const openTaskRecreateIntents = listOpenRecreateIntentsForTask(openIntents, candidate.taskId);
+  if (openTaskRecreateIntents.length > 0) {
+    skipAutoFixCandidate(options, candidate, 'already-queued-recreate-intent', {
+      existingIntentIds: openTaskRecreateIntents.map((intent) => intent.id),
+    });
+    return undefined;
+  }
+
   return { ...latestRef, source: candidate.source, task: latest };
 }
 
@@ -566,6 +618,44 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
           intentId,
           extraPayload: {
             channel: AUTO_FIX_BARE_RETRY_CHANNEL,
+          },
+        });
+        recordAutoFixRetryConsumed(options.store, candidate.taskId, {
+          workflowId: candidate.workflowId,
+        });
+        continue;
+      }
+
+      // Merge gates with a missing/non-git workspace cannot be fixed in-place.
+      // Recreate the gate instead of burning fix-with-agent retry budget.
+      if (shouldRecreateMergeGateInsteadOfAutoFix(candidate.task)) {
+        const intentId = options.submitter.submit(
+          candidate.workflowId,
+          'normal',
+          AUTO_FIX_RECREATE_CHANNEL,
+          [candidate.taskId],
+        );
+        submittedThisTick.add(candidate.taskId);
+        logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-recreate-submitted', {
+          workflowId: candidate.workflowId,
+          intentId,
+          channel: AUTO_FIX_RECREATE_CHANNEL,
+          generation: candidate.generation,
+          taskStateVersion: candidate.taskStateVersion,
+          attemptId: candidate.attemptId ?? null,
+          reason: 'invalid-merge-workspace',
+          workspacePath: candidate.task.execution.workspacePath ?? null,
+        });
+        recordAutoFixDecisionRow(options, candidate, {
+          status: 'queued',
+          summary: 'Queued recreate-task for invalid merge-gate workspace',
+          reason: 'invalid-merge-workspace',
+          intentId,
+          incrementAttempt: true,
+          extraPayload: {
+            channel: AUTO_FIX_RECREATE_CHANNEL,
+            actionType: AUTO_FIX_RECREATE_ACTION_TYPE,
+            workspacePath: candidate.task.execution.workspacePath ?? null,
           },
         });
         recordAutoFixRetryConsumed(options.store, candidate.taskId, {

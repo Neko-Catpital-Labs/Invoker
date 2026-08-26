@@ -1,4 +1,4 @@
-import { AUTO_FIX_BARE_RETRY_CHANNEL, AUTO_FIX_COMMAND_CHANNEL } from './auto-fix-recovery.js';
+import { AUTO_FIX_BARE_RETRY_CHANNEL, AUTO_FIX_COMMAND_CHANNEL, AUTO_FIX_RECREATE_CHANNEL } from './auto-fix-recovery.js';
 import { AUTO_APPROVE_COMMAND_CHANNEL } from './workers/auto-approve-worker.js';
 import { INFRA_REPAIR_RECREATE_TASK_CHANNEL, INFRA_REPAIR_RETRY_TASK_CHANNEL } from './workers/infra-repair-worker.js';
 import { REQUEUE_COMMAND_CHANNEL, REQUEUE_ESCALATE_CHANNEL } from './workers/requeue-worker.js';
@@ -24,6 +24,7 @@ import { WORKFLOW_RESUME_COMMAND_CHANNEL } from './workers/workflow-resume-worke
 export const WORKER_SUBMITTED_MUTATION_CHANNELS: readonly string[] = [
   AUTO_FIX_COMMAND_CHANNEL,
   AUTO_FIX_BARE_RETRY_CHANNEL,
+  AUTO_FIX_RECREATE_CHANNEL,
   AUTO_APPROVE_COMMAND_CHANNEL,
   REQUEUE_COMMAND_CHANNEL,
   REQUEUE_ESCALATE_CHANNEL,
