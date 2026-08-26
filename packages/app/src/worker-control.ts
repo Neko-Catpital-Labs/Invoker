@@ -30,6 +30,7 @@ import {
   REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
+  WORKER_SESSION_MINE_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -349,7 +350,7 @@ interface RuntimeHandle {
   stoppedAt?: string;
 }
 
-const BUILT_IN_WORKER_KINDS = new Set<string>([
+export const BUILT_IN_WORKER_KINDS = new Set<string>([
   AUTO_FIX_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   INFRA_REPAIR_WORKER_KIND,
@@ -366,6 +367,7 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   SLACK_BUG_SCAN_WORKER_KIND,
   CROSS_REPO_RESEARCH_WORKER_KIND,
   MERGIFY_QUEUE_RESEARCH_WORKER_KIND,
+  WORKER_SESSION_MINE_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {
