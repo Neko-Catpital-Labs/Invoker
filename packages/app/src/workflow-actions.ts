@@ -1212,6 +1212,12 @@ async function recordFixedIntegrationAnchor(
  * Automatically fix a failed task with an AI agent and restart it.
  * Worker retry limits are enforced before this action is queued.
  */
+
+/** Command tasks (normalize/safe-push) must not spawn Claude autofix sessions. */
+export function shouldSkipAgentAutoFixForTask(task: { config?: { command?: string } }): boolean {
+  return Boolean(task.config?.command);
+}
+
 export async function autoFixOnFailure(
   taskId: string,
   deps: {
@@ -1232,6 +1238,14 @@ export async function autoFixOnFailure(
 
   const task = orchestrator.getTask(taskId);
   if (!task || task.status !== 'failed') return;
+
+  if (shouldSkipAgentAutoFixForTask(task)) {
+    console.log(`[auto-fix] "${taskId}" skipping agent autofix for command task`);
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-skip-command-task',
+    });
+    return;
+  }
 
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, deps.signal);
