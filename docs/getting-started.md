@@ -10,6 +10,16 @@ Install, configure, and run Invoker. For the product overview, see the [README](
 
 ## Installation
 
+**Recommended (packaged):** one command installs Node if needed, `invoker-cli` + `invoker-ui`, runs `doctor --fix`, then `setup --yes` (skills + MCP). It does not write Slack tokens or remote machines.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/bootstrap.sh | bash
+```
+
+Default Invoker owner is local (`invoker-cli mcp`). In Claude / Cursor / Codex / OMP chat, name a host or IP to use a remote Invoker — the agent probes SSH and retargets MCP only after a successful probe.
+
+**Source checkout** (contributors):
+
 ```bash
 git clone https://github.com/Neko-Catpital-Labs/Invoker.git invoker && cd invoker
 pnpm install
@@ -27,17 +37,17 @@ For packaged installs, the repo includes npm launchers, direct GitHub Release do
 
 The downloaded standalone CLI binary does not require Node after installation. It can run plans directly, or delegate to a running Invoker desktop owner when one is available. The npm package is a launcher that installs and runs that bundled binary as `invoker-cli`.
 
-Install with npm:
+Prefer the [bootstrap one-liner](#installation) above. Manual npm path:
 
 ```bash
 npm install -g @neko-catpital-labs/invoker-cli
 invoker-cli --version
-invoker-cli doctor
-invoker-cli setup
+invoker-cli doctor --fix
+invoker-cli setup --yes
 invoker-cli run plans/fixtures/hello-world.yaml --standalone
 ```
 
-`invoker-cli setup` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and walks through the rest of onboarding (Slack integration, GitHub auth, a smoke-test plan run) — one command for the full standalone install.
+`invoker-cli setup` installs the first-party Invoker AI helper skills and registers the Invoker MCP server with Codex, Claude, Cursor, and OMP. With `--yes` it skips Slack/machines prompts; interactive `setup` still walks Slack, GitHub auth, and a smoke-test plan run.
 
 Or download the platform binary from GitHub Releases:
 
@@ -88,11 +98,13 @@ The macOS npm launcher uses the `.zip` app bundle asset so it does not need to m
 
 For a local maintainer build from the latest `master` commit, including Apple Silicon `.dmg` generation, the standalone `invoker-slack` binary, and unsigned-build quarantine removal, see [local-macos-release-build.md](local-macos-release-build.md) (`bash scripts/local-macos-release-build.sh`).
 
-For source-based packaged installs, the repo includes an installer script:
+For desktop binary packages only (no npm/skills), the repo includes an installer script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash
 ```
+
+For CLI + UI + skills/MCP in one step, use [`scripts/bootstrap.sh`](../scripts/bootstrap.sh) instead.
 
 Tagged releases are configured to publish:
 - standalone CLI binaries and `.tar.gz` archives for macOS and Linux on x64 and arm64

@@ -107,16 +107,26 @@ PR maintenance uses the same owner-host worker path. Enable `prMaintenance` to l
 
 ## Install
 
+One command installs CLI + UI, runs doctor, and wires skills/MCP into Claude, Cursor, Codex, and OMP:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/bootstrap.sh | bash
+```
+
+Default Invoker owner is **local**. In chat, name a host or IP to use a remote Invoker (the agent probes SSH and retargets MCP). Slack and remote machines stay optional (`invoker-cli setup slack` / `setup machines`).
+
+Manual equivalent:
+
 ```bash
 npm install -g @neko-catpital-labs/invoker-ui
 npm install -g @neko-catpital-labs/invoker-cli
-npm install -g @neko-catpital-labs/invoker-slack
-invoker-cli setup
+invoker-cli doctor --fix
+invoker-cli setup --yes
 ```
 
-Or grab desktop builds and standalone binaries from [GitHub Releases](https://github.com/Neko-Catpital-Labs/Invoker/releases/latest). Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
+Or grab desktop builds and standalone binaries from [GitHub Releases](https://github.com/Neko-Catpital-Labs/Invoker/releases/latest) (`curl …/scripts/install.sh | bash` for desktop packages only). Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
 
-`invoker-cli setup` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and walks through the rest of onboarding (Slack integration, GitHub auth, a smoke-test plan run).
+`invoker-cli setup` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and walks through the rest of onboarding when run interactively (Slack, GitHub auth, smoke-test).
 
 Then, in Codex, Claude, Cursor, or OMP, ask in normal chat to plan and run durable work through Invoker. Setup already installs the `invoker-chat-submit` skill and MCP tools, so the agent can prepare a review, wait for one approval, submit, and watch status without a slash command.
 
