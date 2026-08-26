@@ -725,4 +725,32 @@ describe('crossRepoResearch config', () => {
       },
     })).toThrow(/maps key must be a git URL/);
   });
+
+  it.each([
+    'https://github.com/owner',
+    'git@example.com',
+    'ssh://example.com',
+  ])('rejects map keys with no repository path (%s)', (targetUrl) => {
+    expect(() => validateInvokerConfig({
+      crossRepoResearch: {
+        linearTeamId: 'team-1',
+        maps: { [targetUrl]: ['https://github.com/stablyai/orca'] },
+      },
+    })).toThrow(/maps key must be a git URL/);
+  });
+
+  it.each([
+    'https://github.com/owner',
+    'git@example.com',
+    'ssh://example.com',
+  ])('rejects string sources with no repository path (%s)', (sourceUrl) => {
+    expect(() => validateInvokerConfig({
+      crossRepoResearch: {
+        linearTeamId: 'team-1',
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [sourceUrl],
+        },
+      },
+    })).toThrow(/must be a git URL string/);
+  });
 });

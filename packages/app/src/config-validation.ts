@@ -37,8 +37,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+const HTTP_GIT_URL_RE = /^https?:\/\/[^\s/]+\.[^\s/]+\/[^\s/]+\/[^\s/]+/i;
+const SSH_GIT_URL_RE = /^ssh:\/\/(?:[^\s@/]+@)?[^\s/]+\.[^\s/]+\/[^\s/]+\/[^\s/]+/i;
+const SCP_GIT_URL_RE = /^git@[^\s:]+\.[^\s:]+:[^\s/]+\/[^\s/]+/i;
+
 function isGitUrl(value: string): boolean {
-  return /^(?:git@|https?:\/\/|ssh:\/\/).+\..+/i.test(value.trim());
+  const trimmed = value.trim();
+  return HTTP_GIT_URL_RE.test(trimmed) || SSH_GIT_URL_RE.test(trimmed) || SCP_GIT_URL_RE.test(trimmed);
 }
 
 function validateCrossRepoResearchSource(entry: unknown, path: string): void {
