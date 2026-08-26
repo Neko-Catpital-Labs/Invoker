@@ -1,0 +1,44 @@
+name: close-superseded-repair-pr-10549
+description: >
+  PR #10549 is a repair-bot branch that duplicates already-merged PR #10541
+  (commit 49b7394ff), which independently implements the same Node bootstrap
+  wrapper feature. Diffing confirms PR #10549 has no content beyond what
+  master already has, and master's version is strictly better (it keeps a
+  NodeSource-script validation step and a post-install Node major-version
+  mismatch check that PR #10549's version drops), so this plan closes
+  PR #10549 without merging instead of forcing a rebase that would
+  reintroduce a weaker, superseded implementation.
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+
+tasks:
+  - id: verify-pr-10549-superseded
+    description: >
+      Re-confirm PR #10549 (head 0aa1f8f26201651f918ec5cc59c1bdaaf944109e)
+      has no content that master lacks, immediately before closing it.
+      Checks that master's scripts/bootstrap.sh still has the
+      run_nodesource_setup safety wrapper and the INSTALLED_NODE_MAJOR
+      mismatch check (both absent from PR #10549's version), and that the
+      two files PR #10549 touched outside the conflict set
+      (scripts/review-unit-rules.mjs, scripts/test-review-unit-classification.mjs)
+      are still byte-identical to master.
+    command: >
+      git fetch origin master &&
+      git show origin/master:scripts/bootstrap.sh | grep -q 'run_nodesource_setup' &&
+      git show origin/master:scripts/bootstrap.sh | grep -q 'INSTALLED_NODE_MAJOR' &&
+      git diff --exit-code origin/master:scripts/review-unit-rules.mjs 0aa1f8f26201651f918ec5cc59c1bdaaf944109e:scripts/review-unit-rules.mjs &&
+      git diff --exit-code origin/master:scripts/test-review-unit-classification.mjs 0aa1f8f26201651f918ec5cc59c1bdaaf944109e:scripts/test-review-unit-classification.mjs &&
+      echo "OK: master supersedes PR #10549, no unique content found"
+    dependencies: []
+
+  - id: close-pr-10549
+    description: >
+      Close PR #10549 without merging, with a comment explaining it is
+      superseded by #10541 (49b7394ff). Gated on manual approval since this
+      is a visible, external action on shared GitHub state.
+    command: >
+      gh pr close 10549 --comment "Closing: superseded by #10541 (merged as 49b7394ff), which independently implements this same Node bootstrap wrapper feature with additional safety hardening (NodeSource setup-script validation before privileged execution, and a post-install Node major-version mismatch check) that this branch's version lacks. Diffed against current master: no unique content remains here to rebase or cherry-pick."
+    dependencies:
+      - verify-pr-10549-superseded
+    requiresManualApproval: true
