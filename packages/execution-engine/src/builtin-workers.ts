@@ -14,6 +14,7 @@ import { registerRequeueWorker } from './workers/requeue-worker.js';
 import { registerSlackBugScanWorker } from './workers/slack-bug-scan-worker.js';
 import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
 import { registerCrossRepoResearchWorker } from './workers/cross-repo-research-worker.js';
+import { registerCatstackDeployWorker } from './workers/catstack-deploy-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -33,5 +34,6 @@ export function registerBuiltinWorkers(
   registerSlackBugScanWorker(registry);
   registerIdleTaskCleanupWorker(registry);
   registerCrossRepoResearchWorker(registry);
+  registerCatstackDeployWorker(registry);
   return registry;
 }
