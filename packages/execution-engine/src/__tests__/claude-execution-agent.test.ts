@@ -182,79 +182,50 @@ describe('ClaudeExecutionAgent', () => {
 
   describe('getContainerRequirements', () => {
     it('returns mounts for .claude config dir', () => {
-      const configDir = '/tmp/invoker-claude-agent-test-config';
-      mkdirSync(configDir, { recursive: true });
-      try {
-        const agent = new ClaudeExecutionAgent({ configDir });
-        const reqs = agent.getContainerRequirements();
+      const agent = new ClaudeExecutionAgent({ configDir: '/test/.claude' });
+      const reqs = agent.getContainerRequirements();
 
-        expect(reqs.mounts).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ hostPath: '/tmp/invoker-claude-agent-test-config', containerPath: '/home/invoker/.claude' }),
-          ]),
-        );
-      } finally {
-        rmSync(configDir, { recursive: true, force: true });
-      }
+      expect(reqs.mounts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ hostPath: '/test/.claude', containerPath: '/home/invoker/.claude' }),
+        ]),
+      );
     });
 
     it('returns ANTHROPIC_API_KEY in env', () => {
-      const agent = new ClaudeExecutionAgent({ apiKey: 'sk-test-key', configDir: '/tmp/invoker-claude-agent-test-config' });
-      mkdirSync('/tmp/invoker-claude-agent-test-config', { recursive: true });
-      try {
-        const reqs = agent.getContainerRequirements();
-        expect(reqs.env.ANTHROPIC_API_KEY).toBe('sk-test-key');
-      } finally {
-        rmSync('/tmp/invoker-claude-agent-test-config', { recursive: true, force: true });
-      }
-    });
+      const agent = new ClaudeExecutionAgent({ apiKey: 'sk-test-key' });
+      const reqs = agent.getContainerRequirements();
 
-    it('sets CLAUDE_CONFIG_DIR in env to the worker config dir', () => {
-      const configDir = mkdtempSync(join(tmpdir(), 'claude-cfg-'));
-      try {
-        const agent = new ClaudeExecutionAgent({ configDir });
-        expect(agent.getContainerRequirements().env.CLAUDE_CONFIG_DIR).toBe(configDir);
-      } finally {
-        rmSync(configDir, { recursive: true, force: true });
-      }
+      expect(reqs.env.ANTHROPIC_API_KEY).toBe('sk-test-key');
     });
 
     it('uses custom containerHomePath for mount targets', () => {
-      const configDir = mkdtempSync(join(tmpdir(), 'claude-cfg-'));
-      try {
-        const agent = new ClaudeExecutionAgent({ configDir, containerHomePath: '/root' });
-        const reqs = agent.getContainerRequirements();
+      const agent = new ClaudeExecutionAgent({ configDir: '/test/.claude', containerHomePath: '/root' });
+      const reqs = agent.getContainerRequirements();
 
-        expect(reqs.mounts).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ containerPath: '/root/.claude' }),
-          ]),
-        );
-      } finally {
-        rmSync(configDir, { recursive: true, force: true });
-      }
+      expect(reqs.mounts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ containerPath: '/root/.claude' }),
+        ]),
+      );
     });
 
     it('falls back to process.env.ANTHROPIC_API_KEY', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-from-env';
-      const configDir = mkdtempSync(join(tmpdir(), 'claude-cfg-'));
-      try {
-        const agent = new ClaudeExecutionAgent({ configDir });
-        const reqs = agent.getContainerRequirements();
+      const agent = new ClaudeExecutionAgent();
+      const reqs = agent.getContainerRequirements();
 
-        expect(reqs.env.ANTHROPIC_API_KEY).toBe('sk-from-env');
-      } finally {
-        rmSync(configDir, { recursive: true, force: true });
-      }
+      expect(reqs.env.ANTHROPIC_API_KEY).toBe('sk-from-env');
     });
+  });
 
-    it('defaults CLAUDE_CONFIG_DIR to worker dir, not interactive ~/.claude', () => {
+  describe('worker-scoped Claude config', () => {
+    it('defaults CLAUDE_CONFIG_DIR to worker dir, not interactive home', () => {
       delete process.env.INVOKER_CLAUDE_CONFIG_DIR;
       const agent = new ClaudeExecutionAgent();
       const reqs = agent.getContainerRequirements();
       expect(reqs.env.CLAUDE_CONFIG_DIR).toBe(resolveClaudeWorkerConfigDir());
       expect(reqs.env.CLAUDE_CONFIG_DIR).toContain('.invoker');
-      expect(reqs.env.CLAUDE_CONFIG_DIR).not.toMatch(/\.claude$/);
     });
 
     it('honors INVOKER_CLAUDE_CONFIG_DIR', () => {
@@ -268,7 +239,20 @@ describe('ClaudeExecutionAgent', () => {
         rmSync(configDir, { recursive: true, force: true });
       }
     });
+
+    it('includes CLAUDE_CONFIG_DIR when configDir is explicit', () => {
+      const configDir = mkdtempSync(join(tmpdir(), 'claude-cfg-'));
+      try {
+        const agent = new ClaudeExecutionAgent({ apiKey: 'sk-test-key', configDir });
+        const reqs = agent.getContainerRequirements();
+        expect(reqs.env.ANTHROPIC_API_KEY).toBe('sk-test-key');
+        expect(reqs.env.CLAUDE_CONFIG_DIR).toBe(configDir);
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
   });
+
 
   describe('properties', () => {
     it('has name = "claude"', () => {
