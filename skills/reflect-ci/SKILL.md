@@ -53,3 +53,12 @@ Paste the marker line into the task summary.
 - Never vendor catstack `reflect` into this repo as `skills/reflect/`.
 - Never drive-by product or unrelated CI-job fixes from this skill.
 - Prefer structural gates (tests, scripts, harness prompts) over prose.
+
+## Related: worker-session-mine
+
+Fire-and-forget Invoker worker Claude sessions (`claude -p`) are mined by the
+off-by-default `worker-session-mine` owner worker — see
+`skills/worker-session-mine/SKILL.md`. That path files a separate follow-up and
+may open an **Invoker** PR when the root cause is harness/product (unlike
+typical `reflect-ci-*` tasks, which stay catstack-only for methodology). Do not
+confuse the two.
