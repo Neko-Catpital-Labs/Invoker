@@ -113,6 +113,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No e2e auto-fix runs recorded yet.',
     };
   }
+  if (kind === 'cross-repo-research') {
+    return {
+      name: 'Cross-repo research',
+      idleText: 'Idle. Mines mapped source repos and submits a research-swarm → Linear chain when turned on.',
+      noActionText: 'No cross-repo-research runs recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',
