@@ -120,6 +120,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No cross-repo-research runs recorded yet.',
     };
   }
+  if (kind === 'mergify-queue-research') {
+    return {
+      name: 'Mergify queue research',
+      idleText: 'Idle. Mines Mergify/admin-bypass ledger events and submits a research-swarm → Linear chain when turned on.',
+      noActionText: 'No mergify-queue-research runs recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',
