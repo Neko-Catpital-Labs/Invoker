@@ -20,9 +20,11 @@ if [[ ! -f "$CLI_DIST" ]]; then
 fi
 node "$CLI_DIST" install --demo >"$OUT"
 
+grep -qF '==> Invoker quick-install' "$OUT" || fail "transcript missing banner"
 grep -qF 'Slack: skipped' "$OUT" || fail "transcript missing Slack skip"
 grep -qF 'Remote machines: skipped' "$OUT" || fail "transcript missing machines skip"
 grep -qF 'Workers on: pr-status, autofix, auto-approve' "$OUT" || fail "transcript missing workers"
 grep -qF 'Quick-install complete' "$OUT" || fail "transcript missing completion banner"
+grep -qF 'auto-approve-authors --add-current-github-user' "$OUT" || fail "transcript missing auto-approve-authors marker"
 
 echo "Wrote $OUT"
