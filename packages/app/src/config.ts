@@ -283,6 +283,8 @@ export interface InvokerConfig {
    * Cadence stays in the flat `e2eAutoFixIntervalMs` above.
    */
   e2eAutoFix?: E2eAutoFixConfig;
+  /** Cadence for the worker-session-mine worker in milliseconds. Default: 3_600_000 (1h). */
+  workerSessionMineIntervalMs?: number;
   stallRequeueRetries?: number;
   stallRequeueBackoffMs?: number;
   /**
