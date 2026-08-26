@@ -318,6 +318,7 @@ describe('serializeWorkflow', () => {
       baseBranch: 'master',
       featureBranch: 'feature/test',
       generation: 2,
+      staged: true,
     };
     const result = serializeWorkflow(wf);
     expect(result.description).toBe('A test workflow');
@@ -326,6 +327,7 @@ describe('serializeWorkflow', () => {
     expect(result.baseBranch).toBe('master');
     expect(result.featureBranch).toBe('feature/test');
     expect(result.generation).toBe(2);
+    expect(result.staged).toBe(true);
   });
 
   it('omits undefined optional fields', () => {

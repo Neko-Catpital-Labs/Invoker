@@ -1348,7 +1348,7 @@ function startHeadlessMode(): void {
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        })
+        }, { staged: true })
       );
 
       // Web clients get planning-chat token streaming over SSE. The bridge does
