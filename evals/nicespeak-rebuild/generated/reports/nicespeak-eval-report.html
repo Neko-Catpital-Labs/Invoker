@@ -1,0 +1,1120 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>NiceSpeak rebuild eval — per-workflow</title>
+<style>
+body{font-family:ui-monospace,Menlo,monospace;margin:2rem;background:#111;color:#eee;line-height:1.4}
+table{border-collapse:collapse;margin:1rem 0;width:100%}
+th,td{border:1px solid #333;padding:.4rem .6rem;text-align:left;vertical-align:top}
+th{background:#222}
+.null{color:#888}
+.muted{color:#9aa;font-size:.9em}
+.flag{color:#f5a623}
+.ok{color:#6c6}
+.bad{color:#f66}
+a{color:#8cf}
+.tri td{width:30%}
+section{margin:2.5rem 0;padding-top:1rem;border-top:1px solid #333}
+ul{margin:.3rem 0 .8rem 1.2rem;padding:0}
+</style></head><body>
+<h1>NiceSpeak rebuild eval — per-workflow</h1>
+<p>source b4c28368c1f592032172f0bceef1bcd2bc8683e2 · pricing nicespeak-eval-2026-08-21</p>
+<p>Lineages compared: claude · codex · qwen (kimi skipped). Correctness oracle remains human-final.</p>
+<p class="muted">PR metadata from gh (Neko-Catpital-Labs/nicespeak_invoker); excluded from frozen hash.</p>
+<p class="muted">estimatedCostUsd is often 0 when model=unknown; raw tokens are authoritative.
+estimatedCostUsd is 0 because persisted events have model=unknown / unknownConfidence; raw token counts are authoritative.</p>
+<section>
+<h2>Correctness and functional equivalence</h2>
+<p><strong>0 of 10</strong> feature steps are functionally equivalent across all three models under the strict review merge.</p>
+<p class="muted">Strict merge of two independent reviews per feature. A blocking failure from either review prevents a pass. Self-authored tests are supporting evidence, not proof of equivalent behavior.</p>
+<table>
+<thead><tr><th>feature step</th><th>claude</th><th>codex</th><th>qwen</th><th>equivalent</th><th>plain-English finding</th></tr></thead>
+<tbody><tr>
+      <th><a href="#01-repo-bootstrap">01-repo-bootstrap</a></th>
+      <td class="ok">pass</td>
+      <td class="ok">pass</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>The basic Node skeletons look similar, but Qwen's required check command always fails because npm audit has no lockfile. The precheck never ran that command.</td>
+    </tr>
+<tr>
+      <th><a href="#02-rewrite-contract">02-rewrite-contract</a></th>
+      <td class="ok">pass</td>
+      <td class="flag">needs_work</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>Claude enforces validation around the provider. Codex proves ordering only in a test helper. Qwen has no strict output validator and turns malformed output into a valid-looking response.</td>
+    </tr>
+<tr>
+      <th><a href="#03-personas-policy">03-personas-policy</a></th>
+      <td class="flag">needs_work</td>
+      <td class="flag">needs_work</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>The models disagree on persona IDs, defaults, fake doors, and clamping. Claude implements clamps but lets request filler override one persona default; Codex omits clamps; Qwen can bypass the default policy and exposes a mutable prompt catalog.</td>
+    </tr>
+<tr>
+      <th><a href="#04-claude-code-provider">04-claude-code-provider</a></th>
+      <td class="bad">fail</td>
+      <td class="bad">fail</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>No implementation passes the strict session-persistence requirement because none sends the explicit no-session-persistence flag. Qwen also invents unsupported Claude CLI syntax and returns sendable fallback text on errors.</td>
+    </tr>
+<tr>
+      <th><a href="#05-encrypted-persistence">05-encrypted-persistence</a></th>
+      <td class="ok">pass</td>
+      <td class="ok">pass</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>Claude and Codex store encrypted payloads successfully, although their schemas are incompatible. Qwen fails its own round-trip test and has weaker fail-closed reads, audit redaction, and key handling.</td>
+    </tr>
+<tr>
+      <th><a href="#06-durable-lifecycle">06-durable-lifecycle</a></th>
+      <td class="bad">fail</td>
+      <td class="bad">fail</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>All three have blocking durability gaps under strict review. Codex lacks a safe migration from feature 05, Claude has a reclaim race that can revive a completed row, and Qwen lacks atomic claim, bounded retry, correct TTL deletion, and fail-closed output persistence.</td>
+    </tr>
+<tr>
+      <th><a href="#07-http-api-runtime">07-http-api-runtime</a></th>
+      <td class="ok">pass</td>
+      <td class="ok">pass</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>Claude and Codex expose working public rewrite routes, but their response shapes differ. Qwen's route is not exercised by its tests, uses the wrong Slack origin, never initializes persistence correctly, and cannot reliably process a real request.</td>
+    </tr>
+<tr>
+      <th><a href="#08-browser-review-state">08-browser-review-state</a></th>
+      <td class="ok">pass</td>
+      <td class="flag">needs_work</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>Claude records the exact authorized text and consumes send authorization once. Codex can authorize an unacceptable rewrite with no replacement. Qwen allows repeated send events and does not record which text the user chose.</td>
+    </tr>
+<tr>
+      <th><a href="#09-slack-web-adapter">09-slack-web-adapter</a></th>
+      <td class="ok">pass</td>
+      <td class="bad">fail</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>Claude is the only implementation with scoped multi-composer handling and a tested one-shot native send path. Codex can select the wrong composer and cannot complete a native send. Qwen does not stop Slack's own listeners and includes a human hotfix.</td>
+    </tr>
+<tr>
+      <th><a href="#10-chrome-review-ux">10-chrome-review-ux</a></th>
+      <td class="bad">fail</td>
+      <td class="bad">fail</td>
+      <td class="bad">fail</td>
+      <td class="bad">no</td>
+      <td>The live Chrome test failed all three lineages. Claude and Qwen could not load as unpacked extensions. Codex loaded, but a real Enter key bypassed review and posted the original text.</td>
+    </tr></tbody>
+</table>
+<h3>Why the PRs are so different</h3>
+<ol><li>The prompts were shared, but several acceptance terms were ambiguous. Each model chose different API shapes, defaults, schemas, and error behavior.</li><li>The PRs are cumulative. Feature 03 builds on each model's own feature 02, so early contract differences become larger integration differences in later PRs.</li><li>Each model wrote tests for its own interpretation. Green local tests therefore prove internal consistency, not cross-model equivalence.</li><li>The mechanical precheck ran install and test commands, but it did not exercise every named script or real CLI, Postgres, Chrome, Slack, and concurrent-worker boundary.</li><li>Implementation depth varied materially: Claude generally built broader guards and tests, Codex preferred narrower slices, and Qwen often used shallow mocks or committed generated agent artifacts.</li></ol>
+<h3>Why Qwen PRs #25 and #26 fail</h3>
+<p>PRs #25 and #26 both fail at their own heads. They fail the same encrypted-persistence assertion, but #26 also has independent lifecycle defects.</p>
+<h4>PR #25 — encrypted persistence</h4>
+<ul><li>The immediate red test is an object-aliasing bug in the database double. The mock returns its stored row object by reference; getRewriteRun deletes ciphertext_payload from that object after decrypting it, so the mock's stored ciphertext disappears.</li><li>A real pg query normally returns a fresh row object, which is why PR #27's later clone-the-row repair is a legitimate test-double fix. It does not retroactively make PR #25 green.</li><li>PR #25 also has production-quality gaps: unreadable ciphertext can be omitted instead of raising a hard error, raw identifying audit values can be stored under a redacted name, and encryption-key handling truncates long strings instead of decoding an exact 32-byte key.</li></ul>
+<h4>PR #26 — durable lifecycle</h4>
+<ul><li>PR #26 inherits the same red persistence test and edits the fixture without fixing the by-reference deletion mechanism.</li><li>Its lifecycle claim is a read followed by an unconditional update, so two workers can claim and bill the same run.</li><li>Provider failures do not retry as specified; reclaim resets attempts to zero, making repeated reclaim cycles unbounded.</li><li>TTL cleanup ignores the persisted expiry contract and excludes pending or processing rows, so live encrypted text can survive indefinitely.</li><li>Its mocks JSON-parse payloads while the inherited production persistence returns strings, hiding that the real provider path can receive undefined text and lose persona policy.</li><li>Invalid provider output is encrypted and written over the original request instead of failing closed without persisting untrusted output.</li></ul>
+<h3>Live Chrome-to-Slack E2E</h3>
+<p><strong>No lineage completed the Chrome-to-Slack rewrite, review, and send flow.</strong></p>
+<p class="muted">Tested 2026-08-26T05:20:00Z at <a href="https://app.slack.com/client/T0AJUNMP7T7/C0AJW40CRUN">https://app.slack.com/client/T0AJUNMP7T7/C0AJW40CRUN</a>. Screenshots are retained for the Codex and Qwen runs. Claude's exact Chrome error and inspected manifest state are recorded, but no Claude screenshot was retained.</p>
+<table>
+<thead><tr><th>lineage</th><th>PR / frozen head</th><th>failed stage</th><th>observed</th><th>cause</th></tr></thead>
+<tbody><tr>
+        <th>claude</th>
+        <td>#24<br><code>7f7936eb6a455bcbe43ae035e923aa9831f0fc4f</code></td>
+        <td class="bad">manifest load</td>
+        <td>Chrome rejected web_accessible_resources[0] as an invalid match pattern and did not load the extension.</td>
+        <td>The manifest uses the path-specific pattern https://mail.google.com/chat/* where Chrome requires a valid match pattern.</td>
+      </tr><tr>
+        <th>codex</th>
+        <td>#10<br><code>8a86c42ecf0c0737a8da87035273087a534fc776</code></td>
+        <td class="bad">Slack Enter interception</td>
+        <td>The panel showed Ready, but a real Enter keystroke bypassed NiceSpeak and immediately posted the original text without review.</td>
+        <td>The extension loaded and its rewrite endpoint passed preflight, but its real Slack key event path did not prevent the native send.<br><span class="muted">The uniquely tagged Slack test message was deleted; its post-cleanup page count was zero.</span><br><span class="muted">evidence: <code>published/slack-e2e/codex/01-ready.png</code>, <code>published/slack-e2e/codex/02-review.png</code>, <code>published/slack-e2e/codex/02-rewriting.png</code></span></td>
+      </tr><tr>
+        <th>qwen</th>
+        <td>#30<br><code>e0e19a000f6b95874e4c24db63e84bdfa1ba0fea</code></td>
+        <td class="bad">manifest load</td>
+        <td>Chrome could not load ./chrome-extension/content-script.js and rejected the extension.</td>
+        <td>The manifest references a content script, stylesheet, popup, and icons that do not exist in the submitted tree.<br><span class="muted">evidence: <code>published/slack-e2e/qwen/01-load-failure.png</code></span></td>
+      </tr></tbody>
+</table>
+<h3>Narrowest practical slices for equivalent results</h3>
+<p>Smaller prompts alone will not produce equivalent systems. Each model must start from the same frozen parent and pass the same black-box conformance command before its lineage advances.</p>
+<p><strong>Confirmed safety invariant:</strong> For every slice: start all models from the same frozen parent; define exactly one externally observable behavior with one shared golden command; preserve every prior golden command; reject implementation-specific substitutes; do not advance a lineage until it passes.</p>
+<table>
+<thead><tr><th>slice</th><th>one observable behavior</th><th>shared golden command</th></tr></thead>
+<tbody><tr>
+      <th>01-project-commands</th>
+      <td>A clean checkout installs and the required test and check commands exit successfully.</td>
+      <td><code>npm run conformance -- 01-project-commands</code></td>
+    </tr><tr>
+      <th>02-rewrite-request-contract</th>
+      <td>The same valid and invalid rewrite requests receive the same acceptance or rejection result.</td>
+      <td><code>npm run conformance -- 02-rewrite-request-contract</code></td>
+    </tr><tr>
+      <th>03-rewrite-output-contract</th>
+      <td>Only schema-valid provider output becomes sendable text; malformed output fails closed.</td>
+      <td><code>npm run conformance -- 03-rewrite-output-contract</code></td>
+    </tr><tr>
+      <th>04-persona-catalog</th>
+      <td>Persona IDs, defaults, and unknown-persona behavior are byte-for-byte identical.</td>
+      <td><code>npm run conformance -- 04-persona-catalog</code></td>
+    </tr><tr>
+      <th>05-policy-bounds</th>
+      <td>Tone, length, filler, and safety bounds produce the same effective policy and prompt ordering.</td>
+      <td><code>npm run conformance -- 05-policy-bounds</code></td>
+    </tr><tr>
+      <th>06-provider-process</th>
+      <td>The provider uses the exact CLI arguments, disables session persistence, times out, and reports errors without fallback text.</td>
+      <td><code>npm run conformance -- 06-provider-process</code></td>
+    </tr><tr>
+      <th>07-encryption-envelope</th>
+      <td>Exact key parsing, AES-GCM envelope fields, authentication failure, and audit redaction match shared vectors.</td>
+      <td><code>npm run conformance -- 07-encryption-envelope</code></td>
+    </tr><tr>
+      <th>08-persistence-roundtrip</th>
+      <td>One canonical schema stores ciphertext only and returns fresh, correctly typed records on create and read.</td>
+      <td><code>npm run conformance -- 08-persistence-roundtrip</code></td>
+    </tr><tr>
+      <th>09-atomic-claim</th>
+      <td>Concurrent workers can produce exactly one successful claim for a pending run.</td>
+      <td><code>npm run conformance -- 09-atomic-claim</code></td>
+    </tr><tr>
+      <th>10-retry-reclaim-ttl</th>
+      <td>Retry count, stuck-work reclaim, terminal states, and expiry deletion follow one bounded state table.</td>
+      <td><code>npm run conformance -- 10-retry-reclaim-ttl</code></td>
+    </tr><tr>
+      <th>11-http-boundary</th>
+      <td>Health, rewrite, validation, CORS, and error responses use one route and response contract.</td>
+      <td><code>npm run conformance -- 11-http-boundary</code></td>
+    </tr><tr>
+      <th>12-review-state-machine</th>
+      <td>Rewrite, accept, keep-original, cancellation, YOLO disablement, and one-shot authorization follow one transition table.</td>
+      <td><code>npm run conformance -- 12-review-state-machine</code></td>
+    </tr><tr>
+      <th>13-slack-composer-selection</th>
+      <td>With multiple composers, only the active composer and its channel/thread context are selected.</td>
+      <td><code>npm run conformance -- 13-slack-composer-selection</code></td>
+    </tr><tr>
+      <th>14-slack-enter-interception</th>
+      <td>A real Enter event is prevented until review completes, then triggers exactly one native Slack send.</td>
+      <td><code>npm run conformance -- 14-slack-enter-interception</code></td>
+    </tr><tr>
+      <th>15-extension-package</th>
+      <td>The unpacked MV3 extension builds, every manifest reference exists, and Chrome loads it without errors.</td>
+      <td><code>npm run conformance -- 15-extension-package</code></td>
+    </tr><tr>
+      <th>16-live-slack-flow</th>
+      <td>In the controlled Slack channel, type, rewrite, review, choose text, send once, verify posted text, and delete the tagged message.</td>
+      <td><code>npm run conformance -- 16-live-slack-flow</code></td>
+    </tr></tbody>
+</table>
+</section>
+<h2>Index</h2>
+<table>
+<thead><tr><th>feature</th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+<tbody><tr><th><a href="#01-repo-bootstrap">01-repo-bootstrap</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/11">#11</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/1">#1</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 194,888 / out 5,145</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/15">#15</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 297,011 / out 2,366</div>
+
+      </td></tr>
+<tr><th><a href="#02-rewrite-contract">02-rewrite-contract</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/12">#12</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/2">#2</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 367,413 / out 8,477</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/16">#16</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 420,212 / out 6,369</div>
+
+      </td></tr>
+<tr><th><a href="#03-personas-policy">03-personas-policy</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/13">#13</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/3">#3</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 268,580 / out 8,157</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/18">#18</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td></tr>
+<tr><th><a href="#04-claude-code-provider">04-claude-code-provider</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/14">#14</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/4">#4</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 474,488 / out 11,676</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/20">#20</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td></tr>
+<tr><th><a href="#05-encrypted-persistence">05-encrypted-persistence</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/17">#17</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/5">#5</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 865,382 / out 14,076</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/25">#25</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td></tr>
+<tr><th><a href="#06-durable-lifecycle">06-durable-lifecycle</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/19">#19</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/6">#6</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 1,086,578 / out 18,089</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/26">#26</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td></tr>
+<tr><th><a href="#07-http-api-runtime">07-http-api-runtime</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/21">#21</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/7">#7</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 892,338 / out 18,200</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/27">#27</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td></tr>
+<tr><th><a href="#08-browser-review-state">08-browser-review-state</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/22">#22</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/8">#8</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 415,470 / out 9,859</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/28">#28</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td></tr>
+<tr><th><a href="#09-slack-web-adapter">09-slack-web-adapter</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/23">#23</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/9">#9</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 562,147 / out 12,675</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/29">#29</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+        <div class="flag">⚠ human_hotfix</div>
+      </td></tr>
+<tr><th><a href="#10-chrome-review-ux">10-chrome-review-ux</a></th><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/24">#24</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 0 / out 0</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/10">#10</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 1,773,469 / out 24,232</div>
+
+      </td><td>
+        <div><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/30">#30</a></div>
+        <div class="muted">review_ready</div>
+        <div class="muted">in 129,860 / out 1,292</div>
+
+      </td></tr></tbody>
+</table>
+<section id="01-repo-bootstrap">
+      <h2>01-repo-bootstrap</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/11">nicespeak-eval/claude/01-repo-bootstrap</a></p>
+        <p class="muted">branch <code>eval/claude/feature-01-01-repo-bootstrap</code></p>
+        <p class="muted">workflow <code>wf-1787451960504-1</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +246 −0 · 5 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">type_module: type=module</li><li class="ok">engines_node_gte_22: engines.node=&gt;=22</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">scripts_check: check=node scripts/check.mjs</li><li class="ok">gitignore_exists: ok</li><li class="ok">readme_exists: ok</li><li class="ok">smoke_test_exists: test/smoke.test.*</li><li class="ok">smoke_asserts_bootstrap_contract: contract asserts present</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/1">nicespeak-eval/codex/01-repo-bootstrap</a></p>
+        <p class="muted">branch <code>eval/codex/feature-01-01-repo-bootstrap</code></p>
+        <p class="muted">workflow <code>wf-1787337307563-14</code> · review_ready</p>
+        <p>tokens in/out/cached: 194,888 / 5,145 / 0</p>
+        <p>diff: +70 −0 · 4 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">type_module: type=module</li><li class="ok">engines_node_gte_22: engines.node=&gt;=22</li><li class="ok">scripts_test: test=node --test</li><li class="ok">scripts_check: check=node --check test/smoke.test.js</li><li class="ok">gitignore_exists: ok</li><li class="ok">readme_exists: ok</li><li class="ok">smoke_test_exists: test/smoke.test.*</li><li class="ok">smoke_asserts_bootstrap_contract: contract asserts present</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/15">nicespeak-eval/qwen/01-repo-bootstrap</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-01-01-repo-bootstrap</code></p>
+        <p class="muted">workflow <code>wf-1787454199131-11</code> · review_ready</p>
+        <p>tokens in/out/cached: 297,011 / 2,366 / 278,592</p>
+        <p>diff: +68 −0 · 4 files</p>
+
+        <p><strong>acceptance heuristics</strong> FAIL</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">type_module: type=module</li><li class="ok">engines_node_gte_22: engines.node=&gt;=22</li><li class="ok">scripts_test: test=node --test</li><li class="ok">scripts_check: check=npm audit</li><li class="ok">gitignore_exists: ok</li><li class="ok">readme_exists: ok</li><li class="ok">smoke_test_exists: test/smoke.test.*</li><li class="bad">smoke_asserts_bootstrap_contract: trivial 1+1 smoke</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.1564</td>
+        <td>0.8000</td>
+        <td><div class="muted">only left: scripts/check.mjs<br>
+           only right: —<br>
+           shared: .gitignore, README.md, package.json, test/smoke.test.js</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.1827</td>
+        <td>0.8000</td>
+        <td><div class="muted">only left: scripts/check.mjs<br>
+           only right: —<br>
+           shared: .gitignore, README.md, package.json, test/smoke.test.js</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.3407</td>
+        <td>1.0000</td>
+        <td><div class="muted">only left: —<br>
+           only right: —<br>
+           shared: .gitignore, README.md, package.json, test/smoke.test.js</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="02-rewrite-contract">
+      <h2>02-rewrite-contract</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/12">nicespeak-eval/claude/02-rewrite-contract</a></p>
+        <p class="muted">branch <code>eval/claude/feature-02-02-rewrite-contract</code></p>
+        <p class="muted">workflow <code>wf-1787451962533-2</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +956 −4 · 8 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 4 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/2">nicespeak-eval/codex/02-rewrite-contract</a></p>
+        <p class="muted">branch <code>eval/codex/feature-02-02-rewrite-contract</code></p>
+        <p class="muted">workflow <code>wf-1787337310888-15</code> · review_ready</p>
+        <p>tokens in/out/cached: 367,413 / 8,477 / 0</p>
+        <p>diff: +364 −5 · 4 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 2 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/16">nicespeak-eval/qwen/02-rewrite-contract</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-02-02-rewrite-contract</code></p>
+        <p class="muted">workflow <code>wf-1787454201231-12</code> · review_ready</p>
+        <p>tokens in/out/cached: 420,212 / 6,369 / 398,208</p>
+        <p>diff: +424 −0 · 2 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 2 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0421</td>
+        <td>0.2000</td>
+        <td><div class="muted">only left: apps/rewrite/gate.js, apps/rewrite/index.js, apps/rewrite/validate.js, test/rewrite-gate.test.js, test/rewrite-request-validation.test.js, test/rewrite-result-validation.test.js<br>
+           only right: package.json, test/rewrite-contract.test.js<br>
+           shared: README.md, apps/rewrite/contract.js</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0324</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/rewrite/contract.js, apps/rewrite/gate.js, apps/rewrite/index.js, apps/rewrite/validate.js, test/rewrite-gate.test.js, test/rewrite-request-validation.test.js, test/rewrite-result-validation.test.js<br>
+           only right: apps/validation/contract.js, test/validation.test.js<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0346</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/rewrite/contract.js, package.json, test/rewrite-contract.test.js<br>
+           only right: apps/validation/contract.js, test/validation.test.js<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="03-personas-policy">
+      <h2>03-personas-policy</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/13">nicespeak-eval/claude/03-personas-policy</a></p>
+        <p class="muted">branch <code>eval/claude/feature-03-03-personas-policy</code></p>
+        <p class="muted">workflow <code>wf-1787451964554-3</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +869 −3 · 6 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 6 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/3">nicespeak-eval/codex/03-personas-policy</a></p>
+        <p class="muted">branch <code>eval/codex/feature-03-03-personas-policy</code></p>
+        <p class="muted">workflow <code>wf-1787337312669-16</code> · review_ready</p>
+        <p>tokens in/out/cached: 268,580 / 8,157 / 0</p>
+        <p>diff: +217 −15 · 6 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 3 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/18">nicespeak-eval/qwen/03-personas-policy</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-03-03-personas-policy</code></p>
+        <p class="muted">workflow <code>wf-1787454203300-13</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +684 −15 · 6 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 3 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0354</td>
+        <td>0.2000</td>
+        <td><div class="muted">only left: apps/personas/catalog.js, apps/personas/index.js, apps/personas/policy.js, test/personas-catalog.test.js<br>
+           only right: apps/rewrite/contract.js, apps/rewrite/personas.js, package.json, test/rewrite-contract.test.js<br>
+           shared: README.md, test/personas-policy.test.js</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0262</td>
+        <td>0.0909</td>
+        <td><div class="muted">only left: README.md, apps/personas/index.js, apps/personas/policy.js, test/personas-catalog.test.js, test/personas-policy.test.js<br>
+           only right: .qwen/skills/versioned-personas-policy/SKILL.md, apps/personas/service.js, apps/validation/contract.js, test/personas.test.js, test/validation.test.js<br>
+           shared: apps/personas/catalog.js</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0237</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/rewrite/contract.js, apps/rewrite/personas.js, package.json, test/personas-policy.test.js, test/rewrite-contract.test.js<br>
+           only right: .qwen/skills/versioned-personas-policy/SKILL.md, apps/personas/catalog.js, apps/personas/service.js, apps/validation/contract.js, test/personas.test.js, test/validation.test.js<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="04-claude-code-provider">
+      <h2>04-claude-code-provider</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/14">nicespeak-eval/claude/04-claude-code-provider</a></p>
+        <p class="muted">branch <code>eval/claude/feature-04-04-claude-code-provider</code></p>
+        <p class="muted">workflow <code>wf-1787451966578-4</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +1336 −4 · 8 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 9 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/4">nicespeak-eval/codex/04-claude-code-provider</a></p>
+        <p class="muted">branch <code>eval/codex/feature-04-04-claude-code-provider</code></p>
+        <p class="muted">workflow <code>wf-1787337314430-17</code> · review_ready</p>
+        <p>tokens in/out/cached: 474,488 / 11,676 / 0</p>
+        <p>diff: +403 −2 · 5 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 4 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/20">nicespeak-eval/qwen/04-claude-code-provider</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-04-04-claude-code-provider</code></p>
+        <p class="muted">workflow <code>wf-1787454205557-14</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +659 −0 · 6 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 4 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0380</td>
+        <td>0.0833</td>
+        <td><div class="muted">only left: apps/providers/claude-code.js, apps/providers/contract.js, apps/providers/index.js, apps/providers/prompt.js, test/providers-claude-code.test.js, test/providers-contract.test.js, test/providers-selection.test.js<br>
+           only right: apps/rewrite/providers.js, apps/rewrite/providers/claude-code.js, package.json, test/claude-code-provider.test.js<br>
+           shared: README.md</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0188</td>
+        <td>0.0769</td>
+        <td><div class="muted">only left: README.md, apps/providers/contract.js, apps/providers/index.js, apps/providers/prompt.js, test/providers-claude-code.test.js, test/providers-contract.test.js, test/providers-selection.test.js<br>
+           only right: .qwen/skills/claude-code-provider-implementation/SKILL.md, apps/config/provider-config.js, apps/providers/interface.js, package.json, test/providers.test.js<br>
+           shared: apps/providers/claude-code.js</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0407</td>
+        <td>0.1000</td>
+        <td><div class="muted">only left: README.md, apps/rewrite/providers.js, apps/rewrite/providers/claude-code.js, test/claude-code-provider.test.js<br>
+           only right: .qwen/skills/claude-code-provider-implementation/SKILL.md, apps/config/provider-config.js, apps/providers/claude-code.js, apps/providers/interface.js, test/providers.test.js<br>
+           shared: package.json</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="05-encrypted-persistence">
+      <h2>05-encrypted-persistence</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/17">nicespeak-eval/claude/05-encrypted-persistence</a></p>
+        <p class="muted">branch <code>eval/claude/feature-05-05-encrypted-persistence</code></p>
+        <p class="muted">workflow <code>wf-1787451968651-5</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +2207 −6 · 14 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 13 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/5">nicespeak-eval/codex/05-encrypted-persistence</a></p>
+        <p class="muted">branch <code>eval/codex/feature-05-05-encrypted-persistence</code></p>
+        <p class="muted">workflow <code>wf-1787337316499-18</code> · review_ready</p>
+        <p>tokens in/out/cached: 865,382 / 14,076 / 0</p>
+        <p>diff: +445 −2 · 4 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 5 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/25">nicespeak-eval/qwen/05-encrypted-persistence</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-05-05-encrypted-persistence</code></p>
+        <p class="muted">workflow <code>wf-1787454207675-15</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +1274 −2 · 9 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 6 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0223</td>
+        <td>0.0588</td>
+        <td><div class="muted">only left: .env.example, apps/storage/crypto.js, apps/storage/errors.js, apps/storage/index.js, apps/storage/memory-db.js, apps/storage/postgres-db.js, apps/storage/redact.js, apps/storage/runs.js<br>
+           only right: apps/rewrite/persistence.js, package.json, test/encrypted-persistence.test.js<br>
+           shared: README.md</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0138</td>
+        <td>0.0455</td>
+        <td><div class="muted">only left: .env.example, apps/storage/crypto.js, apps/storage/errors.js, apps/storage/index.js, apps/storage/memory-db.js, apps/storage/postgres-db.js, apps/storage/redact.js, apps/storage/runs.js<br>
+           only right: .qwen/skills/encrypted-persistence-implementation/SKILL.md, apps/persistence/db.js, apps/persistence/encryption.js, apps/persistence/schema.js, package-lock.json, package.json, test/persistence-db.test.js, test/persistence.test.js<br>
+           shared: README.md</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0316</td>
+        <td>0.1818</td>
+        <td><div class="muted">only left: apps/rewrite/persistence.js, test/encrypted-persistence.test.js<br>
+           only right: .qwen/skills/encrypted-persistence-implementation/SKILL.md, apps/persistence/db.js, apps/persistence/encryption.js, apps/persistence/schema.js, package-lock.json, test/persistence-db.test.js, test/persistence.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="06-durable-lifecycle">
+      <h2>06-durable-lifecycle</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/19">nicespeak-eval/claude/06-durable-lifecycle</a></p>
+        <p class="muted">branch <code>eval/claude/feature-06-06-durable-lifecycle</code></p>
+        <p class="muted">workflow <code>wf-1787451971536-6</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +1134 −17 · 11 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 16 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/6">nicespeak-eval/codex/06-durable-lifecycle</a></p>
+        <p class="muted">branch <code>eval/codex/feature-06-06-durable-lifecycle</code></p>
+        <p class="muted">workflow <code>wf-1787337319996-19</code> · review_ready</p>
+        <p>tokens in/out/cached: 1,086,578 / 18,089 / 0</p>
+        <p>diff: +719 −8 · 6 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 6 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/26">nicespeak-eval/qwen/06-durable-lifecycle</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-06-06-durable-lifecycle</code></p>
+        <p class="muted">workflow <code>wf-1787454209777-16</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +918 −5 · 5 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 7 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0230</td>
+        <td>0.0625</td>
+        <td><div class="muted">only left: apps/lifecycle/executor.js, apps/lifecycle/index.js, apps/lifecycle/states.js, apps/storage/memory-db.js, apps/storage/postgres-db.js, apps/storage/runs.js, apps/storage/schema.js, test/lifecycle-executor.test.js<br>
+           only right: apps/rewrite/lifecycle.js, apps/rewrite/persistence.js, package.json, test/encrypted-persistence.test.js, test/rewrite-lifecycle.test.js<br>
+           shared: README.md</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0137</td>
+        <td>0.0667</td>
+        <td><div class="muted">only left: README.md, apps/lifecycle/executor.js, apps/lifecycle/states.js, apps/storage/memory-db.js, apps/storage/postgres-db.js, apps/storage/runs.js, apps/storage/schema.js, test/lifecycle-executor.test.js<br>
+           only right: .qwen/skills/durable-lifecycle-implementation/SKILL.md, .qwen/skills/test-fix-approach/SKILL.md, test/lifecycle.test.js, test/persistence-db.test.js<br>
+           shared: apps/lifecycle/index.js</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0196</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/rewrite/lifecycle.js, apps/rewrite/persistence.js, package.json, test/encrypted-persistence.test.js, test/rewrite-lifecycle.test.js<br>
+           only right: .qwen/skills/durable-lifecycle-implementation/SKILL.md, .qwen/skills/test-fix-approach/SKILL.md, apps/lifecycle/index.js, test/lifecycle.test.js, test/persistence-db.test.js<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="07-http-api-runtime">
+      <h2>07-http-api-runtime</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/21">nicespeak-eval/claude/07-http-api-runtime</a></p>
+        <p class="muted">branch <code>eval/claude/feature-07-07-http-api-runtime</code></p>
+        <p class="muted">workflow <code>wf-1787451973525-7</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +1682 −12 · 14 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 21 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/7">nicespeak-eval/codex/07-http-api-runtime</a></p>
+        <p class="muted">branch <code>eval/codex/feature-07-07-http-api-runtime</code></p>
+        <p class="muted">workflow <code>wf-1787337321763-20</code> · review_ready</p>
+        <p>tokens in/out/cached: 892,338 / 18,200 / 0</p>
+        <p>diff: +693 −6 · 6 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 7 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/27">nicespeak-eval/qwen/07-http-api-runtime</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-07-07-http-api-runtime</code></p>
+        <p class="muted">workflow <code>wf-1787454211873-17</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +524 −38 · 8 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 8 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0308</td>
+        <td>0.1111</td>
+        <td><div class="muted">only left: .env.example, apps/api/cors.js, apps/api/index.js, apps/api/main.js, apps/api/router.js, apps/api/runtime.js, apps/api/server.js, test/api-cors-routing.test.js<br>
+           only right: apps/http/memory-rewrite-db.js, apps/http/runtime.js, apps/http/server.js, test/http-api-runtime.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0199</td>
+        <td>0.1000</td>
+        <td><div class="muted">only left: .env.example, apps/api/cors.js, apps/api/index.js, apps/api/main.js, apps/api/router.js, apps/api/runtime.js, apps/api/server.js, test/api-cors-routing.test.js<br>
+           only right: .qwen/skills/http-api-server-implementation/SKILL.md, .qwen/skills/mock-client-object-reference-issue/SKILL.md, apps/server/index.js, package-lock.json, test/persistence-db.test.js, test/server.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0315</td>
+        <td>0.1667</td>
+        <td><div class="muted">only left: apps/http/memory-rewrite-db.js, apps/http/runtime.js, apps/http/server.js, test/http-api-runtime.test.js<br>
+           only right: .qwen/skills/http-api-server-implementation/SKILL.md, .qwen/skills/mock-client-object-reference-issue/SKILL.md, apps/server/index.js, package-lock.json, test/persistence-db.test.js, test/server.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="08-browser-review-state">
+      <h2>08-browser-review-state</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/22">nicespeak-eval/claude/08-browser-review-state</a></p>
+        <p class="muted">branch <code>eval/claude/feature-08-08-browser-review-state</code></p>
+        <p class="muted">workflow <code>wf-1787451975601-8</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +928 −4 · 7 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 23 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/8">nicespeak-eval/codex/08-browser-review-state</a></p>
+        <p class="muted">branch <code>eval/codex/feature-08-08-browser-review-state</code></p>
+        <p class="muted">workflow <code>wf-1787337323784-21</code> · review_ready</p>
+        <p>tokens in/out/cached: 415,470 / 9,859 / 0</p>
+        <p>diff: +333 −1 · 4 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 8 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/28">nicespeak-eval/qwen/08-browser-review-state</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-08-08-browser-review-state</code></p>
+        <p class="muted">workflow <code>wf-1787454213975-18</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +456 −0 · 3 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 9 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0199</td>
+        <td>0.2222</td>
+        <td><div class="muted">only left: apps/review/index.js, apps/review/machine.js, apps/review/states.js, test/review-machine.test.js, test/review-states.test.js<br>
+           only right: apps/browser-review/state-machine.js, test/browser-review-state-machine.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0124</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/review/index.js, apps/review/machine.js, apps/review/states.js, package.json, test/review-machine.test.js, test/review-states.test.js<br>
+           only right: .qwen/skills/browser-review-state-machine-implementation/SKILL.md, apps/browser-review-state-machine.js, test/browser-review-state.test.js<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0125</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/browser-review/state-machine.js, package.json, test/browser-review-state-machine.test.js<br>
+           only right: .qwen/skills/browser-review-state-machine-implementation/SKILL.md, apps/browser-review-state-machine.js, test/browser-review-state.test.js<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="09-slack-web-adapter">
+      <h2>09-slack-web-adapter</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/23">nicespeak-eval/claude/09-slack-web-adapter</a></p>
+        <p class="muted">branch <code>eval/claude/feature-09-09-slack-web-adapter</code></p>
+        <p class="muted">workflow <code>wf-1787451977618-9</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +2246 −5 · 12 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 28 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/9">nicespeak-eval/codex/09-slack-web-adapter</a></p>
+        <p class="muted">branch <code>eval/codex/feature-09-09-slack-web-adapter</code></p>
+        <p class="muted">workflow <code>wf-1787337325623-22</code> · review_ready</p>
+        <p>tokens in/out/cached: 562,147 / 12,675 / 0</p>
+        <p>diff: +533 −3 · 4 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 9 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/29">nicespeak-eval/qwen/09-slack-web-adapter</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-09-09-slack-web-adapter</code></p>
+        <p class="muted">workflow <code>wf-1787454216122-19</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +1211 −1 · 5 files</p>
+        <p class="flag">Human hotfix on Qwen 09: unref timers + NODE_ENV=test / --test-force-exit so verify could exit after an open-handle hang.</p>
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=NODE_ENV=test node --test --test-force-exit</li><li class="ok">has_test_files: 10 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0254</td>
+        <td>0.1429</td>
+        <td><div class="muted">only left: apps/surfaces/index.js, apps/surfaces/slack/adapter.js, apps/surfaces/slack/context.js, apps/surfaces/slack/detect.js, apps/surfaces/slack/index.js, test/helpers/fake-dom.js, test/helpers/slack-page.js, test/slack-adapter.test.js<br>
+           only right: apps/browser-review/slack-web-adapter.js, test/slack-web-adapter.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0133</td>
+        <td>0.1333</td>
+        <td><div class="muted">only left: apps/surfaces/index.js, apps/surfaces/slack/adapter.js, apps/surfaces/slack/context.js, apps/surfaces/slack/detect.js, apps/surfaces/slack/index.js, test/helpers/fake-dom.js, test/helpers/slack-page.js, test/slack-adapter.test.js<br>
+           only right: apps/slack-web-adapter.js, package-lock.json, test/slack-web-adapter.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0243</td>
+        <td>0.5000</td>
+        <td><div class="muted">only left: apps/browser-review/slack-web-adapter.js<br>
+           only right: apps/slack-web-adapter.js, package-lock.json<br>
+           shared: README.md, package.json, test/slack-web-adapter.test.js</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+<section id="10-chrome-review-ux">
+      <h2>10-chrome-review-ux</h2>
+      <table class="tri"><thead><tr><th></th><th>claude</th><th>codex</th><th>qwen</th></tr></thead>
+      <tbody><tr><th>detail</th><td>
+        <h3>claude</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/24">nicespeak-eval/claude/10-chrome-review-ux</a></p>
+        <p class="muted">branch <code>eval/claude/feature-10-10-chrome-review-ux</code></p>
+        <p class="muted">workflow <code>wf-1787451980031-10</code> · review_ready</p>
+        <p>tokens in/out/cached: 0 / 0 / 0</p>
+        <p>diff: +3337 −2 · 27 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test &quot;test/**/*.test.js&quot;</li><li class="ok">has_test_files: 36 test path(s)</li></ul>
+      </td><td>
+        <h3>codex</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/10">nicespeak-eval/codex/10-chrome-review-ux</a></p>
+        <p class="muted">branch <code>eval/codex/feature-10-10-chrome-review-ux</code></p>
+        <p class="muted">workflow <code>wf-1787337327465-23</code> · review_ready</p>
+        <p>tokens in/out/cached: 1,773,469 / 24,232 / 0</p>
+        <p>diff: +865 −32 · 11 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=node --test</li><li class="ok">has_test_files: 10 test path(s)</li></ul>
+      </td><td>
+        <h3>qwen</h3>
+        <p><a href="https://github.com/Neko-Catpital-Labs/nicespeak_invoker/pull/30">nicespeak-eval/qwen/10-chrome-review-ux</a></p>
+        <p class="muted">branch <code>eval/qwen/feature-10-10-chrome-review-ux</code></p>
+        <p class="muted">workflow <code>wf-1787454218281-20</code> · review_ready</p>
+        <p>tokens in/out/cached: 129,860 / 1,292 / 106,816</p>
+        <p>diff: +35 −0 · 1 files</p>
+
+        <p><strong>acceptance heuristics</strong> PASS</p>
+        <ul><li class="ok">package_json_exists: parsed</li><li class="ok">scripts_test: test=NODE_ENV=test node --test --test-force-exit</li><li class="ok">has_test_files: 10 test path(s)</li></ul>
+      </td></tr></tbody></table>
+      <h3>pairwise</h3>
+      <table><thead><tr><th>pair</th><th>diff Jaccard</th><th>path Jaccard</th><th>path highlights</th></tr></thead>
+      <tbody><tr>
+        <td>claude__codex</td>
+        <td>0.0241</td>
+        <td>0.0556</td>
+        <td><div class="muted">only left: apps/extension/api.js, apps/extension/chrome/background.js, apps/extension/chrome/content-main.js, apps/extension/chrome/content.js, apps/extension/chrome/manifest.json, apps/extension/chrome/options.css, apps/extension/chrome/options.html, apps/extension/chrome/options.js<br>
+           only right: apps/browser-review/chrome-review-ui.js, apps/browser-review/extension/content-script.js, apps/browser-review/manifest.json, apps/browser-review/settings.js, apps/browser-review/slack-web-adapter.js, apps/browser-review/state-machine.js, test/browser-review-state-machine.test.js, test/chrome-review-ux.test.js<br>
+           shared: README.md, package.json</div></td>
+      </tr><tr>
+        <td>claude__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>claude__qwen</td>
+        <td>0.0091</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/extension/api.js, apps/extension/chrome/background.js, apps/extension/chrome/content-main.js, apps/extension/chrome/content.js, apps/extension/chrome/manifest.json, apps/extension/chrome/options.css, apps/extension/chrome/options.html<br>
+           only right: apps/chrome-extension/manifest.json<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>codex__kimi</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr><tr>
+        <td>codex__qwen</td>
+        <td>0.0210</td>
+        <td>0.0000</td>
+        <td><div class="muted">only left: README.md, apps/browser-review/chrome-review-ui.js, apps/browser-review/extension/content-script.js, apps/browser-review/manifest.json, apps/browser-review/settings.js, apps/browser-review/slack-web-adapter.js, apps/browser-review/state-machine.js, package.json<br>
+           only right: apps/chrome-extension/manifest.json<br>
+           shared: —</div></td>
+      </tr><tr>
+        <td>kimi__qwen</td>
+        <td><span class="null">missing</span></td>
+        <td><span class="null">missing</span></td>
+        <td></td>
+      </tr></tbody></table>
+    </section>
+</body></html>

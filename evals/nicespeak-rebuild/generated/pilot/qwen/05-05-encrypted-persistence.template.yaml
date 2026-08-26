@@ -1,0 +1,113 @@
+name: "nicespeak-eval/qwen/05-encrypted-persistence"
+description: |
+  NiceSpeak rebuild eval pilot slice.
+  Review claim: Implement 05-encrypted-persistence for lineage qwen.
+  Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+  Spec content hash: 0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd
+  Cross-model prompt hash: 0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: "https://github.com/Neko-Catpital-Labs/nicespeak_invoker.git"
+baseBranch: "eval/qwen/feature-04-04-claude-code-provider"
+featureBranch: "eval/qwen/feature-05-05-encrypted-persistence"
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: impl-05-encrypted-persistence
+    description: |
+      Implement 05-encrypted-persistence (05 — AES-GCM rewrite persistence and schema).
+      Review claim: Implement only this feature slice for lineage comparison.
+      Review lane: behavior
+      Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+      Slice rationale: One independently reviewable feature per model lineage.
+      Architectural effect: Adds 05-encrypted-persistence on the cumulative lineage branch.
+      Goal: Meet the feature acceptance criteria.
+      Motivation: Compare premium vs cheap coding agents on equivalent prompts.
+      Alternative considerations: Porting NiceSpeak source/tests is forbidden.
+      Implementation details: Follow the attached zero-context prompt.
+      Non-goals: Other pilot features and expansion surfaces.
+      Files: package.json, README.md, .gitignore, apps/, test/
+      Change types: feature
+      Acceptance criteria: Feature specification 05-encrypted-persistence must pass and verification must exit 0
+      Layer: domain
+      Feature state: active
+    prompt: |
+      EVAL_LINEAGE=qwen
+      EVAL_EXECUTION_AGENT=qwen
+      EVAL_EXECUTION_MODEL=qwen/qwen3-coder-plus
+      EVAL_FEATURE_ID=05-encrypted-persistence
+      EVAL_FEATURE_INDEX=5
+      EVAL_FEATURE_BRANCH=eval/qwen/feature-05-05-encrypted-persistence
+      EVAL_BASE_BRANCH=eval/qwen/feature-04-04-claude-code-provider
+      EVAL_SPEC_CONTENT_HASH=0c409e0df0cbaee3201f03fdf39a8a86473e49974253d50d885d9ef1a0fea0cd
+      EVAL_SOURCE_SHA=b4c28368c1f592032172f0bceef1bcd2bc8683e2
+      Assume no prior context. Execute this prompt as a zero-context remote task.
+      You are rebuilding NiceSpeak into a new empty repository through Invoker.
+      Hard isolation rules:
+      - Use ONLY the feature specification below and any docs already present in THIS target repository.
+      - Do NOT read, clone, fetch, or browse NiceSpeak source or NiceSpeak tests.
+      - Do NOT access host GitHub credentials, SSH agents, or paths outside this worktree.
+      - Write new tests from the acceptance criteria; do not port NiceSpeak tests.
+      Feature specification:
+      # 05 — AES-GCM rewrite persistence and schema
+      .
+      ## Goal
+      Add Postgres-backed encrypted rewrite run storage.
+      .
+      ## Acceptance criteria
+      - Schema for rewrite runs with status, ciphertext payload, expiry, attempts, and redacted audit fields.
+      - AES-256-GCM encrypt/decrypt helpers using `EMPATHY_RUN_ENCRYPTION_KEY`.
+      - Inserts store ciphertext only; plaintext never persisted.
+      - Unit tests cover round-trip encryption and schema helpers with a test DB or in-memory double.
+      .
+      ## Non-goals
+      - No full claim/retry executor yet.
+      - No social campaign tables.
+      .
+      Review claim: Implement only this feature slice.
+      Review lane: behavior
+      Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+      Slice rationale: One reviewable feature for multi-model comparison.
+      Architectural effect: Adds the capability described above on top of prior lineage commits.
+      Goal: Satisfy the acceptance criteria in the specification.
+      Motivation: Multi-model rebuild eval comparing premium and cheaper coding agents.
+      Alternative considerations: Porting NiceSpeak source or tests is forbidden; reconstruct from this spec only.
+      Implementation details: Follow the acceptance criteria literally and touch only files required by this slice (for example package.json, README.md, .gitignore, apps/, test/, and related .js/.ts/.md files).
+      Non-goals: Later pilot features and expansion surfaces.
+      Files: package.json, README.md, .gitignore, apps/, test/, and any new files required by this feature
+      Change types: feature
+      Acceptance criteria: Implement every must/ensure/verify item in the specification so npm test or the stated verify command exits with exit code 0.
+      Layer: domain
+      Feature state: active
+      When finished, ensure the slice verification exits with exit code 0 and summarize the PR-ready commit on branch eval/qwen/feature-05-05-encrypted-persistence.
+    executionAgent: qwen
+    executionModel: "qwen/qwen3-coder-plus"
+    poolId: nicespeak-eval-agent-local
+    dependencies: []
+  - id: verify-05-encrypted-persistence
+    description: |
+      Verify 05-encrypted-persistence with a deterministic local check.
+      Review claim: Prove the slice still builds/tests locally.
+      Review lane: proof
+      Safety invariant: Verification is command-only and does not mutate lineage identity.
+      Slice rationale: Every implementation step needs a pass/fail command.
+      Architectural effect: None beyond validation.
+      Goal: Exit 0 on package checks when present.
+      Motivation: Keep lineages comparable.
+      Alternative considerations: Full suite gates are out of scope.
+      Implementation details: Run npm test when package.json exists, otherwise a no-op success.
+      Non-goals: Cross-lineage scoring.
+      Files: package.json
+      Change types: verification
+      Acceptance criteria: Command exits 0
+      Layer: app_regression
+      Feature state: active
+    command: "npm test"
+    poolId: nicespeak-eval-verify-local
+    dependencies:
+      - impl-05-encrypted-persistence

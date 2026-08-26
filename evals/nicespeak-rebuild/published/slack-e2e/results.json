@@ -1,0 +1,48 @@
+{
+  "target": "https://app.slack.com/client/T0AJUNMP7T7/C0AJW40CRUN",
+  "testedAt": "2026-08-26T05:20:00Z",
+  "result": "No lineage completed the Chrome-to-Slack rewrite, review, and send flow.",
+  "evidenceLimit": "Screenshots are retained for the Codex and Qwen runs. Claude's exact Chrome error and inspected manifest state are recorded, but no Claude screenshot was retained.",
+  "lineages": {
+    "claude": {
+      "pr": 24,
+      "head": "7f7936eb6a455bcbe43ae035e923aa9831f0fc4f",
+      "stage": "manifest_load",
+      "verdict": "fail",
+      "observed": "Chrome rejected web_accessible_resources[0] with \"Invalid match pattern\" and did not load the extension.",
+      "cause": "The manifest contains the path-specific match pattern https://mail.google.com/chat/* in web_accessible_resources."
+    },
+    "codex": {
+      "pr": 10,
+      "head": "8a86c42ecf0c0737a8da87035273087a534fc776",
+      "stage": "slack_enter_interception",
+      "verdict": "fail",
+      "observed": "The panel showed Ready, but a real Enter keystroke bypassed NiceSpeak and immediately posted the original text without a review.",
+      "providerPreflight": "POST /v1/rewrite returned a rewritten sentence successfully before the browser run.",
+      "cleanup": "The uniquely tagged Slack message was deleted and its post-cleanup page count was zero.",
+      "evidence": [
+        "codex/01-ready.png",
+        "codex/02-review.png",
+        "codex/02-rewriting.png"
+      ]
+    },
+    "qwen": {
+      "pr": 30,
+      "head": "e0e19a000f6b95874e4c24db63e84bdfa1ba0fea",
+      "stage": "manifest_load",
+      "verdict": "fail",
+      "observed": "Chrome could not load ./chrome-extension/content-script.js and rejected the manifest.",
+      "missingManifestReferences": [
+        "./chrome-extension/content-script.js",
+        "./chrome-extension/styles.css",
+        "./chrome-extension/options.html",
+        "./chrome-extension/icons/icon16.png",
+        "./chrome-extension/icons/icon48.png",
+        "./chrome-extension/icons/icon128.png"
+      ],
+      "evidence": [
+        "qwen/01-load-failure.png"
+      ]
+    }
+  }
+}

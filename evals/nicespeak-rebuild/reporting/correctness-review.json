@@ -1,0 +1,229 @@
+{
+  "method": "Strict merge of two independent reviews per feature. A blocking failure from either review prevents a pass. Self-authored tests are supporting evidence, not proof of equivalent behavior.",
+  "equivalentFeatureCount": 0,
+  "featureCount": 10,
+  "modelTotals": {
+    "claude": { "pass": 6, "needs_work": 1, "fail": 3 },
+    "codex": { "pass": 3, "needs_work": 3, "fail": 4 },
+    "qwen": { "pass": 0, "needs_work": 0, "fail": 10 }
+  },
+  "whyImplementationsDiffer": [
+    "The prompts were shared, but several acceptance terms were ambiguous. Each model chose different API shapes, defaults, schemas, and error behavior.",
+    "The PRs are cumulative. Feature 03 builds on each model's own feature 02, so early contract differences become larger integration differences in later PRs.",
+    "Each model wrote tests for its own interpretation. Green local tests therefore prove internal consistency, not cross-model equivalence.",
+    "The mechanical precheck ran install and test commands, but it did not exercise every named script or real CLI, Postgres, Chrome, Slack, and concurrent-worker boundary.",
+    "Implementation depth varied materially: Claude generally built broader guards and tests, Codex preferred narrower slices, and Qwen often used shallow mocks or committed generated agent artifacts."
+  ],
+  "qwen2526": {
+    "summary": "PRs #25 and #26 both fail at their own heads. They fail the same encrypted-persistence assertion, but #26 also has independent lifecycle defects.",
+    "pr25": [
+      "The immediate red test is an object-aliasing bug in the database double. The mock returns its stored row object by reference; getRewriteRun deletes ciphertext_payload from that object after decrypting it, so the mock's stored ciphertext disappears.",
+      "A real pg query normally returns a fresh row object, which is why PR #27's later clone-the-row repair is a legitimate test-double fix. It does not retroactively make PR #25 green.",
+      "PR #25 also has production-quality gaps: unreadable ciphertext can be omitted instead of raising a hard error, raw identifying audit values can be stored under a redacted name, and encryption-key handling truncates long strings instead of decoding an exact 32-byte key."
+    ],
+    "pr26": [
+      "PR #26 inherits the same red persistence test and edits the fixture without fixing the by-reference deletion mechanism.",
+      "Its lifecycle claim is a read followed by an unconditional update, so two workers can claim and bill the same run.",
+      "Provider failures do not retry as specified; reclaim resets attempts to zero, making repeated reclaim cycles unbounded.",
+      "TTL cleanup ignores the persisted expiry contract and excludes pending or processing rows, so live encrypted text can survive indefinitely.",
+      "Its mocks JSON-parse payloads while the inherited production persistence returns strings, hiding that the real provider path can receive undefined text and lose persona policy.",
+      "Invalid provider output is encrypted and written over the original request instead of failing closed without persisting untrusted output."
+    ]
+  },
+  "liveChromeSlack": {
+    "target": "https://app.slack.com/client/T0AJUNMP7T7/C0AJW40CRUN",
+    "testedAt": "2026-08-26T05:20:00Z",
+    "result": "No lineage completed the Chrome-to-Slack rewrite, review, and send flow.",
+    "evidenceLimit": "Screenshots are retained for the Codex and Qwen runs. Claude's exact Chrome error and inspected manifest state are recorded, but no Claude screenshot was retained.",
+    "lineages": {
+      "claude": {
+        "pr": 24,
+        "head": "7f7936eb6a455bcbe43ae035e923aa9831f0fc4f",
+        "stage": "manifest load",
+        "observed": "Chrome rejected web_accessible_resources[0] as an invalid match pattern and did not load the extension.",
+        "cause": "The manifest uses the path-specific pattern https://mail.google.com/chat/* where Chrome requires a valid match pattern."
+      },
+      "codex": {
+        "pr": 10,
+        "head": "8a86c42ecf0c0737a8da87035273087a534fc776",
+        "stage": "Slack Enter interception",
+        "observed": "The panel showed Ready, but a real Enter keystroke bypassed NiceSpeak and immediately posted the original text without review.",
+        "cause": "The extension loaded and its rewrite endpoint passed preflight, but its real Slack key event path did not prevent the native send.",
+        "cleanup": "The uniquely tagged Slack test message was deleted; its post-cleanup page count was zero.",
+        "evidence": [
+          "published/slack-e2e/codex/01-ready.png",
+          "published/slack-e2e/codex/02-review.png",
+          "published/slack-e2e/codex/02-rewriting.png"
+        ]
+      },
+      "qwen": {
+        "pr": 30,
+        "head": "e0e19a000f6b95874e4c24db63e84bdfa1ba0fea",
+        "stage": "manifest load",
+        "observed": "Chrome could not load ./chrome-extension/content-script.js and rejected the extension.",
+        "cause": "The manifest references a content script, stylesheet, popup, and icons that do not exist in the submitted tree.",
+        "evidence": [
+          "published/slack-e2e/qwen/01-load-failure.png"
+        ]
+      }
+    }
+  },
+  "equivalenceStrategy": {
+    "conclusion": "Smaller prompts alone will not produce equivalent systems. Each model must start from the same frozen parent and pass the same black-box conformance command before its lineage advances.",
+    "safetyInvariant": "For every slice: start all models from the same frozen parent; define exactly one externally observable behavior with one shared golden command; preserve every prior golden command; reject implementation-specific substitutes; do not advance a lineage until it passes.",
+    "slices": [
+      {
+        "id": "01-project-commands",
+        "behavior": "A clean checkout installs and the required test and check commands exit successfully.",
+        "goldenCommand": "npm run conformance -- 01-project-commands"
+      },
+      {
+        "id": "02-rewrite-request-contract",
+        "behavior": "The same valid and invalid rewrite requests receive the same acceptance or rejection result.",
+        "goldenCommand": "npm run conformance -- 02-rewrite-request-contract"
+      },
+      {
+        "id": "03-rewrite-output-contract",
+        "behavior": "Only schema-valid provider output becomes sendable text; malformed output fails closed.",
+        "goldenCommand": "npm run conformance -- 03-rewrite-output-contract"
+      },
+      {
+        "id": "04-persona-catalog",
+        "behavior": "Persona IDs, defaults, and unknown-persona behavior are byte-for-byte identical.",
+        "goldenCommand": "npm run conformance -- 04-persona-catalog"
+      },
+      {
+        "id": "05-policy-bounds",
+        "behavior": "Tone, length, filler, and safety bounds produce the same effective policy and prompt ordering.",
+        "goldenCommand": "npm run conformance -- 05-policy-bounds"
+      },
+      {
+        "id": "06-provider-process",
+        "behavior": "The provider uses the exact CLI arguments, disables session persistence, times out, and reports errors without fallback text.",
+        "goldenCommand": "npm run conformance -- 06-provider-process"
+      },
+      {
+        "id": "07-encryption-envelope",
+        "behavior": "Exact key parsing, AES-GCM envelope fields, authentication failure, and audit redaction match shared vectors.",
+        "goldenCommand": "npm run conformance -- 07-encryption-envelope"
+      },
+      {
+        "id": "08-persistence-roundtrip",
+        "behavior": "One canonical schema stores ciphertext only and returns fresh, correctly typed records on create and read.",
+        "goldenCommand": "npm run conformance -- 08-persistence-roundtrip"
+      },
+      {
+        "id": "09-atomic-claim",
+        "behavior": "Concurrent workers can produce exactly one successful claim for a pending run.",
+        "goldenCommand": "npm run conformance -- 09-atomic-claim"
+      },
+      {
+        "id": "10-retry-reclaim-ttl",
+        "behavior": "Retry count, stuck-work reclaim, terminal states, and expiry deletion follow one bounded state table.",
+        "goldenCommand": "npm run conformance -- 10-retry-reclaim-ttl"
+      },
+      {
+        "id": "11-http-boundary",
+        "behavior": "Health, rewrite, validation, CORS, and error responses use one route and response contract.",
+        "goldenCommand": "npm run conformance -- 11-http-boundary"
+      },
+      {
+        "id": "12-review-state-machine",
+        "behavior": "Rewrite, accept, keep-original, cancellation, YOLO disablement, and one-shot authorization follow one transition table.",
+        "goldenCommand": "npm run conformance -- 12-review-state-machine"
+      },
+      {
+        "id": "13-slack-composer-selection",
+        "behavior": "With multiple composers, only the active composer and its channel/thread context are selected.",
+        "goldenCommand": "npm run conformance -- 13-slack-composer-selection"
+      },
+      {
+        "id": "14-slack-enter-interception",
+        "behavior": "A real Enter event is prevented until review completes, then triggers exactly one native Slack send.",
+        "goldenCommand": "npm run conformance -- 14-slack-enter-interception"
+      },
+      {
+        "id": "15-extension-package",
+        "behavior": "The unpacked MV3 extension builds, every manifest reference exists, and Chrome loads it without errors.",
+        "goldenCommand": "npm run conformance -- 15-extension-package"
+      },
+      {
+        "id": "16-live-slack-flow",
+        "behavior": "In the controlled Slack channel, type, rewrite, review, choose text, send once, verify posted text, and delete the tagged message.",
+        "goldenCommand": "npm run conformance -- 16-live-slack-flow"
+      }
+    ]
+  },
+  "features": {
+    "01-repo-bootstrap": {
+      "equivalent": false,
+      "claude": "pass",
+      "codex": "pass",
+      "qwen": "fail",
+      "plainEnglish": "The basic Node skeletons look similar, but Qwen's required check command always fails because npm audit has no lockfile. The precheck never ran that command."
+    },
+    "02-rewrite-contract": {
+      "equivalent": false,
+      "claude": "pass",
+      "codex": "needs_work",
+      "qwen": "fail",
+      "plainEnglish": "Claude enforces validation around the provider. Codex proves ordering only in a test helper. Qwen has no strict output validator and turns malformed output into a valid-looking response."
+    },
+    "03-personas-policy": {
+      "equivalent": false,
+      "claude": "needs_work",
+      "codex": "needs_work",
+      "qwen": "fail",
+      "plainEnglish": "The models disagree on persona IDs, defaults, fake doors, and clamping. Claude implements clamps but lets request filler override one persona default; Codex omits clamps; Qwen can bypass the default policy and exposes a mutable prompt catalog."
+    },
+    "04-claude-code-provider": {
+      "equivalent": false,
+      "claude": "fail",
+      "codex": "fail",
+      "qwen": "fail",
+      "plainEnglish": "No implementation passes the strict session-persistence requirement because none sends the explicit no-session-persistence flag. Qwen also invents unsupported Claude CLI syntax and returns sendable fallback text on errors."
+    },
+    "05-encrypted-persistence": {
+      "equivalent": false,
+      "claude": "pass",
+      "codex": "pass",
+      "qwen": "fail",
+      "plainEnglish": "Claude and Codex store encrypted payloads successfully, although their schemas are incompatible. Qwen fails its own round-trip test and has weaker fail-closed reads, audit redaction, and key handling."
+    },
+    "06-durable-lifecycle": {
+      "equivalent": false,
+      "claude": "fail",
+      "codex": "fail",
+      "qwen": "fail",
+      "plainEnglish": "All three have blocking durability gaps under strict review. Codex lacks a safe migration from feature 05, Claude has a reclaim race that can revive a completed row, and Qwen lacks atomic claim, bounded retry, correct TTL deletion, and fail-closed output persistence."
+    },
+    "07-http-api-runtime": {
+      "equivalent": false,
+      "claude": "pass",
+      "codex": "pass",
+      "qwen": "fail",
+      "plainEnglish": "Claude and Codex expose working public rewrite routes, but their response shapes differ. Qwen's route is not exercised by its tests, uses the wrong Slack origin, never initializes persistence correctly, and cannot reliably process a real request."
+    },
+    "08-browser-review-state": {
+      "equivalent": false,
+      "claude": "pass",
+      "codex": "needs_work",
+      "qwen": "fail",
+      "plainEnglish": "Claude records the exact authorized text and consumes send authorization once. Codex can authorize an unacceptable rewrite with no replacement. Qwen allows repeated send events and does not record which text the user chose."
+    },
+    "09-slack-web-adapter": {
+      "equivalent": false,
+      "claude": "pass",
+      "codex": "fail",
+      "qwen": "fail",
+      "plainEnglish": "Claude is the only implementation with scoped multi-composer handling and a tested one-shot native send path. Codex can select the wrong composer and cannot complete a native send. Qwen does not stop Slack's own listeners and includes a human hotfix."
+    },
+    "10-chrome-review-ux": {
+      "equivalent": false,
+      "claude": "fail",
+      "codex": "fail",
+      "qwen": "fail",
+      "plainEnglish": "The live Chrome test failed all three lineages. Claude and Qwen could not load as unpacked extensions. Codex loaded, but a real Enter key bypassed review and posted the original text."
+    }
+  }
+}

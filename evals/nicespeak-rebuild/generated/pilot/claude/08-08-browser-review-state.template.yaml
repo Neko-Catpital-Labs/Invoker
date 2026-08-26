@@ -1,0 +1,114 @@
+name: "nicespeak-eval/claude/08-browser-review-state"
+description: |
+  NiceSpeak rebuild eval pilot slice.
+  Review claim: Implement 08-browser-review-state for lineage claude.
+  Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+  Spec content hash: d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154
+  Cross-model prompt hash: d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: "https://github.com/Neko-Catpital-Labs/nicespeak_invoker.git"
+baseBranch: "eval/claude/feature-07-07-http-api-runtime"
+featureBranch: "eval/claude/feature-08-08-browser-review-state"
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: impl-08-browser-review-state
+    description: |
+      Implement 08-browser-review-state (08 — Shared browser review state machine).
+      Review claim: Implement only this feature slice for lineage comparison.
+      Review lane: behavior
+      Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+      Slice rationale: One independently reviewable feature per model lineage.
+      Architectural effect: Adds 08-browser-review-state on the cumulative lineage branch.
+      Goal: Meet the feature acceptance criteria.
+      Motivation: Compare premium vs cheap coding agents on equivalent prompts.
+      Alternative considerations: Porting NiceSpeak source/tests is forbidden.
+      Implementation details: Follow the attached zero-context prompt.
+      Non-goals: Other pilot features and expansion surfaces.
+      Files: package.json, README.md, .gitignore, apps/, test/
+      Change types: feature
+      Acceptance criteria: Feature specification 08-browser-review-state must pass and verification must exit 0
+      Layer: domain
+      Feature state: active
+    prompt: |
+      EVAL_LINEAGE=claude
+      EVAL_EXECUTION_AGENT=claude
+      EVAL_EXECUTION_MODEL=opus
+      EVAL_FEATURE_ID=08-browser-review-state
+      EVAL_FEATURE_INDEX=8
+      EVAL_FEATURE_BRANCH=eval/claude/feature-08-08-browser-review-state
+      EVAL_BASE_BRANCH=eval/claude/feature-07-07-http-api-runtime
+      EVAL_SPEC_CONTENT_HASH=d1a158b646bc9453f3f4372da767966e5f3b91102f54875c764cb4f0ca06d154
+      EVAL_SOURCE_SHA=b4c28368c1f592032172f0bceef1bcd2bc8683e2
+      Assume no prior context. Execute this prompt as a zero-context remote task.
+      You are rebuilding NiceSpeak into a new empty repository through Invoker.
+      Hard isolation rules:
+      - Use ONLY the feature specification below and any docs already present in THIS target repository.
+      - Do NOT read, clone, fetch, or browse NiceSpeak source or NiceSpeak tests.
+      - Do NOT access host GitHub credentials, SSH agents, or paths outside this worktree.
+      - Write new tests from the acceptance criteria; do not port NiceSpeak tests.
+      Feature specification:
+      # 08 — Shared browser review state machine
+      .
+      ## Goal
+      Implement the browser review state machine shared by future Slack/Google Chat UIs.
+      .
+      ## Acceptance criteria
+      - States cover idle → rewriting → reviewing → sending/cancelled/failed.
+      - Accept rewrite and keep original transitions are explicit.
+      - Rewrite failures never auto-send the original.
+      - YOLO auto-send remains unavailable (hard-disabled).
+      - Unit tests cover transitions and duplicate-submit prevention.
+      .
+      ## Non-goals
+      - No DOM adapters yet.
+      - Do not enable YOLO.
+      .
+      Review claim: Implement only this feature slice.
+      Review lane: behavior
+      Safety invariant: Change only this feature and its direct tests; preserve prior contracts; never read or port NiceSpeak source/tests; leave a buildable branch; keep rewrite fail-closed / no-send-before-accept where applicable.
+      Slice rationale: One reviewable feature for multi-model comparison.
+      Architectural effect: Adds the capability described above on top of prior lineage commits.
+      Goal: Satisfy the acceptance criteria in the specification.
+      Motivation: Multi-model rebuild eval comparing premium and cheaper coding agents.
+      Alternative considerations: Porting NiceSpeak source or tests is forbidden; reconstruct from this spec only.
+      Implementation details: Follow the acceptance criteria literally and touch only files required by this slice (for example package.json, README.md, .gitignore, apps/, test/, and related .js/.ts/.md files).
+      Non-goals: Later pilot features and expansion surfaces.
+      Files: package.json, README.md, .gitignore, apps/, test/, and any new files required by this feature
+      Change types: feature
+      Acceptance criteria: Implement every must/ensure/verify item in the specification so npm test or the stated verify command exits with exit code 0.
+      Layer: domain
+      Feature state: active
+      When finished, ensure the slice verification exits with exit code 0 and summarize the PR-ready commit on branch eval/claude/feature-08-08-browser-review-state.
+    executionAgent: claude
+    executionModel: "opus"
+    poolId: nicespeak-eval-agent-local
+    dependencies: []
+  - id: verify-08-browser-review-state
+    description: |
+      Verify 08-browser-review-state with a deterministic local check.
+      Review claim: Prove the slice still builds/tests locally.
+      Review lane: proof
+      Safety invariant: Verification is command-only and does not mutate lineage identity.
+      Slice rationale: Every implementation step needs a pass/fail command.
+      Architectural effect: None beyond validation.
+      Goal: Exit 0 on package checks when present.
+      Motivation: Keep lineages comparable.
+      Alternative considerations: Full suite gates are out of scope.
+      Implementation details: Run npm test when package.json exists, otherwise a no-op success.
+      Non-goals: Cross-lineage scoring.
+      Files: package.json
+      Change types: verification
+      Acceptance criteria: Command exits 0
+      Layer: app_regression
+      Feature state: active
+    command: "npm test"
+    poolId: nicespeak-eval-verify-local
+    dependencies:
+      - impl-08-browser-review-state
