@@ -7,6 +7,7 @@ import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor
 import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executor.js';
 import { RepoPool, type RepoPoolLeasePersistence } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { agentUsesNativeMaxTurns, createTurnBudgetWatcher } from './agent-turn-budget.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
 import {
@@ -497,11 +498,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       : (usesAgent ? 'ignore' : 'pipe');
     const spawnCmd = request.actionType === 'ai_task' ? (resolveExecutableOnCurrentPath(cmd) ?? cmd) : cmd;
     bench('WorktreeExecutor.spawn.before', { cmd: spawnCmd, argCount: args.length, cwd: acquired.worktreePath });
+    const agentEnv = usesAgent && this.agentRegistry
+      ? this.agentRegistry.getOrThrow(executionAgent).getContainerRequirements?.()?.env
+      : undefined;
     const child = spawn(spawnCmd, args, {
       stdio: [stdinMode, 'pipe', 'pipe'],
       cwd: acquired.worktreePath,
       detached: true,
-      env: cleanElectronEnv(),
+      env: { ...cleanElectronEnv(), ...(agentEnv ?? {}) },
     });
     bench('WorktreeExecutor.spawn.after');
 
@@ -531,8 +535,22 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
 
     const driver = usesAgent ? this.agentRegistry?.getSessionDriver(executionAgent) : undefined;
+    const maxTurns = request.inputs.maxTurns;
+    const needsExecutorBudget = usesAgent
+      && typeof maxTurns === 'number'
+      && maxTurns > 0
+      && !agentUsesNativeMaxTurns(executionAgent);
+    const turnBudget = needsExecutorBudget ? createTurnBudgetWatcher(maxTurns!) : null;
+    if (needsExecutorBudget && !driver) {
+      traceExecution(`[WorktreeExecutor] turn-budget-unenforced agent=${executionAgent} (no countable stream driver)`);
+    }
     child.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
+      if (turnBudget?.push(text)) {
+        traceExecution(`[WorktreeExecutor] turn budget exhausted agent=${executionAgent} turns=${turnBudget.turns}`);
+        this.emitOutput(executionId, `\n[Invoker] Agent turn budget exhausted (maxTurns=${maxTurns}).\n`);
+        killProcessGroup(child, 'SIGTERM');
+      }
       if (driver) {
         entry.rawStdout = (entry.rawStdout ?? '') + text;
       } else {
