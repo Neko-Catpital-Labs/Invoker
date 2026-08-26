@@ -1,0 +1,33 @@
+==> Invoker quick-install
+
+==> Checking Node.js...
+    OK: Node.js v26.x
+
+==> Installing npm packages...
+    OK: @neko-catpital-labs/invoker-cli @neko-catpital-labs/invoker-ui
+
+==> Running doctor --fix...
+    Doctor finished (optional tools may still be missing).
+
+==> Installing skills + local MCP...
+    Skills/MCP: installed for detected harnesses.
+    Slack: skipped (optional: invoker-cli setup slack)
+    Remote machines: skipped (optional: invoker-cli setup machines)
+
+==> Enabling default workers...
+    Workers on: pr-status, autofix, auto-approve
+
+==> GitHub auth + smoke (report only)...
+    Report-only checks finished (install continues even if red).
+
+============================================
+  Quick-install complete.
+
+  Default Invoker owner: local (invoker-cli mcp).
+
+  Optional next:
+    invoker-cli auto-approve-authors --add-current-github-user
+    invoker-cli setup slack
+    invoker-cli setup machines
+    invoker-ui
+============================================
