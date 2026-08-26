@@ -32,6 +32,22 @@ run_cli() {
   "$@" </dev/null
 }
 
+# Download a NodeSource setup script to a local file and inspect it before
+# executing, instead of piping curl output directly into a privileged shell.
+run_nodesource_setup() {
+  local url="$1"
+  shift
+  local tmp
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' RETURN
+  curl -fsSL "$url" -o "$tmp"
+  if [ ! -s "$tmp" ] || ! head -c 2 "$tmp" | grep -q '^#!'; then
+    echo "    ERROR: Downloaded NodeSource setup script failed validation." >&2
+    exit 1
+  fi
+  sudo "$@" bash "$tmp"
+}
+
 OS="$(uname -s)"
 case "$OS" in
   Darwin|Linux) ;;
@@ -71,10 +87,10 @@ if [ "$NEED_NODE" = true ]; then
     brew link --overwrite "node@$REQUIRED_NODE_MAJOR" 2>/dev/null || true
   else
     if has apt-get; then
-      curl -fsSL "https://deb.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x" | sudo -E bash -
+      run_nodesource_setup "https://deb.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x" -E
       sudo apt-get install -y nodejs
     elif has dnf; then
-      curl -fsSL "https://rpm.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x" | sudo bash -
+      run_nodesource_setup "https://rpm.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x"
       sudo dnf install -y nodejs
     else
       echo "    ERROR: Could not detect apt or dnf. Install Node.js $REQUIRED_NODE_MAJOR.x manually." >&2
