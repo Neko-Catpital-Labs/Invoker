@@ -684,8 +684,11 @@ describe('bundled-skills', () => {
       expect(existsSync(join(fakeHome, '.cursor', 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
       expect(existsSync(cursorRule)).toBe(true);
       expect(readFileSync(cursorRule, 'utf-8')).toContain('alwaysApply: true');
+      expect(readFileSync(cursorRule, 'utf-8')).toContain('Local vs remote Invoker');
+      expect(readFileSync(cursorRule, 'utf-8')).toContain('BatchMode=yes');
       expect(agents).toContain('# Personal rules');
       expect(agents).toContain('<!-- invoker-execution -->');
+      expect(agents).toContain('Local vs remote Invoker');
       expect(settings.hooks.UserPromptSubmit).toHaveLength(2);
       expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toBe('python3 other.py');
       expect(settings.hooks.UserPromptSubmit[1].hooks[0].command).toContain('invoker-execution/claude_prompt_submit');
@@ -698,6 +701,8 @@ describe('bundled-skills', () => {
       });
       expect(hookResult.status).toBe(0);
       expect(JSON.parse(hookResult.stdout).hookSpecificOutput.additionalContext).toContain('Invoker execution routing');
+      expect(JSON.parse(hookResult.stdout).hookSpecificOutput.additionalContext).toContain('Local vs remote Invoker');
+      expect(JSON.parse(hookResult.stdout).hookSpecificOutput.additionalContext).toContain('BatchMode=yes');
 
       installBundledSkills({
         isPackaged: true,
