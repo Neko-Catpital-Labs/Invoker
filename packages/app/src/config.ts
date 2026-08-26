@@ -175,6 +175,40 @@ export const DEFAULT_CROSS_REPO_RESEARCH_INTERVAL_DAYS = 14;
 /** Default max candidates mined per source per tick. */
 export const DEFAULT_CROSS_REPO_RESEARCH_MAX_CANDIDATES_PER_SOURCE = 5;
 
+/**
+ * One source whose Mergify/admin-bypass ledger events are mined for research.
+ * Same shape as CrossRepoResearchSource so maps stay interchangeable.
+ */
+export type MergifyQueueResearchSource = CrossRepoResearchSource;
+
+/**
+ * Opt-in mergify-queue-research worker settings. Process on/off is SQLite
+ * `worker_desired_states`, not a config boolean.
+ */
+export interface MergifyQueueResearchConfig {
+  /** Poll cadence in days. Default: 14. */
+  intervalDays?: number;
+  /** Linear team id required when maps are non-empty. */
+  linearTeamId?: string;
+  /** Cap candidate events per source per tick. Default: 5. */
+  maxCandidatesPerSource?: number;
+  /**
+   * Target repo URL → list of sources whose queue/ledger to mine.
+   * Source entries may be a URL string (lookbackDays defaults to 30) or
+   * `{ repoUrl, lookbackDays }`.
+   */
+  maps?: Record<string, Array<string | MergifyQueueResearchSource>>;
+}
+
+/** Default lookback when a Mergify queue research source omits lookbackDays. */
+export const DEFAULT_MERGIFY_QUEUE_RESEARCH_LOOKBACK_DAYS = 30;
+
+/** Default Mergify queue research poll cadence when intervalDays is unset. */
+export const DEFAULT_MERGIFY_QUEUE_RESEARCH_INTERVAL_DAYS = 14;
+
+/** Default max Mergify queue candidates mined per source per tick. */
+export const DEFAULT_MERGIFY_QUEUE_RESEARCH_MAX_CANDIDATES_PER_SOURCE = 5;
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -517,6 +551,12 @@ export interface InvokerConfig {
    * Process on/off is SQLite `worker_desired_states`, not a config boolean.
    */
   crossRepoResearch?: CrossRepoResearchConfig;
+  /**
+   * Mergify queue research worker: maps target repos to sources whose
+   * Mergify/admin-bypass ledger events are mined for a research swarm.
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
+   */
+  mergifyQueueResearch?: MergifyQueueResearchConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },

@@ -758,6 +758,71 @@ describe('crossRepoResearch config', () => {
   });
 });
 
+describe('mergifyQueueResearch config', () => {
+  it('accepts omitted mergifyQueueResearch block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts empty maps without linearTeamId', () => {
+    expect(validateInvokerConfig({
+      mergifyQueueResearch: { maps: {} },
+    }).mergifyQueueResearch?.maps).toEqual({});
+  });
+
+  it('requires linearTeamId when maps are non-empty', () => {
+    expect(() => validateInvokerConfig({
+      mergifyQueueResearch: {
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [
+            'https://github.com/Neko-Catpital-Labs/Invoker.git',
+          ],
+        },
+      },
+    })).toThrow(/linearTeamId is required/);
+  });
+
+  it('rejects lookbackDays of 0', () => {
+    expect(() => validateInvokerConfig({
+      mergifyQueueResearch: {
+        linearTeamId: 'team-1',
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [
+            { repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git', lookbackDays: 0 },
+          ],
+        },
+      },
+    })).toThrow(/lookbackDays must be an integer > 0/);
+  });
+
+  it('accepts string sources and object sources with lookbackDays', () => {
+    const config = validateInvokerConfig({
+      mergifyQueueResearch: {
+        intervalDays: 14,
+        linearTeamId: 'team-1',
+        maxCandidatesPerSource: 5,
+        maps: {
+          'https://github.com/Neko-Catpital-Labs/Invoker.git': [
+            'https://github.com/Neko-Catpital-Labs/Invoker.git',
+            { repoUrl: 'https://github.com/example/other', lookbackDays: 7 },
+          ],
+        },
+      },
+    });
+    expect(config.mergifyQueueResearch?.linearTeamId).toBe('team-1');
+    expect(config.mergifyQueueResearch?.maps?.['https://github.com/Neko-Catpital-Labs/Invoker.git']).toHaveLength(2);
+  });
+
+  it('rejects non-git map keys', () => {
+    expect(() => validateInvokerConfig({
+      mergifyQueueResearch: {
+        linearTeamId: 'team-1',
+        maps: { 'not-a-url': ['https://github.com/Neko-Catpital-Labs/Invoker.git'] },
+      },
+    })).toThrow(/maps key must be a git URL/);
+  });
+});
+
+
 describe('e2eAutoFix.targetRepos', () => {
   it('reads targetRepos from config', () => {
     expect(resolveE2eAutoFixTargetRepos({
