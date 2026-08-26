@@ -441,6 +441,14 @@ function buildRegisteredOwnerWorkerDeps(
         INVOKER_LINEAR_TEAM_ID: invokerConfig.crossRepoResearch?.linearTeamId,
       },
     },
+    mergifyQueueResearch: {
+      intervalMs: (invokerConfig.mergifyQueueResearch?.intervalDays
+        ?? 14) * 86_400_000,
+      hasMaps: Object.keys(invokerConfig.mergifyQueueResearch?.maps ?? {}).length > 0,
+      env: {
+        INVOKER_LINEAR_TEAM_ID: invokerConfig.mergifyQueueResearch?.linearTeamId,
+      },
+    },
     idleTaskCleanup: {
       github: createPrMaintenanceGitHub({
         run: spawnPrMaintenanceCommand,
