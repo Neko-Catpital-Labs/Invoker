@@ -16,5 +16,15 @@ describe('chat-submit skill contract', () => {
     expect(skill).toContain('invoker_submit_plan');
     expect(skill).toContain('mode: "live"');
     expect(skill).toContain('invoker_wait_for_workflow');
+    expect(skill).toContain('check-planning-completeness.sh');
+  });
+
+  it('defaults to local Invoker and documents conversational remote MCP retarget', () => {
+    const skill = readFileSync(join(repoRoot, 'skills', 'chat-submit', 'SKILL.md'), 'utf8');
+
+    expect(skill).toContain('## Local vs remote owner');
+    expect(skill).toContain('invoker-cli mcp');
+    expect(skill).toContain('references/local-vs-remote-mcp.md');
+    expect(skill).toContain('Never invent HTTP/SSE MCP');
   });
 });
