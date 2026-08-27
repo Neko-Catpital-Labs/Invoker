@@ -292,18 +292,21 @@ def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) ->
     if pr.merge_state_status == "DIRTY" or pr.mergeable == "CONFLICTING":
         blockers.append(Blocker("conflict", "conflict", pr.number, "GitHub reports merge conflict"))
 
-    for name in sorted(required_checks):
+    configured_names = tuple(sorted(required_checks))
+    check_names = configured_names or tuple(sorted(pr.checks))
+    check_detail = "required check" if configured_names else "CI check"
+    for name in check_names:
         ctx = pr.checks.get(name)
         if ctx is None:
-            if pr.base_ref_name == trunk and not is_queue_only_required_check(name):
+            if configured_names and pr.base_ref_name == trunk and not is_queue_only_required_check(name):
                 blockers.append(Blocker(name, "missing_check", pr.number, f"missing required check {name}"))
             continue
         if ctx.state == "success":
             continue
         if ctx.state == "failure":
-            blockers.append(Blocker(name, "failed_check", pr.number, f"required check failed: {name}"))
+            blockers.append(Blocker(name, "failed_check", pr.number, f"{check_detail} failed: {name}"))
         elif ctx.state in {"pending", "unknown"}:
-            blockers.append(Blocker(name, "pending_check", pr.number, f"required check not green: {name}={ctx.state}"))
+            blockers.append(Blocker(name, "pending_check", pr.number, f"{check_detail} not green: {name}={ctx.state}"))
     return tuple(blockers)
 
 
