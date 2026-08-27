@@ -58,7 +58,7 @@
     }
   },
   "scripts": {
-    "build": "node scripts/verify-workspace-imports.cjs && node scripts/verify-noexternal-completeness.cjs && tsup",
+    "build": "node scripts/verify-workspace-imports.cjs && node scripts/verify-noexternal-completeness.cjs && tsup && node scripts/verify-surfaces-bundled.cjs",
     "dist": "electron-builder --publish never",
     "dist:linux": "electron-builder --linux AppImage deb --publish never",
     "dist:mac": "electron-builder --mac dmg --publish never",
