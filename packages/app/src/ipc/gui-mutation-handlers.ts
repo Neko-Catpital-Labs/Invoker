@@ -966,6 +966,9 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:planning-chat-send':
       case 'invoker:planning-chat-submit':
       case 'invoker:planning-chat-reset':
+      case 'invoker:planning-chat-discard-draft':
+      case 'invoker:planning-chat-set-terminal-mode':
+      case 'invoker:planning-chat-rebind-repo':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
