@@ -7,7 +7,7 @@ import { registerGuiMutationHandler } from '../ipc/ipc-registration.js';
 
 const CHANNEL = 'invoker:planning-chat-rebind-repo';
 const REPORTED_URL = 'https://github.com/Neko-Catpital-Labs/Invoker';
-const MISSING_PLANNING_CHAT_CHANNELS = [
+const PREVIOUSLY_UNWIRED_PLANNING_CHAT_CHANNELS = [
   'invoker:planning-chat-discard-draft',
   'invoker:planning-chat-rebind-repo',
   'invoker:planning-chat-set-terminal-mode',
@@ -90,18 +90,23 @@ async function invokeFollower(channel: string, args: unknown[]) {
 }
 
 describe('planning-chat follower owner delegation', () => {
-  it('reproduces the reported repo-field error for a follower GUI', async () => {
+  it('forwards the reported repo-field rebind to the owner instead of throwing', async () => {
     await expect(
       invokeFollower(CHANNEL, [{ sessionId: 'session-1', repoUrl: REPORTED_URL }]),
-    ).rejects.toThrow(`No owner delegation route is available for ${CHANNEL}`);
+    ).resolves.toMatchObject({
+      delegated: true,
+      translatedChannel: 'headless.gui-mutation',
+      payload: { channel: CHANNEL, args: [{ sessionId: 'session-1', repoUrl: REPORTED_URL }] },
+    });
   });
 
-  it.each([...MISSING_PLANNING_CHAT_CHANNELS])(
-    'throws the missing-delegation error for follower %s',
+  it.each([...PREVIOUSLY_UNWIRED_PLANNING_CHAT_CHANNELS])(
+    'forwards follower %s to the owner GUI mutation handler',
     async (channel) => {
-      await expect(invokeFollower(channel, [{ sessionId: 'session-1' }])).rejects.toThrow(
-        `No owner delegation route is available for ${channel}`,
-      );
+      await expect(invokeFollower(channel, [{ sessionId: 'session-1' }])).resolves.toMatchObject({
+        delegated: true,
+        translatedChannel: 'headless.gui-mutation',
+      });
     },
   );
 
@@ -111,9 +116,9 @@ describe('planning-chat follower owner delegation', () => {
     ).resolves.toMatchObject({ delegated: true, translatedChannel: 'headless.gui-mutation' });
   });
 
-  it('documents the planning-chat invoke channels with no follower translation case', () => {
+  it('forwards every planning-chat invoke channel to the owner', () => {
     const routed = routedPlanningChatChannels();
     const missing = planningChatInvokeChannels().filter((channel) => !routed.has(channel));
-    expect(missing.sort()).toEqual([...MISSING_PLANNING_CHAT_CHANNELS].sort());
+    expect(missing).toEqual([]);
   });
 });
