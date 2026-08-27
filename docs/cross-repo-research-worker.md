@@ -48,11 +48,36 @@ Also ensure `idea-skip` exists as a Linear label for skip verdicts.
 2. Fingerprint-dedupe against `~/.invoker/cross-repo-research/ledger.json`.
 3. Submit `scripts/submit-workflow-chain.sh` with:
    - discover (`onFinish: none`)
-   - research swarm (K parallel prompt tasks, `onFinish: none`)
+   - research swarm (K candidate slots, `onFinish: none`)
    - file-linear (command task calling `scripts/linear-issue-create.mjs`)
 4. Steal tickets are unlabeled. Skip/bad tickets get `idea-skip`.
 5. Never adds `invoker-ready` — you triage, then label for
    [linear-ticket-intake](linear-ticket-intake.md).
+
+### Research swarm: five lenses per candidate, then synthesis
+
+Each candidate slot with a real candidate fans out into five independent,
+parallel research lenses (a single combined prompt was rejected — one lens
+per concern keeps each research task small and lets adversarial findings
+survive instead of getting averaged away):
+
+| Lens | Task id | Produces |
+| --- | --- | --- |
+| Fit | `research-N-lens-fit` | architecture/roadmap fit findings |
+| Peers | `research-N-lens-peers` | `peerLandscape` |
+| Implementations | `research-N-lens-implementations` | `alternateImplementations` |
+| Adversarial | `research-N-lens-adversarial` | `adversarialAnalysis` |
+| Effectiveness | `research-N-lens-effectiveness` | `effectivenessMeasurement` (leading + lagging signals, beyond the fixture e2e check) |
+
+Each lens task writes its own `lens-N-<lensId>.json` artifact under the run
+dir and does not read sibling lens artifacts. A `research-N` synthesis task
+depends on all five `research-N-lens-*` tasks, reads their artifacts, and
+writes `research-N.json` with the existing plan-to-invoker fields
+(`title`, `verdict`, `repo`, `goal`, `motivation`, `safetyInvariant`,
+`verify`, `reviewClaim`, `reviewLane`, ...) plus `peerLandscape`,
+`adversarialAnalysis`, `alternateImplementations`, and
+`effectivenessMeasurement`. A candidate slot with no assigned candidate
+skips the lens fan-out and writes a single noop `research-N.json` directly.
 
 ## Manual / test
 
