@@ -49,7 +49,6 @@ import {
   type InvokerConfig,
 } from '../config.js';
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
-import { buildPersistedAutoApproveAuthorGate } from '../auto-approve-author-gate.js';
 import { backupPlan } from '../plan-backup.js';
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
@@ -530,7 +529,6 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         taskExecutor: requireTaskExecutor(),
         mutationTiming: activeMutationContext?.mutationTiming,
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
-        autoApproveAuthorGate: buildPersistedAutoApproveAuthorGate(persistence),
       },
       {
         agentName,
@@ -2444,7 +2442,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         persistence,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
-        autoApproveAuthorGate: buildPersistedAutoApproveAuthorGate(persistence),
       }, agentName, activeMutationContext?.signal);
       await finalizeMutationWithGlobalTopup({
         orchestrator,
