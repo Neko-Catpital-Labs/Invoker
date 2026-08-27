@@ -29,7 +29,8 @@ Invoker integration skill. Generic transcript mining and skill-edit approval sta
    - Sibling PR / nearby failure treated as root cause without failing-then-passing proof
    - Agent claimed success while `needsHuman`, verify failed, or acceptance criteria incomplete
 4. Route Accepted findings:
-   - Methodology / judgment → open a **catstack** PR (never vendor `skills/reflect/` into Invoker)
+   - Methodology about Invoker-owned skills → Invoker PR against `skills/` (never merge from the task)
+   - Catstack-owned or personal-mode methodology → catstack PR. Never vendor `skills/reflect/` into Invoker
    - Mechanical harness prompt/logging only → Invoker PR
 5. For automated `reflect-ci-*` only: treat the task prompt Acceptance criteria as pre-approval for drafting/opening PRs, not merging. Uncertain findings go to Backlog.
 6. Before exit, append operator logs:
