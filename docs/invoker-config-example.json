@@ -119,6 +119,14 @@
     }
   },
 
+  "catstackDeploy": {
+    "comment": "Opt-in worker: every intervalMinutes, clone-or-ff-only-pull catstack and run ./install.sh on the owner machine plus every remoteTargets host. Start from Workers UI; process on/off is worker_desired_states, not this block.",
+    "intervalMinutes": 15,
+    "repoUrl": "https://github.com/EdbertChan/catstack.git",
+    "localRepoPath": "~/Documents/GitHub/catstack",
+    "remoteRepoPath": "~/Documents/GitHub/catstack"
+  },
+
   "webToken": "change-me-to-a-long-random-secret",
   "webHost": "127.0.0.1",
   "webPort": 4200,
