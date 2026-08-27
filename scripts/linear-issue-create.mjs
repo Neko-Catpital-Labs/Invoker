@@ -20,7 +20,9 @@
  *   title, verdict (steal|skip), repo, goal, motivation, safetyInvariant,
  *   verify, reviewClaim, reviewLane, sliceRationale, architecturalEffect,
  *   alternatives, implementationDetails, nonGoals, files, changeTypes,
- *   acceptanceCriteria, layer, featureState, evidence
+ *   acceptanceCriteria, layer, featureState, evidence,
+ *   peerLandscape, alternateImplementations, adversarialAnalysis,
+ *   effectivenessMeasurement (required: { leadingSignals, laggingSignals })
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -70,6 +72,33 @@ function heading(name, value) {
   return text ? `${name}: ${text}` : '';
 }
 
+function formatBulletList(items, formatter) {
+  if (!Array.isArray(items) || items.length === 0) return '';
+  return items.map((item) => `- ${formatter(item)}`).join('\n');
+}
+
+function formatPeerLandscape(list) {
+  return formatBulletList(list, (p) => `${p.repo ?? '?'}: ${p.approach ?? ''} -> ${p.outcome ?? ''}`);
+}
+
+function formatAlternateImplementations(list) {
+  return formatBulletList(list, (a) => `${a.approach ?? ''} (tradeoffs: ${a.tradeoffs ?? ''})`);
+}
+
+function formatAdversarialAnalysis(list) {
+  return formatBulletList(list, (a) => `${a.objection ?? ''} (strength: ${a.strength ?? ''})`);
+}
+
+function formatEffectivenessMeasurement(measurement) {
+  if (!measurement || typeof measurement !== 'object') return '';
+  const leading = Array.isArray(measurement.leadingSignals) ? measurement.leadingSignals : [];
+  const lagging = Array.isArray(measurement.laggingSignals) ? measurement.laggingSignals : [];
+  const sections = [];
+  if (leading.length > 0) sections.push(`Leading signals:\n${leading.map((s) => `- ${s}`).join('\n')}`);
+  if (lagging.length > 0) sections.push(`Lagging signals:\n${lagging.map((s) => `- ${s}`).join('\n')}`);
+  return sections.join('\n');
+}
+
 function buildBodyFromArtifact(artifact) {
   const lines = [
     heading('Repo', artifact.repo ?? artifact.repoUrl),
@@ -83,6 +112,10 @@ function buildBodyFromArtifact(artifact) {
     heading('Architectural effect', artifact.architecturalEffect),
     heading('Alternative considerations', artifact.alternatives ?? artifact.alternativeConsiderations),
     heading('Implementation details', artifact.implementationDetails ?? artifact.implementation),
+    heading('Peer landscape', formatPeerLandscape(artifact.peerLandscape)),
+    heading('Alternate implementations', formatAlternateImplementations(artifact.alternateImplementations)),
+    heading('Adversarial analysis', formatAdversarialAnalysis(artifact.adversarialAnalysis)),
+    heading('Effectiveness measurement', formatEffectivenessMeasurement(artifact.effectivenessMeasurement)),
     heading('Non-goals', artifact.nonGoals),
     heading('Files', Array.isArray(artifact.files) ? artifact.files.join(', ') : artifact.files),
     heading('Change types', Array.isArray(artifact.changeTypes) ? artifact.changeTypes.join(', ') : artifact.changeTypes),
@@ -105,7 +138,7 @@ function requireField(body, name) {
 }
 
 function validateBody(body) {
-  for (const field of ['Repo', 'Goal', 'Motivation', 'Safety invariant', 'Verify']) {
+  for (const field of ['Repo', 'Goal', 'Motivation', 'Safety invariant', 'Verify', 'Effectiveness measurement']) {
     requireField(body, field);
   }
   if (/\binvoker-ready\b/i.test(body)) {

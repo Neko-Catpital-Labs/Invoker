@@ -164,7 +164,21 @@ cat > "$sb/steal.json" <<'JSON'
   "verify": "cd packages/ui && pnpm test -- workflow-progress-surfaces",
   "reviewClaim": "needs_input ranks above failed in attention entries",
   "reviewLane": "behavior",
-  "evidence": "orca #15551"
+  "evidence": "orca #15551",
+  "peerLandscape": [
+    { "repo": "orca", "approach": "recency-sorted palette", "outcome": "reduced miss rate" }
+  ],
+  "alternateImplementations": [
+    { "approach": "sort by needs_input first", "tradeoffs": "simple, may starve stale failed" },
+    { "approach": "weighted score of recency+status", "tradeoffs": "more tunable, more complex" }
+  ],
+  "adversarialAnalysis": [
+    { "objection": "redundant with existing filter", "strength": "low" }
+  ],
+  "effectivenessMeasurement": {
+    "leadingSignals": ["operator clicks needs_input entry within 30s of surfacing"],
+    "laggingSignals": ["reduced time-to-first-response on waiting agents"]
+  }
 }
 JSON
 cat > "$sb/skip.json" <<'JSON'
@@ -176,7 +190,11 @@ cat > "$sb/skip.json" <<'JSON'
   "motivation": "Invoker already orchestrates stacked PRs",
   "safetyInvariant": "No product change; documentation of skip only",
   "verify": "test -f skills/land-stack/SKILL.md",
-  "evidence": "land-stack skill exists"
+  "evidence": "land-stack skill exists",
+  "effectivenessMeasurement": {
+    "leadingSignals": ["no duplicate stacked-PR skill authored within 30d"],
+    "laggingSignals": ["zero regressions filed against land-stack for this idea"]
+  }
 }
 JSON
 cat > "$sb/bin/create-stub" <<STUB
@@ -198,6 +216,10 @@ grep -q "Goal:" "$sb/creates.jsonl" || fail "D-steal: body missing Goal" "$sb/cr
 grep -q "Motivation:" "$sb/creates.jsonl" || fail "D-steal: body missing Motivation" "$sb/creates.jsonl"
 grep -q "Safety invariant:" "$sb/creates.jsonl" || fail "D-steal: body missing Safety" "$sb/creates.jsonl"
 grep -q "Verify:" "$sb/creates.jsonl" || fail "D-steal: body missing Verify" "$sb/creates.jsonl"
+grep -q "Peer landscape:" "$sb/creates.jsonl" || fail "D-steal: body missing Peer landscape" "$sb/creates.jsonl"
+grep -q "Alternate implementations:" "$sb/creates.jsonl" || fail "D-steal: body missing Alternate implementations" "$sb/creates.jsonl"
+grep -q "Adversarial analysis:" "$sb/creates.jsonl" || fail "D-steal: body missing Adversarial analysis" "$sb/creates.jsonl"
+grep -q "Effectiveness measurement:" "$sb/creates.jsonl" || fail "D-steal: body missing Effectiveness measurement" "$sb/creates.jsonl"
 grep -vq "invoker-ready" "$sb/creates.jsonl" || fail "D-steal: must not include invoker-ready" "$sb/creates.jsonl"
 
 : > "$sb/creates.jsonl"
@@ -234,5 +256,29 @@ if env INVOKER_LINEAR_LABEL_NAMES=invoker-ready INVOKER_LINEAR_DRY_RUN=1 \
 fi
 grep -qi "Refusing\|invoker-ready" "$log" || fail "E: expected refusal message" "$log"
 echo "PASS E: refuses invoker-ready"
+
+# ── F. Fail-closed create without effectivenessMeasurement ───────────────────
+mk_sb
+cat > "$sb/steal-no-effectiveness.json" <<'JSON'
+{
+  "title": "Steal Cmd+K recency ranking",
+  "verdict": "steal",
+  "repo": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+  "goal": "Rank Needs Attention by needs_input before failed",
+  "motivation": "Orca ranked palette by recency; operators miss waiting agents",
+  "safetyInvariant": "Attention sort only; no worker behavior change",
+  "verify": "cd packages/ui && pnpm test -- workflow-progress-surfaces",
+  "reviewClaim": "needs_input ranks above failed in attention entries",
+  "reviewLane": "behavior",
+  "evidence": "orca #15551"
+}
+JSON
+log="$sb/f.log"
+if env INVOKER_LINEAR_DRY_RUN=1 \
+  node "$REPO_ROOT/scripts/linear-issue-create.mjs" --artifact "$sb/steal-no-effectiveness.json" > "$log" 2>&1; then
+  fail "F: create must fail closed without effectivenessMeasurement" "$log"
+fi
+grep -qi "Effectiveness measurement" "$log" || fail "F: expected missing-effectiveness error message" "$log"
+echo "PASS F: fails closed without effectivenessMeasurement"
 
 echo "All cross-repo-research fixture tests passed."
