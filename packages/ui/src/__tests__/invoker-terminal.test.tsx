@@ -1815,12 +1815,12 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. No ready work to start.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review the graph, then Start ready work.',
     );
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
@@ -1857,8 +1857,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(2);
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review the graph, then Start ready work.');
