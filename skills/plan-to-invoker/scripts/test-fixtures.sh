@@ -488,6 +488,33 @@ tasks:
       Feature state: active
     command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface, add-regression-tests]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-surface]
 EOF
 
   bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
@@ -691,6 +718,33 @@ tasks:
       Feature state: active
     command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-surface]
 EOF
 
   cat > "$second_plan" <<'EOF'
@@ -790,6 +844,33 @@ tasks:
       Feature state: active
     command: "test -f packages/foo/src/terminal-surface.ts"
     dependencies: [implement-terminal-surface]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-terminal-surface]
 EOF
 
   cat > "$stack_manifest" <<EOF
@@ -994,6 +1075,33 @@ tasks:
       Feature state: active
     command: "cd packages/app && pnpm test"
     dependencies: [implement-bridge]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-bridge]
 EOF
 
   bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
@@ -1163,6 +1271,33 @@ tasks:
       Feature state: active
     command: "cd packages/execution-engine && pnpm test"
     dependencies: [implement-runtime-flow]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-runtime-flow]
 EOF
 
   bash "$LINT_SCRIPT" --strict-delegation "$temp_plan" >/dev/null

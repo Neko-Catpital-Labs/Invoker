@@ -50,7 +50,7 @@ tasks:
       Review claim: c
       Review lane: behavior
       Alternative considerations: none
-      Implementation details: touch nothing harmful
+      Implementation details: touch nothing harmful in packages/app/src/main.ts
       Non-goals: none
       Acceptance criteria:
       - `true`
@@ -99,7 +99,7 @@ tasks:
       Review claim: c
       Review lane: behavior
       Alternative considerations: none
-      Implementation details: touch nothing harmful
+      Implementation details: touch nothing harmful in packages/app/src/main.ts
       Non-goals: none
       Acceptance criteria:
       - `true`
