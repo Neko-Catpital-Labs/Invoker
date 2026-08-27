@@ -48,11 +48,24 @@ Also ensure `idea-skip` exists as a Linear label for skip verdicts.
 2. Fingerprint-dedupe against `~/.invoker/cross-repo-research/ledger.json`.
 3. Submit `scripts/submit-workflow-chain.sh` with:
    - discover (`onFinish: none`)
-   - research swarm (K parallel prompt tasks, `onFinish: none`)
-   - file-linear (command task calling `scripts/linear-issue-create.mjs`)
-4. Steal tickets are unlabeled. Skip/bad tickets get `idea-skip`.
-5. Never adds `invoker-ready` — you triage, then label for
+   - research swarm (`onFinish: none`) — per candidate slot, five parallel lens
+     tasks (`research-N-fit`, `research-N-peers`, `research-N-implementations`,
+     `research-N-adversarial`, `research-N-effectiveness`), then a
+     `research-N-synthesis` task gated on all five that writes `research-N.json`
+   - file-linear (command task calling `scripts/linear-issue-create.mjs`, then
+     `scrub-handoff-artifacts`)
+4. The synthesis artifact carries the plan-to-invoker fields plus
+   `peerLandscape`, `adversarialAnalysis`, `alternateImplementations`, and
+   `effectivenessMeasurement` (leading + lagging signals beyond the fixture
+   e2e check).
+5. Steal tickets are unlabeled. Skip/bad tickets get `idea-skip`.
+6. Never adds `invoker-ready` — you triage, then label for
    [linear-ticket-intake](linear-ticket-intake.md).
+7. After filing, `scrub-handoff-artifacts` (`scripts/scrub-handoff-artifacts.sh`)
+   purges any `candidates.json` / `research-*.json` / `lens-*.json` leaked into
+   the git worktree and fails the task if any remain tracked or untracked. The
+   home `~/.invoker/cross-repo-research` run directory (and its `ledger.json`)
+   is never touched — it stays for audit.
 
 ## Manual / test
 
