@@ -44,6 +44,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Logger } from '@invoker/contracts';
+import { resolveInvokerInstanceProfile } from '@invoker/contracts';
 import {
   OrchestratorError,
   OrchestratorErrorCode,
@@ -210,6 +211,21 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// An explicit INVOKER_API_PORT is a synthetic override and always wins; otherwise the
+// selected profile decides, so a source-development launch never falls back to the
+// production port.
+function resolveApiPort(): number {
+  if (process.env.INVOKER_API_PORT !== undefined) {
+    return parseInt(process.env.INVOKER_API_PORT, 10);
+  }
+  const profile = resolveInvokerInstanceProfile({
+    kind: process.env.INVOKER_RUNTIME_KIND ?? 'packaged',
+    sourceRoot: process.env.INVOKER_SOURCE_ROOT,
+    env: process.env,
+  });
+  return profile.ports.apiPort;
+}
+
 export function startApiServer(deps: ApiServerDeps): ApiServer {
   const {
     logger: apiLogger,
@@ -219,7 +235,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     deleteWorkflow,
     detachWorkflow,
   } = deps;
-  const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
+  const port = resolveApiPort();
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
