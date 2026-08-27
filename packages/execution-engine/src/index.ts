@@ -85,6 +85,7 @@ export * from './workers/e2e-autofix-worker.js';
 export * from './workers/cross-repo-research-worker.js';
 export * from './workers/catstack-deploy-worker.js';
 export * from './workers/mergify-queue-research-worker.js';
+export * from './workers/thrash-detector-worker.js';
 export * from './workers/worker-session-mine-worker.js';
 export * from './workers/reaper-worker.js';
 export * from './workers/requeue-worker.js';

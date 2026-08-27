@@ -48,6 +48,7 @@ import {
 } from './headless-command-registry.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { classifyAutoFixRecoveryPhase } from './recovery-worker-observability.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -541,6 +542,17 @@ export function resolveHeadlessCatstackDeployConfig(
   };
 }
 
+export function resolveHeadlessThrashDetectorConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['thrashDetector']> {
+  return {
+    intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 30) * 60_000,
+    thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+    windowHours: invokerConfig.thrashDetector?.windowHours,
+    classifyPhase: classifyAutoFixRecoveryPhase,
+  };
+}
+
 export function resolveHeadlessInfraRepairConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
   repoRoot: string,
@@ -688,6 +700,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      thrashDetector: resolveHeadlessThrashDetectorConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');

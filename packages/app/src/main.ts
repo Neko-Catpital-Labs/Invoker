@@ -221,6 +221,7 @@ import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { classifyAutoFixRecoveryPhase } from './recovery-worker-observability.js';
 import {
   autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
@@ -456,6 +457,12 @@ function buildRegisteredOwnerWorkerDeps(
         name: target.name,
         connection: target.connection,
       })),
+    },
+    thrashDetector: {
+      intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 30) * 60_000,
+      thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+      windowHours: invokerConfig.thrashDetector?.windowHours,
+      classifyPhase: classifyAutoFixRecoveryPhase,
     },
     idleTaskCleanup: {
       github: createPrMaintenanceGitHub({

@@ -233,6 +233,28 @@ export const DEFAULT_CATSTACK_DEPLOY_REPO_URL = 'https://github.com/EdbertChan/c
 /** Default local/remote checkout path for catstack. */
 export const DEFAULT_CATSTACK_DEPLOY_REPO_PATH = '~/Documents/GitHub/catstack';
 
+/**
+ * Opt-in thrash-detector worker settings. Process on/off is SQLite
+ * `worker_desired_states`, not a config boolean.
+ */
+export interface ThrashDetectorConfig {
+  /** Poll cadence in minutes. Default: 30. */
+  intervalMinutes?: number;
+  /** Distinct-task count within `windowHours` that crosses the thrash threshold. Default: 3. */
+  thresholdCount?: number;
+  /** Recurrence window in hours. Default: 24. */
+  windowHours?: number;
+}
+
+/** Default poll cadence when thrashDetector.intervalMinutes is unset. */
+export const DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES = 30;
+
+/** Default distinct-task threshold when thrashDetector.thresholdCount is unset. */
+export const DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT = 3;
+
+/** Default recurrence window (hours) when thrashDetector.windowHours is unset. */
+export const DEFAULT_THRASH_DETECTOR_WINDOW_HOURS = 24;
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -589,6 +611,13 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  /**
+   * Thrash-detector worker: aggregates recurring debug.auto-fix events by
+   * failure signature and logs one thrash.detected audit event per signature
+   * past threshold. Process on/off is SQLite `worker_desired_states`, not a
+   * config boolean.
+   */
+  thrashDetector?: ThrashDetectorConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },

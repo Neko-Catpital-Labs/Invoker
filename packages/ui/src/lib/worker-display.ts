@@ -134,6 +134,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No catstack-deploy runs recorded yet.',
     };
   }
+  if (kind === 'thrash-detector') {
+    return {
+      name: 'Thrash detector',
+      idleText: 'Idle. Groups debug.auto-fix events by failure signature and logs a thrash.detected audit event past threshold.',
+      noActionText: 'No thrash-detector runs recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',

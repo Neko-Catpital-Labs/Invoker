@@ -23,6 +23,7 @@ import type { SlackBugScanWorkerConfig } from './workers/slack-bug-scan-worker.j
 import type { CrossRepoResearchWorkerConfig } from './workers/cross-repo-research-worker.js';
 import type { CatstackDeployWorkerConfig } from './workers/catstack-deploy-worker.js';
 import type { MergifyQueueResearchWorkerConfig } from './workers/mergify-queue-research-worker.js';
+import type { ThrashDetectorWorkerConfig, ThrashDetectorWorkerStore } from './workers/thrash-detector-worker.js';
 import type {
   InfraRepairWorkerConfig,
   InfraRepairWorkerStore,
@@ -50,7 +51,8 @@ export interface WorkerRuntimeDependencies {
     & InfraRepairWorkerStore
     & WorkflowResumeWorkerStore
     & DiskHeadroomWorkerStore
-    & IdleTaskCleanupWorkerStore;
+    & IdleTaskCleanupWorkerStore
+    & ThrashDetectorWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & ReviewGateCiRepairSubmitter
@@ -96,4 +98,6 @@ export interface WorkerRuntimeDependencies {
   mergifyQueueResearch?: MergifyQueueResearchWorkerConfig;
   /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
+  /** Thrash-detector worker configuration (threshold/window tuning + phase classifier). */
+  thrashDetector?: ThrashDetectorWorkerConfig;
 }

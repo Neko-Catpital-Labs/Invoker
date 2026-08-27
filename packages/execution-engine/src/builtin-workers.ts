@@ -17,6 +17,7 @@ import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.j
 import { registerCrossRepoResearchWorker } from './workers/cross-repo-research-worker.js';
 import { registerCatstackDeployWorker } from './workers/catstack-deploy-worker.js';
 import { registerMergifyQueueResearchWorker } from './workers/mergify-queue-research-worker.js';
+import { registerThrashDetectorWorker } from './workers/thrash-detector-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -39,5 +40,6 @@ export function registerBuiltinWorkers(
   registerCrossRepoResearchWorker(registry);
   registerCatstackDeployWorker(registry);
   registerMergifyQueueResearchWorker(registry);
+  registerThrashDetectorWorker(registry);
   return registry;
 }
