@@ -10,6 +10,7 @@ export interface ClaudeExecutionAgentConfig {
   configDir?: string;
   containerHomePath?: string;
   apiKey?: string;
+  oauthToken?: string;
 }
 
 const CLAUDE_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
@@ -80,6 +81,7 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   private readonly configDir: string;
   private readonly containerHomePath: string;
   private readonly apiKey: string;
+  private readonly oauthToken: string;
 
   constructor(config: ClaudeExecutionAgentConfig = {}) {
     this.command = config.command ?? process.env.INVOKER_CLAUDE_COMMAND ?? 'claude';
@@ -87,6 +89,10 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
     this.configDir = config.configDir ?? resolveClaudeWorkerConfigDir();
     this.containerHomePath = config.containerHomePath ?? '/home/invoker';
     this.apiKey = config.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
+    this.oauthToken = config.oauthToken
+      ?? process.env.INVOKER_CLAUDE_OAUTH_TOKEN
+      ?? process.env.CLAUDE_CODE_OAUTH_TOKEN
+      ?? '';
     this.bundledSkillRoot = join(this.configDir, 'skills');
     ensureClaudeWorkerConfigDir(this.configDir);
   }
@@ -154,6 +160,9 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
       env: {
         ANTHROPIC_API_KEY: this.apiKey,
         CLAUDE_CONFIG_DIR: this.configDir,
+        // Isolated CLAUDE_CONFIG_DIR skips macOS Keychain OAuth lookup (keyed to the
+        // default config dir), so a worker-scoped run needs its own token instead.
+        CLAUDE_CODE_OAUTH_TOKEN: this.oauthToken,
       },
     };
   }

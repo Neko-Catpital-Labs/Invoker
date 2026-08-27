@@ -217,6 +217,30 @@ describe('ClaudeExecutionAgent', () => {
 
       expect(reqs.env.ANTHROPIC_API_KEY).toBe('sk-from-env');
     });
+
+    it('returns CLAUDE_CODE_OAUTH_TOKEN in env', () => {
+      const agent = new ClaudeExecutionAgent({ oauthToken: 'sk-ant-oat-test' });
+      const reqs = agent.getContainerRequirements();
+
+      expect(reqs.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat-test');
+    });
+
+    it('falls back to process.env.CLAUDE_CODE_OAUTH_TOKEN', () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat-from-env';
+      const agent = new ClaudeExecutionAgent();
+      const reqs = agent.getContainerRequirements();
+
+      expect(reqs.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat-from-env');
+    });
+
+    it('prefers INVOKER_CLAUDE_OAUTH_TOKEN over CLAUDE_CODE_OAUTH_TOKEN', () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat-generic';
+      process.env.INVOKER_CLAUDE_OAUTH_TOKEN = 'sk-ant-oat-invoker';
+      const agent = new ClaudeExecutionAgent();
+      const reqs = agent.getContainerRequirements();
+
+      expect(reqs.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat-invoker');
+    });
   });
 
   describe('worker-scoped Claude config', () => {
