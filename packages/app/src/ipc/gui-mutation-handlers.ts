@@ -1,10 +1,9 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
-import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
+import { CommandError, IpcChannels, makeEnvelope, resolveInvokerInstanceProfile } from '@invoker/contracts';
 import type {
   BundledSkillsInstallMode,
   InAppPlanRequest,
@@ -2006,8 +2005,17 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   });
 
+  // An explicit INVOKER_DB_DIR is a synthetic override and always wins; otherwise the
+  // selected profile decides, so a source-development launch never traces into the
+  // production home directory.
+  const invokerHomeRoot = process.env.INVOKER_DB_DIR ?? resolveInvokerInstanceProfile({
+    kind: process.env.INVOKER_RUNTIME_KIND ?? 'packaged',
+    sourceRoot: process.env.INVOKER_SOURCE_ROOT,
+    env: process.env,
+  }).homeRoot;
+
   const traceRendererTaskGraphEvents = process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1';
-  const rendererTaskGraphTracePath = join(homedir(), '.invoker', 'ui-task-graph-events.jsonl');
+  const rendererTaskGraphTracePath = join(invokerHomeRoot, 'ui-task-graph-events.jsonl');
   let rendererTaskGraphTraceWriteFailed = false;
   ipcMain.handle('invoker:trace-renderer-task-graph-event', (_event, event: TaskGraphEvent) => {
     if (!traceRendererTaskGraphEvents) return;
@@ -2033,7 +2041,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   const traceRendererWorkflowEvents = process.env.INVOKER_TRACE_RENDERER_WORKFLOW_EVENTS === '1';
-  const rendererWorkflowTracePath = join(homedir(), '.invoker', 'ui-workflow-events.jsonl');
+  const rendererWorkflowTracePath = join(invokerHomeRoot, 'ui-workflow-events.jsonl');
   let rendererWorkflowTraceWriteFailed = false;
   ipcMain.handle('invoker:trace-renderer-workflow-event', (_event, workflows: unknown[]) => {
     if (!traceRendererWorkflowEvents) return;
