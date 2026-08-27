@@ -30,7 +30,13 @@ const packageRoot = join(__dirname, '..');
 // specific.
 const KNOWN_SAFE_EXTERNAL = {
   '@invoker/cli': 'never imported into the bundle; spawned as a separate subprocess via packages/app/src/cli-helper.ts, pointing at its own independently-built dist',
-  '@invoker/surfaces': 'has a real compiled dist (main: dist/index.js); packaged separately into app-build-dist.tgz, see scripts/test-suites/required/08-build-artifact-surfaces-guard.sh',
+};
+
+// Compiled dist is not enough for these: electron-builder's asar omits pnpm-nested
+// deps (npm 0.0.13 owner-serve died on `Cannot find module 'form-data'` while
+// loading @invoker/surfaces → @slack/bolt → axios). Bundle them into dist/main.js.
+const MUST_BUNDLE_EVEN_IF_COMPILED = {
+  '@invoker/surfaces': 'dynamically imported by in-app-planner; nested @slack/bolt dep form-data is omitted from the packaged asar unless this package is in noExternal',
 };
 
 function readJson(path) {
@@ -77,6 +83,11 @@ for (const name of dependencies) {
   const isRawTypeScript = /\.tsx?$/.test(mainEntry) && !mainEntry.startsWith('dist/');
 
   if (!isRawTypeScript) {
+    if (name in MUST_BUNDLE_EVEN_IF_COMPILED && !noExternal.has(name)) {
+      failures.push(
+        `${name}: ${MUST_BUNDLE_EVEN_IF_COMPILED[name]} Add it to packages/app/tsup.config.ts's noExternal.`,
+      );
+    }
     continue; // has a real compiled entry point; safe to leave external either way
   }
 
@@ -94,6 +105,12 @@ for (const name of dependencies) {
     + `it will crash packages/app/dist/main.js at runtime the moment any code path touches it -- add it `
     + `to noExternal (bundle it), or to KNOWN_SAFE_EXTERNAL with a reason if it's genuinely never `
     + `imported into the bundle (e.g. spawned as a subprocess like @invoker/cli).`,
+  );
+}
+
+if (!noExternal.has('@slack/bolt')) {
+  failures.push(
+    '@slack/bolt: required in noExternal; @invoker/surfaces loads it and the packaged asar omits nested form-data',
   );
 }
 
