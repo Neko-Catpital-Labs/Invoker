@@ -15,6 +15,7 @@ import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.j
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 import type { AutoApproveAuthorGateResult } from './auto-approve-author-allowlist.js';
+import { isAdminBypassNamedWorkflow } from '../workflow-name-gates.js';
 
 export const AUTO_APPROVE_WORKER_KIND = 'autoapprove';
 export const DEFAULT_AUTO_APPROVE_WORKER_INTERVAL_MS = 60_000;
@@ -24,8 +25,12 @@ const AUTO_APPROVE_ACTION_TYPE = 'approve-ai-fix';
 type AutoApproveActionStatus = WorkerActionStatus;
 
 export interface AutoApproveWorkerStore {
-  listWorkflows(): ReadonlyArray<{ id: string }>;
-  loadWorkflow?(workflowId: string): { mergeMode?: string | null; onFinish?: string | null } | undefined;
+  listWorkflows(): ReadonlyArray<{ id: string; name?: string }>;
+  loadWorkflow?(workflowId: string): {
+    name?: string | null;
+    mergeMode?: string | null;
+    onFinish?: string | null;
+  } | undefined;
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents?(
@@ -140,6 +145,17 @@ function candidateFromTask(task: TaskState): AutoApproveCandidate | undefined {
   const ref = taskRefFromTask(task);
   if (!ref) return undefined;
   return { ...ref, source: 'scan' };
+}
+
+function workflowNameForId(
+  options: Pick<AutoApproveWorkerPolicyOptions, 'store'>,
+  workflowId: string,
+): string | undefined {
+  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  if (typeof listed?.name === 'string' && listed.name.length > 0) return listed.name;
+  const loaded = options.store.loadWorkflow?.(workflowId);
+  if (typeof loaded?.name === 'string' && loaded.name.length > 0) return loaded.name;
+  return undefined;
 }
 
 function shouldAutoApproveReviewReadyTask(
@@ -375,6 +391,14 @@ function validateAutoApproveCandidate(
   const snapshotComparison = compareCandidateSnapshot(candidate, latest);
   if (!snapshotComparison.ok) {
     skipAutoApproveCandidate(options, candidate, snapshotComparison.reason, snapshotComparison.details);
+    return undefined;
+  }
+
+  const workflowName = workflowNameForId(options, snapshotComparison.ref.workflowId);
+  if (isAdminBypassNamedWorkflow(workflowName)) {
+    skipAutoApproveCandidate(options, candidate, 'admin-bypass-excluded', {
+      workflowName: workflowName ?? null,
+    });
     return undefined;
   }
 
