@@ -45,6 +45,7 @@ import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecyc
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from './worker-runtime.js';
+import { isAdminBypassNamedWorkflow } from './workflow-name-gates.js';
 
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
@@ -89,7 +90,8 @@ const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 
 };
 
 export interface AutoFixRecoveryStore {
-  listWorkflows(): ReadonlyArray<{ id: string }>;
+  listWorkflows(): ReadonlyArray<{ id: string; name?: string }>;
+  loadWorkflow?(workflowId: string): { name?: string | null } | undefined;
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents(
@@ -198,6 +200,17 @@ type AutoFixCandidateSnapshotComparison =
 
 function workflowIdForTask(task: TaskState): string | undefined {
   return task.config.workflowId ?? task.id.split('/')[0];
+}
+
+function workflowNameForId(
+  options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
+  workflowId: string,
+): string | undefined {
+  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  if (typeof listed?.name === 'string' && listed.name.length > 0) return listed.name;
+  const loaded = options.store.loadWorkflow?.(workflowId);
+  if (typeof loaded?.name === 'string' && loaded.name.length > 0) return loaded.name;
+  return undefined;
 }
 
 function taskRefFromTask(task: TaskState): AutoFixRecoveryTaskRef | undefined {
@@ -487,6 +500,14 @@ function validateAutoFixCandidate(
     return undefined;
   }
   const latestRef = snapshotComparison.ref;
+
+  const workflowName = workflowNameForId(options, latestRef.workflowId);
+  if (isAdminBypassNamedWorkflow(workflowName)) {
+    skipAutoFixCandidate(options, candidate, 'admin-bypass-excluded', {
+      workflowName: workflowName ?? null,
+    });
+    return undefined;
+  }
 
   if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.error)) {
     tripAutoFixCircuitBreaker(options);
