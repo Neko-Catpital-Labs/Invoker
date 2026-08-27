@@ -4,6 +4,10 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.14
+
+- Fix packaged desktop owner-serve: bundle `@invoker/surfaces` and `@slack/bolt` into the Electron main bundle so loading the in-app planner no longer depends on pnpm-nested asar deps (npm 0.0.13 died with `Cannot find module 'form-data'`).
+
 ## 0.0.13
 
 - Bring planning chat to the web surfaces: bind a repo before the conversation starts, wire planning and task terminals through web dispatch, persist and retry turns, and keep Send from racing a repo bind or an in-flight turn (#9955-#9981, #9995).
