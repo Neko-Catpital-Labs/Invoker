@@ -50,20 +50,46 @@ fi
 # Core transport helpers
 # ---------------------------------------------------------------------------
 
-# Read-only Electron query (stderr suppressed for clean parsing).
+# Safety invariant: a live owner is the only Invoker process. Query through
+# that owner (invoker-ui / headless-client IPC). Spawn checkout Electron only
+# for isolated STANDALONE tests. Do not boot a second Invoker to read state.
 #
 # Bounded by INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS (default 60; 0 disables).
 # Safe to kill on timeout: this only runs `query` subcommands, which never
 # write to the DB, so there is no stuck-row risk the way there is for
 # headless_mutation (see run_with_optional_timeout's use in rebase-retry-all.sh
 # for that different, deliberately-timeout-free case).
+_headless_query_invoke() {
+  local seconds="$1"
+  shift
+  local use_electron=0
+  if [ "$FORCE_OWNER_IPC" = "1" ]; then
+    use_electron=0
+  elif [ -n "${INVOKER_HEADLESS_ELECTRON_BIN:-}" ] || [ "$STANDALONE_MODE" = "1" ]; then
+    use_electron=1
+  fi
+  if [ "$use_electron" = "1" ]; then
+    # shellcheck disable=SC2086
+    run_with_optional_timeout "$seconds" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
+    return $?
+  fi
+  if [ -n "${INVOKER_HEADLESS_CLIENT_BIN:-}" ]; then
+    run_with_optional_timeout "$seconds" "$INVOKER_HEADLESS_CLIENT_BIN" "$@"
+    return $?
+  fi
+  if command -v invoker-ui >/dev/null 2>&1; then
+    run_with_optional_timeout "$seconds" invoker-ui --headless "$@"
+    return $?
+  fi
+  run_with_optional_timeout "$seconds" node "$REPO_ROOT/packages/app/dist/headless-client.js" "$@"
+}
+
 headless_query() {
   local seconds="${INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS:-60}"
   local status=0
   local stderr_file
   stderr_file="$(mktemp)"
-  # shellcheck disable=SC2086
-  run_with_optional_timeout "$seconds" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>"$stderr_file" || status=$?
+  _headless_query_invoke "$seconds" "$@" 2>"$stderr_file" || status=$?
   case "$status" in
     0)
       ;;
