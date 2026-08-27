@@ -537,14 +537,44 @@ function validateReviewGate(reviewGate, errors) {
   });
 }
 
+// A base ref may be remote-qualified (`origin/master`, `upstream/main`,
+// `refs/remotes/upstream/release`), and repoUrl is only one remote, so a leading segment
+// that could name a different remote yields a second candidate. Reporting `absent` only
+// when every candidate is missing keeps a documented remote-qualified base from being
+// rejected, while an ordinary `feature/foo` still needs its own literal ref.
+function baseBranchRefCandidates(baseBranch) {
+  const ref = baseBranch.trim();
+  const names = [];
+  const afterFirstSegment = (value) => {
+    const slash = value.indexOf('/');
+    return slash > 0 && slash < value.length - 1 ? value.slice(slash + 1) : undefined;
+  };
+
+  if (ref.startsWith('refs/heads/')) {
+    names.push(ref.slice('refs/heads/'.length));
+  } else if (ref.startsWith('refs/remotes/')) {
+    names.push(afterFirstSegment(ref.slice('refs/remotes/'.length)));
+  } else if (!ref.startsWith('refs/')) {
+    names.push(ref, afterFirstSegment(ref));
+  }
+
+  return [...new Set(names.filter(Boolean))].map((name) => `refs/heads/${name}`);
+}
+
 function checkBaseBranchOnRemote(repoUrl, baseBranch) {
+  const wantRefs = baseBranchRefCandidates(baseBranch);
+  if (wantRefs.length === 0) return 'unknown';
   try {
-    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, baseBranch], {
+    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, '--', ...wantRefs], {
       timeout: 8000,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',
     });
-    return out.trim() === '' ? 'absent' : 'present';
+    const matched = out
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .some((parts) => wantRefs.includes(parts[1]));
+    return matched ? 'present' : 'absent';
   } catch {
     return 'unknown';
   }
