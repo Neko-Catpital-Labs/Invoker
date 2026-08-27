@@ -94,6 +94,15 @@ test -n "$research" || fail "B: missing research template" "$log"
 grep -q "id: research-1" "$research" || fail "B: missing research-1" "$research"
 grep -q "id: research-3" "$research" || fail "B: expected K=3 slots" "$research"
 grep -q "onFinish: none" "$research" || fail "B: research must be onFinish none" "$research"
+for lens in fit peers implementations adversarial effectiveness; do
+  grep -q "id: research-1-lens-$lens" "$research" || fail "B: missing lens task research-1-lens-$lens" "$research"
+done
+grep -q 'dependencies: \["research-1-lens-fit","research-1-lens-peers","research-1-lens-implementations","research-1-lens-adversarial","research-1-lens-effectiveness"\]' "$research" \
+  || fail "B: synthesis task must depend on all five lens tasks" "$research"
+grep -q "effectivenessMeasurement" "$research" || fail "B: synthesis contract missing effectivenessMeasurement" "$research"
+grep -q "peerLandscape" "$research" || fail "B: synthesis contract missing peerLandscape" "$research"
+grep -q "adversarialAnalysis" "$research" || fail "B: synthesis contract missing adversarialAnalysis" "$research"
+grep -q "alternateImplementations" "$research" || fail "B: synthesis contract missing alternateImplementations" "$research"
 file_lin="$(find "$sb/work/runs" -name '03-file-linear.template.yaml' | head -1)"
 grep -q "linear-issue-create.mjs" "$file_lin" || fail "B: file-linear must call create script" "$file_lin"
 grep -vq "invoker-ready" "$file_lin" || fail "B: must not mention invoker-ready" "$file_lin"

@@ -175,26 +175,98 @@ function selectCandidates(activity, { maxCandidates, ledger }) {
   return selected;
 }
 
-function researchPrompt(slot, targetRepoUrl, sourceRepoUrl, artifactDir) {
+const RESEARCH_LENSES = [
+  {
+    id: 'fit',
+    label: 'Fit',
+    focus: 'Judge whether the candidate fits the target repo\'s architecture, conventions, and roadmap. Grep the target checkout for prior art or conflicting patterns.',
+  },
+  {
+    id: 'peers',
+    label: 'Peers',
+    focus: 'Survey how peer/competitor tools solve the same problem. Produce a peerLandscape: which peers have it, which don\'t, and how their approach differs.',
+  },
+  {
+    id: 'implementations',
+    label: 'Implementations',
+    focus: 'Enumerate alternateImplementations: at least two distinct ways the target repo could implement this steal, with tradeoffs for each.',
+  },
+  {
+    id: 'adversarial',
+    label: 'Adversarial',
+    focus: 'Red-team the candidate. Produce an adversarialAnalysis: the strongest reasons this steal is a bad idea, what could break, and what a naive "fit" reading would miss.',
+  },
+  {
+    id: 'effectiveness',
+    label: 'Effectiveness',
+    focus: 'Define an effectivenessMeasurement: leadingSignals and laggingSignals that would show this steal is working after it lands, beyond the fixture e2e check the plan will already run.',
+  },
+];
+
+function lensTaskId(slotIndex, lensId) {
+  return `research-${slotIndex}-lens-${lensId}`;
+}
+
+function lensArtifactPath(artifactDir, slotIndex, lensId) {
+  return `${artifactDir}/lens-${slotIndex}-${lensId}.json`;
+}
+
+function lensPrompt(lens, slot, targetRepoUrl, sourceRepoUrl, artifactDir) {
   const candidate = slot.candidate;
-  const noop = !candidate;
   return [
-    'You are researching whether a source-repo idea should be stolen into the target repo.',
+    `You are the ${lens.label} lens researching whether a source-repo idea should be stolen into the target repo.`,
     'Do not implement product code. Do not open PRs. Do not label Linear tickets invoker-ready.',
-    noop
-      ? 'No candidate was assigned to this slot. Write a JSON artifact with verdict skip and title "noop-slot", then exit.'
-      : `Candidate: ${candidate.title}`,
+    `Candidate: ${candidate.title}`,
     `Source: ${sourceRepoUrl}`,
     `Target checkout: ${targetRepoUrl}`,
-    candidate ? `Evidence URL: ${candidate.url}` : '',
-    candidate ? `Source snippet: ${String(candidate.body).slice(0, 800)}` : '',
+    `Evidence URL: ${candidate.url}`,
+    `Source snippet: ${String(candidate.body).slice(0, 800)}`,
+    `Lens focus: ${lens.focus}`,
+    `Write artifact JSON to ${lensArtifactPath(artifactDir, slot.index, lens.id)} with fields:`,
+    'lensId, candidateTitle, findings, evidence.',
+    'This is one of five independent lenses run in parallel; do not read the other lens artifacts.',
+  ].filter(Boolean).join('\n');
+}
+
+function synthesisPrompt(slot, targetRepoUrl, sourceRepoUrl, artifactDir) {
+  const candidate = slot.candidate;
+  const noop = !candidate;
+  if (noop) {
+    return [
+      'You are synthesizing research for a candidate slot.',
+      'No candidate was assigned to this slot. Write a JSON artifact with verdict skip and title "noop-slot", then exit.',
+      `Write artifact JSON to ${artifactDir}/research-${slot.index}.json with fields:`,
+      'title, verdict (steal|skip), repo, goal, motivation, safetyInvariant, verify,',
+      'reviewClaim, reviewLane, sliceRationale, architecturalEffect, alternatives,',
+      'implementationDetails, nonGoals, files, changeTypes, acceptanceCriteria,',
+      'layer, featureState, evidence, peerLandscape, adversarialAnalysis,',
+      'alternateImplementations, effectivenessMeasurement.',
+    ].join('\n');
+  }
+  const lensArtifacts = RESEARCH_LENSES
+    .map((lens) => `${lens.id}: ${lensArtifactPath(artifactDir, slot.index, lens.id)}`)
+    .join('\n');
+  return [
+    'You are synthesizing five parallel research lenses into a single steal/skip verdict.',
+    'Do not implement product code. Do not open PRs. Do not label Linear tickets invoker-ready.',
+    `Candidate: ${candidate.title}`,
+    `Source: ${sourceRepoUrl}`,
+    `Target checkout: ${targetRepoUrl}`,
+    `Evidence URL: ${candidate.url}`,
+    'Read each lens artifact before writing the synthesis:',
+    lensArtifacts,
     `Write artifact JSON to ${artifactDir}/research-${slot.index}.json with fields:`,
     'title, verdict (steal|skip), repo, goal, motivation, safetyInvariant, verify,',
     'reviewClaim, reviewLane, sliceRationale, architecturalEffect, alternatives,',
     'implementationDetails, nonGoals, files, changeTypes, acceptanceCriteria,',
-    'layer, featureState, evidence.',
+    'layer, featureState, evidence,',
+    'peerLandscape (from the peers lens), adversarialAnalysis (from the adversarial lens),',
+    'alternateImplementations (from the implementations lens),',
+    'effectivenessMeasurement (from the effectiveness lens; must include leadingSignals and',
+    'laggingSignals arrays, going beyond the fixture e2e check named in verify).',
     'repo must be the target repo URL. verify must be a runnable command.',
-    'Justify good vs bad with target greps. Skip ideas the target already owns.',
+    'Weigh the adversarial lens seriously: a strong adversarialAnalysis can flip verdict to skip',
+    'even when the fit lens was positive. Skip ideas the target already owns.',
   ].filter(Boolean).join('\n');
 }
 
@@ -224,8 +296,8 @@ function buildResearchWorkflow({
   upstreamToken,
 }) {
   const tasks = slots.map((slot) => {
-    const deps = [];
-    return `  - id: research-${slot.index}
+    if (!slot.candidate) {
+      return `  - id: research-${slot.index}
     description: |
       Research candidate slot ${slot.index} for steal vs skip.
       Goal: Produce research-${slot.index}.json with plan-to-invoker fields.
@@ -245,9 +317,62 @@ function buildResearchWorkflow({
       Layer: docs
       Feature state: active
     prompt: |
-${researchPrompt(slot, targetRepoUrl, sourceRepoUrl, artifactDir).split('\n').map((l) => `      ${l}`).join('\n')}
-    dependencies: ${JSON.stringify(deps)}
+${synthesisPrompt(slot, targetRepoUrl, sourceRepoUrl, artifactDir).split('\n').map((l) => `      ${l}`).join('\n')}
+    dependencies: []
 `;
+    }
+
+    const lensTasks = RESEARCH_LENSES.map((lens) => `  - id: ${lensTaskId(slot.index, lens.id)}
+    description: |
+      ${lens.label} lens for candidate slot ${slot.index}.
+      Goal: Produce ${lensArtifactPath(artifactDir, slot.index, lens.id)}.
+      Motivation: Steal candidates need peer, adversarial, and effectiveness analysis before Linear filing.
+      Safety invariant: No product commits; artifact write only under ${artifactDir}.
+      Review claim: The lens artifact records ${lens.id}-specific findings for this candidate.
+      Review lane: docs
+      Slice rationale: One lens per parallel prompt task; five lenses fan out independently.
+      Architectural effect: None; research-only.
+      Alternative considerations: One combined prompt was rejected in favor of parallel lenses.
+      Implementation details: ${lens.focus}
+      Non-goals: No Linear create here; no product implementation; no reading sibling lens artifacts.
+      Files: ${lensArtifactPath(artifactDir, slot.index, lens.id)}
+      Change types: docs
+      Acceptance criteria:
+      - Artifact JSON exists with lensId "${lens.id}", candidateTitle, findings, evidence
+      Layer: docs
+      Feature state: active
+    prompt: |
+${lensPrompt(lens, slot, targetRepoUrl, sourceRepoUrl, artifactDir).split('\n').map((l) => `      ${l}`).join('\n')}
+    dependencies: []
+`).join('\n');
+
+    const lensDeps = RESEARCH_LENSES.map((lens) => lensTaskId(slot.index, lens.id));
+    const synthesisTask = `  - id: research-${slot.index}
+    description: |
+      Synthesize five research lenses for candidate slot ${slot.index} into a steal/skip verdict.
+      Goal: Produce research-${slot.index}.json with plan-to-invoker fields plus lens findings.
+      Motivation: Human triage needs full Goal/Motivation/Safety/Verify before invoker-ready.
+      Safety invariant: No product commits; artifact write only under ${artifactDir}.
+      Review claim: The synthesis artifact records a justified steal or skip verdict backed by all five lenses.
+      Review lane: docs
+      Slice rationale: One synthesis task per candidate, gated on that candidate's five lens tasks.
+      Architectural effect: None; research-only.
+      Alternative considerations: One combined prompt was rejected in favor of parallel lenses.
+      Implementation details: Read each lens artifact; write the synthesis JSON.
+      Non-goals: No Linear create here; no product implementation.
+      Files: ${artifactDir}/research-${slot.index}.json
+      Change types: docs
+      Acceptance criteria:
+      - Artifact JSON exists with Goal, Motivation, Safety invariant, Verify, Verdict
+      - Artifact JSON includes peerLandscape, adversarialAnalysis, alternateImplementations, effectivenessMeasurement
+      Layer: docs
+      Feature state: active
+    prompt: |
+${synthesisPrompt(slot, targetRepoUrl, sourceRepoUrl, artifactDir).split('\n').map((l) => `      ${l}`).join('\n')}
+    dependencies: ${JSON.stringify(lensDeps)}
+`;
+
+    return `${lensTasks}\n${synthesisTask}`;
   }).join('\n');
 
   return `name: "cross-repo-research research ${slugify(sourceOwnerRepo(sourceRepoUrl) ?? sourceRepoUrl)}"
