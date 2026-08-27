@@ -537,6 +537,21 @@ function validateReviewGate(reviewGate, errors) {
   });
 }
 
+// Credentials in a repoUrl must never reach validator output — errors are printed to stderr and logged.
+function redactRepoUrlUserInfo(repoUrl) {
+  if (typeof repoUrl !== 'string') return repoUrl;
+  try {
+    const parsed = new URL(repoUrl);
+    if (parsed.username === '' && parsed.password === '') return repoUrl;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    // `new URL` rejects some URLs git still accepts (e.g. file://user:pass@/path).
+    return repoUrl.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@]*@/, '$1');
+  }
+}
+
 function checkBaseBranchOnRemote(repoUrl, baseBranch) {
   const shortName = baseBranch.replace(/^refs\/heads\//, '');
   const wantRef = `refs/heads/${shortName}`;
@@ -598,7 +613,7 @@ function validatePlan(yamlContent, repoRoot) {
       errorType: 'conflicting_fields',
       field: 'repoUrl',
       message: 'Plan cannot set both "scratch: true" and "repoUrl" — scratch plans run with no git repo',
-      value: raw.repoUrl,
+      value: redactRepoUrlUserInfo(raw.repoUrl),
     });
   } else if (!isScratch && !hasRepoUrl) {
     errors.push({
@@ -737,7 +752,7 @@ function validatePlan(yamlContent, repoRoot) {
       errors.push({
         errorType: 'basebranch_not_on_remote',
         field: 'baseBranch',
-        message: `baseBranch '${raw.baseBranch}' was not found on ${raw.repoUrl} (git ls-remote returned no matching ref). Invoker's merge gate fetches this branch from origin and will fail with "required by the merge/gate step was not found on the remote" if submitted as-is. Push the branch first, or point baseBranch at a branch that exists (often 'master').`,
+        message: `baseBranch '${raw.baseBranch}' was not found on ${redactRepoUrlUserInfo(raw.repoUrl)} (git ls-remote returned no matching ref). Invoker's merge gate fetches this branch from origin and will fail with "required by the merge/gate step was not found on the remote" if submitted as-is. Push the branch first, or point baseBranch at a branch that exists (often 'master').`,
         value: raw.baseBranch,
       });
     }

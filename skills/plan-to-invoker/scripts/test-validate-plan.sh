@@ -984,6 +984,96 @@ EOF
   return 0
 }
 
+# Test: repoUrl credentials must never be echoed back in validator output.
+# `git ls-remote` accepts file://user:pass@/path, so a credentialed URL can reach the
+# basebranch_not_on_remote path and leak userinfo into the JSON printed on stderr.
+test_repourl_credentials_are_redacted() {
+  local remote_dir
+  remote_dir=$(mktemp -d)
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -rf $remote_dir $temp_plan" RETURN
+
+  git init -q --bare "$remote_dir/origin.git" || return 1
+  git init -q "$remote_dir/work" || return 1
+  (
+    cd "$remote_dir/work" &&
+    git config user.email test@example.com &&
+    git config user.name test &&
+    git commit -q --allow-empty -m init &&
+    git branch -M master &&
+    git remote add origin "$remote_dir/origin.git" &&
+    git push -q origin master
+  ) || return 1
+
+  local output
+
+  cat > "$temp_plan" <<EOF
+name: basebranch-remote-credentials
+onFinish: none
+mergeMode: manual
+repoUrl: file://bot:s3cr3t-token@$remote_dir/origin.git
+baseBranch: never-pushed
+tasks:
+  - id: t1
+    description: Smoke
+    command: "true"
+EOF
+
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "basebranch_not_on_remote")] | length > 0' &>/dev/null; then
+    echo "Expected basebranch_not_on_remote for a credentialed remote missing the branch" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if echo "$output" | grep -q "s3cr3t-token"; then
+    echo "repoUrl credentials leaked into validator output" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "basebranch_not_on_remote") | select(.message | contains("never-pushed"))] | length > 0' &>/dev/null; then
+    echo "Redaction dropped the baseBranch remediation detail" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  # The same redaction must cover the scratch/repoUrl conflict error, which echoes repoUrl as its value.
+  cat > "$temp_plan" <<EOF
+name: scratch-and-repourl
+onFinish: none
+mergeMode: manual
+scratch: true
+repoUrl: https://bot:s3cr3t-token@example.com/org/repo.git
+tasks:
+  - id: t1
+    description: Smoke
+    command: "true"
+EOF
+
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "conflicting_fields")] | length > 0' &>/dev/null; then
+    echo "Expected conflicting_fields for scratch + repoUrl" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if echo "$output" | grep -q "s3cr3t-token"; then
+    echo "repoUrl credentials leaked into the conflicting_fields error value" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
@@ -1027,6 +1117,7 @@ run_test "Experiment variant missing command scripts should be rejected" test_ex
 run_test "Branched review gate artifacts should be rejected" test_branched_review_gate_rejected
 run_test "Error objects should have correct field structure" test_error_field_structure
 run_test "baseBranch must match the literal remote ref" test_basebranch_remote_ref_is_matched_literally
+run_test "repoUrl credentials must be redacted from validator output" test_repourl_credentials_are_redacted
 
 echo ""
 echo "========================================="
