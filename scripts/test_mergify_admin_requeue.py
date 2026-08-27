@@ -36,7 +36,7 @@ from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_
 from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
-from scripts.mergify_admin_requeue_plan import repair_in_flight
+from scripts.mergify_admin_requeue_plan import plan_stack_execution, repair_in_flight
 from scripts.mergify_admin_requeue_repairer import AdminBypassRepairer
 
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
@@ -289,6 +289,23 @@ Failing checks
         stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
+
+    def test_catstack_failing_test_plans_repair_not_squash_or_queue(self):
+        checks = {"lint": check("lint"), "test": check("test", "failure")}
+        stack = StackGroup(
+            "catstack",
+            (pr(2606, base="main", labels={"admin-bypass"}, checks=checks),),
+        )
+        plan = plan_stack_execution(
+            stack,
+            required_checks=(),
+            ledger=self.ledger(),
+            now_epoch=1,
+            open_pr_numbers=(),
+            open_pr_numbers_by_head={},
+            trunk="main",
+        )
+        self.assertEqual([(action.kind, action.key) for action in plan.actions], [("repair_check", "test")])
 
     def test_failed_check_caps_after_max_repair_attempts(self):
         checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
