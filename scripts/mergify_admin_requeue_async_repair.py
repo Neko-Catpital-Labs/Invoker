@@ -81,10 +81,12 @@ def _write_plan_header(*, name: str, base_branch: str, repo: str, merge_mode: st
     )
 
 
-def _repair_task_yaml(*, description: str, prompt: str) -> str:
+def _repair_task_yaml(*, description: str, prompt: str, max_turns: int | None = 30) -> str:
+    max_turns_line = f"    maxTurns: {max_turns}\n" if max_turns is not None else ""
     return (
         "  - id: repair\n"
         f"    description: {_yaml_str(description)}\n"
+        f"{max_turns_line}"
         "    prompt: |\n"
         f"{_indent_block(prompt, 6)}\n"
     )
@@ -132,15 +134,6 @@ def _shlex(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-_RESTRUCTURE_ESCAPE_HATCH = (
-    "If the real fix requires restructuring this PR instead of editing it in place -- for example, splitting "
-    "unrelated files into their own PR because they can't ship together -- do not force that into a single "
-    "local commit here. Instead, submit an Invoker plan to do the restructuring, the same way a human would "
-    "via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). Then make no "
-    "commit in this checkout and exit 0.\n"
-)
-
-
 _JOB_LOG_EXCERPT_MAX_CHARS = 20000
 
 
@@ -181,7 +174,6 @@ def build_repair_check_plan(
         "If a code change fixes it: make the change in this checkout. Commit locally if "
         "needed, do not push. If local proof shows the check is already green on the "
         "current head, make no commit and exit 0.\n\n"
-        f"{_RESTRUCTURE_ESCAPE_HATCH}\n"
         f"Repair the existing pull request #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
         f"PR URL: {pr.url}\n"
         f"Head branch: {pr.head_ref_name} (at {start_head}), base branch: {pr.base_ref_name}\n\n"
@@ -227,10 +219,6 @@ def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, 
         f"Rebase this pull request onto `{onto_ref}`.\n\n"
         f"Checkout the PR head branch, rebase it onto origin/{onto_ref} while preserving the PR's intended "
         "changes, resolve any conflicts if they appear, then commit locally. Do not push.\n\n"
-        "If the real fix requires restructuring this PR instead of a straightforward rebase, do not force that "
-        "into a single local commit here. Instead, submit an Invoker plan to do the restructuring, the same way "
-        "a human would via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). "
-        "Then make no commit in this checkout and exit 0.\n\n"
         "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
         f"Head SHA: {start_head}\nRebase onto: {onto_ref}\nReason: {reason}\n"
