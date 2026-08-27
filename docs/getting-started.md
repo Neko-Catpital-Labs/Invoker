@@ -1,5 +1,21 @@
 # Getting started
 
+## Develop alongside the packaged production owner
+
+Repository development commands automatically run inside a worktree-specific development profile. `pnpm dev`, `pnpm dev:hot`, `pnpm dev:cli`, `./run.sh`, and the app package's `start`/`dev` scripts derive the same profile from the checkout's real path before starting a process.
+
+The profile lives under `~/.invoker/dev/<profile-id>/` and owns its database, Electron user data, IPC socket, config, environment file, log, and API/web ports. Development also starts with autonomous workers and automatic workflow continuation disabled. The packaged npm application keeps using the production `~/.invoker` namespace.
+
+To reset a development instance, stop only that development process and remove its printed `INVOKER_DB_DIR`; never remove `~/.invoker` itself. Run `node scripts/with-invoker-development-profile.mjs --print-env` to inspect the exact paths without starting Invoker.
+
+The only source-side production exception is the deliberately narrow owner-service form:
+
+```sh
+node scripts/with-invoker-development-profile.mjs --production-owner-service -- invoker-cli owner serve
+```
+
+Every other source command fails closed if it inherits a production path. `pnpm run check:dev-isolation` inventories the supported launch doors and collision behavior.
+
 Install, configure, and run Invoker. For the product overview, see the [README](../README.md). Version history lives in [CHANGELOG.md](../CHANGELOG.md). Join the community on [Invoker Slack](https://join.slack.com/t/invoker-ai/shared_invite/zt-476imo738-VqNp_SDfI6DFZp80EGgscQ).
 
 ## Prerequisites
