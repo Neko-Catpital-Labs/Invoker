@@ -16,5 +16,8 @@ describe('chat-submit skill contract', () => {
     expect(skill).toContain('invoker_submit_plan');
     expect(skill).toContain('mode: "live"');
     expect(skill).toContain('invoker_wait_for_workflow');
+    expect(skill).toContain('invoker-cli wait');
+    expect(skill).toContain('INVOKER_WAKE');
+    expect(skill).toContain('End the turn');
   });
 });
