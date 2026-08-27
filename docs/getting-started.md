@@ -6,6 +6,8 @@ Repository development commands automatically run inside a worktree-specific dev
 
 The profile lives under `~/.invoker/dev/<profile-id>/` and owns its database, Electron user data, IPC socket, config, environment file, log, and API/web ports. Development also starts with autonomous workers and automatic workflow continuation disabled. The packaged npm application keeps using the production `~/.invoker` namespace.
 
+Explicit non-production resource paths such as `INVOKER_DB_DIR` and `INVOKER_REPO_CONFIG_PATH` override those profile defaults for tests and CLI commands. The launcher checks them for production collisions before preserving them.
+
 To reset a development instance, stop only that development process and remove its printed `INVOKER_DB_DIR`; never remove `~/.invoker` itself. Run `node scripts/with-invoker-development-profile.mjs --print-env` to inspect the exact paths without starting Invoker.
 
 The only source-side production exception is the deliberately narrow owner-service form:

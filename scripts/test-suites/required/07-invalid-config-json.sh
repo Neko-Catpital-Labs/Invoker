@@ -21,9 +21,13 @@ node - "$CONFIG_PATH" >"$OUT_FILE" 2>&1 <<'EOF'
 const { spawnSync } = require('node:child_process');
 
 const configPath = process.argv[2];
+const env = { ...process.env, INVOKER_REPO_CONFIG_PATH: configPath };
+// Exercise the clean-runner path even when this guard is invoked from an
+// already-active development profile.
+delete env.INVOKER_DEVELOPMENT_PROFILE_ACTIVE;
 const result = spawnSync('./run.sh', ['--headless', 'query', 'workflows'], {
   cwd: process.cwd(),
-  env: { ...process.env, INVOKER_REPO_CONFIG_PATH: configPath },
+  env,
   encoding: 'utf8',
   timeout: 15000,
 });
