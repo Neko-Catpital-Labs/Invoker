@@ -71,6 +71,7 @@ import {
   openWorkerDesiredStateStore,
   readDesiredStateWorkerToggleValue,
   readWorkerToggleValue,
+  resolveCliInstanceProfile,
 } from './worker-toggles.js';
 import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
 
@@ -399,7 +400,7 @@ async function queryLiveOwner(
 }
 
 function resolveQueryDbDir(): string {
-  return resolve(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
+  return resolve(resolveCliInstanceProfile().homeRoot);
 }
 
 function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> {
