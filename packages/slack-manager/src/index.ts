@@ -28,6 +28,7 @@ import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
 import { loadSlackOwnerEnv, runComplaintScoutDraftCommand } from './complaint-scout-bridge.js';
+import { startLocalSmokeInject } from './local-smoke-inject.js';
 const VERSION = '0.0.14';
 let runDaemon = true;
 
@@ -175,6 +176,10 @@ async function main(): Promise<void> {
 
   await slack.start(commandHandler);
   watchdog.start();
+  const stopSmokeInject = startLocalSmokeInject({
+    injectMention: (request) => slack.injectMention(request),
+    log,
+  });
   // Establish the IPC connection (and re-apply subscriptions) if Invoker is already up.
   void client.ping();
   log('info', `slack-manager started (store=${managerHome})`);
@@ -184,6 +189,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     log('info', `received ${signal}, shutting down`);
+    stopSmokeInject();
     watchdog.stop();
     stopEvents();
     await slack.stop().catch((err) => log('warn', `slack.stop failed: ${errMessage(err)}`));

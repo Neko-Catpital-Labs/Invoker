@@ -140,6 +140,15 @@ export interface SlackSurfaceConfig {
   harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
 }
 
+
+/** Payload for {@link SlackSurface.injectMention} (localhost smoke inject). */
+export interface InjectMentionRequest {
+  channelId: string;
+  threadTs: string;
+  text: string;
+  userId: string;
+}
+
 export interface HarnessPreset {
   tool: string;
   model?: string;
@@ -879,6 +888,39 @@ export class SlackSurface implements Surface {
     this.progressCardTs.clear();
     await this.app.stop();
     this.log('slack', 'info', 'Slack bot stopped');
+  }
+
+
+  /**
+   * Drive the same mention path Socket Mode uses, posting replies into a real
+   * Slack thread via the bot client. Used by the localhost-only smoke inject
+   * because Slack bots do not receive their own app_mention events.
+   */
+  async injectMention(request: InjectMentionRequest): Promise<void> {
+    const channel = request.channelId;
+    const threadTs = request.threadTs;
+    const text = request.text.includes('<@')
+      ? request.text
+      : (this.botUserId ? `<@${this.botUserId}> ${request.text}` : request.text);
+    const event: SlackMentionEvent = {
+      text,
+      ts: threadTs,
+      thread_ts: threadTs,
+      user: request.userId,
+      channel,
+    };
+    const say: SayFn = async ({ text: replyText, thread_ts, blocks }) => {
+      const res = await this.app.client.chat.postMessage({
+        channel,
+        text: replyText,
+        thread_ts,
+        ...(blocks ? { blocks: blocks as never } : {}),
+      });
+      return { ts: res.ts as string };
+    };
+    this.log('slack', 'info', `[SMOKE_INJECT] channel=${channel} thread_ts=${threadTs} user=${request.userId}`);
+    const mapping = this.workflowChannelRepo?.getByChannelId(channel);
+    await this.handleMention(event, say, channel, mapping ?? undefined);
   }
 
   // ── Slash Command ───────────────────────────────────────
