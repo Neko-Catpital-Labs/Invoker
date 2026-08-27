@@ -81,6 +81,7 @@ function mockProcess(stdout: string, exitCode = 0): any {
   // Defer the emit to the next microtask so the close listener is attached first.
   queueMicrotask(() => {
     proc.stdout.emit('data', Buffer.from(stdout));
+    proc.emit('exit', exitCode);
     proc.emit('close', exitCode);
   });
   return proc;
@@ -524,6 +525,8 @@ describe('in-channel workflow assistant', () => {
       workflowChannelRepo: repo,
       planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'x'] }),
       gatherWorkflowContext: gather,
+      // Keep legacy free-form tests on the say()-reply path; ack coverage is in dedicated tests below.
+      enableImmediateAck: false,
     });
     return surface;
   }
@@ -567,6 +570,136 @@ describe('in-channel workflow assistant', () => {
     expect(received).toHaveLength(0);
   });
 
+  it('posts Processing ack for free-form workflow Q&A while the planner is still in flight', async () => {
+    const gather = vi.fn(async (): Promise<WorkflowContext> => ({
+      workflowId: 'wf-1-2',
+      planning: [],
+      tasks: [{ id: 'wf-1-2/api', status: 'failed', agentName: 'omp', transcript: [], output: 'boom' }],
+    }));
+    // Hung planner: never emits exit/close — mirrors the DO1 silent-mention hang.
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = new EventEmitter() as any;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = vi.fn();
+      proc.pid = 1238103;
+      return proc;
+    });
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      planningCommandBuilder: () => ({ command: 'claude', args: ['-p', 'x'] }),
+      gatherWorkflowContext: gather,
+      enableImmediateAck: true,
+      planningHeartbeatIntervalSeconds: 0,
+    });
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'ack-1' });
+    const pending = mentionHandler(surface)({
+      event: {
+        text: '<@BOT> Can you help me figure out why that failed and execute a fix with claude?',
+        ts: 't-live',
+        user: 'U1',
+        channel: 'C123',
+      },
+      say,
+    });
+
+    await vi.waitFor(() => {
+      expect(say).toHaveBeenCalledWith(expect.objectContaining({
+        text: 'Processing your request...',
+        thread_ts: 't-live',
+      }));
+    });
+    await vi.waitFor(() => {
+      expect(mockSpawn).toHaveBeenCalled();
+    });
+    // Mention handler is still awaiting the hung planner — do not await forever.
+    void pending;
+  });
+
+  it('does not post Processing ack for an instant workflow status verb', async () => {
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      enableImmediateAck: true,
+      planningHeartbeatIntervalSeconds: 0,
+    });
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> status', ts: 't1', user: 'U1', channel: 'C123' },
+      say,
+    });
+    expect(say).not.toHaveBeenCalledWith(expect.objectContaining({ text: 'Processing your request...' }));
+    expect(received).toContainEqual({ type: 'get_status', workflowId: 'wf-1-2' });
+  });
+
+  it('settles a one-shot planner on child exit without waiting for close', async () => {
+    const gather = vi.fn(async (): Promise<WorkflowContext> => ({
+      workflowId: 'wf-1-2',
+      planning: [],
+      tasks: [],
+    }));
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = new EventEmitter() as any;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = vi.fn();
+      queueMicrotask(() => {
+        proc.stdout.emit('data', Buffer.from('exit-only reply'));
+        proc.emit('exit', 0);
+        // intentionally no 'close'
+      });
+      return proc;
+    });
+    const surface = assistantSurface(gather);
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> how are we doing', ts: 't1', user: 'U1', channel: 'C123' },
+      say,
+    });
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('exit-only reply'),
+    }));
+  });
+
+  it('settles a one-shot planner timeout even when SIGTERM is ignored', async () => {
+    const gather = vi.fn(async (): Promise<WorkflowContext> => ({
+      workflowId: 'wf-1-2',
+      planning: [],
+      tasks: [],
+    }));
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = new EventEmitter() as any;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = vi.fn();
+      return proc;
+    });
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'x'] }),
+      gatherWorkflowContext: gather,
+      enableImmediateAck: false,
+      planningTimeoutSeconds: 0,
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> how are we doing', ts: 't1', user: 'U1', channel: 'C123' },
+      say,
+    });
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('Planner timed out after 0ms'),
+    }));
+  });
+
   it('uses a temporary prompt file for oversized workflow assistant context', async () => {
     const hugeOutput = 'running task details\n'.repeat(10_000);
     const gather = vi.fn(async (): Promise<WorkflowContext> => ({
@@ -591,6 +724,7 @@ describe('in-channel workflow assistant', () => {
       workflowChannelRepo: repo,
       planningCommandBuilder,
       gatherWorkflowContext: gather,
+      enableImmediateAck: false,
     });
     await surface.start(async (cmd) => { received.push(cmd); });
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
