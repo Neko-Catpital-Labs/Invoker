@@ -57,7 +57,8 @@
     "check:comments": "node scripts/check-added-comments.mjs",
     "check:versions": "node scripts/check-version-sync.mjs",
     "bump-version": "node scripts/bump-version.mjs",
-    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:comments && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
+    "check:dev-isolation": "node scripts/test-development-profile-guard.mjs",
+    "check:all": "pnpm run check:dev-isolation && pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:comments && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
     "lint": "pnpm run check:all"
   },
   "pnpm": {
