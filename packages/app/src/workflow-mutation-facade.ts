@@ -483,7 +483,6 @@ export class WorkflowMutationFacade {
         persistence: this.deps.persistence,
         taskExecutor: this.deps.taskExecutor,
         autoApproveAIFixes: this.deps.autoApproveAIFixes,
-        autoApproveAuthorGate: this.deps.autoApproveAuthorGate,
       },
       agentName,
     );
@@ -518,7 +517,6 @@ export class WorkflowMutationFacade {
         commandService: this.deps.commandService,
         taskExecutor: this.deps.taskExecutor,
         autoApproveAIFixes: this.deps.autoApproveAIFixes,
-        autoApproveAuthorGate: this.deps.autoApproveAuthorGate,
       },
       options,
     );
@@ -546,7 +544,6 @@ export class WorkflowMutationFacade {
       commandService: this.deps.commandService,
       taskExecutor: this.deps.taskExecutor,
       autoApproveAIFixes: this.deps.autoApproveAIFixes,
-      autoApproveAuthorGate: this.deps.autoApproveAuthorGate,
     };
   }
 
