@@ -20,8 +20,7 @@ import { makeEnvelope } from '@invoker/contracts';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { AutoApproveAuthorGateResult, TaskRunner } from '@invoker/execution-engine';
-import { buildPersistedAutoApproveAuthorGate } from './auto-approve-author-gate.js';
+import type { TaskRunner } from '@invoker/execution-engine';
 import {
   parseSpawnRepairWorkflowMutationArgs,
   submitRepairWorkflowFromCiFailure,
@@ -122,7 +121,6 @@ export interface WorkflowMutationFacadeDeps {
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
-  autoApproveAuthorGate?: (taskId: string) => Promise<AutoApproveAuthorGateResult>;
   allowGraphMutation?: boolean;
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
@@ -141,11 +139,7 @@ export class WorkflowMutationFacade {
   private readonly deps: WorkflowMutationFacadeDeps;
 
   constructor(deps: WorkflowMutationFacadeDeps) {
-    this.deps = {
-      ...deps,
-      autoApproveAuthorGate: deps.autoApproveAuthorGate
-        ?? buildPersistedAutoApproveAuthorGate(deps.persistence),
-    };
+    this.deps = deps;
   }
 
   // ── Task-scoped mutations ────────────────────────────────
