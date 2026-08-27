@@ -49,7 +49,15 @@ import {
   withTimeout,
   type LiveOwnerInfo,
 } from './live-owner-bus.js';
+import {
+  assertInvokerWakeLineWithinBudget,
+  formatInvokerWakeLine,
+} from './invoker-wake.js';
 import { runMcpServer } from './mcp-server.js';
+import {
+  normalizeTaskSnapshots,
+  waitForWorkflowTasks,
+} from './mcp-workflow-status.js';
 import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
 import { runInstall } from './quick-install.js';
 import {
@@ -182,6 +190,7 @@ function usage(): string {
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli query workflows [--status <status>] [--output text|json]',
     '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
+    '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
     '  invoker-cli retry-task <taskId>',
     '  invoker-cli retry <workflowId>',
     '  invoker-cli resume <workflowId>',
@@ -201,6 +210,7 @@ function usage(): string {
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
     '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
+    '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
     '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
@@ -228,6 +238,8 @@ function usage(): string {
     '  --json           Emit only a machine-readable result summary on stdout.',
     '  --workflow <id>  Restrict `query tasks` to one workflow.',
     '  --status <status>  Restrict `query workflows` or `query tasks` to one status.',
+    '  --max-wait-ms <ms>  Maximum park time for `wait`. Defaults to 86400000 (24h).',
+    '  --poll-interval-ms <ms>  Query interval for `wait`. Defaults to 5000.',
     '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
     '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
     '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
@@ -530,6 +542,89 @@ async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
 
   process.stdout.write(await queryStandaloneDatabase(options));
   return 0;
+}
+
+type WaitOptions = {
+  workflowId: string;
+  maxWaitMs: number;
+  pollIntervalMs: number;
+};
+
+const DEFAULT_WAIT_MAX_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_WAIT_POLL_MS = 5_000;
+
+function parsePositiveIntFlag(flag: string, value: string | undefined): number {
+  if (!value) throw new Error(`Missing value for ${flag}`);
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== value) {
+    throw new Error(`Invalid ${flag} value. Expected a positive integer.`);
+  }
+  return parsed;
+}
+
+export function parseWaitArgs(argv: string[]): WaitOptions {
+  let workflowId: string | undefined;
+  let maxWaitMs = DEFAULT_WAIT_MAX_MS;
+  let pollIntervalMs = DEFAULT_WAIT_POLL_MS;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--max-wait-ms') {
+      maxWaitMs = parsePositiveIntFlag('--max-wait-ms', argv[++i]);
+    } else if (arg === '--poll-interval-ms') {
+      pollIntervalMs = parsePositiveIntFlag('--poll-interval-ms', argv[++i]);
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown wait option: ${arg}`);
+    } else if (!workflowId) {
+      workflowId = arg;
+    } else {
+      throw new Error(`Unexpected wait argument: ${arg}`);
+    }
+  }
+
+  if (!workflowId) {
+    throw new Error('Missing workflowId. Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+  }
+
+  return { workflowId, maxWaitMs, pollIntervalMs };
+}
+
+async function runWait(options: WaitOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) {
+      throw new Error(REQUIRED_OWNER_MESSAGE);
+    }
+    const activeBus = bus;
+    const result = await waitForWorkflowTasks({
+      workflowId: options.workflowId,
+      maxWaitMs: options.maxWaitMs,
+      pollIntervalMs: options.pollIntervalMs,
+      loadTasks: async () => {
+        const raw = await withTimeout(
+          activeBus.request('headless.query', {
+            kind: 'cli-query',
+            args: ['query', 'tasks', '--workflow', options.workflowId, '--output', 'json'],
+          }),
+          15_000,
+        );
+        return normalizeTaskSnapshots(JSON.parse(validateLiveQueryResponse(raw)));
+      },
+    });
+    const line = formatInvokerWakeLine(result);
+    assertInvokerWakeLineWithinBudget(line);
+    process.stdout.write(`${line}\n`);
+    return result.settled ? 0 : 1;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
 }
 
 const REQUIRED_OWNER_MESSAGE = 'No running Invoker owner is reachable; start the Invoker app or run `invoker-cli owner serve`.';
@@ -1170,6 +1265,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'query') {
       return await runQuery(parseQueryArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'wait') {
+      return await runWait(parseWaitArgs(argv.slice(1)), deps);
     }
     if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume') {
       if (argv.length > 2) {
