@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import {
@@ -27,7 +27,7 @@ import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
 import { installBundledSkills } from './bundled-skills.js';
 import { runRemoteDoctorChecks } from './remote-doctor.js';
-import { applyWorkerToggle, isDesiredStateWorkerToggle, isPolicyWorkerToggle, ONBOARDING_WORKER_TOGGLES, openWorkerDesiredStateStore, applyDesiredStateWorkerToggle, readDesiredStateWorkerToggleValue, readWorkerToggleValue } from './worker-toggles.js';
+import { applyWorkerToggle, isDesiredStateWorkerToggle, isPolicyWorkerToggle, ONBOARDING_WORKER_TOGGLES, openWorkerDesiredStateStore, applyDesiredStateWorkerToggle, readDesiredStateWorkerToggleValue, readWorkerToggleValue, resolveCliInstanceProfile } from './worker-toggles.js';
 
 // ── Paths ────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ function experimentalPlannerServerSpec(packageSpec: string = EXPERIMENTAL_PLANNE
 }
 
 export function invokerHomeDir(): string {
-  return join(homedir(), '.invoker');
+  return resolveCliInstanceProfile().homeRoot;
 }
 export function defaultConfigPath(): string {
   return process.env.INVOKER_REPO_CONFIG_PATH ?? join(invokerHomeDir(), 'config.json');
