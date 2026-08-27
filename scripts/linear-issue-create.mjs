@@ -70,6 +70,24 @@ function heading(name, value) {
   return text ? `${name}: ${text}` : '';
 }
 
+function formatComplex(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    return value.map((v) => `- ${formatComplex(v)}`).join('\n');
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([k, v]) => {
+        const formatted = formatComplex(v);
+        return formatted.includes('\n') ? `${k}:\n${formatted}` : `${k}: ${formatted}`;
+      })
+      .join('\n');
+  }
+  return String(value);
+}
+
 function buildBodyFromArtifact(artifact) {
   const lines = [
     heading('Repo', artifact.repo ?? artifact.repoUrl),
@@ -81,6 +99,10 @@ function buildBodyFromArtifact(artifact) {
     heading('Review lane', artifact.reviewLane),
     heading('Slice rationale', artifact.sliceRationale),
     heading('Architectural effect', artifact.architecturalEffect),
+    heading('Peer landscape', formatComplex(artifact.peerLandscape)),
+    heading('Adversarial analysis', formatComplex(artifact.adversarialAnalysis)),
+    heading('Alternate implementations', formatComplex(artifact.alternateImplementations)),
+    heading('Effectiveness measurement', formatComplex(artifact.effectivenessMeasurement)),
     heading('Alternative considerations', artifact.alternatives ?? artifact.alternativeConsiderations),
     heading('Implementation details', artifact.implementationDetails ?? artifact.implementation),
     heading('Non-goals', artifact.nonGoals),
@@ -105,7 +127,7 @@ function requireField(body, name) {
 }
 
 function validateBody(body) {
-  for (const field of ['Repo', 'Goal', 'Motivation', 'Safety invariant', 'Verify']) {
+  for (const field of ['Repo', 'Goal', 'Motivation', 'Safety invariant', 'Verify', 'Effectiveness measurement']) {
     requireField(body, field);
   }
   if (/\binvoker-ready\b/i.test(body)) {

@@ -166,7 +166,14 @@ cat > "$sb/steal.json" <<'JSON'
   "verify": "cd packages/ui && pnpm test -- workflow-progress-surfaces",
   "reviewClaim": "needs_input ranks above failed in attention entries",
   "reviewLane": "behavior",
-  "evidence": "orca #15551"
+  "evidence": "orca #15551",
+  "peerLandscape": "Orca and Linear both surface needs_input above failed.",
+  "adversarialAnalysis": "Sort thrash could hide steady-state agents if resort runs too often.",
+  "alternateImplementations": ["Client-side sort comparator", "Server-side ordered query"],
+  "effectivenessMeasurement": {
+    "leadingSignals": ["needs_input entries clicked within 5s of render"],
+    "laggingSignals": ["operator-reported time-to-respond drops week over week"]
+  }
 }
 JSON
 cat > "$sb/skip.json" <<'JSON'
@@ -178,7 +185,11 @@ cat > "$sb/skip.json" <<'JSON'
   "motivation": "Invoker already orchestrates stacked PRs",
   "safetyInvariant": "No product change; documentation of skip only",
   "verify": "test -f skills/land-stack/SKILL.md",
-  "evidence": "land-stack skill exists"
+  "evidence": "land-stack skill exists",
+  "effectivenessMeasurement": {
+    "leadingSignals": ["no duplicate skip-idea tickets filed for this fingerprint"],
+    "laggingSignals": ["no stacked-PR rebuild proposal reopens within a quarter"]
+  }
 }
 JSON
 cat > "$sb/bin/create-stub" <<STUB
@@ -200,6 +211,10 @@ grep -q "Goal:" "$sb/creates.jsonl" || fail "D-steal: body missing Goal" "$sb/cr
 grep -q "Motivation:" "$sb/creates.jsonl" || fail "D-steal: body missing Motivation" "$sb/creates.jsonl"
 grep -q "Safety invariant:" "$sb/creates.jsonl" || fail "D-steal: body missing Safety" "$sb/creates.jsonl"
 grep -q "Verify:" "$sb/creates.jsonl" || fail "D-steal: body missing Verify" "$sb/creates.jsonl"
+grep -q "Peer landscape:" "$sb/creates.jsonl" || fail "D-steal: body missing Peer landscape" "$sb/creates.jsonl"
+grep -q "Adversarial analysis:" "$sb/creates.jsonl" || fail "D-steal: body missing Adversarial analysis" "$sb/creates.jsonl"
+grep -q "Alternate implementations:" "$sb/creates.jsonl" || fail "D-steal: body missing Alternate implementations" "$sb/creates.jsonl"
+grep -q "Effectiveness measurement:" "$sb/creates.jsonl" || fail "D-steal: body missing Effectiveness measurement" "$sb/creates.jsonl"
 grep -vq "invoker-ready" "$sb/creates.jsonl" || fail "D-steal: must not include invoker-ready" "$sb/creates.jsonl"
 
 : > "$sb/creates.jsonl"
@@ -236,5 +251,26 @@ if env INVOKER_LINEAR_LABEL_NAMES=invoker-ready INVOKER_LINEAR_DRY_RUN=1 \
 fi
 grep -qi "Refusing\|invoker-ready" "$log" || fail "E: expected refusal message" "$log"
 echo "PASS E: refuses invoker-ready"
+
+# ── F. Fail closed without effectivenessMeasurement ──────────────────────────
+mk_sb
+cat > "$sb/no-measurement.json" <<'JSON'
+{
+  "title": "Missing effectiveness measurement",
+  "verdict": "steal",
+  "repo": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+  "goal": "g",
+  "motivation": "m",
+  "safetyInvariant": "s",
+  "verify": "true"
+}
+JSON
+log="$sb/f.log"
+if env INVOKER_LINEAR_DRY_RUN=1 \
+  node "$REPO_ROOT/scripts/linear-issue-create.mjs" --artifact "$sb/no-measurement.json" > "$log" 2>&1; then
+  fail "F: must refuse create without effectivenessMeasurement" "$log"
+fi
+grep -qi "Effectiveness measurement" "$log" || fail "F: expected missing-effectiveness message" "$log"
+echo "PASS F: fails closed without effectivenessMeasurement"
 
 echo "All cross-repo-research fixture tests passed."
