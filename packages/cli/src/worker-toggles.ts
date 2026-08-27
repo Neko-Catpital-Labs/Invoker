@@ -1,6 +1,10 @@
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import type { InvokerConfigRecord } from '@invoker/contracts';
+import {
+  resolveInvokerInstanceProfile,
+  resolveRepoRoot,
+  type InvokerConfigRecord,
+  type InvokerInstanceProfile,
+} from '@invoker/contracts';
 import { SQLiteAdapter } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -172,7 +176,48 @@ export function findWorkerToggle(id: string): WorkerToggleSpec | undefined {
   return WORKER_TOGGLES.find((spec) => spec.id === id);
 }
 
-function resolveInvokerDbPath(): string {
+export interface CliRuntimeProfileOptions {
+  startDir?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * An installed CLI has no `pnpm-workspace.yaml` above it, so it keeps the
+ * production `~/.invoker` layout; a source checkout resolves one, so it gets
+ * a disjoint per-checkout profile instead of silently sharing the production
+ * database/settings/onboarding/worker-toggle locations with the packaged app.
+ * Explicit env overrides (e.g. INVOKER_DB_DIR) still win either way, since
+ * resolveInvokerInstanceProfile applies them ahead of the profile default.
+ *
+ * The CLI's own test suite always runs from this checkout, so auto-detecting
+ * from the real module location would classify every test process as
+ * source-development. Callers that don't pin a startDir themselves skip
+ * auto-detection under the test runner, keeping the production-shaped
+ * default those tests already isolate against via a temp HOME.
+ */
+export function resolveCliInstanceProfile(options: CliRuntimeProfileOptions = {}): InvokerInstanceProfile {
+  const env = options.env ?? process.env;
+  const autoDetecting = options.startDir === undefined;
+  let sourceRoot: string | undefined;
+  if (!autoDetecting || !env.VITEST) {
+    try {
+      sourceRoot = resolveRepoRoot(options.startDir ?? __dirname);
+    } catch {
+      sourceRoot = undefined;
+    }
+  }
+  return resolveInvokerInstanceProfile({
+    kind: sourceRoot ? 'source-development' : 'packaged',
+    sourceRoot,
+    env,
+    homeDir: options.homeDir,
+    platform: options.platform,
+  });
+}
+
+export function resolveInvokerDbPath(): string {
   if (process.env.INVOKER_DB_DIR) {
     return join(process.env.INVOKER_DB_DIR, 'invoker.db');
   }
@@ -180,7 +225,7 @@ function resolveInvokerDbPath(): string {
   if (configPath) {
     return join(dirname(configPath), 'invoker.db');
   }
-  return join(homedir(), '.invoker', 'invoker.db');
+  return join(resolveCliInstanceProfile().homeRoot, 'invoker.db');
 }
 
 function resolveInvokerOutputDir(dbPath: string): string {
