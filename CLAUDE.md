@@ -53,7 +53,7 @@ Concrete incidents that motivate the class-search rule above — each is a case 
 ## SQLite Command Policy
 
 - If you are considering direct SQLite commands, use the corresponding Invoker headless command first.
-- For normal local operations on workflows or tasks, prefer `./run.sh --headless ...` and `node scripts/headless-ipc.js ...` over SQLite reads or writes. Typical examples: `query workflows`, `query tasks`, `retry`, `retry-task`, `rebase-recreate`, `approve`, `reject`, `cancel`, and `cancel-workflow`.
+- For normal local operations on workflows or tasks, prefer Invoker MCP tools (`invoker_get_workflow`, `invoker_list_tasks`, submit/prepare) when they exist, else `invoker-ui --headless ...` or `invoker-cli` against the live owner. Typical examples: `query workflows`, `query tasks`, `retry`, `retry-task`, `rebase-recreate`, `approve`, `reject`, `cancel`, and `cancel-workflow`.
 - Verify operational changes with Invoker query commands (`query workflows`, `query tasks`, `query queue`, `query audit`) instead of SQLite inspection whenever the command surface exists.
 - If no corresponding headless command exists, stop and prompt the user with a concrete plan to add that headless command functionality before proceeding.
 
