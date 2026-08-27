@@ -8,11 +8,11 @@ description: >
   skill (then chat-submit / auto_submit after the completeness gate) unless the user says "do it locally". Uninstall with `install-skills uninstall`. Trigger: "convert to invoker",
   "submit to invoker", "create invoker plan",
   "invoker-plan-to-invoker", "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
-  Invoker tasks. For benchmark/direct-output
-  prompts with "Required output path", write a complete YAML document directly
+  Invoker tasks. For benchmark/direct-output prompts with
+  "Required output path", write a complete YAML document directly
   to that literal path; it must start with top-level name, onFinish, mergeMode,
-  repoUrl (or scratch: true for no-repo mode), and tasks, never version or
-  metadata wrappers, and must not scan, validate, submit, or discover env vars.
+  repoUrl (or scratch: true for no-repo mode), and tasks, never version or metadata wrappers,
+  and must not scan, validate, submit, or discover env vars.
 ---
 
 # plan-to-invoker
@@ -74,7 +74,8 @@ Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP
 - Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
-- Plain approval stops after workflow handoff: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only, then report the submitted workflow status and stop. Stop after `invoker_submit_plan` or the documented `invoker-cli run ... --live` fallback; do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
+- Plain approval authorizes workflow handoff only: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only. Do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
+- After `invoker_submit_plan` (or the documented `invoker-cli run ... --live` fallback), do **not** abandon the session: arm `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`, then **end the turn**. On wake, continue the parent job from Invoker status (ops on blockers; next step on success). PR publication remains a separate explicit request.
 - Later PR publication is a separate explicit action. When the user separately asks about creating, updating, publishing, or splitting pull requests or PR stacks after workflow handoff, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
