@@ -2784,6 +2784,9 @@ ${text}`;
       const timer = setTimeout(() => {
         timedOut = true;
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
+        settle(() => {
+          reject(new Error(`Planner timed out after ${timeoutMs}ms`));
+        });
       }, timeoutMs);
       const onProcessEnd = (code: number | null): void => {
         settle(() => {

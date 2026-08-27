@@ -667,6 +667,39 @@ describe('in-channel workflow assistant', () => {
     }));
   });
 
+  it('settles a one-shot planner timeout even when SIGTERM is ignored', async () => {
+    const gather = vi.fn(async (): Promise<WorkflowContext> => ({
+      workflowId: 'wf-1-2',
+      planning: [],
+      tasks: [],
+    }));
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = new EventEmitter() as any;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = vi.fn();
+      return proc;
+    });
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'x'] }),
+      gatherWorkflowContext: gather,
+      enableImmediateAck: false,
+      planningTimeoutSeconds: 0,
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> how are we doing', ts: 't1', user: 'U1', channel: 'C123' },
+      say,
+    });
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('Planner timed out after 0ms'),
+    }));
+  });
+
   it('uses a temporary prompt file for oversized workflow assistant context', async () => {
     const hugeOutput = 'running task details\n'.repeat(10_000);
     const gather = vi.fn(async (): Promise<WorkflowContext> => ({
