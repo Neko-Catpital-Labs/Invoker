@@ -127,7 +127,6 @@ import {
   resolveAutoApproveAIFixes,
   resolveAutoFixRetries,
 } from './autofix-defaults.js';
-import { buildPersistedAutoApproveAuthorGate } from './auto-approve-author-gate.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
@@ -431,7 +430,6 @@ function buildRegisteredOwnerWorkerDeps(
     workerSessionMine: {},
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
-      authorGate: buildPersistedAutoApproveAuthorGate(persistence),
     },
     slackBugScan: buildSlackBugScanWorkerConfig(planningCommandBuilder, executionAgentRegistry),
     crossRepoResearch: {
