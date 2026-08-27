@@ -1361,3 +1361,70 @@ describe('Unknown routes', () => {
     expect(res.body.error).toBe('Not found');
   });
 });
+
+describe('API port selection by runtime profile', () => {
+  const envKeys = ['INVOKER_API_PORT', 'INVOKER_RUNTIME_KIND', 'INVOKER_SOURCE_ROOT'] as const;
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = {};
+    for (const key of envKeys) saved[key] = process.env[key];
+  });
+
+  afterEach(() => {
+    for (const key of envKeys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  function startIsolated() {
+    const localMocks = createMocks();
+    return startApiServer({
+      orchestrator: localMocks.orchestrator as any,
+      persistence: localMocks.persistence as any,
+      executorRegistry: localMocks.executorRegistry as any,
+      mutations: buildFacade(localMocks),
+      deleteWorkflow: localMocks.deleteWorkflow,
+      detachWorkflow: localMocks.detachWorkflow,
+    });
+  }
+
+  it('packaged case retains the existing production port when no override is set', async () => {
+    delete process.env.INVOKER_API_PORT;
+    delete process.env.INVOKER_RUNTIME_KIND;
+    delete process.env.INVOKER_SOURCE_ROOT;
+    const localApi = startIsolated();
+    try {
+      expect(localApi.port).toBe(4100);
+    } finally {
+      await localApi.close();
+    }
+  });
+
+  it('source case derives a port disjoint from the production default', async () => {
+    delete process.env.INVOKER_API_PORT;
+    process.env.INVOKER_RUNTIME_KIND = 'source-development';
+    process.env.INVOKER_SOURCE_ROOT = '/tmp/invoker-api-server-test-source-root';
+    const localApi = startIsolated();
+    try {
+      expect(localApi.port).not.toBe(4100);
+      expect(localApi.port).toBeGreaterThanOrEqual(41000);
+      expect(localApi.port).toBeLessThan(41900);
+    } finally {
+      await localApi.close();
+    }
+  });
+
+  it('an explicit synthetic override wins over the selected profile', async () => {
+    process.env.INVOKER_API_PORT = '0';
+    process.env.INVOKER_RUNTIME_KIND = 'source-development';
+    process.env.INVOKER_SOURCE_ROOT = '/tmp/invoker-api-server-test-source-root';
+    const localApi = startIsolated();
+    try {
+      expect(localApi.port).toBe(0);
+    } finally {
+      await localApi.close();
+    }
+  });
+});
