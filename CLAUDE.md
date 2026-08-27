@@ -121,6 +121,8 @@ Allowed comments only:
 
 Before finishing a PR, remove any comment you added unless it matches one of the allowed cases.
 
+When stripping comments for policy compliance, check each one against the PR's own `Safety Invariant` / `Review Claim` text first. If a comment restates that invariant, keep a short one-line version instead of deleting it outright — that is the allowed "non-obvious safety invariant" case above, not a violation.
+
 ## Code Navigation
 
 Use LSP tools (`goToDefinition`, `findReferences`, `documentSymbol`, `workspaceSymbol`, `incomingCalls`, `outgoingCalls`, `hover`) for any task involving symbols, types, or cross-file relationships. Use Grep and Glob for literal text searches and file discovery.
