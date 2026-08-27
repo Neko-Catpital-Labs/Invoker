@@ -437,6 +437,7 @@ export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
     ...(wf.externalDependencyChanges != null && { externalDependencyChanges: wf.externalDependencyChanges }),
     ...(wf.detachedExternalDependencies != null && { detachedExternalDependencies: wf.detachedExternalDependencies }),
     ...(wf.generation != null && { generation: wf.generation }),
+    staged: wf.staged === true,
   };
 }
 
