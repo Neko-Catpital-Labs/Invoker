@@ -537,6 +537,19 @@ function validateReviewGate(reviewGate, errors) {
   });
 }
 
+function checkBaseBranchOnRemote(repoUrl, baseBranch) {
+  try {
+    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, baseBranch], {
+      timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    });
+    return out.trim() === '' ? 'absent' : 'present';
+  } catch {
+    return 'unknown';
+  }
+}
+
 function validatePlan(yamlContent, repoRoot) {
   const errors = [];
 
@@ -708,6 +721,20 @@ function validatePlan(yamlContent, repoRoot) {
       field: 'baseBranch',
       message: "Plan has externalDependencies but baseBranch is 'master'. For stacked workflows, set baseBranch to the upstream workflow's featureBranch, or use step-submit-stacked to auto-resolve.",
     });
+  }
+
+  // Check that an explicit baseBranch actually exists on the remote.
+  // Best-effort: network/auth failures are not validation errors.
+  if (typeof raw.baseBranch === 'string' && raw.baseBranch.trim() !== '' && raw.repoUrl) {
+    const remoteCheck = checkBaseBranchOnRemote(raw.repoUrl, raw.baseBranch);
+    if (remoteCheck === 'absent') {
+      errors.push({
+        errorType: 'basebranch_not_on_remote',
+        field: 'baseBranch',
+        message: `baseBranch '${raw.baseBranch}' was not found on ${raw.repoUrl} (git ls-remote returned no matching ref). Invoker's merge gate fetches this branch from origin and will fail with "required by the merge/gate step was not found on the remote" if submitted as-is. Push the branch first, or point baseBranch at a branch that exists (often 'master').`,
+        value: raw.baseBranch,
+      });
+    }
   }
 
   // Collect task IDs for dependency validation
