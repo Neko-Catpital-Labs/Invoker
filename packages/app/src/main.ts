@@ -30,11 +30,10 @@ const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E
 const earlyHeadlessMode = process.argv.includes('--headless')
   || process.argv.includes('--install-skills')
   || process.argv.slice(2).includes('install-skills');
+const sourceDevelopmentProfile = process.env.INVOKER_DEVELOPMENT_PROFILE === '1';
 
 configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadlessMode });
 
-// Isolate userData (and with it the single-instance lock) for e2e runs so a
-// test instance can launch alongside a normally running Invoker.
 if (process.env.INVOKER_USER_DATA_DIR) {
   app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
 }
@@ -610,10 +609,9 @@ process.on('unhandledRejection', (reason) => {
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
 const planDoctorScriptPath = path.join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
 
-// Load secrets from ~/.invoker/.env (canonical) then the repo .env BEFORE any startup guard
-// reads process.env. dotenv never overrides vars already set in the real environment.
 function loadInvokerEnvFiles(): void {
-  for (const envPath of [path.join(homedir(), '.invoker', '.env'), path.resolve(repoRoot, '.env')]) {
+  const profileEnvPath = process.env.INVOKER_ENV_PATH ?? path.join(homedir(), '.invoker', '.env');
+  for (const envPath of [profileEnvPath, path.resolve(repoRoot, '.env')]) {
     if (existsSync(envPath)) loadDotenv({ path: envPath });
   }
 }
@@ -2082,7 +2080,7 @@ function startHeadlessMode(): void {
             planningCommandBuilder,
             agentRegistry,
           ),
-          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+          autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
@@ -2096,7 +2094,7 @@ function startHeadlessMode(): void {
             );
           }
         }
-        workerRuntimeController.startAutoStartedWorkers();
+        if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
           standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
@@ -2104,7 +2102,7 @@ function startHeadlessMode(): void {
             ownerId: workflowMutationOwnerId,
             createTaskExecutor: createStandaloneTaskExecutor,
             setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
-            topUpReadyLaunchesEnabled: () => !invokerConfig.disableAutoRunOnStartup,
+            topUpReadyLaunchesEnabled: () => !sourceDevelopmentProfile && !invokerConfig.disableAutoRunOnStartup,
           });
         }
         if (command === 'owner-serve') {
@@ -2690,7 +2688,7 @@ startMainProcessBootstrap({
     recordStartupMark('deferred-startup.begin');
     if (ownerMode && workerRuntimeController) {
       setTimeout(() => {
-        workerRuntimeController?.startAutoStartedWorkers();
+        if (!sourceDevelopmentProfile) workerRuntimeController?.startAutoStartedWorkers();
         recordStartupMark('workers.auto-started');
       }, 0);
     }
@@ -3265,7 +3263,7 @@ startMainProcessBootstrap({
           planningCommandBuilder,
           agentRegistry,
         ),
-        autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+        autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
@@ -3297,7 +3295,7 @@ startMainProcessBootstrap({
               { module: 'init', taskIds: orphaned.map((task) => task.id) },
             );
           }
-          if (invokerConfig.disableAutoRunOnStartup) {
+          if (sourceDevelopmentProfile || invokerConfig.disableAutoRunOnStartup) {
             logger.info('auto-run on startup disabled by config', { module: 'init' });
           } else {
             orchestrator.startExecution();
