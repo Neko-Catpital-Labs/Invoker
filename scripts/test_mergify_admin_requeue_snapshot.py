@@ -475,6 +475,17 @@ class GhClientLabelEdit(unittest.TestCase):
             ]
         )
 
+    def test_merge_squash_never_passes_admin_override(self):
+        client = s.GhClient()
+        with mock.patch("mergify_admin_requeue_snapshot.run_logged") as run:
+            client.merge_squash("EdbertChan/catstack", 9007)
+
+        run.assert_called_once_with(
+            ["gh", "pr", "merge", "9007", "--repo", "EdbertChan/catstack", "--squash"]
+        )
+        self.assertNotIn("--admin", run.call_args.args[0])
+
+
 class GhClientRepoRuleDiscovery(unittest.TestCase):
     def test_default_branch_reads_repo_metadata(self):
         client = s.GhClient()

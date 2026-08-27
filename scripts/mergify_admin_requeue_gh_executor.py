@@ -83,6 +83,10 @@ class AdminBypassGhExecutor:
         self.gh.retarget_base(self.repo, pr.number, new_base)
         self.ledger.record("retarget-base", pr.number, pr.head_ref_oid, f"{pr.base_ref_name}->{new_base}", now)
 
+    def squash_merge(self, pr: PrSnapshot, key: str, now: int) -> None:
+        self.gh.merge_squash(self.repo, pr.number)
+        self.ledger.record("squash-merge", pr.number, pr.head_ref_oid, key, now)
+
     def rebase_onto_base(self, pr: PrSnapshot, new_base: str, now: int) -> bool:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
@@ -153,6 +157,7 @@ class AdminBypassGhExecutor:
             "remove_merge_hold",
             "resolve_bot_threads",
             "comment_blocked",
+            "squash_merge",
         } and not self.pr_head_is_current(pr, action.kind, action.key):
             return False
         if action.kind == "requeue":
@@ -166,6 +171,9 @@ class AdminBypassGhExecutor:
             return True
         if action.kind == "retarget_base":
             self.retarget_base(pr, action.key, now)
+            return True
+        if action.kind == "squash_merge":
+            self.squash_merge(pr, action.key, now)
             return True
         if action.kind == "comment_admin_bypass_nudge":
             self.comment_admin_bypass_nudge(pr, action.key, now)

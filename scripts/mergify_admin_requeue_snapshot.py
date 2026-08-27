@@ -185,6 +185,12 @@ class GhClient:
     def retarget_base(self, repo: str, number: int, base: str) -> None:
         run_logged(["gh", "api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"base={base}"])
 
+    def merge_squash(self, repo: str, number: int) -> None:
+        # No --admin: this must only merge a PR GitHub itself already
+        # reports as MERGEABLE with green CI (see plan_bottom_progress's
+        # all_observed_checks_green gate) -- never an admin override.
+        run_logged(["gh", "pr", "merge", str(number), "--repo", repo, "--squash"])
+
     def compare_status(self, repo: str, base: str, head: str) -> str:
         out = run_logged(["gh", "api", f"repos/{repo}/compare/{base}...{head}"])
         return str(json.loads(out).get("status") or "")

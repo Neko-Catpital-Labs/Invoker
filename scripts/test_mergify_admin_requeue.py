@@ -1166,6 +1166,132 @@ The merge conditions cannot be satisfied due to failing checks
         actions = plan_stack_actions(stack, REQUIRED | {"e2e-proof / aggregate"}, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 1814, "e2e-proof / aggregate")])
 
+    def test_squash_merge_lands_when_no_required_checks_and_all_observed_checks_green(self):
+        stack = StackGroup("s", (pr(9001, labels={"admin-bypass"}, checks={"CI": check("CI")}),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(
+            [(a.kind, a.pr_number, a.key, a.detail) for a in actions],
+            [("squash_merge", 9001, "squash", "MERGEABLE with all observed CI green")],
+        )
+
+    def test_squash_merge_waits_for_pending_check_instead_of_merging(self):
+        checks = {"CI": check("CI", "pending")}
+        stack = StackGroup("s", (pr(9002, labels={"admin-bypass"}, checks=checks),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(actions, ())
+
+    def test_squash_merge_waits_when_no_ci_signal_observed_yet(self):
+        stack = StackGroup("s", (pr(9003, labels={"admin-bypass"}, checks={}),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(actions, ())
+
+    def test_squash_merge_requires_mergeable_state(self):
+        stack = StackGroup("s", (pr(9004, labels={"admin-bypass"}, checks={"CI": check("CI")}, mergeable="UNKNOWN"),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(actions, ())
+
+    def test_squash_merge_caps_after_max_requeue_attempts(self):
+        ledger = self.ledger()
+        ledger.record("squash-merge", 9005, HEAD, "squash", 1)
+        ledger.record("squash-merge", 9005, HEAD, "squash", 2)
+        stack = StackGroup("s", (pr(9005, labels={"admin-bypass"}, checks={"CI": check("CI")}),))
+        actions = plan_stack_actions(stack, frozenset(), ledger, 3)
+        self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
+
+    def test_invoker_style_repo_with_required_checks_still_requeues_instead_of_squash_merging(self):
+        # Invoker's own .mergify.yml always resolves a non-empty required_checks
+        # set (see test_loads_admin_bypass_rule_from_mergify_yml), so it must
+        # keep landing through the Mergify queue, never squash_merge.
+        stack = StackGroup("s", (pr(9006, latest=mergify()),))
+        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("requeue", 9006)])
+
+    def test_squash_merge_executes_and_records_ledger(self):
+        class FakeGh:
+            def __init__(self):
+                self.merges = []
+
+            def merge_squash(self, repo, number):
+                self.merges.append((repo, number))
+
+        ledger = self.ledger()
+        item = pr(9007, labels={"admin-bypass"}, checks={"CI": check("CI")})
+        action = Action("squash_merge", 9007, "squash", "MERGEABLE with all observed CI green")
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "EdbertChan/catstack")
+        performed = executor.execute(action, item, 1)
+        self.assertTrue(performed)
+        self.assertEqual(fake.merges, [("EdbertChan/catstack", 9007)])
+        self.assertEqual(ledger.count("squash-merge", 9007, HEAD, "squash"), 1)
+
+    def test_squash_merge_skips_when_head_moved_since_snapshot(self):
+        class FakeGh:
+            def __init__(self):
+                self.merges = []
+
+            def pr_detail(self, repo, number):
+                return {"number": number, "state": "OPEN", "headRefOid": OLD}
+
+            def merge_squash(self, repo, number):
+                self.merges.append((repo, number))
+
+        ledger = self.ledger()
+        item = pr(9008, labels={"admin-bypass"}, checks={"CI": check("CI")})
+        action = Action("squash_merge", 9008, "squash", "MERGEABLE with all observed CI green")
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "EdbertChan/catstack")
+        performed = executor.execute(action, item, 1)
+        self.assertFalse(performed)
+        self.assertEqual(fake.merges, [])
+        self.assertEqual(ledger.count("squash-merge", 9008, HEAD, "squash"), 0)
+
+    def test_dry_run_squash_merge_never_calls_gh_merge(self):
+        class FakeGh:
+            def __init__(self):
+                self.merges = []
+
+            def list_candidate_prs(self, repo, author, pr_numbers):
+                return [self._raw]
+
+            def list_open_prs(self, repo):
+                return [self._raw]
+
+            def issue_comments(self, repo, number):
+                return []
+
+            def merge_squash(self, repo, number):
+                self.merges.append((repo, number))
+
+        raw = {
+            "number": 9009,
+            "title": "catstack green PR",
+            "body": "",
+            "url": "https://example.invalid/9009",
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefName": "master",
+            "headRefName": "feature/9009",
+            "headRefOid": HEAD,
+            "mergeStateStatus": "CLEAN",
+            "mergeable": "MERGEABLE",
+            "labels": {"nodes": [{"name": "admin-bypass"}]},
+            "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+            "statusCheckRollup": {"contexts": {"nodes": [
+                {"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS", "checkSuite": {"commit": {"oid": HEAD}}},
+            ]}},
+        }
+        fake = FakeGh()
+        fake._raw = raw
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = requeue.parse_args([
+            "--once", "--dry-run", "--repo", "EdbertChan/catstack",
+            "--state-file", str(Path(tmp.name) / "ledger.jsonl"),
+        ])
+        with mock.patch.object(exec_impl, "GhClient", return_value=fake):
+            exec_impl.run_cycle(args, None, None, rules=("master", frozenset({"admin-bypass"}), frozenset()))
+        self.assertEqual(fake.merges, [])
+
     def test_closed_pr_never_requeues_even_when_manually_requested(self):
         stack = StackGroup("s", (pr(2999, state="CLOSED", latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)

@@ -566,6 +566,25 @@ def is_non_repairable_check_state(state: str) -> bool:
     return state in {"skipped", "cancelled", "neutral"}
 
 
+def all_observed_checks_green(pr: PrSnapshot) -> bool:
+    """True when every check GitHub currently reports for this PR's head is
+    green (or a non-repairable state like skipped/neutral).
+
+    Only meaningful for the empty-required_checks land path (see
+    plan_bottom_progress): a repo with no admin-bypass Mergify rule has no
+    required-check allowlist, so latest_contexts_by_required_check reports
+    every observed check instead of filtering to a known set. An empty
+    checks mapping means no CI signal has arrived yet, not "nothing to wait
+    for", so it is treated as not-green.
+    """
+    if not pr.checks:
+        return False
+    return all(
+        ctx.state == "success" or is_non_repairable_check_state(ctx.state)
+        for ctx in pr.checks.values()
+    )
+
+
 def mergify_failed_check_actions(
     pr: PrSnapshot,
     ledger: Ledger,
@@ -1465,6 +1484,21 @@ def plan_bottom_progress(
                 detail,
             )
         return Action("refresh_stale_queue", bottom.number, STALE_QUEUE_EVENT_REFRESH_KEY, detail)
+    if not facts.required_checks:
+        # Non-Invoker repo (no admin-bypass Mergify rule -> no required-check
+        # allowlist -> no Mergify queue to requeue into). Land directly via
+        # squash-merge once GitHub reports MERGEABLE and every observed CI
+        # check is green; otherwise wait for CI rather than merging blind.
+        # Invoker itself always resolves a non-empty required_checks set
+        # from its own .mergify.yml, so this branch never fires for it and
+        # it keeps landing through the Mergify-queue requeue path below.
+        if bottom.mergeable != "MERGEABLE" or not all_observed_checks_green(bottom):
+            return None
+        key = "squash"
+        attempts = ledger.count("squash-merge", bottom.number, bottom.head_ref_oid, key)
+        if attempts >= max_requeue_attempts:
+            return cap_action(bottom, Blocker(key, "capped", bottom.number, "squash-merge"), "squash-merge")
+        return Action("squash_merge", bottom.number, key, "MERGEABLE with all observed CI green")
     # Behind master alone is not a rebase trigger: wait / requeue. Rebases are
     # Invoker jobs for GitHub conflicts and no-CI Mergify dequeues only.
     requeue_reason = "eligible-when-ready"
