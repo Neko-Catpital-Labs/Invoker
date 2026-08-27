@@ -5,6 +5,10 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
+if [ "${INVOKER_DEVELOPMENT_PROFILE_ACTIVE:-0}" != "1" ]; then
+  exec node "$REPO_ROOT/scripts/with-invoker-development-profile.mjs" -- bash "$0" "$@"
+fi
+
 # Workspaces are durable task/attempt artifacts. Disable destructive cleanup
 # from this launcher even if the caller's environment opts into it.
 export INVOKER_ENABLE_WORKSPACE_CLEANUP=0

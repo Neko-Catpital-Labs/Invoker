@@ -5,6 +5,13 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
+if (process.argv[2] !== '--install-only' && process.env.INVOKER_DEVELOPMENT_PROFILE_ACTIVE !== '1') {
+  const launcher = path.join(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
+  const result = spawnSync(process.execPath, [launcher, '--', process.execPath, __filename, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}
 const ELECTRON_INSTALL_ATTEMPTS = 3;
 const MISSING_ELECTRON_MESSAGE =
   'Electron is not installed. Provision this machine before running Invoker: ' +
