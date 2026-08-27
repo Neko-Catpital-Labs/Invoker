@@ -22,7 +22,7 @@ import type {
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
-import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
+import { filterExecutionHarnesses, resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import { listInAppPlanningPresets } from '../in-app-planner.js';
 import type { ApiMutationFacade } from '../api-server.js';
 import { getEventsPage } from '../get-events-page.js';
@@ -32,6 +32,22 @@ import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveAgentSession } from '../headless-query-list.js';
 import { buildTaskGraphSnapshot } from './task-graph-snapshot.js';
 import type { TaskTerminalAdapter } from '../task-terminal-adapter.js';
+
+
+/**
+ * Consumer-side port for planning terminals. The owner hosts pass the adapter
+ * built by `createPlanningTerminalAdapter` (terminal-session-ipc.ts), which
+ * satisfies this shape structurally; declaring the port here keeps the web
+ * dispatch free of a hard dependency on the Electron IPC module's exports.
+ */
+export interface WebPlanningTerminals {
+  open(planningSessionId: string): Promise<{ opened: boolean; reason?: string; session?: unknown }>;
+  list(): unknown[] | Promise<unknown[]>;
+  write(sessionId: string, data: string): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>;
+  resize(sessionId: string, cols: number, rows: number): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>;
+  appliedSize(sessionId: string): { cols: number; rows: number } | null | Promise<{ cols: number; rows: number } | null>;
+  close(sessionId: string): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>;
+}
 
 export interface WebInvokerDispatchDeps {
   orchestrator: Orchestrator;
@@ -51,6 +67,13 @@ export interface WebInvokerDispatchDeps {
   checkPrStatuses?: () => void | Promise<void>;
   getWorkers?: () => WorkerStatusSnapshot;
   taskTerminals?: TaskTerminalAdapter;
+  /**
+   * Routes planning-chat channels (and plan-from-goal) to the owner's shared
+   * GUI-mutation handlers. Wired by both the desktop-owned and headless web
+   * surfaces; absent means the historical web downgrades stay in effect.
+   */
+  guiMutations?: (channel: string, args: unknown[]) => Promise<unknown>;
+  planningTerminals?: WebPlanningTerminals;
   logger?: Logger;
 }
 
@@ -151,7 +174,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:get-execution-pools':
         return Object.keys(deps.loadConfig().executionPools ?? {});
       case 'invoker:get-execution-harnesses':
-        return agentRegistry.listExecutionHarnesses();
+        return filterExecutionHarnesses(agentRegistry.listExecutionHarnesses(), deps.loadConfig());
       case 'invoker:get-planning-presets':
         return listInAppPlanningPresets(deps.loadConfig());
       case 'invoker:get-execution-defaults':
@@ -183,8 +206,23 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return { ownerMode: true, readOnly: false, mode: 'local-owner' };
       case 'invoker:get-ui-perf-stats':
         return {};
-      case 'invoker:report-ui-perf':
+      case 'invoker:report-ui-perf': {
+        // Mirror the GUI handler (gui-mutation-handlers.ts): persist every
+        // renderer metric to the activity log so web-surface interactions are
+        // diagnosable after the fact. Previously a silent no-op, which left
+        // web incidents with no client-side record at all.
+        const payload = {
+          ts: new Date().toISOString(),
+          metric: String(args[0] ?? ''),
+          ...((args[1] ?? {}) as Record<string, unknown>),
+        };
+        try {
+          persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
+        } catch {
+          // DB might be locked; matching the GUI handler's tolerance.
+        }
         return undefined;
+      }
       case 'invoker:trace-renderer-task-graph-event':
         return undefined;
       case 'invoker:check-pr-statuses':
@@ -227,6 +265,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.editTaskPrompt(String(args[0]), String(args[1]));
       case 'invoker:edit-task-agent':
         return mutations.editTaskAgent(String(args[0]), String(args[1]));
+      case 'invoker:edit-task-model':
+        return mutations.editTaskModel(String(args[0]), args[1] === undefined || args[1] === null ? null : String(args[1]));
       case 'invoker:edit-task-type':
         return mutations.editTaskType(
           String(args[0]),
@@ -277,15 +317,41 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           return { ok: false, reason: 'unsupported' };
         }
         return deps.taskTerminals.close(String(args[0]));
+      // ── Planning chat + planning terminals ──
+      // Routed to the owner's shared GUI-mutation handlers / terminal adapter
+      // when the host wires them; otherwise keep the historical downgrades.
+      case 'invoker:plan-from-goal':
+      case 'invoker:planning-chat-create':
+      case 'invoker:planning-chat-list':
+      case 'invoker:planning-chat-send':
+      case 'invoker:planning-chat-submit':
+      case 'invoker:planning-chat-discard-draft':
+      case 'invoker:planning-chat-reset':
+      case 'invoker:planning-chat-delete':
+      case 'invoker:planning-chat-delete-submitted':
+      case 'invoker:planning-chat-rebind-repo':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        return unsupported(channel);
+      case 'invoker:planning-chat-set-terminal-mode':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        return { ok: false, error: 'Planning tmux is not available in the web UI' };
       case 'invoker:planning-terminal-open':
+        if (deps.planningTerminals) return deps.planningTerminals.open(String(args[0]));
         return { opened: false, reason: 'Planning terminals are not available in the web UI' };
       case 'invoker:planning-terminal-list':
-        return [];
-      case 'invoker:planning-chat-set-terminal-mode':
-        return { ok: false, error: 'Planning tmux is not available in the web UI' };
+        return deps.planningTerminals?.list() ?? [];
+      case 'invoker:planning-terminal-applied-size':
+        return deps.planningTerminals?.appliedSize(String(args[0])) ?? null;
       case 'invoker:planning-terminal-write':
+        if (deps.planningTerminals) return deps.planningTerminals.write(String(args[0]), String(args[1]));
+        return { ok: false, reason: 'unsupported' };
       case 'invoker:planning-terminal-resize':
+        if (deps.planningTerminals) {
+          return deps.planningTerminals.resize(String(args[0]), Number(args[1]), Number(args[2]));
+        }
+        return { ok: false, reason: 'unsupported' };
       case 'invoker:planning-terminal-close':
+        if (deps.planningTerminals) return deps.planningTerminals.close(String(args[0]));
         return { ok: false, reason: 'unsupported' };
 
       // ── Mutations not exposed on the facade / global lifecycle ──

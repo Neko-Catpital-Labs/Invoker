@@ -466,6 +466,8 @@ describe('SQLiteAdapter', () => {
         'confirmation_mode',
         'draft_plan_summary_json',
         'draft_plan_text',
+        'planning_draft_id',
+        'planning_draft_hash',
         'submitted_workflow_id',
         'submitted_plan_name',
         'terminal_mode',
@@ -475,6 +477,9 @@ describe('SQLiteAdapter', () => {
         'terminal_output_snapshot',
         'terminal_updated_at',
         'pending_response',
+        'active_turn_id',
+        'active_turn_status',
+        'active_turn_error',
         'created_at',
         'updated_at',
         'repo_url',
@@ -2684,6 +2689,17 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('updateWorkflow', () => {
+    it('persists staged workflow activation with active as the default', () => {
+      adapter.saveWorkflow(testWorkflow);
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(false);
+
+      adapter.updateWorkflow('wf-1', { staged: true });
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(true);
+
+      adapter.updateWorkflow('wf-1', { staged: false });
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(false);
+    });
+
     it('ignores workflow status mutations because status is derived from tasks', () => {
       adapter.saveWorkflow(testWorkflow);
       // @ts-expect-error workflow status is derived output, not a persistence input.

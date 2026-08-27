@@ -60,16 +60,24 @@ fi
 headless_query() {
   local seconds="${INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS:-60}"
   local status=0
+  local stderr_file
+  stderr_file="$(mktemp)"
   # shellcheck disable=SC2086
-  run_with_optional_timeout "$seconds" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null || status=$?
+  run_with_optional_timeout "$seconds" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>"$stderr_file" || status=$?
   case "$status" in
+    0)
+      ;;
     124)
       echo "ERROR: headless_query timed out after ${seconds}s (query subprocess killed; owner may be crashed/unresponsive). Override with INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS=<seconds>, or =0 to disable. args: $*" >&2
       ;;
     127)
       echo "ERROR: headless_query could not enforce a timeout (timeout/gtimeout/python3 all unavailable); query ran without a bound." >&2
       ;;
+    *)
+      cat "$stderr_file" >&2
+      ;;
   esac
+  rm -f "$stderr_file"
   return "$status"
 }
 

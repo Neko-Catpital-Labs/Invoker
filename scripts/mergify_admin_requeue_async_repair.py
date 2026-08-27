@@ -35,7 +35,12 @@ def repair_check_plan_name(pr_number: int, check_name: str, start_head: str) -> 
 
 
 def repair_conflict_plan_name(pr_number: int, start_head: str) -> str:
+    # Legacy name kept for settling pre-unification conflict-repair ledger rows.
     return f"admin-bypass-repair-conflict-pr-{pr_number}-{start_head[:7]}"
+
+
+def rebase_onto_master_plan_name(pr_number: int, start_head: str) -> str:
+    return f"admin-bypass-rebase-onto-master-pr-{pr_number}-{start_head[:7]}"
 
 
 def repair_bot_thread_plan_name(pr_number: int, start_head: str) -> str:
@@ -65,24 +70,23 @@ class AsyncRepairPlan:
     yaml_text: str
 
 
-def _write_plan_header(*, name: str, base_branch: str, repo: str) -> str:
+def _write_plan_header(*, name: str, base_branch: str, repo: str, merge_mode: str = "manual") -> str:
     return (
         f"name: {name}\n"
         "onFinish: none\n"
-        "mergeMode: manual\n"
+        f"mergeMode: {merge_mode}\n"
         f"repoUrl: {_yaml_str(_repo_url(repo))}\n"
         f"baseBranch: {_yaml_str(base_branch)}\n"
         "tasks:\n"
     )
 
 
-def _repair_task_yaml(*, description: str, prompt: str) -> str:
+def _repair_task_yaml(*, description: str, prompt: str, max_turns: int | None = 30) -> str:
+    max_turns_line = f"    maxTurns: {max_turns}\n" if max_turns is not None else ""
     return (
         "  - id: repair\n"
         f"    description: {_yaml_str(description)}\n"
-        # codex reaches every SSH pool member; the default claude agent's
-        # session is broken on most of them right now.
-        "    executionAgent: codex\n"
+        f"{max_turns_line}"
         "    prompt: |\n"
         f"{_indent_block(prompt, 6)}\n"
     )
@@ -95,10 +99,6 @@ def _safe_push_task_yaml(
     dependencies: str,
     head_ref: str,
     start_head: str,
-    state_file: Path,
-    json_kind: str,
-    pr_number: int,
-    json_key: str,
     skip_if_prereq: bool,
 ) -> str:
     skip_guard = (
@@ -109,14 +109,14 @@ def _safe_push_task_yaml(
         if skip_if_prereq
         else ""
     )
+    # Owner-side JSONL settlement is recorded by mergify_admin_requeue_workflow_fastpath
+    # from durable workflow/task state. Never pass the owner machine's ledger path into
+    # a remote worker command (Linux workers cannot write /Users/... paths).
     command = (
         "set -euo pipefail\n"
         f"{skip_guard}"
         "python3 scripts/pr_worker_safe_push.py \\\n"
-        f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd . \\\n"
-        f"  --record-json-ledger {_shlex(str(state_file))} \\\n"
-        f"  --json-kind {_shlex(json_kind)} --json-pr {_shlex(str(pr_number))} \\\n"
-        f"  --json-head-sha {_shlex(start_head)} --json-key {_shlex(json_key)}\n"
+        f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd .\n"
     )
     return (
         f"  - id: {task_id}\n"
@@ -132,15 +132,6 @@ def _shlex(value: str) -> str:
     # our own ledger paths/kinds -- none contain single quotes in practice, but
     # this keeps the generated command block safe regardless.
     return "'" + value.replace("'", "'\\''") + "'"
-
-
-_RESTRUCTURE_ESCAPE_HATCH = (
-    "If the real fix requires restructuring this PR instead of editing it in place -- for example, splitting "
-    "unrelated files into their own PR because they can't ship together -- do not force that into a single "
-    "local commit here. Instead, submit an Invoker plan to do the restructuring, the same way a human would "
-    "via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). Then make no "
-    "commit in this checkout and exit 0.\n"
-)
 
 
 _JOB_LOG_EXCERPT_MAX_CHARS = 20000
@@ -183,7 +174,6 @@ def build_repair_check_plan(
         "If a code change fixes it: make the change in this checkout. Commit locally if "
         "needed, do not push. If local proof shows the check is already green on the "
         "current head, make no commit and exit 0.\n\n"
-        f"{_RESTRUCTURE_ESCAPE_HATCH}\n"
         f"Repair the existing pull request #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
         f"PR URL: {pr.url}\n"
         f"Head branch: {pr.head_ref_name} (at {start_head}), base branch: {pr.base_ref_name}\n\n"
@@ -218,16 +208,27 @@ def build_repair_check_plan(
         dependencies="normalize",
         head_ref=pr.head_ref_name,
         start_head=start_head,
-        state_file=state_file,
-        json_kind="repair-check-settled",
-        pr_number=pr.number,
-        json_key=check_name,
         skip_if_prereq=True,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
-def build_repair_conflict_plan(
+def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, onto: str | None = None) -> str:
+    onto_ref = onto or pr.base_ref_name or "master"
+    return (
+        f"Rebase this pull request onto `{onto_ref}`.\n\n"
+        f"Checkout the PR head branch, rebase it onto origin/{onto_ref} while preserving the PR's intended "
+        "changes, resolve any conflicts if they appear, then commit locally. Do not push.\n\n"
+        "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
+        f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
+        f"Head SHA: {start_head}\nRebase onto: {onto_ref}\nReason: {reason}\n"
+        f"Work directly on its branch:\n"
+        f"  git fetch origin {pr.head_ref_name} {onto_ref} && git checkout {pr.head_ref_name}\n"
+        f"  git rebase origin/{onto_ref}\n"
+    )
+
+
+def build_rebase_onto_master_plan(
     pr: PrSnapshot,
     reason: str,
     *,
@@ -235,31 +236,20 @@ def build_repair_conflict_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
-    name = repair_conflict_plan_name(pr.number, start_head)
-    prompt = (
-        "This PR has a merge conflict blocking it from merging. Diagnose why, then fix it.\n\n"
-        "If rebasing the head branch onto its base branch (preserving the PR's intended changes) resolves it: "
-        "do that, run the narrow proof for the conflict resolution, then commit locally. Do not push.\n\n"
-        "If the real fix requires restructuring this PR instead of a straightforward rebase, do not force that "
-        "into a single local commit here. Instead, submit an Invoker plan to do the restructuring, the same way "
-        "a human would via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). "
-        "Then make no commit in this checkout and exit 0.\n\n"
-        "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
-        f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
-        f"Head SHA: {start_head}\nReason: {reason}\n"
-    )
+    onto_ref = pr.base_ref_name or "master"
+    name = rebase_onto_master_plan_name(pr.number, start_head)
+    prompt = _rebase_onto_master_prompt(pr, reason, start_head, onto=onto_ref)
     yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
-    yaml_text += _repair_task_yaml(description=f"Repair merge conflict on PR #{pr.number}", prompt=prompt)
+    yaml_text += _repair_task_yaml(
+        description=f"Rebase PR #{pr.number} onto {onto_ref}",
+        prompt=prompt,
+    )
     yaml_text += _safe_push_task_yaml(
         task_id="safe-push",
         description=f"Safely push PR #{pr.number} only if its head did not move",
         dependencies="repair",
         head_ref=pr.head_ref_name,
         start_head=start_head,
-        state_file=state_file,
-        json_kind="conflict-repair-settled",
-        pr_number=pr.number,
-        json_key=f"conflict:{pr.number}",
         skip_if_prereq=False,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
@@ -280,7 +270,9 @@ def build_repair_bot_thread_plan(
         "If the thread is already resolved, or the PR is closed or merged, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {start_head}\nThread: {thread_id}\n"
     )
-    yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
+    yaml_text = _write_plan_header(
+        name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review"
+    )
     yaml_text += _repair_task_yaml(description=f"Resolve bot review thread on PR #{pr.number}", prompt=prompt)
     yaml_text += _safe_push_task_yaml(
         task_id="safe-push",
@@ -288,10 +280,6 @@ def build_repair_bot_thread_plan(
         dependencies="repair",
         head_ref=pr.head_ref_name,
         start_head=start_head,
-        state_file=state_file,
-        json_kind="repair-bot-thread-settled",
-        pr_number=pr.number,
-        json_key=thread_id,
         skip_if_prereq=False,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)

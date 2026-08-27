@@ -9,15 +9,30 @@ const planText = [
 ].join('\n');
 
 describe('evaluatePlanningTurn', () => {
-  it('returns an ordinary message when drafting is not authorized', () => {
+  it('stages a valid current-turn draft even when prompt drafting was not authorized', () => {
     expect(evaluatePlanningTurn({
       userMessage: 'What would this involve?',
       messagesBeforeTurn: [],
       assistantReply: 'Here is the scope.',
       immediateDraftPlanText: planText,
+    })).toMatchObject({
+      kind: 'draft_ready',
+      text: 'Here is the scope.',
+      planText,
+      draftingAuthorized: false,
+    });
+  });
+
+  it('does not replace a locked draft without explicit redraft authorization', () => {
+    expect(evaluatePlanningTurn({
+      userMessage: 'Can we skip the extra dependency?',
+      messagesBeforeTurn: [],
+      assistantReply: 'Here is an incidental YAML restatement.',
+      immediateDraftPlanText: planText,
+      hasExistingDraft: true,
     })).toEqual({
       kind: 'message',
-      text: 'Here is the scope.',
+      text: 'Here is an incidental YAML restatement.',
       status: 'still_discussing',
       draftingAuthorized: false,
     });

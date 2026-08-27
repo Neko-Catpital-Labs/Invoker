@@ -279,10 +279,12 @@ export function classifyReviewUnitsForPath(filePath) {
   if (/visual-proof/.test(lowerPath) && path.includes('/e2e/')) return ['proof'];
   if (
     path === 'skills/make-pr/SKILL.md'
-    || path === 'skills/plan-to-invoker/SKILL.md'
+    || path.startsWith('skills/chat-submit/')
+    || path.startsWith('skills/plan-to-invoker/')
     || path === 'skills/land-stack/SKILL.md'
     || path === 'skills/visual-proof/SKILL.md'
     || path === 'skills/prove-it/SKILL.md'
+    || path === 'skills/admin-bypass-sweep/SKILL.md'
   ) return ['tooling-policy'];
   if (path.startsWith('docs/') || path.startsWith('skills/') || path.endsWith('.md')) return ['docs'];
   if (path.startsWith('.github/')) return ['tooling-policy'];

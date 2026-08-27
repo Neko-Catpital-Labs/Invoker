@@ -9,18 +9,33 @@
 
 import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, resolve } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function resolveYamlModulePath(scriptDir) {
+/**
+ * Locate the Invoker checkout that owns this doctor script, for `yaml` when
+ * it isn't resolvable as a real installed dependency. Dev-convenience/other-
+ * install-shape fallback — see importYaml below. Checked in order:
+ * 1. `INVOKER_REPO_ROOT` (explicit override, same convention used elsewhere
+ *    in the app, e.g. packages/contracts/src/repo-root.ts).
+ * 2. The local relative path (this script running from inside a live
+ *    Invoker checkout or worktree).
+ * 3. The shared checkout behind a linked git worktree's common dir.
+ * 4. `sourceRepoRoot` recorded in ~/.invoker/bundled-skills.json by the last
+ *    `scripts/setup-agent-skills.sh` install.
+ */
+function resolveInvokerRepoRoot(scriptDir) {
+  const hasWorkspaceMarker = (dir) => existsSync(resolve(dir, 'pnpm-workspace.yaml'));
+
+  const envRoot = process.env.INVOKER_REPO_ROOT;
+  if (envRoot && hasWorkspaceMarker(envRoot)) return resolve(envRoot);
+
   const localRepoRoot = resolve(scriptDir, '../../..');
-  const localYamlPath = resolve(localRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-  if (existsSync(localYamlPath)) {
-    return localYamlPath;
-  }
+  if (hasWorkspaceMarker(localRepoRoot)) return localRepoRoot;
 
   try {
     const gitCommonDir = execSync('git rev-parse --git-common-dir', {
@@ -29,22 +44,60 @@ function resolveYamlModulePath(scriptDir) {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     const sharedRepoRoot = resolve(scriptDir, gitCommonDir, '..');
-    const sharedYamlPath = resolve(sharedRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-    if (existsSync(sharedYamlPath)) {
-      return sharedYamlPath;
+    if (hasWorkspaceMarker(sharedRepoRoot)) return sharedRepoRoot;
+  } catch {
+    // Fall through to the manifest-based lookup below.
+  }
+
+  try {
+    const invokerHome = process.env.INVOKER_DB_DIR ?? resolve(homedir(), '.invoker');
+    const manifestPath = resolve(invokerHome, 'bundled-skills.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (typeof manifest.sourceRepoRoot === 'string' && hasWorkspaceMarker(manifest.sourceRepoRoot)) {
+      return resolve(manifest.sourceRepoRoot);
     }
   } catch {
-    // Ignore git lookup failure and fall through to the explicit error below.
+    // Fall through to the explicit error at the call site.
+  }
+
+  return null;
+}
+
+/**
+ * `yaml` is a real declared dependency of the published `invoker-cli` npm
+ * package (packages/npm-cli/package.json), so when this script runs from
+ * inside that package's install (npm places `yaml` in an ancestor
+ * node_modules, e.g. <install-root>/node_modules/yaml sitting above
+ * <install-root>/vendor/skills/plan-to-invoker/scripts), a plain bare
+ * import resolves it via Node's own module resolution — no custom path
+ * logic needed. Fall back to locating a real Invoker checkout only when
+ * that fails, e.g. a machine-level skill install (~/.claude/skills/...)
+ * copied via `installBundledSkills()`, which has no such node_modules
+ * anywhere nearby.
+ */
+async function importYaml(scriptDir) {
+  try {
+    return await import('yaml');
+  } catch {
+    // Fall through to the checkout-based lookup below.
+  }
+
+  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
+  if (invokerRepoRoot) {
+    const repoYamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+    if (existsSync(repoYamlPath)) return import(repoYamlPath);
   }
 
   throw new Error(
-    'Unable to resolve yaml runtime. Checked packages/app/node_modules/yaml/dist/index.js in the current worktree and the shared git checkout.',
+    "Unable to resolve yaml runtime. Checked a plain 'yaml' import (present if this script is "
+    + 'running from inside the invoker-cli npm install, which declares it as a real dependency) '
+    + 'and packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout '
+    + '(INVOKER_REPO_ROOT, a live git checkout, or ~/.invoker/bundled-skills.json). Set '
+    + 'INVOKER_REPO_ROOT to an Invoker checkout if neither applies.',
   );
 }
 
-const yamlPath = resolveYamlModulePath(__dirname);
-
-const { parse: parseYaml } = await import(yamlPath);
+const { parse: parseYaml } = await importYaml(__dirname);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
 const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review', 'no_op'];
@@ -584,6 +637,17 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
+  for (const field of ['autoFix', 'autoFixRetries']) {
+    if (Object.prototype.hasOwnProperty.call(raw, field)) {
+      errors.push({
+        errorType: 'unsupported_field',
+        field,
+        message: `Plan-level "${field}" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+        value: raw[field],
+      });
+    }
+  }
+
   // Validate description required when onFinish is pull_request or merge
   const onFinish = raw.onFinish ?? 'pull_request';
   if ((onFinish === 'pull_request' || onFinish === 'merge') &&
@@ -729,6 +793,18 @@ function validatePlan(yamlContent, repoRoot) {
     }
 
     // Validate obsolete executor routing fields.
+    for (const field of ['autoFix', 'autoFixRetries']) {
+      if (Object.prototype.hasOwnProperty.call(task, field)) {
+        errors.push({
+          errorType: 'unsupported_field',
+          field,
+          taskId,
+          message: `Task "${taskId}" uses "${field}", which is no longer supported in plan YAML. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+          value: task[field],
+        });
+      }
+    }
+
     if (task.runnerKind !== undefined) {
       errors.push({
         errorType: 'unsupported_field',

@@ -293,6 +293,45 @@ test_runner_kind_is_unsupported() {
   return 0
 }
 
+test_legacy_autofix_fields_are_unsupported() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+  cat > "$temp_plan" <<'EOF'
+name: "Legacy auto-fix fields"
+onFinish: none
+repoUrl: git@github.com:example-org/acme-repo.git
+autoFixRetries: 2
+tasks:
+  - id: legacy-task
+    description: "Exercise obsolete task metadata"
+    command: "echo ok"
+    dependencies: []
+    autoFix: true
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected legacy auto-fix fields to fail validation" >&2
+    return 1
+  fi
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsupported_field" and .field == "autoFixRetries")] | length == 1' &>/dev/null; then
+    echo "Expected plan-level autoFixRetries diagnostic" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsupported_field" and .field == "autoFix" and .taskId == "legacy-task")] | length == 1' &>/dev/null; then
+    echo "Expected task-level autoFix diagnostic" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+}
+
 test_lint_allows_focused_verification_without_test_all() {
   local temp_plan
   temp_plan=$(mktemp)
@@ -1408,6 +1447,7 @@ run_test "Edge: invalid_dependency_reference" test_edge_invalid_dependency
 run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeholder
 run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
 run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
+run_test "Edge: unsupported legacy auto-fix fields" test_legacy_autofix_fields_are_unsupported
 run_test "Lint: allow focused verification without test:all" test_lint_allows_focused_verification_without_test_all
 run_test "Lint: reject multi-prompt standalone without waiver" test_lint_rejects_multi_prompt_standalone_without_waiver
 run_test "Lint: allow stack workflows with focused verification" test_lint_allows_nonterminal_stack_workflow_without_test_all

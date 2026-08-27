@@ -96,19 +96,23 @@ test.describe('rebase-recreate UI drift repro', () => {
       tick += 1;
       const elapsed = Date.now() - startedAt;
 
-      const polled = await page.evaluate(async () => {
+      // invoker query and the chip DOM text both live in the renderer — read
+      // both in one page.evaluate() instead of two separate Playwright
+      // round-trips, so a status transition can't land between them and
+      // produce a false disagreement.
+      const { polledTaskA, polledChip } = await page.evaluate(async () => {
         const result = await window.invoker.getTasks();
-        return Array.isArray(result) ? result : result.tasks;
+        const tasks = Array.isArray(result) ? result : result.tasks;
+        const task = tasks.find((t: { id: string }) => t.id.endsWith('/a'));
+        const chipEl = document.querySelector('[data-testid="queue-chip-running"]');
+        return { polledTaskA: task, polledChip: chipEl ? chipEl.textContent : null };
       });
-      const polledTaskA = polled.find((t: { id: string }) => t.id.endsWith('/a'));
 
       const db2 = new DatabaseSync(dbPath, { readOnly: true });
       const polledRow = db2.prepare('SELECT status FROM tasks WHERE id = ?').get(polledTaskA.id) as
         | { status: string }
         | undefined;
       db2.close();
-
-      const polledChip = await page.getByTestId('queue-chip-running').textContent();
 
       if (polledTaskA.status === 'running' && backendFlippedAtMs === null) backendFlippedAtMs = elapsed;
       const chipShowsRunning = polledChip === 'Executing (1/1)';

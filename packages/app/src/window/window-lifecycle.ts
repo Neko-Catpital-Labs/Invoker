@@ -15,6 +15,11 @@ export interface MainWindowLifecycleDeps {
   setUiInteractive: (uiInteractive: boolean) => void;
   startDeferredStartupWork: () => void;
   setMainWindow: (window: BrowserWindow | null) => void;
+  rendererRecoveryState?: MainWindowRendererRecoveryState;
+}
+
+export interface MainWindowRendererRecoveryState {
+  lastRecoveryAt: number | null;
 }
 
 export interface MainWindowSecondInstanceDeps {
@@ -47,7 +52,9 @@ export function registerMainWindowActivateHandler(deps: MainWindowActivateDeps):
   });
 }
 
-const FALLBACK_WINDOW_HTML = 'data:text/html,<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>The UI failed to load. Restart Invoker. If this keeps happening, reinstall Invoker or rebuild the UI from a source checkout.</p></body></html>';
+const FALLBACK_WINDOW_DOCUMENT = '<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>The UI failed to load. Restart Invoker. If this keeps happening, reinstall Invoker or rebuild the UI from a source checkout.</p></body></html>';
+const FALLBACK_WINDOW_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(FALLBACK_WINDOW_DOCUMENT)}`;
+const RENDERER_RECOVERY_WINDOW_MS = 60_000;
 
 export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   deps.recordStartupMark('createWindow.begin');
@@ -87,6 +94,7 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   }
 
   let fallbackShown = false;
+  const rendererRecoveryState = deps.rendererRecoveryState ?? { lastRecoveryAt: null };
   const showFallbackWindow = (reason: string): void => {
     if (mainWindow.isDestroyed() || fallbackShown) return;
     fallbackShown = true;
@@ -124,11 +132,27 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   });
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    const reason = `render-process-gone reason=${details.reason} exitCode=${details.exitCode}`;
     deps.logger.error(
       `main window render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`,
       { module: 'window' },
     );
-    showFallbackWindow(`render-process-gone reason=${details.reason} exitCode=${details.exitCode}`);
+    const now = Date.now();
+    if (rendererRecoveryState.lastRecoveryAt === null || now - rendererRecoveryState.lastRecoveryAt >= RENDERER_RECOVERY_WINDOW_MS) {
+      rendererRecoveryState.lastRecoveryAt = now;
+      deps.logger.warn(`main window renderer recovery: ${reason}`, { module: 'window' });
+      try {
+        mainWindow.once('closed', () => createMainWindow({ ...deps, rendererRecoveryState }));
+        mainWindow.destroy();
+        return;
+      } catch (err) {
+        deps.logger.error(
+          `main window renderer recovery reload failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'window' },
+        );
+      }
+    }
+    showFallbackWindow(reason);
   });
 
   const shouldShowWindow = process.env.NODE_ENV !== 'test' || deps.enableTestCompositor;

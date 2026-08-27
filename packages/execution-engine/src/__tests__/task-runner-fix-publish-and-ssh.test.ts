@@ -13,46 +13,7 @@ import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
-
-/**
- * Creates a mock executor that auto-completes on start().
- * For merge nodes (no command/prompt), this simulates the executor's
- * handleProcessExit(0) path which immediately completes.
- */
-function createAutoCompleteExecutor() {
-  let completeCallback: ((response: WorkResponse) => void) | undefined;
-  return {
-    type: 'worktree',
-    start: vi.fn().mockImplementation(async (request: any) => {
-      const handle = {
-        executionId: `exec-${request.actionId}`,
-        taskId: request.actionId,
-        workspacePath: '/tmp/mock-worktree',
-        branch: `experiment/${request.actionId}-mock`,
-      };
-      // Auto-complete after start (simulates no-command path)
-      setTimeout(() => {
-        if (completeCallback) {
-          completeCallback({
-            requestId: request.requestId,
-            actionId: request.actionId,
-            executionGeneration: request.executionGeneration,
-            status: 'completed',
-            outputs: { exitCode: 0 },
-          });
-        }
-      }, 0);
-      return handle;
-    }),
-    onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
-      completeCallback = cb;
-    }),
-    onOutput: vi.fn(),
-    onHeartbeat: vi.fn(),
-    kill: vi.fn(),
-    destroyAll: vi.fn(),
-  };
-}
+import { createAutoCompleteExecutor } from './helpers/task-runner-fixtures.js';
 
 function makeTask(overrides: {
   id?: string;
@@ -2322,7 +2283,7 @@ describe('TaskRunner', () => {
         status: 'running',
         dependencies: ['t1'],
         config: { isMergeNode: true, workflowId: 'wf-pub' },
-        execution: { pendingFixError: undefined },
+        execution: { pendingFixError: undefined, fixedIntegrationSha: 'deadbeef' },
       });
 
       const allTasks = [mergeTask, completedTask];
@@ -2372,7 +2333,18 @@ describe('TaskRunner', () => {
       (executor as any).execGitIn = async (args: string[], dir: string) => {
         gitCalls.push({ args: [...args], dir });
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'deadbeef';
-        if (args[0] === 'rev-parse' && args[1] === '--verify') return '';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') {
+          if (args[2] === 'deadbeef^{commit}') return 'deadbeef';
+          return '';
+        }
+        if (
+          args[0] === 'merge-base'
+          && args[1] === '--is-ancestor'
+          && args[2] === 'deadbeef'
+          && args[3] === 'plan/ext-review'
+        ) {
+          return '';
+        }
         if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
         return '';
       };
@@ -2877,16 +2849,22 @@ describe('TaskRunner', () => {
       gateWorkspacePath?: string | null;
       taskBranches?: TaskState[];
       repoUrl?: string;
+      fixedIntegrationSha?: string;
     }) {
       const mergeTaskId = '__merge__wf-pub';
       const workflowId = 'wf-pub';
+      const publishesReview = opts.mergeMode === 'external_review' || opts.onFinish === 'pull_request';
+      const fixedIntegrationSha = opts.fixedIntegrationSha ?? (publishesReview ? 'abc123deadbeef' : undefined);
 
       const mergeTask = makeTask({
         id: mergeTaskId,
         status: 'running',
         dependencies: (opts.taskBranches ?? []).map((t) => t.id),
         config: { isMergeNode: true, workflowId },
-        execution: { pendingFixError: undefined },
+        execution: {
+          pendingFixError: undefined,
+          ...(fixedIntegrationSha ? { fixedIntegrationSha } : {}),
+        },
       });
 
       const allTasks = [mergeTask, ...(opts.taskBranches ?? [])];
@@ -2937,7 +2915,20 @@ describe('TaskRunner', () => {
       (executor as any).execGitIn = async (args: string[], dir: string) => {
         gitCalls.push({ args: [...args], dir });
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123deadbeef';
-        if (args[0] === 'rev-parse' && args[1] === '--verify') return '';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') {
+          if (fixedIntegrationSha && args[2] === `${fixedIntegrationSha}^{commit}`) return fixedIntegrationSha;
+          return '';
+        }
+        if (
+          fixedIntegrationSha
+          &&
+          args[0] === 'merge-base'
+          && args[1] === '--is-ancestor'
+          && args[2] === fixedIntegrationSha
+          && args[3] === opts.featureBranch
+        ) {
+          return '';
+        }
         // merge-base --is-ancestor exits non-zero when branch is NOT an ancestor of HEAD
         if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
         return '';

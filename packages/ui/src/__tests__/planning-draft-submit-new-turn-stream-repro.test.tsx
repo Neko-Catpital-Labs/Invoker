@@ -74,14 +74,14 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
-    await screen.findByTestId('invoker-terminal-ready-bar');
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
-    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
     });
-    expect(await screen.findByText('Plan "Mock Plan" submitted to Invoker. No ready work to start.')).toBeInTheDocument();
+    expect(await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review the graph, then Start ready work.')).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
     expect(screen.getByTestId('invoker-terminal-harness')).toBeDisabled();
 
@@ -94,6 +94,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         message: 'draft the next plan',
         presetKey: 'codex',
         confirmationMode: 'require',

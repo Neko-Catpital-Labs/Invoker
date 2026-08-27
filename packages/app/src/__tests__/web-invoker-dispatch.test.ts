@@ -17,6 +17,7 @@ function makeTask(id: string) {
 function makeDispatch(overrides: Record<string, unknown> = {}) {
   const approveTask = vi.fn(async () => ({ ok: true }));
   const spawnRepairWorkflow = vi.fn(async () => ({ ok: true }));
+  const editTaskModel = vi.fn(async () => ({ ok: true }));
   const deps = {
     orchestrator: {
       syncAllFromDb: vi.fn(),
@@ -27,7 +28,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     persistence: {
       listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
     },
-    mutations: { approveTask, spawnRepairWorkflow },
+    mutations: { approveTask, spawnRepairWorkflow, editTaskModel },
     agentRegistry: { listExecutionHarnesses: () => [] },
     loadConfig: () => ({}),
     getStreamSequence: () => 7,
@@ -36,7 +37,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     detachWorkflow: vi.fn(async () => {}),
     ...overrides,
   };
-  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask, spawnRepairWorkflow };
+  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask, spawnRepairWorkflow, editTaskModel };
 }
 function makeTaskTerminalAdapter() {
   return {
@@ -52,6 +53,34 @@ function makeTaskTerminalAdapter() {
 }
 
 describe('buildWebInvokerDispatch', () => {
+  it('report-ui-perf persists the metric to the activity log like the GUI handler', async () => {
+    const writeActivityLog = vi.fn();
+    const { dispatch } = makeDispatch({
+      persistence: {
+        listWorkflows: () => [],
+        writeActivityLog,
+      },
+    });
+    await dispatch('invoker:report-ui-perf', ['planning_send_start', { sessionId: 's-1', turnId: 't-1' }]);
+    expect(writeActivityLog).toHaveBeenCalledTimes(1);
+    const [source, level, message] = writeActivityLog.mock.calls[0];
+    expect(source).toBe('ui-perf');
+    expect(level).toBe('info');
+    expect(JSON.parse(message)).toMatchObject({ metric: 'planning_send_start', sessionId: 's-1', turnId: 't-1' });
+  });
+
+  it('report-ui-perf swallows activity-log write failures', async () => {
+    const { dispatch } = makeDispatch({
+      persistence: {
+        listWorkflows: () => [],
+        writeActivityLog: vi.fn(() => {
+          throw new Error('database is locked');
+        }),
+      },
+    });
+    await expect(dispatch('invoker:report-ui-perf', ['planning_send_start', {}])).resolves.toBeUndefined();
+  });
+
   it('list-workflows returns the persisted workflows', async () => {
     const { dispatch } = makeDispatch();
     expect(await dispatch('invoker:list-workflows', [])).toEqual([
@@ -93,6 +122,20 @@ describe('buildWebInvokerDispatch', () => {
       agentRegistry: { listExecutionHarnesses: () => harnesses },
     });
     expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual(harnesses);
+  });
+
+  it('get-execution-harnesses honors the enabledExecutionAgents allowlist', async () => {
+    const harnesses = [
+      { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+      { name: 'codex', supportedModels: [] },
+    ];
+    const { dispatch } = makeDispatch({
+      agentRegistry: { listExecutionHarnesses: () => harnesses },
+      loadConfig: () => ({ enabledExecutionAgents: ['claude'] } as unknown as InvokerConfig),
+    });
+    expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual([
+      { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+    ]);
   });
 
   it('get-planning-presets returns configured planning presets', async () => {
@@ -178,6 +221,12 @@ describe('buildWebInvokerDispatch', () => {
     expect(spawnRepairWorkflow).toHaveBeenCalledWith(payload);
   });
 
+  it('edit-task-model routes to the mutation facade', async () => {
+    const { dispatch, editTaskModel } = makeDispatch();
+    await dispatch('invoker:edit-task-model', ['wf-1/task-1', 'gpt-5.3-codex-spark']);
+    expect(editTaskModel).toHaveBeenCalledWith('wf-1/task-1', 'gpt-5.3-codex-spark');
+  });
+
   it('open-terminal degrades gracefully when task terminal support is absent', async () => {
     const { dispatch } = makeDispatch();
     expect(await dispatch('invoker:open-terminal', ['t'])).toEqual({
@@ -252,4 +301,69 @@ describe('buildWebInvokerDispatch', () => {
     const { dispatch } = makeDispatch();
     await expect(dispatch('invoker:does-not-exist', [])).rejects.toMatchObject({ code: 'unknown_channel' });
   });
+
+  describe('planning routes', () => {
+    it('routes planning-chat channels through guiMutations when wired', async () => {
+      const guiMutations = vi.fn(async (channel: string) => ({ ok: true, channel }));
+      const { dispatch } = makeDispatch({ guiMutations });
+      const request = { title: 'demo' };
+      expect(await dispatch('invoker:planning-chat-create', [request])).toEqual({
+        ok: true,
+        channel: 'invoker:planning-chat-create',
+      });
+      expect(guiMutations).toHaveBeenCalledWith('invoker:planning-chat-create', [request]);
+      await dispatch('invoker:planning-chat-list', []);
+      await dispatch('invoker:planning-chat-set-terminal-mode', [{ sessionId: 's1', mode: 'tmux' }]);
+      expect(guiMutations).toHaveBeenCalledTimes(3);
+    });
+
+    it('keeps the historical downgrades when guiMutations is absent', async () => {
+      const { dispatch } = makeDispatch();
+      await expect(dispatch('invoker:planning-chat-create', [{}])).rejects.toMatchObject({
+        code: 'unsupported_on_web',
+      });
+      expect(await dispatch('invoker:planning-chat-set-terminal-mode', [{}])).toEqual({
+        ok: false,
+        error: 'Planning tmux is not available in the web UI',
+      });
+    });
+
+    it('routes planning-terminal channels through the adapter when wired', async () => {
+      const planningTerminals = {
+        open: vi.fn(async (planningSessionId: string) => ({
+          opened: true,
+          session: { sessionId: `pt-${planningSessionId}`, taskId: `planning:${planningSessionId}`, kind: 'planning', status: 'running' },
+        })),
+        list: vi.fn(() => [{ sessionId: 'pt-1', taskId: 'planning:chat-1', kind: 'planning', status: 'running' }]),
+        write: vi.fn((sessionId: string, data: string) => ({ ok: true as const, sessionId, bytes: data.length })),
+        resize: vi.fn(() => ({ ok: true as const })),
+        appliedSize: vi.fn(() => ({ cols: 80, rows: 24 })),
+        close: vi.fn(() => ({ ok: true as const })),
+      };
+      const { dispatch } = makeDispatch({ planningTerminals });
+      const opened = await dispatch('invoker:planning-terminal-open', ['chat-1']) as { opened: boolean };
+      expect(opened.opened).toBe(true);
+      expect(planningTerminals.open).toHaveBeenCalledWith('chat-1');
+      expect(await dispatch('invoker:planning-terminal-list', [])).toHaveLength(1);
+      await dispatch('invoker:planning-terminal-write', ['pt-1', 'ls\n']);
+      expect(planningTerminals.write).toHaveBeenCalledWith('pt-1', 'ls\n');
+      await dispatch('invoker:planning-terminal-resize', ['pt-1', 120, 40]);
+      expect(planningTerminals.resize).toHaveBeenCalledWith('pt-1', 120, 40);
+      expect(await dispatch('invoker:planning-terminal-applied-size', ['pt-1'])).toEqual({ cols: 80, rows: 24 });
+      await dispatch('invoker:planning-terminal-close', ['pt-1']);
+      expect(planningTerminals.close).toHaveBeenCalledWith('pt-1');
+    });
+
+    it('keeps planning terminals downgraded when the adapter is absent', async () => {
+      const { dispatch } = makeDispatch();
+      expect(await dispatch('invoker:planning-terminal-open', ['chat-1'])).toEqual({
+        opened: false,
+        reason: 'Planning terminals are not available in the web UI',
+      });
+      expect(await dispatch('invoker:planning-terminal-list', [])).toEqual([]);
+      expect(await dispatch('invoker:planning-terminal-applied-size', ['pt-1'])).toBeNull();
+      expect(await dispatch('invoker:planning-terminal-write', ['pt-1', 'x'])).toEqual({ ok: false, reason: 'unsupported' });
+    });
+  });
+
 });

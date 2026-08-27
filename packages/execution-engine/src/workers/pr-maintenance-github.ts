@@ -37,6 +37,8 @@ export interface PrMaintenanceGitHub {
   fetchCoderabbitComments(num: number, login: string): Promise<CoderabbitComment[]>;
   /** `gh pr comment`; `true` only when the comment actually posted. */
   postPullRequestComment(num: number, body: string): Promise<boolean>;
+  /** `gh pr close`, optionally deleting the head branch; `true` only when the close actually succeeded. */
+  closePullRequest(num: number, opts?: { deleteBranch?: boolean }): Promise<boolean>;
 }
 
 /** Raised when a `gh` invocation fails after its retry. */
@@ -134,6 +136,16 @@ export function createPrMaintenanceGitHub(options: PrMaintenanceGitHubOptions): 
         command: 'gh',
         args: ['pr', 'comment', String(num), '--repo', repo, '--body', body],
       });
+      return isGhSuccess(retry);
+    },
+
+    async closePullRequest(num, opts): Promise<boolean> {
+      const args = ['pr', 'close', String(num), '--repo', repo];
+      if (opts?.deleteBranch) args.push('--delete-branch');
+      const result = await run({ command: 'gh', args });
+      if (isGhSuccess(result)) return true;
+      // Single attempt then retry, matching gh_json/postPullRequestComment.
+      const retry = await run({ command: 'gh', args });
       return isGhSuccess(retry);
     },
   };

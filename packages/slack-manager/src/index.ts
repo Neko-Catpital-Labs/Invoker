@@ -19,7 +19,7 @@ import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepositor
 
 import { IpcInvokerClient } from './invoker-client.js';
 import { createInvokerLauncher } from './invoker-launcher.js';
-import { readSlackRuntimeConfig, resolveDefaultHarnessPreset } from './runtime-config.js';
+import { readSlackRuntimeConfig, resolveDefaultHarnessPreset, resolveSlackAdminUserIds } from './runtime-config.js';
 import { createRunWorkflowOp } from './workflow-ops.js';
 import { createCommandHandler } from './command-handler.js';
 import { startEventSubscription } from './event-subscription.js';
@@ -28,7 +28,8 @@ import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
 import { loadSlackOwnerEnv, runComplaintScoutDraftCommand } from './complaint-scout-bridge.js';
-const VERSION = '0.0.12';
+import { startLocalSmokeInject } from './local-smoke-inject.js';
+const VERSION = '0.0.14';
 let runDaemon = true;
 
 if (process.argv.includes('--version') || process.argv.includes('-V')) {
@@ -113,6 +114,7 @@ async function main(): Promise<void> {
   const runtimeConfig = readSlackRuntimeConfig();
   const repoUrl = process.env.INVOKER_REPO_URL ?? runtimeConfig.defaultRepoUrl ?? detectRepoUrl(repoRoot, log);
   const defaultHarnessPreset = resolveDefaultHarnessPreset(process.env.INVOKER_SLACK_DEFAULT_PRESET, runtimeConfig.defaultHarnessPreset);
+  const adminUserIds = resolveSlackAdminUserIds(process.env.INVOKER_SLACK_ADMIN_USER_IDS, runtimeConfig.adminUserIds);
 
   const launcher = createInvokerLauncher({
     repoRoot,
@@ -145,9 +147,12 @@ async function main(): Promise<void> {
     prepareRepoCheckout: createPrepareRepoCheckout(path.join(managerHome, 'planning-clones')),
     defaultBranch: process.env.INVOKER_DEFAULT_BRANCH ?? 'master',
     conversationalPlanning: process.env.INVOKER_SLACK_CONVERSATIONAL_PLANNING !== '0',
+    planDoctorScriptPath: path.join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh'),
     repoUrl,
     defaultRepoUrl: repoUrl,
     repoAliases: runtimeConfig.repoAliases,
+    channelRepoBindings: runtimeConfig.channelRepoBindings,
+    adminUserIds,
     runWorkflowOp,
     gatherWorkflowContext,
     onRestartInvoker: async () => {
@@ -171,6 +176,10 @@ async function main(): Promise<void> {
 
   await slack.start(commandHandler);
   watchdog.start();
+  const stopSmokeInject = startLocalSmokeInject({
+    injectMention: (request) => slack.injectMention(request),
+    log,
+  });
   // Establish the IPC connection (and re-apply subscriptions) if Invoker is already up.
   void client.ping();
   log('info', `slack-manager started (store=${managerHome})`);
@@ -180,6 +189,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     log('info', `received ${signal}, shutting down`);
+    stopSmokeInject();
     watchdog.stop();
     stopEvents();
     await slack.stop().catch((err) => log('warn', `slack.stop failed: ${errMessage(err)}`));

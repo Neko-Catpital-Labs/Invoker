@@ -2,7 +2,7 @@
   "name": "@invoker/app",
   "productName": "Invoker",
   "desktopName": "invoker.desktop",
-  "version": "0.0.12",
+  "version": "0.0.14",
   "description": "Invoker desktop app",
   "homepage": "https://github.com/Neko-Catpital-Labs/Invoker",
   "author": {
@@ -58,7 +58,7 @@
     }
   },
   "scripts": {
-    "build": "node scripts/verify-workspace-imports.cjs && tsup",
+    "build": "node scripts/verify-workspace-imports.cjs && node scripts/verify-noexternal-completeness.cjs && tsup && node scripts/verify-surfaces-bundled.cjs",
     "dist": "electron-builder --publish never",
     "dist:linux": "electron-builder --linux AppImage deb --publish never",
     "dist:mac": "electron-builder --mac dmg --publish never",
@@ -78,6 +78,7 @@
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
     "@invoker/shell": "workspace:*",
+    "@invoker/slack-bug-scan": "workspace:*",
     "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
@@ -93,6 +94,7 @@
     "@electron/rebuild": "^4.0.3",
     "@invoker/test-kit": "workspace:*",
     "@playwright/test": "^1.58.2",
+    "@slack/web-api": "^7.14.1",
     "electron": "^35.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",

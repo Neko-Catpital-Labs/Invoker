@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createMainWindow,
   registerMainWindowActivateHandler,
@@ -17,6 +17,7 @@ const electronMock = vi.hoisted(() => {
     },
     loadURL: vi.fn(() => Promise.resolve()),
     loadFile: vi.fn(() => Promise.resolve()),
+    destroy: vi.fn(),
     isDestroyed: vi.fn(() => false),
     setIcon: vi.fn(),
     on: vi.fn(),
@@ -53,6 +54,10 @@ beforeEach(() => {
   electronMock.fakeWindow.loadFile.mockResolvedValue(undefined);
   delete process.env.CAPTURE_MODE;
   delete process.env.INVOKER_VISUAL_PROOF_SHOW_UI;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(() => {
@@ -111,15 +116,18 @@ describe('window-lifecycle', () => {
 
     electronMock.webContentsHandlers.get('did-fail-load')?.({}, -6, 'ERR_FILE_NOT_FOUND', 'file:///missing/index.html');
 
-    expect(electronMock.fakeWindow.loadURL).toHaveBeenCalledWith(expect.stringContaining('The UI failed to load'));
+    const fallbackUrl = electronMock.fakeWindow.loadURL.mock.calls[0]?.[0];
+    expect(fallbackUrl).toMatch(/^data:text\/html;charset=utf-8,/);
+    expect(decodeURIComponent(fallbackUrl)).toContain('The UI failed to load');
     expect(logger.error).toHaveBeenCalledWith(
       'main window did-fail-load: code=-6 desc=ERR_FILE_NOT_FOUND url=file:///missing/index.html',
       { module: 'window' },
     );
   });
 
-  it('shows a diagnostic page when the renderer process dies instead of leaving a white window', () => {
+  it('recreates once after renderer loss and shows a diagnostic when the replacement also dies', () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+    vi.spyOn(Date, 'now').mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
     createMainWindow({
       appRootDir: '/tmp/app',
       invokerConfig: {},
@@ -134,7 +142,42 @@ describe('window-lifecycle', () => {
 
     electronMock.webContentsHandlers.get('render-process-gone')?.({}, { reason: 'crashed', exitCode: 9 });
 
-    expect(electronMock.fakeWindow.loadURL).toHaveBeenCalledWith(expect.stringContaining('The UI failed to load'));
+    expect(electronMock.fakeWindow.destroy).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.loadURL).not.toHaveBeenCalled();
+    const recreateWindow = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'closed')?.[1];
+    expect(recreateWindow).toBeDefined();
+    recreateWindow?.();
+
+    electronMock.webContentsHandlers.get('render-process-gone')?.({}, { reason: 'crashed', exitCode: 9 });
+
+    const fallbackUrl = electronMock.fakeWindow.loadURL.mock.calls[0]?.[0];
+    expect(fallbackUrl).toMatch(/^data:text\/html;charset=utf-8,/);
+    expect(decodeURIComponent(fallbackUrl)).toContain('The UI failed to load');
+  });
+
+  it('allows another renderer recovery after the crash-loop window expires', () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+    vi.spyOn(Date, 'now').mockReturnValueOnce(1_000).mockReturnValueOnce(61_000);
+    createMainWindow({
+      appRootDir: '/tmp/app',
+      invokerConfig: {},
+      logger,
+      hideE2eWindow: false,
+      enableTestCompositor: false,
+      recordStartupMark: vi.fn(),
+      setUiInteractive: vi.fn(),
+      startDeferredStartupWork: vi.fn(),
+      setMainWindow: vi.fn(),
+    });
+
+    electronMock.webContentsHandlers.get('render-process-gone')?.({}, { reason: 'oom', exitCode: 9 });
+    const recreateWindow = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'closed')?.[1];
+    expect(recreateWindow).toBeDefined();
+    recreateWindow?.();
+    electronMock.webContentsHandlers.get('render-process-gone')?.({}, { reason: 'oom', exitCode: 9 });
+
+    expect(electronMock.fakeWindow.destroy).toHaveBeenCalledTimes(2);
+    expect(electronMock.fakeWindow.loadURL).not.toHaveBeenCalled();
   });
 
   it('maps and focuses e2e compositor windows', () => {

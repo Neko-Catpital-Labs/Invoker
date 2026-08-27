@@ -22,6 +22,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
+    staged?: boolean;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
@@ -34,8 +35,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
-    generation?: number;
-  } }> = [];
+      generation?: number;
+      staged?: boolean;
+    } }> = [];
 
   saveWorkflow(workflow: {
     id: string;
@@ -47,6 +49,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
+    staged?: boolean;
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -71,6 +74,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
       generation?: number;
+      staged?: boolean;
     },
   ): void {
     const wf = this.workflows.get(workflowId);
@@ -95,6 +99,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.generation !== undefined) {
       wf.generation = changes.generation;
     }
+    if (wf && changes.staged !== undefined) {
+      wf.staged = changes.staged;
+    }
 
   }
 
@@ -106,6 +113,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
+    staged?: boolean;
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
@@ -248,10 +256,16 @@ class InMemoryPersistence implements OrchestratorPersistence {
 
 class CountingPersistence extends InMemoryPersistence {
   loadTasksCalls: string[] = [];
+  transactionCalls = 0;
 
   override loadTasks(workflowId: string): TaskState[] {
     this.loadTasksCalls.push(workflowId);
     return super.loadTasks(workflowId);
+  }
+
+  runInTransaction<T>(work: () => T): T {
+    this.transactionCalls += 1;
+    return work();
   }
 }
 
@@ -1143,6 +1157,22 @@ describe('Orchestrator', () => {
   // ── loadPlan ────────────────────────────────────────────
 
   describe('loadPlan', () => {
+    it('keeps staged workflows out of automatic execution until activation', () => {
+      orchestrator.loadPlan({
+        name: 'staged-plan',
+        tasks: [{ id: 't1', description: 'Staged task' }],
+      }, { staged: true });
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+
+      expect(persistence.workflows.get(workflowId)?.staged).toBe(true);
+      expect(orchestrator.getExecutableReadyTasks()).toEqual([]);
+      expect(orchestrator.startExecution()).toEqual([]);
+
+      expect(orchestrator.activateStagedWorkflows([workflowId])).toEqual([workflowId]);
+      expect(persistence.workflows.get(workflowId)?.staged).toBe(false);
+      expect(orchestrator.startExecution().map((task) => task.id)).toEqual([sid(orchestrator, 0, 't1')]);
+    });
+
     it('creates tasks with correct dependencies', () => {
       const plan: PlanDefinition = {
         name: 'test-plan',
@@ -6190,16 +6220,15 @@ describe('Orchestrator', () => {
       }
 
       expect(started.length).toBe(workflowCount);
+      expect(persistence.transactionCalls).toBe(1);
       // Before the fix, getTaskLaunchReadinessImpl() called refreshFromDb()
       // -- reloading every active workflow's tasks from the DB -- once per
       // ready task inside planPendingLaunchQueue()'s map and once more per
       // dequeued job inside drainSchedulerImpl()'s while loop, on top of
       // the single refresh startExecution() already does at its own top.
-      // That made refreshFromDb() calls scale with the number of ready
-      // tasks in a single startExecution() call rather than staying
-      // constant. It must now stay at a small, fixed count regardless of
-      // how many tasks are ready.
-      expect(refreshCount).toBeLessThanOrEqual(5);
+      // The queued launch pass now reuses the queue-planning snapshot for
+      // draining, so refreshFromDb() stays both constant and minimal.
+      expect(refreshCount).toBeLessThanOrEqual(3);
     });
   });
 

@@ -26,6 +26,10 @@ import {
 } from '@invoker/execution-engine';
 import { loadConfig, resolveAutoFixExecutionModel, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
+import {
+  buildPersistedAutoApproveAuthorGate,
+  type AutoApproveAuthorGateResult,
+} from './auto-approve-author-gate.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { trackWorkflow } from './headless-watch.js';
 import {
@@ -36,6 +40,8 @@ import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
+import type { WorkerRuntimeController } from './worker-control.js';
+import type { TaskHandleMap } from './execution/task-runner-wiring.js';
 
 
 export interface HeadlessDeps {
@@ -87,6 +93,17 @@ export interface HeadlessDeps {
   ownerTaskRunnerProvider?: () => TaskRunner | null;
   /** Main process dist directory (`__dirname` of main.js); used to locate the built web UI. */
   appRootDir?: string;
+  /**
+   * Accessor for the owner's live `WorkerRuntimeController`, used by
+   * `--headless worker start/stop <kind>` to control an already-running
+   * persistent worker in this process. A getter (not the controller itself)
+   * because it is constructed after `headlessDeps`; `null` when there is no
+   * live owner worker runtime in this process (e.g. a bare CLI command that
+   * only delegated here to run one command and exit).
+   */
+  getWorkerRuntimeController?: () => WorkerRuntimeController | null;
+  /** Fail-closed PR-author gate for auto-approve. Reads config.json autoApproveAuthors. */
+  autoApproveAuthorGate?: (taskId: string) => Promise<AutoApproveAuthorGateResult>;
 }
 
 export const RESET = '\x1b[0m';
@@ -115,6 +132,8 @@ export function buildHeadlessApiServerDeps(
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
+      autoApproveAuthorGate: deps.autoApproveAuthorGate
+        ?? buildPersistedAutoApproveAuthorGate(deps.persistence),
       allowGraphMutation: deps.invokerConfig?.allowGraphMutation,
       defaultAutoFixRetries: deps.invokerConfig ? resolveAutoFixRetries(deps.invokerConfig) : undefined,
       getAutoFixAgent: () => deps.invokerConfig?.autoFixAgent,
@@ -214,15 +233,40 @@ export function createHeadlessExecutor(
   return executor;
 }
 
-export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
-  deps.orchestrator.setBeforeApproveHook(async (task) => {
-    if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
-      const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
-      if (workflow?.mergeMode === "external_review") return;
-      await te.approveMerge(task.config.workflowId);
-    }
-  });
+/**
+ * Tracked variant of {@link createHeadlessExecutor}: registers every spawned
+ * task handle in `taskHandles` so surfaces that need live process handles
+ * (web task terminals) can reach running tasks. Strips
+ * `ownerTaskRunnerProvider` because an owner-provided TaskRunner ignores
+ * callback overrides.
+ */
+export function createTrackedHeadlessExecutor(
+  deps: HeadlessDeps,
+  taskHandles: TaskHandleMap,
+): TaskRunner {
+  return createHeadlessExecutor(
+    {
+      ...deps,
+      ownerTaskRunnerProvider: undefined,
+    },
+    {
+      onSpawned: (taskId, handle, executor) => {
+        taskHandles.set(taskId, { handle, executor });
+      },
+      onComplete: (taskId) => {
+        taskHandles.delete(taskId);
+      },
+    },
+  );
 }
+
+export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void { deps.orchestrator.setBeforeApproveHook(async (task) => {
+  if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
+    const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
+    if (workflow?.mergeMode === "external_review") return;
+    await te.approveMerge(task.config.workflowId);
+  }
+}); }
 
 export interface QueryFlags {
   output: 'text' | 'label' | 'json' | 'jsonl';
@@ -458,11 +502,11 @@ export async function preemptWorkflowExecution(workflowId: string, deps: Headles
   if (deps.preemptWorkflowExecution) {
     return deps.preemptWorkflowExecution(workflowId);
   }
-  if (typeof deps.commandService.cancelWorkflow !== 'function') {
+  if (typeof deps.commandService.preemptWorkflow !== 'function') {
     return { cancelled: [], runningCancelled: [] };
   }
-  const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
-  const result = await deps.commandService.cancelWorkflow(envelope);
+  const envelope = makeEnvelope('preempt-workflow', 'headless', 'workflow', { workflowId });
+  const result = await deps.commandService.preemptWorkflow(envelope);
   if (!result.ok) {
     if (preemptSkipCodes.has(result.error.code)) return { cancelled: [], runningCancelled: [] };
     if (isRaceLostForeignKeyConstraintFailure(result.error.message, workflowId, deps)) {

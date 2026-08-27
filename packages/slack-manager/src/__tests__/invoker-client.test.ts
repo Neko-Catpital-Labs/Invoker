@@ -266,6 +266,7 @@ describe('IpcInvokerClient', () => {
 
     const result = await client.launch({ force: true });
     expect(terminatePid).not.toHaveBeenCalled();
+    expect(spawnInvoker).not.toHaveBeenCalled();
     expect(result.healthy).toBe(true);
   });
 

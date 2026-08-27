@@ -13,7 +13,12 @@ import { IpcBus } from '@invoker/transport';
 
 export const OWNER_SPLIT_BRAIN_PREFIX = '[owner-split-brain]';
 
-const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
+// Must stay >= the slack-manager watchdog's own owner-ping patience
+// (pingTimeoutMs in packages/slack-manager/src/index.ts) -- a shorter value
+// here means a merely-slow-but-alive owner can fail this probe even though
+// the watchdog itself would still consider it healthy, misclassifying it as
+// split-brain and spawning a redundant competing owner.
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 
 export interface OwnerPingAnswer {
   ok?: boolean;

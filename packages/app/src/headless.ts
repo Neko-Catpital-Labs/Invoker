@@ -68,6 +68,7 @@ import {
   BOLD,
   RESET,
   createHeadlessExecutor,
+  createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   parseQueryFlags,
   trackHeadlessWorkflow,
@@ -76,7 +77,7 @@ import {
   withRestoredTaskUnlessDeleteAllWon,
 } from './headless-shared.js';
 
-export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
+export { createHeadlessExecutor, createTrackedHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
 import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headless-query-list.js';
 export { resolveAgentSession } from './headless-query-list.js';
@@ -106,6 +107,7 @@ import {
   headlessCancelWorkflow,
   headlessDeleteWorkflow,
   headlessDeleteTask,
+  headlessCloseTask,
   headlessDetachWorkflow,
   headlessAttachWorkflow,
   headlessOpenTerminal,
@@ -151,13 +153,6 @@ async function dispatchHeadlessRunnableTasks(
   const timer = setInterval(poll, 250);
   timer.unref?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
-}
-
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
 }
 
 // ── Set Router ──────────────────────────────────────────────
@@ -217,6 +212,78 @@ async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   process.stdout.write(`  normalizedLegacyAcknowledgedLaunchDispatches: ${report.normalizedLegacyAcknowledgedLaunchDispatches}\n`);
 }
 
+function parseHeadlessRepairFilingInsertFlags(args: string[]): {
+  kind?: string;
+  subject?: string;
+  stateSha?: string;
+  metadata?: string;
+} {
+  const flags: { kind?: string; subject?: string; stateSha?: string; metadata?: string } = {};
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === '--kind' && i + 1 < args.length) {
+      flags.kind = args[i + 1];
+      i += 2;
+    } else if (arg === '--subject' && i + 1 < args.length) {
+      flags.subject = args[i + 1];
+      i += 2;
+    } else if (arg === '--state-sha' && i + 1 < args.length) {
+      flags.stateSha = args[i + 1];
+      i += 2;
+    } else if (arg === '--metadata' && i + 1 < args.length) {
+      flags.metadata = args[i + 1];
+      i += 2;
+    } else {
+      throw new Error(`Unrecognized repair-filing insert argument: "${arg}"`);
+    }
+  }
+  return flags;
+}
+
+const REPAIR_FILING_USAGE = 'Usage: --headless repair-filing <insert|release> --kind <kind> --subject <subject> --state-sha <sha> [--metadata <json>]';
+
+async function headlessRepairFiling(args: string[], deps: HeadlessDeps): Promise<{ inserted: boolean; row: unknown } | { released: boolean }> {
+  const subCommand = args[0];
+  if (subCommand !== 'insert' && subCommand !== 'release') {
+    throw new Error(REPAIR_FILING_USAGE);
+  }
+  const flags = parseHeadlessRepairFilingInsertFlags(args.slice(1));
+  if (!flags.kind || !flags.subject || !flags.stateSha) {
+    throw new Error(REPAIR_FILING_USAGE);
+  }
+
+  if (subCommand === 'release') {
+    const released = deps.persistence.deleteRepairFiling(flags.kind, flags.subject, flags.stateSha);
+    const output = { released };
+    process.stdout.write(`${JSON.stringify(output)}\n`);
+    return output;
+  }
+
+  let metadata: Record<string, unknown> | null = null;
+  if (flags.metadata !== undefined) {
+    try {
+      metadata = JSON.parse(flags.metadata) as Record<string, unknown>;
+    } catch (err) {
+      throw new Error(`--metadata must be valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const result = deps.persistence.insertRepairFiling({
+    kind: flags.kind,
+    subject: flags.subject,
+    stateSha: flags.stateSha,
+    metadata,
+  });
+  const output = { inserted: result.inserted, row: result.row };
+  // Printed for direct/standalone CLI callers; also returned so IPC-delegated
+  // callers (headless.exec against a live owner) get the same payload back
+  // instead of the generic `{ ok: true }` mutation ack -- see runHeadless's
+  // return-value plumbing and executeHeadlessExec/main.ts's standalone
+  // headless.exec handler, both of which merge this into their response.
+  process.stdout.write(`${JSON.stringify(output)}\n`);
+  return output;
+}
+
 async function headlessInstallSkills(
   mode: BundledSkillsInstallMode | undefined,
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
@@ -228,7 +295,8 @@ async function headlessInstallSkills(
     throw new Error('Bundled AI helper installation is not available in this runtime.');
   }
   const status = deps.installBundledSkills(mode ?? 'install');
-  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
+  const verb = mode === 'uninstall' ? 'Uninstalled' : 'Installed';
+  process.stdout.write(`${verb} ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
   for (const target of status.targets) {
     process.stdout.write(`Skill target (${target.name}): ${target.path}\n`);
   }
@@ -238,6 +306,9 @@ async function headlessInstallSkills(
   for (const target of status.mcpTargets) {
     process.stdout.write(`MCP target (${target.name}): ${target.path}\n`);
   }
+  for (const target of status.instructionTargets ?? []) {
+    process.stdout.write(`Instruction target (${target.name}): ${target.path}\n`);
+  }
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
   }
@@ -245,7 +316,7 @@ async function headlessInstallSkills(
 
 // ── Headless Command Router ──────────────────────────────────
 
-export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
+export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<unknown> {
   const command = args[0];
 
   if (isHeadlessHelpCommand(command)) {
@@ -267,9 +338,11 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'migrate-compat':
       await headlessMigrateCompatibility(deps);
       break;
+    case 'repair-filing':
+      return headlessRepairFiling(args.slice(1), deps);
     case 'install-skills':
       await headlessInstallSkills(
-        args[1] === 'reinstall' || args[1] === 'update' ? args[1] : 'install',
+        args[1] === 'reinstall' || args[1] === 'update' || args[1] === 'uninstall' ? args[1] : 'install',
         deps,
       );
       break;
@@ -379,11 +452,13 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'delete-task':
       await headlessDeleteTask(args[1], deps);
       break;
+    case 'close-task':
+      await headlessCloseTask(args[1], deps);
+      break;
     case 'delete':
       await headlessDeleteWorkflow(args[1], deps);
       break;
     case 'delete-all':
-      assertDeleteAllEnabled();
       {
         const { snapshotPath } = await sharedDeleteAllWorkflows({
           logger: deps.logger,
@@ -426,6 +501,42 @@ export function resolveHeadlessDiskHeadroomConfig(
         port: target.port,
       },
       remotePath: target.remoteInvokerHome ?? '~/.invoker',
+    })),
+  };
+}
+
+export function resolveHeadlessClaudeOauthRefreshConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['claudeOauthRefresh']> {
+  return {
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
+    })),
+  };
+}
+
+export function resolveHeadlessCatstackDeployConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['catstackDeploy']> {
+  return {
+    intervalMs: (invokerConfig.catstackDeploy?.intervalMinutes ?? 15) * 60_000,
+    repoUrl: invokerConfig.catstackDeploy?.repoUrl,
+    localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
+    remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
     })),
   };
 }
@@ -514,10 +625,33 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     return;
   }
 
+  if (subCommand === 'start' || subCommand === 'stop') {
+    const kind = args[1];
+    if (!kind) {
+      throw new Error(`Missing worker kind. Usage: --headless worker ${subCommand} <kind>`);
+    }
+    if (!registry.get(kind)) {
+      const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+      throw new Error(`Unknown worker kind: "${kind}". Use: ${knownKinds}`);
+    }
+    const controller = deps.getWorkerRuntimeController?.();
+    if (!controller) {
+      throw new Error(
+        `Cannot ${subCommand} worker "${kind}": no live owner worker runtime in this process. `
+        + `Run this against a live "owner-serve" process, or use `
+        + `"invoker-cli worker toggles --${subCommand === 'start' ? 'enable' : 'disable'} <id>" `
+        + 'to change the persisted config default instead.',
+      );
+    }
+    const entry = subCommand === 'start' ? controller.start(kind) : await controller.stop(kind);
+    process.stdout.write(`${kind}: ${subCommand === 'start' ? 'started' : 'stopped'} (desiredEnabled=${entry.desiredEnabled})\n`);
+    return;
+  }
+
   const definition = registry.get(subCommand);
   if (!definition) {
     const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
-    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status`);
+    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status, start, stop`);
   }
 
   let lock;
@@ -552,6 +686,8 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
       diskHeadroom: resolveHeadlessDiskHeadroomConfig(deps.invokerConfig),
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
+      claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
+      catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');

@@ -20,7 +20,10 @@ export HOME="$TMP/home"
 WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
 mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
+REAL_NODE="$(command -v node)"
+export REAL_NODE
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
 import sys
@@ -71,7 +74,7 @@ if [[ "$#" -ge 1 && "$1" == *"/scripts/validate-pr-body-local.mjs" ]]; then
 JSON
   exit 1
 fi
-exec /usr/bin/env node "$@"
+exec "$REAL_NODE" "$@"
 EOF
 chmod +x "$TMP/bin/node"
 
@@ -209,6 +212,9 @@ run_worker() {
 git clone . "$SEED" >/dev/null
 (
   cd "$SEED"
+  # This repository is disposable and removed by the EXIT trap. Keep Git from
+  # racing that cleanup with a background auto-gc process.
+  git config gc.auto 0
   git config user.email repro@example.test
   git config user.name 'Repro Bot'
   git checkout -B master >/dev/null

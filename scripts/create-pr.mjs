@@ -35,7 +35,7 @@
  *   and required ## Visual Proof for UI changes.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -205,6 +205,12 @@ function parseArgs() {
 }
 
 const TRUNK_BRANCHES = new Set(['main', 'master', 'develop']);
+const REPAIR_PUBLICATION_MARKERS = join(homedir(), '.invoker', 'repair-publication-lineages.json');
+const REPAIR_PUBLICATION_ENV_KEYS = [
+  'INVOKER_REPAIR_PUBLICATION',
+  'INVOKER_REPAIR_TASK_CHAIN_ID',
+  'INVOKER_REPAIR_SESSION_COMMIT',
+];
 const STACK_PR_TITLE_PATTERN = /^\[[^\[\]\r\n]{3,80}\]\([1-9]\d*[a-z]?\)(?:\[REFACTOR: [^\[\]\r\n]{2,80}\])?(?:\s+\S.*)?$/;
 const REFACTOR_TAG_PATTERN = /\[REFACTOR: [^\[\]\r\n]{2,80}\]/;
 
@@ -463,6 +469,106 @@ function gitExitStatus(args) {
     if (typeof error.status === 'number') return error.status;
     throw error;
   }
+}
+
+function repairPublicationContext() {
+  const hasContext = REPAIR_PUBLICATION_ENV_KEYS.some((key) => process.env[key]?.trim());
+  if (!hasContext) return undefined;
+  return {
+    chainId: process.env.INVOKER_REPAIR_TASK_CHAIN_ID?.trim() || '',
+    sessionCommit: process.env.INVOKER_REPAIR_SESSION_COMMIT?.trim() || '',
+  };
+}
+
+function publicationLineageForBranch(branch) {
+  if (branch.startsWith('stack/')) return 'stack';
+  if (branch.startsWith('plan/')) return 'plan';
+  if (branch.startsWith('pr/')) return 'pr';
+  return branch.split('/')[0] || branch;
+}
+
+function loadRepairPublicationMarkers() {
+  try {
+    return JSON.parse(readFileSync(REPAIR_PUBLICATION_MARKERS, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function persistRepairPublicationMarkers(markers) {
+  mkdirSync(join(homedir(), '.invoker'), { recursive: true });
+  const tmp = `${REPAIR_PUBLICATION_MARKERS}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(markers, null, 2)}\n`);
+  renameSync(tmp, REPAIR_PUBLICATION_MARKERS);
+}
+
+function assertRepairPublicationIntegrity(currentBranch) {
+  const context = repairPublicationContext();
+  if (!context) return undefined;
+
+  if (!context.chainId) {
+    throw new Error('repair-publication-missing-task-chain: repair PR publication requires INVOKER_REPAIR_TASK_CHAIN_ID.');
+  }
+  if (!context.sessionCommit) {
+    throw new Error('repair-publication-missing-session-commit: repair PR publication requires the fix session recorded commit hash.');
+  }
+  const recordedCommit = gitTextOrEmpty(['rev-parse', '--verify', `${context.sessionCommit}^{commit}`]);
+  if (!recordedCommit) {
+    throw new Error(
+      `repair-publication-missing-session-commit: recorded fix session commit ${context.sessionCommit} is not present in this repository.`,
+    );
+  }
+  if (gitExitStatus(['merge-base', '--is-ancestor', recordedCommit, 'HEAD']) !== 0) {
+    throw new Error(
+      [
+        'repair-publication-unowned-diff: refusing to publish a repair PR whose head does not contain the recorded fix-session commit.',
+        `Recorded commit: ${recordedCommit}`,
+        `Current branch: ${currentBranch}`,
+        `Current head: ${resolveRev('HEAD')}`,
+      ].join('\n'),
+    );
+  }
+
+  const lineage = publicationLineageForBranch(currentBranch);
+  const markers = loadRepairPublicationMarkers();
+  const existing = markers[context.chainId];
+  if (existing && existing.lineage && existing.lineage !== lineage) {
+    throw new Error(
+      [
+        'repair-publication-duplicate-lineage: refusing a second published branch lineage for this repair task chain.',
+        `Task chain: ${context.chainId}`,
+        `Existing lineage: ${existing.lineage}`,
+        `Requested lineage: ${lineage}`,
+        `Existing branch: ${existing.branch ?? '(unknown)'}`,
+        `Requested branch: ${currentBranch}`,
+      ].join('\n'),
+    );
+  }
+
+  return {
+    chainId: context.chainId,
+    lineage,
+    branch: currentBranch,
+    recordedCommit,
+  };
+}
+
+function recordRepairPublicationLineage(publication) {
+  if (!publication) return;
+  const markers = loadRepairPublicationMarkers();
+  const existing = markers[publication.chainId];
+  if (existing && existing.lineage && existing.lineage !== publication.lineage) {
+    throw new Error(
+      `repair-publication-duplicate-lineage: marker changed during publication for ${publication.chainId} (${existing.lineage} != ${publication.lineage}).`,
+    );
+  }
+  markers[publication.chainId] = {
+    lineage: publication.lineage,
+    branch: publication.branch,
+    recordedCommit: publication.recordedCommit,
+    publishedAt: new Date().toISOString(),
+  };
+  persistRepairPublicationMarkers(markers);
 }
 
 export function isUiImpactingPath(filePath) {
@@ -943,6 +1049,7 @@ async function main() {
   const args = parseArgs();
 
   const currentBranch = getCurrentBranch();
+  const repairPublication = assertRepairPublicationIntegrity(currentBranch);
   const mergifyState = getMergifyBranchState(currentBranch);
   assertNotPlanBaseForMergifyStack(args.base, currentBranch, mergifyState);
   assertCleanPrBase(args.base);
@@ -1008,6 +1115,7 @@ async function main() {
   const pr = updatePrNumber
     ? await updatePr(nwo, updatePrNumber, args.title, body, args.dryRun)
     : await createPr(nwo, args.title, args.base, body, args.dryRun);
+  recordRepairPublicationLineage(repairPublication);
   if (isStackedPrContext(args.base, mergifyState)) {
     syncStackCommentsForPr(nwo, pr.number, { dryRun: args.dryRun });
   }

@@ -56,6 +56,12 @@ tasks:
 
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
+const INTERRUPTED_TURN_SYSTEM_LINE = {
+  role: 'system',
+  text: 'Planner was interrupted before it could answer.',
+  tone: 'error',
+} as const;
+
 function planningSession(
   overrides: Partial<InAppPlanningChatSession> & Pick<InAppPlanningChatSession, 'id' | 'title'>,
 ): InAppPlanningChatSession {
@@ -274,7 +280,7 @@ describe('planning chat', () => {
   it('rejects blank messages without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       sessionId: 'session-1',
       message: '   ',
     }, {
@@ -282,14 +288,15 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: 'session-1', error: 'Type a message first.' });
+    });
+    expect(rejected).toEqual({ ok: false, sessionId: 'session-1', turnId: expect.any(String), error: 'Type a message first.' });
     expect(sessions.size).toBe(0);
   });
 
   it('rejects an unknown preset without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
 
-    await expect(sendPlanningChatMessage({
+    const rejected = await sendPlanningChatMessage({
       message: 'hello',
       presetKey: 'bad',
     }, {
@@ -297,7 +304,8 @@ describe('planning chat', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-    })).resolves.toEqual({ ok: false, sessionId: undefined, error: 'Unknown planner preset "bad".' });
+    });
+    expect(rejected).toEqual({ ok: false, sessionId: undefined, turnId: expect.any(String), error: 'Unknown planner preset "bad".' });
     expect(sessions.size).toBe(0);
   });
 
@@ -342,11 +350,11 @@ describe('planning chat', () => {
     });
 
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
-    const prompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
-    expect(prompt).toContain('Treat this as a conversation before a plan.');
-    expect(prompt).toContain('Talk through edge cases, corner cases, architecture, and ambiguity with the human.');
-    expect(prompt).toContain('Resolve those points before producing a YAML plan.');
-    expect(prompt).toContain('Draft YAML only after the human asks you to draft/proceed');
+    const sentPlannerPrompt = spawnPlanner.mock.calls[0]?.[0] ?? '';
+    expect(sentPlannerPrompt).toContain('This session is a planning conversation before any task plan exists.');
+    expect(sentPlannerPrompt).toContain('Discuss relevant edge cases, corner cases, architecture choices, ambiguity');
+    expect(sentPlannerPrompt).toContain('Drafting is not authorized yet. Do NOT output a ```yaml code block');
+    expect(sentPlannerPrompt).toContain('Do not rush directly to YAML unless the user has clearly approved drafting a plan.');
   });
 
   it('reuses an existing session and keeps its original preset', async () => {
@@ -398,6 +406,7 @@ describe('planning chat', () => {
     })).resolves.toEqual({
       ok: false,
       sessionId: 'missing-session',
+      turnId: expect.any(String),
       error: 'Planning session "missing-session" was not found.',
     });
 
@@ -972,6 +981,126 @@ tasks:
     expect(overrideCalls.length).toBe(2);
   });
 
+  it('echoes an explicit turnId and rejects a duplicate send while that turn runs', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    let resolveTurn: ((value: string) => void) | undefined;
+    let turnStarted!: () => void;
+    const started = new Promise<void>((resolve) => { turnStarted = resolve; });
+    const plannerReplyOverride = vi.fn(() => {
+      turnStarted();
+      return new Promise<string>((resolve) => { resolveTurn = resolve; });
+    });
+    const deps = {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride,
+    };
+
+    const first = sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-explicit' }, deps);
+    await started;
+
+    const sessionId = [...sessions.keys()][0];
+    const duplicate = await sendPlanningChatMessage({ sessionId, message: 'draft', turnId: 'turn-explicit' }, deps);
+    expect(duplicate).toMatchObject({ ok: false, turnId: 'turn-explicit', error: 'duplicate-turn' });
+
+    resolveTurn?.('turn reply');
+    const result = await first;
+    if (!result.ok) throw new Error(result.error);
+    expect(result.turnId).toBe('turn-explicit');
+    expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a failed turn and a retry with the same turnId re-runs without duplicating the user line', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const plannerReplyOverride = vi.fn()
+        .mockRejectedValueOnce(new Error('planner crashed'))
+        .mockResolvedValueOnce('recovered reply');
+      const deps = {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        plannerReplyOverride,
+        planningSessionStore: adapter,
+      };
+
+      const failed = await sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-retry' }, deps);
+      if (failed.ok) throw new Error('expected the first turn to fail');
+      expect(failed.turnId).toBe('turn-retry');
+      const sessionId = failed.sessionId;
+      if (!sessionId) throw new Error('expected a sessionId on the failed turn');
+      const session = sessions.get(sessionId);
+      expect(session?.activeTurnId).toBe('turn-retry');
+      expect(session?.activeTurnStatus).toBe('failed');
+      expect(session?.activeTurnError).toBe('planner crashed');
+      const persisted = adapter.loadInAppPlanningSession(sessionId);
+      expect(persisted?.activeTurnId).toBe('turn-retry');
+      expect(persisted?.activeTurnStatus).toBe('failed');
+      expect(persisted?.activeTurnError).toBe('planner crashed');
+      const userLinesBefore = session?.messages.filter((line) => line.role === 'user').length;
+
+      const retried = await sendPlanningChatMessage({ sessionId, message: 'draft', turnId: 'turn-retry' }, deps);
+      if (!retried.ok) throw new Error(retried.error);
+      expect(retried.reply).toBe('recovered reply');
+      expect(session?.messages.filter((line) => line.role === 'user').length).toBe(userLinesBefore);
+      expect(session?.activeTurnId).toBeUndefined();
+      expect(session?.activeTurnStatus).toBeUndefined();
+      expect(session?.activeTurnError).toBeUndefined();
+      const persistedAfter = adapter.loadInAppPlanningSession(sessionId);
+      expect(persistedAfter?.activeTurnId).toBeUndefined();
+      expect(persistedAfter?.activeTurnStatus).toBeUndefined();
+      expect(persistedAfter?.activeTurnError).toBeUndefined();
+      expect(plannerReplyOverride).toHaveBeenCalledTimes(2);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('emits turn outcome events on the planning stream channel', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const onRawPlannerOutput = vi.fn();
+    const ok = await sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-events' }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'turn reply',
+      onRawPlannerOutput,
+    });
+    if (!ok.ok) throw new Error(ok.error);
+    const completedEvent = onRawPlannerOutput.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.turn?.status === 'completed');
+    expect(completedEvent).toMatchObject({
+      sessionId: ok.sessionId,
+      turnId: 'turn-events',
+      turn: { status: 'completed', reply: 'turn reply', draftPlanAvailable: false },
+    });
+
+    const failSessions = createInAppPlanningChatSessions();
+    const onFailEvent = vi.fn();
+    const failed = await sendPlanningChatMessage({ message: 'draft', presetKey: 'codex', turnId: 'turn-fail' }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions: failSessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => { throw new Error('boom'); },
+      onRawPlannerOutput: onFailEvent,
+    });
+    expect(failed.ok).toBe(false);
+    const failedEvent = onFailEvent.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.turn?.status === 'failed');
+    expect(failedEvent).toMatchObject({
+      turnId: 'turn-fail',
+      turn: { status: 'failed', error: 'boom' },
+    });
+  });
+
   it('never constructs a session in mode: agent (createSession and planFromGoal paths)', async () => {
     // The single shared config builder every terminal PlanConversation goes
     // through never sets `mode` at all, so every terminal session defaults
@@ -1041,7 +1170,7 @@ tasks:
     });
   });
 
-  it('submits planner drafts after stripping legacy auto-fix fields', async () => {
+  it('does not stage or submit planner drafts rejected for legacy auto-fix fields', async () => {
     const legacyPlan = `Here is the plan.
 
 \`\`\`yaml
@@ -1065,8 +1194,12 @@ tasks:
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
+      planDoctorScriptPath: join(process.cwd(), '../../skills/plan-to-invoker/scripts/skill-doctor.sh'),
     });
     if (!sent.ok) throw new Error(sent.error);
+    expect(sent.draftPlanAvailable).toBe(false);
+    expect(sent.reply).toContain('Draft not shown: the plan doctor rejected it.');
+    expect(sent.reply).toContain('Nothing was submitted.');
     const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
 
     await expect(submitPlanningChatDraft({
@@ -1074,12 +1207,8 @@ tasks:
     }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toEqual({ ok: true, planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
-
-    const submittedPlan = loadGeneratedPlan.mock.calls[0]?.[0] as string;
-    expect(submittedPlan).toContain('id: make-selected-lists-scroll');
-    expect(submittedPlan).not.toContain('autoFix');
-    expect(submittedPlan).not.toContain('autoFixRetries');
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
   it('submits stacked drafts as stacked workflows', async () => {
@@ -1488,6 +1617,54 @@ tasks:
     }
   });
 
+  it('rebuilds stale compacted draft summaries from the canonical draft text on restore', async () => {
+    const multilinePlan = `name: Greeting fix
+onFinish: none
+mergeMode: manual
+repoUrl: /tmp/greeting
+tasks:
+  - id: fix-greeting
+    description: |
+      Review claim: Fix greeting punctuation.
+      Review lane: behavior
+      Safety invariant: Preserve existing inputs.
+    command: pnpm test
+    dependencies: []
+`;
+    const record: InAppPlanningSessionRecord = {
+      id: 'planning-stale-summary',
+      title: 'Greeting fix',
+      presetKey: 'codex',
+      status: 'draft_ready',
+      messages: [],
+      pendingResponse: false,
+      draftPlanText: multilinePlan,
+      draftPlanSummary: {
+        name: 'Greeting fix',
+        steps: ['Review claim: Fix greeting punctuation. Review lane: behavior Safety invariant: Preserve existing inputs.'],
+        taskCount: 1,
+        taskGroups: [{
+          workflow: null,
+          tasks: ['Review claim: Fix greeting punctuation. Review lane: behavior Safety invariant: Preserve existing inputs.'],
+        }],
+      },
+      createdAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:01.000Z',
+    };
+    const sessions = createInAppPlanningChatSessions();
+
+    await restorePlanningChatSessions([record], {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(sessions.get(record.id)?.draftPlanSummary?.taskGroups[0]?.tasks[0]).toBe(
+      'Review claim: Fix greeting punctuation.\nReview lane: behavior\nSafety invariant: Preserve existing inputs.',
+    );
+  });
+
   it('clears submitted pending-response state during restore', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
@@ -1572,14 +1749,54 @@ tasks:
         planningSessionStore: adapter,
       });
 
-      const restored = sessions.get('planning-interrupted');
-      expect(restored?.pendingSend).toBeUndefined();
-      expect(restored?.messages.at(-1)).toMatchObject({
-        role: 'system',
-        text: 'Planner was interrupted before it could answer. Send another message to continue.',
-        tone: 'error',
-      });
+      const restoredInterrupted = sessions.get('planning-interrupted');
+      expect(restoredInterrupted?.pendingSend).toBeUndefined();
+      expect(restoredInterrupted?.messages.at(-1)).toMatchObject(INTERRUPTED_TURN_SYSTEM_LINE);
       expect(adapter.loadInAppPlanningSession('planning-interrupted')?.pendingResponse).toBe(false);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('restores an interrupted pending turn as failed with its turnId preserved', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-interrupted-turn',
+        title: 'Interrupted turn',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        confirmationMode: 'require',
+        messages: [
+          { id: 1, role: 'user', text: 'Continue', createdAt: '2026-07-07T00:00:01.000Z' },
+        ],
+        activeTurnId: 'turn-x',
+        activeTurnStatus: 'running',
+        pendingResponse: true,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+      adapter.upsertInAppPlanningSession(record);
+      const sessions = createInAppPlanningChatSessions();
+
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      });
+
+      const restoredTurn = sessions.get('planning-interrupted-turn');
+      expect(restoredTurn?.activeTurnId).toBe('turn-x');
+      expect(restoredTurn?.activeTurnStatus).toBe('failed');
+      expect(restoredTurn?.activeTurnError).toBe(INTERRUPTED_TURN_SYSTEM_LINE.text);
+      expect(restoredTurn?.messages.at(-1)).toMatchObject(INTERRUPTED_TURN_SYSTEM_LINE);
+      const persisted = adapter.loadInAppPlanningSession('planning-interrupted-turn');
+      expect(persisted?.activeTurnId).toBe('turn-x');
+      expect(persisted?.activeTurnStatus).toBe('failed');
+      expect(persisted?.pendingResponse).toBe(false);
     } finally {
       adapter.close();
     }
@@ -2215,6 +2432,149 @@ describe('rebindPlanningChatRepo', () => {
     expect(stored?.conversation).toBe(originalConversation);
   });
 
+  it('rejects rebinding once the conversation has a message', async () => {
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'message-rebind-session',
+      title: 'Message rebind',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-message',
+      worktreeBranch: 'invoker/planning/message-rebind-session',
+      messages: [
+        { id: 1, role: 'user', text: 'What does this repo do?', createdAt: '2026-07-07T00:00:01.000Z' },
+      ],
+    });
+    const originalConversation = session.conversation;
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/other-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Set the repo before the conversation or terminal starts.',
+    });
+    expect(repoPool.ensureCloneThroughRepoQueue).not.toHaveBeenCalled();
+    expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+    expect(repoPool.release).not.toHaveBeenCalled();
+
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/repo.git');
+    expect(stored?.baseCommit).toBe('sha-a');
+    expect(stored?.worktreePath).toBe('/fake/worktree/existing-message');
+    expect(stored?.conversation).toBe(originalConversation);
+  });
+
+  it('rejects rebinding once a terminal session exists', async () => {
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'terminal-rebind-session',
+      title: 'Terminal rebind',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-terminal',
+      worktreeBranch: 'invoker/planning/terminal-rebind-session',
+      terminalMode: 'tmux',
+      terminalSessionId: 'term-planning-rebind',
+    });
+    const originalConversation = session.conversation;
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/other-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Set the repo before the conversation or terminal starts.',
+    });
+    expect(repoPool.ensureCloneThroughRepoQueue).not.toHaveBeenCalled();
+    expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/repo.git');
+    expect(stored?.baseCommit).toBe('sha-a');
+    expect(stored?.worktreePath).toBe('/fake/worktree/existing-terminal');
+    expect(stored?.conversation).toBe(originalConversation);
+  });
+
+  it('rebinds an untouched session with a prior binding to a different repo', async () => {
+    const worktreePath = '/fake/worktree/retarget-session';
+    const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'retarget-session',
+      title: 'Retarget test',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-retarget',
+      worktreeBranch: 'invoker/planning/retarget-session',
+    });
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/other-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({ ok: true, action: 'provision' });
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/other-repo.git');
+    expect(stored?.baseCommit).toBe('new-head-sha');
+    expect(stored?.worktreePath).toBe(worktreePath);
+  });
+
+  it('threads the planning command builder into the rebuilt conversation', async () => {
+    const worktreePath = '/fake/worktree/builder-session';
+    const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
+    const session = planningSession({ id: 'builder-session', title: 'Builder test' });
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/new-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+      planningCommandBuilder,
+    });
+
+    expect(result).toEqual({ ok: true, action: 'provision' });
+    const stored = sessions.get(session.id);
+    // Without the builder the conversation falls back to spawning the literal
+    // `agent` CLI, which does not exist on headless hosts.
+    const conversation = stored?.conversation as unknown as { planningCommandBuilder?: unknown };
+    expect(conversation.planningCommandBuilder).toBe(planningCommandBuilder);
+  });
+
   it('returns an error when no repo URL can be resolved', async () => {
     const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'sha-a');
     const sessions = createInAppPlanningChatSessions();
@@ -2384,6 +2744,63 @@ describe('plan draft sidecar mirror', () => {
       expect(existsSync(sidecarPathFor(sessionId))).toBe(false);
     } finally {
       rmSync(sidecarPathFor(sessionId), { force: true });
+      adapter.close();
+    }
+  });
+});
+
+describe('immutable in-app planning draft submission', () => {
+  it('submits the exact doctor-approved draft id and rejects a mismatched review copy', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const conversation = new PlanConversation({
+        threadTs: 'immutable-in-app',
+        conversationRepo,
+        draftDoctor: vi.fn().mockResolvedValue({ ok: true, diagnostics: [] }),
+      });
+      vi.spyOn(conversation, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+      await conversation.sendMessage('draft the plan');
+      const approved = conversation.approvedPlanningDraft;
+      if (!approved) throw new Error('expected immutable approved draft');
+
+      const now = new Date().toISOString();
+      const session: InAppPlanningChatSession = {
+        id: 'immutable-in-app',
+        title: 'Immutable plan',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+        status: 'draft_ready',
+        messages: [],
+        conversation,
+        draftPlanText: approved.planText,
+        draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+        planningDraftId: approved.id,
+        planningDraftHash: approved.contentHash,
+        createdAt: now,
+        updatedAt: now,
+        nextMessageId: 1,
+      };
+      const sessions = new Map([[session.id, session]]);
+      const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Mock Plan', workflowId: 'wf-1' });
+
+      const submitted = await submitPlanningChatDraft({ sessionId: session.id }, {
+        sessions,
+        loadGeneratedPlan,
+      });
+
+      expect(submitted.ok).toBe(true);
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(approved.planText);
+      expect(conversation.approvedPlanningDraft?.status).toBe('submitted');
+
+      session.status = 'draft_ready';
+      session.draftPlanText = `${approved.planText}\n# changed`;
+      const rejected = await submitPlanningChatDraft({ sessionId: session.id }, {
+        sessions,
+        loadGeneratedPlan,
+      });
+      expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining('immutable approved draft') });
+    } finally {
       adapter.close();
     }
   });

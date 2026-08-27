@@ -1,5 +1,12 @@
 import { test, expect, captureScreenshot } from './fixtures/electron-app.js';
 
+test.use({
+  repoConfig: {
+    autoFixRetries: 0,
+    infraRepair: { enabled: true },
+  },
+});
+
 test('workers surface shows the worker control in the details panel', async ({ page }) => {
   await page.getByTestId('sidebar-workers').click();
 

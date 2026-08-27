@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+  :root {
+    --surface-0: #f5f4f0;
+    --surface-1: #fcfcfb;
+    --surface-2: #f0efe9;
+    --border: #e0ddd4;
+    --text-primary: #14130f;
+    --text-secondary: #56544c;
+    --text-muted: #8a8779;
+    --series-baseline: #2a78d6;
+    --series-candidate: #eb6834;
+    --series-baseline-soft: #2a78d61a;
+    --series-candidate-soft: #eb68341a;
+    --grid-line: #dedad0;
+    --status-good: #0ca30c;
+    --status-warning: #b9790a;
+    --status-critical: #d03b3b;
+    --shadow: 0 1px 2px rgba(20, 19, 15, 0.04), 0 8px 24px rgba(20, 19, 15, 0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --surface-0: #131311;
+      --surface-1: #1a1a18;
+      --surface-2: #201f1c;
+      --border: #35332c;
+      --text-primary: #f6f5f0;
+      --text-secondary: #c3c0b3;
+      --text-muted: #8d8a7c;
+      --series-baseline: #3987e5;
+      --series-candidate: #d95926;
+      --series-baseline-soft: #3987e526;
+      --series-candidate-soft: #d9592626;
+      --grid-line: #2c2b26;
+      --status-good: #2fbf2f;
+      --status-warning: #fab219;
+      --status-critical: #e66767;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --surface-0: #131311;
+    --surface-1: #1a1a18;
+    --surface-2: #201f1c;
+    --border: #35332c;
+    --text-primary: #f6f5f0;
+    --text-secondary: #c3c0b3;
+    --text-muted: #8d8a7c;
+    --series-baseline: #3987e5;
+    --series-candidate: #d95926;
+    --series-baseline-soft: #3987e526;
+    --series-candidate-soft: #d9592626;
+    --grid-line: #2c2b26;
+    --status-good: #2fbf2f;
+    --status-warning: #fab219;
+    --status-critical: #e66767;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  body {
+    padding: clamp(20px, 4vw, 56px) 16px 64px;
+  }
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(26px, 4vw, 34px);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  h2 { margin: 0; font-size: 16px; font-weight: 700; }
+  .lede {
+    margin: 0;
+    max-width: 62ch;
+    font-size: 15.5px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+  .meta-row span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .meta-row b { color: var(--text-secondary); font-weight: 600; }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 640px) {
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  .stat-tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stat-tile .label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .stat-tile .value {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .stat-tile .sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .stat-tile.baseline .value { color: var(--series-baseline); }
+  .stat-tile.candidate .value { color: var(--series-candidate); }
+
+  .callout {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--series-candidate);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+  }
+  .callout b { color: var(--text-primary); }
+
+  .panel {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 20px 20px 16px;
+  }
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .panel-head .panel-sub {
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    margin: 10px 0 4px;
+    align-items: center;
+  }
+  .legend .swatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .legend .dot.baseline { background: var(--series-baseline); }
+  .legend .dot.candidate { background: var(--series-candidate); }
+  .legend .hint {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .legend .hint .q-inline {
+    display: inline-flex;
+  }
+
+  .view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    overflow: hidden;
+  }
+  .view-toggle button {
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--surface-1);
+    border: none;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  .view-toggle button + button { border-left: 1px solid var(--border); }
+  .view-toggle button[aria-pressed="true"] {
+    background: var(--surface-2);
+    color: var(--text-primary);
+  }
+  .view-toggle button:focus-visible { outline: 2px solid var(--series-baseline); outline-offset: -2px; }
+
+  .chart-scroll { overflow-x: auto; }
+  #chart-svg { display: block; }
+  .row-label {
+    font-size: 11.5px;
+    fill: var(--text-secondary);
+  }
+  .axis-label, .axis-tick {
+    font-size: 10.5px;
+    fill: var(--text-muted);
+  }
+  .grid-line { stroke: var(--grid-line); stroke-width: 1; }
+  .connector { stroke: var(--text-muted); stroke-width: 1.5; opacity: 0.55; }
+  .dot-baseline { fill: var(--series-baseline); }
+  .dot-candidate { fill: var(--series-candidate); }
+  .hit-row { fill: transparent; cursor: pointer; }
+  .hit-row:hover { fill: var(--surface-2); }
+  .q-badge-circle { fill: var(--surface-2); stroke: var(--text-muted); stroke-width: 1; }
+  .q-badge-text { fill: var(--text-muted); font-size: 9px; font-weight: 700; text-anchor: middle; pointer-events: none; }
+  .q-badge-hit { cursor: pointer; }
+  .q-badge-hit:hover .q-badge-circle { fill: var(--series-baseline-soft); stroke: var(--series-baseline); }
+  .q-badge-hit:hover .q-badge-text { fill: var(--series-baseline); }
+
+  /* inline "?" used in the legend and table */
+  .q-inline {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid var(--text-muted);
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--surface-2);
+    cursor: pointer;
+    flex: none;
+  }
+  .q-inline:hover {
+    border-color: var(--series-baseline);
+    color: var(--series-baseline);
+    background: var(--series-baseline-soft);
+  }
+
+  .tooltip {
+    position: fixed;
+    pointer-events: none;
+    background: var(--text-primary);
+    color: var(--surface-1);
+    font-size: 12px;
+    line-height: 1.5;
+    border-radius: 7px;
+    padding: 8px 10px;
+    box-shadow: var(--shadow);
+    opacity: 0;
+    max-width: 300px;
+    white-space: normal;
+    transform: translate(-50%, -100%);
+    transition: opacity 0.08s ease;
+    z-index: 10;
+  }
+  .tooltip.visible { opacity: 1; }
+  .tooltip .t-id { font-weight: 700; margin-bottom: 3px; display: block; }
+  .tooltip .t-row { display: flex; gap: 8px; justify-content: space-between; white-space: nowrap; }
+  .tooltip .t-row b { font-variant-numeric: tabular-nums; }
+  .tooltip .t-prompt {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+  table.data-table th, table.data-table td {
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  table.data-table th {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  table.data-table td.num { text-align: right; }
+  table.data-table td.num.baseline-col { color: var(--series-baseline); }
+  table.data-table td.num.candidate-col { color: var(--series-candidate); }
+  table.data-table .case-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .hidden { display: none; }
+
+  .risk-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 2px 7px 2px 6px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .risk-pill .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .risk-pill.risk-high .dot { background: var(--status-critical); }
+  .risk-pill.risk-medium .dot { background: var(--status-warning); }
+  .risk-pill.risk-low .dot { background: var(--status-good); }
+
+  .cat-chip {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
+
+  #reference h2 { margin-bottom: 2px; }
+  .ref-list {
+    display: flex;
+    flex-direction: column;
+    margin-top: 12px;
+  }
+  .ref-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 4px;
+    border-bottom: 1px solid var(--border);
+    scroll-margin-top: 20px;
+    transition: background-color 0.6s ease;
+    border-radius: 8px;
+  }
+  .ref-item:last-child { border-bottom: none; }
+  .ref-item.flash { background-color: var(--series-baseline-soft); }
+  .ref-item-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .ref-item-id {
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .ref-item-prompt {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    max-width: 74ch;
+  }
+  .ref-item-prompt code {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: 12px;
+  }
+  .ref-item-costs {
+    display: flex;
+    gap: 14px;
+    font-size: 12px;
+  }
+  .ref-item-costs .c-baseline { color: var(--series-baseline); }
+  .ref-item-costs .c-candidate { color: var(--series-candidate); }
+
+  footer {
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+  footer code {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11.5px;
+  }
+
+  .convo-details { margin-top: 10px; }
+  .convo-summary {
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--series-baseline);
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    user-select: none;
+  }
+  .convo-summary::-webkit-details-marker { display: none; }
+  .convo-summary::before {
+    content: "\25B8";
+    display: inline-block;
+    transition: transform 0.15s ease;
+    font-size: 10px;
+  }
+  .convo-details[open] .convo-summary::before { transform: rotate(90deg); }
+  .convo-summary:hover { text-decoration: underline; }
+  .convo-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  @media (max-width: 720px) {
+    .convo-grid { grid-template-columns: 1fr; }
+  }
+  .convo-panel {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .convo-panel.baseline { border-left: 3px solid var(--series-baseline); }
+  .convo-panel.candidate { border-left: 3px solid var(--series-candidate); }
+  .convo-panel-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    display: block;
+  }
+  .convo-panel.baseline .convo-panel-label { color: var(--series-baseline); }
+  .convo-panel.candidate .convo-panel-label { color: var(--series-candidate); }
+  .convo-panel p { margin: 0 0 8px; }
+  .convo-panel p:last-child { margin-bottom: 0; }
+  .convo-panel code {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    background: var(--surface-1);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: 11.5px;
+  }
+</style>
+</head>
+<body>
+<div class="page viz-root">
+  <header>
+    <span class="eyebrow">{{EYEBROW}}</span>
+    <h1>What it costs to test whether the skill works</h1>
+    <p class="lede">{{CASE_COUNT}} real decision-point scenarios, run twice each &mdash; once with no skill instructions, once with <code class="mono">{{SKILL_PATH}}</code> injected &mdash; on the same <code class="mono">{{MODEL}}</code> model. This is what those {{TOTAL_CALLS}} calls actually cost, not an estimate.</p>
+    <div class="meta-row">
+      <span><b>Model</b> {{MODEL}}</span>
+      <span><b>Trials</b> {{TRIALS_LABEL}}</span>
+      <span><b>Calls</b> {{TOTAL_CALLS}}</span>
+      <span><b>Recorded</b> {{RECORDED_DATE}}</span>
+    </div>
+  </header>
+
+  <div class="stat-grid">
+    <div class="stat-tile">
+      <span class="label">Total spend</span>
+      <span class="value mono">{{TOTAL_COST}}</span>
+      <span class="sub">{{TOTAL_CALLS}} calls, both conditions</span>
+    </div>
+    <div class="stat-tile baseline">
+      <span class="label">Baseline</span>
+      <span class="value mono">{{BASELINE_TOTAL}}</span>
+      <span class="sub">no skill &middot; avg {{BASELINE_AVG}}/call</span>
+    </div>
+    <div class="stat-tile candidate">
+      <span class="label">Candidate</span>
+      <span class="value mono">{{CANDIDATE_TOTAL}}</span>
+      <span class="sub">with skill &middot; avg {{CANDIDATE_AVG}}/call</span>
+    </div>
+    <div class="stat-tile">
+      <span class="label">Cost multiplier</span>
+      <span class="value mono">{{MULTIPLIER}}&times;</span>
+      <span class="sub">candidate vs. baseline, per call</span>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>Why candidate usually costs more:</b> <code class="mono">{{SKILL_PATH}}</code> is {{SKILL_LINES}} injected into every prompt. Each call is a fresh, non-persistent CLI process, so prompt caching doesn&rsquo;t carry over between the {{CANDIDATE_CALLS}} candidate calls &mdash; every one pays the full injection cost. This is a cost measurement only; it says nothing yet about whether the skill makes responses better.
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Cost per case</h2>
+        <div class="panel-sub">Sorted by candidate cost, highest first</div>
+      </div>
+      <div class="view-toggle" role="group" aria-label="Chart view">
+        <button type="button" id="btn-chart" aria-pressed="true">Chart</button>
+        <button type="button" id="btn-table" aria-pressed="false">Table</button>
+      </div>
+    </div>
+    <div class="legend">
+      <span class="swatch"><span class="dot baseline"></span>Baseline (no skill)</span>
+      <span class="swatch"><span class="dot candidate"></span>Candidate (with SKILL.md)</span>
+      <span class="hint"><span class="q-inline" aria-hidden="true">?</span>&nbsp; hover a row, or click the <b>?</b> next to a case &mdash; the full conversation is collapsed at the bottom of each entry</span>
+    </div>
+    <div class="chart-scroll" id="chart-view">
+      <svg id="chart-svg"></svg>
+    </div>
+    <div id="table-view" class="hidden" style="overflow-x:auto;">
+      <table class="data-table" id="data-table">
+        <thead>
+          <tr><th>Case</th><th style="text-align:right">Baseline</th><th style="text-align:right">Candidate</th><th style="text-align:right">Delta</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel" id="reference">
+    <h2>What each case tests</h2>
+    <div class="panel-sub">All {{CASE_COUNT}} prompts, exactly as sent to the model &middot; A&ndash;Z</div>
+    <div class="ref-list" id="ref-list"></div>
+  </div>
+
+  <footer>
+    Regenerate this report with <code>python3 scripts/run_skill_evals.py report --cases {{CASES_PATH}} --responses {{RESPONSES_PATH}} --condition-skill {{SKILL_PATH}} --output &lt;file&gt;.html</code>. Full data in <code>{{RESPONSES_PATH}}</code> and cases in <code>{{CASES_PATH}}</code>. Quality scoring against the rubric is a separate, not-yet-done step &mdash; this page covers cost only.
+  </footer>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+(function () {
+  var cases = {{CASES_JSON}};
+
+  var data = {{DATA_JSON}};
+
+  var responses = {{RESPONSES_JSON}};
+
+  data.forEach(function (d) {
+    var c = cases[d.id] || {};
+    d.category = c.category || "";
+    d.prompt = c.prompt || "";
+    d.risk = c.risk || "medium";
+    var r = responses[d.id] || {};
+    d.baselineResponse = r.baseline || "";
+    d.candidateResponse = r.candidate || "";
+  });
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch];
+    });
+  }
+
+  function promptHtml(p) {
+    return escapeHtml(p).replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+
+  function lightMarkdown(text) {
+    var esc = escapeHtml(text);
+    esc = esc.replace(/`([^`]+)`/g, "<code>$1</code>");
+    esc = esc.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    var paras = esc.split(/\n\n+/).map(function (p) {
+      return "<p>" + p.replace(/\n/g, "<br>") + "</p>";
+    }).join("");
+    return paras;
+  }
+
+  function goToReference(id) {
+    var target = document.getElementById("ref-" + id);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("flash");
+    setTimeout(function () { target.classList.remove("flash"); }, 900);
+  }
+
+  var svgNS = "http://www.w3.org/2000/svg";
+  var svg = document.getElementById("chart-svg");
+  var tooltip = document.getElementById("tooltip");
+
+  var rowH = 21;
+  var padTop = 10;
+  var padBottom = 34;
+  var labelW = 250;
+  var qBadgeX = labelW - 12;
+  var chartW = 560;
+  var width = labelW + chartW + 20;
+  var height = padTop + data.length * rowH + padBottom;
+  var maxVal = {{MAX_VAL}};
+
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Cost per test case, baseline versus candidate, in US dollars. Click the question mark beside a case to read what it tests.");
+
+  function el(tag, attrs) {
+    var e = document.createElementNS(svgNS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function x(v) { return labelW + (v / maxVal) * chartW; }
+
+  // gridlines + axis ticks
+  var ticks = {{TICKS_JSON}};
+  ticks.forEach(function (t) {
+    var gx = x(t);
+    svg.appendChild(el("line", {
+      class: "grid-line",
+      x1: gx, x2: gx,
+      y1: padTop, y2: padTop + data.length * rowH,
+    }));
+    var tick = el("text", {
+      class: "axis-tick mono",
+      x: gx, y: padTop + data.length * rowH + 16,
+      "text-anchor": "middle",
+    });
+    tick.textContent = "$" + t.toFixed(2);
+    svg.appendChild(tick);
+  });
+
+  function tooltipHtml(d) {
+    var delta = d.candidate - d.baseline;
+    return '<span class="t-id">' + escapeHtml(d.id) + '</span>' +
+      '<span class="t-row"><span>Baseline</span><b>$' + d.baseline.toFixed(4) + '</b></span>' +
+      '<span class="t-row"><span>Candidate</span><b>$' + d.candidate.toFixed(4) + '</b></span>' +
+      '<span class="t-row"><span>Delta</span><b>+$' + delta.toFixed(4) + '</b></span>' +
+      '<span class="t-prompt">' + promptHtml(d.prompt) + '</span>';
+  }
+
+  data.forEach(function (d, i) {
+    var y = padTop + i * rowH + rowH / 2;
+
+    var hit = el("rect", {
+      class: "hit-row",
+      x: 0, y: padTop + i * rowH,
+      width: width, height: rowH,
+    });
+    svg.appendChild(hit);
+
+    var label = el("text", {
+      class: "row-label",
+      x: 0, y: y + 4,
+    });
+    label.textContent = d.id.length > 33 ? d.id.slice(0, 31) + "…" : d.id;
+    svg.appendChild(label);
+
+    // "?" badge: click jumps to the full prompt in the reference list below
+    var qGroup = el("g", { class: "q-badge-hit" });
+    qGroup.appendChild(el("circle", { class: "q-badge-circle", cx: qBadgeX, cy: y, r: 7 }));
+    var qText = el("text", { class: "q-badge-text", x: qBadgeX, y: y + 3 });
+    qText.textContent = "?";
+    qGroup.appendChild(qText);
+    qGroup.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      goToReference(d.id);
+    });
+    svg.appendChild(qGroup);
+
+    var x1 = x(d.baseline), x2 = x(d.candidate);
+    svg.appendChild(el("line", {
+      class: "connector",
+      x1: x1, x2: x2, y1: y, y2: y,
+    }));
+    svg.appendChild(el("circle", {
+      class: "dot-baseline",
+      cx: x1, cy: y, r: 3.5,
+    }));
+    svg.appendChild(el("circle", {
+      class: "dot-candidate",
+      cx: x2, cy: y, r: 3.5,
+    }));
+
+    hit.addEventListener("mousemove", function (ev) {
+      tooltip.innerHTML = tooltipHtml(d);
+      tooltip.style.left = ev.clientX + "px";
+      tooltip.style.top = (ev.clientY - 10) + "px";
+      tooltip.classList.add("visible");
+    });
+    hit.addEventListener("mouseleave", function () {
+      tooltip.classList.remove("visible");
+    });
+  });
+
+  // table view
+  var tbody = document.querySelector("#data-table tbody");
+  data.forEach(function (d) {
+    var delta = d.candidate - d.baseline;
+    var tr = document.createElement("tr");
+    var idCell = document.createElement("td");
+    idCell.innerHTML =
+      '<span class="case-cell mono">' + escapeHtml(d.id) +
+      '<span class="q-inline" tabindex="0" role="button" aria-label="What does ' + escapeHtml(d.id) + ' test?">?</span></span>';
+    idCell.querySelector(".q-inline").addEventListener("click", function () { goToReference(d.id); });
+    idCell.querySelector(".q-inline").addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); goToReference(d.id); }
+    });
+    tr.appendChild(idCell);
+    var bCell = document.createElement("td");
+    bCell.className = "num mono baseline-col";
+    bCell.textContent = "$" + d.baseline.toFixed(4);
+    tr.appendChild(bCell);
+    var cCell = document.createElement("td");
+    cCell.className = "num mono candidate-col";
+    cCell.textContent = "$" + d.candidate.toFixed(4);
+    tr.appendChild(cCell);
+    var dCell = document.createElement("td");
+    dCell.className = "num mono";
+    dCell.textContent = "+$" + delta.toFixed(4);
+    tr.appendChild(dCell);
+    tbody.appendChild(tr);
+  });
+
+  // reference list, A-Z for easy lookup
+  var refList = document.getElementById("ref-list");
+  var alpha = data.slice().sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+  alpha.forEach(function (d) {
+    var item = document.createElement("div");
+    item.className = "ref-item";
+    item.id = "ref-" + d.id;
+    item.innerHTML =
+      '<div class="ref-item-head">' +
+      '<span class="ref-item-id mono">' + escapeHtml(d.id) + '</span>' +
+      '<span class="cat-chip">' + escapeHtml(d.category) + '</span>' +
+      '<span class="risk-pill risk-' + escapeHtml(d.risk) + '"><span class="dot"></span>' + escapeHtml(d.risk) + ' risk</span>' +
+      '</div>' +
+      '<div class="ref-item-prompt">' + promptHtml(d.prompt) + '</div>' +
+      '<div class="ref-item-costs mono">' +
+      '<span class="c-baseline">baseline $' + d.baseline.toFixed(4) + '</span>' +
+      '<span class="c-candidate">candidate $' + d.candidate.toFixed(4) + '</span>' +
+      '</div>' +
+      '<details class="convo-details">' +
+      '<summary class="convo-summary">View full conversation</summary>' +
+      '<div class="convo-grid">' +
+      '<div class="convo-panel baseline"><span class="convo-panel-label">Baseline response</span>' + lightMarkdown(d.baselineResponse) + '</div>' +
+      '<div class="convo-panel candidate"><span class="convo-panel-label">Candidate response</span>' + lightMarkdown(d.candidateResponse) + '</div>' +
+      '</div>' +
+      '</details>';
+    refList.appendChild(item);
+  });
+
+  var btnChart = document.getElementById("btn-chart");
+  var btnTable = document.getElementById("btn-table");
+  var chartView = document.getElementById("chart-view");
+  var tableView = document.getElementById("table-view");
+  btnChart.addEventListener("click", function () {
+    chartView.classList.remove("hidden");
+    tableView.classList.add("hidden");
+    btnChart.setAttribute("aria-pressed", "true");
+    btnTable.setAttribute("aria-pressed", "false");
+  });
+  btnTable.addEventListener("click", function () {
+    tableView.classList.remove("hidden");
+    chartView.classList.add("hidden");
+    btnTable.setAttribute("aria-pressed", "true");
+    btnChart.setAttribute("aria-pressed", "false");
+  });
+})();
+</script>
+</body>
+</html>

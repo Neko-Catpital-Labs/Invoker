@@ -19,7 +19,7 @@ import {
   type WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, createWorkerRegistry, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
-import type { CostAttributionAttempt } from '@invoker/data-store';
+import type { CostAttributionAttempt, WorkerActionRecord } from '@invoker/data-store';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
@@ -53,7 +53,7 @@ import {
  * per request, so concurrent delegated queries never cross output.
  */
 const queryOutputSink = new AsyncLocalStorage<(chunk: string) => void>();
-const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks';
+const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, alert-history, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks';
 const QUERY_SUBCOMMAND_USAGE = QUERY_SUBCOMMANDS.replaceAll(', ', '|');
 
 function writeOut(chunk: string): void {
@@ -71,6 +71,30 @@ export type HeadlessQueryDeps = Pick<
   HeadlessDeps,
   'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig' | 'getUiPerfStats' | 'resetUiPerfStats'
 >;
+
+function hasStringProp(value: unknown, key: string): boolean {
+  return Boolean(value && typeof value === 'object' && typeof (value as Record<string, unknown>)[key] === 'string');
+}
+
+function isAlertWorkerAction(action: WorkerActionRecord): boolean {
+  const searchable = [
+    action.actionType,
+    action.subjectType,
+    action.subjectId,
+    action.externalKey,
+  ].join(' ').toLowerCase();
+  if (searchable.includes('alert')) return true;
+  const payload = action.payload;
+  return hasStringProp(payload, 'alertKey')
+    || hasStringProp(payload, 'alertSource')
+    || (hasStringProp(payload, 'severity') && (hasStringProp(payload, 'subject') || hasStringProp(payload, 'message')));
+}
+
+export function listAlertHistoryRows(
+  persistence: Pick<HeadlessQueryDeps['persistence'], 'listWorkerActions'>,
+): WorkerActionRecord[] {
+  return persistence.listWorkerActions().filter(isAlertWorkerAction);
+}
 
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
@@ -208,16 +232,16 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
     }
     case 'review-gate': {
       const arg = flags.positional[0];
-      if (!arg) throw new Error('Usage: --headless query review-gate <prNumber|prUrl> [--output text|json|jsonl|label]');
-      const prNumber = parsePrNumber(arg);
-      if (!prNumber) throw new Error(`Could not parse a PR number from "${arg}".`);
-      const record = deps.persistence.findReviewGateByPr(prNumber);
+      if (!arg) throw new Error('Usage: --headless query review-gate <prNumber|owner/repo#pr|prUrl> [--output text|json|jsonl|label]');
+      const parsed = parseReviewGatePrArg(arg);
+      if (!parsed) throw new Error(`Could not parse a PR number from "${arg}".`);
+      const record = deps.persistence.findReviewGateByPr(parsed.prNumber, parsed.repo);
       switch (flags.output) {
         case 'label': writeOut(`${record?.workflowId ?? ''}\n`); break;
         case 'json':  writeOut(formatAsJson(record ?? {}) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(record ? [record] : []) + '\n'); break;
         default:      if (!record) {
-          writeOut(`No Invoker workflow found for PR ${prNumber}.\n`);
+          writeOut(`No Invoker workflow found for PR ${parsed.prNumber}.\n`);
           break;
         }
         {
@@ -226,7 +250,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
           const gate = buildReviewGateQueryResponse({ workflowId: record.workflowId, workflow, tasks });
           const substate = gate.substate ?? 'null';
           writeOut(
-            `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\tsubstate=${substate}\t${record.branch ?? ''}\n`,
+            `${record.workflowId}\t${record.reviewId ?? parsed.prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\tsubstate=${substate}\t${record.branch ?? ''}\n`,
           );
         }
         break;
@@ -339,6 +363,16 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         case 'json': writeOut(formatAsJson(response.actions) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(response.actions) + '\n'); break;
         default: writeOut(formatWorkerDecisions(response.actions) + '\n'); break;
+      }
+      break;
+    }
+    case 'alert-history': {
+      const alerts = listAlertHistoryRows(deps.persistence);
+      switch (flags.output) {
+        case 'label': writeOut(formatAsLabel(alerts) + '\n'); break;
+        case 'json': writeOut(formatAsJson(alerts.map(serializeWorkerAction)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(alerts.map(serializeWorkerAction)) + '\n'); break;
+        default: writeOut(formatWorkerActions(alerts) + '\n'); break;
       }
       break;
     }
@@ -566,15 +600,25 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
 }
 
 /**
- * Parse a PR number from either a bare number (`999`, `#999`) or a full PR URL
- * (`https://github.com/owner/repo/pull/999`). Returns undefined when neither
- * shape matches.
+ * Parse a PR number from either a bare number (`999`, `#999`), `owner/repo#999`,
+ * or a full PR URL (`https://github.com/owner/repo/pull/999`). Returns undefined
+ * when none of those shapes match.
  */
 function parsePrNumber(arg: string): string | undefined {
-  const fromUrl = arg.match(/\/pull\/(\d+)/);
-  if (fromUrl) return fromUrl[1];
+  return parseReviewGatePrArg(arg)?.prNumber;
+}
+
+function parseReviewGatePrArg(arg: string): { prNumber: string; repo?: string } | undefined {
+  const fromUrl = arg.match(/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/i);
+  if (fromUrl) {
+    return { prNumber: fromUrl[3], repo: `${fromUrl[1]}/${fromUrl[2]}` };
+  }
+  const fromNwo = arg.match(/^([^/\s#]+)\/([^/\s#]+)#(\d+)$/);
+  if (fromNwo) {
+    return { prNumber: fromNwo[3], repo: `${fromNwo[1]}/${fromNwo[2]}` };
+  }
   const bare = arg.replace(/^#/, '');
-  return /^\d+$/.test(bare) ? bare : undefined;
+  return /^\d+$/.test(bare) ? { prNumber: bare } : undefined;
 }
 
 async function headlessCosts(

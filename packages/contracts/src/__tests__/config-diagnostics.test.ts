@@ -64,7 +64,10 @@ describe('collectInvokerConfigDiagnostics', () => {
     });
 
     it('accepts a fully specified target', () => {
-      expect(collectInvokerConfigDiagnostics({ remoteTargets: { box: { ...sshTarget, port: 22 } } })).toEqual([]);
+      expect(collectInvokerConfigDiagnostics({
+        remoteTargets: { box: { ...sshTarget, port: 22 } },
+        infraRepair: { enabled: true },
+      })).toEqual([]);
     });
   });
 
@@ -117,6 +120,7 @@ describe('collectInvokerConfigDiagnostics', () => {
       expect(collectInvokerConfigDiagnostics({
         remoteTargets: { box: sshTarget },
         executionPools: { fast: { members: [{ type: 'ssh', id: 'box' }] } },
+        infraRepair: { enabled: true },
       })).toEqual([]);
     });
 
@@ -259,5 +263,16 @@ describe('collectInvokerConfigDiagnostics', () => {
       defaultPoolId: 'missing',
     });
     expect(diagnostics.filter((entry) => entry.severity === 'error').length).toBeGreaterThan(3);
+  });
+
+  it('does not warn about removed infraRepair.enabled config gate', () => {
+    const sshTarget = {
+      host: '203.0.113.10',
+      user: 'invoker',
+      sshKeyPath: '/tmp/key',
+    };
+    expect(warnings({
+      remoteTargets: { box: sshTarget },
+    }).filter((entry) => entry.path === 'infraRepair.enabled')).toEqual([]);
   });
 });

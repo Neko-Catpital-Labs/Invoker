@@ -110,6 +110,10 @@ for (const [name, spec] of Object.entries(varSpecs)) {
 }
 if (missing.length) die(`missing required --var: ${missing.join(', ')} (or pass --example)`);
 
+if (typeof values.verify_command === 'string' && values.verify_command.includes('No local verify command is mapped')) {
+  die('verify_command rejected: contains watcher sentinel "No local verify command is mapped"');
+}
+
 function substitute(text, file) {
   const unresolved = new Set();
   const out = text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (m, key) => {

@@ -124,8 +124,8 @@ async function mention(surface: SlackSurface, text: string, ts: string, threadTs
   return say;
 }
 
-function actionValueFromUpdatedCard(actionId: string): string | null {
-  for (const call of [...sharedSlack.client.chat.update.mock.calls].reverse()) {
+function actionValueFromUpdatedCard(say: Mock, actionId: string): string | null {
+  for (const call of [...say.mock.calls].reverse()) {
     const message = call[0] as SaidMessage | undefined;
     for (const block of message?.blocks ?? []) {
       for (const element of block.elements ?? []) {
@@ -138,8 +138,8 @@ function actionValueFromUpdatedCard(actionId: string): string | null {
   return null;
 }
 
-function updatedCardWithAction(actionId: string): SaidMessage | undefined {
-  return [...sharedSlack.client.chat.update.mock.calls]
+function updatedCardWithAction(say: Mock, actionId: string): SaidMessage | undefined {
+  return [...say.mock.calls]
     .map((call) => call[0] as SaidMessage)
     .find((message) => message.blocks?.some((block) =>
       block.elements?.some((element) => element.action_id === actionId)));
@@ -218,11 +218,11 @@ describe('Slack approve-button repro contracts', () => {
       return processWith(goodPlanReply);
     });
 
-    await mention(slack, '/plan', 'thread-a1-plan', 'thread-a1');
+    const planSay = await mention(slack, '/plan', 'thread-a1-plan', 'thread-a1');
 
     const draft = slackPlanDrafts.getReady('C_LOBBY', 'thread-a1');
     expect(draft?.planText).toContain('name: Good');
-    expect(actionValueFromUpdatedCard('plan_draft_approve')).toBe(`${draft?.draftId}:${draft?.version}`);
+    expect(actionValueFromUpdatedCard(planSay, 'plan_draft_approve')).toBe(`${draft?.draftId}:${draft?.version}`);
   });
 
   it('carries the Approve/Cancel actions on the same message as the drafted plan brief', async () => {
@@ -233,9 +233,9 @@ describe('Slack approve-button repro contracts', () => {
     mockSpawn.mockImplementationOnce(() => processWith('Scope captured.'));
     await mention(slack, 'build it cleanly', 'thread-a2');
     mockSpawn.mockImplementationOnce(() => processWith(goodPlanReply));
-    await mention(slack, '/plan', 'thread-a2-plan', 'thread-a2');
+    const planSay = await mention(slack, '/plan', 'thread-a2-plan', 'thread-a2');
 
-    const briefed = updatedCardWithAction('plan_draft_approve');
+    const briefed = updatedCardWithAction(planSay, 'plan_draft_approve');
     expect(briefed).toBeDefined();
     const actions = briefed?.blocks?.find((block) => block.type === 'actions');
     expect(briefed?.text).toContain('Good');

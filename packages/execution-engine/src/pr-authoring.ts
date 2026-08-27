@@ -731,6 +731,7 @@ export function spawnAgentPrAuthorViaRegistry(
   cwd: string,
   agent: ExecutionAgent,
   driver?: SessionDriver,
+  extraEnv: NodeJS.ProcessEnv = {},
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
@@ -741,7 +742,7 @@ export function spawnAgentPrAuthorViaRegistry(
     const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: cleanElectronEnv(),
+      env: { ...cleanElectronEnv(), ...extraEnv },
       detached: process.platform !== 'win32',
     });
 

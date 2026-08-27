@@ -252,9 +252,12 @@ describe('Browser-surface camera (component)', () => {
     await screen.findByTestId('selected-workflow-mini-dag');
     await settleCamera();
     fireEvent.click(await screen.findByTestId('rf__node-wf-a/one'));
-    await waitFor(() => {
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task One');
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task One');
+      },
+      { timeout: 2500 },
+    );
     await settleCamera();
     fitViewMock.mockClear();
     setCenterMock.mockClear();

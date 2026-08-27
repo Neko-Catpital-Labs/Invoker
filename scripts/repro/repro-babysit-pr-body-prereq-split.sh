@@ -22,6 +22,7 @@ WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
 mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
 import sys
@@ -97,6 +98,22 @@ git add .github/workflows/ci.yml scripts/test-suites/required/guardrails.sh
 git commit -m "worker tooling-policy repair" >/dev/null
 EOF
 chmod +x "$TMP/bin/claude"
+
+# Without this, resolve_workflow_for_pr (mergify_admin_requeue_workflow_fastpath.py)
+# shells out to a live Invoker owner over IPC to look up a review-gate workflow
+# mapping for PR #5800, which this hermetic repro never provides -- the lookup
+# subprocess fails to connect, resolve_workflow_for_pr raises, and the whole
+# repair attempt aborts before reaching the async repair path below (same
+# hermetic-IPC class as the Incident 2026-08-12 note further down; mocked the
+# same way its sibling repros already do, e.g. repro-babysit-pr-body-human-split.sh).
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+
 REMOTE="$TMP/origin.git"
 SEED="$TMP/seed"
 WORK_ROOT="$WORK_PARENT/5800"
@@ -187,6 +204,9 @@ run_worker() {
 git clone . "$SEED" >/dev/null
 (
   cd "$SEED"
+  # This repository is disposable and removed by the EXIT trap. Keep Git from
+  # racing that cleanup with a background auto-gc process.
+  git config gc.auto 0
   git config user.email repro@example.test
   git config user.name 'Repro Bot'
   git checkout -B master >/dev/null
@@ -216,10 +236,43 @@ fi
 write_state
 : > "$CALLS_PATH"
 
+# Incident 2026-08-12: submit_async_repair_plan's default path shells out to a
+# live Invoker owner over IPC (scripts/headless-ipc.js), which this hermetic
+# repro never provides -- every tick just crashed with "No request handler
+# registered for channel: headless.run". Mock the submit command (same
+# pattern as repro-babysit-pr-body-human-split.sh) and simulate what the real
+# async plan's two tasks do for this scenario: the "repair" task runs the
+# fake claude wrapper above (already set up to make the tooling-policy commit
+# this PR needs), then the real "normalize" task runs against that commit --
+# same script, same args the real generated plan YAML would use.
+cat > "$TMP/bin/submit-async.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="\${1:?plan path required}"
+test -f "\$plan_path"
+cd "$WORK_ROOT"
+git fetch origin stack/5800 >/dev/null
+git checkout stack/5800 >/dev/null 2>&1
+"$TMP/bin/claude"
+python3 "$ROOT/scripts/mergify_admin_requeue_repair_normalize.py" \\
+  --repo fake/repo --pr 5800 --check "required-fast / Guardrails" \\
+  --start-head "$ORIGINAL_HEAD" --base master --trunk master \\
+  --state-file "$LEDGER_PATH"
+EOF
+chmod +x "$TMP/bin/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async.sh"
+
 if ! out1="$(run_worker)"; then
   fail 'tick 1: worker failed' "$out1"
 fi
-echo "$out1" | grep -q 'admin-bypass-repair-prereq-created' || fail 'tick 1: missing prerequisite creation trace' "$out1"
+# admin-bypass-repair-prereq-created is logged inside create_repair_prerequisite
+# (mergify_admin_requeue_repair_body.py), which since PR #5483 only runs inside
+# the async-submitted subprocess (mergify_admin_requeue_repair_normalize.py via
+# INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD above) -- its stdout is captured
+# by run_headless and never reaches $out1, so grepping for it here can never
+# pass again under the current architecture. assert_tick1_state below is the
+# real, still-valid check: it confirms prerequisite PR #5801 actually exists
+# with the right label in the fake-gh state.
 assert_tick1_state
 
 remove_prereq

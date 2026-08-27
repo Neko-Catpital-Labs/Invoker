@@ -40,7 +40,7 @@ function statusEmoji(status: string): string {
 function statusLabel(status: string): string {
   return STATUS_LABEL[status] ?? status;
 }
-function clampMrkdwnText(text: string, max = 3000): string {
+export function clampMrkdwnText(text: string, max = 3000): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
@@ -259,6 +259,31 @@ export function formatError(message: string): SlackMessage {
   };
 }
 
+export function formatAlert(event: Extract<SurfaceEvent, { type: 'alert' }>): SlackMessage {
+  const severityEmoji: Record<typeof event.severity, string> = {
+    info: ':information_source:',
+    warning: ':warning:',
+    critical: ':rotating_light:',
+  };
+  const severityLabel = event.severity.toUpperCase();
+  const lines = [
+    `${severityEmoji[event.severity]} *${severityLabel} alert*: ${event.subject}`,
+    `*Source:* ${event.source}`,
+    event.message,
+    `_${event.alertKey}_`,
+  ];
+
+  return {
+    text: clampMrkdwnText(`${severityLabel} alert: ${event.subject} - ${event.message}`),
+    blocks: [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: clampMrkdwnText(lines.join('\n')) },
+      },
+    ],
+  };
+}
+
 // ── Top-Level Event Router ──────────────────────────────────
 
 export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
@@ -293,6 +318,6 @@ export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
     case 'error':
       return formatError(event.message);
     case 'alert':
-      return null;
+      return formatAlert(event);
   }
 }

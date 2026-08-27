@@ -10,7 +10,7 @@ try:
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Blocker, CheckContext, Ledger, MergifyQueueEvent, PrSnapshot, ReviewThread, StackGroup, latest_contexts_by_required_check, load_mergify_rules
-    from .mergify_admin_requeue_plan import classify_pr, plan_stack_actions
+    from .mergify_admin_requeue_plan import classify_pr, default_claim_repair_filing, default_release_repair_filing, plan_stack_actions
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import group_stack_prs, parse_mergify_queue_event, parse_stack_metadata
 except ImportError:
@@ -19,7 +19,7 @@ except ImportError:
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Blocker, CheckContext, Ledger, MergifyQueueEvent, PrSnapshot, ReviewThread, StackGroup, latest_contexts_by_required_check, load_mergify_rules
-    from mergify_admin_requeue_plan import classify_pr, plan_stack_actions
+    from mergify_admin_requeue_plan import classify_pr, default_claim_repair_filing, default_release_repair_filing, plan_stack_actions
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import group_stack_prs, parse_mergify_queue_event, parse_stack_metadata
 
@@ -31,7 +31,9 @@ REPO_ROOT = exec_impl.REPO_ROOT
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    return run_loop(args) if args.loop else run_once(args)
+    if args.loop:
+        return run_loop(args, default_claim_repair_filing, default_release_repair_filing)
+    return run_once(args, default_claim_repair_filing, default_release_repair_filing)
 
 
 if __name__ == "__main__":

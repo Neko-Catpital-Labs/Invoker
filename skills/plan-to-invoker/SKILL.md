@@ -1,14 +1,18 @@
 ---
 name: plan-to-invoker
 description: >
-  Convert a plan into an Invoker YAML plan file. Trigger: "convert to invoker",
-  "submit to invoker", "create invoker plan", "invoker-plan-to-invoker",
-  "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
-  Invoker tasks. For benchmark/direct-output prompts with "Required output path",
-  write a complete YAML document directly to that literal path; it must start
-  with top-level name, onFinish, mergeMode,
-  repoUrl (or scratch: true for no-repo mode), and tasks, never version or metadata wrappers,
-  and must not scan, validate, submit, or discover env vars.
+  Convert a plan into an Invoker YAML plan file. After `install-skills`, this
+  routing is always on via Cursor `~/.cursor/rules/invoker-execution-precedence.mdc`,
+  a Codex AGENTS.md marked block, and a Claude UserPromptSubmit hook.
+  One-slice same-repo edits stay local; multi-layer or multi-PR work goes through this
+  skill (then chat-submit / auto_submit after the completeness gate) unless the user says "do it locally". Uninstall with `install-skills uninstall`. Trigger: "convert to invoker",
+  "submit to invoker", "create invoker plan",
+  "invoker-plan-to-invoker", "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
+  Invoker tasks. For benchmark/direct-output
+  prompts with "Required output path", write a complete YAML document directly
+  to that literal path; it must start with top-level name, onFinish, mergeMode,
+  repoUrl (or scratch: true for no-repo mode), and tasks, never version or
+  metadata wrappers, and must not scan, validate, submit, or discover env vars.
 ---
 
 # plan-to-invoker
@@ -60,16 +64,32 @@ Use this mode when invoked by the installed command or MCP prompt.
 
 > **Not this mode:** Slack `plan:` and agent threads use a separate, orchestrator-owned Slack plan submission path. Do not invoke the CLI or MCP handoff tools from those threads.
 
+### Local vs remote Invoker
+
+Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP, or SSH alias, follow [references/local-vs-remote-mcp.md](references/local-vs-remote-mcp.md) before prepare/submit: probe SSH, rewrite harness MCP only on success, never clobber local on failure. “Local” / “this machine” restores local MCP. Do not invent HTTP/SSE MCP.
+
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
+- Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
 - Plain approval stops after workflow handoff: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only, then report the submitted workflow status and stop. Stop after `invoker_submit_plan` or the documented `invoker-cli run ... --live` fallback; do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
 - Later PR publication is a separate explicit action. When the user separately asks about creating, updating, publishing, or splitting pull requests or PR stacks after workflow handoff, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
+### Self-triggered delegation routing (agents and subagents)
+
+Use `confirmationMode` to distinguish who decided the hand-off should happen:
+
+- **Self-triggered delegation: confirmationMode: auto_submit** — the agent or subagent itself decided, mid-task and without a direct human instruction, that a chunk of work should be handed off to Invoker. No human message asked for this specific hand-off; it's the agent's own routing choice. In this case, skip the Slack review-card wait and call `invoker_submit_plan` once `invoker_prepare_plan_review` reports `confirmationMode: auto_submit` **and** `check-planning-completeness.sh` passed. Incomplete plans stay on the native surface (AskQuestion / Slack question / Linear comment).
+- **Human-triggered delegation: confirmationMode: require** — a human's message is the direct request to hand off or send work to Invoker. Today's `require` + human-approval flow is unchanged: show the ordered steps and `confirmationText`, and wait for explicit approval before calling `invoker_submit_plan`. Completeness still must pass first.
+
+In both paths, the delegating agent chooses `poolId` best-effort per `references/schema.md` (an existing field) — omit it for the local default when unsure. `skill-doctor.sh` still runs against the generated plan in both paths; self-triggered delegation changes who approves the submission, not the validation gate.
+
 ## Intended flow (do not skip steps)
+
+**Current auto-fix schema:** Never emit `autoFix` or `autoFixRetries` at the plan, workflow, or task level. Those YAML fields are obsolete. Auto-fix retries are configured only with `autoFixRetries` in `~/.invoker/config.json`. A draft containing either YAML field must be corrected and re-run through `skill-doctor.sh`; do not present or submit it.
 
 1. Discuss scope/risk with the user; before authoring YAML, propose each
    `Safety invariant:` and ask the user to confirm or correct it. If the work
@@ -241,7 +261,8 @@ When those hardening workflows target Invoker itself, the branch/PR publication 
 
 - File/function-heavy plans: see playbook `playbooks/verify-then-build.md`
 - Schema and required fields: `references/schema.md`
-- Task decomposition and dependency patterns: `references/task-patterns.md`
+- Task decomposition and dependency patterns (code-change plans): `references/task-patterns.md`
+- Structured entity research plans (any plan whose deliverable is a fact about a real-world entity — a stock's filing quirk, a legal case's status, a product spec — not a code change): `references/entity-research-patterns.md`. Do not use `task-patterns.md`'s handoff/task-split conventions for these; use this file instead.
 - Review compression: `../review-compression/SKILL.md`
 - End-to-end examples: `references/examples.md`
 - Efficacy / soft scoring: `references/efficacy-rubric.md`

@@ -46,9 +46,12 @@ import {
   createTerminalUiPerfSink,
 } from '../terminal-ui-perf.js';
 import {
+  createPlanningTerminalAdapter,
   registerTerminalSessionPersistence,
+  type PlanningTerminalAdapter,
   type TerminalSessionPersistenceHandle,
 } from '../terminal-session-ipc.js';
+import type { InAppPlanningChatSessions } from '../in-app-planner.js';
 import { WorkflowRollupProjection } from '../workflow-rollup-projection.js';
 import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot } from '../worker-control.js';
 import { buildWebInvokerDispatch } from './web-invoker-dispatch.js';
@@ -95,6 +98,10 @@ export interface StartHeadlessWebSurfaceDeps {
   /** Main process dist directory (`__dirname` of main.js) used to locate the built UI. */
   appRootDir: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
+  /** Routes planning-chat channels to the owner's shared GUI-mutation handlers. */
+  guiMutations?: (channel: string, args: unknown[]) => Promise<unknown>;
+  /** Enables planning terminals over the web when present (with repoRoot + executorRegistry + taskHandles). */
+  planningChatSessions?: InAppPlanningChatSessions;
 }
 
 export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebBridge | null {
@@ -113,6 +120,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
 
   let terminalSessionPersistenceHandle: TerminalSessionPersistenceHandle | null = null;
   let taskTerminals: TaskTerminalAdapter | undefined;
+  let planningTerminals: PlanningTerminalAdapter | undefined;
   let terminalEvents: WebBridgeTerminalEvents | undefined;
   if (deps.repoRoot && deps.executorRegistry && deps.taskHandles) {
     const embeddedTerminalManager = new EmbeddedTerminalManager({
@@ -159,6 +167,16 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
         };
       },
     };
+    if (deps.planningChatSessions) {
+      const planningChatSessions = deps.planningChatSessions;
+      planningTerminals = createPlanningTerminalAdapter({
+        embeddedTerminalManager,
+        logger: deps.logger,
+        planningChatSessions,
+        getPlanningSessionStore: () => deps.persistence,
+        repoRoot: deps.repoRoot,
+      });
+    }
   }
   const streamSeq = createTaskDeltaStreamSequence();
   const projection = new WorkflowRollupProjection();
@@ -210,6 +228,8 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(deps.config),
     }),
     taskTerminals,
+    guiMutations: deps.guiMutations,
+    planningTerminals,
     logger: deps.logger,
   });
 
@@ -253,6 +273,8 @@ export interface HeadlessWebSurfaceHost {
   taskHandles?: TaskHandleMap;
   appRootDir?: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
+  guiMutations?: (channel: string, args: unknown[]) => Promise<unknown>;
+  planningChatSessions?: InAppPlanningChatSessions;
 }
 
 /**
@@ -284,5 +306,7 @@ export function startWebSurfaceForHeadless(
     taskHandles: host.taskHandles,
     appRootDir: host.appRootDir ?? __dirname,
     getBundledSkillsStatus: host.getBundledSkillsStatus,
+    guiMutations: host.guiMutations,
+    planningChatSessions: host.planningChatSessions,
   });
 }

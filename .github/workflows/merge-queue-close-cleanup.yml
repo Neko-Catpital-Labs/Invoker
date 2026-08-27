@@ -1,0 +1,27 @@
+name: Merge Queue Close Cleanup
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-ci:
+    if: ${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: CI-merge-queue-${{ github.head_ref }}
+      cancel-in-progress: true
+    steps:
+      - run: echo "Closed merge-queue wrapper released its CI concurrency group."
+
+  cancel-pr-body:
+    if: ${{ startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: PR Body-merge-queue-${{ github.head_ref }}
+      cancel-in-progress: true
+    steps:
+      - run: echo "Closed merge-queue wrapper released its PR Body concurrency group."

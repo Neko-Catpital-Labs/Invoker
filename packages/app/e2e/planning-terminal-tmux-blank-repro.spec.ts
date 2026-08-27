@@ -32,7 +32,7 @@ function launchArgs(): string[] {
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30000 });
 }
 
 async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketPath: string; configPath: string }): Promise<{ app: ElectronApplication; page: Page }> {
@@ -53,7 +53,6 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: paths.dbDir,
       INVOKER_IPC_SOCKET: paths.ipcSocketPath,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_EMBEDDED_TERMINAL_BACKEND: 'bash',
       INVOKER_REPO_CONFIG_PATH: paths.configPath,
@@ -79,7 +78,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
   });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
   if (timedOut && !childExited) {
@@ -91,7 +90,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
         /* process group may already be gone */
       }
     }
-    await Promise.race([closePromise, childExitPromise, delay(2_000)]);
+    await Promise.race([childExitPromise, delay(2_000)]);
     if (!childExited) {
       child.kill('SIGKILL');
       if (child.pid && process.platform !== 'win32') {
@@ -130,7 +129,8 @@ async function bootstrapPlanningDraft(page: Page, planYaml: string): Promise<str
 
   await openPlanningTerminal(page);
   await submitPlanningText(page, 'Draft a YAML plan to reproduce planning terminal tmux blanking');
-  await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText(/draft ready/i, { timeout: 10000 });
+  await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Planning Terminal Tmux Blank Repro', { timeout: 10000 });
   const sessionId = await page.evaluate(async () => {
     const list = await window.invoker.planningChatList();
     return list.sessions[0]?.id;

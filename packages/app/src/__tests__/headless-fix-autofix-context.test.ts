@@ -31,6 +31,7 @@ function makeDeps(executionOverrides: Record<string, unknown> = {}, configOverri
     execution: { error: 'boom', ...executionOverrides },
     taskStateVersion: 1,
   };
+  const autoApproveAuthorGate = vi.fn(async () => ({ allowed: false, reason: 'allowlist-missing' as const }));
   const deps = {
     orchestrator: {
       getTask: vi.fn(() => task),
@@ -49,8 +50,9 @@ function makeDeps(executionOverrides: Record<string, unknown> = {}, configOverri
     invokerConfig: { autoApproveAIFixes: false, launchOutboxMode: 'active', ...configOverrides },
     ownerTaskRunnerProvider: () => ({ fixWithAgent: vi.fn(), resolveConflict: vi.fn() }),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    autoApproveAuthorGate,
   } as any;
-  return { deps, updateTask };
+  return { deps, updateTask, autoApproveAuthorGate };
 }
 
 describe('headless fix auto-fix context', () => {
@@ -117,5 +119,18 @@ describe('headless fix auto-fix context', () => {
 
     expect(fixWithAgentActionMock).toHaveBeenCalledTimes(1);
     expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ reviewGateContext });
+  });
+
+  it('passes the on-disk PR-author gate into fix-with-agent', async () => {
+    const { runHeadless } = await import('../headless.js');
+    const { deps, autoApproveAuthorGate } = makeDeps();
+
+    await runHeadless(['fix', 'wf-1/task-1', 'claude'], deps);
+
+    expect(fixWithAgentActionMock.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        autoApproveAuthorGate,
+      }),
+    );
   });
 });

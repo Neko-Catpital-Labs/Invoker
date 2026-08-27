@@ -375,9 +375,9 @@ Failing checks
         stack = StackGroup("s", (pr(2609, merge_state="DIRTY", latest=mergify()),))
         ledger = self.ledger()
         actions = plan_stack_actions(stack, REQUIRED, ledger, 1)
-        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("repair_conflict", 2609)])
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("rebase_onto_master", 2609)])
         for epoch in range(3):
-            ledger.record("conflict-repair", 2609, HEAD, "conflict:2609", epoch)
+            ledger.record("rebase-onto-master", 2609, HEAD, "rebase-onto-master:2609", epoch)
         actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
@@ -391,26 +391,29 @@ Failing checks
             side_effect=lambda plan: submitted.append(plan),
         ):
             for epoch in range(3):
-                repairer.repair_conflict(item, "GitHub reports merge conflict", epoch)
-        self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
+                repairer.rebase_onto_master(item, "GitHub reports merge conflict", epoch)
+        self.assertEqual(ledger.count("rebase-onto-master", 2647, HEAD, "rebase-onto-master:2647"), 3)
         self.assertEqual(len(submitted), 3)
         self.assertIn("commit locally. Do not push.", submitted[0].yaml_text)
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
-    def test_repair_conflict_returns_submitted_and_records_ledger(self):
+    def test_rebase_onto_master_returns_submitted_and_records_ledger(self):
         item = pr(2660, merge_state="DIRTY", latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
         with mock.patch("scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan") as submit:
-            result = repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
+            result = repairer.rebase_onto_master(item, "GitHub reports merge conflict", 1)
         submit.assert_called_once()
         self.assertEqual(result.status, "submitted")
         self.assertEqual(result.start_head, HEAD)
         self.assertEqual(result.end_head, HEAD)
-        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
+        self.assertEqual(
+            ledger.count("rebase-onto-master", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
+            1,
+        )
 
-    def test_repair_conflict_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
+    def test_rebase_onto_master_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
         # The ledger row is written before submission (not after) so a broken
         # ledger write can never leave a real, running repair uncounted. The
         # cost is the mirror case here: if submission itself fails, the
@@ -424,8 +427,11 @@ Failing checks
             side_effect=RuntimeError("submit failed"),
         ):
             with self.assertRaises(RuntimeError):
-                repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
-        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
+                repairer.rebase_onto_master(item, "GitHub reports merge conflict", 1)
+        self.assertEqual(
+            ledger.count("rebase-onto-master", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
+            1,
+        )
 
     def test_repair_check_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
         item = pr(2662, latest=mergify())
@@ -864,6 +870,56 @@ Failing checks
         self.assertIn(("owner/repo", 5811, "@mergifyio queue"), fake_gh.comments)
         refreshed = Ledger(ledger.path)
         self.assertEqual(refreshed.count("queue-only-requeue", 5811, HEAD, "required-fast / Guardrails"), 1)
+
+    def test_run_cycle_records_queue_only_noop_from_empty_job_log_repair(self):
+        # Incident 2026-08-12: plan_bottom_progress's restore_admin_bypass_label
+        # only fires once a "queue-only-noop" ledger row exists (see
+        # test_run_cycle_restores_label_then_requeues_after_queue_only_noop,
+        # which pre-seeds one). Nothing ever wrote that row: repair_check's
+        # own "queue_only_noop" outcome was silently dropped by run_cycle's
+        # dispatch loop, so a real queue-only check with an empty job log
+        # settled and then went nowhere -- the PR stayed unlabeled forever.
+        # This proves run_cycle itself now writes the row, with no pre-seed.
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+                self.label_edits = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def edit_label(self, repo, pr_number, *, add=None, remove=None):
+                self.label_edits.append((repo, pr_number, add, remove))
+
+        ledger = self.ledger()
+        latest = MergifyQueueEvent(
+            "m5811",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-03T06:13:00Z",
+            HEAD,
+            (),
+            ("required-fast / Guardrails",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5811#issuecomment-1",
+            5854,
+            (("required-fast / Guardrails", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/1/job/2",)),),
+        )
+        fake_gh = FakeGh()
+        stack = StackGroup("orig", (pr(5811, labels={"dequeued"}, checks={}, latest=latest),))
+        empty_log = tempfile.NamedTemporaryFile(delete=False)
+        self.addCleanup(lambda: os.unlink(empty_log.name))
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), {"required-fast / Guardrails"})):
+            with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
+                with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                    with mock.patch.object(AdminBypassGhExecutor, "download_job_log", return_value=empty_log.name):
+                        with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                            with redirect_stdout(stdout), redirect_stderr(stderr):
+                                should_poll = exec_impl.run_cycle(requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)]))
+        self.assertTrue(should_poll)
+        refreshed = Ledger(ledger.path)
+        self.assertEqual(refreshed.count("queue-only-noop", 5811, HEAD, "required-fast / Guardrails"), 1)
 
     def test_run_cycle_stops_suppressing_after_prereq_requeue(self):
         ledger = self.ledger()

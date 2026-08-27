@@ -722,6 +722,7 @@ export function selectExecutor(
         ...(selectedWorktreeTarget ?? {}),
         provisionCommand: selectedWorktreeTarget?.provisionCommand?.trim() || '',
         repoProvisionCommands,
+        secretsFile: host.dockerConfig.secretsFile ?? '',
         worktreeBaseDir: resolve(invokerHome, 'worktrees'),
         cacheDir: resolve(invokerHome, 'repos'),
       });
@@ -739,6 +740,7 @@ export function selectExecutor(
         provisionCommand: selectedWorktreeTarget?.provisionCommand,
         repoProvisionCommands,
         leasePersistence: host.persistence,
+        secretsFile: host.dockerConfig.secretsFile,
       });
       host.executorRegistry.register('worktree', worktree);
       host.worktreeExecutorCache.set(configFingerprint, worktree);

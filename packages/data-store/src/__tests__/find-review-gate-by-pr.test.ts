@@ -134,4 +134,16 @@ describe('SQLiteAdapter.findReviewGateByPr', () => {
     expect(result?.workflowId).toBe('wf-gen3');
     expect(result?.workflowGeneration).toBe(3);
   });
+
+  it('does not attach a foreign-repo PR number to an Invoker bare review_id', () => {
+    adapter.saveWorkflow(makeWorkflow('wf-invoker'));
+    adapter.saveTask('wf-invoker', makeMergeTask('wf-invoker', {
+      reviewId: '999',
+      reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/999',
+    }));
+
+    expect(adapter.findReviewGateByPr('999', 'EdbertChan/catstack')).toBeUndefined();
+    expect(adapter.findReviewGateByPr('999', 'Neko-Catpital-Labs/Invoker')?.workflowId).toBe('wf-invoker');
+    expect(adapter.findReviewGateByPr('999')?.workflowId).toBe('wf-invoker');
+  });
 });

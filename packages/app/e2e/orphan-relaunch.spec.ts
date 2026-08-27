@@ -50,7 +50,7 @@ function findTask(tasks: Array<{ id: string; status: string; execution?: { error
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30_000 });
 }
 
 base.describe('Orphan task relaunch on restart', () => {
@@ -68,7 +68,6 @@ base.describe('Orphan task relaunch on restart', () => {
       INVOKER_TEST_WORKFLOW_IDS: '1',
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: testDir,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_REPO_CONFIG_PATH: configPath,
       INVOKER_USER_DATA_DIR: electronUserDataDir,

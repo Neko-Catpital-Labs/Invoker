@@ -1,7 +1,7 @@
 import { stringify as yamlStringify } from 'yaml';
 import { test, expect, E2E_REPO_URL, waitForRuntimeMode } from './fixtures/electron-app';
 
-test.use({ guiOwnerMode: 'auto', standaloneOwnerIdleTimeoutMs: '90000' });
+test.use({ guiOwnerMode: 'daemon', standaloneOwnerIdleTimeoutMs: '5000' });
 
 const PLAN_YAML = yamlStringify({
   name: 'Long Deadline Proof Plan',

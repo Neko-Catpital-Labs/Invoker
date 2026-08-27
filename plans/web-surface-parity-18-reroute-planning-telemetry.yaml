@@ -1,0 +1,223 @@
+name: "Web surface parity (18) — reroute planning telemetry to reportUiPerf"
+description: |
+  PR #9981 (`stack/EdbertChan/pr/web-planning-parity/web-surface-parity-18-instrument-planning--508afca7`,
+  head `60fe5c28e`) reports a GitHub merge conflict against `master`. The conflict
+  is not a simple textual rebase problem: PR #9981 (part 18 of the "Web surface
+  parity" stack) instruments planning interactions by importing
+  `logPlanningEvent` from `packages/ui/src/lib/planning-telemetry.ts`, a module
+  introduced by its stack parent, part 17 (`5c30a3943`, "Buffered planning
+  telemetry pipeline with transport-failure retry").
+
+  When part 17 was actually reviewed and merged to master (PR #9980, commit
+  `e8f5824ce`), it landed with a different design: `planning-telemetry.ts` and
+  its ring-buffer test helpers (`planningTelemetryRing`,
+  `resetPlanningTelemetryForTests`) do not exist anywhere in master's history.
+  Master instead persists UI telemetry through `window.invoker.reportUiPerf`
+  (wired to the activity log by part 16, PR #9979), a pattern already used
+  throughout `App.tsx` (`renderer_event_loop_lag`, `renderer_long_task`,
+  `PLANNING_TYPING_LAG_METRIC`) and inside `InvokerTerminal.tsx` via the local
+  `reportPlanningChatPerf(metric, data)` helper, which itself calls
+  `window.invoker?.reportUiPerf?.(metric, data)`.
+
+  ```mermaid
+  flowchart LR
+    subgraph "PR #9981 as authored (stale)"
+      A["App.tsx / InvokerTerminal.tsx"] -->|logPlanningEvent| B["planning-telemetry.ts\n(ring buffer, deleted on master)"]
+    end
+    subgraph "master today"
+      C["App.tsx"] -->|"window.invoker.reportUiPerf(metric, data)"| E["activity log\n(source: ui-perf)"]
+      D["InvokerTerminal.tsx"] -->|reportPlanningChatPerf| E
+    end
+  ```
+
+  Because the dependency PR #9981 built on has been redesigned, not just
+  renamed, re-deriving part 18 requires picking a telemetry sink and rewriting
+  the tests that assert against it — a design decision, not a mechanical merge
+  conflict resolution. This plan re-authors part 18's intent (instrument
+  planning turn lifecycle, poll failures, plan submit/send, session lifecycle,
+  and the disabled-send dead-click case) directly on top of `master`, routing
+  every event through the surviving `reportUiPerf` sink instead of the deleted
+  module, and updates the two new `InvokerTerminal` tests to assert against
+  the mocked `reportUiPerf` the same way every other perf-marker test in this
+  suite already does.
+
+  This plan only rewires the telemetry sink. It does not change polling
+  cadence, retry counts, dedupe behavior (the `inFlight` guard already on
+  master), or any user-visible planning UI behavior.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+baseBranch: master
+featureBranch: fix/web-surface-parity-18-report-ui-perf
+
+tasks:
+  - id: reroute-planning-telemetry-to-report-ui-perf
+    description: |
+      Review claim:
+      - Re-author PR #9981's planning-interaction instrumentation on top of `master` so every event goes through the surviving `reportUiPerf` telemetry sink instead of the retired `logPlanningEvent` helper.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Touch only `packages/ui/src/App.tsx`, `packages/ui/src/components/InvokerTerminal.tsx`, and `packages/ui/src/__tests__/invoker-terminal.test.tsx`. Do not recreate `packages/ui/src/lib/planning-telemetry.ts` or any ring-buffer helper. Do not change the existing `inFlight`-guarded polling dedupe logic, retry counts, or any user-visible planning UI behavior — only add/rewire telemetry calls alongside it.
+      Slice rationale:
+      - This is one review claim (point one PR's instrumentation at the surviving telemetry sink) in one review lane (behavior), touching one package boundary (`packages/ui`), so it fits one prompt task plus focused verification rather than a multi-workflow stack.
+      Architectural effect:
+      - Planning-interaction telemetry (turn lifecycle, poll health, submit/send, session lifecycle, disabled-send dead-clicks) now flows through the same `reportUiPerf` → activity-log pipeline as every other UI perf marker, instead of a client-only ring buffer that no longer exists on master.
+      Goal:
+      - Land PR #9981's "instrument planning interactions end to end" intent in a form that compiles and tests green against master's current telemetry architecture.
+      Motivation:
+      - PR #9981 is blocked by a GitHub-reported merge conflict. The underlying cause is that its dependency module was redesigned during review of its parent PR, not merely renamed, so the fix is a redesign of the telemetry call sites, not a rebase.
+      Alternative considerations:
+      - Option A (chosen): call `window.invoker?.reportUiPerf?.(metric, data)` directly in `App.tsx` (matching the existing `renderer_event_loop_lag` / `PLANNING_TYPING_LAG_METRIC` call sites there) and `reportPlanningChatPerf(metric, data)` in `InvokerTerminal.tsx` (the local helper already wrapping `reportUiPerf` in that file), reusing the same event names and payload shapes PR #9981 originally chose.
+      - Option B: resurrect `planning-telemetry.ts` as a compatibility shim that forwards to `reportUiPerf`. Rejected — it would reintroduce a module master's own reviewers removed, and duplicate a sink that already exists.
+      Implementation details:
+      - Add a `reportUiPerf` call at each planning-interaction call site listed below, matching the event name and payload shape from PR #9981's original diff, and keep the retired `planning-telemetry.ts` helper out of the tree.
+      Concrete edits:
+      - Assume no prior context beyond this description. In `packages/ui/src/App.tsx`:
+        1. Do not add `import { logPlanningEvent } from './lib/planning-telemetry.js';` (that module does not exist on master).
+        2. In the planning-session poll-failure `useEffect` (the `setInterval` calling `refreshPlanningSessionsNow` guarded by `inFlight`), add `void window.invoker?.reportUiPerf?.('planning_poll_failure', { consecutiveFailures: planningPollFailureCountRef.current });` right after `planningPollFailureCountRef.current += 1;`, and `void window.invoker?.reportUiPerf?.('planning_poll_lost_connection', { sessionId: session.id, turnId: session.activeTurnId });` right before the `applyTurnOutcomeRef.current(session.id, session.activeTurnId, { status: 'failed', error: 'Lost connection to the planner.' })` call inside that same handler. Keep the existing `inFlight`/`.finally(() => { inFlight = false; })` structure exactly as it is on master today — only add the two `reportUiPerf` calls inside it.
+        3. In the "gone" session-detection loop (the one tracking `goneCounts`), add `void window.invoker?.reportUiPerf?.('planning_turn_gone_tick', { sessionId: session.id, turnId: session.activeTurnId, count });` right before `goneCounts.set(session.id, count);`, and `void window.invoker?.reportUiPerf?.('planning_turn_gone_failed', { sessionId: session.id, turnId: session.activeTurnId });` right after `goneCounts.delete(session.id);` and before the following `applyTurnOutcomeRef.current(...)` call for the "no longer exists on the server" failure.
+        4. In the `catch (err)` block of the planning-session refresh function, add `void window.invoker?.reportUiPerf?.('planning_poll_error', { error: err instanceof Error ? err.message : String(err) });` before the existing `console.error('[planning] planning session refresh failed', err);` line.
+        5. In `applyPlanningTurnOutcome`, add `void window.invoker?.reportUiPerf?.('planning_turn_outcome_dropped', { sessionId, turnId, reason: !target ? 'no-session' : 'turn-mismatch' });` in the early-return branch (`if (!target || target.activeTurnId !== turnId) { ... return; }`), and `void window.invoker?.reportUiPerf?.('planning_turn_outcome', { sessionId: targetId, turnId, status: outcome.status, ...(outcome.status === 'failed' ? { error: outcome.error } : {}) });` right after `const targetId = target.id;`.
+        6. In the `startReady` handler, add `void window.invoker?.reportUiPerf?.('planning_start_ready_start', { dryRun: request.dryRun === true });` right before the `try`, `void window.invoker?.reportUiPerf?.('planning_start_ready_ok', { dryRun: result.dryRun === true, startedCount: result.started.length, recreatedCount: result.recreatedWorkflowIds.length, failedOutcomeCount: result.workflowOutcomes?.filter((outcome) => !outcome.ok).length ?? 0, partial: result.partial === true, durationMs: Math.round(performance.now() - startReadyStartedAt) });` right after `const result = await invoker.startReady(request);` (introduce `const startReadyStartedAt = performance.now();` right before the `try`), and `void window.invoker?.reportUiPerf?.('planning_start_ready_error', { error: err instanceof Error ? err.message : String(err), durationMs: Math.round(performance.now() - startReadyStartedAt) });` in the `catch (err)` block before `notifyMutationError(...)`.
+        7. In the plan-submit handler, add `const submitStartedAt = performance.now();` and `void window.invoker?.reportUiPerf?.('planning_plan_submit_start', { sessionId: targetSessionId });` before the `try`; on the success path add `void window.invoker?.reportUiPerf?.('planning_plan_submit_ok', { sessionId: targetSessionId, workflowId: result.workflowId, planName: result.planName, durationMs: Math.round(performance.now() - submitStartedAt) });` right after `if (result.ok) {`; on the `result.ok === false` path add `void window.invoker?.reportUiPerf?.('planning_plan_submit_error', { sessionId: targetSessionId, error: result.error, durationMs: Math.round(performance.now() - submitStartedAt) });` before updating session state to not-busy; in the `catch (err)` block add `void window.invoker?.reportUiPerf?.('planning_plan_submit_error', { sessionId: targetSessionId, transport: true, error: err instanceof Error ? err.message : String(err), durationMs: Math.round(performance.now() - submitStartedAt) });` before updating session state to not-busy.
+        8. In `handlePlanningSubmit`, when the guard `if (!input || activePlanningSessionBusy || activePlanningReadOnly)` returns early, add `void window.invoker?.reportUiPerf?.('planning_submit_blocked', { sessionId: activePlanningSessionId, reason: !input ? 'empty-input' : activePlanningSessionBusy ? 'busy' : 'read-only' });` before the `return;`.
+        9. In the send path of `handlePlanningSubmit`, add `const sendStartedAt = performance.now();` and `void window.invoker?.reportUiPerf?.('planning_send_start', { sessionId: previousSessionId, turnId, messageLength: input.length });` before the `try`; after `const result = await invoker.planningChatSend(request);` add `void window.invoker?.reportUiPerf?.('planning_send_result', { sessionId: previousSessionId, turnId, ok: result.ok, ...(result.ok ? {} : { error: result.error }), durationMs: Math.round(performance.now() - sendStartedAt) });`; in the `catch (err)` block add `void window.invoker?.reportUiPerf?.('planning_send_transport_failure', { sessionId: previousSessionId, turnId, error: err instanceof Error ? err.message : String(err), durationMs: Math.round(performance.now() - sendStartedAt) });` before the existing `console.error('[planning] planningChatSend transport failure', err);` line. Apply the same pattern (with `retry: true` added to each payload) to the retry-send handler, matching PR #9981's original `planning_send_start` / `planning_send_result` / `planning_send_transport_failure` retry call sites.
+        10. In `handleCreatePlanningSession`, add `void window.invoker?.reportUiPerf?.('planning_session_new', { sessionId: session.id });` right after `const session = makeFreshLocalPlanningSession();`.
+        11. In the session-delete handler, add `void window.invoker?.reportUiPerf?.('planning_session_delete', { sessionId });` right after the `activePlanningReadOnly` early-return check.
+        12. In the sidebar session-switch `onClick` handler, add `void window.invoker?.reportUiPerf?.('planning_session_switch', { to: session.id });` before `setActivePlanningSessionId(session.id);`.
+        In `packages/ui/src/components/InvokerTerminal.tsx`:
+        13. Keep the disabled-send `pointerdown` wrapper `<span data-testid="invoker-terminal-send-wrap" ...>` around the existing Send `<button>`, but call the file's existing local `reportPlanningChatPerf('planning_chat_send_dead_click', { busy, binding, readOnly, valueLength: value.length })` helper (already defined near the top of the file, wrapping `window.invoker?.reportUiPerf?.`) from the `onPointerDown` handler instead of `logPlanningEvent`.
+        In `packages/ui/src/__tests__/invoker-terminal.test.tsx`:
+        14. Do not import `planningTelemetryRing` or `resetPlanningTelemetryForTests` (that module is gone). Rewrite the two new tests ("records a dead-click telemetry event..." and "does not record dead clicks...") to follow this suite's existing `mock.api.reportUiPerf` convention (see the "reports planning chat input, submit, and transcript render perf markers" test in the same file): call `vi.mocked(mock.api.reportUiPerf).mockClear()` before rendering/acting, then assert with `expect(mock.api.reportUiPerf).toHaveBeenCalledWith('planning_chat_send_dead_click', expect.objectContaining({ busy: true, binding: false, readOnly: false, valueLength: 11 }))` for the disabled-button case, and `expect(mock.api.reportUiPerf).not.toHaveBeenCalledWith('planning_chat_send_dead_click', expect.anything())` for the enabled-button case.
+      Non-goals:
+      - No changes to `planning-session-view.ts`, `start-ready-rail-modes.ts`, or any other file introduced by the already-merged part 16/17 PRs. No changes to poll intervals, retry thresholds, or the `inFlight` dedupe guard's control flow. No new activity-log query tooling or dashboard work. No PR publication in this task — this workflow stops at handoff.
+      Layer: ui
+      Feature state: active
+      Files:
+      - packages/ui/src/App.tsx
+      - packages/ui/src/components/InvokerTerminal.tsx
+      - packages/ui/src/__tests__/invoker-terminal.test.tsx
+      Change types:
+      - packages/ui/src/App.tsx: modify
+      - packages/ui/src/components/InvokerTerminal.tsx: modify
+      - packages/ui/src/__tests__/invoker-terminal.test.tsx: modify
+      Acceptance criteria:
+      - No reference to `planning-telemetry` or `logPlanningEvent` remains anywhere under `packages/ui/src`.
+      - `packages/ui/src/App.tsx` and `packages/ui/src/components/InvokerTerminal.tsx` route every new planning-interaction telemetry event through `window.invoker?.reportUiPerf?.(...)` (directly in `App.tsx`, via the existing `reportPlanningChatPerf` helper in `InvokerTerminal.tsx`).
+      - The two new `InvokerTerminal` tests for the disabled-send dead-click case assert against `mock.api.reportUiPerf`, not a ring buffer.
+      - Pass condition: `pnpm --filter @invoker/ui test` exits 0.
+    prompt: |
+      Review claim:
+      - Re-author PR #9981's planning-interaction instrumentation on top of `master` so every event goes through the surviving `reportUiPerf` telemetry sink instead of the retired `logPlanningEvent` helper.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Touch only `packages/ui/src/App.tsx`, `packages/ui/src/components/InvokerTerminal.tsx`, and `packages/ui/src/__tests__/invoker-terminal.test.tsx`. Do not recreate `packages/ui/src/lib/planning-telemetry.ts` or any ring-buffer helper. Do not change the existing `inFlight`-guarded polling dedupe logic, retry counts, or any user-visible planning UI behavior — only add/rewire telemetry calls alongside it.
+      Slice rationale:
+      - This is one review claim (point one PR's instrumentation at the surviving telemetry sink) in one review lane (behavior), touching one package boundary (`packages/ui`), so it fits one prompt task plus focused verification rather than a multi-workflow stack.
+      Architectural effect:
+      - Planning-interaction telemetry (turn lifecycle, poll health, submit/send, session lifecycle, disabled-send dead-clicks) now flows through the same `reportUiPerf` → activity-log pipeline as every other UI perf marker, instead of a client-only ring buffer that no longer exists on master.
+      Goal:
+      - Land PR #9981's "instrument planning interactions end to end" intent in a form that compiles and tests green against master's current telemetry architecture.
+      Motivation:
+      - PR #9981 is blocked by a GitHub-reported merge conflict. The underlying cause is that its dependency module was redesigned during review of its parent PR, not merely renamed, so the fix is a redesign of the telemetry call sites, not a rebase.
+      Alternative considerations:
+      - Option A (chosen): call `window.invoker?.reportUiPerf?.(metric, data)` directly in `App.tsx` (matching the existing `renderer_event_loop_lag` / `PLANNING_TYPING_LAG_METRIC` call sites there) and `reportPlanningChatPerf(metric, data)` in `InvokerTerminal.tsx` (the local helper already wrapping `reportUiPerf` in that file), reusing the same event names and payload shapes PR #9981 originally chose.
+      - Option B: resurrect `planning-telemetry.ts` as a compatibility shim that forwards to `reportUiPerf`. Rejected — it would reintroduce a module master's own reviewers removed, and duplicate a sink that already exists.
+      Implementation details:
+      - Add a `reportUiPerf` call at each planning-interaction call site listed below, matching the event name and payload shape from PR #9981's original diff, and keep the retired `planning-telemetry.ts` helper out of the tree.
+      Concrete edits:
+      - Assume no prior context beyond this description. In `packages/ui/src/App.tsx`:
+        1. Do not add `import { logPlanningEvent } from './lib/planning-telemetry.js';` (that module does not exist on master).
+        2. In the planning-session poll-failure `useEffect` (the `setInterval` calling `refreshPlanningSessionsNow` guarded by `inFlight`), add `void window.invoker?.reportUiPerf?.('planning_poll_failure', { consecutiveFailures: planningPollFailureCountRef.current });` right after `planningPollFailureCountRef.current += 1;`, and `void window.invoker?.reportUiPerf?.('planning_poll_lost_connection', { sessionId: session.id, turnId: session.activeTurnId });` right before the `applyTurnOutcomeRef.current(session.id, session.activeTurnId, { status: 'failed', error: 'Lost connection to the planner.' })` call inside that same handler. Keep the existing `inFlight`/`.finally(() => { inFlight = false; })` structure exactly as it is on master today — only add the two `reportUiPerf` calls inside it.
+        3. In the "gone" session-detection loop (the one tracking `goneCounts`), add `void window.invoker?.reportUiPerf?.('planning_turn_gone_tick', { sessionId: session.id, turnId: session.activeTurnId, count });` right before `goneCounts.set(session.id, count);`, and `void window.invoker?.reportUiPerf?.('planning_turn_gone_failed', { sessionId: session.id, turnId: session.activeTurnId });` right after `goneCounts.delete(session.id);` and before the following `applyTurnOutcomeRef.current(...)` call for the "no longer exists on the server" failure.
+        4. In the `catch (err)` block of the planning-session refresh function, add `void window.invoker?.reportUiPerf?.('planning_poll_error', { error: err instanceof Error ? err.message : String(err) });` before the existing `console.error('[planning] planning session refresh failed', err);` line.
+        5. In `applyPlanningTurnOutcome`, add `void window.invoker?.reportUiPerf?.('planning_turn_outcome_dropped', { sessionId, turnId, reason: !target ? 'no-session' : 'turn-mismatch' });` in the early-return branch (`if (!target || target.activeTurnId !== turnId) { ... return; }`), and `void window.invoker?.reportUiPerf?.('planning_turn_outcome', { sessionId: targetId, turnId, status: outcome.status, ...(outcome.status === 'failed' ? { error: outcome.error } : {}) });` right after `const targetId = target.id;`.
+        6. In the `startReady` handler, add `void window.invoker?.reportUiPerf?.('planning_start_ready_start', { dryRun: request.dryRun === true });` right before the `try`, `void window.invoker?.reportUiPerf?.('planning_start_ready_ok', { dryRun: result.dryRun === true, startedCount: result.started.length, recreatedCount: result.recreatedWorkflowIds.length, failedOutcomeCount: result.workflowOutcomes?.filter((outcome) => !outcome.ok).length ?? 0, partial: result.partial === true, durationMs: Math.round(performance.now() - startReadyStartedAt) });` right after `const result = await invoker.startReady(request);` (introduce `const startReadyStartedAt = performance.now();` right before the `try`), and `void window.invoker?.reportUiPerf?.('planning_start_ready_error', { error: err instanceof Error ? err.message : String(err), durationMs: Math.round(performance.now() - startReadyStartedAt) });` in the `catch (err)` block before `notifyMutationError(...)`.
+        7. In the plan-submit handler, add `const submitStartedAt = performance.now();` and `void window.invoker?.reportUiPerf?.('planning_plan_submit_start', { sessionId: targetSessionId });` before the `try`; on the success path add `void window.invoker?.reportUiPerf?.('planning_plan_submit_ok', { sessionId: targetSessionId, workflowId: result.workflowId, planName: result.planName, durationMs: Math.round(performance.now() - submitStartedAt) });` right after `if (result.ok) {`; on the `result.ok === false` path add `void window.invoker?.reportUiPerf?.('planning_plan_submit_error', { sessionId: targetSessionId, error: result.error, durationMs: Math.round(performance.now() - submitStartedAt) });` before updating session state to not-busy; in the `catch (err)` block add `void window.invoker?.reportUiPerf?.('planning_plan_submit_error', { sessionId: targetSessionId, transport: true, error: err instanceof Error ? err.message : String(err), durationMs: Math.round(performance.now() - submitStartedAt) });` before updating session state to not-busy.
+        8. In `handlePlanningSubmit`, when the guard `if (!input || activePlanningSessionBusy || activePlanningReadOnly)` returns early, add `void window.invoker?.reportUiPerf?.('planning_submit_blocked', { sessionId: activePlanningSessionId, reason: !input ? 'empty-input' : activePlanningSessionBusy ? 'busy' : 'read-only' });` before the `return;`.
+        9. In the send path of `handlePlanningSubmit`, add `const sendStartedAt = performance.now();` and `void window.invoker?.reportUiPerf?.('planning_send_start', { sessionId: previousSessionId, turnId, messageLength: input.length });` before the `try`; after `const result = await invoker.planningChatSend(request);` add `void window.invoker?.reportUiPerf?.('planning_send_result', { sessionId: previousSessionId, turnId, ok: result.ok, ...(result.ok ? {} : { error: result.error }), durationMs: Math.round(performance.now() - sendStartedAt) });`; in the `catch (err)` block add `void window.invoker?.reportUiPerf?.('planning_send_transport_failure', { sessionId: previousSessionId, turnId, error: err instanceof Error ? err.message : String(err), durationMs: Math.round(performance.now() - sendStartedAt) });` before the existing `console.error('[planning] planningChatSend transport failure', err);` line. Apply the same pattern (with `retry: true` added to each payload) to the retry-send handler, matching PR #9981's original `planning_send_start` / `planning_send_result` / `planning_send_transport_failure` retry call sites.
+        10. In `handleCreatePlanningSession`, add `void window.invoker?.reportUiPerf?.('planning_session_new', { sessionId: session.id });` right after `const session = makeFreshLocalPlanningSession();`.
+        11. In the session-delete handler, add `void window.invoker?.reportUiPerf?.('planning_session_delete', { sessionId });` right after the `activePlanningReadOnly` early-return check.
+        12. In the sidebar session-switch `onClick` handler, add `void window.invoker?.reportUiPerf?.('planning_session_switch', { to: session.id });` before `setActivePlanningSessionId(session.id);`.
+        In `packages/ui/src/components/InvokerTerminal.tsx`:
+        13. Keep the disabled-send `pointerdown` wrapper `<span data-testid="invoker-terminal-send-wrap" ...>` around the existing Send `<button>`, but call the file's existing local `reportPlanningChatPerf('planning_chat_send_dead_click', { busy, binding, readOnly, valueLength: value.length })` helper (already defined near the top of the file, wrapping `window.invoker?.reportUiPerf?.`) from the `onPointerDown` handler instead of `logPlanningEvent`.
+        In `packages/ui/src/__tests__/invoker-terminal.test.tsx`:
+        14. Do not import `planningTelemetryRing` or `resetPlanningTelemetryForTests` (that module is gone). Rewrite the two new tests ("records a dead-click telemetry event..." and "does not record dead clicks...") to follow this suite's existing `mock.api.reportUiPerf` convention (see the "reports planning chat input, submit, and transcript render perf markers" test in the same file): call `vi.mocked(mock.api.reportUiPerf).mockClear()` before rendering/acting, then assert with `expect(mock.api.reportUiPerf).toHaveBeenCalledWith('planning_chat_send_dead_click', expect.objectContaining({ busy: true, binding: false, readOnly: false, valueLength: 11 }))` for the disabled-button case, and `expect(mock.api.reportUiPerf).not.toHaveBeenCalledWith('planning_chat_send_dead_click', expect.anything())` for the enabled-button case.
+      Non-goals:
+      - No changes to `planning-session-view.ts`, `start-ready-rail-modes.ts`, or any other file introduced by the already-merged part 16/17 PRs. No changes to poll intervals, retry thresholds, or the `inFlight` dedupe guard's control flow. No new activity-log query tooling or dashboard work. No PR publication in this task — this workflow stops at handoff.
+      Files:
+      - packages/ui/src/App.tsx
+      - packages/ui/src/components/InvokerTerminal.tsx
+      - packages/ui/src/__tests__/invoker-terminal.test.tsx
+      Change types:
+      - packages/ui/src/App.tsx: modify
+      - packages/ui/src/components/InvokerTerminal.tsx: modify
+      - packages/ui/src/__tests__/invoker-terminal.test.tsx: modify
+      Acceptance criteria:
+      - No reference to `planning-telemetry` or `logPlanningEvent` remains anywhere under `packages/ui/src`.
+      - `packages/ui/src/App.tsx` and `packages/ui/src/components/InvokerTerminal.tsx` route every new planning-interaction telemetry event through `window.invoker?.reportUiPerf?.(...)` (directly in `App.tsx`, via the existing `reportPlanningChatPerf` helper in `InvokerTerminal.tsx`).
+      - The two new `InvokerTerminal` tests for the disabled-send dead-click case assert against `mock.api.reportUiPerf`, not a ring buffer.
+      - Pass condition: `pnpm --filter @invoker/ui test` exits 0.
+    dependencies: []
+
+  - id: verify-no-deleted-telemetry-module-references
+    description: |
+      Review claim:
+      - Confirm no reference to the deleted `planning-telemetry.ts` module or `logPlanningEvent` survives anywhere under `packages/ui/src`.
+      Review lane:
+      - proof
+      Safety invariant:
+      - Read-only grep; does not modify any file.
+      Slice rationale:
+      - Cheap, independent static check kept separate from the full test run so a stray dangling import fails fast with a precise message.
+      Architectural effect:
+      - None; this is a proof task.
+      Goal:
+      - Guarantee the rerouted telemetry change left no dead import to a module that no longer exists on master.
+      Motivation:
+      - A dangling `import ... from './lib/planning-telemetry.js'` would fail the TypeScript build even if `pnpm --filter @invoker/ui test` happened to pass in isolation.
+      Alternative considerations:
+      - Option A (chosen): a focused grep over `packages/ui/src` for the two dead identifiers.
+      - Option B: rely solely on the test run to catch it. Rejected — a missing import surfaces as a build/type error, not necessarily a test failure, depending on which files vitest touches.
+      Implementation details:
+      - Run a grep that exits non-zero if either dead identifier is found.
+      Non-goals:
+      - Does not run the UI test suite; see the sibling verification task for that.
+      Layer exception: allowed
+      - This proof depends on the implementation task so it only runs after the rerouted call sites exist.
+      Layer: app_regression
+      Feature state: active
+    command: "! grep -rn 'planning-telemetry\\|logPlanningEvent' packages/ui/src"
+    dependencies: [reroute-planning-telemetry-to-report-ui-perf]
+
+  - id: verify-ui-tests
+    description: |
+      Review claim:
+      - Run the UI package's test suite to confirm the rerouted telemetry calls and rewritten `InvokerTerminal` tests are green.
+      Review lane:
+      - proof
+      Safety invariant:
+      - Runs the package's own `pnpm test` script only; does not modify source.
+      Slice rationale:
+      - Focused package-local test run is the smallest honest proof for a `packages/ui`-only change.
+      Architectural effect:
+      - None; this is a proof task.
+      Goal:
+      - Prove `packages/ui` compiles and its tests, including the two rewritten dead-click tests, pass against the `reportUiPerf`-routed telemetry.
+      Motivation:
+      - This is the acceptance criterion stated in the implementation task.
+      Alternative considerations:
+      - Option A (chosen): `pnpm --filter @invoker/ui test`, the repo-supported package test script.
+      - Option B: `npx vitest run` — banned pattern (ABI mismatch risk); not used.
+      Implementation details:
+      - Execute the package test script from the repository root using the pnpm filter flag, not a raw `vitest` invocation.
+      Non-goals:
+      - Does not run the full monorepo `pnpm test` or any e2e/Playwright suite.
+      Layer exception: allowed
+      - This proof depends on the implementation task so it only runs after the rerouted call sites exist.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm --filter @invoker/ui test"
+    dependencies: [reroute-planning-telemetry-to-report-ui-perf]

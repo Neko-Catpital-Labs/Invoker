@@ -173,6 +173,36 @@ class Ledger:
                 latest_epoch = epoch
         return latest_row
 
+    def count_by_unit(self, kind: str, pr: int, key: str) -> int:
+        # Same as count(), but persistent across a commit change: a
+        # successful repair attempt pushes a new commit as a normal side
+        # effect, and that must not silently reset the retry cap for this
+        # (pr, kind, key) unit of work. Used for the retry-cap/backoff
+        # decision; count()/latest() stay head_sha-scoped for repair_in_flight,
+        # which genuinely needs "is *this* submission still running".
+        return sum(
+            1 for row in self.rows
+            if row.get("kind") == kind
+            and int(row.get("pr", -1)) == pr
+            and row.get("key") == key
+        )
+
+    def latest_by_unit(self, kind: str, pr: int, key: str) -> dict[str, object] | None:
+        latest_row: dict[str, object] | None = None
+        latest_epoch = float("-inf")
+        for row in self.rows:
+            if row.get("kind") != kind:
+                continue
+            if int(row.get("pr", -1)) != pr:
+                continue
+            if row.get("key") != key:
+                continue
+            epoch = int(row.get("epoch", 0) or 0)
+            if latest_row is None or epoch >= latest_epoch:
+                latest_row = row
+                latest_epoch = epoch
+        return latest_row
+
     def has_different_head(self, kind: str, pr: int, current_head: str, key: str) -> bool:
         for row in self.rows:
             if row.get("kind") != kind:
@@ -358,6 +388,30 @@ def payload_rule(payload: Mapping[str, object], body: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def payload_head_sha(payload: Mapping[str, object], body: str) -> str:
+    """Prefer Mergify payload SHA fields; fall back to Left-the-queue prose.
+
+    Waiting comments never contain the Left-the-queue SHA markup, so without
+    payload SHA the planner cannot detect HEAD movement against a waiting event.
+    """
+    for key in ("head_sha", "sha", "pull_request_head_sha", "current_sha"):
+        value = payload.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+            return value
+    pull_request = payload.get("pull_request")
+    if isinstance(pull_request, Mapping):
+        head = pull_request.get("head")
+        if isinstance(head, Mapping):
+            value = head.get("sha")
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+                return value
+        value = pull_request.get("sha")
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+            return value
+    sha_match = re.search(r"Left the queue.*?`([0-9a-fA-F]{40})`", body, re.I | re.S)
+    return sha_match.group(1) if sha_match else ""
+
+
 def clean_markdown(text: str) -> str:
     clean = re.sub(r"<[^>]+>", "", text)
     clean = re.sub(r"[*_]", "", clean)
@@ -463,9 +517,9 @@ def norm_check_state(node: Mapping[str, object]) -> tuple[str, str, str, str, st
     status = str(node.get("status") or "").upper()
     if conclusion in {"SUCCESS"}:
         state = "success"
-    elif conclusion in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE"}:
+    elif conclusion in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "STARTUP_FAILURE"}:
         state = "failure"
-    elif conclusion == "SKIPPED":
+    elif conclusion in {"SKIPPED", "CANCELLED"}:
         state = "skipped"
     elif conclusion == "NEUTRAL":
         state = "neutral"
