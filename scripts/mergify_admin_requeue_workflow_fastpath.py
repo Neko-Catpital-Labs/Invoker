@@ -10,6 +10,7 @@ from pathlib import Path
 try:
     from .mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from .mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from .mergify_admin_requeue_model import DEFAULT_INVOKER_REPO
     from .mergify_admin_requeue_async_repair import (
         rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
@@ -19,6 +20,7 @@ try:
 except ImportError:
     from mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from mergify_admin_requeue_model import DEFAULT_INVOKER_REPO
     from mergify_admin_requeue_async_repair import (
         rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
@@ -27,11 +29,18 @@ except ImportError:
     )
 
 
-def resolve_workflow_for_pr(pr_number: int) -> str | None:
+def resolve_workflow_for_pr(pr_number: int, repo: str = DEFAULT_INVOKER_REPO) -> str | None:
     # See cron-pr-lib.sh's resolve_workflow_for_pr comment: review-gate exits 0
     # with `{}` for a genuine miss (no local workflow mapping). A non-zero exit
     # means the lookup mechanism itself is broken, which must propagate as an
     # exception rather than silently falling back to ad-hoc repair.
+    #
+    # Invoker only ever owns a workflow for a PR on its own repo -- a foreign
+    # repo's PR number can collide with an unrelated Invoker PR number, so
+    # skip the lookup entirely for any other repo instead of risking the
+    # fast-path reusing the wrong repo's workflow.
+    if repo != DEFAULT_INVOKER_REPO:
+        return None
     review_gate_cmd = os.environ.get("INVOKER_PR_CRON_REVIEW_GATE_CMD")
     if review_gate_cmd:
         try:

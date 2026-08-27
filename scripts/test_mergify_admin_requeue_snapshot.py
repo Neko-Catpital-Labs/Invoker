@@ -475,6 +475,35 @@ class GhClientLabelEdit(unittest.TestCase):
             ]
         )
 
+class GhClientRepoRuleDiscovery(unittest.TestCase):
+    def test_default_branch_reads_repo_metadata(self):
+        client = s.GhClient()
+        with mock.patch.object(client, "_run", return_value='{"default_branch": "main"}') as run:
+            result = client.default_branch("some-org/catstack")
+        run.assert_called_once_with(["gh", "api", "repos/some-org/catstack"])
+        self.assertEqual(result, "main")
+
+    def test_file_text_decodes_base64_content(self):
+        import base64
+
+        client = s.GhClient()
+        encoded = base64.b64encode(b"pull_request_rules:\n").decode("ascii")
+        with mock.patch.object(client, "_run", return_value=encoded) as run:
+            result = client.file_text("some-org/catstack", ".mergify.yml")
+        run.assert_called_once_with(
+            ["gh", "api", "repos/some-org/catstack/contents/.mergify.yml", "--jq", ".content"]
+        )
+        self.assertEqual(result, "pull_request_rules:\n")
+
+    def test_file_text_returns_none_on_missing_file(self):
+        client = s.GhClient()
+        with mock.patch.object(
+            client, "_run", side_effect=subprocess.CalledProcessError(1, ["gh"], stderr="404 Not Found")
+        ):
+            result = client.file_text("some-org/catstack", ".mergify.yml")
+        self.assertIsNone(result)
+
+
 class GhRetryBudgetRespectsWorkerTickTimeout(unittest.TestCase):
     # The pr-admin-bypass-land worker (packages/execution-engine/src/workers/
     # pr-maintenance-workers.ts) force-kills the whole script if a tick runs

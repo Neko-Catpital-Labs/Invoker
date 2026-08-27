@@ -92,6 +92,24 @@ def _repair_task_yaml(*, description: str, prompt: str, max_turns: int | None = 
     )
 
 
+def _foreign_safe_push_command(*, head_ref: str, start_head: str, skip_guard: str) -> str:
+    # A foreign worktree never has Invoker's own scripts/pr_worker_safe_push.py
+    # (that script lives only in the Invoker checkout). Reimplement its
+    # expected-head safety check inline with plain git so the push still
+    # refuses to run if the branch moved since this repair started.
+    return (
+        "set -euo pipefail\n"
+        f"{skip_guard}"
+        f"git fetch origin {_shlex(head_ref)}\n"
+        f"current_head=\"$(git rev-parse origin/{head_ref})\"\n"
+        f"if [ \"$current_head\" != {_shlex(start_head)} ]; then\n"
+        f"  echo \"refusing to push: {head_ref} moved from {start_head} to $current_head\" >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        f"git push origin HEAD:{_shlex(head_ref)}\n"
+    )
+
+
 def _safe_push_task_yaml(
     *,
     task_id: str,
@@ -100,6 +118,7 @@ def _safe_push_task_yaml(
     head_ref: str,
     start_head: str,
     skip_if_prereq: bool,
+    foreign: bool = False,
 ) -> str:
     skip_guard = (
         "if [ -f .invoker-repair-prereq-created ]; then\n"
@@ -109,15 +128,18 @@ def _safe_push_task_yaml(
         if skip_if_prereq
         else ""
     )
-    # Owner-side JSONL settlement is recorded by mergify_admin_requeue_workflow_fastpath
-    # from durable workflow/task state. Never pass the owner machine's ledger path into
-    # a remote worker command (Linux workers cannot write /Users/... paths).
-    command = (
-        "set -euo pipefail\n"
-        f"{skip_guard}"
-        "python3 scripts/pr_worker_safe_push.py \\\n"
-        f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd .\n"
-    )
+    if foreign:
+        command = _foreign_safe_push_command(head_ref=head_ref, start_head=start_head, skip_guard=skip_guard)
+    else:
+        # Owner-side JSONL settlement is recorded by mergify_admin_requeue_workflow_fastpath
+        # from durable workflow/task state. Never pass the owner machine's ledger path into
+        # a remote worker command (Linux workers cannot write /Users/... paths).
+        command = (
+            "set -euo pipefail\n"
+            f"{skip_guard}"
+            "python3 scripts/pr_worker_safe_push.py \\\n"
+            f"  --branch {_shlex(head_ref)} --expected-head {_shlex(start_head)} --cwd .\n"
+        )
     return (
         f"  - id: {task_id}\n"
         f"    description: {_yaml_str(description)}\n"
@@ -166,6 +188,7 @@ def build_repair_check_plan(
     latest: MergifyQueueEvent | None,
     start_head: str,
     state_file: Path,
+    foreign: bool = False,
 ) -> AsyncRepairPlan:
     name = repair_check_plan_name(pr.number, check_name, start_head)
     prompt = (
@@ -189,6 +212,21 @@ def build_repair_check_plan(
 
     yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
     yaml_text += _repair_task_yaml(description=f"Repair PR #{pr.number} (failed check {check_name})", prompt=prompt)
+    if foreign:
+        # A foreign worktree never has Invoker's own
+        # mergify_admin_requeue_repair_normalize.py (prerequisite-PR splitting
+        # is an Invoker-repo-only concept), so go straight from repair to a
+        # plain safe push instead of running that Invoker-only normalize step.
+        yaml_text += _safe_push_task_yaml(
+            task_id="safe-push",
+            description=f"Safely push PR #{pr.number} only if its head did not move",
+            dependencies="repair",
+            head_ref=pr.head_ref_name,
+            start_head=start_head,
+            skip_if_prereq=False,
+            foreign=True,
+        )
+        return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
     normalize_command = (
         "set -euo pipefail\n"
         "python3 -B scripts/mergify_admin_requeue_repair_normalize.py \\\n"
@@ -235,6 +273,7 @@ def build_rebase_onto_master_plan(
     repo: str,
     start_head: str,
     state_file: Path,
+    foreign: bool = False,
 ) -> AsyncRepairPlan:
     onto_ref = pr.base_ref_name or "master"
     name = rebase_onto_master_plan_name(pr.number, start_head)
@@ -251,6 +290,7 @@ def build_rebase_onto_master_plan(
         head_ref=pr.head_ref_name,
         start_head=start_head,
         skip_if_prereq=False,
+        foreign=foreign,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
@@ -262,6 +302,7 @@ def build_repair_bot_thread_plan(
     repo: str,
     start_head: str,
     state_file: Path,
+    foreign: bool = False,
 ) -> AsyncRepairPlan:
     name = repair_bot_thread_plan_name(pr.number, start_head)
     prompt = (
@@ -281,6 +322,7 @@ def build_repair_bot_thread_plan(
         head_ref=pr.head_ref_name,
         start_head=start_head,
         skip_if_prereq=False,
+        foreign=foreign,
     )
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 

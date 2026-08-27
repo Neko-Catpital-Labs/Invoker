@@ -8,14 +8,14 @@ try:
     from . import mergify_admin_requeue_async_repair as async_repair
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
+    from .mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import is_queue_only_required_check
     from .mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
+    from mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import is_queue_only_required_check
     from mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
@@ -45,6 +45,12 @@ class AdminBypassRepairer:
         self.logger = logger
         self.ledger = ledger
         self.repo = repo
+        # A foreign repo's worktree never has Invoker's own repair helper
+        # scripts (mergify_admin_requeue_repair_normalize.py,
+        # pr_worker_safe_push.py), so its generated repair plans must never
+        # invoke them -- see async_repair.build_repair_check_plan's
+        # foreign= parameter.
+        self.is_foreign = repo != DEFAULT_INVOKER_REPO
 
     def blocked_outcome(
         self,
@@ -182,6 +188,7 @@ class AdminBypassRepairer:
             latest=latest,
             start_head=start_head,
             state_file=self.ledger.path,
+            foreign=self.is_foreign,
         )
         self.logger.trace(
             "admin-bypass-repair-check-start",
@@ -208,6 +215,7 @@ class AdminBypassRepairer:
         key = f"rebase-onto-master:{pr.number}"
         plan = async_repair.build_rebase_onto_master_plan(
             pr, reason, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
+            foreign=self.is_foreign,
         )
         self.logger.trace(
             "admin-bypass-rebase-onto-master-start",
@@ -229,6 +237,7 @@ class AdminBypassRepairer:
         start_head = pr.head_ref_oid
         plan = async_repair.build_repair_bot_thread_plan(
             pr, thread_id, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
+            foreign=self.is_foreign,
         )
         self.logger.trace(
             "admin-bypass-repair-bot-thread-start",

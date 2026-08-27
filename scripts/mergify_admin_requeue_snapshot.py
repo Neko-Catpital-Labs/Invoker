@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import re
@@ -191,6 +192,24 @@ class GhClient:
     def resolve_review_thread(self, thread_id: str) -> None:
         query = "mutation($threadId:ID!) { resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } } }"
         run_logged(["gh", "api", "graphql", "-f", f"threadId={thread_id}", "-f", f"query={query}"])
+
+    def default_branch(self, repo: str) -> str:
+        out = self._run(["gh", "api", f"repos/{repo}"])
+        return str(json.loads(out).get("default_branch") or "")
+
+    def file_text(self, repo: str, path: str) -> str | None:
+        # A missing file (no admin-bypass Mergify rule in this repo) is the
+        # expected case for most foreign repos. A 404 is not in
+        # TRANSIENT_GH_ERROR_MARKERS, so run_logged raises it on the first
+        # attempt without retrying/backing off.
+        try:
+            out = self._run(["gh", "api", f"repos/{repo}/contents/{path}", "--jq", ".content"])
+        except (subprocess.CalledProcessError, RuntimeError):
+            return None
+        encoded = out.strip()
+        if not encoded:
+            return None
+        return base64.b64decode(encoded).decode("utf-8", errors="replace")
 
 
 def run_logged(

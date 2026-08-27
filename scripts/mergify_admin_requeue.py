@@ -31,6 +31,11 @@ REPO_ROOT = exec_impl.REPO_ROOT
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    target_repos = [repo.strip() for repo in args.target_repos.split(",") if repo.strip()]
+    if target_repos:
+        return exec_impl.run_cron_target_repos(
+            args, target_repos, default_claim_repair_filing, default_release_repair_filing
+        )
     if args.loop:
         return run_loop(args, default_claim_repair_filing, default_release_repair_filing)
     return run_once(args, default_claim_repair_filing, default_release_repair_filing)

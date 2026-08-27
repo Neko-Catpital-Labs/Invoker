@@ -318,6 +318,37 @@ class MergifyRuleLoading(unittest.TestCase):
             m.load_mergify_rules(self._write("pull_request_rules:\n  - name: other\n"))
 
 
+class ResolveAdminBypassRulesForRepo(unittest.TestCase):
+    """A foreign repo's own Mergify text wins; a default branch is the fallback."""
+
+    def test_uses_repo_own_mergify_text_when_present(self):
+        trunk, labels, required = m.resolve_admin_bypass_rules_for_repo(
+            "some-org/catstack", MERGIFY_YML, "main"
+        )
+        self.assertEqual(trunk, "master")
+        self.assertEqual(labels, frozenset({"admin-bypass"}))
+        self.assertEqual(required, frozenset({"lint", "build (ubuntu-latest)"}))
+
+    def test_falls_back_to_default_branch_when_no_mergify_text(self):
+        trunk, labels, required = m.resolve_admin_bypass_rules_for_repo(
+            "some-org/catstack", None, "main"
+        )
+        self.assertEqual(trunk, "main")
+        self.assertEqual(labels, frozenset())
+        self.assertEqual(required, frozenset())
+
+    def test_falls_back_to_default_branch_when_mergify_text_has_no_admin_bypass_rule(self):
+        trunk, labels, required = m.resolve_admin_bypass_rules_for_repo(
+            "some-org/catstack", "pull_request_rules:\n  - name: other\n", "main"
+        )
+        self.assertEqual(trunk, "main")
+        self.assertEqual(required, frozenset())
+
+    def test_raises_when_neither_mergify_text_nor_default_branch_available(self):
+        with self.assertRaises(ValueError):
+            m.resolve_admin_bypass_rules_for_repo("some-org/catstack", None, None)
+
+
 class LedgerIdempotency(unittest.TestCase):
     """The ledger stops the worker repeating an action on the same commit."""
 
@@ -356,6 +387,17 @@ class LedgerIdempotency(unittest.TestCase):
         )
         led = m.Ledger(path)
         self.assertEqual(led.count("requeue", 3221, "sha1", "flaky"), 1)
+
+    def test_repo_scoping_keeps_two_repos_from_cross_pollinating_the_same_pr_number(self):
+        path = self._ledger_path()
+        led = m.Ledger(path)
+        led.record("requeue", 1, "sha1", "flaky", repo="owner/invoker")
+        self.assertEqual(led.count("requeue", 1, "sha1", "flaky", repo="owner/invoker"), 1)
+        self.assertEqual(led.count("requeue", 1, "sha1", "flaky", repo="owner/catstack"), 0)
+        # No repo filter (the pre-multi-repo call shape) still sees every row.
+        self.assertEqual(led.count("requeue", 1, "sha1", "flaky"), 1)
+        self.assertIsNone(led.latest("requeue", 1, "sha1", "flaky", repo="owner/catstack"))
+        self.assertIsNotNone(led.latest("requeue", 1, "sha1", "flaky", repo="owner/invoker"))
 
 
 if __name__ == "__main__":

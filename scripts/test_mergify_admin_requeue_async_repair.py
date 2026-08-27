@@ -266,6 +266,46 @@ class AsyncRepairPlanTests(unittest.TestCase):
         run.assert_called_once()
         self.assertFalse(written_paths[0].exists())
 
+    def test_foreign_repair_check_plan_omits_normalize_and_invoker_safe_push(self):
+        plan = async_repair.build_repair_check_plan(
+            pr(), "CI", repo="some-org/catstack", details_url="https://example.invalid/job",
+            log_path="/tmp/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+            start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"), foreign=True,
+        )
+        doc = yaml.safe_load(plan.yaml_text)
+        self.assertEqual(doc["repoUrl"], "https://github.com/some-org/catstack.git")
+        self.assertEqual([task["id"] for task in doc["tasks"]], ["repair", "safe-push"])
+        self.assertNotIn("id: normalize", plan.yaml_text)
+        self.assertNotIn("mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
+        self.assertNotIn("pr_worker_safe_push.py", plan.yaml_text)
+        self.assertIn("git push origin HEAD:", plan.yaml_text)
+        self.assertIn(HEAD, plan.yaml_text)
+
+    def test_foreign_rebase_and_bot_thread_plans_omit_invoker_safe_push(self):
+        rebase_plan = async_repair.build_rebase_onto_master_plan(
+            pr(), "GitHub reports merge conflict", repo="some-org/catstack",
+            start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"), foreign=True,
+        )
+        bot_thread_plan = async_repair.build_repair_bot_thread_plan(
+            pr(), "tbot", repo="some-org/catstack", start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"), foreign=True,
+        )
+        for plan in (rebase_plan, bot_thread_plan):
+            with self.subTest(plan=plan.plan_name):
+                self.assertNotIn("pr_worker_safe_push.py", plan.yaml_text)
+                self.assertIn("git push origin HEAD:", plan.yaml_text)
+
+    def test_non_foreign_repair_check_plan_still_includes_invoker_helpers(self):
+        # Default (foreign=False) behavior must stay exactly as it was before
+        # multi-repo support existed.
+        plan = async_repair.build_repair_check_plan(
+            pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
+            log_path="/tmp/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+            start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
+        self.assertIn("pr_worker_safe_push.py", plan.yaml_text)
+
     def test_submit_async_repair_plan_raises_on_failure(self):
         plan = async_repair.AsyncRepairPlan(plan_name="p", yaml_text="name: x\n")
         completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")

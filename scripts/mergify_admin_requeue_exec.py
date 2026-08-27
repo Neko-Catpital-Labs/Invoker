@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 import sys
@@ -11,7 +12,14 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
+    from .mergify_admin_requeue_model import (
+        Action,
+        DEFAULT_INVOKER_REPO,
+        Ledger,
+        PrSnapshot,
+        load_mergify_rules,
+        resolve_admin_bypass_rules_for_repo,
+    )
     from .mergify_admin_requeue_plan import (
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
@@ -36,7 +44,14 @@ except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
+    from mergify_admin_requeue_model import (
+        Action,
+        DEFAULT_INVOKER_REPO,
+        Ledger,
+        PrSnapshot,
+        load_mergify_rules,
+        resolve_admin_bypass_rules_for_repo,
+    )
     from mergify_admin_requeue_plan import (
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
@@ -121,13 +136,23 @@ def run_cycle(
     args: argparse.Namespace,
     claim_repair_filing: ClaimRepairFiling | None = None,
     release_repair_filing: ReleaseRepairFiling | None = None,
+    rules: tuple[str, frozenset[str], frozenset[str]] | None = None,
 ) -> bool:
-    rule_path = REPO_ROOT / ".mergify.yml"
-    try:
-        trunk, _labels, required_checks = load_mergify_rules(rule_path)
-    except ValueError as exc:
-        print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
-        raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
+    # `rules` lets a multi-repo caller (run_cron_target_repos) pass in a
+    # rule tuple it already resolved for a foreign repo via
+    # resolve_admin_bypass_rules_for_repo, instead of always loading
+    # Invoker's own local .mergify.yml regardless of args.repo. Every
+    # existing single-repo caller omits it and keeps this exact prior
+    # behavior.
+    if rules is not None:
+        trunk, _labels, required_checks = rules
+    else:
+        rule_path = REPO_ROOT / ".mergify.yml"
+        try:
+            trunk, _labels, required_checks = load_mergify_rules(rule_path)
+        except ValueError as exc:
+            print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
+            raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
 
     logger = AdminBypassLogger()
     logger.trace(
@@ -226,7 +251,7 @@ def run_cycle(
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                     else:
                         check_name = action.key
-                        workflow_id = resolve_workflow_for_pr(action.pr_number)
+                        workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                         if workflow_id:
                             submit_repair_review_gate_ci(action.pr_number)
                             ledger.record(
@@ -308,7 +333,7 @@ def run_cycle(
                 continue
             elif action.kind == "rebase_onto_master":
                 try:
-                    workflow_id = resolve_workflow_for_pr(action.pr_number)
+                    workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                     if workflow_id:
                         submit_rebase_recreate(workflow_id)
                         ledger.record(
@@ -434,6 +459,57 @@ def run_loop(
     return 0
 
 
+def resolve_rules_for_repo(repo: str, gh: GhClient) -> tuple[str, frozenset[str], frozenset[str]]:
+    # The Invoker repo itself always reads its own local checkout's
+    # .mergify.yml (matches load_mergify_rules' pre-existing single-repo
+    # behavior exactly, and avoids a needless network round trip for the
+    # repo cron already runs from). Every other target repo has no local
+    # checkout to read, so its rule (if any) and default branch come from
+    # the GitHub API instead.
+    if repo == DEFAULT_INVOKER_REPO:
+        try:
+            return load_mergify_rules(REPO_ROOT / ".mergify.yml")
+        except ValueError as exc:
+            raise RuntimeError(f"failed to load admin-bypass Mergify rule for {repo}") from exc
+    file_text = gh.file_text(repo, ".mergify.yml")
+    default_branch = gh.default_branch(repo)
+    try:
+        return resolve_admin_bypass_rules_for_repo(repo, file_text, default_branch)
+    except ValueError as exc:
+        raise RuntimeError(f"failed to resolve admin-bypass rules for {repo}") from exc
+
+
+def run_cron_target_repos(
+    args: argparse.Namespace,
+    target_repos: Sequence[str],
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+    gh: GhClient | None = None,
+) -> int:
+    # Cron entry point for scanning more than one repo in a single tick.
+    # Each repo gets its own rule resolution (its own Mergify text/default
+    # branch, per resolve_rules_for_repo) and its own args.repo so every
+    # downstream call (ledger, executor, repairer, fastpath) stays scoped
+    # to that one repo. One repo's rule-resolution or scan failure is
+    # logged and skipped rather than aborting the whole cron tick.
+    gh = gh or GhClient()
+    had_failure = False
+    for repo in target_repos:
+        repo_args = copy.copy(args)
+        repo_args.repo = repo
+        try:
+            rules = resolve_rules_for_repo(repo, gh)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            had_failure = True
+            continue
+        try:
+            run_cycle(repo_args, claim_repair_filing, release_repair_filing, rules=rules)
+        except RuntimeError:
+            had_failure = True
+    return 2 if had_failure else 0
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Repair and queue open admin-bypass Mergify stacks.")
     mode = parser.add_mutually_exclusive_group()
@@ -442,6 +518,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--poll-seconds", type=float, default=60, help="Seconds to wait between loop scans. Default: 60.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions; perform no GitHub mutations.")
     parser.add_argument("--repo", default="Neko-Catpital-Labs/Invoker", help="Default: Neko-Catpital-Labs/Invoker.")
+    parser.add_argument(
+        "--target-repos",
+        default="",
+        help="Comma-separated repos to cron over in one tick (owner/name,owner/name,...). "
+        "Default: --repo alone. Any repo other than --repo's default is treated as foreign: "
+        "its own Mergify rule (or default branch) is resolved via the GitHub API, and its "
+        "repair plans never invoke Invoker-only repair helper scripts.",
+    )
     parser.add_argument("--author", help="Limit scan to one author. Default: all authors.")
     parser.add_argument("--state-file", default=str(Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"), help="Ledger JSONL path.")
     parser.add_argument("--pr", type=int, action="append", default=[], help="Limit to a PR; repeatable.")
