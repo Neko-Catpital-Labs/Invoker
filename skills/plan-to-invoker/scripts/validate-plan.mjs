@@ -538,13 +538,19 @@ function validateReviewGate(reviewGate, errors) {
 }
 
 function checkBaseBranchOnRemote(repoUrl, baseBranch) {
+  const shortName = baseBranch.replace(/^refs\/heads\//, '');
+  const wantRef = `refs/heads/${shortName}`;
   try {
-    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, baseBranch], {
+    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, '--', wantRef], {
       timeout: 8000,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',
     });
-    return out.trim() === '' ? 'absent' : 'present';
+    const matched = out
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .some((parts) => parts[1] === wantRef);
+    return matched ? 'present' : 'absent';
   } catch {
     return 'unknown';
   }
