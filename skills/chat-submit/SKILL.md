@@ -45,11 +45,15 @@ Do **not** use this skill for one-slice same-repo feature iteration, one-file fi
    - Self-triggered multi-layer delegation: use `confirmationMode: "auto_submit"` and call `invoker_submit_plan` once prepare reports that mode **and** completeness passed.
    - Human-triggered handoff: wait for one explicit user approval unless prepare already returned `auto_submit`.
 6. Call `invoker_submit_plan` with the same source (`planPath` or `sessionId`) plus `reviewToken` and `mode: "live"`.
-7. Watch results with read-only MCP tools:
-   - `invoker_get_workflow`
-   - `invoker_list_tasks`
-   - bounded `invoker_wait_for_workflow`
-8. Report completion, a blocker, or an approval gate. For retries/cancels/approvals against the running workflow, switch to `skill://invoker-ops/SKILL.md`.
+7. After submit, park — do not poll in-turn:
+   - Optionally confirm the workflow exists with a short `invoker_get_workflow` / `invoker_wait_for_workflow` (~5s).
+   - Arm a background shell: `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`.
+   - **End the turn.** Do not `AwaitShell`. Do not keep calling MCP wait/poll while the workflow runs.
+8. On `INVOKER_WAKE`, continue the parent job (same as a background subagent return):
+   - Read `invoker_get_workflow` / `invoker_list_tasks` for status (do not paste task logs into chat).
+   - On blocker / approval gate → `skill://invoker-ops/SKILL.md`.
+   - On success → next parent step. Do **not** publish PRs unless the original ask included that.
+9. For retries/cancels/approvals against the running workflow, switch to `skill://invoker-ops/SKILL.md`.
 
 ## Hard rules
 
@@ -60,3 +64,4 @@ Do **not** use this skill for one-slice same-repo feature iteration, one-file fi
 - If plan content changed after review, prepare again and re-approve.
 - If MCP tools are missing, tell the user to run `invoker-cli setup` / the bootstrap one-liner (or use `/invoker-plan-to-invoker`) instead of falling back to raw database access.
 - Never invent HTTP/SSE MCP; remote means SSH stdio to `invoker-cli mcp` after a successful probe.
+- After submit, prefer `invoker-cli wait` + end-turn over in-turn `invoker_wait_for_workflow` polling.
