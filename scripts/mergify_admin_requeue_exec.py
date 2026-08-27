@@ -96,6 +96,9 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
     elif action.kind == "retarget_base":
         from_base = pr.base_ref_name if pr else ""
         print(f"{prefix}retarget-base PR #{action.pr_number} from={from_base} to={action.key}")
+    elif action.kind == "squash_merge":
+        head = pr.head_ref_oid if pr else ""
+        print(f"{prefix}squash-merge PR #{action.pr_number} head={head} reason={action.detail}")
     elif action.kind == "rebase_onto_base":
         print(f"{prefix}rebase-onto-base PR #{action.pr_number} onto={action.key}")
     elif action.kind == "rebase_onto_master":

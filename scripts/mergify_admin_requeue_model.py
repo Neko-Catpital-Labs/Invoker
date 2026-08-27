@@ -368,7 +368,13 @@ def latest_contexts_by_required_check(raw_contexts: list[Mapping[str, object]], 
             continue
         if sha and sha != head_sha:
             continue
-        if name not in required:
+        # An empty required_checks set means the repo has no admin-bypass
+        # Mergify rule (a foreign, non-Invoker repo -- see
+        # resolve_admin_bypass_rules_for_repo's fallback), so there is no
+        # allowlist to filter against. Observe every check instead of
+        # filtering down to nothing, so squash-merge-when-green planning has
+        # real CI signal to read for these repos.
+        if required and name not in required:
             continue
         ctx = CheckContext(name=name, state=state, details_url=url, head_sha=sha or head_sha, completed_at=completed)
         old = latest.get(name)
