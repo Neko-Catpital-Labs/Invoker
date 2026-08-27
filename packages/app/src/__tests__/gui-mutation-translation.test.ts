@@ -158,4 +158,65 @@ describe('GUI mutation translation', () => {
     expect(retryTaskSource).not.toContain('preemptTaskSubgraph(taskId)');
     expect(retryTaskSource).toContain('commandService.retryTask(envelope)');
   });
+
+  it('gives every production GUI mutation registration a follower translator case', () => {
+    const testOnlyBlock = extractBalancedBlock(
+      guiMutationHandlersSource,
+      "if (process.env.NODE_ENV === 'test')",
+    );
+    const productionHandlersSource = testOnlyBlock
+      ? guiMutationHandlersSource.replace(testOnlyBlock, '')
+      : guiMutationHandlersSource;
+    const registered = new Set([
+      ...channelRegistrations(productionHandlersSource),
+      ...channelRegistrations(mainSource),
+    ]);
+    const routed = new Set([
+      ...casesIn(getTranslatorSource()),
+      ...wrapperChannels(getMainTranslatorWrapperSource()),
+    ]);
+    if (/case SPAWN_REPAIR_WORKFLOW_CHANNEL:/.test(getTranslatorSource())) {
+      routed.add('invoker:spawn-repair-workflow');
+    }
+    const missing = [...registered].filter((channel) => !routed.has(channel)).sort();
+    expect(missing).toEqual([]);
+  });
 });
+
+function extractBalancedBlock(source: string, marker: string): string {
+  const markerIdx = source.indexOf(marker);
+  if (markerIdx < 0) return '';
+  const openIdx = source.indexOf('{', markerIdx);
+  let depth = 0;
+  for (let idx = openIdx; idx < source.length; idx += 1) {
+    if (source[idx] === '{') depth += 1;
+    else if (source[idx] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(openIdx, idx + 1);
+    }
+  }
+  return '';
+}
+
+function channelRegistrations(source: string): string[] {
+  return [
+    ...source.matchAll(/register(?:WorkflowScoped)?GuiMutationHandler\(\s*'([^']+)'/g),
+    ...source.matchAll(/registrars\.registerGuiMutationHandler\(\s*'([^']+)'/g),
+  ].map((match) => match[1]);
+}
+
+function casesIn(block: string): string[] {
+  return [...block.matchAll(/case '([^']+)':/g)].map((match) => match[1]);
+}
+
+function wrapperChannels(block: string): string[] {
+  return [...block.matchAll(/payload\.channel === '([^']+)'/g)].map((match) => match[1]);
+}
+
+function getMainTranslatorWrapperSource(): string {
+  const start = mainSource.indexOf('translateGuiMutationToHeadless: (payload) => {');
+  const end = mainSource.indexOf('guiMutationHandlers,', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return mainSource.slice(start, end);
+}
