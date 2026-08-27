@@ -13,7 +13,6 @@ import {
   type AutoApproveCandidate,
   type AutoApproveWorkerStore,
 } from '../workers/auto-approve-worker.js';
-import type { AutoApproveAuthorGateResult } from '../workers/auto-approve-author-allowlist.js';
 
 const logger = {
   info: vi.fn(),
@@ -117,15 +116,6 @@ function candidate(overrides: Partial<AutoApproveCandidate> = {}): AutoApproveCa
   };
 }
 
-async function allowOwnPr(): Promise<AutoApproveAuthorGateResult> {
-  return {
-    allowed: true,
-    author: 'EdbertChan',
-    prNumber: '1',
-    repo: 'Neko-Catpital-Labs/Invoker',
-  };
-}
-
 describe('autoapprove worker', () => {
   it('scan candidates include only awaiting approval tasks with pending fix errors', () => {
     const eligible = task();
@@ -142,7 +132,7 @@ describe('autoapprove worker', () => {
     const { store } = makeStore([task({ execution: { pendingFixError: undefined } })]);
     const submitter = { submit: vi.fn() };
 
-    await createAutoApproveTick({ store, submitter, logger, enabled: true, authorGate: allowOwnPr })({
+    await createAutoApproveTick({ store, submitter, logger, enabled: true })({
       identity: { kind: 'autoapprove', instanceId: 'test' },
       reason: 'manual',
       tickNumber: 1,
@@ -180,7 +170,7 @@ describe('autoapprove worker', () => {
     const { store, writes } = makeStore([reviewReadyGate], [], [{ id: 'wf-1', mergeMode: 'automatic', onFinish: 'merge' }]);
     const submitter = { submit: vi.fn(() => 42) };
 
-    await createAutoApproveTick({ store, submitter, logger, enabled: true, authorGate: allowOwnPr })({
+    await createAutoApproveTick({ store, submitter, logger, enabled: true })({
       identity: { kind: 'autoapprove', instanceId: 'test' },
       reason: 'manual',
       tickNumber: 1,
@@ -234,7 +224,6 @@ describe('autoapprove worker', () => {
       submitter,
       logger,
       enabled: true,
-      authorGate: allowOwnPr,
       drainWakeupHints: () => [wakeup(), wakeup()],
     })({ identity: { kind: 'autoapprove', instanceId: 'test' }, reason: 'wake', tickNumber: 1,
       signal: new AbortController().signal });
@@ -260,7 +249,7 @@ describe('autoapprove worker', () => {
     const { store, writes } = makeStore([task()]);
     const submitter = { submit: vi.fn(() => 42) };
 
-    await createAutoApproveTick({ store, submitter, logger, enabled: true, authorGate: allowOwnPr })({
+    await createAutoApproveTick({ store, submitter, logger, enabled: true })({
       identity: { kind: 'autoapprove', instanceId: 'test' },
       reason: 'manual',
       tickNumber: 1,
@@ -293,48 +282,6 @@ describe('autoapprove worker', () => {
 
     expect(store.listWorkflows).not.toHaveBeenCalled();
     expect(submitter.submit).not.toHaveBeenCalled();
-  });
-
-  it('does not submit when the author allowlist file is missing', async () => {
-    const { store, writes } = makeStore([task()]);
-    const submitter = { submit: vi.fn() };
-
-    await createAutoApproveTick({ store, submitter, logger, enabled: true })({
-      identity: { kind: 'autoapprove', instanceId: 'test' },
-      reason: 'manual',
-      tickNumber: 1,
-      signal: new AbortController().signal,
-    });
-
-    expect(submitter.submit).not.toHaveBeenCalled();
-    expect(writes[0]).toMatchObject({
-      status: 'skipped',
-      summary: 'Skipped AI fix approval: allowlist-missing',
-    });
-  });
-
-  it('does not submit a mapped PR from a non-allowlisted author', async () => {
-    const { store, writes } = makeStore([task()]);
-    const submitter = { submit: vi.fn() };
-
-    await createAutoApproveTick({
-      store,
-      submitter,
-      logger,
-      enabled: true,
-      authorGate: async () => ({ allowed: false, reason: 'author-not-allowlisted' }),
-    })({
-      identity: { kind: 'autoapprove', instanceId: 'test' },
-      reason: 'manual',
-      tickNumber: 1,
-      signal: new AbortController().signal,
-    });
-
-    expect(submitter.submit).not.toHaveBeenCalled();
-    expect(writes[0]).toMatchObject({
-      status: 'skipped',
-      summary: 'Skipped AI fix approval: author-not-allowlisted',
-    });
   });
 
   it('skips admin-bypass-* workflows even with pending fix errors', () => {
