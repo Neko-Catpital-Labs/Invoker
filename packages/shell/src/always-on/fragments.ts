@@ -12,7 +12,8 @@ When Invoker MCP (\`invoker_prepare_plan_review\` / \`invoker_submit_plan\`) or 
 - If MCP and CLI are both missing: stay local.
 
 Slash commands \`/invoker-plan-to-invoker\` and \`/plan-to-invoker\` always enter the skill.
-Plain approval stops after workflow handoff; do not publish PRs unless the user asks.
+Plain approval authorizes workflow handoff only; do not publish PRs unless the user asks.
+After submit, arm \`invoker-cli wait <workflowId>\` with \`notify_on_output\` on \`^INVOKER_WAKE\`, end the turn, and continue the parent job on wake.
 `;
 
 export const CURSOR_RULE_CONTENTS = `---
@@ -34,7 +35,8 @@ When Invoker MCP (\`invoker_prepare_plan_review\` / \`invoker_submit_plan\`) or 
 - If MCP and CLI are both missing: stay local.
 
 Slash commands \`/invoker-plan-to-invoker\` and \`/plan-to-invoker\` always enter the skill.
-Plain approval stops after workflow handoff; do not publish PRs unless the user asks.
+Plain approval authorizes workflow handoff only; do not publish PRs unless the user asks.
+After submit, arm \`invoker-cli wait <workflowId>\` with \`notify_on_output\` on \`^INVOKER_WAKE\`, end the turn, and continue the parent job on wake.
 `;
 
 export const CLAUDE_HOOK_SCRIPT = `#!/usr/bin/env node
