@@ -94,9 +94,16 @@ test -n "$research" || fail "B: missing research template" "$log"
 grep -q "id: research-1" "$research" || fail "B: missing research-1" "$research"
 grep -q "id: research-3" "$research" || fail "B: expected K=3 slots" "$research"
 grep -q "onFinish: none" "$research" || fail "B: research must be onFinish none" "$research"
+for lens in fit peers implementations adversarial effectiveness; do
+  grep -q "id: research-1-${lens}" "$research" || fail "B: missing lens id research-1-${lens}" "$research"
+done
+grep -q "id: research-1-synthesis" "$research" || fail "B: missing synthesis task for slot 1" "$research"
+grep -q "effectivenessMeasurement" "$research" || fail "B: synthesis must require effectivenessMeasurement" "$research"
 file_lin="$(find "$sb/work/runs" -name '03-file-linear.template.yaml' | head -1)"
 grep -q "linear-issue-create.mjs" "$file_lin" || fail "B: file-linear must call create script" "$file_lin"
 grep -vq "invoker-ready" "$file_lin" || fail "B: must not mention invoker-ready" "$file_lin"
+grep -q "id: scrub-handoff-artifacts" "$file_lin" || fail "B: file-linear chain missing scrub-handoff-artifacts" "$file_lin"
+grep -q "scrub-handoff-artifacts.sh" "$file_lin" || fail "B: scrub task must run scrub-handoff-artifacts.sh" "$file_lin"
 echo "PASS B: feat activity → chain with K slots"
 
 # ── C. Duplicate fingerprint → skip ──────────────────────────────────────────
