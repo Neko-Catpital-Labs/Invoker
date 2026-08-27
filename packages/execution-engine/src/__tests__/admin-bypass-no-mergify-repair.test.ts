@@ -51,7 +51,7 @@ print(json.dumps([[blocker.kind, blocker.key] for blocker in blockers]))
 `;
 
 describe('admin-bypass observed CI without Mergify configuration', () => {
-  it.fails('classifies an observed failed check when required_checks is empty', () => {
+  it('classifies an observed failed check when required_checks is empty', () => {
     const result = spawnSync('python3', ['-c', repro], {
       cwd: repoRoot,
       encoding: 'utf8',
