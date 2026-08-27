@@ -78,6 +78,8 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
+          - name: Added Comment Policy
+            command: pnpm run check:comments
 
     name: quality / ${{ matrix.name }}
 
