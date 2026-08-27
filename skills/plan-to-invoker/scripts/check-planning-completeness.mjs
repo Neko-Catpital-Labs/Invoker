@@ -48,9 +48,10 @@ const PLACEHOLDER_RE = /\bREPLACE_ME\b|\bTODO\b|\bTBD\b|\bFIXME\b/i;
 const MANUAL_VERIFY_RE = /\bmanually\s+check\b|\bcheck\s+manually\b|\bby\s+hand\b/i;
 const GIT_URL_RE = /^(?:git@|https?:\/\/|ssh:\/\/).+\..+/i;
 const HEADING_RE = {
-  goal: /\bGoal:\s*(.+?)(?=\s+(?:Motivation|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Safety invariant|Slice rationale|Architectural effect|Files|Change types):|$)/is,
-  motivation: /\bMotivation:\s*(.+?)(?=\s+(?:Goal|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Safety invariant|Slice rationale|Architectural effect|Files|Change types):|$)/is,
-  safety: /\bSafety invariant:\s*(.+?)(?=\s+(?:Goal|Motivation|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Slice rationale|Architectural effect|Files|Change types):|$)/is,
+  goal: /\bGoal:\s*(.+?)(?=\s+(?:Motivation|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Safety invariant|Slice rationale|Architectural effect|Effectiveness measurement|Files|Change types):|$)/is,
+  motivation: /\bMotivation:\s*(.+?)(?=\s+(?:Goal|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Safety invariant|Slice rationale|Architectural effect|Effectiveness measurement|Files|Change types):|$)/is,
+  safety: /\bSafety invariant:\s*(.+?)(?=\s+(?:Goal|Motivation|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Slice rationale|Architectural effect|Effectiveness measurement|Files|Change types):|$)/is,
+  effectiveness: /\bEffectiveness measurement:\s*(.+?)(?=\s+(?:Goal|Motivation|Safety invariant|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Slice rationale|Architectural effect|Files|Change types):|$)/is,
 };
 
 function isRecord(value) {
@@ -166,6 +167,23 @@ function checkPlan(plan) {
       gaps.push({
         field: 'Verify',
         message: `Verify is not runnable: ${verifies.map((v) => v.value).join(' | ')}`,
+      });
+    }
+  }
+
+  // Effectiveness measurement is required on every task that already carries
+  // a Goal: heading, regardless of onFinish — including onFinish: none proof
+  // tasks (command-only) that skip the Goal/Motivation/Safety depth checks above.
+  for (const { task } of tasks) {
+    if (!isRecord(task)) continue;
+    const id = typeof task.id === 'string' ? task.id : '(unnamed)';
+    const text = [task.description, task.prompt].filter((v) => typeof v === 'string').join('\n\n');
+    if (!/\bGoal:/i.test(text)) continue;
+    const value = headingValue(text, 'effectiveness');
+    if (isPlaceholder(value)) {
+      gaps.push({
+        field: `${id}.Effectiveness measurement`,
+        message: `Task "${id}" is missing a real Effectiveness measurement: (empty or placeholder).`,
       });
     }
   }

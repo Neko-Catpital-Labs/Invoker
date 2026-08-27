@@ -22,6 +22,7 @@ tasks:
       Architectural effect: None; no new module boundaries or interfaces.
       Goal: Make `{{verify_command}}` pass by correcting the defect at its source.
       Motivation: {{bug_summary}} is a real defect. REPLACE_ME with user impact.
+      Effectiveness measurement: `{{verify_command}}` exit code 0 is the gate; it fails before the fix and passes after.
       Alternative considerations: A local workaround was rejected; the correction belongs at the source. REPLACE_ME.
       Implementation details: Correct the defect in {{fix_file}}; keep everything else identical. REPLACE_ME with the concrete change.
       Non-goals: No refactor, no new fields, no unrelated cleanup, no doc edits.
@@ -36,6 +37,7 @@ tasks:
       Goal: Correct {{bug_summary}} at its source so the shared repro/verify passes.
       Review lane: behavior
       Motivation: {{bug_summary}} is a real defect that must be fixed at the root. REPLACE_ME with user impact.
+      Effectiveness measurement: `{{verify_command}}` exit code 0 is the gate; it fails before the fix and passes after.
       Alternative considerations: Do not mask the symptom; correct the root cause. REPLACE_ME.
       Implementation details: Edit {{fix_file}} to correct the defect; touch nothing else. REPLACE_ME with the concrete change.
       Non-goals: No refactor, no new fields, no unrelated cleanup.
@@ -55,6 +57,7 @@ tasks:
       Architectural effect: None; adds no product behavior.
       Goal: Deterministically prove the fix with a single command.
       Motivation: A shared repro/verify guards against regression. REPLACE_ME if the repro differs.
+      Effectiveness measurement: Exit code 0 on `{{verify_command}}` is the gate for this proof slice.
       Alternative considerations: Manual verification was rejected as non-deterministic.
       Implementation details: Execute `{{verify_command}}` as the terminal proof.
       Non-goals: No product edits here; proof only.

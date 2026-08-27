@@ -18,6 +18,8 @@ tasks:
       - Implement deterministic runtime flow updates.
       Motivation:
       - Keep remote execution instructions explicit and reproducible.
+      Effectiveness measurement:
+      - Reproduction command exits 0 after the runtime flow update lands.
       Alternative considerations:
       - Option A (chosen): targeted transport-layer update.
       - Option B: broad refactor across unrelated modules.
@@ -52,6 +54,8 @@ tasks:
       - Run final full-suite regression gate.
       Motivation:
       - Ensure implementation updates remain stable.
+      Effectiveness measurement:
+      - Exit code 0 on the full-suite regression command is the gate.
       Alternative considerations:
       - Option A (chosen): full repository regression.
       - Option B: package-only checks.

@@ -25,6 +25,8 @@ tasks:
       - Restore auto-fix work for failed tasks discovered by the recovery worker.
       Motivation:
       - Persisted failed tasks need a worker-side path that can recover after process restarts.
+      Effectiveness measurement:
+      - Eligible failed tasks submit exactly one fix-with-agent mutation intent in the covering test.
       Alternative considerations:
       - Option A (chosen for fixture): keep the broad slice to prove lint rejects it.
       - Option B: split ports, scan, validation, submit, and wakeup handling into separate review units.
@@ -89,6 +91,8 @@ tasks:
       - Run final full-suite regression gate.
       Motivation:
       - Ensure implementation updates remain stable.
+      Effectiveness measurement:
+      - Exit code 0 on the full-suite regression command is the gate.
       Alternative considerations:
       - Option A (chosen): full repository regression.
       - Option B: package-only checks.

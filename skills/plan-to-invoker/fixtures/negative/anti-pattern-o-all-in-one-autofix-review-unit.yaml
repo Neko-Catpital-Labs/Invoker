@@ -25,6 +25,8 @@ tasks:
       - Implement the complete auto-fix recovery path.
       Motivation:
       - Recover failed tasks after process restarts.
+      Effectiveness measurement:
+      - Worker-runtime, auto-fix-recovery, and headless-autofix tests all pass in the covering suite.
       Alternative considerations:
       - Option A (chosen for fixture): keep the all-in-one slice to prove lint rejects it.
       - Option B: split ownership, scan, validation, submit, wakeups, and activation into separate review units.
@@ -88,6 +90,8 @@ tasks:
       - Run final full-suite regression gate.
       Motivation:
       - Ensure implementation updates remain stable.
+      Effectiveness measurement:
+      - Exit code 0 on the full-suite regression command is the gate.
       Alternative considerations:
       - Option A (chosen): full repository regression.
       - Option B: package-only checks.
