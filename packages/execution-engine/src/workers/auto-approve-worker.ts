@@ -14,7 +14,6 @@ import type { RecoveryWorkerWakeupHint, WorkflowLifecycleEvent } from '../lifecy
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
-import type { AutoApproveAuthorGateResult } from './auto-approve-author-allowlist.js';
 import { isAdminBypassNamedWorkflow } from '../workflow-name-gates.js';
 
 export const AUTO_APPROVE_WORKER_KIND = 'autoapprove';
@@ -54,8 +53,6 @@ export interface AutoApproveWorkerSubmitter {
 
 export interface AutoApproveWorkerConfig {
   enabled?: boolean;
-  /** Fail-closed PR-author gate. Missing/denied means this worker must not approve. */
-  authorGate?: (taskId: string) => Promise<AutoApproveAuthorGateResult>;
 }
 
 export interface AutoApproveWorkerPolicyOptions {
@@ -64,7 +61,6 @@ export interface AutoApproveWorkerPolicyOptions {
   logger: Logger;
   enabled?: boolean;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
-  authorGate?: (taskId: string) => Promise<AutoApproveAuthorGateResult>;
 }
 
 export interface AutoApproveWorkerOptions {
@@ -118,7 +114,6 @@ export function registerAutoApproveWorker(
           store: deps.store,
           submitter: deps.submitter,
           enabled: deps.autoApprove?.enabled,
-          authorGate: deps.autoApprove?.authorGate,
         },
       }),
   });
@@ -455,15 +450,6 @@ export function createAutoApproveTick(options: AutoApproveWorkerPolicyOptions): 
     for (const candidate of collectValidatedAutoApproveCandidates(options, candidates)) {
       if (submittedThisTick.has(candidate.taskId)) {
         skipAutoApproveCandidate(options, candidate, 'duplicate-candidate');
-        continue;
-      }
-      const authorGate = options.authorGate
-        ? await options.authorGate(candidate.taskId)
-        : { allowed: false as const, reason: 'allowlist-missing' as const };
-      if (!authorGate.allowed) {
-        skipAutoApproveCandidate(options, candidate, authorGate.reason, {
-          author: 'author' in authorGate ? authorGate.author : null,
-        });
         continue;
       }
       const intentId = options.submitter.submit(
