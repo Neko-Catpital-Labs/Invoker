@@ -217,6 +217,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       ...(nodeDef.poolId ? { poolId: nodeDef.poolId } : {}),
       ...(nodeDef.executionAgent ? { executionAgent: nodeDef.executionAgent } : {}),
       ...(nodeDef.executionModel ? { executionModel: nodeDef.executionModel } : {}),
+      ...(nodeDef.maxTurns !== undefined ? { maxTurns: nodeDef.maxTurns } : {}),
     } as const;
     let nodeConfig: TaskConfig;
     switch (nodeDef.runnerKind) {
