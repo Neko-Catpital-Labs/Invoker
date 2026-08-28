@@ -123,6 +123,8 @@ Before finishing a PR, remove any comment you added unless it matches one of the
 
 When stripping comments for policy compliance, check each one against the PR's own `Safety Invariant` / `Review Claim` text first. If a comment restates that invariant, keep a short one-line version instead of deleting it outright — that is the allowed "non-obvious safety invariant" case above, not a violation.
 
+This policy also applies to example code inside `skills/**/*.md` (fenced ```js/```ts/```sh/```py blocks and their aliases). `scripts/check-added-comments.mjs` enforces both the source-file and skill-markdown cases as one CI gate (`quality / Added Comment Policy`).
+
 ## Code Navigation
 
 Use LSP tools (`goToDefinition`, `findReferences`, `documentSymbol`, `workspaceSymbol`, `incomingCalls`, `outgoingCalls`, `hover`) for any task involving symbols, types, or cross-file relationships. Use Grep and Glob for literal text searches and file discovery.
