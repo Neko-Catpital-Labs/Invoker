@@ -11,7 +11,12 @@ import { FailureClassifier } from '@invoker/workflow-core';
 import type { SshInfraFailureClass, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 import { isLivenessFailureTask, normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
-import { checkAutoFixRetryCap, recordAutoFixRetryConsumed } from '../auto-fix-retry-cap.js';
+import {
+  checkAutoFixRetryCap,
+  recordAutoFixRetryConsumed,
+  recordAutoFixRetryPending,
+  recordAutoFixRetryUnacknowledged,
+} from '../auto-fix-retry-cap.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import {
   resolveRemoteBranchOwnerPath,
@@ -744,7 +749,16 @@ async function submitFollowUpMutation(
     return;
   }
 
-  const intentId = options.submitter.submit(candidate.workflowId, 'normal', channel, args);
+  recordAutoFixRetryPending(options.store, candidate.taskId, { workflowId: candidate.workflowId });
+  let intentId: number;
+  try {
+    intentId = options.submitter.submit(candidate.workflowId, 'normal', channel, args);
+  } catch (error) {
+    recordAutoFixRetryUnacknowledged(options.store, candidate.taskId, error, {
+      workflowId: candidate.workflowId,
+    });
+    throw error;
+  }
   recordTaskDecision(options, candidate, reason, 'completed', summary, {
     channel,
     ...payload,

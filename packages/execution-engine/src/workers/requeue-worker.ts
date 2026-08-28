@@ -14,6 +14,8 @@ import {
 import {
   checkRequeueRetryCap,
   recordRequeueRetryConsumed,
+  recordRequeueRetryPending,
+  recordRequeueRetryUnacknowledged,
 } from '../requeue-retry-cap.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -228,12 +230,20 @@ export function createRequeueRecoveryTick(options: RequeueWorkerPolicyOptions): 
         continue;
       }
 
-      const intentId = options.submitter.submit(
-        workflowId,
-        'normal',
-        REQUEUE_COMMAND_CHANNEL,
-        buildRequeueMutationArgs(latest.id),
-      );
+      recordRequeueRetryPending(options.store, latest.id, { workflowId });
+      let intentId: number;
+      try {
+        intentId = options.submitter.submit(
+          workflowId,
+          'normal',
+          REQUEUE_COMMAND_CHANNEL,
+          buildRequeueMutationArgs(latest.id),
+        );
+      } catch (error) {
+        options.ledger.refund(key);
+        recordRequeueRetryUnacknowledged(options.store, latest.id, error, { workflowId });
+        throw error;
+      }
       recordRequeueRetryConsumed(options.store, latest.id, {
         workflowId,
       });

@@ -6,6 +6,8 @@ import {
   autoFixRetryCapExternalKey,
   checkAutoFixRetryCap,
   recordAutoFixRetryConsumed,
+  recordAutoFixRetryPending,
+  recordAutoFixRetryUnacknowledged,
 } from '../auto-fix-retry-cap.js';
 import type { WorkerDecisionStore } from '../worker-decision-ledger.js';
 
@@ -106,6 +108,26 @@ describe('checkAutoFixRetryCap', () => {
 });
 
 describe('recordAutoFixRetryConsumed', () => {
+  it('keeps pending and unacknowledged requests at zero attempts, then charges an acknowledged request', () => {
+    const { store } = makeFakeStore();
+
+    recordAutoFixRetryPending(store, 'task-1', { workflowId: 'wf-1' });
+    let saved = store.getWorkerAction?.('autofix', 'retry-cap:task-1');
+    expect(saved).toMatchObject({ status: 'pending', attemptCount: 0 });
+    expect(saved?.payload).toMatchObject({ dispatchState: 'pending' });
+
+    recordAutoFixRetryUnacknowledged(store, 'task-1', new Error('owner unavailable'), { workflowId: 'wf-1' });
+    saved = store.getWorkerAction?.('autofix', 'retry-cap:task-1');
+    expect(saved).toMatchObject({ status: 'failed', attemptCount: 0 });
+    expect(saved?.payload).toMatchObject({ dispatchState: 'not-acknowledged', failurePhase: 'submission' });
+
+    recordAutoFixRetryPending(store, 'task-1', { workflowId: 'wf-1' });
+    recordAutoFixRetryConsumed(store, 'task-1', { workflowId: 'wf-1' });
+    saved = store.getWorkerAction?.('autofix', 'retry-cap:task-1');
+    expect(saved).toMatchObject({ status: 'queued', attemptCount: 1 });
+    expect(saved?.payload).toMatchObject({ dispatchState: 'acknowledged' });
+  });
+
   it('increments the durable counter under the retry-cap external key', () => {
     const { store } = makeFakeStore();
 
