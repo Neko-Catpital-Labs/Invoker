@@ -290,24 +290,79 @@ def _repairer_plan_name(kind: str, pr: int, head: str, key: str) -> str:
 
 
 def settle_repairer_plan_rows(ledger, now: int) -> int:
-    """Write `<kind>-settled` rows for repairer.py's ad-hoc repair plans whose
-    workflow reached a terminal status but whose own safe-push task never ran
-    to write it. Returns how many rows were settled."""
-    pending = [row for row in ledger.rows if row.get("kind") in _REPAIRER_PLAN_SETTLE_KINDS]
-    if not pending:
-        return 0
-    workflows: list[dict] | None = None
-    settled = 0
-    for row in pending:
-        kind = str(row.get("kind"))
+    """Reconcile pending requests, then settle acknowledged repair workflows."""
+    pending_requests = [
+        row for row in ledger.rows
+        if str(row.get("kind") or "").endswith("-pending")
+        and str(row.get("kind") or "").removesuffix("-pending") in _REPAIRER_PLAN_SETTLE_KINDS
+    ]
+    acknowledged = []
+    for row in ledger.rows:
+        kind = row.get("kind")
+        if kind not in _REPAIRER_PLAN_SETTLE_KINDS:
+            continue
         pr = int(row.get("pr", -1))
         head = str(row.get("headSha") or "")
         key = str(row.get("key") or "")
         existing = ledger.latest(f"{kind}-settled", pr, head, key)
-        if existing is not None and int(existing.get("epoch", 0) or 0) >= int(row.get("epoch", 0) or 0):
+        if existing is None or int(existing.get("epoch", 0) or 0) < int(row.get("epoch", 0) or 0):
+            acknowledged.append(row)
+    if not pending_requests and not acknowledged:
+        return 0
+    workflows = list_workflows()
+    if workflows is None:
+        return 0
+    settled = 0
+    for row in pending_requests:
+        pending_kind = str(row.get("kind"))
+        kind = pending_kind.removesuffix("-pending")
+        pr = int(row.get("pr", -1))
+        head = str(row.get("headSha") or "")
+        key = str(row.get("key") or "")
+        pending_epoch = int(row.get("epoch", 0) or 0)
+        existing_ack = ledger.latest(kind, pr, head, key)
+        if existing_ack is not None and int(existing_ack.get("epoch", 0) or 0) >= pending_epoch:
             continue
-        if workflows is None:
-            workflows = list_workflows() or []
+        existing_settle = ledger.latest(f"{pending_kind}-settled", pr, head, key)
+        if existing_settle is not None and int(existing_settle.get("epoch", 0) or 0) >= pending_epoch:
+            continue
+        meta = row.get("meta") or {}
+        plan_name = str(meta.get("planName") or _repairer_plan_name(kind, pr, head, key))
+        match = next((workflow for workflow in workflows if workflow.get("name") == plan_name), None)
+        if match is not None:
+            ledger.record(
+                kind,
+                pr,
+                head,
+                key,
+                now,
+                meta={
+                    "dispatchState": "acknowledged",
+                    "acknowledgedBy": "pending-request-observer",
+                    "planName": plan_name,
+                    "workflowId": match.get("id"),
+                },
+            )
+        else:
+            ledger.record(
+                f"{pending_kind}-settled",
+                pr,
+                head,
+                key,
+                now,
+                meta={
+                    "dispatchState": "not-acknowledged",
+                    "failurePhase": "submission",
+                    "outcomeClass": "infra",
+                    "planName": plan_name,
+                },
+            )
+        settled += 1
+    for row in acknowledged:
+        kind = str(row.get("kind"))
+        pr = int(row.get("pr", -1))
+        head = str(row.get("headSha") or "")
+        key = str(row.get("key") or "")
         plan_name = _repairer_plan_name(kind, pr, head, key)
         match = next((w for w in workflows if w.get("name") == plan_name), None)
         if match is None:

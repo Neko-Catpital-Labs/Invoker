@@ -52,6 +52,60 @@ class AdminBypassRepairer:
         # foreign= parameter.
         self.is_foreign = repo != DEFAULT_INVOKER_REPO
 
+    def submit_repair_plan(
+        self,
+        plan: async_repair.AsyncRepairPlan,
+        submit_kind: str,
+        pr_number: int,
+        head_sha: str,
+        key: str,
+        now: int | None,
+    ) -> None:
+        pending_kind = f"{submit_kind}-pending"
+        self.ledger.record(
+            pending_kind,
+            pr_number,
+            head_sha,
+            key,
+            now,
+            meta={"planName": plan.plan_name, "dispatchState": "pending"},
+        )
+        try:
+            acknowledgement = async_repair.submit_async_repair_plan(plan)
+        except Exception as exc:
+            self.ledger.record(
+                f"{pending_kind}-settled",
+                pr_number,
+                head_sha,
+                key,
+                now,
+                meta={
+                    "outcomeClass": "infra",
+                    "failurePhase": "submission",
+                    "dispatchState": "not-acknowledged",
+                    "planName": plan.plan_name,
+                    "error": str(exc),
+                },
+            )
+            raise
+        self.ledger.record(
+            submit_kind,
+            pr_number,
+            head_sha,
+            key,
+            now,
+            meta={
+                "dispatchState": "acknowledged",
+                "planName": plan.plan_name,
+                **(
+                    {"workflowId": acknowledgement.workflow_id}
+                    if isinstance(acknowledgement, async_repair.RepairSubmissionAcknowledgement)
+                    and isinstance(acknowledgement.workflow_id, str)
+                    else {}
+                ),
+            },
+        )
+
     def blocked_outcome(
         self,
         status: str,
@@ -200,13 +254,7 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        # Record before submitting: once submitted, the workflow is real and
-        # running whether or not this process survives another instruction.
-        # Recording first means a broken ledger write (e.g. disk full) raises
-        # here and skips the submission entirely, instead of leaving a real,
-        # running repair permanently invisible to the retry-cap count.
-        self.ledger.record("repair-check", pr.number, start_head, check_name, now)
-        async_repair.submit_async_repair_plan(plan)
+        self.submit_repair_plan(plan, "repair-check", pr.number, start_head, check_name, now)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
     def rebase_onto_master(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
@@ -227,10 +275,7 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        # See repair_check: record before submitting so a broken ledger write
-        # blocks the submission instead of orphaning a real, running repair.
-        self.ledger.record("rebase-onto-master", pr.number, start_head, key, now)
-        async_repair.submit_async_repair_plan(plan)
+        self.submit_repair_plan(plan, "rebase-onto-master", pr.number, start_head, key, now)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
     def repair_bot_thread(self, pr: PrSnapshot, thread_id: str, now: int | None = None) -> RepairOutcome:
@@ -247,8 +292,5 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        # See repair_check: record before submitting so a broken ledger write
-        # blocks the submission instead of orphaning a real, running repair.
-        self.ledger.record("repair-bot-thread", pr.number, start_head, thread_id, now)
-        async_repair.submit_async_repair_plan(plan)
+        self.submit_repair_plan(plan, "repair-bot-thread", pr.number, start_head, thread_id, now)
         return self.blocked_outcome("submitted", thread_id, start_head, start_head)
