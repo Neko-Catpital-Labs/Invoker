@@ -1547,6 +1547,7 @@ export class TaskRunner {
     cwd: string;
     expectedGeneration: number;
     reviewGate?: ReviewGateState;
+    recordedFixCommit?: string;
   }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }> {
     if (!this.executionAgentRegistry) {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
@@ -1607,11 +1608,30 @@ export class TaskRunner {
           agentName: agent.name,
           cwd: args.cwd,
         });
-        this.logger.info(
+        const skillLine =
           `[pr-authoring] review-stack publish starting agent=${agent.name} `
-            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
-        );
-        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`;
+        this.logger.info(skillLine);
+        if (args.mergeNodeTaskId) {
+          const outputLine = `${skillLine}\n`;
+          try {
+            this.callbacks.onOutput?.(args.mergeNodeTaskId, outputLine);
+            this.persistence.appendTaskOutput?.(args.mergeNodeTaskId, outputLine);
+          } catch (error) {
+            this.logger.warn('[pr-authoring] failed to persist task output', {
+              taskId: args.mergeNodeTaskId,
+              error,
+            });
+          }
+        }
+        const repairPublicationEnv = args.recordedFixCommit
+          ? {
+            INVOKER_REPAIR_PUBLICATION: '1',
+            INVOKER_REPAIR_TASK_CHAIN_ID: args.workflowId ?? args.mergeNodeTaskId ?? '',
+            INVOKER_REPAIR_SESSION_COMMIT: args.recordedFixCommit,
+          }
+          : {};
+        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver, repairPublicationEnv);
         logProgress('info', `${agent.name} make-pr agent finished; validating output`, {
           agentName: agent.name,
           sessionId: result.sessionId,

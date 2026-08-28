@@ -8,6 +8,7 @@ import {
   syncPlanBaseRemoteForRef,
   resolvePlanBaseRevision,
   resolvePreferredTrackingRemote,
+  ensureRequiredCommitResolvable,
 } from '../plan-base-remote.js';
 
 function runGitFactory(cwd: string) {
@@ -143,5 +144,51 @@ describe('plan-base-remote', () => {
 
     const resolved = (await resolvePlanBaseRevision(runGit, 'upstream/master')).trim();
     expect(resolved).toBe(upstreamTip);
+  });
+
+  describe('ensureRequiredCommitResolvable', () => {
+    it('reproduces the bug: a dependency\'s commit pushed after the mirror was created is not resolvable without retrying', async () => {
+      const runGit = runGitFactory(mirror);
+
+      // The mirror is already cloned (matches the real shared-clone timing:
+      // RepoPool.ensureClone / buildMirrorCloneScript run once, then get
+      // reused). The dependency pushes its commit to origin AFTER that.
+      writeFileSync(join(originRepo, 'dep.txt'), 'dep');
+      execSync('git add dep.txt && git commit -m dep', { cwd: originRepo });
+      const dependencyCommit = execSync('git rev-parse HEAD', { cwd: originRepo }).toString().trim();
+
+      const stillUnresolved = await runGit(['rev-parse', '--verify', `${dependencyCommit}^{commit}`]).catch(() => undefined);
+      expect(stillUnresolved).toBeUndefined();
+    });
+
+    it('self-heals: retries the fetch until the dependency commit resolves', async () => {
+      const runGit = runGitFactory(mirror);
+
+      writeFileSync(join(originRepo, 'dep.txt'), 'dep');
+      execSync('git add dep.txt && git commit -m dep', { cwd: originRepo });
+      const dependencyCommit = execSync('git rev-parse HEAD', { cwd: originRepo }).toString().trim();
+
+      await expect(
+        ensureRequiredCommitResolvable(runGit, dependencyCommit, {
+          maxAttempts: 3,
+          sleep: async () => {},
+        }),
+      ).resolves.toBeUndefined();
+
+      const resolved = await runGit(['rev-parse', '--verify', `${dependencyCommit}^{commit}`]);
+      expect(resolved).toBe(dependencyCommit);
+    });
+
+    it('throws a clear error after exhausting retries when the commit never appears', async () => {
+      const runGit = runGitFactory(mirror);
+      const neverPushedCommit = '0'.repeat(40);
+
+      await expect(
+        ensureRequiredCommitResolvable(runGit, neverPushedCommit, {
+          maxAttempts: 2,
+          sleep: async () => {},
+        }),
+      ).rejects.toThrow(/not resolvable after 2 fetch attempts/);
+    });
   });
 });

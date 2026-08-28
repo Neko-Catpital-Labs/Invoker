@@ -1,5 +1,5 @@
 import type { Orchestrator } from '@invoker/workflow-core';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import type {
   GetEventsOptions,
   WorkerActionHistoryRequest,
@@ -11,7 +11,7 @@ import type {
 import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
-import { runReadOnlyHeadlessQueryToString, type HeadlessQueryDeps } from './headless-query-list.js';
+import { listAlertHistoryRows, runReadOnlyHeadlessQueryToString, type HeadlessQueryDeps } from './headless-query-list.js';
 import { listWorkerActionHistory, listWorkerDecisions } from './worker-control.js';
 
 /**
@@ -39,6 +39,7 @@ export interface OwnerReadQueryHandlers {
   getQueueStatus: () => Record<string, unknown>;
   listWorkerActionHistory: (request: WorkerActionHistoryRequest) => WorkerActionHistoryResponse;
   listWorkerDecisions: (request: WorkerDecisionsRequest) => WorkerDecisionsResponse;
+  getAlertHistory?: () => WorkerActionRecord[];
   getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkers: () => WorkerStatusSnapshot;
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
@@ -122,6 +123,9 @@ export function answerOwnerReadQuery(
       return { workerActionHistory: handlers.listWorkerActionHistory(workerActionHistoryRequest()) };
     case 'worker-decisions':
       return { workerDecisions: handlers.listWorkerDecisions(workerDecisionsRequest()) };
+    case 'alert-history':
+      if (!handlers.getAlertHistory) throw new Error('Unsupported headless query: alert-history');
+      return { alertHistory: handlers.getAlertHistory() };
     case 'workflow-status':
       return handlers.getWorkflowStatus(body.workflowId);
     case 'tasks':
@@ -239,6 +243,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     getWorkers: deps.getWorkers,
     listWorkerActionHistory: (request: WorkerActionHistoryRequest) => listWorkerActionHistory(persistence, request),
     listWorkerDecisions: (request: WorkerDecisionsRequest) => listWorkerDecisions(persistence, request),
+    getAlertHistory: () => listAlertHistoryRows(persistence),
     getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
     getTasksSnapshot: () => {
       orchestrator.syncAllFromDb();

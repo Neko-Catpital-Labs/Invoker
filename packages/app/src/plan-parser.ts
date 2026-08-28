@@ -88,6 +88,7 @@ export interface RawPlanTask {
   poolId?: string;
   executionAgent?: string;
   executionModel?: string;
+  maxTurns?: number;
 }
 
 export interface RawPlan {
@@ -459,6 +460,11 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
       throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);
     }
+    if (task.maxTurns !== undefined) {
+      if (typeof task.maxTurns !== 'number' || !Number.isInteger(task.maxTurns) || task.maxTurns < 1) {
+        throw new PlanParseError(`Task "${task.id}" field "maxTurns" must be a positive integer when provided`);
+      }
+    }
 
     return {
       id: task.id,
@@ -474,6 +480,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
       executionModel: task.executionModel?.trim() || undefined,
+      maxTurns: task.maxTurns,
     };
   });
 

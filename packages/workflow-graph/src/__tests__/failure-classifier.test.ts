@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from '../../../execution-engine/src/__tests__/fixtures/pr-6976-oauth-session-expired.js';
 import { FailureClassifier, SSH_INFRA_FAILURE_CLASSES } from '../failure-classifier.js';
 
+const GIT_REF_PATH_CONFLICT_ERROR =
+  "fatal: cannot lock ref 'refs/heads/experiment/child': "
+  + 'unable to create directory for .git/refs/heads/experiment/child';
+
 describe('FailureClassifier.classifyError', () => {
   it('classifies the env.sh invalid-export signature', () => {
     expect(FailureClassifier.classifyError(
@@ -32,9 +36,39 @@ describe('FailureClassifier.classifyError', () => {
     )).toBe('ssh-repo-mirror-corrupt');
   });
 
+  it('classifies finalize-time stale managed-worktree admin metadata', () => {
+    expect(FailureClassifier.classifyError(
+      'remote commit or push failed (code 128): fatal: not a git repository: '
+      + '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+      + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+    )).toBe('ssh-worktree-corrupt');
+  });
+
+  it('classifies finalize-time worktree corruption when git omits the admin path', () => {
+    expect(FailureClassifier.classifyError(
+      'remote commit or push failed (code 128): fatal: not a git repository: (null)',
+    )).toBe('ssh-worktree-corrupt');
+  });
+
+  it('does not classify a bare "not a git repository" outside the finalize commit/push path', () => {
+    expect(FailureClassifier.classifyError(
+      'fatal: not a git repository: (null)',
+    )).toBeUndefined();
+  });
+
   it('classifies the OAuth-session-expired signature', () => {
     expect(FailureClassifier.classifyError(PR_6976_OAUTH_SESSION_EXPIRED_ERROR))
       .toBe('ssh-oauth-session-expired');
+  });
+
+  it('classifies an explicit disk-full signature', () => {
+    expect(FailureClassifier.classifyError(
+      'No space left on device',
+    )).toBe('ssh-disk-full');
+  });
+
+  it('does not classify a non-ENOSPC Git ref-path conflict as disk-full', () => {
+    expect(FailureClassifier.classifyError(GIT_REF_PATH_CONFLICT_ERROR)).toBeUndefined();
   });
 
   it('does not classify a bare "not a git repository" outside the bootstrap-clone phase', () => {
@@ -70,5 +104,20 @@ describe('FailureClassifier predicates', () => {
     expect(FailureClassifier.isCancellation('Terminated: shutdown')).toBe(true);
     expect(FailureClassifier.isCancellation('boom')).toBe(false);
     expect(FailureClassifier.isCancellation(undefined)).toBe(false);
+  });
+
+  it('isUsageLimit matches both real agent-quota failure shapes seen in production', () => {
+    // Live incident text captured from a real failed task's execution.error.
+    expect(FailureClassifier.isUsageLimit(
+      '[Fix with Agent failed] SSH remote script failed (exit=1, phase=remote_agent_fix)\n'
+      + "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to "
+      + 'purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
+    )).toBe(true);
+    // Distinct phrasing this repo's own codex-driver tests already model.
+    expect(FailureClassifier.isUsageLimit(
+      'codex fix exited with code 1: [assistant] Model refused: usage limit reached',
+    )).toBe(true);
+    expect(FailureClassifier.isUsageLimit('AssertionError: expected 1 to be 2')).toBe(false);
+    expect(FailureClassifier.isUsageLimit(undefined)).toBe(false);
   });
 });

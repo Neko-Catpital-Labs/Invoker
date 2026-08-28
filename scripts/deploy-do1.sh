@@ -94,12 +94,24 @@ setsid bash -c '
   cd "'"$REPO_ROOT"'"
 
   systemctl --user stop slack-manager.service 2>/dev/null || true
+
+  # Find and SIGTERM the old owner process group, if any.
+  #
+  # This must exclude its OWN process group from the kill candidates. This
+  # restart sequence itself runs as `setsid bash -c "<this literal script
+  # text>"`, so its own /proc/<pid>/cwd is also repo_root and its own
+  # /proc/<pid>/cmdline is the literal source below -- which necessarily
+  # contains the same match string, since that string is written right here.
+  # Without the own_pgid exclusion, this step matches and kills its own
+  # ancestor, aborting the sequence before `systemctl restart` ever runs
+  # (see scripts/repro/repro-deploy-do1-kill-script-self-match.sh).
   python3 - "'"$REPO_ROOT"'" <<PY
 import os
 import signal
 import sys
 
 repo_root = os.path.realpath(sys.argv[1])
+own_pgid = os.getpgid(os.getpid())
 process_groups = set()
 for name in os.listdir("/proc"):
     if not name.isdigit():
@@ -112,8 +124,12 @@ for name in os.listdir("/proc"):
             command = proc.read().replace(b"\0", b" ").decode(errors="replace")
     except (FileNotFoundError, PermissionError, ProcessLookupError):
         continue
-    if "packages/app/dist/main.js" in command:
-        process_groups.add(os.getpgid(pid))
+    if "--headless owner-serve" not in command:
+        continue
+    pgid = os.getpgid(pid)
+    if pgid == own_pgid:
+        continue
+    process_groups.add(pgid)
 
 for process_group in process_groups:
     try:
@@ -121,6 +137,35 @@ for process_group in process_groups:
     except ProcessLookupError:
         pass
 PY
+
+  # Same matcher as above (own_pgid excluded for the same self-match reason),
+  # reused here to detect that a NEW owner process has come up post-restart.
+  owner_is_up() {
+    python3 - "'"$REPO_ROOT"'" <<PY
+import os
+import sys
+
+repo_root = os.path.realpath(sys.argv[1])
+own_pgid = os.getpgid(os.getpid())
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    pid = int(name)
+    try:
+        if os.path.realpath(f"/proc/{pid}/cwd") != repo_root:
+            continue
+        with open(f"/proc/{pid}/cmdline", "rb") as proc:
+            command = proc.read().replace(b"\0", b" ").decode(errors="replace")
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        continue
+    if "--headless owner-serve" not in command:
+        continue
+    if os.getpgid(pid) == own_pgid:
+        continue
+    sys.exit(0)
+sys.exit(1)
+PY
+  }
 
   # Install/refresh the user unit when missing (e.g. after local cutover removed it).
   if ! systemctl --user cat slack-manager.service >/dev/null 2>&1; then
@@ -133,12 +178,12 @@ PY
   systemctl --user is-active --quiet slack-manager.service
 
   for _ in $(seq 1 45); do
-    if pgrep -f "packages/app/dist/main.js --headless owner-serve" >/dev/null; then
+    if owner_is_up; then
       break
     fi
     sleep 1
   done
-  pgrep -f "packages/app/dist/main.js --headless owner-serve" >/dev/null
+  owner_is_up
 ' </dev/null >"$LOG_FILE" 2>&1 &
 RESTART_PID=$!
 

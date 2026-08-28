@@ -1,0 +1,86 @@
+name: "PR #9903 rebase (2) domain layer"
+description: |
+  Reconcile PR #9903's backend planning-repo-binding logic in
+  packages/app/src/in-app-planner.ts with master's independently-landed
+  "[Planning draft ownership]" doctor-approved-draft flow
+  (commit 55cd5119e, #10249), which master added inside the exact same
+  function PR #9903 modifies (the draft-preparation branch of the chat-turn
+  handler). PR #9903 adds two pieces here: `resolvePlanningRepoBinding` /
+  `activatePlanningSessionWorktree` (pure new insertions, no master
+  equivalent), and a `silentRepoMismatch` correction block that retries the
+  planner once when a draft silently names a different repository than the
+  session is bound to. Master's doctor-approved-draft flow requires
+  `activeSession.conversation.approvedPlanningDraft` to exist and derives
+  `reviewedPlanText`/`planningDraftId`/`planningDraftHash` from it before the
+  draft is accepted. These two must be composed in the right order: the
+  mismatch check/correction has to run against the draft that actually gets
+  reviewed, and if a correction happens, the corrected draft must still
+  satisfy the doctor-approval requirement (not bypass it). Gated on the
+  contracts workflow's merge, since it needs the `repoBinding` request field.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "wf-1787605362540-6"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: implement-planning-repo-binding-rebase-domain
+    description: |
+      Reapply PR #9903's backend repo-binding logic in in-app-planner.ts on
+      top of current master, reconciled with master's doctor-approved-draft
+      flow (55cd5119e, #10249).
+      Review claim: in-app-planner.ts carries PR #9903's backend-owned repoBinding default resolution and silent-mismatch correction, composed with master's doctor-approved-draft gate so neither feature bypasses the other.
+      Review lane: behavior
+      Safety invariant: Only the domain layer changes; the persistence layer's repoBinding field (from the prior workflow in this stack) is already available. A drift correction must never produce a draft that skips the doctor-approval check when draftDoctorEnabled is true.
+      Slice rationale: One layer slice built on the contracts layer; the ui layer builds on this one.
+      Architectural effect: Restores PR #9903's canonical-binding behavior (backend session binding is the default and validated repository source for in-app planning) without regressing the doctor-approved-draft invariant master added afterward.
+      Goal: Implement the domain layer so `pnpm --filter @invoker/app test -- src/__tests__/in-app-planner.test.ts -t "automatically corrects|backend-bound repository|cross-repository draft"` passes, and no existing doctor-approved-draft test in the same file regresses.
+      Motivation: PR #9903 (https://github.com/Neko-Catpital-Labs/Invoker/pull/9903, "Keep planning bound to its repository") has a GitHub merge conflict against master because master's "[Planning draft ownership]" stack (landed 2026-08-2x, commit 55cd5119e / #10249) added a doctor-approved-draft requirement inside the exact same draft-preparation code region PR #9903 modifies.
+      Alternative considerations: Silently keeping only one side (either drop the mismatch-correction retry, or drop the doctor-approval gate) was rejected — both are safety-relevant: the mismatch correction prevents a planner from silently switching repos, and the doctor-approval gate prevents review-identity spoofing. They must compose, not compete. Also rejected: reordering so doctor-approval runs before mismatch correction, since that would let doctor approval bless a draft that is then silently rewritten by the correction retry, invalidating the approval.
+      Implementation details: In packages/app/src/in-app-planner.ts, reinsert `resolvePlanningRepoBinding` and `activatePlanningSessionWorktree` (from PR #9903 commit d759e7e1a) unchanged, placed alongside the newer `listInAppPlanningPresets` doc comment master added (both are pure insertions at that location, order between them does not matter functionally). Then, in the chat-turn handler's draft-preparation branch, run PR #9903's `silentRepoMismatch` check/correction (from commit a46b024e3) against `review.planText` BEFORE deriving `reviewedPlanText`/`planningDraftId`/`planningDraftHash` from `activeSession.conversation.approvedPlanningDraft` (master's doctor-approval block, 55cd5119e). Concretely: after `review` is finalized (including any mismatch-triggered correction that reassigns `review`), only then evaluate `if (!deps.plannerReplyOverride && activeSession.conversation.draftDoctorEnabled)` and require `approvedPlanningDraft`, exactly as master does today, using the (possibly corrected) `review.planText` as the value that must match the doctor-approved draft. If a mismatch correction changes the draft text, the doctor-approval flow must fail closed the normal way (throw "no immutable doctor-approved draft") rather than silently accepting the corrected text as pre-approved, since the doctor never saw the corrected content.
+      Non-goals: No persistence or ui work here, no refactor, no unrelated cleanup, no doc edits, no change to rebindPlanningChatRepo (pre-existing, unrelated to this conflict).
+      Layer: domain
+      Feature state: active
+      Files: packages/app/src/in-app-planner.ts
+      Change types:
+      - packages/app/src/in-app-planner.ts: modify
+      Acceptance criteria:
+      - `pnpm --filter @invoker/app test -- src/__tests__/in-app-planner.test.ts -t "automatically corrects|backend-bound repository|cross-repository draft"` exits 0 after the change.
+      - `pnpm --filter @invoker/app test -- src/__tests__/in-app-planner.test.ts -t "doctor-approved draft"` exits 0 after the change (no regression to the pre-existing master behavior).
+    prompt: |
+      Goal: Reapply PR #9903's backend repo-binding logic in in-app-planner.ts on top of current master, reconciled with master's doctor-approved-draft flow.
+      Review lane: behavior
+      Motivation: PR #9903 (https://github.com/Neko-Catpital-Labs/Invoker/pull/9903, head SHA a46b024e37963287e13b7d0b9d50f0055f469d80, "Keep planning bound to its repository") cannot merge into master due to a GitHub-reported conflict. `git merge-base master pr/planning-repo-binding` is 7a163f926b60f637b765c220979f1bd748e6d9db; master has moved 93 commits ahead since then. Two independent master features touch the same file region as this PR: a doctor-approved-draft requirement (commit 55cd5119e, "[Planning draft ownership](5) Bind in-app review identity", #10249) inside the same chat-turn handler this PR's `silentRepoMismatch` correction touches.
+      Alternative considerations: Do not drop either feature to make the merge textually trivial. Do not bundle contracts (ipc-channels.ts) or ui (App.tsx) work here — those are separate workflow steps in this stack; assume the contracts step already landed the `repoBinding` field on `InAppPlanningChatRequest`.
+      Implementation details: Fetch PR #9903's three commits for reference (`git fetch origin refs/pull/9903/head`, or `git log -p a46b024e3 acb1f1e3 d759e7e1a -- packages/app/src/in-app-planner.ts`) to see the exact original diff. Reinsert `resolvePlanningRepoBinding(config)` (resolves `config.defaultRepoUrl`/`config.defaultBranch` into an `InAppPlanningRepoBinding`) and `activatePlanningSessionWorktree` unchanged — these have no equivalent in current master. Then locate the chat-turn handler's draft-preparation branch (search for `preparePlanningReview` and `draftDoctorEnabled` in the same function) and compose PR #9903's `silentRepoMismatch` retry-and-correct block with master's existing doctor-approved-draft block so that: (1) the mismatch check/correction runs first, using and potentially replacing `review`/`reply`; (2) the doctor-approval check (`if (!deps.plannerReplyOverride && activeSession.conversation.draftDoctorEnabled)`) then runs against the resulting `review.planText`, exactly as it does in current master, so a mismatch-corrected draft still must be doctor-approved when that gate is enabled — do not let a correction bypass doctor approval.
+      Non-goals: No persistence or ui work, no refactor, no unrelated cleanup, no change to rebindPlanningChatRepo.
+      Assume no prior context. You are given only this task.
+      Implement the domain layer described above in packages/app/src/in-app-planner.ts. Touch nothing outside this layer.
+      Acceptance criteria:
+      - `pnpm --filter @invoker/app test -- src/__tests__/in-app-planner.test.ts -t "automatically corrects|backend-bound repository|cross-repository draft"` exits 0 after your change (this is the pass condition).
+      - `pnpm --filter @invoker/app test -- src/__tests__/in-app-planner.test.ts -t "doctor-approved draft"` exits 0 after your change (no regression).
+    dependencies: []
+
+  - id: verify-planning-repo-binding-rebase-domain
+    description: |
+      Run the deterministic proof for the domain layer.
+      Review claim: The targeted PR #9903 tests pass and the pre-existing doctor-approved-draft tests do not regress.
+      Review lane: proof
+      Safety invariant: Proof-only; adds no product behavior.
+      Slice rationale: One proof slice for the domain layer.
+      Architectural effect: None; verification only.
+      Goal: Prove the domain layer deterministically.
+      Motivation: The domain layer is the highest-risk slice in this stack (two safety-relevant features composed in one function); it needs both the PR's original targeted tests and a check that master's existing doctor-approval tests still pass.
+      Alternative considerations: Manual verification was rejected as non-deterministic.
+      Implementation details: Execute both targeted vitest filters as the terminal proof.
+      Non-goals: No product edits here; proof only.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm --filter @invoker/app test -- src/__tests__/in-app-planner.test.ts -t \"automatically corrects|backend-bound repository|cross-repository draft|doctor-approved draft\""
+    dependencies:
+      - implement-planning-repo-binding-rebase-domain

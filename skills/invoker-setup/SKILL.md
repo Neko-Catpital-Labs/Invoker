@@ -113,6 +113,11 @@ canonical tools, config, planning-tools, and default-preset readiness as `invoke
 default preset's tool is missing, the readiness check reports an error while startup still continues,
 and if Slack env is incomplete it logs exactly which variable is missing and to run `invoker-cli setup slack`.
 
+`invoker-cli setup` also writes Invoker-owned always-on harness instructions: a Cursor rule, a Codex
+AGENTS.md marked block, and a Claude UserPromptSubmit hook. Feature work then goes through the
+installed `invoker-plan-to-invoker` skill unless the user says "do it locally". Remove those helpers
+with `install-skills uninstall`. That does not delete the Invoker app or `~/.invoker`.
+
 ## Hard rules
 
 - Never write secrets anywhere except `~/.invoker/.env` (the wizard writes it `0600`). Never echo full

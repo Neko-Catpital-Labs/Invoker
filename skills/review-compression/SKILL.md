@@ -111,6 +111,11 @@ Split changes when they introduce a different claim:
 - refactor/extraction plus new fields or other behavior changes
 - benchmark/repro/proof harness plus the fix it is meant to justify
 - product code plus planning/policy/docs updates
+- two or more independent fixes bundled only because they're both needed to
+  turn one composite/auto-discovery CI job green (e.g. a job that runs every
+  `scripts/repro/repro-*.sh` matching a name pattern) — each fix is still a
+  separate claim even though they share one job label; a single "Review
+  claim: root cause" is a category error for this job shape
 - broad mechanical moves too large to inspect comfortably
 - multiple distinct extractions from one file (one top-level symbol move per slice)
 

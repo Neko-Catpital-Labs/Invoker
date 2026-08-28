@@ -181,7 +181,6 @@ const launchEnv = {
   HOME: process.env.HOME,
   INVOKER_DB_DIR: dbDir,
   INVOKER_REPO_CONFIG_PATH: configPath,
-  INVOKER_ALLOW_DELETE_ALL: '1',
 };
 
 // chdir so @playwright/test (and the bundled electron) resolves from the

@@ -424,12 +424,37 @@ export class CommandService {
     );
   }
 
+  async closeIdleTask(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState>> {
+    return this.executeCommand<TaskState>(
+      'CLOSE_IDLE_TASK_FAILED',
+      () => this.orchestrator.closeIdleTask(envelope.payload.taskId),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async cancelWorkflow(
     envelope: CommandEnvelope<{ workflowId: string }>,
   ): Promise<CommandResult<CancelResult>> {
     return this.executeCommand<CancelResult>(
       'CANCEL_WORKFLOW_FAILED',
       () => this.orchestrator.cancelWorkflow(envelope.payload.workflowId),
+      envelope.payload.workflowId,
+    );
+  }
+
+  /**
+   * Cancel a workflow's own in-flight tasks as a preamble to rerunning it (recreate, retry,
+   * rebase-recreate, rebase-retry), without detaching downstream workflows gated on it via
+   * externalDependencies. Unlike cancelWorkflow, this workflow is expected to complete again shortly.
+   */
+  async preemptWorkflow(
+    envelope: CommandEnvelope<{ workflowId: string }>,
+  ): Promise<CommandResult<CancelResult>> {
+    return this.executeCommand<CancelResult>(
+      'PREEMPT_WORKFLOW_FAILED',
+      () => this.orchestrator.cancelWorkflow(envelope.payload.workflowId, { detachDependents: false }),
       envelope.payload.workflowId,
     );
   }

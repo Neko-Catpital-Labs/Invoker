@@ -1,0 +1,69 @@
+name: "PR #9903 rebase (1) contracts layer"
+description: |
+  Add PR #9903's `repoBinding?: InAppPlanningRepoBinding` field to
+  `InAppPlanningChatRequest` in packages/contracts/src/ipc-channels.ts
+  alongside the `turnId?: string` field master independently added in the
+  same interface (web-surface-parity stack, #9963/#9977). Both fields are
+  additive and optional; there is no semantic conflict here, only a textual
+  one from two unrelated features touching the same interface body. This is
+  the bottom of the stack; the domain (in-app-planner.ts) and ui (App.tsx)
+  layers build on it.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: implement-planning-repo-binding-rebase-persistence
+    description: |
+      Add `repoBinding?: InAppPlanningRepoBinding` to `InAppPlanningChatRequest`
+      in packages/contracts/src/ipc-channels.ts, next to the existing
+      `turnId?: string` field.
+      Review claim: InAppPlanningChatRequest carries both repoBinding (PR #9903) and turnId (master #9977) as sibling optional fields, with no behavior change to either.
+      Review lane: behavior
+      Safety invariant: Only the persistence layer changes; all other behavior in packages/contracts/src/ipc-channels.ts stays identical.
+      Slice rationale: One layer slice; the domain and ui layers build on this one.
+      Architectural effect: Restores the repoBinding request field that PR #9903 introduced, which was lost to a merge conflict against master's independently-added turnId field.
+      Goal: Implement the persistence layer so `grep -q 'repoBinding?: InAppPlanningRepoBinding' packages/contracts/src/ipc-channels.ts && grep -q 'turnId?: string' packages/contracts/src/ipc-channels.ts` passes.
+      Motivation: PR #9903 (Keep planning bound to its repository) cannot land as-is because master moved 93 commits and an unrelated web-surface-parity stack added a sibling field in the same interface, producing a GitHub merge conflict.
+      Alternative considerations: Building all three layers (contracts, domain, ui) in one slice was rejected as unreviewable; this contracts-only slice is the safe bottom layer since it is a pure additive merge with no logic to reconcile.
+      Implementation details: In packages/contracts/src/ipc-channels.ts's InAppPlanningChatRequest interface, add `repoBinding?: InAppPlanningRepoBinding;` as a new optional field alongside the existing `turnId?: string;` field. Reuse the InAppPlanningRepoBinding type already defined elsewhere in this file (PR #9903, commit d759e7e1a "Keep planning repository binding canonical") — do not redefine it.
+      Non-goals: No higher-layer work, no refactor, no unrelated cleanup, no doc edits.
+      Layer: persistence
+      Feature state: active
+      Files: packages/contracts/src/ipc-channels.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      Acceptance criteria:
+      - `grep -q 'repoBinding?: InAppPlanningRepoBinding' packages/contracts/src/ipc-channels.ts && grep -q 'turnId?: string' packages/contracts/src/ipc-channels.ts` exits 0 after the change.
+    prompt: |
+      Goal: Add PR #9903's repoBinding field back to InAppPlanningChatRequest so it coexists with master's turnId field.
+      Review lane: behavior
+      Motivation: PR #9903 (Keep planning bound to its repository, https://github.com/Neko-Catpital-Labs/Invoker/pull/9903) has a GitHub merge conflict against master because master independently added a `turnId?: string` field to the same `InAppPlanningChatRequest` interface in packages/contracts/src/ipc-channels.ts (web-surface-parity stack, PR #9977). Both fields must coexist.
+      Alternative considerations: Do not bundle the domain-layer (in-app-planner.ts) or ui-layer (App.tsx) work here. Do not rename or remove turnId.
+      Implementation details: Edit packages/contracts/src/ipc-channels.ts. In the InAppPlanningChatRequest interface (currently has sessionId, message, presetKey, confirmationMode, and turnId fields), add a new optional field `repoBinding?: InAppPlanningRepoBinding;`. The InAppPlanningRepoBinding type is already defined in this same file from PR #9903's first commit (d759e7e1a, "Keep planning repository binding canonical") — reuse it, do not redeclare it. Keep the existing turnId field unchanged.
+      Non-goals: No higher-layer work, no refactor, no unrelated cleanup.
+      Assume no prior context. You are given only this task.
+      Implement the persistence layer described above in packages/contracts/src/ipc-channels.ts. Touch nothing outside this layer.
+      Acceptance criteria:
+      - `grep -q 'repoBinding?: InAppPlanningRepoBinding' packages/contracts/src/ipc-channels.ts && grep -q 'turnId?: string' packages/contracts/src/ipc-channels.ts` exits 0 after your change (this is the pass condition).
+    dependencies: []
+
+  - id: verify-planning-repo-binding-rebase-persistence
+    description: |
+      Run the deterministic proof for the contracts layer.
+      Review claim: `grep -q 'repoBinding?: InAppPlanningRepoBinding' packages/contracts/src/ipc-channels.ts && grep -q 'turnId?: string' packages/contracts/src/ipc-channels.ts` passes only when both fields are present on the same interface.
+      Review lane: proof
+      Safety invariant: Proof-only; adds no product behavior.
+      Slice rationale: One proof slice for the contracts layer.
+      Architectural effect: None; verification only.
+      Goal: Prove the contracts layer deterministically.
+      Motivation: Each layer carries its own proof so the domain layer's task can assume the request type already has repoBinding available.
+      Alternative considerations: Manual verification was rejected as non-deterministic.
+      Implementation details: Execute the grep check as the terminal proof.
+      Non-goals: No product edits here; proof only.
+      Layer: app_regression
+      Feature state: active
+    command: "grep -q 'repoBinding?: InAppPlanningRepoBinding' packages/contracts/src/ipc-channels.ts && grep -q 'turnId?: string' packages/contracts/src/ipc-channels.ts"
+    dependencies:
+      - implement-planning-repo-binding-rebase-persistence

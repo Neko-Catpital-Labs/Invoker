@@ -149,6 +149,7 @@ export async function buildWorkRequest(
       prompt: task.config.prompt,
       executionAgent,
       executionModel,
+      maxTurns: task.config.maxTurns,
       repoUrl,
       branchRepoUrl,
       featureBranch: task.config.featureBranch,

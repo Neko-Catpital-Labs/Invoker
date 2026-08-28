@@ -762,6 +762,48 @@ describe('WorkflowInspector', () => {
     expect(screen.getByTestId('inspector-pending-fix-error')).toHaveTextContent('tests failed');
   });
 
+  it('hides merge approval actions when the workflow has no merge configured', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', onFinish: 'none' }}
+        task={makeTask({
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true, runnerKind: 'merge' },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Approve Merge' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject Merge' })).not.toBeInTheDocument();
+  });
+
+  it('keeps merge approval actions for workflows with a configured finish action', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', onFinish: 'pull_request' }}
+        task={makeTask({
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true, runnerKind: 'merge' },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Approve Merge' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reject Merge' })).toBeVisible();
+  });
+
   it('surfaces an executor-selection failure captured in pendingFixError so approve dispatch errors are visible', () => {
     const capabilityError =
       'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"';

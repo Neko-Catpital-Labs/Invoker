@@ -17,6 +17,7 @@ import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
+import { canonicalizeRemoteManagedWorkspacePath } from './conflict-resolver.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
@@ -713,6 +714,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       repoHash: h,
       baseRef,
       invokerHome,
+      requiredCommit: request.inputs.upstreamBase?.commitHash?.trim() || undefined,
     });
     bench('SshExecutor.startManagedWorkspace.bootstrapCloneFetch.before', { baseRef });
     const bootstrapOut = await this.execRemoteCapture(script1, 'bootstrap_clone_fetch');
@@ -1015,9 +1017,13 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     const msgEmpty = this.buildResultCommitMessage(request, commandExitCode);
     const gitUserName = process.env.GIT_AUTHOR_NAME ?? process.env.GIT_COMMITTER_NAME ?? 'Invoker Bot';
     const gitUserEmail = process.env.GIT_AUTHOR_EMAIL ?? process.env.GIT_COMMITTER_EMAIL ?? 'invoker@local';
+    const remoteWorktreePath = canonicalizeRemoteManagedWorkspacePath(
+      worktreePath,
+      this.remoteInvokerHome,
+    );
 
     const recordScript = buildRecordAndPushScript({
-      worktreePath,
+      worktreePath: remoteWorktreePath,
       branch,
       commitMessageChanges: msgChanges,
       commitMessageEmpty: msgEmpty,

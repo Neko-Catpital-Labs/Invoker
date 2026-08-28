@@ -57,3 +57,29 @@ export function buildCurrentActionGraphSnapshot(args: {
     launchDispatches: args.persistence.listLaunchDispatchesByState(['enqueued', 'leased']),
   });
 }
+
+export function createCachedActionGraphSnapshotReader(args: {
+  getOrchestrator: () => Orchestrator;
+  persistence: SQLiteAdapter;
+  invokerConfig: InvokerConfig;
+  ttlMs?: number;
+  now?: () => number;
+}): () => ActionGraphResponse {
+  const ttlMs = args.ttlMs ?? 1000;
+  const now = args.now ?? (() => Date.now());
+  let cached: { at: number; value: ActionGraphResponse } | null = null;
+
+  return () => {
+    const at = now();
+    if (cached && at - cached.at >= 0 && at - cached.at < ttlMs) {
+      return cached.value;
+    }
+    const value = buildCurrentActionGraphSnapshot({
+      orchestrator: args.getOrchestrator(),
+      persistence: args.persistence,
+      invokerConfig: args.invokerConfig,
+    });
+    cached = { at, value };
+    return value;
+  };
+}

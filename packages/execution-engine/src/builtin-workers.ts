@@ -3,13 +3,20 @@ import { registerAutoApproveWorker } from './workers/auto-approve-worker.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
 import { registerE2eAutoFixWorker } from './workers/e2e-autofix-worker.js';
+import { registerWorkerSessionMineWorker } from './workers/worker-session-mine-worker.js';
+import { registerIdleTaskCleanupWorker } from './workers/idle-task-cleanup-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
+import { registerClaudeOauthRefreshWorker } from './workers/claude-oauth-refresh-worker.js';
 import { registerInfraRepairWorker } from './workers/infra-repair-worker.js';
 import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 import { registerReaperWorker } from './workers/reaper-worker.js';
 import { registerRequeueWorker } from './workers/requeue-worker.js';
+import { registerSlackBugScanWorker } from './workers/slack-bug-scan-worker.js';
 import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
+import { registerCrossRepoResearchWorker } from './workers/cross-repo-research-worker.js';
+import { registerCatstackDeployWorker } from './workers/catstack-deploy-worker.js';
+import { registerMergifyQueueResearchWorker } from './workers/mergify-queue-research-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -21,9 +28,16 @@ export function registerBuiltinWorkers(
   registerPrStatusWorker(registry);
   registerInfraRepairWorker(registry);
   registerDiskHeadroomWorker(registry);
+  registerClaudeOauthRefreshWorker(registry);
   registerReaperWorker(registry);
   registerAutoApproveWorker(registry);
   registerPrMaintenanceWorkers(registry);
   registerE2eAutoFixWorker(registry);
+  registerWorkerSessionMineWorker(registry);
+  registerSlackBugScanWorker(registry);
+  registerIdleTaskCleanupWorker(registry);
+  registerCrossRepoResearchWorker(registry);
+  registerCatstackDeployWorker(registry);
+  registerMergifyQueueResearchWorker(registry);
   return registry;
 }

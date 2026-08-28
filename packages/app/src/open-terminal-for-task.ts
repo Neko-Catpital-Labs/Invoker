@@ -2,10 +2,9 @@
  * Shared logic for opening an external OS terminal for a persisted task.
  */
 
-import type { Logger, OpenTerminalResponse } from '@invoker/contracts';
+import { resolveInvokerHomeRoot, type Logger, type OpenTerminalResponse } from '@invoker/contracts';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
-import { homedir } from 'node:os';
 import {
   DEFAULT_EXECUTION_AGENT,
   DockerExecutor,
@@ -20,7 +19,7 @@ import {
   type PersistedTaskMeta,
   type TerminalSpec,
 } from '@invoker/execution-engine';
-import { loadConfig } from './config.js';
+import { loadConfig, resolveSecretsFilePath } from './config.js';
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
@@ -242,13 +241,14 @@ export function resolveTaskTerminalSpec(
       executorRegistry.register('docker', docker);
       executor = docker;
     } else if (repairedMeta.runnerKind === 'worktree') {
-      const invokerHome = path.resolve(homedir(), '.invoker');
+      const invokerHome = resolveInvokerHomeRoot();
       const maxWorktrees = resolveEffectiveMaxConcurrency(loadConfig().maxConcurrency);
       const worktree = new WorktreeExecutor({
         worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
         cacheDir: path.resolve(invokerHome, 'repos'),
         maxWorktrees,
         agentRegistry: opts.executionAgentRegistry,
+        secretsFile: resolveSecretsFilePath(loadConfig()),
       });
       executorRegistry.register('worktree', worktree);
       executor = worktree;

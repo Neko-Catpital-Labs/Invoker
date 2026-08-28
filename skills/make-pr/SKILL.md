@@ -151,6 +151,8 @@ Test Plan and Revert Plan are the opposite: keep their `## Test Plan` / `## Reve
 
 CI validates the declared Review Lane and Review Unit against the actual changed files. Keep `behavior`, `refactor`, and `cleanup` slices separate from docs, policy, and proof files. Keep `proof` separate from product, docs, and policy files. Keep `policy` separate from product and proof files. Keep `docs` separate from product, policy, proof, and product-test files. The exact classification and review-unit boundaries live in `scripts/validate-pr-body.mjs` and `scripts/review-unit-rules.mjs`; split the PR when the local validator reports a mismatch.
 
+Before running the full validator, check the drafted Summary/Non-goals prose against the declared Review Unit with `node scripts/check-pr-body-keywords.mjs --body-file <file> --declared-unit <unit>`. Common words like "stale", "retry", "split", "route" each belong to a different review unit's keyword list and will conflict with most other declared units — this check catches that in one step instead of discovering it through repeated full-validator rejections.
+
 When an existing PR changes after its body or proof was written, rerun this skill from the current diff before updating the PR. If the new diff touches UI-impacting files, rerun `skills/visual-proof/SKILL.md` and replace old screenshot or video links with fresh proof for the current code. Do not reuse earlier proof media after UI behavior changes.
 Before writing any "Fixed"/"resolves"/"no longer happens" claim backed by a screenshot or video, actually open that exact media yourself — Read the image, or extract and Read video frames — in the same turn you write the claim. Do not trust an automated DOM/test assertion as a substitute for looking; a test passing proves the test's assertion, not that you looked at what the media shows. State precisely what you saw on a `Manually inspected:` line inside `## Visual Proof`. `scripts/validate-pr-body.mjs` rejects a Visual Proof section that has media but no `Manually inspected:` line. See `skills/prove-it/SKILL.md` for the full rule, including the same standard applied to live-system status claims.
 
@@ -179,6 +181,10 @@ Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. Th
 For Invoker stacked PRs, diff atomicity blockers are hard failures. Readability warnings like large file count stay warnings, but a stack slice that trips a diff-atomicity finding such as unrelated areas MUST be split before publication.
 
 If one branch mixes behavior, refactor, cleanup, or test-harness/proof work, split the work into separate PRs. Do not relabel the lane or weaken the checker to make a mixed branch pass.
+
+## Comment policy gate
+
+Before publishing, run `pnpm run check:comments` (`scripts/check-added-comments.mjs`). It covers `.cjs`/`.js`/`.jsx`/`.mjs`/`.py`/`.pyi`/`.sh`/`.ts`/`.tsx` and rejects any newly-added explanatory comment against this repo's Comment Policy (see root `CLAUDE.md`), including comments picked up from a cherry-picked or auto-generated commit. It also covers fenced code blocks (```js, ```ts, ```sh, ```py, and aliases) inside `skills/**/*.md`, so a skill's own example snippets follow the same policy — untagged or non-code fences (yaml, json, prose) are not scanned. It runs in CI as `quality / Added Comment Policy`, so a failure here after publishing still blocks the PR — check it locally first rather than discovering it from a red check.
 
 ## Command surface
 
@@ -292,6 +298,7 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - keep Test Plan and Revert Plan content inside their collapsed `<details><summary>Test Plan</summary>` / `<summary>Revert Plan</summary>` blocks
 - do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
 - validate the body against the current branch diff with `node scripts/validate-pr-body-local.mjs --body-file <file> --base <base-branch>`
+- run `pnpm run check:comments` and remove any newly-added comment it flags, including one carried in from a cherry-pick
 - for stacked PRs, treat diff-atomicity blockers as fatal, even when readability-only warnings still print
 - for stacked PRs, after any split or restack, re-audit the full rebuilt stack before publishing or updating PRs
 - for stacked PRs, auto-fold conflict-only, import-only, or other no-new-claim fixup slices into the previous slice before publication

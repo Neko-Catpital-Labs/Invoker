@@ -75,6 +75,14 @@ export interface DiskCleanupResult {
 
 export type LocalDiskCleanupMode = 'critical' | 'stale-only';
 
+/**
+ * 'stale-only' skips the destructive Invoker-managed-dir wipe entirely and
+ * only age-gate-sweeps shared /tmp CI scratch -- safe to run at the `warn`
+ * threshold instead of waiting for `critical`, mirroring
+ * cleanupLocalInvokerHome's stale-only contract for local targets.
+ */
+export type RemoteDiskCleanupMode = 'critical' | 'stale-only';
+
 export interface CleanupLocalInvokerHomeOptions {
   invokerHome: string;
   targetKey?: string;
@@ -155,6 +163,7 @@ const REMOTE_CHILD_SWEPT_DIRS = ['repos', 'worktrees', 'merge-clones', 'merge-la
 export function buildInvokerHomeCleanupScript(
   invokerHome: string,
   preservePaths: readonly string[] = [],
+  mode: RemoteDiskCleanupMode = 'critical',
 ): string {
   const homeQ = shellPosixSingleQuote(invokerHome);
   const preserveArrayLiteral = preservePaths.map((p) => shellPosixSingleQuote(p)).join(' ');
@@ -169,6 +178,24 @@ remove_path "$INVOKER_HOME/pr-cron-work"`;
     .join(' ');
   const tmpGlobList = TMP_SCRATCH_GLOBS.join(' ');
   const transientTestGlobList = TMP_TRANSIENT_TEST_GLOBS.join(' ');
+  // stale-only (warn-paced) never kills provision grinders, wipes Invoker's own
+  // managed dirs, or recreates them -- it only age-gate-sweeps shared /tmp CI
+  // scratch, the same non-destructive contract cleanupLocalInvokerHome's
+  // stale-only mode already keeps for local targets.
+  const destructiveSection = mode === 'critical' ? `# Provision grinders only — do not pkill -f INVOKER_HOME (kills this SSH session).
+pkill -9 -f 'pnpm install --frozen-lockfile' >/dev/null 2>&1
+pkill -9 -f 'pnpm install' >/dev/null 2>&1
+pkill -9 -f 'electron-v[0-9].*-linux-x64.zip' >/dev/null 2>&1
+pkill -9 -f 'node_modules/.pnpm/electron@' >/dev/null 2>&1
+sleep 1
+# Prior rename leftovers from interrupted cleanups.
+rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
+${childSweptRemoveCalls}
+${wholeDirRemoveCalls}
+rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
+mkdir -p ${mkdirArgs}
+chmod 700 ${mkdirArgs}
+` : '';
   return `set +e
 INVOKER_HOME=${homeQ}
 ${bashNormalizeTildePath('INVOKER_HOME')}
@@ -178,16 +205,8 @@ case "$INVOKER_HOME" in
     exit 64
     ;;
 esac
-echo "[disk-headroom-cleanup] begin home=$INVOKER_HOME"
+echo "[disk-headroom-cleanup] ${mode === 'stale-only' ? 'stale-only ' : ''}begin home=$INVOKER_HOME"
 df -h / | tail -1
-# Provision grinders only — do not pkill -f INVOKER_HOME (kills this SSH session).
-pkill -9 -f 'pnpm install --frozen-lockfile' >/dev/null 2>&1
-pkill -9 -f 'pnpm install' >/dev/null 2>&1
-pkill -9 -f 'electron-v[0-9].*-linux-x64.zip' >/dev/null 2>&1
-pkill -9 -f 'node_modules/.pnpm/electron@' >/dev/null 2>&1
-sleep 1
-# Prior rename leftovers from interrupted cleanups.
-rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
 remove_path() {
   local path="$1"
   if [ -e "$path" ]; then
@@ -225,12 +244,7 @@ sweep_children_preserving() {
     remove_path "$child"
   done
 }
-${childSweptRemoveCalls}
-${wholeDirRemoveCalls}
-rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
-mkdir -p ${mkdirArgs}
-chmod 700 ${mkdirArgs}
-# Shared temp dir: reclaim only Invoker/test scratch, never a blanket /tmp wipe.
+${destructiveSection}# Shared temp dir: reclaim only Invoker/test scratch, never a blanket /tmp wipe.
 # Age guard leaves entries newer than ${TMP_SCRATCH_MIN_AGE_MINUTES}m alone (an active run may hold them).
 TMP_CLEAN="\${TMPDIR:-/tmp}"
 TMP_CLEAN="\${TMP_CLEAN%/}"
@@ -270,7 +284,7 @@ find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} 
   -print0 2>/dev/null | while IFS= read -r -d '' entry; do
   reap_tmp "$entry"
 done
-echo "[disk-headroom-cleanup] done"
+echo "[disk-headroom-cleanup] ${mode === 'stale-only' ? 'stale-only ' : ''}done"
 df -h / | tail -1
 exit 0
 `;
@@ -842,8 +856,10 @@ export async function cleanupRemoteInvokerHome(opts: {
   target: RemoteDiskTarget;
   logger?: Logger;
   store?: DiskHeadroomWorkerStore;
+  mode?: RemoteDiskCleanupMode;
   runRemoteScript?: (target: RemoteDiskTarget, script: string) => Promise<string>;
 }): Promise<DiskCleanupResult> {
+  const mode = opts.mode ?? 'critical';
   const targetKey = `ssh:${opts.target.name} ${opts.target.remotePath}`;
   if (!isSafeRemoteInvokerHomePath(opts.target.remotePath)) {
     return {
@@ -857,7 +873,7 @@ export async function cleanupRemoteInvokerHome(opts: {
   }
 
   let preservePaths: string[] = [];
-  if (opts.store) {
+  if (mode === 'critical' && opts.store) {
     try {
       preservePaths = computeRemotePreservationPaths(opts.store, opts.target);
     } catch (err) {
@@ -870,15 +886,16 @@ export async function cleanupRemoteInvokerHome(opts: {
     }
   }
 
-  const script = buildInvokerHomeCleanupScript(opts.target.remotePath, preservePaths);
+  const script = buildInvokerHomeCleanupScript(opts.target.remotePath, preservePaths, mode);
   const run = opts.runRemoteScript ?? defaultRunRemoteCleanup;
+  const reason = mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup';
   try {
-    opts.logger?.info?.(`[disk-headroom-cleanup] remote begin ${targetKey}`, {
+    opts.logger?.info?.(`[disk-headroom-cleanup] remote ${mode === 'stale-only' ? 'stale-only ' : ''}begin ${targetKey}`, {
       module: 'disk-headroom',
       targetKey,
     });
     const output = await run(opts.target, script);
-    opts.logger?.info?.(`[disk-headroom-cleanup] remote done ${targetKey}`, {
+    opts.logger?.info?.(`[disk-headroom-cleanup] remote ${mode === 'stale-only' ? 'stale-only ' : ''}done ${targetKey}`, {
       module: 'disk-headroom',
       targetKey,
       outputTail: output.slice(-400),
@@ -886,7 +903,7 @@ export async function cleanupRemoteInvokerHome(opts: {
     return {
       targetKey,
       ok: true,
-      reason: 'critical-cleanup',
+      reason,
       detail: output.slice(-400),
       protectedSkipCount: 0,
       protectedSkipBytes: 0,

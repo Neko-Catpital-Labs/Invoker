@@ -2,11 +2,7 @@ name: "CI regression: {{job_slug}}"
 description: |
   {{marker}}
 
-  CI job `{{job_name}}` first failed on default-branch push commit {{sha}}
-  in run {{run_id}}. It was most recently still red at {{last_bad_sha}}
-  in run {{last_bad_run_id}}.
-
-  First bad job: {{job_url}}
+  {{failure_description}}
 onFinish: pull_request
 mergeMode: external_review
 baseBranch: {{base_branch}}
@@ -14,7 +10,6 @@ repoUrl: {{repo_url}}
 
 tasks:
   - id: fix-ci-{{job_slug}}
-    executionAgent: codex
     description: |
       Fix CI job {{job_name}} first observed failing at {{sha}}.
       Review claim: The change corrects the CI regression's root cause at its source, with no unrelated edits.
@@ -26,6 +21,10 @@ tasks:
       Motivation: This job first failed on default-branch commit {{sha}} and stayed red through {{last_bad_sha}}.
       Alternative considerations: Re-running or weakening the test was rejected; fix the underlying defect.
       Implementation details: Reproduce at {{sha}}, then implement on current master.
+      Repro protocol:
+      - Before editing, check out {{sha}} in a detached temporary worktree and run `{{verify_command}}` or the narrowest probe derived from failing CI job `{{job_name}}`; record the failing exit code in the task summary.
+      - If the failure cannot reproduce locally because it is infra-class, write a `Repro waiver:` block in the task summary quoting the CI job log evidence, including the URL and exact relevant lines; an unproven fix without this waiver is a task failure.
+      - After the fix, run the same probe on the final branch and record the passing exit code in the task summary.
       Non-goals: No refactor, no unrelated cleanup, no test weakening, no snapshot churn unless it is the reviewed expected output.
       Layer: e2e_regression
       Feature state: active
@@ -50,18 +49,23 @@ tasks:
       `.github/workflows/ci.yml`, the relevant `scripts/` suite entrypoint, and
       the first failing GitHub job logs:
       `gh run view {{run_id}} --repo Neko-Catpital-Labs/Invoker --job {{job_database_id}} --log`.
-      Inspect the introducing commit with `git show {{sha}}`. Reproduce against
-      the historical commit without doing final work there: use a detached
-      temporary worktree or clone at {{sha}}, then run `{{verify_command}}`.
-      Return to the current task branch based on master and implement the fix
-      there. If historical reproduction is blocked by external runner setup,
-      use the GitHub job logs as the historical evidence and still prove the
-      final fix locally.
+      Inspect the introducing commit with `git show {{sha}}`.
+      Acceptance criteria: `{{verify_command}}` exits 0 on the final branch
+      after the change.
       Non-goals: Do not weaken, skip, or delete assertions; do not make broad
       refactors; do not manually edit GitHub CI state; do not target a PR at
       the historical SHA.
-      Acceptance criteria: `{{verify_command}}` must exit code 0 on the final
-      branch after the change.
+      Repro protocol:
+      1. Before editing, check out {{sha}} in a detached temporary worktree and
+         run `{{verify_command}}` or the narrowest probe derived from failing CI
+         job `{{job_name}}`; record the failing exit code in the task summary.
+      2. If the failure cannot reproduce locally because it is infra-class,
+         write a `Repro waiver:` block in the task summary quoting the CI job
+         log evidence, including the URL and exact relevant lines; an unproven
+         fix without this waiver is a task failure.
+      3. Return to the current task branch based on master, implement the fix
+         there, then run the same probe and record the passing exit code in the
+         task summary.
     dependencies: []
 
   - id: verify-ci-{{job_slug}}

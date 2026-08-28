@@ -19,7 +19,7 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 
-export const REQUEUE_WORKER_KIND = 'requeue';
+export const REQUEUE_WORKER_KIND = 'heartbeat-requeue';
 
 export const REQUEUE_COMMAND_CHANNEL = 'invoker:requeue';
 export const REQUEUE_ESCALATE_CHANNEL = 'invoker:requeue-escalate';
@@ -329,7 +329,7 @@ export function registerRequeueWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: REQUEUE_WORKER_KIND,
-    note: 'Re-runs liveness-stalled tasks (requeue) with bounded budget/backoff; escalates to needs_input.',
+    note: 'Re-runs heartbeat-stalled tasks with bounded budget/backoff; escalates to needs_input.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createRequeueWorker({
         logger: deps.logger,

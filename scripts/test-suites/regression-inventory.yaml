@@ -1,0 +1,134 @@
+# Policy source for deterministic regression candidates that live outside the
+# merge-required CI gates (.mergify.yml / required-fast). Loaded by
+# scripts/regression-inventory.mjs; validated by scripts/test-regression-inventory.mjs.
+#
+# Every candidate has exactly one tier:
+#   nightly - deterministic and hermetic (hermetic: true is required). Runs
+#             automatically via `pnpm run test:all:nightly` and the scheduled /
+#             workflow_dispatch "scheduled / Nightly Regression Tier" CI job.
+#             Never merge-required.
+#   manual  - live-service, destructive, fleet, production-DB, or otherwise
+#             non-hermetic. Never run by nightly tooling or CI automation; a
+#             human runs the command directly. Must document why via `reason`.
+#
+# Adding a new deterministic repro/proof script? Add it here with a tier so it
+# cannot go silently unwired again.
+
+candidates:
+  - id: playwright-shard-inventory-self-test
+    tier: nightly
+    hermetic: true
+    description: >-
+      Hermetic fixture proof that the Playwright shard inventory guard
+      accounts for specs nested below packages/app/e2e, not just top-level
+      specs, and still honors the manual-only allowlist.
+    script: scripts/repro/repro-ci-playwright-shard-inventory.mjs
+    command: node scripts/repro/repro-ci-playwright-shard-inventory.mjs --self-test
+
+  - id: workflow-mutation-oom-safe
+    tier: nightly
+    hermetic: true
+    description: >-
+      Orphaned deterministic Node repro (not wired into any test-suite tier)
+      proving task output stays externalized instead of growing the SQLite
+      output_spool table under sustained mutation-lease renewal.
+    script: scripts/run-oom-repro.sh
+    command: bash scripts/run-oom-repro.sh safe --expect fixed
+
+  - id: gui-open-terminal-pty-race-repro
+    tier: nightly
+    hermetic: true
+    description: >-
+      Orphaned deterministic Vitest-backed repro (not wired into any
+      test-suite tier) replaying PTY first-frame output emitted before
+      openOrReuse returns.
+    script: scripts/repro-gui-open-terminal-pty-race.sh
+    command: bash scripts/repro-gui-open-terminal-pty-race.sh
+
+  - id: worktree-already-exists-repro
+    tier: nightly
+    hermetic: true
+    description: >-
+      Orphaned deterministic Vitest-backed repro (not wired into any
+      test-suite tier) proving acquireWorktree retries once when git reports
+      the target worktree path already exists.
+    script: scripts/repro-worktree-already-exists.sh
+    command: bash scripts/repro-worktree-already-exists.sh
+
+  - id: e2e-regression-watch-hermetic-repro
+    tier: nightly
+    hermetic: true
+    description: >-
+      Hermetic E2E regression-watch repro (not wired into any test-suite
+      tier): exercises scripts/e2e-regression-watch.mjs's pure classification,
+      dedup, and dry-run rendering logic with no live GitHub calls.
+    script: scripts/repro/repro-e2e-regression-watch.mjs
+    command: node scripts/repro/repro-e2e-regression-watch.mjs
+
+  - id: drift-single-op
+    tier: manual
+    hermetic: false
+    description: >-
+      UI/backend drift harness scenario battery (single-operation lens).
+      Diagnostic, not a green-required CI gate; some scenarios intentionally
+      fail until their underlying drift bug is fixed.
+    script: packages/app/e2e/drift/drift-single-op.spec.ts
+    command: pnpm --filter @invoker/app exec playwright test e2e/drift/drift-single-op.spec.ts
+    reason: >-
+      Expected-failing scenarios by design; running it in an automated
+      pass/fail gate would misreport known, tracked drift as a fresh
+      regression.
+
+  - id: drift-thundering-herd
+    tier: manual
+    hermetic: false
+    description: >-
+      UI/backend drift harness scenario battery (thundering-herd lens).
+      Diagnostic, not a green-required CI gate; some scenarios intentionally
+      fail until their underlying drift bug is fixed.
+    script: packages/app/e2e/drift/drift-thundering-herd.spec.ts
+    command: pnpm --filter @invoker/app exec playwright test e2e/drift/drift-thundering-herd.spec.ts
+    reason: >-
+      Expected-failing scenarios by design; running it in an automated
+      pass/fail gate would misreport known, tracked drift as a fresh
+      regression.
+
+  - id: drift-battery
+    tier: manual
+    hermetic: false
+    description: >-
+      UI/backend drift harness full scenario-catalog battery. Diagnostic, not
+      a green-required CI gate; some scenarios intentionally fail until their
+      underlying drift bug is fixed.
+    script: packages/app/e2e/drift/drift-battery.spec.ts
+    command: pnpm --filter @invoker/app exec playwright test e2e/drift/drift-battery.spec.ts
+    reason: >-
+      Expected-failing scenarios by design; running it in an automated
+      pass/fail gate would misreport known, tracked drift as a fresh
+      regression.
+
+  - id: e2e-regression-watch-live-sweep
+    tier: manual
+    hermetic: false
+    description: >-
+      Watches live default-branch CI runs and files one Invoker repair plan
+      per active failure.
+    script: scripts/e2e-regression-watch.mjs
+    command: node scripts/e2e-regression-watch.mjs
+    reason: >-
+      Reads and mutates live GitHub Actions and Invoker workflow state;
+      requires live auth and files real repair plans, so it never runs from
+      nightly tooling or unattended CI.
+
+  - id: sqljs-oom-diagnostic
+    tier: manual
+    hermetic: false
+    description: >-
+      Non-mutating diagnostic that inspects an existing sql.js-backed SQLite
+      DB for OOM risk (page counts, mutation_intents / lease sizes, memory
+      growth across export cycles).
+    script: scripts/repro-sqljs-oom.mjs
+    command: node scripts/repro-sqljs-oom.mjs --db <path-to-existing-db>
+    reason: >-
+      Requires a caller-supplied --db path to an existing SQLite file; not
+      self-contained, so it cannot run unattended in a hermetic nightly job.

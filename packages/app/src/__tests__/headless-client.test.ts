@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -563,6 +563,50 @@ describe('headless-client', () => {
     expect(runHandler).toHaveBeenCalledWith(expect.objectContaining({ planPath: expect.stringContaining('plan.yaml') }));
   });
 
+  it('delegates headless.run when the plan contains workflow externalDependencies', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    const planDir = mkdtempSync(join(tmpdir(), 'headless-client-extdeps-'));
+    const planPath = join(planDir, 'plan.yaml');
+    writeFileSync(planPath, [
+      'name: "Headless external deps segfault repro"',
+      'onFinish: none',
+      'scratch: true',
+      'externalDependencies:',
+      '  - workflowId: "wf-1786581036099-164"',
+      '    taskId: "__merge__"',
+      '    requiredStatus: completed',
+      '    gatePolicy: review_ready',
+      'tasks:',
+      '  - id: repro',
+      '    description: "Minimal repro task"',
+      '    prompt: "Say hello."',
+      '',
+    ].join('\n'));
+
+    const bus = new LocalBus();
+    const runHandler = vi.fn(async (req: { planPath: string }) => {
+      expect(readFileSync(req.planPath, 'utf-8')).toContain('externalDependencies:');
+      return { workflowId: 'wf-extdeps', tasks: [] };
+    });
+    const runElectronHeadless = vi.fn(async () => 23);
+    bus.onRequest('headless.run', runHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-extdeps', mode: 'standalone' }));
+
+    try {
+      const exitCode = await runHeadlessClientCommand(['run', planPath, '--no-track'], {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(runHandler).toHaveBeenCalledTimes(1);
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+    } finally {
+      rmSync(planDir, { recursive: true, force: true });
+    }
+  });
+
   // --- Regression: standalone-owner scope for headless.resume ---
 
   it('delegates headless.resume to an existing standalone owner', async () => {
@@ -1020,6 +1064,78 @@ describe('headless-client', () => {
     expect(exitCode).toBe(0);
     expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'action-graph', '--output', 'json']);
   }, 30_000);
+
+  it('keeps delegating query action-graph when the ping misses but a live owner marker exists', async () => {
+    // A live owner holds the DB (marker names this process, sidecars present) but is
+    // too busy to answer the fast discovery ping. Regression for a real repro: bursts
+    // of `query action-graph`/`query queue` each independently spun up their own
+    // standalone Electron process (visible dock-icon flashes / focus steal) instead of
+    // retrying against the owner that was actually already running.
+    const dbPath = join(dbDir, 'invoker.db');
+    writeFileSync(dbPath, '');
+    writeFileSync(`${dbPath}-wal`, '');
+    writeFileSync(`${dbPath}.owner`, String(process.pid), 'utf-8');
+
+    const graph = {
+      generatedAt: '2026-05-14T12:00:00.000Z',
+      stallThresholdMs: 60_000,
+      nodes: [],
+      edges: [],
+    };
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    // No owner-ping handler on either bus → discovery misses; cli-query still succeeds.
+    secondBus.onRequest('headless.query', async (payload: { kind: string }) => {
+      expect(payload).toEqual({ kind: 'action-graph' });
+      return graph;
+    });
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 23);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'action-graph', '--output', 'json'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus: vi.fn().mockResolvedValue(secondBus),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith(`${JSON.stringify(graph)}\n`);
+    stdout.mockRestore();
+  });
+
+  it('keeps delegating query queue when the ping misses but a live owner marker exists', async () => {
+    const dbPath = join(dbDir, 'invoker.db');
+    writeFileSync(dbPath, '');
+    writeFileSync(`${dbPath}-wal`, '');
+    writeFileSync(`${dbPath}.owner`, String(process.pid), 'utf-8');
+
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    secondBus.onRequest('headless.query', async () => ({
+      maxConcurrency: 4,
+      runningCount: 1,
+      running: [{ taskId: 'wf-1/root', description: 'root task' }],
+      queued: [],
+    }));
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 23);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'queue', '--output', 'json'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus: vi.fn().mockResolvedValue(secondBus),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith('{"maxConcurrency":4,"runningCount":1,"running":[{"taskId":"wf-1/root","description":"root task"}],"queued":[]}\n');
+    stdout.mockRestore();
+  });
 
   it('falls back to direct Electron headless for query queue when no owner endpoint is reachable', async () => {
     const runElectronHeadless = vi.fn(async () => 0);

@@ -244,6 +244,76 @@ describe('disk-headroom worker', () => {
     );
   });
 
+  it('runs remote warn-paced stale-only cleanup after consecutive warn ticks, same as local', async () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registerDiskHeadroomWorker(registry);
+
+    const remoteTargets: RemoteDiskTarget[] = [
+      {
+        name: 'remote-1',
+        connection: { host: 'h', user: 'u', sshKeyPath: '/k' },
+        remotePath: '~/.invoker',
+      },
+    ];
+    const remoteLabel = 'ssh:remote-1 ~/.invoker';
+    const evaluations = [
+      warnEval(remoteLabel),
+      warnEval(remoteLabel),
+      warnEval(remoteLabel),
+      criticalEval(remoteLabel),
+    ];
+    let tick = 0;
+    const runCheck = vi.fn(async () => [evaluations[tick++] ?? evaluations[evaluations.length - 1]!]);
+    const cleanupRemote = vi.fn(async ({ target, mode }: { target: RemoteDiskTarget; mode?: string }) => ({
+      targetKey: `ssh:${target.name} ${target.remotePath}`,
+      ok: true,
+      reason: mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup',
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    }));
+    const upsertWorkerAction = vi.fn((row: unknown) => row);
+
+    const definition = registry.get(DISK_HEADROOM_WORKER_KIND)!;
+    const runtime = definition.factory({
+      store: { upsertWorkerAction } as any,
+      submitter: { submit: vi.fn() } as any,
+      logger: makeLogger(),
+      diskHeadroom: {
+        localPath: '/tmp/invoker-home',
+        remoteTargets,
+        thresholds: { warnPercent: 85, criticalPercent: 95 },
+        intervalMs: 0,
+        tickOnStart: false,
+        cleanupCooldownMs: 60_000,
+        runCheck,
+        cleanupRemote,
+      },
+    });
+
+    await runtime.tick('manual');
+    expect(cleanupRemote).not.toHaveBeenCalled();
+
+    await runtime.tick('manual');
+    expect(cleanupRemote).toHaveBeenCalledTimes(1);
+    expect(cleanupRemote.mock.calls[0]?.[0]).toMatchObject({
+      target: remoteTargets[0],
+      mode: 'stale-only',
+    });
+
+    await runtime.tick('manual');
+    expect(cleanupRemote).toHaveBeenCalledTimes(1);
+
+    await runtime.tick('manual');
+    expect(cleanupRemote).toHaveBeenCalledTimes(2);
+    expect(cleanupRemote.mock.calls[1]?.[0]).toMatchObject({ target: remoteTargets[0] });
+    expect(cleanupRemote.mock.calls[1]?.[0]).not.toHaveProperty('mode');
+    expect(upsertWorkerAction).toHaveBeenCalledWith(expect.objectContaining({
+      externalKey: `cleanup:${remoteLabel}:warn-paced`,
+      payload: expect.objectContaining({ reason: 'warn-paced' }),
+      status: 'completed',
+    }));
+  });
+
   it('respects cleanup cooldown on a second critical tick', async () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
     registerDiskHeadroomWorker(registry);

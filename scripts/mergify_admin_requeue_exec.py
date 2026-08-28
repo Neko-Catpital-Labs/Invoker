@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 import sys
@@ -11,12 +12,30 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from .mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
+    from .mergify_admin_requeue_model import (
+        Action,
+        DEFAULT_INVOKER_REPO,
+        Ledger,
+        PrSnapshot,
+        load_mergify_rules,
+        resolve_admin_bypass_rules_for_repo,
+    )
+    from .mergify_admin_requeue_plan import (
+        REBASE_CONFLICT_REPAIR_FILING_KIND,
+        REBASE_ONTO_MASTER_FILING_KIND,
+        REBASE_ONTO_MASTER_LEDGER_KIND,
+        ClaimRepairFiling,
+        ReleaseRepairFiling,
+        current_bottom_pr,
+        mergify_check_state_sha,
+        plan_stack_execution,
+        repair_filing_kind_for_check,
+    )
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
     from .mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_repairer_plan_rows,
         settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
@@ -25,12 +44,30 @@ except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
-    from mergify_admin_requeue_plan import current_bottom_pr, plan_stack_execution
+    from mergify_admin_requeue_model import (
+        Action,
+        DEFAULT_INVOKER_REPO,
+        Ledger,
+        PrSnapshot,
+        load_mergify_rules,
+        resolve_admin_bypass_rules_for_repo,
+    )
+    from mergify_admin_requeue_plan import (
+        REBASE_CONFLICT_REPAIR_FILING_KIND,
+        REBASE_ONTO_MASTER_FILING_KIND,
+        REBASE_ONTO_MASTER_LEDGER_KIND,
+        ClaimRepairFiling,
+        ReleaseRepairFiling,
+        current_bottom_pr,
+        mergify_check_state_sha,
+        plan_stack_execution,
+        repair_filing_kind_for_check,
+    )
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
     from mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_repairer_plan_rows,
         settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
@@ -59,14 +96,17 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
     elif action.kind == "retarget_base":
         from_base = pr.base_ref_name if pr else ""
         print(f"{prefix}retarget-base PR #{action.pr_number} from={from_base} to={action.key}")
+    elif action.kind == "squash_merge":
+        head = pr.head_ref_oid if pr else ""
+        print(f"{prefix}squash-merge PR #{action.pr_number} head={head} reason={action.detail}")
     elif action.kind == "rebase_onto_base":
         print(f"{prefix}rebase-onto-base PR #{action.pr_number} onto={action.key}")
+    elif action.kind == "rebase_onto_master":
+        print(f"{prefix}rebase-onto-master PR #{action.pr_number} {action.detail}")
     elif action.kind == "remove_merge_hold":
         print(f"{prefix}remove-merge-hold PR #{action.pr_number}")
     elif action.kind == "resolve_bot_threads":
         print(f"{prefix}resolve-bot-threads PR #{action.pr_number} thread={action.key}")
-    elif action.kind == "repair_conflict":
-        print(f"{prefix}repair-conflict PR #{action.pr_number} {action.detail}")
 
 
 def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClient, logger: AdminBypassLogger) -> dict[int, bool]:
@@ -75,8 +115,8 @@ def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClie
     # to one `gh api compare` call per ready-to-land stack per tick, not one
     # per candidate PR scanned. Uses GitHub's compare API instead of a local
     # git checkout so a normal scan never touches the filesystem or shells
-    # out to real git -- `rebase_onto_base` (the executor action, dispatched
-    # only when this signal is true) is the one place that actually clones.
+    # out to real git -- the legacy `rebase_onto_base` executor action (no longer
+    # planned for behind-master alone) is the one place that actually clones.
     stale_base_by_pr: dict[int, bool] = {}
     for stack in stacks:
         bottom = current_bottom_pr(stack, trunk)
@@ -95,13 +135,27 @@ def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClie
     return stale_base_by_pr
 
 
-def run_cycle(args: argparse.Namespace) -> bool:
-    rule_path = REPO_ROOT / ".mergify.yml"
-    try:
-        trunk, _labels, required_checks = load_mergify_rules(rule_path)
-    except ValueError as exc:
-        print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
-        raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
+def run_cycle(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+    rules: tuple[str, frozenset[str], frozenset[str]] | None = None,
+) -> bool:
+    # `rules` lets a multi-repo caller (run_cron_target_repos) pass in a
+    # rule tuple it already resolved for a foreign repo via
+    # resolve_admin_bypass_rules_for_repo, instead of always loading
+    # Invoker's own local .mergify.yml regardless of args.repo. Every
+    # existing single-repo caller omits it and keeps this exact prior
+    # behavior.
+    if rules is not None:
+        trunk, _labels, required_checks = rules
+    else:
+        rule_path = REPO_ROOT / ".mergify.yml"
+        try:
+            trunk, _labels, required_checks = load_mergify_rules(rule_path)
+        except ValueError as exc:
+            print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
+            raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
 
     logger = AdminBypassLogger()
     logger.trace(
@@ -126,6 +180,12 @@ def run_cycle(args: argparse.Namespace) -> bool:
             logger.trace("admin-bypass-fastpath-settled", count=fastpath_settled)
     except Exception as exc:
         logger.trace("admin-bypass-fastpath-settle-failed", error=str(exc))
+    try:
+        repairer_plan_settled = settle_repairer_plan_rows(ledger, now)
+        if repairer_plan_settled:
+            logger.trace("admin-bypass-repairer-plan-settled", count=repairer_plan_settled)
+    except Exception as exc:
+        logger.trace("admin-bypass-repairer-plan-settle-failed", error=str(exc))
     pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
     logger.trace(
         "admin-bypass-scan-loaded",
@@ -141,6 +201,14 @@ def run_cycle(args: argparse.Namespace) -> bool:
     repair_dispatch_last_error: str | None = None
     open_pr_numbers = set(pr_by_number)
     stale_base_by_pr = compute_stale_base_by_pr(stacks, trunk, args.repo, gh, logger)
+    # A dry run never dispatches a repair (see the `if args.dry_run: continue`
+    # below, right after print_action), so it has nothing to dedup against
+    # other systems for -- claiming here would perform a real ledger write
+    # for a filing that's never going to happen, and a claim that fails
+    # closed (ledger/owner unreachable) would silently drop the action from
+    # the printed plan instead.
+    dry_run_claim_repair_filing = None if args.dry_run else claim_repair_filing
+    dry_run_release_repair_filing = None if args.dry_run else release_repair_filing
     for stack in stacks:
         plan = plan_stack_execution(
             stack,
@@ -153,6 +221,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
             args.max_repair_attempts,
             trunk,
             stale_base_by_pr,
+            dry_run_claim_repair_filing,
+            dry_run_release_repair_filing,
         )
         queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
@@ -184,7 +254,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                     else:
                         check_name = action.key
-                        workflow_id = resolve_workflow_for_pr(action.pr_number)
+                        workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                         if workflow_id:
                             submit_repair_review_gate_ci(action.pr_number)
                             ledger.record(
@@ -194,7 +264,33 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             progressed = True
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
-                            progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
+                            if outcome.status == "queue_only_noop":
+                                # See plan.py's latest_queue_only_noop_check: without this
+                                # record, a queue-only check with an empty job log settles
+                                # here and then goes nowhere -- plan_bottom_progress can
+                                # never see it, so the admin-bypass label never comes back
+                                # and the PR is stuck outside the queue for good.
+                                ledger.record("queue-only-noop", pr.number, pr.head_ref_oid, check_name, now)
+                                logger.trace(
+                                    "admin-bypass-queue-only-noop",
+                                    repo=args.repo,
+                                    pr_number=pr.number,
+                                    check_name=check_name,
+                                )
+                            elif outcome.status == "noop" and check_name == "PR Body":
+                                # See plan.py's plan_stack_execution: without this record,
+                                # a PR whose body is already valid (or whose PR was merged/
+                                # closed mid-repair) keeps re-running the same local PR-Body
+                                # checkout+validate cycle every tick instead of the bottom
+                                # check staying suppressed.
+                                ledger.record("repair-noop", pr.number, pr.head_ref_oid, check_name, now)
+                                logger.trace(
+                                    "admin-bypass-repair-noop",
+                                    repo=args.repo,
+                                    pr_number=pr.number,
+                                    check_name=check_name,
+                                )
+                            progressed = outcome.status in {"pushed", "prereq_created", "submitted", "queue_only_noop"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
                     repair_dispatch_failed += 1
@@ -207,6 +303,28 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    # The planner already claimed this key (if claim_repair_filing was
+                    # wired in) before returning this Action; the actual dispatch
+                    # (fastpath or repairer.repair_check) never completed, so release
+                    # the claim or this key would be permanently blocked from every
+                    # future retry. bot_review_thread repairs are planned by
+                    # plan_bot_thread_repairs, which is not gated by claim_repair_filing,
+                    # so there is nothing to release for that key shape.
+                    #
+                    # A "repair_check" Action can come from either
+                    # mergify_failed_check_actions (claims with
+                    # mergify_check_state_sha, a composite of head_ref_oid and
+                    # the Mergify comment_id -- see that function) or
+                    # plan_direct_repairs' own failed_check path (claims with
+                    # the plain head_ref_oid); the Action itself carries no
+                    # record of which one produced it, so release both
+                    # possible shapes -- releasing a key that was never
+                    # claimed is a safe no-op.
+                    if release_repair_filing is not None and not action.key.startswith("bot_review_thread:"):
+                        kind = repair_filing_kind_for_check(action.key)
+                        release_repair_filing(kind, str(action.pr_number), pr.head_ref_oid)
+                        if pr.latest_mergify is not None:
+                            release_repair_filing(kind, str(action.pr_number), mergify_check_state_sha(pr, pr.latest_mergify))
                     should_poll = True
                     continue
                 if progressed:
@@ -216,18 +334,18 @@ def run_cycle(args: argparse.Namespace) -> bool:
                 else:
                     should_poll = True
                 continue
-            elif action.kind == "repair_conflict":
+            elif action.kind == "rebase_onto_master":
                 try:
-                    workflow_id = resolve_workflow_for_pr(action.pr_number)
+                    workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                     if workflow_id:
                         submit_rebase_recreate(workflow_id)
                         ledger.record(
-                            "conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now,
+                            REBASE_ONTO_MASTER_LEDGER_KIND, action.pr_number, pr.head_ref_oid, action.key, now,
                             meta={"workflowId": workflow_id, "via": "fastpath"},
                         )
                         progressed = True
                     else:
-                        outcome = repairer.repair_conflict(pr, action.detail, now)
+                        outcome = repairer.rebase_onto_master(pr, action.detail, now)
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
@@ -241,6 +359,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    if release_repair_filing is not None:
+                        release_repair_filing(REBASE_ONTO_MASTER_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
                     should_poll = True
                     continue
                 if progressed:
@@ -265,6 +385,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         key=action.key,
                         error=str(exc),
                     )
+                    if release_repair_filing is not None:
+                        release_repair_filing(REBASE_CONFLICT_REPAIR_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
                     should_poll = True
                     continue
                 repair_dispatch_attempted += 1
@@ -315,21 +437,80 @@ def run_cycle(args: argparse.Namespace) -> bool:
     return any_progress or should_poll
 
 
-def run_once(args: argparse.Namespace) -> int:
+def run_once(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> int:
     try:
-        run_cycle(args)
+        run_cycle(args, claim_repair_filing, release_repair_filing)
     except RuntimeError:
         return 2
     return 0
 
 
-def run_loop(args: argparse.Namespace) -> int:
+def run_loop(
+    args: argparse.Namespace,
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+) -> int:
     try:
-        while run_cycle(args):
+        while run_cycle(args, claim_repair_filing, release_repair_filing):
             time.sleep(args.poll_seconds)
     except RuntimeError:
         return 2
     return 0
+
+
+def resolve_rules_for_repo(repo: str, gh: GhClient) -> tuple[str, frozenset[str], frozenset[str]]:
+    # The Invoker repo itself always reads its own local checkout's
+    # .mergify.yml (matches load_mergify_rules' pre-existing single-repo
+    # behavior exactly, and avoids a needless network round trip for the
+    # repo cron already runs from). Every other target repo has no local
+    # checkout to read, so its rule (if any) and default branch come from
+    # the GitHub API instead.
+    if repo == DEFAULT_INVOKER_REPO:
+        try:
+            return load_mergify_rules(REPO_ROOT / ".mergify.yml")
+        except ValueError as exc:
+            raise RuntimeError(f"failed to load admin-bypass Mergify rule for {repo}") from exc
+    file_text = gh.file_text(repo, ".mergify.yml")
+    default_branch = gh.default_branch(repo)
+    try:
+        return resolve_admin_bypass_rules_for_repo(repo, file_text, default_branch)
+    except ValueError as exc:
+        raise RuntimeError(f"failed to resolve admin-bypass rules for {repo}") from exc
+
+
+def run_cron_target_repos(
+    args: argparse.Namespace,
+    target_repos: Sequence[str],
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+    gh: GhClient | None = None,
+) -> int:
+    # Cron entry point for scanning more than one repo in a single tick.
+    # Each repo gets its own rule resolution (its own Mergify text/default
+    # branch, per resolve_rules_for_repo) and its own args.repo so every
+    # downstream call (ledger, executor, repairer, fastpath) stays scoped
+    # to that one repo. One repo's rule-resolution or scan failure is
+    # logged and skipped rather than aborting the whole cron tick.
+    gh = gh or GhClient()
+    had_failure = False
+    for repo in target_repos:
+        repo_args = copy.copy(args)
+        repo_args.repo = repo
+        try:
+            rules = resolve_rules_for_repo(repo, gh)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            had_failure = True
+            continue
+        try:
+            run_cycle(repo_args, claim_repair_filing, release_repair_filing, rules=rules)
+        except RuntimeError:
+            had_failure = True
+    return 2 if had_failure else 0
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -340,6 +521,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--poll-seconds", type=float, default=60, help="Seconds to wait between loop scans. Default: 60.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions; perform no GitHub mutations.")
     parser.add_argument("--repo", default="Neko-Catpital-Labs/Invoker", help="Default: Neko-Catpital-Labs/Invoker.")
+    parser.add_argument(
+        "--target-repos",
+        default="",
+        help="Comma-separated repos to cron over in one tick (owner/name,owner/name,...). "
+        "Default: --repo alone. Any repo other than --repo's default is treated as foreign: "
+        "its own Mergify rule (or default branch) is resolved via the GitHub API, and its "
+        "repair plans never invoke Invoker-only repair helper scripts.",
+    )
     parser.add_argument("--author", help="Limit scan to one author. Default: all authors.")
     parser.add_argument("--state-file", default=str(Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"), help="Ledger JSONL path.")
     parser.add_argument("--pr", type=int, action="append", default=[], help="Limit to a PR; repeatable.")

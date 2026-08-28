@@ -81,7 +81,11 @@ describe('approveSlackPlanDraft', () => {
 
     await approve(onCommand, draft);
 
-    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({ type: 'start_plan', planText: draft.planText }));
+    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'start_plan',
+      repoUrl: 'https://github.com/acme/repo.git',
+      planText: expect.stringContaining('repoUrl: https://github.com/acme/repo.git'),
+    }));
     const stored = repo.get(draft.draftId, draft.version);
     expect(stored?.status).toBe('submitted');
     expect(JSON.parse(stored?.workflowIdsJson ?? '[]')).toEqual(['wf-1']);
@@ -146,7 +150,7 @@ describe('approveSlackPlanDraft', () => {
       channel_id: 'C1',
       thread_ts: 'T1',
     }));
-    expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(app.client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({
       channel: 'C1',
       blocks: expect.arrayContaining([
         expect.objectContaining({

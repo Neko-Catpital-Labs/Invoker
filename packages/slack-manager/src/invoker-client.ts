@@ -363,8 +363,9 @@ export class IpcInvokerClient implements InvokerClient {
         this.log('warn', `launch throttled — only ${Math.round(sinceLast / 1000)}s since last launch`);
         return { healthy: false, cause: 'throttled' };
       }
-    } else {
-      await this.forceReclaimSplitBrainHolder();
+    } else if (await this.forceReclaimSplitBrainHolder()) {
+      this.lockReadUnknownStreak = 0;
+      return { healthy: true };
     }
     if (await this.doLaunch()) {
       this.lockReadUnknownStreak = 0;
@@ -403,17 +404,21 @@ export class IpcInvokerClient implements InvokerClient {
    * Safety invariant: only explicit force restarts reach here, the holder is
    * re-confirmed unreachable after a fresh ping, and the signal is SIGTERM so
    * the holder's lock release() and shutdown cleanup still run.
+   *
+   * Returns true when the owner turned out to already be alive (nothing to
+   * reclaim) -- the caller must skip launching a new instance in that case,
+   * or it duplicates a healthy owner.
    */
-  private async forceReclaimSplitBrainHolder(): Promise<void> {
-    if (await this.ping()) return;
+  private async forceReclaimSplitBrainHolder(): Promise<boolean> {
+    if (await this.ping()) return true;
     const holder = this.detectUnreachableLockHolder();
-    if (holder.status !== 'unreachable') return;
+    if (holder.status !== 'unreachable') return false;
     const holderPid = holder.pid;
     this.log('warn', `force restart: writer lock held by unreachable PID ${holderPid} — sending SIGTERM`);
     try {
       this.terminatePid(holderPid);
     } catch {
-      return;
+      return false;
     }
     const deadline = this.now() + 10_000;
     while (this.now() < deadline && this.isPidAlive(holderPid)) {
@@ -422,6 +427,7 @@ export class IpcInvokerClient implements InvokerClient {
     if (this.isPidAlive(holderPid)) {
       this.log('error', `force restart: PID ${holderPid} did not exit within 10s of SIGTERM`);
     }
+    return false;
   }
 
   subscribe(channel: string, handler: (message: unknown) => void): () => void {

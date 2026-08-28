@@ -13,6 +13,7 @@ import type {
   TaskState,
   TaskDelta,
   TaskStateChanges,
+  ExternalGatePolicy,
   WorkflowDerivedStatus,
   WorkflowRollup,
 } from '@invoker/workflow-graph';
@@ -217,6 +218,7 @@ export type WorkerActionStatus =
 export type WorkerSource = 'built-in' | 'external';
 export type WorkerAvailability = 'available' | 'unknown';
 export type WorkerLogSource = 'worker_actions' | 'task_events';
+export type WorkerSnapshotAuthority = 'live' | 'cached' | 'unavailable';
 
 export interface WorkerLogEntry {
   id: string;
@@ -254,6 +256,8 @@ export interface WorkerActionSummary {
   sessionId?: string;
   summary?: string;
   reason?: string;
+  outcomeClass?: string;
+  decisionOutcome?: string;
   decision?: 'act' | 'skip';
   createdAt: string;
   updatedAt: string;
@@ -286,6 +290,8 @@ export interface WorkerStatusEntry {
   policyReason?: string;
   autoStarts: boolean;
   desiredEnabled?: boolean;
+  configuredAutoStart?: boolean;
+  suppressedByPersistedStop?: boolean;
   startable: boolean;
   stoppable: boolean;
   controlDisabledReason?: string;
@@ -303,6 +309,9 @@ export interface WorkerStatusEntry {
 export interface WorkerStatusSnapshot {
   generatedAt: string;
   workers: WorkerStatusEntry[];
+  authority?: WorkerSnapshotAuthority;
+  lastSuccessfulAt?: string;
+  unavailableReason?: string;
 }
 
 export interface WorkerActionHistoryRequest {
@@ -495,6 +504,9 @@ export interface InAppPlanningSessionSummary {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -518,11 +530,33 @@ export type InAppPlanningCreateSessionResponse =
 export type InAppPlanningListSessionsResponse = {
   ok: true;
   sessions: InAppPlanningSessionSummary[];
+  repoBinding?: InAppPlanningRepoBinding;
 };
+
+export type InAppPlanningTurnStatus = 'running' | 'failed';
+
+export type InAppPlanningTurnOutcome =
+  | {
+      status: 'completed';
+      reply: string;
+      reasoning?: string;
+      confirmationMode?: PlanningConfirmationMode;
+      draftPlanAvailable: boolean;
+      draftPlanSummary?: InAppPlanningPlanSummary;
+      draftPlanText?: string;
+    }
+  | { status: 'failed'; error: string };
 
 export interface InAppPlanningStreamEvent {
   sessionId: string;
-  chunk: string;
+  chunk?: string;
+  turnId?: string;
+  turn?: InAppPlanningTurnOutcome;
+}
+
+export interface InAppPlanningRepoBinding {
+  repoUrl: string;
+  baseBranch: string;
 }
 
 export interface InAppPlanningChatRequest {
@@ -530,12 +564,15 @@ export interface InAppPlanningChatRequest {
   message: string;
   presetKey?: string;
   confirmationMode?: PlanningConfirmationMode;
+  turnId?: string;
+  repoBinding?: InAppPlanningRepoBinding;
 }
 
 export type InAppPlanningChatResponse =
   | {
       ok: true;
       sessionId: string;
+      turnId?: string;
       reply: string;
       confirmationMode?: PlanningConfirmationMode;
       draftPlanAvailable: boolean;
@@ -545,6 +582,7 @@ export type InAppPlanningChatResponse =
   | {
       ok: false;
       sessionId?: string;
+      turnId?: string;
       error: string;
     };
 
@@ -761,6 +799,16 @@ export interface HarnessMcpConfigState {
   serverName: string;
 }
 
+export interface HarnessInstructionConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  installedInstructionNames: string[];
+}
+
 export interface BundledSkillsStatus {
   available: boolean;
   promptRecommended: boolean;
@@ -772,9 +820,10 @@ export interface BundledSkillsStatus {
   targets: BundledSkillTargetStatus[];
   commandTargets: HarnessConfigState[];
   mcpTargets: HarnessMcpConfigState[];
+  instructionTargets?: HarnessInstructionConfigState[];
 }
 
-export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
+export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall' | 'uninstall';
 
 export interface CliInstallerStatus {
   /** Packaged app + bundled binary present + darwin/linux. */
@@ -1043,6 +1092,10 @@ export const IpcChannels = {
   },
   'invoker:detach-workflow': {} as {
     request: [workflowId: string, upstreamWorkflowId: string];
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:attach-workflow': {} as {
+    request: [workflowId: string, upstreamWorkflowId: string, opts?: { taskId?: string; gatePolicy?: ExternalGatePolicy; force?: boolean }];
     response: WorkflowMutationAcceptedResult;
   },
   'invoker:load-workflow': {} as {

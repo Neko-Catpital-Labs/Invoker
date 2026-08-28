@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -12,11 +12,14 @@ import type { Logger } from '@invoker/contracts';
 import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
 
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
+import { createWorkerRegistry } from '../worker-registry.js';
+import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_AUTO_LABEL_WORKER_KIND,
   PR_DUPLICATE_CLOSE_WORKER_KIND,
+  PR_JAILBREAK_LAND_WORKER_KIND,
   PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   buildPrMaintenanceEnv,
@@ -24,6 +27,7 @@ import {
   createPrAutoLabelWorker,
   createPrDuplicateCloseWorker,
   createPrOrphanRepairWorker,
+  registerPrMaintenanceWorkers,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
 
@@ -265,6 +269,35 @@ describe('PR maintenance workers', () => {
     }));
   });
 
+  it('registers the jailbreak-land worker with its shell entrypoint', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    const registry = registerPrMaintenanceWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+    const definition = registry.get(PR_JAILBREAK_LAND_WORKER_KIND);
+
+    expect(definition?.kind).toBe(PR_JAILBREAK_LAND_WORKER_KIND);
+
+    const worker = definition!.factory({
+      logger,
+      store: {} as WorkerRuntimeDependencies['store'],
+      submitter: { submit: vi.fn(() => 0) } as WorkerRuntimeDependencies['submitter'],
+      prMaintenance: {
+        repoRoot,
+        spawnProcess: spawnHarness.spawnProcess,
+        lockProbe: () => ({ held: false }),
+      },
+    } as WorkerRuntimeDependencies);
+
+    await worker.tick();
+
+    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
+      command: 'bash',
+      args: [resolve(repoRoot, 'scripts/cron-pr-jailbreak-land.sh')],
+      options: expect.objectContaining({ cwd: repoRoot }),
+    }));
+  });
+
   it('staggers the duplicate-close worker 2/4 of the interval after the other workers', async () => {
     vi.useFakeTimers();
     expect(PR_MAINTENANCE_WORKER_STAGGER_STEP_MS).toBe(DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 4);
@@ -399,6 +432,7 @@ describe('PR maintenance workers', () => {
       lockProbe: () => ({ held: false }),
       installSignalHandlers: false,
       store,
+      env: { INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: join(repoRoot, 'mergify-admin-requeue-state.jsonl') },
     });
 
     await worker.tick();
@@ -411,6 +445,55 @@ describe('PR maintenance workers', () => {
       subjectType: 'repo',
       subjectId: repoRoot,
     });
+  });
+
+  it('ignores admin-bypass blocked ledger rows with malformed PR numbers', async () => {
+    const repoRoot = makeRepoRoot();
+    const ledgerPath = join(repoRoot, 'mergify-admin-requeue-state.jsonl');
+    writeFileSync(ledgerPath, [
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: '12invalid',
+        headSha: 'bad-trailing',
+        key: 'review-thread',
+        meta: { detail: 'would be the wrong PR' },
+      }),
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: '3.5',
+        headSha: 'bad-fraction',
+        key: 'review-thread',
+        meta: { detail: 'would truncate to the wrong PR' },
+      }),
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: ' 14 ',
+        headSha: 'good',
+        key: 'review-thread',
+        meta: { detail: 'valid blocked PR' },
+      }),
+    ].join('\n'));
+    const store = {
+      getWorkerAction: vi.fn(() => undefined),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => write as WorkerActionRecord),
+    };
+    const worker = createPrAdminBypassLandWorker({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: ledgerPath },
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      store,
+    });
+
+    await worker.tick();
+
+    const prWrites = store.upsertWorkerAction.mock.calls
+      .map((call) => call[0] as WorkerActionWrite)
+      .filter((write) => write.subjectType === 'pr');
+    expect(prWrites.map((write) => write.subjectId)).toEqual(['14', '14']);
+    expect(prWrites.map((write) => write.actionType)).toEqual(['mergify-blocked-pr', 'alert-send']);
   });
 
   it('does not record a decision row when the lock is held', async () => {

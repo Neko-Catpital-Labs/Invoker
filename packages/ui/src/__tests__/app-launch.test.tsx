@@ -10,7 +10,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../types.js';
+import type { WorkerStatusSnapshot, WorkflowMeta } from '../types.js';
+import { WorkerActivityCard } from '../components/WorkerActivityCard.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -20,6 +21,28 @@ vi.mock('@xyflow/react', async () => {
 
 // Dynamic import is required so App sees the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
+
+function workerSnapshot(
+  authority: WorkerStatusSnapshot['authority'],
+  lifecycles: Record<string, 'running' | 'stopped'>,
+  extras: Partial<WorkerStatusSnapshot> = {},
+): WorkerStatusSnapshot {
+  return {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    authority,
+    workers: Object.entries(lifecycles).map(([kind, lifecycle]) => ({
+      kind,
+      note: `${kind} worker`,
+      lifecycle,
+      policy: 'enabled',
+      autoStarts: lifecycle === 'running',
+      startable: lifecycle !== 'running',
+      stoppable: lifecycle === 'running',
+      recentActions: [],
+    })),
+    ...extras,
+  };
+}
 
 describe('App launch (component)', () => {
   let mock: MockInvoker;
@@ -154,6 +177,60 @@ describe('App launch (component)', () => {
 
     await waitFor(() => expect(mock.api.stopWorker).toHaveBeenCalledWith('pr-status'));
     expect(mock.api.startWorker).not.toHaveBeenCalled();
+  });
+
+  it('labels saved owner values during a timeout and clears the warning on recovery', () => {
+    const props = {
+      selectedWorkerKind: null,
+      onSelectWorker: vi.fn(),
+      showControls: false,
+    };
+    const live = workerSnapshot('live', {
+      'pr-status': 'running',
+      autofix: 'stopped',
+    }, { lastSuccessfulAt: '2026-01-01T00:00:01.000Z' });
+    const { rerender } = render(<WorkerActivityCard snapshot={live} {...props} />);
+
+    expect(screen.queryByTestId('worker-snapshot-freshness')).not.toBeInTheDocument();
+    expect(screen.getByTestId('worker-lifecycle-pr-status')).toHaveAttribute('data-lifecycle', 'running');
+    expect(screen.getByTestId('worker-lifecycle-autofix')).toHaveAttribute('data-lifecycle', 'stopped');
+
+    rerender(<WorkerActivityCard snapshot={{
+      ...live,
+      authority: 'cached',
+      unavailableReason: 'Owner request timed out',
+    }} {...props} />);
+
+    expect(screen.getByTestId('worker-snapshot-freshness')).toHaveTextContent('Showing saved worker status');
+    expect(screen.getByTestId('worker-snapshot-freshness')).toHaveTextContent('Last owner response: 2026-01-01 00:00:01 UTC');
+    expect(screen.getByTestId('worker-snapshot-freshness')).toHaveTextContent('Owner request timed out');
+    expect(screen.getByTestId('worker-lifecycle-pr-status')).toHaveAttribute('data-lifecycle', 'running');
+    expect(screen.getByTestId('worker-lifecycle-autofix')).toHaveAttribute('data-lifecycle', 'stopped');
+
+    rerender(<WorkerActivityCard snapshot={workerSnapshot('live', {
+      'pr-status': 'stopped',
+      autofix: 'running',
+    }, { lastSuccessfulAt: '2026-01-01T00:02:01.000Z' })} {...props} />);
+
+    expect(screen.queryByTestId('worker-snapshot-freshness')).not.toBeInTheDocument();
+    expect(screen.getByTestId('worker-lifecycle-pr-status')).toHaveAttribute('data-lifecycle', 'stopped');
+    expect(screen.getByTestId('worker-lifecycle-autofix')).toHaveAttribute('data-lifecycle', 'running');
+  });
+
+  it('shows explicit unavailability instead of guessed stopped rows before the first owner response', () => {
+    render(<WorkerActivityCard
+      snapshot={workerSnapshot('unavailable', {
+        'pr-status': 'stopped',
+        autofix: 'stopped',
+      }, { unavailableReason: 'Owner request timed out' })}
+      selectedWorkerKind={null}
+      onSelectWorker={vi.fn()}
+      showControls={false}
+    />);
+
+    expect(screen.getByTestId('worker-snapshot-freshness')).toHaveTextContent('Worker status unavailable');
+    expect(screen.getByTestId('worker-snapshot-freshness')).toHaveTextContent('Owner request timed out');
+    expect(screen.queryByText('Process: Stopped')).not.toBeInTheDocument();
   });
   it('renders the Apple-like source list without manual plan loading', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });

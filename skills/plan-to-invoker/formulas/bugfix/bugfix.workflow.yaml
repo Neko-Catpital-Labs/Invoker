@@ -18,6 +18,7 @@ tasks:
       Review claim: The change corrects {{bug_summary}} at its source with no unrelated edits. REPLACE_ME with the precise defect claim.
       Review lane: behavior
       Safety invariant: All other behavior in {{fix_file}} stays identical; only the defect path changes.
+      Effectiveness measurement: `{{verify_command}}` fails before this change and passes after; that transition is the effectiveness signal.
       Slice rationale: One behavior slice: the defect and its deterministic proof, nothing else.
       Architectural effect: None; no new module boundaries or interfaces.
       Goal: Make `{{verify_command}}` pass by correcting the defect at its source.
@@ -51,6 +52,7 @@ tasks:
       Review claim: `{{verify_command}}` passes only when {{bug_summary}} is fixed.
       Review lane: proof
       Safety invariant: The command is identical before and after the fix; it fails before and passes after.
+      Effectiveness measurement: Exit code of `{{verify_command}}` is the effectiveness signal for this proof slice.
       Slice rationale: One proof slice: the deterministic verification only.
       Architectural effect: None; adds no product behavior.
       Goal: Deterministically prove the fix with a single command.

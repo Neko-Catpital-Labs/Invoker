@@ -19,6 +19,68 @@ type ExistingPullRequest = { url: string; number: number };
 const DEFAULT_GITHUB_CLI_TIMEOUT_MS = 60_000;
 const GITHUB_CLI_TIMEOUT_ENV = 'INVOKER_GITHUB_CLI_TIMEOUT_MS';
 
+/** Byte length of a UTF-8 string without allocating a Buffer when possible. */
+export function utf8ByteLength(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
+}
+
+/**
+ * Compact PR / gh API log fields. Never include full `body`, create `stdout`,
+ * or `gh_result` JSON — those blobs inflate owner logs toward OOM.
+ */
+export function formatMergeGatePrLog(fields: {
+  number?: number | string | null;
+  htmlUrl?: string | null;
+  bodyBytes?: number | null;
+  responseBytes?: number | null;
+  count?: number | null;
+}): string {
+  const parts: string[] = [];
+  if (fields.number != null && fields.number !== '') {
+    parts.push(`number=${fields.number}`);
+  }
+  if (fields.htmlUrl) {
+    parts.push(`html_url=${fields.htmlUrl}`);
+  }
+  if (fields.bodyBytes != null) {
+    parts.push(`body_bytes=${fields.bodyBytes}`);
+  }
+  if (fields.responseBytes != null) {
+    parts.push(`response_bytes=${fields.responseBytes}`);
+  }
+  if (fields.count != null) {
+    parts.push(`count=${fields.count}`);
+  }
+  return parts.join(' ');
+}
+
+function summarizeGhJsonPayload(raw: string): string {
+  const responseBytes = utf8ByteLength(raw);
+  try {
+    const parsed = JSON.parse(raw) as {
+      number?: number;
+      html_url?: string;
+      url?: string;
+    } | Array<{ number?: number; html_url?: string; url?: string }>;
+    if (Array.isArray(parsed)) {
+      const first = parsed[0];
+      return formatMergeGatePrLog({
+        number: first?.number,
+        htmlUrl: first?.html_url ?? first?.url,
+        responseBytes,
+        count: parsed.length,
+      });
+    }
+    return formatMergeGatePrLog({
+      number: parsed.number,
+      htmlUrl: parsed.html_url ?? parsed.url,
+      responseBytes,
+    });
+  } catch {
+    return formatMergeGatePrLog({ responseBytes });
+  }
+}
+
 export function resolveMergeGatePrLifecycle(state: string): MergeGatePrLifecycle {
   return state === 'MERGED' ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
 }
@@ -60,9 +122,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     body?: string;
   }): Promise<MergeGateProviderResult> {
     const { baseBranch, featureBranch, title, cwd, body } = opts;
+    const bodyBytes = utf8ByteLength(body ?? '');
     console.log(
       `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview ` +
-      `baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} body=${body}`,
+      `baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} ` +
+      formatMergeGatePrLog({ bodyBytes }),
     );
     const remoteNames = await listRemoteNamesForGithubCli(this.exec.bind(this), cwd);
     const ghBase = normalizeBranchForGithubCli(baseBranch, remoteNames);
@@ -73,7 +137,14 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     await this.pushFeatureBranch(cwd, featureBranch);
 
     const existing = await this.findExistingOpenPullRequest(cwd, targetRepo, ghHead);
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=` +
+      formatMergeGatePrLog({
+        number: existing[0]?.number,
+        htmlUrl: existing[0]?.url,
+        count: existing.length,
+      }),
+    );
 
     if (existing.length > 0) {
       const apiArgs = [
@@ -84,7 +155,10 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       ];
       if (body) apiArgs.push('-f', `body=${body}`);
       const ghResult = await retryTransientGitHubCli(() => this.exec('gh', apiArgs, cwd));
-      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${ghResult}`);
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing ` +
+        summarizeGhJsonPayload(ghResult),
+      );
 
       return { url: existing[0].url, identifier: String(existing[0].number) };
     }
@@ -98,7 +172,14 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const stdout = await this.exec('gh', createArgs, cwd);
     const pr = JSON.parse(stdout) as { html_url: string; number: number };
 
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview creating stdout=${stdout}`);
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview creating ` +
+      formatMergeGatePrLog({
+        number: pr.number,
+        htmlUrl: pr.html_url,
+        responseBytes: utf8ByteLength(stdout),
+      }),
+    );
     return { url: pr.html_url, identifier: String(pr.number) };
   }
 
@@ -253,8 +334,17 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
         '--json', 'url,number',
         '--limit', '1',
       ], cwd);
-      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
-      return JSON.parse(listOutput) as ExistingPullRequest[];
+      const pulls = JSON.parse(listOutput) as ExistingPullRequest[];
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput ` +
+        formatMergeGatePrLog({
+          number: pulls[0]?.number,
+          htmlUrl: pulls[0]?.url,
+          responseBytes: utf8ByteLength(listOutput),
+          count: pulls.length,
+        }),
+      );
+      return pulls;
     } catch (err) {
       console.warn(
         `[merge-gate] gh pr list failed; falling back to REST pulls lookup: ` +
@@ -278,14 +368,23 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       '-f', `head=${owner}:${ghHead}`,
       '-f', 'per_page=1',
     ], cwd));
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview restListOutput=${output}`);
     const pulls = JSON.parse(output) as Array<{ html_url?: string; url?: string; number: number }>;
-    return pulls
+    const existing = pulls
       .map((pull) => ({
         url: pull.html_url ?? pull.url ?? '',
         number: pull.number,
       }))
       .filter((pull): pull is ExistingPullRequest => Boolean(pull.url) && Number.isFinite(pull.number));
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview restListOutput ` +
+      formatMergeGatePrLog({
+        number: existing[0]?.number,
+        htmlUrl: existing[0]?.url,
+        responseBytes: utf8ByteLength(output),
+        count: existing.length,
+      }),
+    );
+    return existing;
   }
 
   private parseGitHubRepoNwo(url: string): string | undefined {

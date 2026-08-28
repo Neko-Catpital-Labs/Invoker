@@ -11,7 +11,9 @@ import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from './fixtures/pr-6976-oauth-se
 import {
   buildRepoMirrorRepairScript,
   createInfraRepairTick,
+  deriveCorruptWorktreeAdminPathFromWorkspace,
   extractCorruptMirrorPath,
+  extractCorruptWorktreeAdminPath,
   INFRA_REPAIR_RECREATE_TASK_CHANNEL,
   INFRA_REPAIR_RETRY_TASK_CHANNEL,
   INFRA_REPAIR_WORKER_KIND,
@@ -113,7 +115,16 @@ function makeHarness(
   };
   const runRemoteProvisionRepairFn = vi.fn(async () => 'remote repair ok');
   const runRepoMirrorRepairFn = vi.fn(async () => 'mirror repair ok');
+  const runWorktreeCorruptRepairFn = vi.fn(async () => 'worktree corrupt repair ok');
   const resolveRemoteBranchOwnerPathFn = vi.fn(async () => undefined as string | undefined);
+  const cleanupRemoteInvokerHomeFn = vi.fn(async () => ({
+    targetKey: 'ssh:remote-1 ~/.invoker',
+    ok: true as const,
+    reason: 'cleaned' as const,
+    detail: 'freed 21GB',
+    protectedSkipCount: 0,
+    protectedSkipBytes: 0,
+  }));
   let nowMs = Date.parse('2026-01-01T00:00:00.000Z');
   const tick = createInfraRepairTick({
     store,
@@ -133,7 +144,9 @@ function makeHarness(
     defaultAutoFixRetries: options.defaultAutoFixRetries ?? Number.POSITIVE_INFINITY,
     runRemoteProvisionRepairFn,
     runRepoMirrorRepairFn,
+    runWorktreeCorruptRepairFn,
     resolveRemoteBranchOwnerPathFn,
+    cleanupRemoteInvokerHomeFn,
     now: () => nowMs,
   });
 
@@ -146,7 +159,9 @@ function makeHarness(
     updateTask,
     runRemoteProvisionRepairFn,
     runRepoMirrorRepairFn,
+    runWorktreeCorruptRepairFn,
     resolveRemoteBranchOwnerPathFn,
+    cleanupRemoteInvokerHomeFn,
     setNow: (nextNowMs: number) => { nowMs = nextNowMs; },
   };
 }
@@ -275,6 +290,155 @@ describe('infra-repair worker', () => {
         status: 'completed',
         payload: expect.objectContaining({
           infraReason: 'ssh-repo-mirror-corrupt',
+          channel: INFRA_REPAIR_RETRY_TASK_CHANNEL,
+        }),
+      }),
+    ]));
+  });
+
+  it('classifies finalize-time stale worktree admin metadata, cleans it, and queues recreate-task', async () => {
+    const adminPath = '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+      + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23';
+    const managedPath = '/home/invoker/.invoker/worktrees/c9d4f5f68faf/'
+      + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23';
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          workspacePath: managedPath,
+          error: `remote commit or push failed (code 128): fatal: not a git repository: ${adminPath}`,
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(extractCorruptWorktreeAdminPath(
+      `remote commit or push failed (code 128): fatal: not a git repository: ${adminPath}`,
+    )).toEqual({
+      adminPath,
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      worktreeName: 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+    });
+    expect(h.runWorktreeCorruptRepairFn).toHaveBeenCalledTimes(1);
+    expect(h.runWorktreeCorruptRepairFn).toHaveBeenCalledWith(expect.objectContaining({
+      adminPath,
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      managedWorktreePath: managedPath,
+    }));
+    expect(h.runRepoMirrorRepairFn).not.toHaveBeenCalled();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
+    expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-worktree-corrupt',
+          channel: INFRA_REPAIR_RECREATE_TASK_CHANNEL,
+        }),
+      }),
+    ]));
+  });
+
+  it('classifies finalize-time worktree corruption and derives the admin path from workspacePath when git omits it', async () => {
+    const managedPath = '/home/invoker/.invoker/worktrees/c9d4f5f68faf/'
+      + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23';
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          workspacePath: managedPath,
+          error: 'remote commit or push failed (code 128): fatal: not a git repository: (null)',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(extractCorruptWorktreeAdminPath(
+      'remote commit or push failed (code 128): fatal: not a git repository: (null)',
+    )).toBeUndefined();
+    expect(deriveCorruptWorktreeAdminPathFromWorkspace(managedPath, undefined)).toEqual({
+      adminPath: '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+        + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      worktreeName: 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+    });
+    expect(h.runWorktreeCorruptRepairFn).toHaveBeenCalledTimes(1);
+    expect(h.runWorktreeCorruptRepairFn).toHaveBeenCalledWith(expect.objectContaining({
+      adminPath: '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+        + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      managedWorktreePath: managedPath,
+    }));
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-worktree-corrupt',
+          channel: INFRA_REPAIR_RECREATE_TASK_CHANNEL,
+        }),
+      }),
+    ]));
+  });
+
+  it('refuses finalize-time worktree repair when the admin path cannot be validated', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: 'remote commit or push failed (code 128): fatal: not a git repository: '
+            + '/tmp/not-repos/.git/worktrees/bad',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.runWorktreeCorruptRepairFn).not.toHaveBeenCalled();
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
+  it('classifies an explicit disk-full failure, reclaims remote disk space, and queues retry-task', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: "Error: Executor startup failed (ssh): SSH remote script failed (exit=255)\n"
+            + "STDERR:\n"
+            + "Preparing worktree (new branch 'experiment/wf-1/fix-ci-x/g0.t0.a-a1')\n"
+            + "fatal: cannot lock ref 'refs/heads/experiment/wf-1/fix-ci-x/g0.t0.a-a1': "
+            + "unable to create directory for .git/refs/heads/experiment/wf-1/fix-ci-x/g0.t0.a-a1\n"
+            + 'mkdir: No space left on device',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.cleanupRemoteInvokerHomeFn).toHaveBeenCalledTimes(1);
+    expect(h.cleanupRemoteInvokerHomeFn).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        name: 'remote-1',
+        connection: expect.objectContaining({ host: '203.0.113.10' }),
+      }),
+    }));
+    expect(h.runRepoMirrorRepairFn).not.toHaveBeenCalled();
+    expect(h.runRemoteProvisionRepairFn).not.toHaveBeenCalled();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RETRY_TASK_CHANNEL);
+    expect(parseInfraRepairRetryTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-disk-full',
           channel: INFRA_REPAIR_RETRY_TASK_CHANNEL,
         }),
       }),

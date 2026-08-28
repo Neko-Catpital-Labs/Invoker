@@ -24,6 +24,16 @@ Do not query or mutate the SQLite database directly for normal operations.
 
 Use Invoker commands first. Direct database reads are only allowed when the user explicitly asks to debug persistence/storage internals, or when the Invoker command surface itself is the broken thing being investigated.
 
+## Sticky admin-bypass host
+
+Admin-bypass babysitting (`pr-admin-bypass-land` / `mergify_admin_requeue`, repair-filing claims, retry-cap ledger clears, and requeue for a named admin-bypass PR) is host-sticky for the session.
+
+If this session already named a remote host for that class of work, or already ran deploy/reset/repair against that host for admin-bypass PRs, later reset-retries / repair / requeue / ledger edits for those PRs must target the same host unless the user explicitly says local / this machine.
+
+Do not clear `~/.invoker/mergify-admin-requeue-state.jsonl` on a different machine and submit repair via that owner when the live babysitter ledger and cron live on the session's chosen host — that is the wrong machine even when a local dry-run plans the same action.
+
+Require an explicit "local" / "this machine" to switch hosts mid-session.
+
 ## Safe command map
 
 ### List workflows

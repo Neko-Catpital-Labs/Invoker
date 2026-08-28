@@ -1,0 +1,89 @@
+name: "restack-pr-9980-onto-web-surface-parity-16-tip"
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+
+tasks:
+  - id: restack-pr-9980-onto-base-tip
+    description: >
+      Review claim: PR #9980's head branch
+      (stack/EdbertChan/pr/web-planning-parity/web-surface-parity-17-buffered-planning-telemetry--e15a8670)
+      reports a merge conflict against its base
+      (stack/EdbertChan/pr/web-planning-parity/web-surface-parity-16-persist-web-surface-ui--917b4e24)
+      because it still carries 7 stale local commits for stack items (9) through (16) that
+      have since each been independently merged into the base branch as their own separate
+      PRs (#9963, #9964, #9965, #9966, #9970, #9977, #9978). A plain `git rebase` onto the
+      current base tip auto-skips 4 of those 7 via patch-id matching but the other 3
+      (items 9, 11, 12 as observed at diagnosis time) fail to skip because their merged
+      counterparts drifted slightly from the stale local copies (e.g. review feedback,
+      added PR number in the merged trailer), producing real content conflicts in
+      packages/ui/src/App.tsx, packages/ui/src/components/InvokerTerminal.tsx, and
+      packages/ui/src/__tests__/planning-repo-binding.test.tsx when git tries to re-apply
+      already-landed changes on top of themselves.
+
+      The only commit on PR #9980's branch that is not already present in some form on the
+      base branch is 5c30a394325995bdd2bc025c274e4b5a292c5b3e, "[Web surface parity](17)
+      Buffered planning telemetry pipeline with transport-failure retry". Verified at
+      diagnosis time: cherry-picking that single commit onto the current base tip
+      (94dcb3116) applies with zero conflicts and reproduces the same 5-file diff stat as
+      the original commit.
+
+      Review lane: tooling-policy.
+
+      Safety invariant: never touch the remote head branch unless its current tip is
+      exactly the expected SHA ccdc94138798e733a782a502127e7cec8bdc9cc3 at push time; push
+      only with --force-with-lease keyed to that SHA (never a bare --force), so a
+      concurrent human/agent push to the same branch aborts this task instead of being
+      silently overwritten. Abort without pushing anything if the (17) commit no longer
+      cherry-picks cleanly onto the base branch's current tip (base may have moved further
+      since diagnosis).
+
+      Slice rationale: pure branch history restructuring; no new file content beyond what
+      commit 5c30a3943 already introduced. This only drops already-landed duplicate
+      commits from PR #9980's ancestry so its diff against the (moving) base branch stops
+      being polluted by stale copies of already-merged work.
+
+      Architectural effect: none on shipped code; this changes only which commits PR
+      #9980's branch contains, not what ends up on master once every stack PR lands.
+
+      Layer: tooling_policy.
+      Feature state: active.
+      Files: none (git history only).
+      Change types: git fetch of both branches, cherry-pick of the single new commit onto
+      the base branch's current tip, force-with-lease push of the existing remote head
+      branch.
+      Acceptance criteria: the command exits 0 only if (a) the fetched head branch tip
+      matched the expected SHA before rewriting, (b) the cherry-pick of
+      5c30a394325995bdd2bc025c274e4b5a292c5b3e onto the base branch's current tip succeeded
+      with no conflicts, and (c) the force-with-lease push of the resulting commit onto the
+      head branch succeeded. Any other outcome must exit non-zero and must not push
+      anything, leaving PR #9980 for manual restructuring instead.
+    command: |
+      set -eu
+
+      BASE_REF="stack/EdbertChan/pr/web-planning-parity/web-surface-parity-16-persist-web-surface-ui--917b4e24"
+      HEAD_REF="stack/EdbertChan/pr/web-planning-parity/web-surface-parity-17-buffered-planning-telemetry--e15a8670"
+      EXPECTED_HEAD_SHA="ccdc94138798e733a782a502127e7cec8bdc9cc3"
+      NEW_COMMIT_SHA="5c30a394325995bdd2bc025c274e4b5a292c5b3e"
+
+      git fetch origin "$BASE_REF":refs/heads/__restack_base
+      git fetch origin "$HEAD_REF":refs/heads/__restack_head
+
+      ACTUAL_HEAD_SHA="$(git rev-parse __restack_head)"
+      if [ "$ACTUAL_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+        echo "head branch moved since diagnosis (expected $EXPECTED_HEAD_SHA, got $ACTUAL_HEAD_SHA); aborting without pushing" >&2
+        exit 1
+      fi
+
+      git branch -f __restack_new __restack_base
+      git checkout __restack_new
+
+      if ! git cherry-pick -x "$NEW_COMMIT_SHA"; then
+        git cherry-pick --abort || true
+        echo "cherry-pick of $NEW_COMMIT_SHA onto the current base tip conflicted; this PR needs manual restructuring instead" >&2
+        exit 1
+      fi
+
+      git push "--force-with-lease=refs/heads/$HEAD_REF:$ACTUAL_HEAD_SHA" origin "__restack_new:refs/heads/$HEAD_REF"
+    dependencies: []
+    requiresManualApproval: true

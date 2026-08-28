@@ -1,10 +1,9 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
-import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
+import { CommandError, IpcChannels, makeEnvelope, resolveInvokerInstanceProfile } from '@invoker/contracts';
 import type {
   BundledSkillsInstallMode,
   InAppPlanRequest,
@@ -42,6 +41,7 @@ import {
 import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
+  filterExecutionHarnesses,
   loadConfig,
   resolveAutoFixExecutionModel,
   resolveDefaultTaskExecutionSettings,
@@ -84,7 +84,7 @@ import {
   type ReviewGateCiContext,
 } from '../auto-fix-intents.js';
 import { persistShutdownDiagnostic } from '../shutdown-diagnostic.js';
-import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
+import { createCachedActionGraphSnapshotReader } from '../action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
 import {
   createInAppPlanningChatSessions,
@@ -209,7 +209,7 @@ export function acknowledgeNoTrackHeadlessExec(
   const command = Array.isArray(payload.args) ? payload.args[0] : undefined;
   // Global commands are not workflow-scoped. Fall through to inline execution
   // instead of requiring a mutation-intent workflow id.
-  if (command === 'start-ready' || command === 'check-pr-status') {
+  if (command === 'start-ready' || command === 'check-pr-status' || command === 'repair-filing') {
     context.logger.info(
       `headless.exec start-ready noTrack fallthrough ${headlessExecLogFields(payload, mode, Boolean(workflowMutationCoordinator), { workflow: '"<global>"', priority })}`,
       { module: 'ipc-delegate' },
@@ -287,6 +287,11 @@ export interface GuiMutationTaskActions {
   logAutoFixDebug: (taskId: string, phase: string, details?: Record<string, unknown>) => void;
   performDeleteWorkflow: (workflowId: string) => Promise<void>;
   performDetachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
+  performAttachWorkflow: (
+    workflowId: string,
+    upstreamWorkflowId: string,
+    opts?: { taskId?: string; gatePolicy?: string; force?: boolean },
+  ) => Promise<void>;
   performCancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   performDeleteTask: (taskId: string) => Promise<void>;
   performCancelWorkflow: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -389,13 +394,6 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   resolveSetupCliPath: () => string;
   getBundledSkillsStatus: () => ReturnType<typeof resolveBundledSkillsStatus>;
   installPackagedSkills: (mode?: BundledSkillsInstallMode) => ReturnType<typeof installBundledSkills>;
-}
-
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
 }
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
@@ -635,6 +633,25 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     requestWorkflowMetadataPublish('detach-workflow');
   }
 
+  async function performAttachWorkflow(
+    workflowId: string,
+    upstreamWorkflowId: string,
+    opts?: { taskId?: string; gatePolicy?: string; force?: boolean },
+  ): Promise<void> {
+    logger.info(`performAttachWorkflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    const envelope = makeEnvelope('attach-workflow', 'ui', 'workflow', {
+      workflowId,
+      upstreamWorkflowId,
+      taskId: opts?.taskId,
+      gatePolicy: opts?.gatePolicy as 'completed' | 'review_ready' | 'ci_failed' | undefined,
+      force: opts?.force,
+    });
+    const result = await commandService.attachWorkflow(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    logger.info(`performAttachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    requestWorkflowMetadataPublish('attach-workflow');
+  }
+
   /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
   const preemptSkipCodes: ReadonlySet<string> = new Set([
     OrchestratorErrorCode.TASK_NOT_FOUND,
@@ -741,7 +758,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     ) {
       cancelDeferredWorkflowLaunch(resolvedHeadlessTarget.workflowId, `headless.${headlessCommand}`);
     }
-    await runHeadless(payload.args, {
+    const commandResult = await runHeadless(payload.args, {
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
@@ -785,7 +802,10 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       module: 'ipc-delegate',
     });
     if (!workflowId) {
-      return { ok: true };
+      return {
+        ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
+        ok: true,
+      };
     }
     orchestrator.syncFromDb(workflowId);
     const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
@@ -943,6 +963,9 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:planning-chat-send':
       case 'invoker:planning-chat-submit':
       case 'invoker:planning-chat-reset':
+      case 'invoker:planning-chat-discard-draft':
+      case 'invoker:planning-chat-set-terminal-mode':
+      case 'invoker:planning-chat-rebind-repo':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
@@ -976,6 +999,17 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.exec', request: { args: ['delete', String(arg0)], noTrack: true } };
       case 'invoker:detach-workflow':
         return { channel: 'headless.exec', request: { args: ['detach-workflow', String(arg0), String(arg1)], noTrack: true } };
+      case 'invoker:attach-workflow': {
+        const opts = arg2 as { taskId?: string; gatePolicy?: string; force?: boolean } | undefined;
+        const flags: string[] = [];
+        if (opts?.gatePolicy) flags.push('--gate-policy', opts.gatePolicy);
+        if (opts?.taskId) flags.push('--task-id', opts.taskId);
+        if (opts?.force) flags.push('--force');
+        return {
+          channel: 'headless.exec',
+          request: { args: ['attach-workflow', String(arg0), String(arg1), ...flags], noTrack: true },
+        };
+      }
       case 'invoker:provide-input':
         return { channel: 'headless.exec', request: { args: ['input', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:approve':
@@ -1091,6 +1125,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     logAutoFixDebug,
     performDeleteWorkflow,
     performDetachWorkflow,
+    performAttachWorkflow,
     performCancelTask,
     performDeleteTask,
     performCancelWorkflow,
@@ -1168,7 +1203,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return Boolean(mainWindow && !mainWindow.isDestroyed());
   };
   const ownerMode = getOwnerMode();
+  const planDoctorScriptPath = join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
   const workerRuntimeController = getWorkerRuntimeController();
+  const readActionGraphSnapshot = createCachedActionGraphSnapshotReader({
+    getOrchestrator: () => orchestrator,
+    persistence,
+    invokerConfig,
+  });
   const workflowIdForTaskArg = actions.workflowIdForTaskArg;
   const workflowIdForTargetArg = actions.workflowIdForTargetArg;
   const performDeleteTask = actions.performDeleteTask;
@@ -1178,6 +1219,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const preemptWorkflowExecution = actions.preemptWorkflowExecution;
   const performDeleteWorkflow = actions.performDeleteWorkflow;
   const performDetachWorkflow = actions.performDetachWorkflow;
+  const performAttachWorkflow = actions.performAttachWorkflow;
   const performSharedApproveTask = actions.performSharedApproveTask;
   const executeFixWithAgentMutation = actions.executeFixWithAgentMutation;
   const executeSpawnRepairWorkflowMutation = actions.executeSpawnRepairWorkflowMutation;
@@ -1263,6 +1305,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       logLabel: options?.logLabel ?? 'plan-from-goal',
       preserveTaskHandles: options?.preserveTaskHandles,
       taskHandles,
+      staged: true,
     });
   }
 
@@ -1274,6 +1317,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
     config: invokerConfig,
     workingDir: repoRoot,
+    planDoctorScriptPath,
     sessions: planningChatSessions,
     planningCommandBuilder,
     executionAgentRegistry: agentRegistry,
@@ -1290,8 +1334,9 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   // given message. The error variant lets visual-proof specs render the
   // exhausted-retry error path without spawning a real planner subprocess.
   let testPlanningChatResponse:
-    | { planYaml: string; planName: string; reply?: string; delayMs?: number }
+    | { planYaml: string; planName: string; reply?: string; delayMs?: number; sidecarDraft?: boolean }
     | { throwError: string }
+    | { replyOnly: string }
     | null = null;
 
 
@@ -1303,6 +1348,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return planFromGoalInApp(args[0] as InAppPlanRequest, {
       config: invokerConfig,
       workingDir: repoRoot,
+      planDoctorScriptPath,
       loadGeneratedPlan: loadGeneratedPlanPreview,
       planningCommandBuilder,
       conversationRepo: planningConversationRepo,
@@ -1312,6 +1358,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return createPlanningChatSession(request as InAppPlanningCreateSessionRequest | undefined, {
       config: invokerConfig,
       workingDir: repoRoot,
+      planDoctorScriptPath,
       sessions: planningChatSessions,
       planningCommandBuilder,
       executionAgentRegistry: agentRegistry,
@@ -1333,15 +1380,24 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         if ('throwError' in planningChatResponseOverride) {
           throw new Error(planningChatResponseOverride.throwError);
         }
+        if ('replyOnly' in planningChatResponseOverride) {
+          return planningChatResponseOverride.replyOnly;
+        }
         if (planningChatResponseOverride.delayMs) {
           await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
         }
         return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
       }
       : undefined;
+    const plannerReplyOverrideSidecarDraft = Boolean(
+      planningChatResponseOverride
+      && 'planYaml' in planningChatResponseOverride
+      && planningChatResponseOverride.sidecarDraft,
+    );
     return sendPlanningChatMessage(request as InAppPlanningChatRequest, {
       config: invokerConfig,
       workingDir: repoRoot,
+      planDoctorScriptPath,
       sessions: planningChatSessions,
       planningCommandBuilder,
       executionAgentRegistry: agentRegistry,
@@ -1350,6 +1406,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       planningSessionStore: ownerMode ? persistence : undefined,
       logger,
       plannerReplyOverride,
+      plannerReplyOverrideSidecarDraft,
       onRawPlannerOutput: emitPlanningChatStream,
       repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
     });
@@ -1386,8 +1443,15 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return rebindPlanningChatRepo(request as InAppPlanningRebindRepoRequest, {
       config: invokerConfig,
       sessions: planningChatSessions,
+      planningCommandBuilder,
+      executionAgentRegistry: agentRegistry,
+      conversationRepo: planningConversationRepo,
+      logger,
+      onRawPlannerOutput: emitPlanningChatStream,
       planningSessionStore: ownerMode ? persistence : undefined,
       repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+      workingDir: repoRoot,
+      planDoctorScriptPath,
     });
   });
   registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
@@ -1589,7 +1653,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
 
   registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
     logger.info('delete-all-workflows', { module: 'ipc' });
-    assertDeleteAllEnabled();
     await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: getTaskExecutor() ?? undefined });
     taskHandles.clear();
     rendererTaskFeed.resetSnapshotState();
@@ -1598,7 +1661,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
 
   registerGuiMutationHandler('invoker:delete-all-workflows-bulk', async () => {
     logger.info('delete-all-workflows-bulk', { module: 'ipc' });
-    assertDeleteAllEnabled();
     await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: getTaskExecutor() ?? undefined });
     taskHandles.clear();
     rendererTaskFeed.resetSnapshotState();
@@ -1652,6 +1714,27 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         await performDetachWorkflow(workflowId, upstreamWorkflowId);
       } catch (err) {
         logger.error(`detach-workflow failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+    },
+  );
+
+  registerWorkflowScopedGuiMutationHandler(
+    'invoker:attach-workflow',
+    (workflowIdArg: unknown) => String(workflowIdArg),
+    'high',
+    async (workflowIdArg: unknown, upstreamWorkflowIdArg: unknown, optsArg: unknown) => {
+      const workflowId = String(workflowIdArg);
+      const upstreamWorkflowId = String(upstreamWorkflowIdArg);
+      const opts = optsArg as { taskId?: string; gatePolicy?: string; force?: boolean } | undefined;
+      logger.info(
+        `attach-workflow: workflow="${workflowId}" upstream="${upstreamWorkflowId}"`,
+        { module: 'ipc' },
+      );
+      try {
+        await performAttachWorkflow(workflowId, upstreamWorkflowId, opts);
+      } catch (err) {
+        logger.error(`attach-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     },
@@ -1820,14 +1903,14 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     if (!workerRuntimeController) {
       throw new Error('Worker runtime controller is unavailable');
     }
-    return workerRuntimeController.start(String(kindArg));
+    return workerRuntimeController.start(String(kindArg), { source: 'gui-ipc' });
   });
 
   registerGuiMutationHandler('invoker:stop-worker', async (kindArg: unknown) => {
     if (!workerRuntimeController) {
       throw new Error('Worker runtime controller is unavailable');
     }
-    return workerRuntimeController.stop(String(kindArg));
+    return workerRuntimeController.stop(String(kindArg), { source: 'gui-ipc' });
   });
 
   ipcMain.handle('invoker:get-queue-status', (_event, options?: { refresh?: boolean }) => resolveGuiQueueStatusRead({
@@ -1838,7 +1921,16 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     markDaemonOwnerUnavailable,
     refresh: options?.refresh,
   }));
+  let cachedWorkerStatusSnapshot: { at: number; value: unknown } | null = null;
   ipcMain.handle('invoker:get-worker-status', async () => {
+    const now = Date.now();
+    if (cachedWorkerStatusSnapshot && now - cachedWorkerStatusSnapshot.at >= 0 && now - cachedWorkerStatusSnapshot.at < 1000) {
+      return cachedWorkerStatusSnapshot.value;
+    }
+    const cacheWorkerStatusSnapshot = <T>(value: T): T => {
+      cachedWorkerStatusSnapshot = { at: Date.now(), value };
+      return value;
+    };
     if (!ownerMode) {
       try {
         const delegated = await messageBus.request<{ kind: string }, { workerStatus?: unknown }>(
@@ -1846,7 +1938,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           { kind: 'worker-status' },
         );
         if (delegated && typeof delegated === 'object' && 'workerStatus' in delegated) {
-          return delegated.workerStatus;
+          return cacheWorkerStatusSnapshot(delegated.workerStatus);
         }
       } catch (err) {
         if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
@@ -1857,17 +1949,17 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           { module: 'ipc' },
         );
       }
-      return createLocalWorkerStatusSnapshot({
+      return cacheWorkerStatusSnapshot(createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
         autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-      });
+      }));
     }
-    return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+    return cacheWorkerStatusSnapshot(workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
       registry: createRegisteredWorkerRegistry(),
       persistence,
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-    });
+    }));
   });
 
 
@@ -1885,7 +1977,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         );
       }
     }
-    return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
+    return readActionGraphSnapshot();
   });
 
   ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {
@@ -1913,8 +2005,17 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   });
 
+  // An explicit INVOKER_DB_DIR is a synthetic override and always wins; otherwise the
+  // selected profile decides, so a source-development launch never traces into the
+  // production home directory.
+  const invokerHomeRoot = process.env.INVOKER_DB_DIR ?? resolveInvokerInstanceProfile({
+    kind: process.env.INVOKER_RUNTIME_KIND ?? 'packaged',
+    sourceRoot: process.env.INVOKER_SOURCE_ROOT,
+    env: process.env,
+  }).homeRoot;
+
   const traceRendererTaskGraphEvents = process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1';
-  const rendererTaskGraphTracePath = join(homedir(), '.invoker', 'ui-task-graph-events.jsonl');
+  const rendererTaskGraphTracePath = join(invokerHomeRoot, 'ui-task-graph-events.jsonl');
   let rendererTaskGraphTraceWriteFailed = false;
   ipcMain.handle('invoker:trace-renderer-task-graph-event', (_event, event: TaskGraphEvent) => {
     if (!traceRendererTaskGraphEvents) return;
@@ -1940,7 +2041,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   const traceRendererWorkflowEvents = process.env.INVOKER_TRACE_RENDERER_WORKFLOW_EVENTS === '1';
-  const rendererWorkflowTracePath = join(homedir(), '.invoker', 'ui-workflow-events.jsonl');
+  const rendererWorkflowTracePath = join(invokerHomeRoot, 'ui-workflow-events.jsonl');
   let rendererWorkflowTraceWriteFailed = false;
   ipcMain.handle('invoker:trace-renderer-workflow-event', (_event, workflows: unknown[]) => {
     if (!traceRendererWorkflowEvents) return;
@@ -1978,12 +2079,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-workflow');
     logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.recreate-workflow',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const recreateWfEnvelope = makeEnvelope('recreate-workflow', 'ui', 'workflow', { workflowId });
       const recreateWfResult = activeMutationContext?.mutationTiming
         ? await activeMutationContext.mutationTiming.span(
@@ -2120,12 +2215,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     cancelDeferredWorkflowLaunch(workflowId, 'ipc.retry-workflow');
     logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.retry-workflow',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
       const result = activeMutationContext?.mutationTiming
         ? await activeMutationContext.mutationTiming.span(
@@ -2168,12 +2257,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
     logger.info(`rebase-retry: "${target}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.rebase-retry',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const started = await rebaseRetry(target, {
         logger,
         orchestrator,
@@ -2212,12 +2295,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     cancelDeferredWorkflowLaunch(workflowId, 'ipc.rebase-recreate');
     logger.info(`rebase-recreate: "${target}"`, { module: 'ipc' });
     try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.rebase-recreate',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
       const started = await rebaseRecreate(target, {
         logger,
         orchestrator,
@@ -2631,7 +2708,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   ipcMain.handle('invoker:get-execution-harnesses', () => {
-    return agentRegistry.listExecutionHarnesses();
+    return filterExecutionHarnesses(agentRegistry.listExecutionHarnesses(), loadConfig());
   });
 
   ipcMain.handle('invoker:get-planning-presets', () => {

@@ -448,6 +448,7 @@ BEGIN {
   standalone_workflow_waiver = 0
   on_finish = "pull_request"
   enforce_layering = 1
+  is_scratch = 0
 }
 
 {
@@ -462,6 +463,14 @@ BEGIN {
     sub(/^[[:space:]]*onFinish:[[:space:]]*/, "", on_finish)
     on_finish = trim(strip_quotes(on_finish))
     enforce_layering = (tolower(on_finish) != "none")
+    next
+  }
+
+  if (!in_task && line ~ /^[[:space:]]*scratch:[[:space:]]*/) {
+    scratch_val = line
+    sub(/^[[:space:]]*scratch:[[:space:]]*/, "", scratch_val)
+    scratch_val = trim(strip_quotes(scratch_val))
+    is_scratch = (tolower(scratch_val) == "true")
     next
   }
 
@@ -642,6 +651,44 @@ END {
           if (layer_rank(cur_layer) < layer_rank(dep_layer) && task_layer_exceptions[idx] != 1) {
             errors[++errn] = "Task \"" task_ids[idx] "\" layer ordering violation: lower layer \"" cur_layer "\" depends on higher layer \"" dep_layer "\" via dependency \"" dep_id "\" (add \"Layer exception: allowed\" with rationale to override)"
           }
+        }
+      }
+    }
+  }
+
+  if (enforce_layering == 1 && is_scratch == 0) {
+    scrub_idx = task_id_to_index["scrub-handoff-artifacts"]
+    if (scrub_idx == 0) {
+      errors[++errn] = "Plan with onFinish != none requires a task with id \"scrub-handoff-artifacts\" that scrubs ephemeral inter-task handoff files before the PR merge gate"
+    } else {
+      if (task_has_command[scrub_idx] != 1) {
+        errors[++errn] = "Task \"scrub-handoff-artifacts\" must define a shell \"command\" (not a prompt task)"
+      } else if (tolower(task_command_line[scrub_idx]) !~ /scrub[-_a-z]*handoff[-_a-z]*artifacts[-_a-z]*\.sh/) {
+        errors[++errn] = "Task \"scrub-handoff-artifacts\" command must run scripts/scrub-handoff-artifacts.sh (or an equivalent handoff-scrub script)"
+      }
+
+      for (idx = 1; idx <= taskn; idx++) {
+        has_dependent[idx] = 0
+      }
+      for (idx = 1; idx <= taskn; idx++) {
+        if (idx == scrub_idx) continue
+        deps_csv2 = task_dependencies[idx]
+        if (deps_csv2 == "") continue
+        split(deps_csv2, dep_ids2, /,/)
+        for (didx2 in dep_ids2) {
+          dep_id2 = trim(dep_ids2[didx2])
+          if (dep_id2 == "") continue
+          dep_index2 = task_id_to_index[dep_id2]
+          if (dep_index2 > 0) has_dependent[dep_index2] = 1
+        }
+      }
+
+      scrub_deps_csv = task_dependencies[scrub_idx]
+      for (idx = 1; idx <= taskn; idx++) {
+        if (idx == scrub_idx) continue
+        if (has_dependent[idx] == 1) continue
+        if (!csv_has(scrub_deps_csv, task_ids[idx])) {
+          errors[++errn] = "Task \"scrub-handoff-artifacts\" must depend on leaf task \"" task_ids[idx] "\" so handoff artifacts are scrubbed after every implement/verify task completes"
         }
       }
     }

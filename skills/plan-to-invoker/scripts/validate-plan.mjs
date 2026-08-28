@@ -9,18 +9,33 @@
 
 import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, resolve } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function resolveYamlModulePath(scriptDir) {
+/**
+ * Locate the Invoker checkout that owns this doctor script, for `yaml` when
+ * it isn't resolvable as a real installed dependency. Dev-convenience/other-
+ * install-shape fallback — see importYaml below. Checked in order:
+ * 1. `INVOKER_REPO_ROOT` (explicit override, same convention used elsewhere
+ *    in the app, e.g. packages/contracts/src/repo-root.ts).
+ * 2. The local relative path (this script running from inside a live
+ *    Invoker checkout or worktree).
+ * 3. The shared checkout behind a linked git worktree's common dir.
+ * 4. `sourceRepoRoot` recorded in ~/.invoker/bundled-skills.json by the last
+ *    `scripts/setup-agent-skills.sh` install.
+ */
+function resolveInvokerRepoRoot(scriptDir) {
+  const hasWorkspaceMarker = (dir) => existsSync(resolve(dir, 'pnpm-workspace.yaml'));
+
+  const envRoot = process.env.INVOKER_REPO_ROOT;
+  if (envRoot && hasWorkspaceMarker(envRoot)) return resolve(envRoot);
+
   const localRepoRoot = resolve(scriptDir, '../../..');
-  const localYamlPath = resolve(localRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-  if (existsSync(localYamlPath)) {
-    return localYamlPath;
-  }
+  if (hasWorkspaceMarker(localRepoRoot)) return localRepoRoot;
 
   try {
     const gitCommonDir = execSync('git rev-parse --git-common-dir', {
@@ -29,22 +44,60 @@ function resolveYamlModulePath(scriptDir) {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     const sharedRepoRoot = resolve(scriptDir, gitCommonDir, '..');
-    const sharedYamlPath = resolve(sharedRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-    if (existsSync(sharedYamlPath)) {
-      return sharedYamlPath;
+    if (hasWorkspaceMarker(sharedRepoRoot)) return sharedRepoRoot;
+  } catch {
+    // Fall through to the manifest-based lookup below.
+  }
+
+  try {
+    const invokerHome = process.env.INVOKER_DB_DIR ?? resolve(homedir(), '.invoker');
+    const manifestPath = resolve(invokerHome, 'bundled-skills.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (typeof manifest.sourceRepoRoot === 'string' && hasWorkspaceMarker(manifest.sourceRepoRoot)) {
+      return resolve(manifest.sourceRepoRoot);
     }
   } catch {
-    // Ignore git lookup failure and fall through to the explicit error below.
+    // Fall through to the explicit error at the call site.
+  }
+
+  return null;
+}
+
+/**
+ * `yaml` is a real declared dependency of the published `invoker-cli` npm
+ * package (packages/npm-cli/package.json), so when this script runs from
+ * inside that package's install (npm places `yaml` in an ancestor
+ * node_modules, e.g. <install-root>/node_modules/yaml sitting above
+ * <install-root>/vendor/skills/plan-to-invoker/scripts), a plain bare
+ * import resolves it via Node's own module resolution — no custom path
+ * logic needed. Fall back to locating a real Invoker checkout only when
+ * that fails, e.g. a machine-level skill install (~/.claude/skills/...)
+ * copied via `installBundledSkills()`, which has no such node_modules
+ * anywhere nearby.
+ */
+async function importYaml(scriptDir) {
+  try {
+    return await import('yaml');
+  } catch {
+    // Fall through to the checkout-based lookup below.
+  }
+
+  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
+  if (invokerRepoRoot) {
+    const repoYamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+    if (existsSync(repoYamlPath)) return import(repoYamlPath);
   }
 
   throw new Error(
-    'Unable to resolve yaml runtime. Checked packages/app/node_modules/yaml/dist/index.js in the current worktree and the shared git checkout.',
+    "Unable to resolve yaml runtime. Checked a plain 'yaml' import (present if this script is "
+    + 'running from inside the invoker-cli npm install, which declares it as a real dependency) '
+    + 'and packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout '
+    + '(INVOKER_REPO_ROOT, a live git checkout, or ~/.invoker/bundled-skills.json). Set '
+    + 'INVOKER_REPO_ROOT to an Invoker checkout if neither applies.',
   );
 }
 
-const yamlPath = resolveYamlModulePath(__dirname);
-
-const { parse: parseYaml } = await import(yamlPath);
+const { parse: parseYaml } = await importYaml(__dirname);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
 const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review', 'no_op'];
@@ -484,6 +537,64 @@ function validateReviewGate(reviewGate, errors) {
   });
 }
 
+// Credentials in a repoUrl must never reach validator output — errors are printed to stderr and logged.
+function redactRepoUrlUserInfo(repoUrl) {
+  if (typeof repoUrl !== 'string') return repoUrl;
+  try {
+    const parsed = new URL(repoUrl);
+    if (parsed.username === '' && parsed.password === '') return repoUrl;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    // `new URL` rejects some URLs git still accepts (e.g. file://user:pass@/path).
+    return repoUrl.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@]*@/, '$1');
+  }
+}
+
+// A base ref may be remote-qualified (`origin/master`, `upstream/main`,
+// `refs/remotes/upstream/release`), and repoUrl is only one remote, so a leading segment
+// that could name a different remote yields a second candidate. Reporting `absent` only
+// when every candidate is missing keeps a documented remote-qualified base from being
+// rejected, while an ordinary `feature/foo` still needs its own literal ref.
+function baseBranchRefCandidates(baseBranch) {
+  const ref = baseBranch.trim();
+  const names = [];
+  const afterFirstSegment = (value) => {
+    const slash = value.indexOf('/');
+    return slash > 0 && slash < value.length - 1 ? value.slice(slash + 1) : undefined;
+  };
+
+  if (ref.startsWith('refs/heads/')) {
+    names.push(ref.slice('refs/heads/'.length));
+  } else if (ref.startsWith('refs/remotes/')) {
+    names.push(afterFirstSegment(ref.slice('refs/remotes/'.length)));
+  } else if (!ref.startsWith('refs/')) {
+    names.push(ref, afterFirstSegment(ref));
+  }
+
+  return [...new Set(names.filter(Boolean))].map((name) => `refs/heads/${name}`);
+}
+
+function checkBaseBranchOnRemote(repoUrl, baseBranch) {
+  const wantRefs = baseBranchRefCandidates(baseBranch);
+  if (wantRefs.length === 0) return 'unknown';
+  try {
+    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, '--', ...wantRefs], {
+      timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    });
+    const matched = out
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .some((parts) => wantRefs.includes(parts[1]));
+    return matched ? 'present' : 'absent';
+  } catch {
+    return 'unknown';
+  }
+}
+
 function validatePlan(yamlContent, repoRoot) {
   const errors = [];
 
@@ -526,7 +637,7 @@ function validatePlan(yamlContent, repoRoot) {
       errorType: 'conflicting_fields',
       field: 'repoUrl',
       message: 'Plan cannot set both "scratch: true" and "repoUrl" — scratch plans run with no git repo',
-      value: raw.repoUrl,
+      value: redactRepoUrlUserInfo(raw.repoUrl),
     });
   } else if (!isScratch && !hasRepoUrl) {
     errors.push({
@@ -582,6 +693,17 @@ function validatePlan(yamlContent, repoRoot) {
       message: '"runnerKind" is no longer supported. Omit it for the default worktree executor, use "poolId" for configured execution pools, or use "dockerImage" for Docker tasks.',
       value: raw.runnerKind,
     });
+  }
+
+  for (const field of ['autoFix', 'autoFixRetries']) {
+    if (Object.prototype.hasOwnProperty.call(raw, field)) {
+      errors.push({
+        errorType: 'unsupported_field',
+        field,
+        message: `Plan-level "${field}" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+        value: raw[field],
+      });
+    }
   }
 
   // Validate description required when onFinish is pull_request or merge
@@ -644,6 +766,20 @@ function validatePlan(yamlContent, repoRoot) {
       field: 'baseBranch',
       message: "Plan has externalDependencies but baseBranch is 'master'. For stacked workflows, set baseBranch to the upstream workflow's featureBranch, or use step-submit-stacked to auto-resolve.",
     });
+  }
+
+  // Check that an explicit baseBranch actually exists on the remote.
+  // Best-effort: network/auth failures are not validation errors.
+  if (typeof raw.baseBranch === 'string' && raw.baseBranch.trim() !== '' && raw.repoUrl) {
+    const remoteCheck = checkBaseBranchOnRemote(raw.repoUrl, raw.baseBranch);
+    if (remoteCheck === 'absent') {
+      errors.push({
+        errorType: 'basebranch_not_on_remote',
+        field: 'baseBranch',
+        message: `baseBranch '${raw.baseBranch}' was not found on ${redactRepoUrlUserInfo(raw.repoUrl)} (git ls-remote returned no matching ref). Invoker's merge gate fetches this branch from origin and will fail with "required by the merge/gate step was not found on the remote" if submitted as-is. Push the branch first, or point baseBranch at a branch that exists (often 'master').`,
+        value: raw.baseBranch,
+      });
+    }
   }
 
   // Collect task IDs for dependency validation
@@ -729,6 +865,18 @@ function validatePlan(yamlContent, repoRoot) {
     }
 
     // Validate obsolete executor routing fields.
+    for (const field of ['autoFix', 'autoFixRetries']) {
+      if (Object.prototype.hasOwnProperty.call(task, field)) {
+        errors.push({
+          errorType: 'unsupported_field',
+          field,
+          taskId,
+          message: `Task "${taskId}" uses "${field}", which is no longer supported in plan YAML. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+          value: task[field],
+        });
+      }
+    }
+
     if (task.runnerKind !== undefined) {
       errors.push({
         errorType: 'unsupported_field',

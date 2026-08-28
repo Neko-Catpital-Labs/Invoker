@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type { Logger } from '@invoker/contracts';
 import type {
   WorkerActionRecord,
@@ -8,11 +11,18 @@ import type {
   WorkflowMutationPriority,
 } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
-import type { TaskState } from '@invoker/workflow-core';
+import { FailureClassifier, type TaskState } from '@invoker/workflow-core';
 
+import {
+  defaultCircuitBreakerPath,
+  isCircuitBreakerPaused,
+  loadCircuitBreakerState,
+  tripCircuitBreaker,
+} from './auto-fix-circuit-breaker.js';
 import {
   buildFixWithAgentMutationArgs,
   listOpenFixIntentsForTask,
+  listOpenRecreateIntentsForTask,
 } from './auto-fix-intents.js';
 import {
   autoFixAttemptLedgerKeyFromTask,
@@ -23,6 +33,7 @@ import {
   normalizeAutoFixRetryBudget,
   shouldSkipAutoFixForError,
   isLivenessFailureTask,
+  isSshInfraFailureTask,
 } from './auto-fix-gating.js';
 import {
   autoFixBareRetryExternalKey,
@@ -34,6 +45,7 @@ import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecyc
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from './worker-runtime.js';
+import { isAdminBypassNamedWorkflow } from './workflow-name-gates.js';
 
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
@@ -45,17 +57,41 @@ const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 export const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
 /** Owner-worker mutation channel the recovery worker submits its free bare retry through. Must have a registered `workflowMutationDispatcher` handler in `packages/app/src/main.ts`. */
 export const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
+/**
+ * Owner-worker mutation channel used when a merge gate cannot be fixed in-place
+ * because its saved workspace is missing or is not a git repository.
+ * Must have a registered `workflowMutationDispatcher` handler in `packages/app/src/main.ts`.
+ */
+export const AUTO_FIX_RECREATE_CHANNEL = 'invoker:recreate-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
+const AUTO_FIX_RECREATE_ACTION_TYPE = 'auto-recreate';
+/**
+ * A failed task's auto-fix attempt is a real, capacity-limited agent
+ * dispatch, not a free retry. If the provider itself is out of quota, every
+ * other failed task's auto-fix attempt fails identically -- so one such
+ * failure pauses all auto-fix dispatch fleet-wide for this long, instead of
+ * each failed task separately burning its own attempt budget on certain
+ * failure. See auto-fix-circuit-breaker.ts.
+ */
+export const DEFAULT_CIRCUIT_BREAKER_PAUSE_MS = 6 * 60 * 60 * 1000;
+
+/** Substrings that indicate a prior fix attempt already diagnosed an invalid merge workspace. */
+export const INVALID_MERGE_WORKSPACE_ERROR_MARKERS = [
+  "Cannot apply a fix because this merge gate's saved workspace",
+  'Recreate this merge-gate task from a fresh base',
+] as const;
 
 const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 'submit' | 'skip' }> = {
   'worker-autofix-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
   'worker-autofix-bare-retry-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
+  'worker-autofix-recreate-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
   'worker-autofix-skip': { eventType: 'recovery.worker.skip', action: 'skip' },
 };
 
 export interface AutoFixRecoveryStore {
-  listWorkflows(): ReadonlyArray<{ id: string }>;
+  listWorkflows(): ReadonlyArray<{ id: string; name?: string }>;
+  loadWorkflow?(workflowId: string): { name?: string | null } | undefined;
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents(
@@ -67,11 +103,16 @@ export interface AutoFixRecoveryStore {
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
+export type AutoFixRecoverySubmitChannel =
+  | typeof AUTO_FIX_COMMAND_CHANNEL
+  | typeof AUTO_FIX_BARE_RETRY_CHANNEL
+  | typeof AUTO_FIX_RECREATE_CHANNEL;
+
 export interface AutoFixRecoverySubmitter {
   submit(
     workflowId: string,
     priority: WorkflowMutationPriority,
-    channel: typeof AUTO_FIX_COMMAND_CHANNEL | typeof AUTO_FIX_BARE_RETRY_CHANNEL,
+    channel: AutoFixRecoverySubmitChannel,
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
@@ -99,6 +140,8 @@ export interface AutoFixRecoveryPolicyOptions {
   getAutoFixAgent?: () => string | undefined;
   getRetryBudget?: (task: TaskState) => number;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
+  circuitBreakerPath?: string;
+  circuitBreakerPauseMs?: number;
 }
 /** Register the built-in auto-fix worker. */
 export function registerAutoFixWorker(
@@ -159,6 +202,17 @@ function workflowIdForTask(task: TaskState): string | undefined {
   return task.config.workflowId ?? task.id.split('/')[0];
 }
 
+function workflowNameForId(
+  options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
+  workflowId: string,
+): string | undefined {
+  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  if (typeof listed?.name === 'string' && listed.name.length > 0) return listed.name;
+  const loaded = options.store.loadWorkflow?.(workflowId);
+  if (typeof loaded?.name === 'string' && loaded.name.length > 0) return loaded.name;
+  return undefined;
+}
+
 function taskRefFromTask(task: TaskState): AutoFixRecoveryTaskRef | undefined {
   const workflowId = workflowIdForTask(task);
   if (!workflowId) return undefined;
@@ -211,9 +265,32 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   // Liveness stalls (executor stopped heartbeating) are re-run by the requeue
   // worker, not "fixed" by the AI — auto-fix would loop on a non-defect.
   if (isLivenessFailureTask(task)) return false;
+  // SSH infra buckets are owned by infra-repair; generic autofix must not race it.
+  if (isSshInfraFailureTask(task)) return false;
   const max = retryBudgetForTask(task, options);
   if (max <= 0) return false;
   return true;
+}
+
+export function isInvalidMergeWorkspaceErrorText(error: string | undefined): boolean {
+  if (!error) return false;
+  return INVALID_MERGE_WORKSPACE_ERROR_MARKERS.some((marker) => error.includes(marker));
+}
+
+/**
+ * True when a merge-gate task cannot be fixed in-place because its saved
+ * workspace is missing / not a git repo, or a prior attempt already reported that.
+ */
+export function shouldRecreateMergeGateInsteadOfAutoFix(task: TaskState): boolean {
+  if (!task.config.isMergeNode) return false;
+  if (isInvalidMergeWorkspaceErrorText(task.execution.error)) return true;
+
+  const workspacePath = task.execution.workspacePath?.trim();
+  if (!workspacePath) return true;
+  if (!existsSync(workspacePath)) return true;
+  // Linked worktrees store `.git` as a file; bare/missing trees have neither.
+  if (!existsSync(join(workspacePath, '.git'))) return true;
+  return false;
 }
 
 function loadLatestTask(
@@ -424,6 +501,20 @@ function validateAutoFixCandidate(
   }
   const latestRef = snapshotComparison.ref;
 
+  const workflowName = workflowNameForId(options, latestRef.workflowId);
+  if (isAdminBypassNamedWorkflow(workflowName)) {
+    skipAutoFixCandidate(options, candidate, 'admin-bypass-excluded', {
+      workflowName: workflowName ?? null,
+    });
+    return undefined;
+  }
+
+  if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.error)) {
+    tripAutoFixCircuitBreaker(options);
+    skipAutoFixCandidate(options, candidate, 'usage-limit', { status: latest.status });
+    return undefined;
+  }
+
   const latestRetryBudget = retryBudgetForTask(latest, options);
   if (!isRuntimeAutoFixEligibleTask(latest, options)) {
     const reason = latestRetryBudget <= 0
@@ -448,6 +539,14 @@ function validateAutoFixCandidate(
     return undefined;
   }
 
+  const openTaskRecreateIntents = listOpenRecreateIntentsForTask(openIntents, candidate.taskId);
+  if (openTaskRecreateIntents.length > 0) {
+    skipAutoFixCandidate(options, candidate, 'already-queued-recreate-intent', {
+      existingIntentIds: openTaskRecreateIntents.map((intent) => intent.id),
+    });
+    return undefined;
+  }
+
   return { ...latestRef, source: candidate.source, task: latest };
 }
 
@@ -460,9 +559,25 @@ export function collectValidatedAutoFixRecoveryCandidates(
     .filter((candidate): candidate is ValidatedAutoFixRecoveryCandidate => Boolean(candidate));
 }
 
+function tripAutoFixCircuitBreaker(options: AutoFixRecoveryPolicyOptions): void {
+  tripCircuitBreaker(options.circuitBreakerPath ?? defaultCircuitBreakerPath(), {
+    reason: 'usage-limit',
+    pauseMs: options.circuitBreakerPauseMs ?? DEFAULT_CIRCUIT_BREAKER_PAUSE_MS,
+  });
+}
+
 export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
   return async (ctx) => {
     ctx.signal?.throwIfAborted();
+    const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
+    if (isCircuitBreakerPaused(breakerState, Date.now())) {
+      options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] worker-autofix-circuit-breaker-paused`, {
+        module: 'auto-fix-recovery',
+        pausedUntil: breakerState.pausedUntil,
+        reason: breakerState.reason,
+      });
+      return;
+    }
     // Drain wake hints (coalesce only). Discover work from a fresh scan —
     // wake snapshots go stale across bare-retry generation bumps.
     options.drainWakeupHints?.();
@@ -470,6 +585,19 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
     const submittedThisTick = new Set<string>();
 
     for (const candidate of collectValidatedAutoFixRecoveryCandidates(options, candidates)) {
+      // Re-check per candidate, not just once at tick start: candidate
+      // validation above can itself trip the breaker (a usage-limit
+      // failure), and every candidate after it in this same tick must stop
+      // too, not just on the next tick a minute later.
+      const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
+      if (isCircuitBreakerPaused(breakerState, Date.now())) {
+        skipAutoFixCandidate(options, candidate, 'circuit-breaker-paused', {
+          pausedUntil: breakerState.pausedUntil,
+          breakerReason: breakerState.reason,
+        });
+        continue;
+      }
+
       if (submittedThisTick.has(candidate.taskId)) {
         skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
         continue;
@@ -511,6 +639,44 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
           intentId,
           extraPayload: {
             channel: AUTO_FIX_BARE_RETRY_CHANNEL,
+          },
+        });
+        recordAutoFixRetryConsumed(options.store, candidate.taskId, {
+          workflowId: candidate.workflowId,
+        });
+        continue;
+      }
+
+      // Merge gates with a missing/non-git workspace cannot be fixed in-place.
+      // Recreate the gate instead of burning fix-with-agent retry budget.
+      if (shouldRecreateMergeGateInsteadOfAutoFix(candidate.task)) {
+        const intentId = options.submitter.submit(
+          candidate.workflowId,
+          'normal',
+          AUTO_FIX_RECREATE_CHANNEL,
+          [candidate.taskId],
+        );
+        submittedThisTick.add(candidate.taskId);
+        logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-recreate-submitted', {
+          workflowId: candidate.workflowId,
+          intentId,
+          channel: AUTO_FIX_RECREATE_CHANNEL,
+          generation: candidate.generation,
+          taskStateVersion: candidate.taskStateVersion,
+          attemptId: candidate.attemptId ?? null,
+          reason: 'invalid-merge-workspace',
+          workspacePath: candidate.task.execution.workspacePath ?? null,
+        });
+        recordAutoFixDecisionRow(options, candidate, {
+          status: 'queued',
+          summary: 'Queued recreate-task for invalid merge-gate workspace',
+          reason: 'invalid-merge-workspace',
+          intentId,
+          incrementAttempt: true,
+          extraPayload: {
+            channel: AUTO_FIX_RECREATE_CHANNEL,
+            actionType: AUTO_FIX_RECREATE_ACTION_TYPE,
+            workspacePath: candidate.task.execution.workspacePath ?? null,
           },
         });
         recordAutoFixRetryConsumed(options.store, candidate.taskId, {

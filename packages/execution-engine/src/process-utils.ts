@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { accessSync, constants, readFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
 export const SIGKILL_TIMEOUT_MS = 5_000;
@@ -34,17 +34,50 @@ let initializationPromise: Promise<ShellEnvironmentInitResult> | null = null;
 let initializationResult: ShellEnvironmentInitResult | null = null;
 
 /**
- * Sends a signal to the entire process group.
- * Uses negative PID to target the group when the process was spawned with detached: true.
+ * Read the process group id for `pid`. A group kill aimed at `-pid` only
+ * reaches that process's own tree when the process leads its group
+ * (`pgid === pid`). When it does not — or when a recycled pid matches a
+ * foreign group — the same call signals whichever group happens to carry
+ * that id (including the Invoker owner). Matches the e2e
+ * `killOwnedProcessGroup` leader check.
+ */
+export function readProcessGroupId(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const afterComm = stat.slice(stat.lastIndexOf(')') + 2);
+    const fields = afterComm.split(' ');
+    const pgid = Number.parseInt(fields[2] ?? '', 10);
+    return Number.isFinite(pgid) ? pgid : null;
+  } catch {
+    // /proc unavailable (non-linux) — fall through to ps.
+  }
+  try {
+    const out = execFileSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8' });
+    const pgid = Number.parseInt(out.trim(), 10);
+    return Number.isFinite(pgid) ? pgid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sends a signal to the entire process group only when the child verifiably
+ * leads it (`pgid === pid`). Otherwise falls back to signaling the child
+ * alone — never `kill(-pid)` against an unverified / recycled group id.
  */
 export function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): boolean {
   if (child.pid == null) return false;
-  try {
-    process.kill(-child.pid, signal);
-    return true;
-  } catch {
-    return child.kill(signal);
+  const pid = child.pid;
+  const pgid = readProcessGroupId(pid);
+  if (pgid === pid) {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch {
+      return child.kill(signal);
+    }
   }
+  return child.kill(signal);
 }
 
 export function childProcessHasExited(child: ChildProcess): boolean {

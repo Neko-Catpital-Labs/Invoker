@@ -18,9 +18,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ELECTRON="$REPO_ROOT/scripts/electron.cjs"
-MAIN="$REPO_ROOT/packages/app/dist/main.js"
-IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
+# shellcheck source=headless-lib.sh
+source "$REPO_ROOT/scripts/headless-lib.sh"
 
 DRY_RUN=false
 STATUS_FILTER=""
@@ -74,34 +73,6 @@ if [[ -n "$PARALLELISM" ]] && ! [[ "$PARALLELISM" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --parallel value: $PARALLELISM (expected integer >= 1)" >&2
   exit 1
 fi
-
-unset ELECTRON_RUN_AS_NODE
-SANDBOX_FLAG=""
-if [ "$(uname)" = "Linux" ]; then
-  SANDBOX_BIN="$REPO_ROOT/node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox"
-  # shellcheck disable=SC2086
-  if ! stat -c '%U:%a' $SANDBOX_BIN 2>/dev/null | grep -q '^root:4755$'; then
-    SANDBOX_FLAG="--no-sandbox"
-  fi
-  export LIBGL_ALWAYS_SOFTWARE=1
-fi
-
-# Bounded so a dead/unresponsive owner can't hang this script forever; safe
-# to kill since query subcommands never write to the DB.
-headless_query() {
-  local seconds="${INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS:-60}"
-  local status=0
-  # shellcheck disable=SC2086
-  if command -v timeout >/dev/null 2>&1; then
-    timeout -k 5 "$seconds" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null || status=$?
-  else
-    "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null || status=$?
-  fi
-  if [ "$status" -eq 124 ]; then
-    echo "ERROR: headless_query timed out after ${seconds}s (owner may be crashed/unresponsive)." >&2
-  fi
-  return "$status"
-}
 
 headless_mutation() {
   # --no-track is an option to the IPC helper's `exec` subcommand and MUST come

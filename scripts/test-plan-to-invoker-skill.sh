@@ -74,10 +74,11 @@ must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it thro
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
 must_contain "$CANONICAL_COMMAND" "Use this host's native planning mode when the host supports entering it from this command." "Invoker handoff command must keep handoff-only host planning boundary"
 must_contain "$CANONICAL_COMMAND" "If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved." "Invoker handoff command must stay handoff-only when native planning mode is unavailable"
-must_contain "$CANONICAL_COMMAND" 'Plain approval stops after workflow handoff: submit the approved workflow and do not publish local branches, create PRs, or update PR stacks unless the user explicitly asks for PR publication.' "Invoker handoff command must keep first plain-approval handoff-only boundary"
+must_contain "$CANONICAL_COMMAND" 'Plain approval authorizes workflow handoff only: submit the approved workflow and do not publish local branches, create PRs, or update PR stacks unless the user explicitly asks for PR publication.' "Invoker handoff command must keep first plain-approval handoff-only boundary"
+must_contain "$CANONICAL_COMMAND" 'arm `invoker-cli wait <workflowId>`' "Invoker handoff command must park on invoker-cli wait after submit"
 must_contain "$CANONICAL_COMMAND" 'If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skill://make-pr/SKILL.md` before PR authoring or publication.' "Invoker handoff command must keep later PR publication as a separate explicit request"
 must_contain "$CANONICAL_COMMAND" 'Call `invoker_prepare_plan_review` on `plans/invoker-handoff.yaml`, show the returned ordered steps and `confirmationText`, and use that review output as the only approval gate.' "Invoker handoff command must use the prepared review output as its approval gate"
-must_contain "$CANONICAL_COMMAND" 'Plain approval means workflow handoff only: stop after Invoker submission; do not publish a local branch or create, update, or publish a PR unless the user explicitly asks for PR publication.' "Invoker handoff command must keep final plain-approval handoff-only boundary"
+must_contain "$CANONICAL_COMMAND" 'Plain approval means workflow handoff only: do not publish a local branch or create, update, or publish a PR unless the user explicitly asks for PR publication. After Invoker submission, park on `invoker-cli wait` rather than abandoning the session.' "Invoker handoff command must keep final plain-approval handoff-only boundary"
 must_contain "$CANONICAL_COMMAND" 'If the review result says `confirmationMode` is `require`, wait for approval before submission. If it says `auto_submit`, show the same review output and then submit immediately.' "Invoker handoff command must keep require and auto-submit review modes explicit"
 must_contain "$CANONICAL_COMMAND" 'Call `invoker_submit_plan` with mode `live` only after that review step, or immediately after it when `confirmationMode` is `auto_submit`.' "Invoker handoff command must submit through MCP only after review"
 must_contain "$CANONICAL_COMMAND" "mode \`live\`" "Invoker handoff command must submit in live mode"
@@ -100,7 +101,7 @@ must_contain "$LOOP_COMMAND" "plans/invoker-handoff.md" "Loop generator command 
 must_contain "$LOOP_COMMAND" "Validate and submit only under the submission rules defined by \`skill://loop-generator/SKILL.md\`." "Loop generator command must defer validation and submission rules to the skill"
 must_contain "$LOOP_COMMAND" "skill://make-pr/SKILL.md" "Loop generator command must trigger the PR skill for PR work"
 must_contain "$LOOP_COMMAND" "skill://review-compression/SKILL.md" "Loop generator command must trigger review compression for PR publishing work"
-must_contain "$README" "\`invoker-cli setup\` installs the first-party Invoker AI helper skills" "README must document invoker-cli setup helper installation"
+must_contain "$README" "\`invoker-cli install\` (and interactive \`invoker-cli setup\`) installs the first-party Invoker AI helper skills" "README must document invoker-cli setup helper installation"
 must_contain "$README" "run \`invoker-cli setup\` (or System Setup in the desktop app) to install helpers" "README must document the invoker-cli setup / System Setup fallback"
 must_contain "$README" "Codex, Claude, Cursor, or OMP" "README must document supported handoff hosts"
 must_contain "$README" '/invoker-plan-to-invoker "help me plan <change>"' "README must document the installed handoff command"
@@ -110,14 +111,14 @@ must_contain "$README" "converts it to \`plans/invoker-handoff.yaml\`, validates
 must_contain "$README" "invoker-cli run --live" "README must document the CLI handoff submit path"
 must_contain "$README" "Invoker MCP tool" "README must document the MCP handoff submit path"
 must_contain_count "$README" '/invoker-plan-to-invoker "help me plan <change>"' 2 "README must document the handoff command in install and usage sections"
-must_contain "$TUTORIAL" "run \`invoker-cli setup\` (or System Setup in the desktop app) to install helpers" "Tutorial must document helper installation"
-must_contain "$TUTORIAL" "Codex, Claude, Cursor, or OMP" "Tutorial must document supported handoff hosts"
-must_contain "$TUTORIAL" '/invoker-plan-to-invoker "help me plan <change>"' "Tutorial must document the installed handoff command"
-must_contain "$TUTORIAL" "plans/invoker-handoff.md" "Tutorial must document the handoff Markdown plan path"
-must_contain "$TUTORIAL" "plans/invoker-handoff.yaml" "Tutorial must document the handoff YAML plan path"
-must_contain "$TUTORIAL" "converts it to \`plans/invoker-handoff.yaml\`, validates" "Tutorial must document YAML conversion and validation"
-must_contain "$TUTORIAL" "invoker-cli run --live" "Tutorial must document the CLI handoff submit path"
-must_contain "$TUTORIAL" "Invoker MCP tool" "Tutorial must document the MCP handoff submit path"
+must_contain "$TUTORIAL" "examples/first-agent-workflow/create-local-project.sh" "Tutorial must document the toy project generator script"
+must_contain "$TUTORIAL" "## Bind the repository" "Tutorial must document binding the generated repository via config.json"
+must_contain "$TUTORIAL" "## Draft the workflow" "Tutorial must document drafting the workflow in the planner"
+must_contain "$TUTORIAL" "## Create and review the workflow" "Tutorial must document creating and reviewing the staged workflow"
+must_contain "$TUTORIAL" "## Start ready work" "Tutorial must document starting ready work to run the workflow"
+must_contain "$TUTORIAL" "Checkpoint: the right sidebar's **Repo** section should show \`invoker-first-agent-workflow\`" "Tutorial must document the repo-binding checkpoint"
+must_contain "$TUTORIAL" "Checkpoint: the workflow graph should finish green." "Tutorial must document the workflow-completion checkpoint"
+must_contain "$TUTORIAL" "## Generated YAML plans" "Tutorial must document the generated CLI-reference YAML plans"
 
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
@@ -137,6 +138,9 @@ done
 
 # SKILL.md — focused runtime verification + Invoker headless as complementary lane
 must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must document the full flow"
+must_contain "$SKILL_MD" 'Never emit `autoFix` or `autoFixRetries`' "SKILL must forbid obsolete auto-fix YAML fields"
+must_contain "$SKILL_MD" 'configured only with `autoFixRetries` in `~/.invoker/config.json`' "SKILL must direct auto-fix retries to user configuration"
+must_contain "$SKILL_MD" 'must be corrected and re-run through `skill-doctor.sh`; do not present or submit it' "SKILL must require doctor success before review"
 must_contain "$SKILL_MD" "Runtime verification (Phase 1b)" "SKILL must require runtime behavioral verification"
 must_contain "$SKILL_MD" "Invoker headless" "SKILL must mention Invoker headless as a verification lane"
 must_contain "$SKILL_MD" "cheapest deterministic command" "SKILL must prefer focused behavioral proof"
@@ -177,7 +181,9 @@ must_contain "$SKILL_MD" "In an Invoker source checkout, still run \`bash skills
 must_contain "$SKILL_MD" "Prefer the MCP review/submission flow when available: call \`invoker_prepare_plan_review\`, show its ordered steps plus \`confirmationText\`, then call \`invoker_submit_plan\` only after approval unless the review result carries \`confirmationMode: auto_submit\`." "SKILL handoff mode must keep review before submission"
 must_contain "$SKILL_MD" "Outside an Invoker source checkout, \`invoker_prepare_plan_review\` is the canonical review surface and \`invoker_validate_plan\` remains an optional diagnostic, not the approval gate." "SKILL handoff mode must keep outside-checkout review separate from diagnostics"
 must_contain "$SKILL_MD" "Convert the approved Markdown plan to \`plans/invoker-handoff.yaml\`." "SKILL handoff mode must require YAML conversion"
-must_contain "$SKILL_MD" "Plain approval stops after workflow handoff: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only, then report the submitted workflow status and stop. Stop after \`invoker_submit_plan\` or the documented \`invoker-cli run ... --live\` fallback; do not create, update, publish pull requests, or run \`mergify stack push\` from that approval alone." "SKILL handoff mode must keep plain approval scoped to workflow handoff only"
+must_contain "$SKILL_MD" "Plain approval authorizes workflow handoff only: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only. Do not create, update, publish pull requests, or run \`mergify stack push\` from that approval alone." "SKILL handoff mode must keep plain approval scoped to workflow handoff only"
+must_contain "$SKILL_MD" "arm \`invoker-cli wait <workflowId>\`" "SKILL handoff mode must park on invoker-cli wait after submit"
+must_contain "$SKILL_MD" "do **not** abandon the session" "SKILL handoff mode must not abandon the session after submit"
 must_contain "$SKILL_MD" "Later PR publication is a separate explicit action. When the user separately asks about creating, updating, publishing, or splitting pull requests or PR stacks after workflow handoff, first read and follow \`skills/make-pr/SKILL.md\` (or \`skill://make-pr/SKILL.md\` when available) before PR authoring or publication." "SKILL handoff mode must keep later PR publication as a separate explicit action"
 must_contain "$SKILL_MD" "creating, updating, publishing, or splitting pull requests or PR stacks" "SKILL handoff mode must define PR skill trigger scope"
 must_contain "$SKILL_MD" "skills/make-pr/SKILL.md" "SKILL handoff mode must trigger the PR skill for PR work"
@@ -219,6 +225,15 @@ must_contain "$CLAUDE_MD" "Do not write \`version:\` or \`metadata:\` wrappers."
 must_contain "$CLAUDE_MD" "anything that can trigger an agent/autofix" "CLAUDE.md must prevent benchmark autofix-triggering tasks"
 
 must_contain "$SKILL_MD" "Deterministic validation gate" "SKILL must document the primary deterministic proof gate"
+must_contain "$SKILL_MD" "### Local vs remote Invoker" "SKILL must document local vs remote Invoker owner routing"
+must_contain "$SKILL_MD" "references/local-vs-remote-mcp.md" "SKILL must point at the local-vs-remote MCP reference"
+must_contain "$SKILL_MD" "Do not invent HTTP/SSE MCP" "SKILL must forbid inventing HTTP/SSE MCP"
+REMOTE_MCP_REF="$SKILL_DIR/references/local-vs-remote-mcp.md"
+[[ -f "$REMOTE_MCP_REF" ]] || fail "expected $REMOTE_MCP_REF"
+must_contain "$REMOTE_MCP_REF" "BatchMode=yes" "Remote MCP reference must document SSH BatchMode probe"
+must_contain "$REMOTE_MCP_REF" 'invoker-cli' "Remote MCP reference must keep invoker-cli mcp as the remote command"
+must_contain "$REMOTE_MCP_REF" "do not" "Remote MCP reference must keep failed-probe non-clobber guidance"
+
 must_contain "$SKILL_MD" 'Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface' "SKILL must record the primary doctor gate"
 must_contain "$SKILL_MD" "Schema-only validation or ad hoc individual script checks are not sufficient as the review gate" "SKILL must reject incomplete primary gates"
 must_contain "$SKILL_MD" "Individual validator scripts remain fallback diagnostics only" "SKILL must preserve fallback diagnostics"
@@ -236,6 +251,143 @@ must_output_contain "$DOCTOR_HELP" "  0 = all checks passed" "skill-doctor --hel
 must_output_contain "$DOCTOR_HELP" "  1 = one or more checks failed" "skill-doctor --help must expose failure exit code"
 must_output_contain "$DOCTOR_HELP" "  2 = usage/argument error" "skill-doctor --help must expose usage-error exit code"
 must_output_contain "$DOCTOR_HELP" "Output: JSON summary of all checks with pass/fail status" "skill-doctor --help must expose JSON output contract"
+
+# Regression: skill-doctor.sh (and its validate-plan/lint-review-units
+# sub-checks) must work when copied wholesale to a machine-level skill
+# install outside any git checkout — e.g. ~/.claude/skills/invoker-plan-to-invoker,
+# the layout `scripts/setup-agent-skills.sh` produces. Reproduces the bug where
+# an agent planning against a non-Invoker repo had no working doctor: validate-plan.sh
+# resolved its repo root via `git -C <script dir>`, and lint-review-units.mjs
+# statically imported `../../../scripts/review-unit-rules.mjs` — both broke
+# once the scripts' physical location was no longer 3 directories under the
+# Invoker repo root.
+STANDALONE_INSTALL_DIR="$(mktemp -d)"
+STANDALONE_INVOKER_HOME="$(mktemp -d)"
+trap 'rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"' EXIT
+cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.sh "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.mjs "$STANDALONE_INSTALL_DIR/"
+STANDALONE_DOCTOR="$STANDALONE_INSTALL_DIR/skill-doctor.sh"
+STANDALONE_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
+
+# Without INVOKER_REPO_ROOT or a bundled-skills manifest, the doctor must fail
+# with an actionable message instead of a raw stack trace or generic error.
+STANDALONE_NO_FALLBACK_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT INVOKER_DB_DIR="$STANDALONE_INVOKER_HOME" bash "$STANDALONE_DOCTOR" --skip-assumptions "$STANDALONE_FIXTURE" 2>&1 || true)"
+must_output_contain "$STANDALONE_NO_FALLBACK_OUTPUT" "INVOKER_REPO_ROOT" "Standalone doctor without a resolvable repo root must point at the INVOKER_REPO_ROOT override"
+
+# INVOKER_REPO_ROOT must work as an explicit override, without any manifest.
+STANDALONE_ENV_OUTPUT="$(cd /tmp && env -u INVOKER_DB_DIR INVOKER_REPO_ROOT="$REPO_ROOT" bash "$STANDALONE_DOCTOR" --skip-assumptions "$STANDALONE_FIXTURE" 2>/dev/null || true)"
+STANDALONE_ENV_VALIDATE_STATUS="$(printf '%s' "$STANDALONE_ENV_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$STANDALONE_ENV_VALIDATE_STATUS" == "passed" ]] || fail "Standalone install with INVOKER_REPO_ROOT override must pass validate-plan; got status=$STANDALONE_ENV_VALIDATE_STATUS. Full output: $STANDALONE_ENV_OUTPUT"
+STANDALONE_ENV_REVIEW_UNITS_STATUS="$(printf '%s' "$STANDALONE_ENV_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$STANDALONE_ENV_REVIEW_UNITS_STATUS" == "passed" ]] || fail "Standalone install with INVOKER_REPO_ROOT override must pass lint-review-units; got status=$STANDALONE_ENV_REVIEW_UNITS_STATUS. Full output: $STANDALONE_ENV_OUTPUT"
+
+# With the bundled-skills manifest recording the source checkout (what
+# `installBundledSkills()` now writes on every install/reinstall), both
+# validate-plan and lint-review-units must pass standalone with no env var set —
+# the ordinary case for an agent working in a non-Invoker repo after running
+# `scripts/setup-agent-skills.sh` once.
+cat > "$STANDALONE_INVOKER_HOME/bundled-skills.json" <<EOF
+{"sourceRepoRoot": "$REPO_ROOT"}
+EOF
+STANDALONE_MANIFEST_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT INVOKER_DB_DIR="$STANDALONE_INVOKER_HOME" bash "$STANDALONE_DOCTOR" --skip-assumptions "$STANDALONE_FIXTURE" 2>/dev/null || true)"
+STANDALONE_MANIFEST_VALIDATE_STATUS="$(printf '%s' "$STANDALONE_MANIFEST_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$STANDALONE_MANIFEST_VALIDATE_STATUS" == "passed" ]] || fail "Standalone install (via bundled-skills.json sourceRepoRoot) must pass validate-plan; got status=$STANDALONE_MANIFEST_VALIDATE_STATUS. Full output: $STANDALONE_MANIFEST_OUTPUT"
+STANDALONE_MANIFEST_REVIEW_UNITS_STATUS="$(printf '%s' "$STANDALONE_MANIFEST_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$STANDALONE_MANIFEST_REVIEW_UNITS_STATUS" == "passed" ]] || fail "Standalone install (via bundled-skills.json sourceRepoRoot) must pass lint-review-units; got status=$STANDALONE_MANIFEST_REVIEW_UNITS_STATUS. Full output: $STANDALONE_MANIFEST_OUTPUT"
+
+rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"
+trap - EXIT
+
+echo "OK: skill-doctor works from a machine-level standalone install (outside any git checkout)"
+
+# Regression: the vendored copy under skills/plan-to-invoker/scripts/vendor/
+# must stay byte-identical to its source, so `resolveReviewUnitRulesModulePath`
+# never silently serves stale logic.
+VENDOR_DIR="$SKILL_DIR/scripts/vendor"
+[[ -f "$VENDOR_DIR/review-unit-rules.mjs" ]] || fail "Missing vendored copy: $VENDOR_DIR/review-unit-rules.mjs (run bash scripts/vendor-plan-doctor-deps.sh)"
+diff -q "$REPO_ROOT/scripts/review-unit-rules.mjs" "$VENDOR_DIR/review-unit-rules.mjs" >/dev/null 2>&1 \
+  || fail "$VENDOR_DIR/review-unit-rules.mjs has drifted from scripts/review-unit-rules.mjs — re-run bash scripts/vendor-plan-doctor-deps.sh"
+echo "OK: vendored plan-doctor dependency matches its source"
+
+# Regression: both sub-checks must work from the real invoker-cli npm-install
+# shape -- skills/ sitting under <install-root>/vendor/, with a real `yaml`
+# install (npm's declared-dependency placement, not a symlink into a pnpm
+# store) at <install-root>/node_modules/yaml, and nothing else: no git repo,
+# no INVOKER_REPO_ROOT, no ~/.invoker/bundled-skills.json, no packages/, no
+# repo-root scripts/ directory. This is exactly the payload
+# scripts/archive-cli-binary.sh ships next to the compiled invoker-cli
+# release binary, plus the `yaml` dependency packages/npm-cli/package.json
+# now declares, which npm installs into that same install root. It proves:
+# lint-review-units resolves via the vendored review-unit-rules.mjs copy
+# (there's no npm-based alternative for a private, unpublished helper file);
+# validate-plan resolves `yaml` via a plain bare import, walking up to the
+# sibling node_modules/yaml -- Node's own module resolution, no custom path
+# logic, no vendored copy.
+NPM_CLI_INSTALL_ROOT="$(mktemp -d)"
+trap 'rm -rf "$NPM_CLI_INSTALL_ROOT"' EXIT
+mkdir -p "$NPM_CLI_INSTALL_ROOT/node_modules" "$NPM_CLI_INSTALL_ROOT/vendor"
+cp -RL "$REPO_ROOT/packages/app/node_modules/yaml" "$NPM_CLI_INSTALL_ROOT/node_modules/yaml"
+cp -R "$SKILL_DIR" "$NPM_CLI_INSTALL_ROOT/vendor/plan-to-invoker"
+NPM_CLI_DOCTOR="$NPM_CLI_INSTALL_ROOT/vendor/plan-to-invoker/scripts/skill-doctor.sh"
+NPM_CLI_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
+NPM_CLI_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT -u INVOKER_DB_DIR bash "$NPM_CLI_DOCTOR" --skip-assumptions "$NPM_CLI_FIXTURE" 2>/dev/null || true)"
+NPM_CLI_VALIDATE_STATUS="$(printf '%s' "$NPM_CLI_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "validate-plan")"
+[[ "$NPM_CLI_VALIDATE_STATUS" == "passed" ]] || fail "The invoker-cli npm-install shape (skills/ under vendor/, sibling node_modules/yaml) must pass validate-plan via a plain 'yaml' import; got status=$NPM_CLI_VALIDATE_STATUS. Full output: $NPM_CLI_OUTPUT"
+NPM_CLI_REVIEW_UNITS_STATUS="$(printf '%s' "$NPM_CLI_OUTPUT" | node -e '
+  const raw = require("node:fs").readFileSync(0, "utf8");
+  const report = JSON.parse(raw);
+  const check = report.checks.find((c) => c.stepId === process.argv[1]);
+  process.stdout.write(check ? String(check.status) : "missing");
+' "lint-review-units")"
+[[ "$NPM_CLI_REVIEW_UNITS_STATUS" == "passed" ]] || fail "The invoker-cli npm-install shape (skills/ under vendor/, sibling node_modules/yaml) must pass lint-review-units via the vendored review-unit-rules.mjs; got status=$NPM_CLI_REVIEW_UNITS_STATUS. Full output: $NPM_CLI_OUTPUT"
+
+rm -rf "$NPM_CLI_INSTALL_ROOT"
+trap - EXIT
+
+echo "OK: skill-doctor works from the invoker-cli npm-install shape (yaml as a real declared dependency, review-unit-rules.mjs vendored)"
+
+# Boundary check, not a bug: a skills/plan-to-invoker/ copy with truly
+# nothing else nearby -- no node_modules (so no declared `yaml` dependency
+# to find), no git repo, no INVOKER_REPO_ROOT, no manifest -- correctly
+# fails validate-plan with an actionable message, not a crash. Nothing can
+# make YAML parsing available with zero real dependency and zero checkout
+# present anywhere; this documents that boundary instead of silently
+# dropping coverage of it.
+TOTALLY_BARE_DIR="$(mktemp -d)"
+trap 'rm -rf "$TOTALLY_BARE_DIR"' EXIT
+cp -R "$SKILL_DIR" "$TOTALLY_BARE_DIR/plan-to-invoker"
+TOTALLY_BARE_DOCTOR="$TOTALLY_BARE_DIR/plan-to-invoker/scripts/skill-doctor.sh"
+TOTALLY_BARE_OUTPUT="$(cd /tmp && env -u INVOKER_REPO_ROOT -u INVOKER_DB_DIR bash "$TOTALLY_BARE_DOCTOR" --skip-assumptions "$NPM_CLI_FIXTURE" 2>&1 || true)"
+must_output_contain "$TOTALLY_BARE_OUTPUT" "INVOKER_REPO_ROOT" "A totally bare skills/plan-to-invoker/ copy with no yaml dependency and no checkout anywhere must fail with an actionable message, not a raw stack trace"
+
+rm -rf "$TOTALLY_BARE_DIR"
+trap - EXIT
+
+echo "OK: a totally bare skills/plan-to-invoker/ copy fails informatively, not with a raw crash"
 
 # Playbook — Phase 1a / 1b focused lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"

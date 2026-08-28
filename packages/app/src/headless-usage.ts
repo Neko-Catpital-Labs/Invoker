@@ -57,6 +57,7 @@ ${BOLD}Respond:${RESET}
 
 ${BOLD}Configure:${RESET}
   install-skills [install|update|reinstall]          Install bundled Invoker AI helpers
+  install-skills uninstall                            Remove bundled Invoker AI helpers
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
@@ -70,13 +71,18 @@ ${BOLD}Configure:${RESET}
   set workflow <workflowId> <fieldPath> <value>      Safely update workflow metadata/config
   set task <taskId> <fieldPath> <value>              Safely update task metadata/config
   migrate-compat                                     Normalize persisted compatibility workflow/task state
+  repair-filing insert --kind K --subject S --state-sha SHA [--metadata JSON]
+                                                      Atomic insert-if-not-exists into the repair_filings dedup ledger
+  repair-filing release --kind K --subject S --state-sha SHA
+                                                      Release a claimed repair_filings row (e.g. filing failed after the claim succeeded)
 
 ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
   cancel-workflow <workflowId>                        Cancel all active tasks in a workflow
   delete-task <taskId>                                 Delete one task and retarget dependents
+  close-task <taskId>                                  Close one failed/completed/review_ready task, no cascade
   delete <workflowId>                                  Delete a single workflow
-  delete-all                                           Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
+  delete-all                                           Delete all workflows
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
   worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)

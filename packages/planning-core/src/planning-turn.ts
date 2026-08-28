@@ -19,7 +19,7 @@ export type SharedPlanningTurn =
       text: string;
       planText: string;
       summary: PlanSummary;
-      draftingAuthorized: true;
+      draftingAuthorized: boolean;
     };
 
 export interface EvaluatePlanningTurnInput {
@@ -28,6 +28,7 @@ export interface EvaluatePlanningTurnInput {
   assistantReply: string;
   immediateDraftPlanText: string | null | undefined;
   requireDraftAuthorization?: boolean;
+  hasExistingDraft?: boolean;
 }
 
 export function evaluatePlanningTurn({
@@ -36,19 +37,20 @@ export function evaluatePlanningTurn({
   assistantReply,
   immediateDraftPlanText,
   requireDraftAuthorization = true,
+  hasExistingDraft = false,
 }: EvaluatePlanningTurnInput): SharedPlanningTurn {
   const draftingAuthorized = !requireDraftAuthorization
     || isDraftingAuthorized(userMessage, messagesBeforeTurn);
   const planText = immediateDraftPlanText?.trim() || null;
   const summary = planText ? summarizePlanText(planText) : null;
 
-  if (draftingAuthorized && planText && summary) {
+  if (planText && summary && (!hasExistingDraft || draftingAuthorized)) {
     return {
       kind: 'draft_ready',
       text: assistantReply,
       planText,
       summary,
-      draftingAuthorized: true,
+      draftingAuthorized,
     };
   }
 

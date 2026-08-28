@@ -8,16 +8,20 @@ vi.mock('../plan-backup.js', () => ({
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
 
 function makeDeps() {
-  const workflows: Array<{ id: string; featureBranch?: string }> = [];
+  const workflows: Array<{ id: string; featureBranch?: string; staged?: boolean }> = [];
   const loadedPlans: PlanDefinition[] = [];
   return {
     loadedPlans,
     deps: {
       persistence: {
         listWorkflows: vi.fn(() => workflows.map((workflow) => ({ ...workflow }))),
+        updateWorkflow: vi.fn((workflowId: string, changes: { staged: boolean }) => {
+          const workflow = workflows.find((candidate) => candidate.id === workflowId);
+          if (workflow) workflow.staged = changes.staged;
+        }),
       },
       orchestrator: {
-        loadPlan: vi.fn((plan: PlanDefinition, _opts: { allowGraphMutation?: boolean }) => {
+        loadPlan: vi.fn((plan: PlanDefinition, _opts: { allowGraphMutation?: boolean; staged?: boolean }) => {
           loadedPlans.push(plan);
           workflows.push({
             id: `wf-${loadedPlans.length}`,
@@ -31,6 +35,26 @@ function makeDeps() {
 }
 
 describe('loadPlanSubmissionBundle', () => {
+  it('passes staged state only when requested by the planning preview path', async () => {
+    const { deps } = makeDeps();
+    const plan = `
+name: Preview
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build it
+`;
+
+    await loadPlanSubmissionBundle(plan, deps, { staged: true });
+
+    expect(deps.orchestrator.loadPlan).toHaveBeenCalledWith(
+      expect.anything(),
+      { allowGraphMutation: true, staged: true },
+    );
+    expect(deps.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { staged: true });
+    expect(deps.persistence.listWorkflows()[0]?.staged).toBe(true);
+  });
+
   it('pins a single submitted workflow base branch to master', async () => {
     const { deps, loadedPlans } = makeDeps();
 

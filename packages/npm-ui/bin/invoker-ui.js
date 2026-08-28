@@ -25,8 +25,24 @@ function doctor() {
   return ok ? 0 : 1;
 }
 
+function printHelp() {
+  console.log(`Usage: invoker-ui [command]
+
+Commands:
+  doctor       Check that required tools and the desktop artifact are present
+  --headless   Launch the Invoker desktop app in headless mode
+  --help, -h   Show this help message
+
+With no command, launches the Invoker desktop GUI.`);
+}
+
 if (process.argv[2] === 'doctor') {
   process.exit(doctor());
+}
+
+if (process.argv[2] === '--help' || process.argv[2] === '-h') {
+  printHelp();
+  process.exit(0);
 }
 
 if (process.platform === 'darwin') {

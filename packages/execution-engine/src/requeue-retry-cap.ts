@@ -3,7 +3,7 @@ import { recordWorkerDecisionRow, type WorkerDecisionStore } from './worker-deci
 
 export const REQUEUE_RETRY_CAP_ACTION_TYPE = 'stall-requeue-cap';
 
-const REQUEUE_RETRY_CAP_WORKER_KIND = 'requeue';
+const REQUEUE_RETRY_CAP_WORKER_KIND = 'heartbeat-requeue';
 
 export function requeueRetryCapExternalKey(taskId: string): string {
   return `stall-requeue-cap:${taskId}`;

@@ -119,6 +119,57 @@ branch refs/heads/${branch}
     );
   });
 
+  it('rewrites a persisted macOS owner workspace path onto the Linux remoteInvokerHome', async () => {
+    const { spawn } = await import('node:child_process');
+    const { canonicalizeRemoteManagedWorkspacePath } = await import('../conflict-resolver.js');
+    const macOwnerPath = '/Users/edbertchan/.invoker/worktrees/c9d4f5f68faf/experiment-wf-1-task-abc123';
+    const linuxHome = '/home/invoker/.invoker';
+    const linuxPath = `${linuxHome}/worktrees/c9d4f5f68faf/experiment-wf-1-task-abc123`;
+    expect(canonicalizeRemoteManagedWorkspacePath(macOwnerPath, linuxHome)).toBe(linuxPath);
+
+    const branch = 'experiment/wf-1/task-abc123';
+    const task = {
+      id: 'wf-1/task-abc123',
+      status: 'failed' as const,
+      execution: {
+        error: 'Test failed',
+        workspacePath: macOwnerPath,
+        branch,
+      },
+      config: {
+        command: 'pnpm test',
+        runnerKind: 'ssh' as const,
+        poolMemberId: 'remote-1',
+      },
+    };
+
+    const { host, updateTask } = makeHost(task);
+    const firstChild = mockSshChild(
+      `worktree ${linuxPath}
+HEAD deadbeef
+branch refs/heads/${branch}
+`,
+      0,
+    );
+    const secondChild = mockSshChild('Codex session: real-session-123\nremote fix applied', 0);
+    vi.mocked(spawn)
+      .mockReturnValueOnce(firstChild as any)
+      .mockReturnValueOnce(secondChild as any);
+
+    await fixWithAgentImpl(host, task.id, 'error output', 'codex');
+
+    const listScript = ((firstChild as any).stdin.write as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    const { base64Encode } = await import('../ssh-git-exec.js');
+    expect(listScript).not.toContain('/Users/');
+    expect(listScript).not.toContain(base64Encode('/Users/edbertchan/.invoker'));
+    expect(listScript).toContain(base64Encode(linuxHome));
+    expect(updateTask).toHaveBeenCalledWith(task.id, {
+      execution: {
+        workspacePath: linuxPath,
+      },
+    });
+  });
+
   it('uses the resolved OMP model for repaired remote fix sessions', async () => {
     const { spawn } = await import('node:child_process');
     const stalePath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-b68b146f';

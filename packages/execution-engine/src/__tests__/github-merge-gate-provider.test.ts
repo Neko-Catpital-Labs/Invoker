@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { GitHubMergeGateProvider, resolveMergeGatePrLifecycle } from '../github-merge-gate-provider.js';
+import {
+  GitHubMergeGateProvider,
+  formatMergeGatePrLog,
+  resolveMergeGatePrLifecycle,
+  utf8ByteLength,
+} from '../github-merge-gate-provider.js';
 
 vi.mock('node:child_process');
 
@@ -19,6 +24,24 @@ function mockSpawnResult(stdoutData: string, exitCode: number, stderrData = '') 
 
   return child;
 }
+
+describe('merge-gate PR log redaction helpers', () => {
+  it('formats number/html_url/byte lengths without a body blob', () => {
+    const body = `## Summary\n\n${'x'.repeat(8_000)}`;
+    const line = formatMergeGatePrLog({
+      number: 42,
+      htmlUrl: 'https://github.com/owner/repo/pull/42',
+      bodyBytes: utf8ByteLength(body),
+      responseBytes: 12_345,
+    });
+    expect(line).toContain('number=42');
+    expect(line).toContain('html_url=https://github.com/owner/repo/pull/42');
+    expect(line).toContain(`body_bytes=${utf8ByteLength(body)}`);
+    expect(line).toContain('response_bytes=12345');
+    expect(line).not.toContain('"body":');
+    expect(line).not.toContain(body.slice(0, 40));
+  });
+});
 
 describe('GitHubMergeGateProvider', () => {
   let provider: GitHubMergeGateProvider;
@@ -65,6 +88,125 @@ describe('GitHubMergeGateProvider', () => {
   });
 
   describe('createReview', () => {
+    it('logs createReview without dumping PR body or create stdout JSON', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      const logs: string[] = [];
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+        logs.push(args.map(String).join(' '));
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const hugeBody = `## Summary\n\n${'PR_BODY_MARKER_'.repeat(400)}`;
+      const createStdout = JSON.stringify({
+        html_url: 'https://github.com/owner/repo/pull/99',
+        number: 99,
+        body: hugeBody,
+        title: 'Test PR',
+      });
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'git') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) {
+          return mockSpawnResult('[]', 0);
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('POST')) {
+          return mockSpawnResult(createStdout, 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      try {
+        const result = await provider.createReview({
+          baseBranch: 'main',
+          featureBranch: 'feature/test',
+          title: 'Test PR',
+          cwd: '/tmp/repo',
+          body: hugeBody,
+        });
+
+        expect(result.url).toBe('https://github.com/owner/repo/pull/99');
+        expect(result.identifier).toBe('99');
+
+        const joined = logs.join('\n');
+        expect(joined).toContain('number=99');
+        expect(joined).toContain('html_url=https://github.com/owner/repo/pull/99');
+        expect(joined).toContain(`body_bytes=${utf8ByteLength(hugeBody)}`);
+        expect(joined).not.toContain('PR_BODY_MARKER_');
+        expect(joined).not.toContain('"body":');
+        expect(joined).not.toContain(`stdout=${createStdout}`);
+        expect(joined).not.toContain(`gh_result=`);
+        expect(joined).not.toContain(createStdout);
+      } finally {
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('logs existing-PR update without dumping gh_result JSON body blobs', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      const logs: string[] = [];
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+        logs.push(args.map(String).join(' '));
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const hugeBody = `## Summary\n\n${'UPDATE_BODY_MARKER_'.repeat(400)}`;
+      const patchStdout = JSON.stringify({
+        html_url: 'https://github.com/owner/repo/pull/10',
+        number: 10,
+        body: hugeBody,
+      });
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'git') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) {
+          return mockSpawnResult(
+            JSON.stringify([{ html_url: 'https://github.com/owner/repo/pull/10', number: 10, body: hugeBody }]),
+            0,
+          );
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls/10') {
+          return mockSpawnResult(patchStdout, 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      try {
+        await provider.createReview({
+          baseBranch: 'main',
+          featureBranch: 'feature/test',
+          title: 'Updated PR',
+          cwd: '/tmp/repo',
+          body: hugeBody,
+        });
+
+        const joined = logs.join('\n');
+        expect(joined).toContain('number=10');
+        expect(joined).toContain('html_url=https://github.com/owner/repo/pull/10');
+        expect(joined).not.toContain('UPDATE_BODY_MARKER_');
+        expect(joined).not.toContain('"body":');
+        expect(joined).not.toContain(`gh_result=${patchStdout}`);
+        expect(joined).not.toContain(patchStdout);
+      } finally {
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
+    });
+
     it('targets origin repository when creating merge-gate PRs', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);

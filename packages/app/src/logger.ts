@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import type { Logger } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 
-const LOG_PATH = path.join(homedir(), '.invoker', 'invoker.log');
+const LOG_PATH = process.env.INVOKER_LOG_PATH ?? path.join(homedir(), '.invoker', 'invoker.log');
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 

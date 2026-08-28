@@ -298,6 +298,98 @@ describe('cancelTask', () => {
   });
 });
 
+describe('closeIdleTask', () => {
+  let orchestrator: Orchestrator;
+  let persistence: InMemoryPersistence;
+  let bus: InMemoryBus;
+  let publishedDeltas: TaskDelta[];
+
+  beforeEach(() => {
+    persistence = new InMemoryPersistence();
+    bus = new InMemoryBus();
+    publishedDeltas = [];
+
+    bus.subscribe('task.delta', (delta) => {
+      publishedDeltas.push(delta as TaskDelta);
+    });
+
+    orchestrator = new Orchestrator({
+      persistence,
+      messageBus: bus,
+      maxConcurrency: 3,
+    });
+  });
+
+  it('throws TASK_NOT_CLOSABLE for a non-terminal status', () => {
+    orchestrator.loadPlan(simplePlan());
+    expect(orchestrator.getTask('a')!.status).toBe('pending');
+
+    expect(() => orchestrator.closeIdleTask('a')).toThrow(/pending/);
+  });
+
+  it('throws TASK_NOT_FOUND for an unknown task id', () => {
+    orchestrator.loadPlan(simplePlan());
+    expect(() => orchestrator.closeIdleTask('does-not-exist')).toThrow('not found');
+  });
+
+  it('closes a failed task without touching its blocked dependents', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.cancelTask('a');
+    expect(orchestrator.getTask('a')!.status).toBe('failed');
+    expect(orchestrator.getTask('b')!.status).toBe('blocked');
+    expect(orchestrator.getTask('c')!.status).toBe('blocked');
+
+    orchestrator.closeIdleTask('a');
+
+    expect(orchestrator.getTask('a')!.status).toBe('closed');
+    // Dependents are untouched — closeIdleTask never cascades.
+    expect(orchestrator.getTask('b')!.status).toBe('blocked');
+    expect(orchestrator.getTask('c')!.status).toBe('blocked');
+  });
+
+  it('closes a completed task', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.startExecution();
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: 'a', status: 'completed', outputs: { exitCode: 0 } }),
+    );
+    expect(orchestrator.getTask('a')!.status).toBe('completed');
+
+    orchestrator.closeIdleTask('a');
+
+    expect(orchestrator.getTask('a')!.status).toBe('closed');
+  });
+
+  it('closes a review_ready task', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.startExecution();
+    orchestrator.setTaskReviewReady('a');
+    expect(orchestrator.getTask('a')!.status).toBe('review_ready');
+
+    orchestrator.closeIdleTask('a');
+
+    expect(orchestrator.getTask('a')!.status).toBe('closed');
+  });
+
+  it('publishes a single delta for the closed task, not its dependents', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.cancelTask('a');
+
+    publishedDeltas = [];
+    orchestrator.closeIdleTask('a');
+
+    const sa = sid(orchestrator, 0, 'a');
+    const closeDeltas = publishedDeltas.filter(
+      (d): d is Extract<TaskDelta, { type: 'updated' }> => d.type === 'updated' && d.taskId === sa,
+    );
+    expect(closeDeltas).toHaveLength(1);
+    const otherTaskDeltas = publishedDeltas.filter(
+      (d): d is Extract<TaskDelta, { type: 'updated' }> => d.type === 'updated' && d.taskId !== sa,
+    );
+    expect(otherTaskDeltas).toHaveLength(0);
+  });
+});
+
 describe('cancelWorkflow', () => {
   let orchestrator: Orchestrator;
   let persistence: InMemoryPersistence;

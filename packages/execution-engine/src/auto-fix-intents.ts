@@ -36,6 +36,30 @@ export function hasOpenFixIntentForTask(
   return intents.some((intent) => isFixIntentForTask(intent, taskId));
 }
 
+export function isRecreateIntentForTask(intent: WorkflowMutationIntent, taskId: string): boolean {
+  if (intent.channel === 'invoker:recreate-task') {
+    return typeof intent.args[0] === 'string' && intent.args[0] === taskId;
+  }
+  if (intent.channel === 'invoker:infra-repair-recreate-task') {
+    const first = intent.args[0];
+    if (first && typeof first === 'object' && !Array.isArray(first)) {
+      const candidate = first as { taskId?: unknown };
+      return typeof candidate.taskId === 'string' && candidate.taskId === taskId;
+    }
+    return typeof first === 'string' && first === taskId;
+  }
+
+  const args = getHeadlessExecArgs(intent);
+  return args[0] === 'recreate-task' && typeof args[1] === 'string' && args[1] === taskId;
+}
+
+export function listOpenRecreateIntentsForTask(
+  intents: WorkflowMutationIntent[],
+  taskId: string,
+): WorkflowMutationIntent[] {
+  return intents.filter((intent) => isRecreateIntentForTask(intent, taskId));
+}
+
 export interface ReviewGateCiContext {
   reviewId: string;
   generation: number;

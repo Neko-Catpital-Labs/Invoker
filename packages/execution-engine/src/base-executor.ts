@@ -1200,7 +1200,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const agent = opts.agentRegistry.getOrThrow(agentName);
         assertExecutionModelSupported(agent, request.inputs.executionModel);
         const fullPrompt = this.buildFullPrompt(request);
-        const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
+        const spec = agent.buildCommand(fullPrompt, {
+          executionModel: request.inputs.executionModel,
+          maxTurns: request.inputs.maxTurns,
+        });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
       }
       const requestedAgent = request.inputs.executionAgent;
@@ -1404,12 +1407,20 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   /**
    * Build CLI args for invoking `claude` with a session ID and prompt.
    */
-  protected buildClaudeArgs(sessionId: string, fullPrompt: string, executionModel?: string): string[] {
+  protected buildClaudeArgs(
+    sessionId: string,
+    fullPrompt: string,
+    executionModel?: string,
+    maxTurns?: number,
+  ): string[] {
     return [
       '--session-id',
       sessionId,
       '--dangerously-skip-permissions',
       ...(executionModel ? ['--model', executionModel] : []),
+      ...(typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
+        ? ['--max-turns', String(maxTurns)]
+        : []),
       '-p',
       fullPrompt,
     ];
@@ -1422,7 +1433,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected prepareClaudeSession(request: WorkRequest): ClaudeSessionParams {
     const sessionId = randomUUID();
     const fullPrompt = this.buildFullPrompt(request);
-    const cliArgs = this.buildClaudeArgs(sessionId, fullPrompt, request.inputs.executionModel);
+    const cliArgs = this.buildClaudeArgs(
+      sessionId,
+      fullPrompt,
+      request.inputs.executionModel,
+      request.inputs.maxTurns,
+    );
     return { sessionId, cliArgs, fullPrompt };
   }
 

@@ -5,6 +5,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import type { TaskState } from '@invoker/workflow-core';
+import {
+  buildWorktreeCorruptRepairScript,
+  deriveCorruptWorktreeAdminPathFromWorkspace,
+  extractCorruptWorktreeAdminPath,
+} from '../workers/infra-repair-worker.js';
 
 function git(cmd: string, cwd: string): string {
   return execSync(cmd, {
@@ -233,6 +238,74 @@ describe('SSH worktree metadata repro', () => {
       branch: staleBranch,
       hasAgentSessionId: false,
       hasContainerId: false,
+    });
+  });
+
+  it('proves finalize-time corrupt worktree admin metadata is a not-a-git-repository failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-worktree-finalize-corrupt-'));
+    tempRoots.push(root);
+
+    const repoDir = join(root, 'repos', 'c9d4f5f68faf');
+    const worktreePath = join(root, 'worktrees', 'c9d4f5f68faf', 'experiment-task');
+    execSync(`mkdir -p ${JSON.stringify(repoDir)}`);
+    git('git init -b master', repoDir);
+    git('git config user.email "test@example.com"', repoDir);
+    git('git config user.name "Test User"', repoDir);
+    writeFileSync(join(repoDir, 'README.md'), 'seed\n');
+    git('git add README.md', repoDir);
+    git('git commit -m "seed"', repoDir);
+    git(`git worktree add ${JSON.stringify(worktreePath)} -b experiment/task master`, repoDir);
+
+    const adminPath = join(repoDir, '.git', 'worktrees', 'experiment-task');
+    expect(existsSync(adminPath)).toBe(true);
+    // Corrupt the linked admin entry the way production finalize saw it.
+    rmSync(adminPath, { recursive: true, force: true });
+    execSync(`mkdir -p ${JSON.stringify(adminPath)}`);
+
+    let failed = false;
+    let message = '';
+    try {
+      git('git rev-parse HEAD', worktreePath);
+    } catch (error) {
+      failed = true;
+      const err = error as { stderr?: Buffer | string; message?: string };
+      message = String(err.stderr ?? err.message ?? error);
+    }
+    expect(failed).toBe(true);
+    expect(message).toMatch(/not a git repository/);
+    // git's exact wording for this failure is version-dependent: older git
+    // embeds the corrupt admin path (`.git/worktrees/<name>`), newer git
+    // (observed on git 2.55.0) prints `fatal: not a git repository: (null)`
+    // with no path at all. Both are real, observed shapes of the same failure.
+    expect(message).toMatch(/\.git\/worktrees\/|\(null\)/);
+
+    const shapedAdmin = '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/experiment-task';
+    const shapedError = `remote commit or push failed (code 128): fatal: not a git repository: ${shapedAdmin}`;
+    expect(extractCorruptWorktreeAdminPath(shapedError)).toEqual({
+      adminPath: shapedAdmin,
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      worktreeName: 'experiment-task',
+    });
+    const script = buildWorktreeCorruptRepairScript({
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      adminPath: shapedAdmin,
+      managedWorktreePath: '/home/invoker/.invoker/worktrees/c9d4f5f68faf/experiment-task',
+    });
+    expect(script).toContain('worktree prune');
+    expect(script).toContain('Removing stale worktree admin path');
+    expect(script).toContain('Removing managed worktree path');
+
+    // On the newer git shape, the error text carries no path at all --
+    // extraction must fall back to the task's own managed workspace path.
+    const pathlessError = 'remote commit or push failed (code 128): fatal: not a git repository: (null)';
+    expect(extractCorruptWorktreeAdminPath(pathlessError)).toBeUndefined();
+    expect(deriveCorruptWorktreeAdminPathFromWorkspace(
+      '/home/invoker/.invoker/worktrees/c9d4f5f68faf/experiment-task',
+      undefined,
+    )).toEqual({
+      adminPath: shapedAdmin,
+      remoteClone: '/home/invoker/.invoker/repos/c9d4f5f68faf',
+      worktreeName: 'experiment-task',
     });
   });
 });

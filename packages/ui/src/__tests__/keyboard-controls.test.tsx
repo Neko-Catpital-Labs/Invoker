@@ -53,9 +53,10 @@ const tasks = [
 async function renderKeyboardFixture(mock: MockInvoker) {
   mock.setTasks(tasks, workflows);
   render(<App />);
-    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+  fireEvent.click(await screen.findByTestId('sidebar-planning'));
   await screen.findByTestId('workflow-node-wf-a');
   await screen.findByTestId('selected-workflow-mini-dag');
+  await screen.findByTestId('rf__node-wf-a/task-a');
 }
 
 function key(keyName: string, init: Partial<KeyboardEvent> = {}) {
@@ -588,6 +589,7 @@ describe('Sidebar keyboard navigation (component)', () => {
 describe('Graph camera controls (component)', () => {
   let mock: MockInvoker;
   let localStorageSetItemMock: Mock;
+  let originalLocalStorageDescriptor: PropertyDescriptor | undefined;
   /** Active getBoundingClientRect spy, restored after each test. */
   let rectSpy: ReturnType<typeof vi.spyOn> | null = null;
 
@@ -606,6 +608,7 @@ describe('Graph camera controls (component)', () => {
   beforeEach(() => {
     // App's theme hook touches localStorage; keep a shim so F1 can assert it
     // does not perform storage writes after the initial render settles.
+    originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     const store = new Map<string, string>();
     localStorageSetItemMock = vi.fn((k: string, v: string) => { store.set(k, String(v)); });
     Object.defineProperty(globalThis, 'localStorage', {
@@ -631,7 +634,12 @@ describe('Graph camera controls (component)', () => {
     rectSpy?.mockRestore();
     rectSpy = null;
     mock.cleanup();
-    delete (globalThis as { localStorage?: unknown }).localStorage;
+    if (originalLocalStorageDescriptor) {
+      Object.defineProperty(globalThis, 'localStorage', originalLocalStorageDescriptor);
+    } else {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+    originalLocalStorageDescriptor = undefined;
   });
 
   /**
@@ -691,7 +699,7 @@ describe('Graph camera controls (component)', () => {
     );
   }
 
-  it('F1 issues exactly one centerSelection for the selected node in the focused region', async () => {
+  it('F1 issues exactly one centerTarget for the selected node in the focused region', async () => {
     await renderAndSettle();
 
     key('F1');
@@ -732,7 +740,7 @@ describe('Graph camera controls (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('clicking a workflow node selects it and centers the camera', async () => {
+  it('clicking a workflow node selects it without moving the camera', async () => {
     await renderAndSettle();
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
@@ -740,21 +748,47 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('clicking a task node selects it and centers the camera', async () => {
+  it('right-clicking a workflow node opens its context menu without moving the camera', async () => {
     await renderAndSettle();
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-a/task-b'));
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-b'));
+
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('clicking a task node selects it without moving the camera', async () => {
+    await renderAndSettle();
+
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/task-b'));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('arrow navigation selects the newly targeted node and centers the camera', async () => {
+  it('right-clicking a task node opens its context menu without moving the camera', async () => {
+    await renderAndSettle();
+
+    fireEvent.contextMenu(await screen.findByTestId('rf__node-wf-a/task-b'));
+
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Terminal');
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('arrow navigation selects the newly targeted node without moving the camera', async () => {
     await renderAndSettle();
 
     key('ArrowRight');
@@ -762,7 +796,32 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('Escape from the task graph deselects back to the workflow graph without moving the camera', async () => {
+    await renderAndSettle();
+
+    key('Tab');
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('selected-workflow-mini-dag').querySelector('[data-keyboard-region="taskGraph"]'),
+      ).toHaveAttribute('data-keyboard-active', 'true');
+    });
+    await flushFrame();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    key('Escape');
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
   });
 
   it('keyboard-opened workflow menu handles arrows and restores workflow graph control', async () => {
@@ -797,7 +856,9 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
   });
 
   it('keyboard-opened task menu handles arrows and restores task graph control', async () => {
@@ -808,7 +869,8 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
 
@@ -842,7 +904,9 @@ describe('Graph camera controls (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Task');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
   });
 
   it('arrow navigation selects the geometrically nearest node, not the alphabetical neighbor', async () => {
@@ -876,13 +940,13 @@ describe('Graph camera controls (component)', () => {
       'workflow-node-wf-c': 400,
     });
 
-    // Select the rightmost node first, and drain its user-initiated center
-    // before checking that the boundary ArrowRight is a no-op.
+    // Select the rightmost node first, then check that the boundary ArrowRight
+    // is a no-op — neither selection change nor camera move.
     fireEvent.click(screen.getByTestId('workflow-node-wf-c'));
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Gamma Workflow task DAG');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrame();
     setCenterMock.mockClear();
 
     key('ArrowRight');

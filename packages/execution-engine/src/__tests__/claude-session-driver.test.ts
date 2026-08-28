@@ -149,7 +149,34 @@ describe('ClaudeSessionDriver', () => {
       inputTokens: 800,
       outputTokens: 200,
       cachedTokens: 50,
+      cacheCreationTokens: 0,
       totalTokens: 1000,
+      confidence: 'exact',
+    });
+  });
+
+  it('extractUsage reads message.usage and message.model (Claude Code JSONL shape)', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          model: 'claude-opus-5',
+          content: [{ type: 'text', text: 'ok' }],
+          usage: { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5600, cache_creation_input_tokens: 900 },
+        },
+        timestamp: '2026-08-23T00:00:00Z',
+      }),
+    ].join('\n');
+
+    const events = driver.extractUsage(jsonl);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      model: 'claude-opus-5',
+      inputTokens: 12,
+      outputTokens: 34,
+      cachedTokens: 5600,
+      cacheCreationTokens: 900,
+      totalTokens: 46,
       confidence: 'exact',
     });
   });

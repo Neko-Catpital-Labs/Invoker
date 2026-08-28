@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { planningHostContext } from '@invoker/planning-core';
 
 interface MockHandler {
   pattern: string | RegExp;
@@ -124,7 +125,14 @@ function writeDraftFile(workingDir: string, threadTs: string): void {
 }
 
 function normalizePrompt(prompt: string, workingDir: string): string {
-  return prompt.split(workingDir).join('<worktree>');
+  return prompt
+    .split(workingDir).join('<worktree>')
+    .replace(planningHostContext('slack'), '<current-planning-host>')
+    .replace(planningHostContext('in_app'), '<current-planning-host>')
+    .replace(
+      /After the YAML exists, the (?:Slack planner reads that exact YAML, renders the ordered steps in its Approve\/Cancel review card|in-app planner reads that exact YAML, renders the ordered steps in its review panel), and owns the approval step\./,
+      '<host-review-instruction>',
+    );
 }
 
 describe('Slack and planning-terminal parity for the same request (real surface, real conversation engine)', () => {
@@ -168,6 +176,7 @@ describe('Slack and planning-terminal parity for the same request (real surface,
       cursorCommand: 'cursor',
       mode: 'plan',
       conversationalPlanning: true,
+      planningSurface: 'in_app',
       workingDir: terminalDir,
       threadTs: 'thread-pink',
     });
@@ -182,6 +191,8 @@ describe('Slack and planning-terminal parity for the same request (real surface,
     const slackScopingPrompt = normalizePrompt(capturedPrompts[0], slackDir);
     const terminalScopingPrompt = normalizePrompt(capturedPrompts[1], terminalDir);
     expect(slackScopingPrompt).toBe(terminalScopingPrompt);
+    expect(capturedPrompts[0]).toContain('Current planning host: Invoker Slack planner.');
+    expect(capturedPrompts[1]).toContain('Current planning host: Invoker in-app planner.');
     expect(slackScopingPrompt).toContain('conversational planning mode');
     expect(slackScopingPrompt).toContain('Drafting is not authorized yet');
     expect(slackScopingPrompt).not.toContain('edit code');
@@ -203,7 +214,10 @@ describe('Slack and planning-terminal parity for the same request (real surface,
     const slackDraftPrompt = normalizePrompt(capturedPrompts[2], slackDir);
     const terminalDraftPrompt = normalizePrompt(capturedPrompts[3], terminalDir);
     expect(slackDraftPrompt).toBe(terminalDraftPrompt);
-    expect(slackDraftPrompt).toContain('Only the hosting surface (the Slack orchestrator or the in-app planner) may submit the plan');
+    expect(capturedPrompts[2]).toContain('Slack planner reads that exact YAML, renders the ordered steps in its Approve/Cancel review card');
+    expect(capturedPrompts[3]).toContain('in-app planner reads that exact YAML, renders the ordered steps in its review panel');
+    const hostOwnsSubmission = slackDraftPrompt.includes('Only the current planning host may submit the plan');
+    expect(hostOwnsSubmission).toBe(true);
     expect(slackDraftPrompt).toContain(join('<worktree>', '.invoker', 'plan-drafts', 'thread-pink.yaml'));
 
     const cardCall = say.mock.calls.find(([msg]) => typeof msg?.text === 'string' && msg.text.includes('Pink Theme Retheme'));

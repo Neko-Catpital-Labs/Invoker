@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
+import { E2E_REPO_URL, injectTaskStates, waitForTasksResult } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
@@ -34,7 +34,7 @@ function launchArgs(): string[] {
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30000 });
 }
 
 async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketPath: string; configPath: string }): Promise<{ app: ElectronApplication; page: Page }> {
@@ -55,7 +55,6 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: paths.dbDir,
       INVOKER_IPC_SOCKET: paths.ipcSocketPath,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_REPO_CONFIG_PATH: paths.configPath,
       INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
@@ -70,24 +69,34 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
 
 async function closeApp(app: ElectronApplication): Promise<void> {
   const child = app.process();
+  let childExited = child.exitCode !== null || child.signalCode !== null;
+  const childExitPromise = new Promise<void>((resolve) => {
+    if (childExited) {
+      resolve();
+      return;
+    }
+    const markChildExited = () => {
+      childExited = true;
+      resolve();
+    };
+    child.once('exit', markChildExited);
+    child.once('close', markChildExited);
+  });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
-  if (timedOut) {
+  if (timedOut && !childExited) {
     child.kill('SIGTERM');
-    await Promise.race([closePromise, delay(2_000)]);
-    if (!child.killed) child.kill('SIGKILL');
+    await Promise.race([childExitPromise, delay(2_000)]);
+    if (!childExited) child.kill('SIGKILL');
   }
 }
 
 async function loadPlan(page: Page): Promise<void> {
   await page.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(TERMINAL_RESTART_PLAN));
-  await page.waitForFunction(() => window.invoker.getTasks().then((result) => {
-    const tasks = Array.isArray(result) ? result : result.tasks;
-    return tasks.some((task: { id: string }) => task.id.endsWith('/terminal-task'));
-  }), null, { timeout: 10000 });
+  await waitForTasksResult(page, ({ tasks }) => tasks.some((task) => task.id.endsWith('/terminal-task')));
   await page.getByTestId('sidebar-planning').click();
   await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10000 });
   await page.getByRole('button', { name: 'Refresh' }).click();

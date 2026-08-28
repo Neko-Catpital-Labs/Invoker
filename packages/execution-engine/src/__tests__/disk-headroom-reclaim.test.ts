@@ -154,6 +154,34 @@ describe('disk-headroom cleanup guards', () => {
     expect(script).toContain('$INVOKER_HOME/pr-cron-work');
   });
 
+  it('stale-only mode skips the destructive Invoker-managed-dir wipe but keeps the /tmp scratch sweep', () => {
+    const criticalScript = buildInvokerHomeCleanupScript('~/.invoker', [], 'critical');
+    const staleOnlyScript = buildInvokerHomeCleanupScript('~/.invoker', [], 'stale-only');
+
+    // critical still does the full destructive sweep.
+    expect(criticalScript).toContain("pkill -9 -f 'pnpm install");
+    expect(criticalScript).toContain('remove_path "$INVOKER_HOME/runtime"');
+    expect(criticalScript).toContain('remove_path "$INVOKER_HOME/pr-cron-work"');
+    expect(criticalScript).toContain('sweep_children_preserving "$INVOKER_HOME/repos" "repos"');
+    expect(criticalScript).toContain('mkdir -p');
+
+    // stale-only never kills provision grinders or wipes/recreates Invoker's own dirs.
+    expect(staleOnlyScript).not.toContain("pkill -9 -f 'pnpm install");
+    expect(staleOnlyScript).not.toContain('remove_path "$INVOKER_HOME/runtime"');
+    expect(staleOnlyScript).not.toContain('remove_path "$INVOKER_HOME/pr-cron-work"');
+    expect(staleOnlyScript).not.toContain('sweep_children_preserving "$INVOKER_HOME/repos" "repos"');
+    expect(staleOnlyScript).not.toContain('mkdir -p');
+
+    // stale-only still runs the age-gated /tmp CI-scratch sweep, unconditionally.
+    for (const glob of TMP_SCRATCH_GLOBS) {
+      expect(staleOnlyScript).toContain(glob);
+    }
+    expect(staleOnlyScript).toContain('reap_tmp');
+    expect(staleOnlyScript).toContain(`-mmin +${TMP_SCRATCH_MIN_AGE_MINUTES}`);
+    expect(staleOnlyScript).toContain('stale-only begin');
+    expect(staleOnlyScript).toContain('stale-only done');
+  });
+
   it('sweeps only Invoker/test scratch from the shared temp dir, never a blanket /tmp wipe', () => {
     const script = buildInvokerHomeCleanupScript('~/.invoker');
     // Resolves the temp dir with a safe fallback, and re-anchors unsafe values to /tmp.
@@ -601,6 +629,28 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(result.reason).toBe('cleanup-error');
   });
 
+  it('stale-only mode skips the preservation lookup entirely, even when the store throws', async () => {
+    const target = makeTarget();
+    const throwingStore: DiskHeadroomWorkerStore = {
+      listWorkflows: () => {
+        throw new Error('db unavailable');
+      },
+      loadTasks: () => [],
+    };
+    const runRemoteScript = vi.fn(async () => 'ok');
+
+    const result = await cleanupRemoteInvokerHome({
+      target,
+      store: throwingStore,
+      runRemoteScript,
+      mode: 'stale-only',
+    });
+
+    expect(runRemoteScript).toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('warn-paced');
+  });
+
   it('narrows preservation to this target\'s own poolMemberId and embeds it in the generated script', async () => {
     const target = makeTarget({ name: 'remote-1', remotePath: '/home/remote/.invoker' });
     const otherTarget = makeTarget({ name: 'remote-2', remotePath: '/home/remote/.invoker' });
@@ -645,6 +695,25 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(otherResult.ok).toBe(true);
     expect(capturedScripts[1]).toContain('worktrees/hash2/branch');
     expect(capturedScripts[1]).not.toContain('worktrees/hash1/branch');
+  });
+
+  it('passes mode through to the generated script and result reason, defaulting to critical', async () => {
+    const target = makeTarget();
+    const capturedScripts: string[] = [];
+    const runRemoteScript = vi.fn(async (_t: RemoteDiskTarget, script: string) => {
+      capturedScripts.push(script);
+      return 'ok';
+    });
+
+    const staleResult = await cleanupRemoteInvokerHome({ target, runRemoteScript, mode: 'stale-only' });
+    expect(staleResult.ok).toBe(true);
+    expect(staleResult.reason).toBe('warn-paced');
+    expect(capturedScripts[0]).not.toContain("pkill -9 -f 'pnpm install");
+
+    const defaultResult = await cleanupRemoteInvokerHome({ target, runRemoteScript });
+    expect(defaultResult.ok).toBe(true);
+    expect(defaultResult.reason).toBe('critical-cleanup');
+    expect(capturedScripts[1]).toContain("pkill -9 -f 'pnpm install");
   });
 
   it('clears everything (empty PRESERVE) when no store is provided', async () => {

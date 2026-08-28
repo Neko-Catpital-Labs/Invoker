@@ -9,7 +9,7 @@ import {
 const rootPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.match(
   rootPackage.scripts.test,
-  /node scripts\/test-review-unit-classification\.mjs && (?:node scripts\/test-create-pr-stack-workflow\.mjs && )?bash scripts\/workspace-test\.sh/,
+  /node scripts\/test-review-unit-classification\.mjs && (?:node (?:--test )?scripts\/[\w.-]+\.m?js && )*bash scripts\/workspace-test\.sh/,
   'root test must run review-unit classification before the workspace test contract',
 );
 
@@ -36,10 +36,15 @@ const stillToolingPolicy = [
   'scripts/review-unit-rules.mjs',
   '.github/workflows/ci.yml',
   'skills/make-pr/SKILL.md',
+  'skills/chat-submit/SKILL.md',
+  'skills/chat-submit/scripts/check-contract.sh',
   'skills/plan-to-invoker/SKILL.md',
+  'skills/plan-to-invoker/references/local-vs-remote-mcp.md',
   'skills/land-stack/SKILL.md',
   'skills/visual-proof/SKILL.md',
   'skills/prove-it/SKILL.md',
+  'scripts/bootstrap.sh',
+  'scripts/test-bootstrap.sh',
 ];
 for (const path of stillToolingPolicy) {
   assert.deepEqual(

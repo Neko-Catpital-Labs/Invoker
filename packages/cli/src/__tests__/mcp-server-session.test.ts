@@ -5,6 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { LocalBus, type MessageBus } from '@invoker/transport';
 
 import { createMcpServer, type McpServerOptions } from '../mcp-server.js';
+import { createReviewTokenStore } from '../mcp-review-binding.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const fixturePlan = resolve(repoRoot, 'plans/fixtures/hello-world.yaml');
@@ -29,6 +30,15 @@ async function connectMcpClient(options: McpServerOptions) {
 function refusingCreateMessageBus(): () => Promise<MessageBus> {
   return () => {
     throw new Error('createMessageBus should not be called without an effective session id');
+  };
+}
+
+/** LocalBus.disconnect() clears handlers, so multi-call flows need a fresh bus each time. */
+function liveOwnerBusFactory(setup: (bus: LocalBus) => void): () => Promise<MessageBus> {
+  return async () => {
+    const bus = new LocalBus();
+    setup(bus);
+    return bus;
   };
 }
 
@@ -58,18 +68,17 @@ describe('mcp-server session-scoped tools', () => {
       expect(result.isError).toBeFalsy();
       const content = result.content as Array<{ type: string; text: string }>;
       const parsed = JSON.parse(content[0]!.text);
-      expect(parsed).toMatchObject({
-        planText: expect.any(String),
-        summary: { name: 'Hello World CLI', taskCount: 1 },
-        confirmationMode: 'require',
-        confirmationText: 'Approve to submit this exact YAML. Cancel keeps the draft. Discard removes it.',
-      });
+      expect(parsed.planText).toEqual(expect.any(String));
+      expect(parsed.summary).toEqual(expect.objectContaining({ name: 'Hello World CLI', taskCount: 1 }));
+      expect(parsed.confirmationMode).toEqual('require');
+      expect(parsed.confirmationText).toEqual('Approve to submit this exact YAML. Cancel keeps the draft. Discard removes it.');
+      expect(parsed.reviewToken).toEqual(expect.stringMatching(/^rev_/));
     } finally {
       await close();
     }
   });
 
-  it('leaves the file-path invoker_submit_plan behavior unchanged with no sessionId and no env var', async () => {
+  it('rejects file-path submit without a reviewToken', async () => {
     delete process.env.INVOKER_PLANNING_SESSION_ID;
     const runner = {
       run: vi.fn(async () => ({ exitCode: 0, stdout: '{"workflow":{"id":"wf-file-path"}}\n', stderr: '' })),
@@ -84,10 +93,57 @@ describe('mcp-server session-scoped tools', () => {
         arguments: { planPath: fixturePlan },
       });
 
+      expect(String((result.content as Array<{text:string}>)[0]?.text ?? '')).toMatch(/reviewToken/i);
+      expect(runner.run.mock.calls).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  it('submits a file-path plan only with a matching reviewToken', async () => {
+    delete process.env.INVOKER_PLANNING_SESSION_ID;
+    const runner = {
+      run: vi.fn(async () => ({ exitCode: 0, stdout: '{"workflow":{"id":"wf-file-path"}}\n', stderr: '' })),
+    };
+    const { client, close } = await connectMcpClient({
+      runner,
+      createMessageBus: refusingCreateMessageBus(),
+    });
+    try {
+      const review = await client.callTool({
+        name: 'invoker_prepare_plan_review',
+        arguments: { planPath: fixturePlan },
+      });
+      const reviewToken = JSON.parse((review.content as Array<{ text: string }>)[0]!.text).reviewToken as string;
+
+      const result = await client.callTool({
+        name: 'invoker_submit_plan',
+        arguments: { planPath: fixturePlan, reviewToken },
+      });
+
       expect(result.isError).toBeFalsy();
       expect(runner.run).toHaveBeenCalledTimes(1);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0]!.text).toContain('wf-file-path');
+      const payload = JSON.parse(content[0]!.text) as { ok: boolean; workflowId: string };
+      expect(payload.ok).toEqual(true);
+      expect(payload.workflowId).toEqual('wf-file-path');
+    } finally {
+      await close();
+    }
+  });
+
+  it('rejects providing both planPath and sessionId', async () => {
+    const { client, close } = await connectMcpClient({
+      createMessageBus: refusingCreateMessageBus(),
+    });
+    try {
+      const result = await client.callTool({
+        name: 'invoker_prepare_plan_review',
+        arguments: { planPath: fixturePlan, sessionId: 'sess-both' },
+      });
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0]!.text.includes('exactly one')).toEqual(true);
     } finally {
       await close();
     }
@@ -103,7 +159,7 @@ describe('mcp-server session-scoped tools', () => {
     try {
       const result = await client.callTool({
         name: 'invoker_prepare_plan_review',
-        arguments: { planPath: '/nonexistent/plan.yaml', sessionId: 'sess-no-owner' },
+        arguments: { sessionId: 'sess-no-owner' },
       });
 
       expect(result.isError).toBe(true);
@@ -133,18 +189,17 @@ describe('mcp-server session-scoped tools', () => {
     try {
       const result = await client.callTool({
         name: 'invoker_prepare_plan_review',
-        arguments: { planPath: '/nonexistent/plan.yaml', sessionId: 'sess-with-draft' },
+        arguments: { sessionId: 'sess-with-draft' },
       });
 
       expect(result.isError).toBeFalsy();
       const content = result.content as Array<{ type: string; text: string }>;
       const parsed = JSON.parse(content[0]!.text);
-      expect(parsed).toEqual({
-        planText: 'name: Session Plan\nonFinish: none\ntasks: []\n',
-        summary: { name: 'Session Plan', taskCount: 0, taskGroups: [] },
-        confirmationMode: 'require',
-        confirmationText: 'Approve to submit this exact YAML. Cancel keeps the draft. Discard removes it.',
-      });
+      expect(parsed.planText).toEqual('name: Session Plan\nonFinish: none\ntasks: []\n');
+      expect(parsed.summary).toEqual({ name: 'Session Plan', taskCount: 0, taskGroups: [] });
+      expect(parsed.confirmationMode).toEqual('require');
+      expect(parsed.confirmationText).toEqual('Approve to submit this exact YAML. Cancel keeps the draft. Discard removes it.');
+      expect(parsed.reviewToken).toEqual(expect.stringMatching(/^rev_/));
     } finally {
       await close();
     }
@@ -158,7 +213,7 @@ describe('mcp-server session-scoped tools', () => {
     try {
       const result = await client.callTool({
         name: 'invoker_prepare_plan_review',
-        arguments: { planPath: '/nonexistent/plan.yaml', sessionId: 'sess-missing' },
+        arguments: { sessionId: 'sess-missing' },
       });
 
       expect(result.isError).toBe(true);
@@ -170,8 +225,7 @@ describe('mcp-server session-scoped tools', () => {
   });
 
   it('dispatches invoker_submit_plan through headless.gui-mutation and maps an ok response', async () => {
-    const bus = new LocalBus();
-    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    const planText = 'name: Session Plan\nonFinish: none\ntasks: []\n';
     const guiMutation = vi.fn(async (req: unknown) => {
       expect(req).toEqual({
         channel: 'invoker:planning-chat-submit',
@@ -179,32 +233,107 @@ describe('mcp-server session-scoped tools', () => {
       });
       return { ok: true, planName: 'Session Plan', workflowId: 'wf-session-1' };
     });
-    bus.onRequest('headless.gui-mutation', guiMutation);
-    const { client, close } = await connectMcpClient({ createMessageBus: async () => bus });
+    const { client, close } = await connectMcpClient({
+      createMessageBus: liveOwnerBusFactory((bus) => {
+        bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+        bus.onRequest('headless.query', async () => ({
+          session: {
+            draftPlanText: planText,
+            draftPlanSummary: { name: 'Session Plan', taskCount: 0, taskGroups: [] },
+            confirmationMode: 'require',
+            status: 'draft_ready',
+          },
+        }));
+        bus.onRequest('headless.gui-mutation', guiMutation);
+      }),
+    });
     try {
+      const review = await client.callTool({
+        name: 'invoker_prepare_plan_review',
+        arguments: { sessionId: 'sess-submit-ok' },
+      });
+      const reviewToken = JSON.parse((review.content as Array<{ text: string }>)[0]!.text).reviewToken as string;
+
       const result = await client.callTool({
         name: 'invoker_submit_plan',
-        arguments: { planPath: '/nonexistent/plan.yaml', sessionId: 'sess-submit-ok' },
+        arguments: { sessionId: 'sess-submit-ok', reviewToken },
       });
 
       expect(result.isError).toBeFalsy();
       expect(guiMutation).toHaveBeenCalledTimes(1);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0]!.text).toBe('Submitted Invoker plan. Workflow id: wf-session-1.');
+      const submitPayload = JSON.parse(content[0]!.text) as { ok: boolean; workflowId: string };
+      expect(submitPayload.ok).toEqual(true);
+      expect(submitPayload.workflowId).toEqual('wf-session-1');
+    } finally {
+      await close();
+    }
+  });
+
+  it('rejects submit when session draft changed after review', async () => {
+    let draft = 'name: Session Plan\nonFinish: none\ntasks: []\n';
+    const guiMutation = vi.fn(async () => ({ ok: true, planName: 'Session Plan', workflowId: 'wf-session-1' }));
+    const { client, close } = await connectMcpClient({
+      createMessageBus: liveOwnerBusFactory((bus) => {
+        bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+        bus.onRequest('headless.query', async () => ({
+          session: {
+            draftPlanText: draft,
+            draftPlanSummary: { name: 'Session Plan', taskCount: 0, taskGroups: [] },
+            confirmationMode: 'require',
+            status: 'draft_ready',
+          },
+        }));
+        bus.onRequest('headless.gui-mutation', guiMutation);
+      }),
+    });
+    try {
+      const review = await client.callTool({
+        name: 'invoker_prepare_plan_review',
+        arguments: { sessionId: 'sess-stale' },
+      });
+      const reviewToken = JSON.parse((review.content as Array<{ text: string }>)[0]!.text).reviewToken as string;
+      draft = 'name: Changed Plan\nonFinish: none\ntasks: []\n';
+
+      const result = await client.callTool({
+        name: 'invoker_submit_plan',
+        arguments: { sessionId: 'sess-stale', reviewToken },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(guiMutation).not.toHaveBeenCalled();
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0]!.text).toContain('changed after review');
     } finally {
       await close();
     }
   });
 
   it('maps a failed headless.gui-mutation response to an MCP error result', async () => {
-    const bus = new LocalBus();
-    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
-    bus.onRequest('headless.gui-mutation', async () => ({ ok: false, error: 'This planning session was already submitted.' }));
-    const { client, close } = await connectMcpClient({ createMessageBus: async () => bus });
+    const planText = 'name: Session Plan\nonFinish: none\ntasks: []\n';
+    const { client, close } = await connectMcpClient({
+      createMessageBus: liveOwnerBusFactory((bus) => {
+        bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+        bus.onRequest('headless.query', async () => ({
+          session: {
+            draftPlanText: planText,
+            draftPlanSummary: { name: 'Session Plan', taskCount: 0, taskGroups: [] },
+            confirmationMode: 'require',
+            status: 'draft_ready',
+          },
+        }));
+        bus.onRequest('headless.gui-mutation', async () => ({ ok: false, error: 'This planning session was already submitted.' }));
+      }),
+    });
     try {
+      const review = await client.callTool({
+        name: 'invoker_prepare_plan_review',
+        arguments: { sessionId: 'sess-submit-fail' },
+      });
+      const reviewToken = JSON.parse((review.content as Array<{ text: string }>)[0]!.text).reviewToken as string;
       const result = await client.callTool({
         name: 'invoker_submit_plan',
-        arguments: { planPath: '/nonexistent/plan.yaml', sessionId: 'sess-submit-fail' },
+        arguments: { sessionId: 'sess-submit-fail', reviewToken },
       });
 
       expect(result.isError).toBe(true);
@@ -215,10 +344,8 @@ describe('mcp-server session-scoped tools', () => {
     }
   });
 
-  it('honors INVOKER_PLANNING_SESSION_ID as a fallback when no explicit sessionId argument is given', async () => {
+  it('honors INVOKER_PLANNING_SESSION_ID as a fallback when no planPath or sessionId is given', async () => {
     process.env.INVOKER_PLANNING_SESSION_ID = 'sess-from-env';
-    const bus = new LocalBus();
-    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
     const query = vi.fn(async (req: unknown) => {
       expect(req).toEqual({ kind: 'planning-chat-session', sessionId: 'sess-from-env' });
       return {
@@ -230,12 +357,16 @@ describe('mcp-server session-scoped tools', () => {
         },
       };
     });
-    bus.onRequest('headless.query', query);
-    const { client, close } = await connectMcpClient({ createMessageBus: async () => bus });
+    const { client, close } = await connectMcpClient({
+      createMessageBus: liveOwnerBusFactory((bus) => {
+        bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+        bus.onRequest('headless.query', query);
+      }),
+    });
     try {
       const result = await client.callTool({
         name: 'invoker_prepare_plan_review',
-        arguments: { planPath: '/nonexistent/plan.yaml' },
+        arguments: {},
       });
 
       expect(result.isError).toBeFalsy();
@@ -244,6 +375,84 @@ describe('mcp-server session-scoped tools', () => {
       const parsed = JSON.parse(content[0]!.text);
       expect(parsed.confirmationMode).toBe('auto_submit');
       expect(parsed.confirmationText).toBe('Auto-submit is enabled. Submit this exact YAML now.');
+      expect(parsed.reviewToken).toMatch(/^rev_/);
+    } finally {
+      await close();
+    }
+  });
+
+  it('returns workflow and task snapshots from live owner queries', async () => {
+    const { client, close } = await connectMcpClient({
+      createMessageBus: liveOwnerBusFactory((bus) => {
+        bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+        bus.onRequest('headless.query', async (req: unknown) => {
+          const request = req as { kind: string; args: string[] };
+          expect(request.kind).toBe('cli-query');
+          if (request.args.includes('workflows')) {
+            return { output: JSON.stringify([{ id: 'wf-1', name: 'Demo', status: 'running' }]) };
+          }
+          return {
+            output: JSON.stringify([
+              { id: 'wf-1/task-a', status: 'completed', description: 'A' },
+              { id: 'wf-1/task-b', status: 'running', description: 'B' },
+            ]),
+          };
+        });
+      }),
+    });
+    try {
+      const workflow = await client.callTool({
+        name: 'invoker_get_workflow',
+        arguments: { workflowId: 'wf-1' },
+      });
+      const tasks = await client.callTool({
+        name: 'invoker_list_tasks',
+        arguments: { workflowId: 'wf-1' },
+      });
+      expect(workflow.isError).toBeFalsy();
+      expect(tasks.isError).toBeFalsy();
+      expect(JSON.parse((workflow.content as Array<{ text: string }>)[0]!.text)).toMatchObject({
+        ok: true,
+        workflow: { id: 'wf-1', name: 'Demo' },
+      });
+      expect(JSON.parse((tasks.content as Array<{ text: string }>)[0]!.text)).toMatchObject({
+        ok: true,
+        workflowId: 'wf-1',
+        tasks: [
+          { id: 'wf-1/task-a', status: 'completed' },
+          { id: 'wf-1/task-b', status: 'running' },
+        ],
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  it('bounded wait times out while tasks remain unsettled', async () => {
+    const sleep = vi.fn(async () => undefined);
+    const { client, close } = await connectMcpClient({
+      createMessageBus: liveOwnerBusFactory((bus) => {
+        bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+        bus.onRequest('headless.query', async () => ({
+          output: JSON.stringify([{ id: 'wf-1/task-a', status: 'running', description: 'A' }]),
+        }));
+      }),
+      sleep,
+      reviewTokens: createReviewTokenStore(),
+    });
+    try {
+      const result = await client.callTool({
+        name: 'invoker_wait_for_workflow',
+        arguments: { workflowId: 'wf-1', maxWaitMs: 5, pollIntervalMs: 1 },
+      });
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+      expect(parsed).toMatchObject({
+        ok: true,
+        settled: false,
+        timedOut: true,
+        status: { running: 1 },
+      });
     } finally {
       await close();
     }

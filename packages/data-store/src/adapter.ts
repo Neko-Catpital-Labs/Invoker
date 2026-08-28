@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
@@ -33,6 +33,20 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export type PlanningDraftStatus = 'current' | 'superseded' | 'submitted';
+
+export interface PlanningDraft {
+  id: string;
+  conversationId: string;
+  version: number;
+  planText: string;
+  contentHash: string;
+  status: PlanningDraftStatus;
+  createdAt: string;
+  supersededAt?: string;
+  submittedAt?: string;
+}
+
 export interface SlackLaunchContext {
   threadTs: string;
   repoUrl: string;
@@ -56,6 +70,7 @@ export type SlackPlanDraftStatus =
 export interface SlackPlanDraft {
   draftId: string;
   version: number;
+  planningDraftId?: string;
   channelId: string;
   threadTs: string;
   messageTs?: string;
@@ -101,6 +116,30 @@ export interface WorkflowChannel {
   createdAt: string;
 }
 
+// ── Repair Filing Types (cross-system CI/PR repair dedup ledger) ─
+
+export interface RepairFiling {
+  id: number;
+  kind: string;
+  subject: string;
+  stateSha: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface RepairFilingInsertInput {
+  kind: string;
+  subject: string;
+  stateSha: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface RepairFilingInsertResult {
+  /** True only when this call created the row; false means an identical (kind, subject, stateSha) row already existed. */
+  inserted: boolean;
+  row: RepairFiling;
+}
+
 // ── Workflow Types ──────────────────────────────────────────
 
 export interface Workflow {
@@ -124,6 +163,7 @@ export interface Workflow {
   /** Read-only provenance for dependencies removed by `detachWorkflow`. Never re-read by scheduling. */
   detachedExternalDependencies?: DetachedExternalDependency[];
   generation?: number;
+  staged?: boolean;
   deletedAt?: number;
   createdAt: string;
   updatedAt: string;
@@ -305,6 +345,8 @@ export interface InAppPlanningSessionRecord {
   messages: InAppPlanningChatLine[];
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
+  planningDraftId?: string;
+  planningDraftHash?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
@@ -313,6 +355,9 @@ export interface InAppPlanningSessionRecord {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   pendingResponse: boolean;
   createdAt: string;
   updatedAt: string;
@@ -331,6 +376,8 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'messages'
   | 'draftPlanSummary'
   | 'draftPlanText'
+  | 'planningDraftId'
+  | 'planningDraftHash'
   | 'submittedWorkflowId'
   | 'submittedPlanName'
   | 'terminalMode'
@@ -339,6 +386,9 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'terminalExitCode'
   | 'terminalOutputSnapshot'
   | 'terminalUpdatedAt'
+  | 'activeTurnId'
+  | 'activeTurnStatus'
+  | 'activeTurnError'
   | 'pendingResponse'
   | 'updatedAt'
 >>;
@@ -346,16 +396,25 @@ export type InAppPlanningSessionPatch = Partial<Pick<
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void;
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'staged' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined;
   listWorkflows(options?: WorkflowReadOptions): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
-  /** Resolve a GitHub PR number back to its Invoker workflow via the merge node. */
-  findReviewGateByPr(pr: string): ReviewGateLookup | undefined;
+  /** Resolve a GitHub PR number back to its Invoker workflow via the merge node.
+   * When `repo` is set (owner/repo), prefer URL matches for that repo; bare
+   * review_id matches are allowed only for the default Invoker repo (or when
+   * `repo` is omitted). */
+  findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined;
 
   // Tasks
   saveTask(workflowId: string, task: TaskState): void;
-  updateTask(taskId: string, changes: TaskStateChanges): void;
+  updateTask(taskId: string, changes: TaskStateChanges, opts?: { skipWorkflowStatusSync?: boolean }): void;
+  updateTaskFromKnownState?(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void;
   loadTasks(workflowId: string): TaskState[];
   loadWorkflowTaskSnapshot?(options?: WorkflowReadOptions): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
@@ -409,6 +468,14 @@ export interface PersistenceAdapter {
   countMessages(threadTs: string): number;
   loadMessages(threadTs: string): ConversationMessage[];
 
+  // Immutable doctor-approved planning drafts
+  createCurrentPlanningDraft(input: Omit<PlanningDraft, 'version' | 'status' | 'supersededAt' | 'submittedAt'>): PlanningDraft;
+  loadCurrentPlanningDraft(conversationId: string): PlanningDraft | undefined;
+  loadPlanningDraft(id: string): PlanningDraft | undefined;
+  supersedePlanningDraft(id: string, supersededAt: string): void;
+  supersedeCurrentPlanningDraft(conversationId: string, supersededAt: string): void;
+  markPlanningDraftSubmitted(id: string, submittedAt: string): void;
+
   // Slack plan submission session state
   saveSlackLaunchContext(context: SlackLaunchContext): void;
   loadSlackLaunchContext(threadTs: string): SlackLaunchContext | undefined;
@@ -423,6 +490,13 @@ export interface PersistenceAdapter {
   loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined;
   loadLatestSlackPendingConfirmationByThread(threadTs: string): SlackPendingConfirmation | undefined;
   deleteSlackPendingConfirmation(confirmKey: string): void;
+
+  // Repair filings (cross-system CI/PR repair dedup ledger)
+  insertRepairFiling(input: RepairFilingInsertInput): RepairFilingInsertResult;
+  getRepairFiling(kind: string, subject: string, stateSha: string): RepairFiling | undefined;
+  listRepairFilings(kind?: string, subject?: string): RepairFiling[];
+  /** Release a claimed (kind, subject, stateSha) row -- e.g. the actual filing failed after the claim succeeded -- so a later attempt can reclaim it. Returns true iff a row was deleted. */
+  deleteRepairFiling(kind: string, subject: string, stateSha: string): boolean;
 
   // Workflow channels (Slack workflow↔channel mapping)
   saveWorkflowChannel(rec: WorkflowChannel): void;

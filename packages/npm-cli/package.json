@@ -1,6 +1,6 @@
 {
   "name": "@neko-catpital-labs/invoker-cli",
-  "version": "0.0.12",
+  "version": "0.0.14",
   "description": "Invoker standalone CLI installer",
   "type": "module",
   "repository": {
@@ -21,6 +21,9 @@
   "scripts": {
     "postinstall": "node scripts/install.js",
     "test": "node bin/invoker-cli.js --version || true"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
   },
   "publishConfig": {
     "access": "public"

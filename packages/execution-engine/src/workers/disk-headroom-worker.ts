@@ -133,10 +133,6 @@ function recordCleanupDecision(
 
 const WARN_PACED_STREAK = 2;
 
-function isLocalTargetKey(targetKey: string): boolean {
-  return !targetKey.startsWith('ssh:');
-}
-
 function warnPacedCooldownKey(targetKey: string): string {
   return `cleanup:${targetKey}:warn-paced`;
 }
@@ -201,7 +197,6 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
       const warnPacedTargets: DiskHeadroomEvaluation[] = [];
       for (const evaluation of evaluationsRaw) {
         const targetKey = evaluation.label;
-        if (!isLocalTargetKey(targetKey)) continue;
         if (evaluation.level !== 'warn') {
           warnStreaks.delete(targetKey);
           continue;
@@ -237,13 +232,35 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
           `[disk-headroom-cleanup] warn-paced begin ${targetKey}`,
           { module: 'disk-headroom', targetKey },
         );
-        const result = await cleanupLocal({
-          invokerHome: options.localPath,
-          targetKey,
-          logger: options.logger,
-          store: options.workflowStore,
-          mode: 'stale-only',
-        });
+        let result: DiskCleanupResult;
+        if (targetKey.startsWith('ssh:')) {
+          const target = options.remoteTargets.find(
+            (t) => `ssh:${t.name} ${t.remotePath}` === targetKey,
+          );
+          result = target
+            ? await cleanupRemote({
+              target,
+              logger: options.logger,
+              store: options.workflowStore,
+              mode: 'stale-only',
+            })
+            : {
+              targetKey,
+              ok: false,
+              reason: 'cleanup-error',
+              detail: `remote target not found for ${targetKey}`,
+              protectedSkipCount: 0,
+              protectedSkipBytes: 0,
+            };
+        } else {
+          result = await cleanupLocal({
+            invokerHome: options.localPath,
+            targetKey,
+            logger: options.logger,
+            store: options.workflowStore,
+            mode: 'stale-only',
+          });
+        }
         const recordedResult: DiskCleanupResult = result.ok
           ? { ...result, reason: 'warn-paced' }
           : result;

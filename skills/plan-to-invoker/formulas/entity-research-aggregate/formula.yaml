@@ -1,0 +1,55 @@
+formula: entity-research-aggregate
+version: 1
+description: >
+  Build the aggregate table across many already-merged entity-research
+  records as its own small, independently reviewable PR — never inside a
+  per-entity workflow. Gated on every upstream entity-research workflow's
+  __merge__ task via plan-level externalDependencies (gatePolicy:
+  review_ready), reading only the shared base branch, never any in-flight
+  branch. Ships with 2 example externalDependencies entries; duplicate the
+  block once per upstream entity workflow before submit.
+vars:
+  repo_url:
+    required: true
+    example: "git@github.com:EdbertChan/hidden.git"
+    description: "Git remote for the repo where the aggregate table is committed."
+  base_branch:
+    required: true
+    example: "main"
+    description: >
+      Base branch to pull records from (the shared trunk, never an upstream
+      feature branch). Must not be the literal string "master" — validate-plan.mjs's
+      stacked_basebranch_default check hard-fails any plan with concrete
+      externalDependencies whose baseBranch resolves to "master". See
+      references/entity-research-patterns.md's "known limitation" note. This
+      is not a stylistic choice.
+  aggregate_slug:
+    required: true
+    example: "stock-quirk-check"
+    description: "Kebab-case identifier used in task ids and the plan name."
+  aggregate_summary:
+    required: true
+    example: "the stock quirk-check table"
+    description: "One-line description of what's being aggregated."
+  record_glob:
+    required: true
+    example: "data/stocks/*.json"
+    description: "Glob of already-merged per-entity records to read (on base_branch only)."
+  aggregate_output_path:
+    required: true
+    example: "SUMMARY.md"
+    description: "Single output file the aggregate table is written to."
+  aggregate_build_command:
+    required: true
+    example: "python3 scripts/build-summary-table.py"
+    description: "Deterministic command that globs record_glob and regenerates aggregate_output_path; must fail loudly on a row-count mismatch."
+  upstream_workflow_id_a:
+    required: true
+    example: "wf-1786134278894-01"
+    description: "First upstream entity-research workflow id to gate on (__merge__ task)."
+  upstream_workflow_id_b:
+    required: true
+    example: "wf-1786134278894-02"
+    description: "Second upstream entity-research workflow id to gate on (__merge__ task); duplicate this var/block per additional upstream workflow."
+workflows:
+  - entity-research-aggregate.workflow.yaml

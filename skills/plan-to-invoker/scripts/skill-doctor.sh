@@ -307,6 +307,14 @@ if [[ "$SKIP_VALIDATION" == "false" ]]; then
     bash "$SCRIPT_DIR/validate-plan.sh" "$PLAN_FILE"
 fi
 
+# Check 3a: Planning completeness (Goal / Motivation / Safety invariant / Verify / no REPLACE_ME)
+if [[ "$SKIP_VALIDATION" == "false" ]]; then
+  run_check \
+    "check-planning-completeness" \
+    "Validate Goal/Motivation/Safety invariant/Verify and reject REPLACE_ME placeholders" \
+    bash "$SCRIPT_DIR/check-planning-completeness.sh" "$PLAN_FILE"
+fi
+
 # Check 4: Task atomicity linting (if not skipped)
 if [[ "$SKIP_ATOMICITY" == "false" ]]; then
   atomicity_args=(--strict-delegation)

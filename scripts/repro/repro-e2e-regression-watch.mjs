@@ -10,14 +10,21 @@ import {
   buildCiJobDefinitions,
   buildMarker,
   buildPlanVars,
+  claimRepairFiling,
   classifyJobConclusion,
+  extractFailureIdentitiesFromLog,
+  failureStorageKey,
   fileBugfixPlan,
   getActionableFailures,
   getCiRun,
   listUnprocessedDefaultBranchRuns,
+  jobNameIsMapped,
   liveQueryHasNonTerminalWork,
   loadEmptyState,
+  normalizeState,
+  processFailureFilingSweep,
   reconcileCiRun,
+  repairFilingKind,
 } from '../e2e-regression-watch.mjs';
 
 function fail(message) {
@@ -52,6 +59,45 @@ function fakeRun(id, sha, jobs) {
     createdAt: `2026-07-31T00:${id}:00Z`,
     jobs,
   };
+}
+
+function fakeFailure(overrides = {}) {
+  return {
+    jobName: 'playwright / launch-dispatch-stuck-lease',
+    failureId: 'job',
+    failureKey: overrides.jobName ?? 'playwright / launch-dispatch-stuck-lease',
+    firstBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
+    firstBadRunId: 500,
+    firstBadRunCreatedAt: '2026-08-12T00:00:00Z',
+    firstJobDatabaseId: 501,
+    firstJobUrl: 'https://example.test/job/501',
+    lastBadSha: 'a5d6b3e626ace9e963e924c0de9410dc0302de9a',
+    lastBadRunId: 500,
+    lastJobDatabaseId: 501,
+    lastJobUrl: 'https://example.test/job/501',
+    lastObservedAt: '2026-08-21T12:00:00Z',
+    occurrences: 1,
+    attempts: 0,
+    lastFiledAt: null,
+    needsHuman: false,
+    ...overrides,
+  };
+}
+
+function stateWithFailure(failure) {
+  const state = loadEmptyState();
+  const key = failureStorageKey(failure) || failure.jobName;
+  state.activeFailures[key] = { ...failure, failureKey: key, failureId: failure.failureId ?? 'job' };
+  return state;
+}
+
+function stateWithFailures(failures) {
+  const state = loadEmptyState();
+  for (const failure of failures) {
+    const key = failureStorageKey(failure) || failure.jobName;
+    state.activeFailures[key] = { ...failure, failureKey: key, failureId: failure.failureId ?? 'job' };
+  }
+  return state;
 }
 
 function testJobClassification() {
@@ -128,6 +174,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / launch-dispatch-stuck-lease',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +186,17 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const legacyStuckLeaseCommand = defs.get('playwright / launch-dispatch-stuck-lease')?.verifyCommand ?? '';
+  if (legacyStuckLeaseCommand.includes('No local verify command is mapped')) {
+    fail('legacy stuck-lease playwright job must not use fallback verify command');
+  }
+  if (
+    !legacyStuckLeaseCommand.includes('ci-playwright-launch-dispatch-stuck-lease')
+    || !legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-cap.spec.ts')
+    || !legacyStuckLeaseCommand.includes('e2e/launch-dispatch-stuck-lease-storm.spec.ts')
+  ) {
+    fail('legacy stuck-lease playwright job must map to its two spec files');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -168,7 +226,8 @@ function testPlanVarsAndDryRunRendering() {
     if (!rendered.planPath.endsWith('ci-regression-watch.yaml')) fail('dry run did not render expected plan path');
     if (rendered.submitted) fail('dry run must not submit');
     const planText = readFileSync(rendered.planPath, 'utf8');
-    if (!planText.includes('executionAgent: codex')) fail('fix task must request codex (default claude agent hits the broken SSH pool)');
+    if (planText.includes('executionAgent:')) fail('fix task must not pin an execution agent');
+    if (planText.includes('executionModel:')) fail('fix task must not pin an execution model');
   } finally {
     rmSync(outRoot, { recursive: true, force: true });
   }
@@ -199,6 +258,234 @@ function testLiveSubmissionUsesNoTrack() {
   console.log('[repro-e2e-regression-watch] live submission uses --no-track: PASS');
 }
 
+function testAttemptLedgerScenario() {
+  const cappedState = stateWithFailure(fakeFailure({ attempts: 3 }));
+  let cappedFilings = 0;
+  const cappedCounts = processFailureFilingSweep(cappedState, {
+    now: new Date('2026-08-12T01:00:00Z'),
+    maxAttempts: 3,
+    liveQuery: () => false,
+    fileFailure: () => {
+      cappedFilings += 1;
+    },
+  });
+  assertEqual(cappedFilings, 0, 'cap reached does not file');
+  assertEqual(cappedCounts.groupsNeedingHuman, 1, 'cap reached is counted for human review');
+  assertEqual(cappedState.activeFailures['playwright / launch-dispatch-stuck-lease'].needsHuman, true, 'cap reached marks needsHuman');
+
+  const backoffState = stateWithFailure(fakeFailure({
+    attempts: 1,
+    lastFiledAt: '2026-08-12T00:00:00.000Z',
+  }));
+  let backoffFilings = 0;
+  const backoffCounts = processFailureFilingSweep(backoffState, {
+    now: new Date('2026-08-12T00:59:59Z'),
+    maxAttempts: 3,
+    liveQuery: () => false,
+    fileFailure: () => {
+      backoffFilings += 1;
+    },
+  });
+  assertEqual(backoffFilings, 0, 'inside backoff does not file');
+  assertEqual(backoffCounts.groupsInBackoff, 1, 'inside backoff is counted');
+
+  const readyState = stateWithFailure(fakeFailure({
+    attempts: 1,
+    lastFiledAt: '2026-08-12T00:00:00.000Z',
+  }));
+  let readyFilings = 0;
+  const readyNow = new Date('2026-08-12T01:00:00Z');
+  processFailureFilingSweep(readyState, {
+    now: readyNow,
+    maxAttempts: 3,
+    liveQuery: () => false,
+    fileFailure: () => {
+      readyFilings += 1;
+    },
+  });
+  assertEqual(readyFilings, 1, 'past backoff files');
+  assertEqual(readyState.activeFailures['playwright / launch-dispatch-stuck-lease'].attempts, 2, 'past backoff increments attempts');
+  assertEqual(readyState.activeFailures['playwright / launch-dispatch-stuck-lease'].lastFiledAt, readyNow.toISOString(), 'past backoff records lastFiledAt');
+
+  const migrated = normalizeState({
+    schemaVersion: 2,
+    activeFailures: {
+      'required-fast / Vitest Workspace': {
+        jobName: 'required-fast / Vitest Workspace',
+        firstBadSha: 'legacy-sha',
+      },
+    },
+  });
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].attempts, 0, 'legacy migration defaults attempts');
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].lastFiledAt, null, 'legacy migration defaults lastFiledAt');
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].needsHuman, false, 'legacy migration defaults needsHuman');
+  assertEqual(migrated.activeFailures['required-fast / Vitest Workspace'].retired, false, 'legacy migration defaults retired');
+
+  const backtestState = stateWithFailure(fakeFailure());
+  const startMs = Date.parse('2026-08-12T00:00:00Z');
+  let backtestFilings = 0;
+  for (let sweep = 0; sweep < 64; sweep += 1) {
+    processFailureFilingSweep(backtestState, {
+      now: new Date(startMs + (sweep * 15 * 60 * 1000)),
+      maxAttempts: 3,
+      liveQuery: () => false,
+      fileFailure: () => {
+        backtestFilings += 1;
+      },
+    });
+  }
+  assertEqual(backtestFilings, 3, '64 terminal sweeps file at most three plans');
+  assertEqual(backtestState.activeFailures['playwright / launch-dispatch-stuck-lease'].needsHuman, true, '64 terminal sweeps flag needsHuman');
+  console.log('[repro-e2e-regression-watch] attempt-ledger scenario: PASS');
+}
+
+function testFleetCorrelationScenario() {
+  const sha = '631a0d08c7072e9544813fc1b93fb616586ce441';
+  const jobs = [
+    'build-artifacts',
+    'quality / Dependency Cruise',
+    'quality / TypeScript Types',
+    'quality / Required Package Builds',
+    'required-fast / Vitest Workspace',
+    'required-fast / Guardrails',
+    'required-fast / PR Babysit Harness',
+    'ssh / shard-30',
+    'ssh / shard-31',
+    'docker / comprehensive',
+    'e2e-proof / shard 0',
+  ];
+  const failures = jobs.map((jobName, index) => fakeFailure({
+    jobName,
+    firstBadSha: sha,
+    firstBadRunId: 6310,
+    firstJobDatabaseId: 63100 + index,
+    firstJobUrl: `https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/6310/job/${63100 + index}`,
+    lastBadSha: sha,
+    lastBadRunId: 6310,
+  }));
+  const jobDefinitions = buildCiJobDefinitions();
+  const historicalState = stateWithFailures(failures);
+  const fleetState = stateWithFailures(failures.map((failure) => ({ ...failure })));
+  const historicalFilings = [];
+  const fleetFilings = [];
+
+  processFailureFilingSweep(historicalState, {
+    fleetEventThreshold: 99,
+    jobDefinitions,
+    now: new Date('2026-08-21T12:00:00Z'),
+    liveQuery: () => false,
+    fileFailure: (failure) => {
+      historicalFilings.push(failure.jobName);
+    },
+  });
+  const counts = processFailureFilingSweep(fleetState, {
+    jobDefinitions,
+    now: new Date('2026-08-21T12:00:00Z'),
+    liveQuery: (failure) => {
+      const marker = buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName);
+      if (marker !== buildMarker(sha, 'fleet')) fail(`fleet sweep used wrong marker: ${marker}`);
+      return false;
+    },
+    fileFailure: (failure) => {
+      fleetFilings.push(failure);
+    },
+  });
+
+  assertEqual(historicalFilings.length, 11, 'historical 631a0d0 wave would file eleven isolated jobs');
+  assertEqual(fleetFilings.length, 1, '631a0d0 wave files one fleet plan');
+  assertEqual(fleetFilings[0].jobName, 'fleet / 631a0d0', 'fleet filing has expected synthetic job name');
+  assertEqual(counts.groupsCorrelated, 1, 'fleet sweep counts one correlated group');
+  for (const jobName of jobs) {
+    if (!fleetFilings[0].description.includes(jobName)) fail(`fleet description omitted ${jobName}`);
+    assertEqual(fleetState.activeFailures[jobName].memberOfFleetEvent, sha, `${jobName} memberOfFleetEvent`);
+  }
+  if (!fleetFilings[0].verifyCommand || fleetFilings[0].verifyCommand.includes('No local verify command is mapped')) {
+    fail('fleet verify_command must be a real mapped command');
+  }
+
+  const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-fleet-render-'));
+  try {
+    const rendered = fileBugfixPlan(fleetFilings[0], {
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      jobDefinitions,
+      outRoot,
+      dryRun: true,
+    });
+    const planText = readFileSync(rendered.planPath, 'utf8');
+    if (!planText.includes(buildMarker(sha, 'fleet'))) fail('rendered fleet plan omitted fleet marker');
+    for (const jobName of jobs) {
+      if (!planText.includes(jobName)) fail(`rendered fleet plan omitted ${jobName}`);
+    }
+  } finally {
+    rmSync(outRoot, { recursive: true, force: true });
+  }
+  console.log('[repro-e2e-regression-watch] fleet-correlation scenario: PASS');
+}
+
+function testRetiredJobScenario() {
+  const retiredKey = 'playwright / retired-example';
+  const defs = buildCiJobDefinitions();
+  if (jobNameIsMapped(retiredKey, defs)) {
+    fail(`${retiredKey} should be absent from current ci.yml`);
+  }
+  const legacyStuckLeaseKey = 'playwright / launch-dispatch-stuck-lease';
+  if (!jobNameIsMapped(legacyStuckLeaseKey, defs)) {
+    fail(`${legacyStuckLeaseKey} should stay mapped to its focused local verifier`);
+  }
+
+  const state = stateWithFailure(fakeFailure({
+    jobName: retiredKey,
+    attempts: 64,
+    lastFiledAt: '2026-08-12T23:45:00.000Z',
+  }));
+  let filed = 0;
+  let liveQueryCalled = false;
+  const retiredKeys = [];
+  const counts = processFailureFilingSweep(state, {
+    now: new Date('2026-08-13T00:00:00Z'),
+    jobDefinitions: defs,
+    liveQuery: () => {
+      liveQueryCalled = true;
+      return false;
+    },
+    fileFailure: () => {
+      filed += 1;
+    },
+    onRetired: (failure) => {
+      retiredKeys.push(failure.jobName);
+    },
+  });
+
+  assertEqual(filed, 0, 'retired job does not file');
+  assertEqual(liveQueryCalled, false, 'retired job skips before live dedup');
+  assertEqual(retiredKeys, [retiredKey], 'retired callback names the skipped key');
+  assertEqual(counts.groupsRetired, 1, 'retired job is counted');
+  assertEqual(counts.groupsFiled, 0, 'retired job yields zero filings');
+  assertEqual(state.activeFailures[retiredKey].retired, true, 'retired job is persisted with retired=true');
+
+  assertEqual(
+    jobNameIsMapped('required-fast / Vitest Workspace', defs),
+    true,
+    'mapped live job remains fileable',
+  );
+
+  const calls = [];
+  try {
+    fileBugfixPlan(state.activeFailures[retiredKey], {
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      jobDefinitions: defs,
+      runCommand: (cmd, args) => calls.push([cmd, args]),
+    });
+    fail('fileBugfixPlan should throw for retired job');
+  } catch (err) {
+    if (!String(err?.message ?? err).includes('unmapped CI job')) {
+      throw err;
+    }
+  }
+  assertEqual(calls, [], 'retired job throws before render/submit commands');
+  console.log('[repro-e2e-regression-watch] retired-job scenario: PASS');
+}
+
 function testLiveGithubSmokeIfRequested() {
   if (process.env.INVOKER_E2E_REGRESSION_WATCH_LIVE !== '1') {
     console.log('[repro-e2e-regression-watch] live GitHub smoke: SKIP');
@@ -221,6 +508,47 @@ function testLiveGithubSmokeIfRequested() {
   console.log('[repro-e2e-regression-watch] live GitHub smoke: PASS');
 }
 
+function testDistinctIdentitiesUnderOneJob() {
+  const jobName = 'required-fast / Mergify Admin Requeue';
+  const log = "rm: cannot remove '/tmp/repro-babysit-pr-body-human-split.ERdycn/seed/.git/objects': Directory not empty";
+  const extracted = extractFailureIdentitiesFromLog(log);
+  if (!extracted.some((entry) => entry.failureId.includes('repro-babysit-pr-body-human-split'))) {
+    fail('log parser must identify the babysit human-split repro');
+  }
+
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(32534741079, '22891618af26fc7e3e19227ccc56ed183c0e7e26', [{
+    ...fakeJob(jobName, 'failure', 96936670245),
+    failureIdentities: ['repro-mergify-admin-requeue', 'repro-babysit-pr-body-human-split'],
+  }]));
+  const failures = getActionableFailures(state);
+  assertEqual(failures.length, 2, 'two identities under one job are actionable');
+  assertEqual(
+    failures.map((failure) => failure.failureId).sort(),
+    ['repro-babysit-pr-body-human-split', 'repro-mergify-admin-requeue'],
+    'both repro identities are retained',
+  );
+
+  const ledger = new Map();
+  const filed = [];
+  processFailureFilingSweep(state, {
+    now: new Date('2026-08-21T23:30:00Z'),
+    jobDefinitions: new Map([[jobName, { verifyCommand: 'bash scripts/test-suites/required/12-mergify-admin-requeue.sh' }]]),
+    liveQuery: (failure) => claimRepairFiling(failure, ({ kind, subject, stateSha, metadata }) => {
+      const key = `${kind} ${subject} ${stateSha}`;
+      if (ledger.has(key)) return { inserted: false, row: ledger.get(key) };
+      const row = { kind, subject, stateSha, metadata };
+      ledger.set(key, row);
+      return { inserted: true, row };
+    }),
+    fileFailure: (failure) => filed.push(failureStorageKey(failure)),
+  });
+  assertEqual(filed.length, 2, 'each identity files its own repair');
+  assertEqual(ledger.size, 2, 'each identity claims a distinct ledger key');
+  if (!repairFilingKind(failures[0]).includes(':a1')) fail('filing kind must be attempt-scoped');
+  console.log('[repro-e2e-regression-watch] distinct identities under one job: PASS');
+}
+
 function main() {
   testJobClassification();
   testPerHeadFailureDedupAndRecovery();
@@ -230,6 +558,10 @@ function main() {
   testWorkflowCommandMapping();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
+  testAttemptLedgerScenario();
+  testFleetCorrelationScenario();
+  testRetiredJobScenario();
+  testDistinctIdentitiesUnderOneJob();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
 }

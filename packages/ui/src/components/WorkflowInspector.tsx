@@ -439,9 +439,11 @@ export function WorkflowInspector({
   const statusText = taskColors?.text ?? workflowVisual?.textClass ?? 'text-muted-foreground';
   const statusDot = taskColors?.dot ?? '';
   const isFixApproval = Boolean(task?.execution.pendingFixError);
+  const isNoMergeGate = Boolean(task?.config.isMergeNode && workflow?.onFinish === 'none');
   const showApprovalActions = Boolean(
     task
     && (task.status === 'awaiting_approval' || task.status === 'review_ready')
+    && !isNoMergeGate
     && onApprove
     && onReject,
   );

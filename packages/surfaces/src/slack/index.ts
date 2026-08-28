@@ -2,6 +2,7 @@ export * from './slack-commands.js';
 export * from './slack-formatter.js';
 export * from './slack-surface.js';
 export * from './plan-conversation.js';
+export * from './planning-draft-doctor.js';
 export * from './thread-session-manager.js';
 export * from './harness-session-driver-select.js';
 export * from './workflow-assistant.js';

@@ -2,7 +2,7 @@
   "name": "@invoker/app",
   "productName": "Invoker",
   "desktopName": "invoker.desktop",
-  "version": "0.0.12",
+  "version": "0.0.14",
   "description": "Invoker desktop app",
   "homepage": "https://github.com/Neko-Catpital-Labs/Invoker",
   "author": {
@@ -58,13 +58,13 @@
     }
   },
   "scripts": {
-    "build": "node scripts/verify-workspace-imports.cjs && tsup",
+    "build": "node scripts/verify-workspace-imports.cjs && node scripts/verify-noexternal-completeness.cjs && tsup && node scripts/verify-surfaces-bundled.cjs",
     "dist": "electron-builder --publish never",
     "dist:linux": "electron-builder --linux AppImage deb --publish never",
     "dist:mac": "electron-builder --mac dmg --publish never",
     "test": "sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; exec vitest run \"$@\"' --",
-    "start": "unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
-    "dev": "tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron && unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
+    "start": "node ../../scripts/with-invoker-development-profile.mjs -- node ../../scripts/electron.cjs dist/main.js",
+    "dev": "node ../../scripts/with-invoker-development-profile.mjs --shell \"tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron && node ../../scripts/electron.cjs dist/main.js\"",
     "test:e2e": "sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; if command -v xvfb-run >/dev/null 2>&1; then exec xvfb-run --auto-servernum playwright test \"$@\"; else exec playwright test \"$@\"; fi' --",
     "test:e2e:visible": "sh -c 'export INVOKER_E2E_HIDE_WINDOW=0; if command -v xvfb-run >/dev/null 2>&1; then exec xvfb-run --auto-servernum playwright test \"$@\"; else exec playwright test \"$@\"; fi' --",
     "test:e2e:quiet": "pnpm run test:e2e"
@@ -78,6 +78,7 @@
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
     "@invoker/shell": "workspace:*",
+    "@invoker/slack-bug-scan": "workspace:*",
     "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
@@ -93,6 +94,7 @@
     "@electron/rebuild": "^4.0.3",
     "@invoker/test-kit": "workspace:*",
     "@playwright/test": "^1.58.2",
+    "@slack/web-api": "^7.14.1",
     "electron": "^35.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",

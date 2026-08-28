@@ -4,9 +4,8 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
-import type { Logger } from '@invoker/contracts';
+import { resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
 import type { PlanDefinition } from '@invoker/workflow-core';
 
 let backupCounter = 0;
@@ -27,7 +26,7 @@ function slugify(name: string): string {
  * @returns The absolute path of the backup file.
  */
 export function backupPlan(plan: PlanDefinition, yamlSource?: string, planLogger?: Logger): string {
-  const dir = join(homedir(), '.invoker', 'plans');
+  const dir = join(resolveInvokerHomeRoot(), 'plans');
   mkdirSync(dir, { recursive: true });
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-');

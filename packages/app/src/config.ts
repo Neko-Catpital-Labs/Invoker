@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
-import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
+import type { E2eAutoFixWorkerConfig, PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
 
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
@@ -44,19 +44,13 @@ export interface DefaultExecutionConfig {
 }
 
 /**
- * Owner-side PR-maintenance worker config.
+ * Owner-side PR-maintenance worker launch settings.
  *
- * Disabled by default: `enabled` is the gate for building launch dependencies
- * for the surviving `pr-admin-bypass-land` and `pr-orphan-repair` worker
- * paths. The remaining fields tune those shell entrypoints and fall back to
- * the worker defaults when omitted.
+ * Process on/off lives in SQLite `worker_desired_states`, not in this block.
+ * These fields tune the shell entrypoints and fall back to worker defaults
+ * when omitted.
  */
 export interface PrMaintenanceConfig {
-  /**
-   * Gate for building PR-maintenance worker dependencies at owner startup.
-   * Default: false (workers get no launch config).
-   */
-  enabled?: boolean;
   /** Repository root that owns the PR-maintenance shell scripts. Defaults to the Invoker repo root. */
   repoRoot?: string;
   /** Environment overrides forwarded to the shell entrypoint. `undefined` removes a variable. */
@@ -67,7 +61,177 @@ export interface PrMaintenanceConfig {
   lockPath?: string;
   /** Shell executable used to run the entrypoint. Defaults to bash. */
   shell?: string;
+  /**
+   * GitHub `owner/repo` list scanned each PR-maintenance tick (admin-bypass,
+   * orphan repair, duplicate close). When omitted, defaults to the Invoker repo.
+   */
+  targetRepos?: string[];
 }
+
+export const DEFAULT_PR_MAINTENANCE_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
+
+/**
+ * Owner-side e2e-autofix worker target settings.
+ *
+ * Cadence lives in the flat `e2eAutoFixIntervalMs`; this block only carries
+ * the GitHub scan list and env overrides forwarded to the shell entrypoint.
+ */
+export interface E2eAutoFixConfig {
+  /** Environment overrides forwarded to the shell entrypoint. `undefined` removes a variable. */
+  env?: Record<string, string | undefined>;
+  /**
+   * GitHub `owner/repo` list watched by the e2e-autofix worker (CI regression
+   * watch + repair filing). When omitted, defaults to the Invoker repo only.
+   */
+  targetRepos?: string[];
+}
+
+export const DEFAULT_E2E_AUTOFIX_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
+
+const GITHUB_OWNER_REPO_RE = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+
+/** Normalize and validate a GitHub `owner/repo` string; returns null when invalid. */
+export function normalizeGithubOwnerRepo(value: string): string | null {
+  const trimmed = value.trim();
+  if (!GITHUB_OWNER_REPO_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
+ * Resolve the PR-maintenance scan list from `prMaintenance.targetRepos`.
+ * When omitted or empty, defaults to the Invoker repo only.
+ */
+export function resolvePrMaintenanceTargetRepos(config: InvokerConfig): string[] {
+  const fromConfig = config.prMaintenance?.targetRepos;
+  if (Array.isArray(fromConfig) && fromConfig.length > 0) {
+    const repos: string[] = [];
+    for (const entry of fromConfig) {
+      if (typeof entry !== 'string') continue;
+      const normalized = normalizeGithubOwnerRepo(entry);
+      if (normalized && !repos.includes(normalized)) repos.push(normalized);
+    }
+    if (repos.length > 0) return repos;
+  }
+  return [DEFAULT_PR_MAINTENANCE_TARGET_REPO];
+}
+
+/**
+ * Resolve the e2e-autofix scan list from `e2eAutoFix.targetRepos`.
+ * When omitted or empty, defaults to the Invoker repo only.
+ */
+export function resolveE2eAutoFixTargetRepos(config: InvokerConfig): string[] {
+  const fromConfig = config.e2eAutoFix?.targetRepos;
+  if (Array.isArray(fromConfig) && fromConfig.length > 0) {
+    const repos: string[] = [];
+    for (const entry of fromConfig) {
+      if (typeof entry !== 'string') continue;
+      const normalized = normalizeGithubOwnerRepo(entry);
+      if (normalized && !repos.includes(normalized)) repos.push(normalized);
+    }
+    if (repos.length > 0) return repos;
+  }
+  return [DEFAULT_E2E_AUTOFIX_TARGET_REPO];
+}
+
+export interface SlackBugScanConfig {
+  intervalMs?: number;
+  maxAutoSubmissionsPerDay?: number;
+  maxAutoSubmissionsPerTick?: number;
+}
+
+/** One source repo to mine for stealable ideas. */
+export interface CrossRepoResearchSource {
+  /** GitHub repo URL (https or git@). */
+  repoUrl: string;
+  /** Days of source activity to consider. Must be > 0. Default: 30. */
+  lookbackDays?: number;
+}
+
+/**
+ * Opt-in cross-repo-research worker settings. Process on/off is SQLite
+ * `worker_desired_states`, not a config boolean.
+ */
+export interface CrossRepoResearchConfig {
+  /** Poll cadence in days. Default: 14. */
+  intervalDays?: number;
+  /** Linear team id required when maps are non-empty. */
+  linearTeamId?: string;
+  /** Cap candidate ideas per source per tick. Default: 5. */
+  maxCandidatesPerSource?: number;
+  /**
+   * Target repo URL → list of sources to mine.
+   * Source entries may be a URL string (lookbackDays defaults to 30) or
+   * `{ repoUrl, lookbackDays }`.
+   */
+  maps?: Record<string, Array<string | CrossRepoResearchSource>>;
+}
+
+/** Default lookback when a source omits lookbackDays. */
+export const DEFAULT_CROSS_REPO_RESEARCH_LOOKBACK_DAYS = 30;
+
+/** Default worker poll cadence when intervalDays is unset. */
+export const DEFAULT_CROSS_REPO_RESEARCH_INTERVAL_DAYS = 14;
+
+/** Default max candidates mined per source per tick. */
+export const DEFAULT_CROSS_REPO_RESEARCH_MAX_CANDIDATES_PER_SOURCE = 5;
+
+/**
+ * One source whose Mergify/admin-bypass ledger events are mined for research.
+ * Same shape as CrossRepoResearchSource so maps stay interchangeable.
+ */
+export type MergifyQueueResearchSource = CrossRepoResearchSource;
+
+/**
+ * Opt-in mergify-queue-research worker settings. Process on/off is SQLite
+ * `worker_desired_states`, not a config boolean.
+ */
+export interface MergifyQueueResearchConfig {
+  /** Poll cadence in days. Default: 14. */
+  intervalDays?: number;
+  /** Linear team id required when maps are non-empty. */
+  linearTeamId?: string;
+  /** Cap candidate events per source per tick. Default: 5. */
+  maxCandidatesPerSource?: number;
+  /**
+   * Target repo URL → list of sources whose queue/ledger to mine.
+   * Source entries may be a URL string (lookbackDays defaults to 30) or
+   * `{ repoUrl, lookbackDays }`.
+   */
+  maps?: Record<string, Array<string | MergifyQueueResearchSource>>;
+}
+
+/** Default lookback when a Mergify queue research source omits lookbackDays. */
+export const DEFAULT_MERGIFY_QUEUE_RESEARCH_LOOKBACK_DAYS = 30;
+
+/** Default Mergify queue research poll cadence when intervalDays is unset. */
+export const DEFAULT_MERGIFY_QUEUE_RESEARCH_INTERVAL_DAYS = 14;
+
+/** Default max Mergify queue candidates mined per source per tick. */
+export const DEFAULT_MERGIFY_QUEUE_RESEARCH_MAX_CANDIDATES_PER_SOURCE = 5;
+
+/**
+ * Opt-in catstack-deploy worker settings. Process on/off is SQLite
+ * `worker_desired_states`, not a config boolean.
+ */
+export interface CatstackDeployConfig {
+  /** Poll cadence in minutes. Default: 15. */
+  intervalMinutes?: number;
+  /** Git clone URL. Default: https://github.com/EdbertChan/catstack.git */
+  repoUrl?: string;
+  /** Local checkout path. Default: ~/Documents/GitHub/catstack */
+  localRepoPath?: string;
+  /** Remote checkout path on each SSH host. Default: ~/Documents/GitHub/catstack */
+  remoteRepoPath?: string;
+}
+
+/** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
+export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
+
+/** Default catstack clone URL. */
+export const DEFAULT_CATSTACK_DEPLOY_REPO_URL = 'https://github.com/EdbertChan/catstack.git';
+
+/** Default local/remote checkout path for catstack. */
+export const DEFAULT_CATSTACK_DEPLOY_REPO_PATH = '~/Documents/GitHub/catstack';
 
 export interface InvokerConfig {
   defaultBranch?: string;
@@ -112,14 +276,15 @@ export interface InvokerConfig {
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
-  /**
-   * When true, the owner process auto-starts the e2e-autofix worker (runs the
-   * extended battery on a schedule and opens one fix PR per failing suite).
-   * Default: false.
-   */
-  e2eAutoFixEnabled?: boolean;
   /** Cadence for the e2e-autofix worker in milliseconds. Default: 43_200_000 (12h). */
   e2eAutoFixIntervalMs?: number;
+  /**
+   * Owner-side e2e-autofix worker target settings (GitHub scan list, env overrides).
+   * Cadence stays in the flat `e2eAutoFixIntervalMs` above.
+   */
+  e2eAutoFix?: E2eAutoFixConfig;
+  /** Cadence for the worker-session-mine worker in milliseconds. Default: 3_600_000 (1h). */
+  workerSessionMineIntervalMs?: number;
   stallRequeueRetries?: number;
   stallRequeueBackoffMs?: number;
   /**
@@ -171,6 +336,15 @@ export interface InvokerConfig {
   /** Default execution model for prompt-backed tasks when the task does not override it. */
   defaultExecutionModel?: string;
   /**
+   * Allowlist of execution agents offered by UI surfaces (execution-harness
+   * pickers and planning presets). Entries are agent names, e.g. 'claude',
+   * 'codex', 'omp'; matching is case-insensitive and whitespace-trimmed.
+   * Unset (or empty after trimming) means every registered agent is offered.
+   * This only restricts what surfaces offer — a task explicitly pinned to a
+   * disabled agent still runs.
+   */
+  enabledExecutionAgents?: string[];
+  /**
    * Config-owned default execution harness/model for tasks that omit them.
    * This is separate from Slack planning presets and applies across surfaces.
    */
@@ -182,39 +356,6 @@ export interface InvokerConfig {
    * Default: false.
    */
   autoFixCi?: boolean;
-  /**
-   * Owner-side infra-repair worker config.
-   * Default: false.
-   */
-  infraRepair?: {
-    enabled?: boolean;
-  };
-  /**
-   * Owner-side autofix worker config.
-   * Default: false.
-   */
-  autofix?: {
-    enabled?: boolean;
-  };
-  /**
-   * Owner-side reaper worker config.
-   * Default: false.
-   */
-  reaper?: {
-    enabled?: boolean;
-  };
-  /**
-   * Owner-side workflow-resume worker config.
-   * Default: false.
-   */
-  workflowResume?: {
-    enabled?: boolean;
-  };
-  /**
-   * Enables stalled-task requeue behavior.
-   * Default: false.
-   */
-  requeueEnabled?: boolean;
   /**
    * Read-only diagnostics tuning for the Action Graph view.
    * Default stall threshold: 60000ms. Env fallback:
@@ -247,6 +388,10 @@ export interface InvokerConfig {
   slackRepos?: Record<string, string>;
   /** Repo URL used for Slack planning when the message carries no `[repo:]` tag. */
   defaultRepoUrl?: string;
+  /** Slack user IDs allowed to run Slack administrative actions. */
+  slackAdminUserIds?: string[];
+  /** Stable Slack channel ID → default repository URL for channel-scoped planning. */
+  slackChannelRepos?: Record<string, string>;
   /** Maximum number of tasks that can run concurrently. Default: 6. */
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
@@ -413,19 +558,37 @@ export interface InvokerConfig {
    */
   externalWorkers?: ExternalWorkerConfig[];
   /**
-   * Owner-side PR-maintenance worker config. Disabled by default; when
-   * `enabled` is true the owner builds launch dependencies for the surviving
-   * PR-maintenance workers from this block.
+   * Owner-side PR-maintenance launch settings (interval, lock, repo root).
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
    */
   prMaintenance?: PrMaintenanceConfig;
   /**
-   * Owner-side disk-headroom worker config. `cleanupEnabled` takes precedence
-   * over the legacy `INVOKER_DISK_CLEANUP_ENABLED` env var when set; the worker
-   * falls back to the env var only when this is left unset. Default: enabled.
+   * Owner-side disk-headroom policy. `cleanupEnabled` controls whether the
+   * always-running disk-headroom worker may delete files on critical disks;
+   * it does not start or stop the worker. Takes precedence over the legacy
+   * `INVOKER_DISK_CLEANUP_ENABLED` env var when set. Default: enabled.
    */
   diskHeadroom?: {
     cleanupEnabled?: boolean;
   };
+  slackBugScan?: SlackBugScanConfig;
+  /**
+   * Cross-repo research worker: maps target repos to source repos to mine.
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
+   */
+  crossRepoResearch?: CrossRepoResearchConfig;
+  /**
+   * Mergify queue research worker: maps target repos to sources whose
+   * Mergify/admin-bypass ledger events are mined for a research swarm.
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
+   */
+  mergifyQueueResearch?: MergifyQueueResearchConfig;
+  /**
+   * Catstack deploy worker: clone/pull/install cadence and paths.
+   * Process on/off is SQLite `worker_desired_states`, not a config boolean.
+   * Remotes always come from top-level `remoteTargets`.
+   */
+  catstackDeploy?: CatstackDeployConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
@@ -473,6 +636,52 @@ export function loadConfig(): InvokerConfig {
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = config.defaultExecutionAgent?.trim();
   return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
+}
+
+/**
+ * Resolve the configured execution-agent allowlist.
+ * Returns null when `enabledExecutionAgents` is unset or empty after trimming
+ * (null = no restriction). Entries are trimmed and lowercased.
+ */
+export function resolveEnabledExecutionAgents(config: InvokerConfig): Set<string> | null {
+  const entries = (config.enabledExecutionAgents ?? [])
+    .map((name) => (typeof name === 'string' ? name.trim().toLowerCase() : ''))
+    .filter((name) => name.length > 0);
+  return entries.length > 0 ? new Set(entries) : null;
+}
+
+/**
+ * Filter execution harnesses down to the configured allowlist.
+ * No allowlist configured -> input returned unchanged.
+ */
+export function filterExecutionHarnesses<T extends { name: string }>(harnesses: T[], config: InvokerConfig): T[] {
+  const enabled = resolveEnabledExecutionAgents(config);
+  if (!enabled) return harnesses;
+  return harnesses.filter((harness) => enabled.has(harness.name.trim().toLowerCase()));
+}
+
+/** Planning tools that wrap another agent; their `model` names the wrapped agent. */
+const WRAPPER_PLANNING_TOOLS: Record<string, true> = { cursor: true, omp: true };
+
+/**
+ * Filter planning presets down to the configured allowlist.
+ * A preset is kept when its `tool` is allowlisted, or when the tool is a
+ * wrapper ('cursor'/'omp') whose `model` names an allowlisted agent.
+ * No allowlist configured -> input returned unchanged.
+ */
+export function filterPlanningPresets<T extends { tool: string; model?: string }>(
+  presets: T[],
+  config: InvokerConfig,
+): T[] {
+  const enabled = resolveEnabledExecutionAgents(config);
+  if (!enabled) return presets;
+  return presets.filter((preset) => {
+    const tool = preset.tool.trim().toLowerCase();
+    if (enabled.has(tool)) return true;
+    if (!WRAPPER_PLANNING_TOOLS[tool]) return false;
+    const model = preset.model?.trim().toLowerCase();
+    return Boolean(model && enabled.has(model));
+  });
 }
 
 
@@ -578,24 +787,53 @@ export function resolveSecretsFilePath(config: InvokerConfig): string | undefine
 /**
  * Build PR-maintenance worker launch dependencies from config.
  *
- * Returns `undefined` when the block is absent or `enabled` is not true, so the
- * owner keeps PR-maintenance workers disabled by default. When enabled, returns
- * only the launch fields (the `enabled` gate is dropped) for injection as the
- * worker runtime `prMaintenance` dependency; omitted fields fall back to the
- * worker defaults.
+ * Returns `undefined` when the block is absent or empty. Process on/off is
+ * SQLite desired state; this only threads interval/lock/repoRoot/env/shell
+ * so a started PR-maintenance worker still gets launch settings.
  */
 export function resolvePrMaintenanceWorkerConfig(
   config: InvokerConfig,
 ): PrMaintenanceWorkerConfig | undefined {
   const prMaintenance = config.prMaintenance;
-  if (!prMaintenance?.enabled) {
+  if (!prMaintenance) {
     return undefined;
   }
   const launch: PrMaintenanceWorkerConfig = {};
   if (prMaintenance.repoRoot !== undefined) launch.repoRoot = prMaintenance.repoRoot;
-  if (prMaintenance.env !== undefined) launch.env = prMaintenance.env;
   if (prMaintenance.intervalMs !== undefined) launch.intervalMs = prMaintenance.intervalMs;
   if (prMaintenance.lockPath !== undefined) launch.lockPath = prMaintenance.lockPath;
   if (prMaintenance.shell !== undefined) launch.shell = prMaintenance.shell;
-  return launch;
+
+  const targetRepos = resolvePrMaintenanceTargetRepos(config);
+  // Config is authoritative; always inject the scan list for the shell entrypoints.
+  const env: Record<string, string | undefined> = {
+    ...(prMaintenance.env ?? {}),
+    INVOKER_GITHUB_TARGET_REPOS: targetRepos.join(','),
+    INVOKER_GITHUB_TARGET_REPO: targetRepos[0],
+  };
+  launch.env = env;
+
+  return Object.keys(launch).length > 0 ? launch : {};
+}
+
+/**
+ * Build e2e-autofix worker launch dependencies from config.
+ *
+ * Always returns `intervalMs` and `env` (with the resolved target-repo scan
+ * list injected), so the worker keeps watching only Invoker by default when
+ * `e2eAutoFix` is absent or `targetRepos` is omitted/empty.
+ */
+export function resolveE2eAutoFixWorkerConfig(
+  config: InvokerConfig,
+): E2eAutoFixWorkerConfig {
+  const targetRepos = resolveE2eAutoFixTargetRepos(config);
+  const env: Record<string, string | undefined> = {
+    ...(config.e2eAutoFix?.env ?? {}),
+    INVOKER_GITHUB_TARGET_REPOS: targetRepos.join(','),
+    INVOKER_GITHUB_TARGET_REPO: targetRepos[0],
+  };
+  return {
+    intervalMs: config.e2eAutoFixIntervalMs,
+    env,
+  };
 }

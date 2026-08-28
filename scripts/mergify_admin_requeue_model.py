@@ -14,6 +14,12 @@ STACK_MARKER_RE = re.compile(r"<!--\s*mergify-stack-data:\s*(\{.*?\})\s*-->", re
 SHA_RE = re.compile(r"`([0-9a-fA-F]{40})`")
 GH_ACTIONS_JOB_RE = re.compile(r"/actions/runs/\d+/job/(\d+)")
 
+# The one repo whose worktree carries Invoker's own repair helper scripts
+# (mergify_admin_requeue_repair_normalize.py, pr_worker_safe_push.py). Any
+# other repo's worktree is "foreign": it never has those scripts, so repair
+# plans for it must not invoke them.
+DEFAULT_INVOKER_REPO = "Neko-Catpital-Labs/Invoker"
+
 
 @dataclass(frozen=True)
 class CheckContext:
@@ -146,16 +152,22 @@ class Ledger:
                 if isinstance(row, dict):
                     self.rows.append(row)
 
-    def count(self, kind: str, pr: int, head_sha: str, key: str) -> int:
+    # `repo` is keyword-only and defaults to None (no repo filter applied), so
+    # every pre-existing single-repo caller keeps its exact prior behavior.
+    # Multi-repo callers pass repo= to scope reads/writes to one repo's rows,
+    # so two repos sharing a PR number (or retry-cap key) never cross-pollute
+    # each other's ledger state in one shared ledger file.
+    def count(self, kind: str, pr: int, head_sha: str, key: str, *, repo: str | None = None) -> int:
         return sum(
             1 for row in self.rows
             if row.get("kind") == kind
             and int(row.get("pr", -1)) == pr
             and row.get("headSha") == head_sha
             and row.get("key") == key
+            and (repo is None or row.get("repo") == repo)
         )
 
-    def latest(self, kind: str, pr: int, head_sha: str, key: str) -> dict[str, object] | None:
+    def latest(self, kind: str, pr: int, head_sha: str, key: str, *, repo: str | None = None) -> dict[str, object] | None:
         latest_row: dict[str, object] | None = None
         latest_epoch = float("-inf")
         for row in self.rows:
@@ -167,13 +179,32 @@ class Ledger:
                 continue
             if row.get("key") != key:
                 continue
+            if repo is not None and row.get("repo") != repo:
+                continue
             epoch = int(row.get("epoch", 0) or 0)
             if latest_row is None or epoch >= latest_epoch:
                 latest_row = row
                 latest_epoch = epoch
         return latest_row
 
-    def has_different_head(self, kind: str, pr: int, current_head: str, key: str) -> bool:
+    def count_by_unit(self, kind: str, pr: int, key: str, *, repo: str | None = None) -> int:
+        # Same as count(), but persistent across a commit change: a
+        # successful repair attempt pushes a new commit as a normal side
+        # effect, and that must not silently reset the retry cap for this
+        # (pr, kind, key) unit of work. Used for the retry-cap/backoff
+        # decision; count()/latest() stay head_sha-scoped for repair_in_flight,
+        # which genuinely needs "is *this* submission still running".
+        return sum(
+            1 for row in self.rows
+            if row.get("kind") == kind
+            and int(row.get("pr", -1)) == pr
+            and row.get("key") == key
+            and (repo is None or row.get("repo") == repo)
+        )
+
+    def latest_by_unit(self, kind: str, pr: int, key: str, *, repo: str | None = None) -> dict[str, object] | None:
+        latest_row: dict[str, object] | None = None
+        latest_epoch = float("-inf")
         for row in self.rows:
             if row.get("kind") != kind:
                 continue
@@ -181,11 +212,39 @@ class Ledger:
                 continue
             if row.get("key") != key:
                 continue
+            if repo is not None and row.get("repo") != repo:
+                continue
+            epoch = int(row.get("epoch", 0) or 0)
+            if latest_row is None or epoch >= latest_epoch:
+                latest_row = row
+                latest_epoch = epoch
+        return latest_row
+
+    def has_different_head(self, kind: str, pr: int, current_head: str, key: str, *, repo: str | None = None) -> bool:
+        for row in self.rows:
+            if row.get("kind") != kind:
+                continue
+            if int(row.get("pr", -1)) != pr:
+                continue
+            if row.get("key") != key:
+                continue
+            if repo is not None and row.get("repo") != repo:
+                continue
             if row.get("headSha") and row.get("headSha") != current_head:
                 return True
         return False
 
-    def record(self, kind: str, pr: int, head_sha: str, key: str, epoch: int | None = None, meta: Mapping[str, object] | None = None) -> None:
+    def record(
+        self,
+        kind: str,
+        pr: int,
+        head_sha: str,
+        key: str,
+        epoch: int | None = None,
+        meta: Mapping[str, object] | None = None,
+        *,
+        repo: str | None = None,
+    ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         row = {
             "kind": kind,
@@ -196,6 +255,8 @@ class Ledger:
         }
         if meta:
             row["meta"] = dict(meta)
+        if repo is not None:
+            row["repo"] = repo
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
         self.rows.append(row)
@@ -233,7 +294,10 @@ def load_mergify_rules(path: Path) -> tuple[str, frozenset[str], frozenset[str]]
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         raise ValueError("failed to load admin-bypass Mergify rule")
+    return _parse_mergify_rules(lines)
 
+
+def _parse_mergify_rules(lines: list[str]) -> tuple[str, frozenset[str], frozenset[str]]:
     start = -1
     start_indent = 0
     for i, line in enumerate(lines):
@@ -275,6 +339,26 @@ def load_mergify_rules(path: Path) -> tuple[str, frozenset[str], frozenset[str]]
     return trunk, frozenset(labels), frozenset(required)
 
 
+def resolve_admin_bypass_rules_for_repo(
+    repo: str, file_text: str | None, default_branch: str | None
+) -> tuple[str, frozenset[str], frozenset[str]]:
+    # A foreign repo (anything but DEFAULT_INVOKER_REPO) rarely ships an
+    # admin-bypass Mergify rule shaped like Invoker's own -- when it does,
+    # honor it exactly like the Invoker path (trunk/labels/required checks
+    # all parsed from the rule). When it doesn't, fall back to the repo's
+    # default branch as trunk with no required-check allowlist, so the
+    # caller repairs whatever checks are actually observed failing on that
+    # PR instead of refusing to act for lack of a configured rule.
+    if file_text:
+        try:
+            return _parse_mergify_rules(file_text.splitlines())
+        except ValueError:
+            pass
+    if not default_branch:
+        raise ValueError(f"failed to resolve admin-bypass rules for repo {repo}")
+    return default_branch, frozenset(), frozenset()
+
+
 def latest_contexts_by_required_check(raw_contexts: list[Mapping[str, object]], head_sha: str, required_checks: Collection[str]) -> dict[str, CheckContext]:
     required = set(required_checks)
     latest: dict[str, CheckContext] = {}
@@ -284,7 +368,13 @@ def latest_contexts_by_required_check(raw_contexts: list[Mapping[str, object]], 
             continue
         if sha and sha != head_sha:
             continue
-        if name not in required:
+        # An empty required_checks set means the repo has no admin-bypass
+        # Mergify rule (a foreign, non-Invoker repo -- see
+        # resolve_admin_bypass_rules_for_repo's fallback), so there is no
+        # allowlist to filter against. Observe every check instead of
+        # filtering down to nothing, so squash-merge-when-green planning has
+        # real CI signal to read for these repos.
+        if required and name not in required:
             continue
         ctx = CheckContext(name=name, state=state, details_url=url, head_sha=sha or head_sha, completed_at=completed)
         old = latest.get(name)
@@ -356,6 +446,30 @@ def payload_rule(payload: Mapping[str, object], body: str) -> str:
                 return str(nested)
     match = re.search(r"queue rule [`']?([^`'\n]+)[`']?", body, re.I)
     return match.group(1).strip() if match else ""
+
+
+def payload_head_sha(payload: Mapping[str, object], body: str) -> str:
+    """Prefer Mergify payload SHA fields; fall back to Left-the-queue prose.
+
+    Waiting comments never contain the Left-the-queue SHA markup, so without
+    payload SHA the planner cannot detect HEAD movement against a waiting event.
+    """
+    for key in ("head_sha", "sha", "pull_request_head_sha", "current_sha"):
+        value = payload.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+            return value
+    pull_request = payload.get("pull_request")
+    if isinstance(pull_request, Mapping):
+        head = pull_request.get("head")
+        if isinstance(head, Mapping):
+            value = head.get("sha")
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+                return value
+        value = pull_request.get("sha")
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value):
+            return value
+    sha_match = re.search(r"Left the queue.*?`([0-9a-fA-F]{40})`", body, re.I | re.S)
+    return sha_match.group(1) if sha_match else ""
 
 
 def clean_markdown(text: str) -> str:
@@ -463,9 +577,9 @@ def norm_check_state(node: Mapping[str, object]) -> tuple[str, str, str, str, st
     status = str(node.get("status") or "").upper()
     if conclusion in {"SUCCESS"}:
         state = "success"
-    elif conclusion in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE"}:
+    elif conclusion in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "STARTUP_FAILURE"}:
         state = "failure"
-    elif conclusion == "SKIPPED":
+    elif conclusion in {"SKIPPED", "CANCELLED"}:
         state = "skipped"
     elif conclusion == "NEUTRAL":
         state = "neutral"

@@ -10,6 +10,15 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
 | **`optional/`** | `pnpm run test:all:extended` or `INVOKER_TEST_ALL_EXTENDED=1` |
 | **`dangerous/`** | Same as extended **and** `INVOKER_TEST_ALL_DANGEROUS=1` (e.g. `pnpm run test:all:destructive`) — can touch real user paths / Docker |
 
+## Nightly regression tier
+
+`INVOKER_TEST_ALL_NIGHTLY=1 bash scripts/run-all-tests.sh` (or `pnpm run test:all:nightly`) is a separate mode driven entirely by **`regression-inventory.yaml`** in this directory, not by the `required/`/`optional/`/`dangerous/` suite files above. It exists so deterministic repro/proof scripts that live outside those directories (e.g. `scripts/repro/*.mjs`, top-level `scripts/repro-*.{sh,mjs}`) cannot go silently unwired from both local tooling and CI.
+
+- The manifest is loaded and validated by `scripts/regression-inventory.mjs`; unit-tested by `scripts/test-regression-inventory.mjs` (part of root `pnpm test`).
+- Every candidate declares exactly one tier: `nightly` (deterministic, `hermetic: true`, runs automatically) or `manual` (live-service, destructive, fleet, production-DB, or otherwise non-hermetic — never run by nightly tooling or CI, must document `reason`).
+- Nightly mode first re-validates the manifest itself (a hermetic preflight) and only then launches the nightly-tier candidates; a broken manifest fails fast before anything else runs.
+- Wired into CI as the scheduled/`workflow_dispatch`-only `scheduled / Nightly Regression Tier` job in `.github/workflows/ci.yml` — not merge-required.
+
 ## CI merge queue lane
 
 Mergify queue PRs only run the checks listed in `.mergify.yml` `merge_conditions`.

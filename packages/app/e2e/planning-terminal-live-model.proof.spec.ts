@@ -75,7 +75,6 @@ async function launchLivePlannerApp(paths: {
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: paths.dbDir,
       INVOKER_IPC_SOCKET: paths.ipcSocketPath,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_EMBEDDED_TERMINAL_BACKEND:
         process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',

@@ -5,9 +5,13 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-vi.mock('node:child_process', () => ({
-  spawn: vi.fn(),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: vi.fn(),
+  };
+});
 
 function createMockProcess(): ChildProcess & EventEmitter {
   const proc = new EventEmitter() as ChildProcess & EventEmitter;
@@ -268,6 +272,85 @@ describe('terminateChildProcessGroup', () => {
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
     child.emit('close', null, 'SIGKILL');
     await expect(killed).resolves.toBeUndefined();
+  });
+});
+
+describe('killProcessGroup leader guard', () => {
+  // Production killProcessGroup must match e2e killOwnedProcessGroup: only
+  // process.kill(-pid) when the child leads its own group. A recycled or
+  // non-leader pid must not SIGTERM a foreign group (including the owner).
+
+  const liveChildren: ChildProcess[] = [];
+
+  async function spawnSleeper(opts: { detached: boolean }): Promise<ChildProcess> {
+    const { spawn: realSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    const child = realSpawn('sleep', ['30'], { detached: opts.detached, stdio: 'ignore' });
+    liveChildren.push(child);
+    return await new Promise((resolve, reject) => {
+      child.once('spawn', () => resolve(child));
+      child.once('error', reject);
+    });
+  }
+
+  afterEach(() => {
+    for (const child of liveChildren.splice(0)) {
+      try {
+        if (child.pid) {
+          try { process.kill(-child.pid, 'SIGKILL'); } catch { /* not a leader */ }
+          child.kill('SIGKILL');
+        }
+      } catch { /* already gone */ }
+    }
+  });
+
+  it('reads the real pgid: detached child leads its own group, non-detached child does not', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const leader = await spawnSleeper({ detached: true });
+    const follower = await spawnSleeper({ detached: false });
+    expect(processUtils.readProcessGroupId(leader.pid!)).toBe(leader.pid);
+    expect(processUtils.readProcessGroupId(follower.pid!)).not.toBe(follower.pid);
+  });
+
+  it('group-kills a verified leader via negative pid', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const leader = await spawnSleeper({ detached: true });
+    const exited = new Promise<NodeJS.Signals | number | null>((resolve) => {
+      leader.once('exit', (code, signal) => resolve(signal ?? code));
+    });
+    const killSpy = vi.spyOn(process, 'kill');
+    expect(processUtils.killProcessGroup(leader, 'SIGTERM')).toBe(true);
+    expect(killSpy).toHaveBeenCalledWith(-leader.pid!, 'SIGTERM');
+    expect(await exited).toBe('SIGTERM');
+    killSpy.mockRestore();
+  });
+
+  it('refuses group-kill for a non-leader and only signals the child', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const victim = await spawnSleeper({ detached: true });
+    const nonLeader = await spawnSleeper({ detached: false });
+    const killSpy = vi.spyOn(process, 'kill');
+
+    expect(processUtils.killProcessGroup(nonLeader, 'SIGTERM')).toBe(true);
+
+    expect(killSpy).not.toHaveBeenCalledWith(-nonLeader.pid!, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(-victim.pid!, 'SIGTERM');
+    expect(nonLeader.killed || nonLeader.signalCode === 'SIGTERM' || nonLeader.exitCode != null).toBe(true);
+    expect(victim.exitCode).toBeNull();
+    expect(victim.signalCode).toBeNull();
+    killSpy.mockRestore();
+  });
+
+  it('falls back to child.kill when pgid cannot be read', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const child = createMockProcess();
+    const pgidSpy = vi.spyOn(processUtils, 'readProcessGroupId').mockReturnValue(null);
+    const killSpy = vi.spyOn(process, 'kill');
+
+    expect(processUtils.killProcessGroup(child, 'SIGTERM')).toBe(true);
+    expect(killSpy).not.toHaveBeenCalledWith(-child.pid!, 'SIGTERM');
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    killSpy.mockRestore();
+    pgidSpy.mockRestore();
   });
 });
 

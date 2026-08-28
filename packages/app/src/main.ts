@@ -30,11 +30,10 @@ const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E
 const earlyHeadlessMode = process.argv.includes('--headless')
   || process.argv.includes('--install-skills')
   || process.argv.slice(2).includes('install-skills');
+const sourceDevelopmentProfile = process.env.INVOKER_DEVELOPMENT_PROFILE === '1';
 
 configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadlessMode });
 
-// Isolate userData (and with it the single-instance lock) for e2e runs so a
-// test instance can launch alongside a normally running Invoker.
 if (process.env.INVOKER_USER_DATA_DIR) {
   app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
 }
@@ -68,10 +67,13 @@ import type {
   InAppPlanningListSessionsResponse,
   InAppPlanningRebindRepoRequest,
   InAppPlanningResetRequest,
+  InAppPlanningSetTerminalModeRequest,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
   StartReadyRequest,
   StartReadyResult,
+  WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository, hasLiveWritableOwner } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -103,6 +105,8 @@ import {
   reconcileTerminalWorkerActionsOnStartup,
   SPAWN_REPAIR_WORKFLOW_CHANNEL,
   submitRepairWorkflowFromCiFailure,
+  createPrMaintenanceGitHub,
+  spawnPrMaintenanceCommand,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -114,6 +118,7 @@ import {
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
   resolveConfigFileState,
+  resolveE2eAutoFixWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
   type InvokerConfig,
 } from './config.js';
@@ -136,7 +141,6 @@ import { openMainProcessDatabase } from './viewer-db-boundary.js';
 import {
   isHeadlessMutatingCommand,
   isHeadlessReadOnlyCommand,
-  resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import {
   isHeadlessHelpCommand,
@@ -156,13 +160,14 @@ import {
   tryDelegateExec,
   tryDelegateQuery,
   createHeadlessExecutor,
+  createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
 import { writeStdoutFlushAndExit, flushStdoutAndStderr } from './headless-stdout-flush.js';
-import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
+import { repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
@@ -219,7 +224,10 @@ import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
+  createOwnerWorkerStatusReader,
   createWorkerRuntimeController,
+  migrateWorkerDesiredStateFromLegacyConfig,
+  type LegacyWorkerStartConfigFlags,
   type WorkerRuntimeController,
 } from './worker-control.js';
 import { runStartReady } from './start-ready.js';
@@ -250,6 +258,7 @@ import {
 } from './renderer-ui-perf.js';
 import {
   bindPlanningTerminalSessionState,
+  createPlanningTerminalAdapter,
   registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
@@ -280,9 +289,13 @@ import {
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
+  setPlanningChatTerminalMode,
   submitPlanningChatDraft,
 } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
+import type { PlanningCommandBuilder } from '@invoker/surfaces';
+import { createRealSlackBugScanClient, createSlackBugScanClassifier } from '@invoker/slack-bug-scan';
+import { createSlackBugScanPlanner } from './slack-bug-scan-planner.js';
 import {
   killRunningTaskExecution,
   rebuildTaskRunner as rebuildTaskRunnerWiring,
@@ -323,9 +336,35 @@ function submitRegisteredOwnerWorkerMutation(
 const autoFixAttemptLedger = createAutoFixAttemptLedger();
 
 
+function buildSlackBugScanWorkerConfig(
+  planningCommandBuilder: PlanningCommandBuilder,
+  executionAgentRegistry: AgentRegistry,
+): WorkerRuntimeDependencies['slackBugScan'] {
+  const client = createRealSlackBugScanClient();
+  if (!client) return undefined;
+  return {
+    client,
+    classify: createSlackBugScanClassifier(),
+    draftAndSubmitPlan: createSlackBugScanPlanner({
+      config: invokerConfig,
+      repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+      persistence,
+      orchestrator,
+      planningCommandBuilder,
+      executionAgentRegistry,
+      logger,
+    }),
+    intervalMs: invokerConfig.slackBugScan?.intervalMs,
+    maxAutoSubmissionsPerDay: invokerConfig.slackBugScan?.maxAutoSubmissionsPerDay,
+    maxAutoSubmissionsPerTick: invokerConfig.slackBugScan?.maxAutoSubmissionsPerTick,
+  };
+}
+
 function buildRegisteredOwnerWorkerDeps(
   store: WorkerRuntimeDependencies['store'],
   checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
+  planningCommandBuilder: PlanningCommandBuilder,
+  executionAgentRegistry: AgentRegistry,
 ): WorkerRuntimeDependencies {
   const remoteTargets = Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
     name,
@@ -366,6 +405,9 @@ function buildRegisteredOwnerWorkerDeps(
       remoteTargets,
       cleanupEnabled: invokerConfig.diskHeadroom?.cleanupEnabled,
     },
+    claudeOauthRefresh: {
+      remoteTargets: remoteTargets.map((target) => ({ name: target.name, connection: target.connection })),
+    },
     infraRepair: {
       ownerRepoRoot: repoRoot,
       ownerInvokerHome: resolveInvokerHomeRoot(),
@@ -383,9 +425,46 @@ function buildRegisteredOwnerWorkerDeps(
         ]),
       ),
     },
-    e2eAutoFix: { intervalMs: invokerConfig.e2eAutoFixIntervalMs },
+    e2eAutoFix: resolveE2eAutoFixWorkerConfig(invokerConfig),
+    workerSessionMine: {},
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
+    },
+    slackBugScan: buildSlackBugScanWorkerConfig(planningCommandBuilder, executionAgentRegistry),
+    crossRepoResearch: {
+      intervalMs: (invokerConfig.crossRepoResearch?.intervalDays
+        ?? 14) * 86_400_000,
+      hasMaps: Object.keys(invokerConfig.crossRepoResearch?.maps ?? {}).length > 0,
+      env: {
+        INVOKER_LINEAR_TEAM_ID: invokerConfig.crossRepoResearch?.linearTeamId,
+      },
+    },
+    mergifyQueueResearch: {
+      intervalMs: (invokerConfig.mergifyQueueResearch?.intervalDays
+        ?? 14) * 86_400_000,
+      hasMaps: Object.keys(invokerConfig.mergifyQueueResearch?.maps ?? {}).length > 0,
+      env: {
+        INVOKER_LINEAR_TEAM_ID: invokerConfig.mergifyQueueResearch?.linearTeamId,
+      },
+    },
+    catstackDeploy: {
+      intervalMs: (invokerConfig.catstackDeploy?.intervalMinutes ?? 15) * 60_000,
+      repoUrl: invokerConfig.catstackDeploy?.repoUrl,
+      localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
+      remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+      remoteTargets: remoteTargets.map((target) => ({
+        name: target.name,
+        connection: target.connection,
+      })),
+    },
+    idleTaskCleanup: {
+      github: createPrMaintenanceGitHub({
+        run: spawnPrMaintenanceCommand,
+        repo: process.env.INVOKER_GITHUB_TARGET_REPO?.trim() || 'Neko-Catpital-Labs/Invoker',
+        author: process.env.INVOKER_PR_CRON_AUTHOR?.trim() || 'EdbertChan',
+        logger,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      }),
     },
   };
 }
@@ -528,11 +607,11 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
+const planDoctorScriptPath = path.join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
 
-// Load secrets from ~/.invoker/.env (canonical) then the repo .env BEFORE any startup guard
-// reads process.env. dotenv never overrides vars already set in the real environment.
 function loadInvokerEnvFiles(): void {
-  for (const envPath of [path.join(homedir(), '.invoker', '.env'), path.resolve(repoRoot, '.env')]) {
+  const profileEnvPath = process.env.INVOKER_ENV_PATH ?? path.join(homedir(), '.invoker', '.env');
+  for (const envPath of [profileEnvPath, path.resolve(repoRoot, '.env')]) {
     if (existsSync(envPath)) loadDotenv({ path: envPath });
   }
 }
@@ -669,13 +748,6 @@ async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   const delayMs = Number(raw);
   if (!Number.isFinite(delayMs) || delayMs <= 0) return;
   await new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
 }
 
 interface InitServicesOptions {
@@ -970,6 +1042,28 @@ async function tryDelegateHeadlessMutationToExistingOwner(
   }
 }
 
+function createNoopRendererTaskFeed(): RendererTaskFeed {
+  const stopHandle = { stop() {} };
+  return {
+    enqueueTaskOutput() {},
+    flushTaskOutput() {},
+    seedUiSnapshotCache() {},
+    getDetachedViewerTasks: () => [],
+    publishTaskDeltaToRenderer() {},
+    getLastKnownWorkflowCount: () => 0,
+    setLastKnownWorkflowCount() {},
+    getTaskSnapshot: () => undefined,
+    listKnownTaskIds: () => [],
+    clearTaskSnapshots() {},
+    replaceWorkflowRollups() {},
+    rememberTaskState() {},
+    resetSnapshotState() {},
+    receiveTaskDelta() {},
+    startDbPolling: () => stopHandle,
+    startActivityPolling: () => stopHandle,
+  };
+}
+
 function startHeadlessMode(): void {
   const runHeadlessMain = async (): Promise<void> => {
     const agentRegistry = registerBuiltinAgents();
@@ -1202,13 +1296,19 @@ function startHeadlessMode(): void {
         }),
         runtimeServices,
         appRootDir: __dirname,
+        getWorkerRuntimeController: () => workerRuntimeController,
       } as HeadlessDeps;
 
-      const createStandaloneTaskExecutor = (): TaskRunner => {
-        const executor = createHeadlessExecutor(headlessDeps);
-        wireHeadlessApproveHook(headlessDeps, executor);
-        return executor;
-      };
+      // Every standalone execution path (launch dispatcher, fix/retry handlers,
+            // REST mutations) builds its executor through this factory, so one shared
+            // handle map covers all owner-serve task processes. The web surface needs
+            // those live handles to open task terminals in the browser.
+            const standaloneTaskHandles: TaskHandleMap = new Map();
+            const createStandaloneTaskExecutor = (): TaskRunner => {
+              const executor = createTrackedHeadlessExecutor(headlessDeps, standaloneTaskHandles);
+              wireHeadlessApproveHook(headlessDeps, executor);
+              return executor;
+            };
 
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
         const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
@@ -1244,8 +1344,16 @@ function startHeadlessMode(): void {
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        })
+        }, { staged: true })
       );
+
+      // Web clients get planning-chat token streaming over SSE. The bridge does
+      // not exist yet when these handlers are built, so route through a
+      // mutable ref that owner-serve fills in after the web surface starts.
+      let broadcastPlanningChatStream: ((event: InAppPlanningStreamEvent) => void) | undefined;
+      const emitPlanningChatStreamToWeb = (event: InAppPlanningStreamEvent): void => {
+        broadcastPlanningChatStream?.(event);
+      };
 
       const planningConversationRepo = new ConversationRepository(persistence, {
         info: (message) => logger.info(message, { module: 'planning-chat' }),
@@ -1255,6 +1363,7 @@ function startHeadlessMode(): void {
       await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
         config: invokerConfig,
         workingDir: repoRoot,
+        planDoctorScriptPath,
         sessions: planningChatSessions,
         planningCommandBuilder,
         executionAgentRegistry: agentRegistry,
@@ -1262,12 +1371,14 @@ function startHeadlessMode(): void {
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
         logger,
+        onRawPlannerOutput: emitPlanningChatStreamToWeb,
         repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
       });
 
       let testPlanningChatResponse:
         | { planYaml: string; planName: string; reply?: string; delayMs?: number }
         | { throwError: string }
+        | { replyOnly: string }
         | null = null;
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
@@ -1303,6 +1414,7 @@ function startHeadlessMode(): void {
             return planFromGoalInApp(payload.args[0] as InAppPlanRequest, {
               config: invokerConfig,
               workingDir: repoRoot,
+              planDoctorScriptPath,
               loadGeneratedPlan,
               planningCommandBuilder,
               conversationRepo: planningConversationRepo,
@@ -1312,6 +1424,7 @@ function startHeadlessMode(): void {
             return createPlanningChatSession(payload.args[0] as InAppPlanningCreateSessionRequest | undefined, {
               config: invokerConfig,
               workingDir: repoRoot,
+              planDoctorScriptPath,
               sessions: planningChatSessions,
               planningCommandBuilder,
               executionAgentRegistry: agentRegistry,
@@ -1319,6 +1432,7 @@ function startHeadlessMode(): void {
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
               logger,
+              onRawPlannerOutput: emitPlanningChatStreamToWeb,
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
@@ -1332,6 +1446,9 @@ function startHeadlessMode(): void {
                 if ('throwError' in planningChatResponseOverride) {
                   throw new Error(planningChatResponseOverride.throwError);
                 }
+                if ('replyOnly' in planningChatResponseOverride) {
+                  return planningChatResponseOverride.replyOnly;
+                }
                 if (planningChatResponseOverride.delayMs) {
                   await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
                 }
@@ -1341,6 +1458,7 @@ function startHeadlessMode(): void {
             return sendPlanningChatMessage(payload.args[0] as InAppPlanningChatRequest, {
               config: invokerConfig,
               workingDir: repoRoot,
+              planDoctorScriptPath,
               sessions: planningChatSessions,
               planningCommandBuilder,
               executionAgentRegistry: agentRegistry,
@@ -1349,6 +1467,7 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
               logger,
               plannerReplyOverride,
+              onRawPlannerOutput: emitPlanningChatStreamToWeb,
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
@@ -1371,12 +1490,25 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
             });
           }
+          case 'invoker:planning-chat-set-terminal-mode': {
+            return setPlanningChatTerminalMode(payload.args[0] as InAppPlanningSetTerminalModeRequest, {
+              sessions: planningChatSessions,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+            });
+          }
           case 'invoker:planning-chat-rebind-repo': {
             return rebindPlanningChatRepo(payload.args[0] as InAppPlanningRebindRepoRequest, {
               config: invokerConfig,
               sessions: planningChatSessions,
+              planningCommandBuilder,
+              executionAgentRegistry: agentRegistry,
+              conversationRepo: planningConversationRepo,
+              logger,
+              onRawPlannerOutput: emitPlanningChatStreamToWeb,
               planningSessionStore: readOnlyMode ? undefined : persistence,
               repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+              workingDir: repoRoot,
+              planDoctorScriptPath,
             });
           }
           case 'invoker:planning-chat-delete': {
@@ -1588,108 +1720,45 @@ function startHeadlessMode(): void {
           );
         };
 
-        const classifyStandaloneHeadlessExecMutation = (
-          payload: HeadlessExecMutationPayload,
-        ): { workflowId?: string; priority: WorkflowMutationPriority } => {
-          const [command, arg0] = payload.args;
-          if (!command) return { priority: 'normal' };
-
-          switch (command) {
-            case 'set': {
-              const [, subCommand, targetArg] = payload.args;
-              switch (subCommand) {
-                case 'workflow':
-                case 'merge-mode':
-                  return {
-                    workflowId: targetArg === undefined ? undefined : String(targetArg),
-                    priority: 'high',
-                  };
-                case 'command':
-                case 'prompt':
-                case 'executor':
-                case 'agent':
-                case 'fix-prompt':
-                case 'fix-context':
-                case 'gate-policy':
-                case 'task':
-                  return {
-                    workflowId: targetArg === undefined ? undefined : standaloneWorkflowIdForTaskArg(targetArg),
-                    priority: 'high',
-                  };
-                default:
-                  return { priority: 'normal' };
-              }
-            }
-            case 'resume':
-            case 'retry':
-              return {
-                workflowId: arg0 === undefined ? undefined : standaloneWorkflowIdForTaskArg(arg0),
-                priority: 'high',
-              };
-            case 'recreate':
-            case 'cancel-workflow':
-              return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
-            case 'rebase-retry':
-            case 'rebase-recreate':
-              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
-            case 'cancel':
-            case 'retry-task':
-            case 'recreate-task':
-            case 'delete-task':
-              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
-            case 'delete':
-            case 'delete-workflow':
-            case 'detach-workflow':
-              return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
-            case 'approve':
-            case 'reject':
-            case 'select':
-            case 'fix':
-            case 'resolve-conflict':
-              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
-            case 'repair-review-gate-ci':
-              return { workflowId: standaloneWorkflowIdForReviewGatePrArg(arg0), priority: 'normal' };
-            default:
-              return { priority: 'normal' };
-          }
-        };
-
-        const standaloneWorkflowIdForTaskArg = (taskIdArg: unknown): string => {
-          return resolveHeadlessTargetWorkflowId(taskIdArg, persistence);
-        };
-        const standaloneWorkflowIdForReviewGatePrArg = (prArg: unknown): string | undefined => {
-          const raw = prArg === undefined ? undefined : String(prArg);
-          if (!raw) return undefined;
-          const prNumber = parseReviewGatePrNumber(raw);
-          if (!prNumber) return undefined;
-          return persistence.findReviewGateByPr(prNumber)?.workflowId;
-        };
-
-        const runStandaloneWorkflowMutation = async <T>(
-          workflowId: string | undefined,
-          priority: WorkflowMutationPriority,
-          channel: string,
-          args: unknown[],
-          op: () => Promise<T>,
-        ): Promise<T> => {
-          if (!workflowId) return op();
-          if (!workflowMutationCoordinator || !workflowMutationDispatcher.has(channel)) {
-            return op();
-          }
-          return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
-        };
+        const standaloneMutationActions = createGuiMutationTaskActions({
+          logger,
+          persistence,
+          messageBus,
+          executorRegistry,
+          agentRegistry,
+          repoRoot,
+          invokerConfig,
+          effectiveMaxConcurrency,
+          taskHandles: standaloneTaskHandles,
+          getOrchestrator: () => orchestrator,
+          setOrchestrator: (nextOrchestrator) => { orchestrator = nextOrchestrator; },
+          getCommandService: () => commandService,
+          setCommandService: (nextCommandService) => { commandService = nextCommandService; },
+          getWorkflowMutationCoordinator: () => workflowMutationCoordinator,
+          workflowMutationDispatcher,
+          getActiveMutationContext: () => activeMutationContext,
+          getRendererTaskFeed: createNoopRendererTaskFeed,
+          getStartupWorkflowId: () => null,
+          getLaunchDispatcher: () => null,
+          requireTaskExecutor: createStandaloneTaskExecutor,
+          getTaskExecutor: () => createStandaloneTaskExecutor(),
+          rebuildTaskRunner: () => {},
+          initServices,
+          requestWorkflowMetadataPublish: () => {},
+          cancelDeferredWorkflowLaunch: () => {},
+          killRunningTask: async (taskId) => {
+            await killRunningTaskExecution({
+              getTaskRunner: createStandaloneTaskExecutor,
+              logger,
+              taskHandles: standaloneTaskHandles,
+            }, taskId);
+          },
+          buildCommandServiceInvalidationDeps,
+        });
 
         if (!workflowMutationDispatcher.has('headless.exec')) {
           workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
-            const payload = payloadArg as HeadlessExecMutationPayload;
-            await runHeadless(payload.args, {
-              ...headlessDeps,
-              waitForApproval: payload.waitForApproval,
-              noTrack: payload.noTrack,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-            return { ok: true };
+            return standaloneMutationActions.executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);
           });
         }
         if (!workflowMutationDispatcher.has('invoker:start-ready')) {
@@ -1765,21 +1834,15 @@ function startHeadlessMode(): void {
           });
         }
         {
-          const standaloneRunHeadlessCommand = async (args: string[]): Promise<unknown> => {
-            await runHeadless(args, {
-              ...headlessDeps,
-              waitForApproval: false,
-              noTrack: true,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-            return { ok: true };
-          };
           const standaloneWorkerHandlers = buildWorkerMutationHandlers({
             orchestrator,
             commandService,
             logger,
-            runHeadlessCommand: standaloneRunHeadlessCommand,
+            runHeadlessCommand: (args) => standaloneMutationActions.executeHeadlessExec({
+              args,
+              waitForApproval: false,
+              noTrack: true,
+            }),
             getTaskExecutor: createStandaloneTaskExecutor,
             getMutationTiming: () => activeMutationContext?.mutationTiming,
             contextLabel: 'standalone',
@@ -1962,19 +2025,16 @@ function startHeadlessMode(): void {
             traceId,
           };
           logHeadlessExecReceived(payload, 'standalone', headlessExecMutationContext);
-          const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
+          const { workflowId, priority } = standaloneMutationActions.classifyHeadlessExecMutation(payload);
           const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone', headlessExecMutationContext);
           if (acknowledgement) return acknowledgement;
-          await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
-            await runHeadless(args, {
-              ...headlessDeps,
-              waitForApproval: delegatedWait,
-              noTrack: delegatedNoTrack,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
-            });
-          });
-          return { ok: true };
+          return standaloneMutationActions.runWorkflowMutation(
+            workflowId,
+            priority,
+            'headless.exec',
+            [payload],
+            async () => standaloneMutationActions.executeHeadlessExec(payload),
+          );
         });
         messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
           noteStandaloneOwnerActivity();
@@ -1995,6 +2055,21 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
+        if (!readOnlyMode) {
+          const seededDesiredStates = migrateWorkerDesiredStateFromLegacyConfig(
+            persistence,
+            invokerConfig as LegacyWorkerStartConfigFlags,
+          );
+          if (seededDesiredStates.length > 0) {
+            logger.info(
+              `migrated ${seededDesiredStates.length} legacy worker start flag(s) into desired state`,
+              {
+                module: 'init',
+                seeded: seededDesiredStates.map((seed) => `${seed.workerKind}=${seed.desiredEnabled}`),
+              },
+            );
+          }
+        }
         workerRuntimeController = createWorkerRuntimeController({
           registry: createRegisteredWorkerRegistry(),
           deps: buildRegisteredOwnerWorkerDeps(
@@ -2002,20 +2077,24 @@ function startHeadlessMode(): void {
             async () => {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
+            planningCommandBuilder,
+            agentRegistry,
           ),
-          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+          autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
-        const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
-        if (reconciledWorkerActions > 0) {
-          logger.info(
-            `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
-            { module: 'init' },
-          );
+        if (!readOnlyMode) {
+          const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
+          if (reconciledWorkerActions > 0) {
+            logger.info(
+              `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
+              { module: 'init' },
+            );
+          }
         }
-        workerRuntimeController.startAutoStartedWorkers();
+        if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
           standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
@@ -2023,7 +2102,7 @@ function startHeadlessMode(): void {
             ownerId: workflowMutationOwnerId,
             createTaskExecutor: createStandaloneTaskExecutor,
             setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
-            topUpReadyLaunchesEnabled: () => !invokerConfig.disableAutoRunOnStartup,
+            topUpReadyLaunchesEnabled: () => !sourceDevelopmentProfile && !invokerConfig.disableAutoRunOnStartup,
           });
         }
         if (command === 'owner-serve') {
@@ -2038,10 +2117,17 @@ function startHeadlessMode(): void {
               executionAgentRegistry: agentRegistry,
               invokerConfig,
               repoRoot,
+              executorRegistry,
+              taskHandles: standaloneTaskHandles,
               appRootDir: __dirname,
+              guiMutations: (channel, args) => executeStandaloneGuiMutation({ channel, args } as GuiMutationPayload),
+              planningChatSessions,
             },
             apiServerDeps,
           );
+          broadcastPlanningChatStream = (event) => {
+            headlessWebBridge?.broadcast('invoker:planning-chat-stream', event);
+          };
           startOwnerSocketSentinelForBus(messageBus);
         }
 
@@ -2237,6 +2323,16 @@ startMainProcessBootstrap({
       };
     },
   };
+  // Planning terminals for the desktop-owned web surface. Shares the same
+  // EmbeddedTerminalManager and session map as the Electron IPC handlers, so
+  // browser and desktop views stay consistent.
+  const webPlanningTerminals = createPlanningTerminalAdapter({
+    embeddedTerminalManager,
+    logger,
+    planningChatSessions,
+    getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
+    repoRoot,
+  });
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
   const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
@@ -2592,7 +2688,7 @@ startMainProcessBootstrap({
     recordStartupMark('deferred-startup.begin');
     if (ownerMode && workerRuntimeController) {
       setTimeout(() => {
-        workerRuntimeController?.startAutoStartedWorkers();
+        if (!sourceDevelopmentProfile) workerRuntimeController?.startAutoStartedWorkers();
         recordStartupMark('workers.auto-started');
       }, 0);
     }
@@ -2674,6 +2770,14 @@ startMainProcessBootstrap({
             autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           }),
           taskTerminals,
+          guiMutations: async (channel, args) => {
+            const handler = guiMutationHandlers.get(channel);
+            if (!handler) {
+              throw new Error(`No GUI mutation handler registered for ${channel}`);
+            }
+            return handler(...args);
+          },
+          planningTerminals: webPlanningTerminals,
           getSystemDiagnostics: () => collectSystemDiagnostics({
             appVersion: app.getVersion(),
             isPackaged: app.isPackaged,
@@ -2758,6 +2862,7 @@ startMainProcessBootstrap({
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+        process.exitCode = 1;
         app.quit();
         return;
       }
@@ -2773,6 +2878,7 @@ startMainProcessBootstrap({
         const message = err instanceof Error ? err.message : String(err);
         if (!message.includes('[db-writer-lock]')) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          process.exitCode = 1;
           app.quit();
           return;
         }
@@ -2780,6 +2886,7 @@ startMainProcessBootstrap({
         if (!isStandaloneCapable(owner)) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
           process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
+          process.exitCode = 1;
           app.quit();
           return;
         }
@@ -3133,6 +3240,19 @@ startMainProcessBootstrap({
     }
 
     if (ownerMode) {
+      const seededDesiredStates = migrateWorkerDesiredStateFromLegacyConfig(
+        persistence,
+        invokerConfig as LegacyWorkerStartConfigFlags,
+      );
+      if (seededDesiredStates.length > 0) {
+        logger.info(
+          `migrated ${seededDesiredStates.length} legacy worker start flag(s) into desired state`,
+          {
+            module: 'init',
+            seeded: seededDesiredStates.map((seed) => `${seed.workerKind}=${seed.desiredEnabled}`),
+          },
+        );
+      }
       workerRuntimeController = createWorkerRuntimeController({
         registry: createRegisteredWorkerRegistry(),
         deps: buildRegisteredOwnerWorkerDeps(
@@ -3140,8 +3260,10 @@ startMainProcessBootstrap({
           async () => {
             await requireTaskExecutor().checkMergeGateStatuses();
           },
+          planningCommandBuilder,
+          agentRegistry,
         ),
-        autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+        autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
@@ -3173,7 +3295,7 @@ startMainProcessBootstrap({
               { module: 'init', taskIds: orphaned.map((task) => task.id) },
             );
           }
-          if (invokerConfig.disableAutoRunOnStartup) {
+          if (sourceDevelopmentProfile || invokerConfig.disableAutoRunOnStartup) {
             logger.info('auto-run on startup disabled by config', { module: 'init' });
           } else {
             orchestrator.startExecution();
@@ -3266,6 +3388,7 @@ startMainProcessBootstrap({
         if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
           mainWindow.webContents.send('invoker:planning-chat-stream', event);
         }
+        webBridge?.broadcast('invoker:planning-chat-stream', event);
       },
       taskGraphEventPublisher,
       loadTaskByIdFromPersistence,
@@ -3311,30 +3434,36 @@ startMainProcessBootstrap({
       planningTerminalState.restorePersistedPlanningTerminals();
     }
 
-    ipcMain.handle('invoker:get-workers', async () => {
-      if (!ownerMode) {
-        try {
-          return await messageBus.request('headless.query', { kind: 'workers' });
-        } catch (err) {
-          if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
-          logger.warn(
-            `get-workers owner delegation failed; falling back to local read-only snapshot: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-            { module: 'ipc' },
-          );
-        }
-        return createLocalWorkerStatusSnapshot({
-          registry: createRegisteredWorkerRegistry(),
-          persistence,
-          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
-        });
-      }
-      return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+    const createUnavailableWorkerStatusSnapshot = (): WorkerStatusSnapshot =>
+      createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
         autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
       });
+    const readOwnerWorkerStatus = createOwnerWorkerStatusReader({
+      queryOwner: () => messageBus.request<{ kind: 'workers' }, WorkerStatusSnapshot>(
+        'headless.query',
+        { kind: 'workers' },
+      ),
+      createUnavailableSnapshot: createUnavailableWorkerStatusSnapshot,
+      onUnavailable: (err) => {
+        if (isMutationOwnerUnavailableError(err)) {
+          markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+        }
+        logger.warn(
+          `get-workers owner delegation failed; preserving last owner snapshot when available: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { module: 'ipc' },
+        );
+      },
+    });
+
+    ipcMain.handle('invoker:get-workers', async () => {
+      if (!ownerMode) {
+        return readOwnerWorkerStatus();
+      }
+      return workerRuntimeController?.snapshot() ?? createUnavailableWorkerStatusSnapshot();
     });
 
     ipcMain.handle('invoker:get-activity-logs', (_event, sinceId?: number, limit?: number) => {

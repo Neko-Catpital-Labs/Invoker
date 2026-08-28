@@ -2,6 +2,7 @@ import {
   AUTO_APPROVE_COMMAND_CHANNEL,
   AUTO_FIX_BARE_RETRY_CHANNEL,
   AUTO_FIX_COMMAND_CHANNEL,
+  AUTO_FIX_RECREATE_CHANNEL,
   buildHeadlessFixArgs,
   INFRA_REPAIR_RECREATE_TASK_CHANNEL,
   INFRA_REPAIR_RETRY_TASK_CHANNEL,
@@ -75,6 +76,10 @@ export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Ma
 
   handlers.set(AUTO_FIX_BARE_RETRY_CHANNEL, async (...retryArgs: unknown[]) => {
     return runHeadlessCommand(['retry-task', String(retryArgs[0])]);
+  });
+
+  handlers.set(AUTO_FIX_RECREATE_CHANNEL, async (...recreateArgs: unknown[]) => {
+    return runHeadlessCommand(['recreate-task', String(recreateArgs[0])]);
   });
 
   handlers.set(REQUEUE_COMMAND_CHANNEL, async (...requeueArgs: unknown[]) => {

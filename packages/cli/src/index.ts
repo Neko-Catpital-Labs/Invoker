@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, resolve, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
@@ -49,16 +49,33 @@ import {
   withTimeout,
   type LiveOwnerInfo,
 } from './live-owner-bus.js';
-import { runMcpServer } from './mcp-server.js';
-import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
 import {
+  assertInvokerWakeLineWithinBudget,
+  formatInvokerWakeLine,
+} from './invoker-wake.js';
+import { runMcpServer } from './mcp-server.js';
+import {
+  normalizeTaskSnapshots,
+  waitForWorkflowTasks,
+} from './mcp-workflow-status.js';
+import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
+import { runInstall } from './quick-install.js';
+import {
+  applyDesiredStateWorkerToggle,
   applyWorkerToggle,
   findWorkerToggle,
+  isDesiredStateWorkerToggle,
+  isPolicyWorkerToggle,
   ONBOARDING_WORKER_TOGGLES,
+  WORKER_TOGGLES,
+  openWorkerDesiredStateStore,
+  readDesiredStateWorkerToggleValue,
   readWorkerToggleValue,
+  resolveCliInstanceProfile,
 } from './worker-toggles.js';
+import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
 
-const VERSION = '0.0.12';
+const VERSION = '0.0.14';
 
 type CliOptions = {
   dbDir?: string;
@@ -174,6 +191,7 @@ function usage(): string {
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli query workflows [--status <status>] [--output text|json]',
     '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
+    '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
     '  invoker-cli retry-task <taskId>',
     '  invoker-cli retry <workflowId>',
     '  invoker-cli resume <workflowId>',
@@ -181,27 +199,32 @@ function usage(): string {
     '  invoker-cli delete-all',
     '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli install [--demo]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli worker toggles [--enable <id>|--disable <id> ...]',
+    '  invoker-cli auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
     '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
+    '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
     '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
     '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
-    '  delete-all      Ask a live Invoker owner to delete all workflows, after the production DB guard passes.',
+    '  delete-all      Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
+    '  install         Quick-install: global cli+ui, doctor --fix, skills+MCP, default workers. Skips Slack/machines.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
-    '  worker toggles      Show or set the on/off state of optional owner workers (PR maintenance, e2e auto-fix, auto-approve, disk-headroom cleanup).',
+    '  worker toggles      Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
+    '  auto-approve-authors  Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
     '',
     'Options:',
     '  --planner-url <url>   Planner service URL for `setup planner`.',
@@ -216,6 +239,8 @@ function usage(): string {
     '  --json           Emit only a machine-readable result summary on stdout.',
     '  --workflow <id>  Restrict `query tasks` to one workflow.',
     '  --status <status>  Restrict `query workflows` or `query tasks` to one status.',
+    '  --max-wait-ms <ms>  Maximum park time for `wait`. Defaults to 86400000 (24h).',
+    '  --poll-interval-ms <ms>  Query interval for `wait`. Defaults to 5000.',
     '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
     '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
     '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
@@ -375,50 +400,7 @@ async function queryLiveOwner(
 }
 
 function resolveQueryDbDir(): string {
-  return resolve(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
-}
-
-function expandHomePath(raw: string): string {
-  if (raw === '~') return homedir();
-  if (raw.startsWith('~/')) return join(homedir(), raw.slice(2));
-  return raw;
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function normalizeDeleteAllGuardPath(raw: string): string {
-  let expanded = expandHomePath(raw);
-  expanded = expanded.endsWith('/') ? expanded.slice(0, -1) : expanded;
-  if (expanded.length === 0) expanded = '/';
-
-  if (isDirectory(expanded)) {
-    return realpathSync(expanded);
-  }
-
-  const parent = dirname(expanded);
-  if (isDirectory(parent)) {
-    return join(realpathSync(parent), basename(expanded));
-  }
-
-  return expanded;
-}
-
-function checkDeleteAllProductionGuard(): number | undefined {
-  const dbRoot = normalizeDeleteAllGuardPath(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
-  const prodRoot = normalizeDeleteAllGuardPath(join(homedir(), '.invoker'));
-  if (process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL !== '1' && dbRoot === prodRoot) {
-    process.stderr.write(`ERROR: Refusing to run 'delete-all' against production DB root: ${dbRoot}\n`);
-    process.stderr.write('Set INVOKER_DB_DIR to an isolated temp directory for tests.\n');
-    process.stderr.write('Override only if intentional: INVOKER_ALLOW_PRODUCTION_DELETE_ALL=1\n');
-    return 64;
-  }
-  return undefined;
+  return resolve(resolveCliInstanceProfile().homeRoot);
 }
 
 function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> {
@@ -563,6 +545,89 @@ async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
   return 0;
 }
 
+type WaitOptions = {
+  workflowId: string;
+  maxWaitMs: number;
+  pollIntervalMs: number;
+};
+
+const DEFAULT_WAIT_MAX_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_WAIT_POLL_MS = 5_000;
+
+function parsePositiveIntFlag(flag: string, value: string | undefined): number {
+  if (!value) throw new Error(`Missing value for ${flag}`);
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== value) {
+    throw new Error(`Invalid ${flag} value. Expected a positive integer.`);
+  }
+  return parsed;
+}
+
+export function parseWaitArgs(argv: string[]): WaitOptions {
+  let workflowId: string | undefined;
+  let maxWaitMs = DEFAULT_WAIT_MAX_MS;
+  let pollIntervalMs = DEFAULT_WAIT_POLL_MS;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--max-wait-ms') {
+      maxWaitMs = parsePositiveIntFlag('--max-wait-ms', argv[++i]);
+    } else if (arg === '--poll-interval-ms') {
+      pollIntervalMs = parsePositiveIntFlag('--poll-interval-ms', argv[++i]);
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown wait option: ${arg}`);
+    } else if (!workflowId) {
+      workflowId = arg;
+    } else {
+      throw new Error(`Unexpected wait argument: ${arg}`);
+    }
+  }
+
+  if (!workflowId) {
+    throw new Error('Missing workflowId. Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+  }
+
+  return { workflowId, maxWaitMs, pollIntervalMs };
+}
+
+async function runWait(options: WaitOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) {
+      throw new Error(REQUIRED_OWNER_MESSAGE);
+    }
+    const activeBus = bus;
+    const result = await waitForWorkflowTasks({
+      workflowId: options.workflowId,
+      maxWaitMs: options.maxWaitMs,
+      pollIntervalMs: options.pollIntervalMs,
+      loadTasks: async () => {
+        const raw = await withTimeout(
+          activeBus.request('headless.query', {
+            kind: 'cli-query',
+            args: ['query', 'tasks', '--workflow', options.workflowId, '--output', 'json'],
+          }),
+          15_000,
+        );
+        return normalizeTaskSnapshots(JSON.parse(validateLiveQueryResponse(raw)));
+      },
+    });
+    const line = formatInvokerWakeLine(result);
+    assertInvokerWakeLineWithinBudget(line);
+    process.stdout.write(`${line}\n`);
+    return result.settled ? 0 : 1;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
 const REQUIRED_OWNER_MESSAGE = 'No running Invoker owner is reachable; start the Invoker app or run `invoker-cli owner serve`.';
 
 function mutationQueryOptions(status: string): QueryOptions {
@@ -634,9 +699,6 @@ async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume', tar
 }
 
 async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
-  const guardExitCode = checkDeleteAllProductionGuard();
-  if (guardExitCode !== undefined) return guardExitCode;
-
   let bus: MessageBus | undefined;
   try {
     bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
@@ -959,11 +1021,11 @@ function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
 
 /**
  * `invoker-cli worker toggles [--enable <id>|--disable <id> ...]`
- * With no flags, prints each toggle's current state. Each flag applies
- * immediately, writing to ~/.invoker/config.json (or INVOKER_REPO_CONFIG_PATH).
+ * Start presets write SQLite desired state; policy toggles write config.
+ * When an owner is live, start presets also request live start/stop.
  */
-function runWorkerTogglesCommand(args: string[]): number {
-  const changes: Array<{ spec: ReturnType<typeof findWorkerToggle>; enabled: boolean }> = [];
+async function runWorkerTogglesCommand(args: string[]): Promise<number> {
+  const changes: Array<{ spec: NonNullable<ReturnType<typeof findWorkerToggle>>; enabled: boolean }> = [];
   for (let i = 0; i < args.length; i += 1) {
     const flag = args[i];
     if (flag !== '--enable' && flag !== '--disable') {
@@ -972,7 +1034,7 @@ function runWorkerTogglesCommand(args: string[]): number {
     const id = args[++i];
     const spec = id ? findWorkerToggle(id) : undefined;
     if (!spec) {
-      const knownIds = ONBOARDING_WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
+      const knownIds = WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
       throw new Error(`Unknown worker toggle id: "${id ?? ''}". Known ids: ${knownIds}`);
     }
     changes.push({ spec, enabled: flag === '--enable' });
@@ -980,26 +1042,78 @@ function runWorkerTogglesCommand(args: string[]): number {
 
   if (changes.length > 0) {
     const configPath = defaultConfigPath();
-    updateInvokerConfigFile(configPath, (config) => {
-      for (const { spec, enabled } of changes) {
-        Object.assign(config, applyWorkerToggle(config, spec!, enabled));
+    const policyChanges = changes.filter((change) => isPolicyWorkerToggle(change.spec));
+    const desiredChanges = changes.filter((change) => isDesiredStateWorkerToggle(change.spec));
+
+    if (policyChanges.length > 0) {
+      updateInvokerConfigFile(configPath, (config) => {
+        for (const { spec, enabled } of policyChanges) {
+          Object.assign(config, applyWorkerToggle(config, spec, enabled));
+        }
+      });
+    }
+
+    if (desiredChanges.length > 0) {
+      const store = await openWorkerDesiredStateStore();
+      try {
+        for (const { spec, enabled } of desiredChanges) {
+          applyDesiredStateWorkerToggle(store, spec, enabled);
+        }
+      } finally {
+        store.close?.();
       }
-    });
+      await tryLiveDesiredStateWorkerControl(desiredChanges);
+    }
+
     for (const { spec, enabled } of changes) {
-      process.stdout.write(`${spec!.label}: ${enabled ? 'on' : 'off'}\n`);
+      process.stdout.write(`${spec.label}: ${enabled ? 'on' : 'off'}\n`);
     }
     return 0;
   }
 
   const config = readInvokerConfigFile(defaultConfigPath());
-  process.stdout.write('Worker toggles\n');
-  for (const spec of ONBOARDING_WORKER_TOGGLES) {
-    const value = readWorkerToggleValue(config, spec);
-    const enabled = value ?? spec.defaultEnabled ?? false;
-    const state = enabled ? 'on' : 'off';
-    process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+  const store = await openWorkerDesiredStateStore();
+  try {
+    process.stdout.write('Worker toggles\n');
+    for (const spec of WORKER_TOGGLES) {
+      let value: boolean | undefined;
+      if (isDesiredStateWorkerToggle(spec)) {
+        value = readDesiredStateWorkerToggleValue(store, spec);
+      } else {
+        value = readWorkerToggleValue(config, spec);
+      }
+      const enabled = value ?? spec.defaultEnabled ?? false;
+      const state = enabled ? 'on' : 'off';
+      process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+    }
+  } finally {
+    store.close?.();
   }
   return 0;
+}
+
+async function tryLiveDesiredStateWorkerControl(
+  changes: ReadonlyArray<{ spec: Extract<NonNullable<ReturnType<typeof findWorkerToggle>>, { workerKinds: readonly string[] }>; enabled: boolean }>,
+): Promise<void> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await createDefaultMessageBus();
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) return;
+    for (const { spec, enabled } of changes) {
+      for (const kind of spec.workerKinds) {
+        await bus.request('headless.gui-mutation', {
+          channel: enabled ? 'invoker:start-worker' : 'invoker:stop-worker',
+          args: [kind],
+        });
+      }
+    }
+  } catch {
+    // Desired state is already persisted; live apply is best-effort.
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) disconnect.call(bus);
+  }
 }
 
 function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorkerRuntime {
@@ -1110,12 +1224,18 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
     }
+    if (argv[0] === 'install') {
+      return await runInstall(argv.slice(1));
+    }
     if (argv[0] === 'setup') {
       return await runSetup(argv.slice(1));
     }
     if (argv[0] === 'mcp') {
       await (deps.runMcpServer ?? runMcpServer)();
       return 0;
+    }
+    if (argv[0] === 'auto-approve-authors') {
+      return await runAutoApproveAuthorsCommand(argv.slice(1), { configPath: defaultConfigPath() });
     }
     if (argv[0] === 'owner') {
       if (argv[1] !== 'serve') {
@@ -1126,7 +1246,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       if (subcommand === 'toggles') {
-        return runWorkerTogglesCommand(argv.slice(2));
+        return await runWorkerTogglesCommand(argv.slice(2));
       }
       const registry = registerExternalWorkers(
         registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
@@ -1146,6 +1266,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'query') {
       return await runQuery(parseQueryArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'wait') {
+      return await runWait(parseWaitArgs(argv.slice(1)), deps);
     }
     if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume') {
       if (argv.length > 2) {

@@ -153,6 +153,7 @@ describe('checkConfigContents', () => {
       remoteTargets: { box: { host: 'h', user: 'u', sshKeyPath: '/k' } },
       executionPools: { fast: { members: [{ type: 'ssh', id: 'box' }] } },
       defaultPoolId: 'fast',
+      infraRepair: { enabled: true },
     });
     expect(check.status).toBe('ok');
   });

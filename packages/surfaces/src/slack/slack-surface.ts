@@ -15,6 +15,7 @@ import {
   formatPlanSummaryLines,
   formatSlackPlanBrief,
   preparePlanningReview,
+  resolvePlanningSubmitAction,
   summarizePlanText,
   type PlanSummary,
   type PlanningConfirmationMode,
@@ -22,7 +23,7 @@ import {
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress } from '../surface.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
-import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
+import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
 import {
   splitForSlack,
   sanitizeSlackOutbound,
@@ -45,7 +46,7 @@ import type { LobbyControl } from './lobby-control.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt, parseWorkflowControl } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
-import type { ConversationRepository, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
+import type { ConversationRepository, PlanningDraft, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 import { SlackPlanDraftRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout, materializeLocalAgentPrompt } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
@@ -103,6 +104,8 @@ export interface SlackSurfaceConfig {
   plannerRetryBaseDelayMs?: number;
   /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
   conversationalPlanning?: boolean;
+  /** Canonical full skill-doctor script used before exposing review drafts. */
+  planDoctorScriptPath?: string;
 
   // ── Slack-native workflow extensions ──────────────────────
   /** Lobby channel where `@Invoker` starts planning. Defaults to channelId. */
@@ -119,6 +122,8 @@ export interface SlackSurfaceConfig {
   repoAliases?: Record<string, string>;
   /** Repo URL used when the message carries no `[repo:]` tag. */
   defaultRepoUrl?: string;
+  /** Channel ID → repo URL defaults. Channel IDs are stable across renames; channel names are not accepted here. */
+  channelRepoBindings?: Record<string, string>;
   /** Default Slack plan review mode. Default: 'require'. */
   defaultPlanningConfirmationMode?: PlanningConfirmationMode;
   /** Persisted workflow↔channel mapping for routing + channel creation. */
@@ -133,6 +138,15 @@ export interface SlackSurfaceConfig {
   instanceId?: string;
   /** Resolves a per-turn harness session driver for a preset (append-based continuity instead of prompt replay), when feasible. */
   harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
+}
+
+
+/** Payload for {@link SlackSurface.injectMention} (localhost smoke inject). */
+export interface InjectMentionRequest {
+  channelId: string;
+  threadTs: string;
+  text: string;
+  userId: string;
 }
 
 export interface HarnessPreset {
@@ -186,12 +200,43 @@ export type LocalRequest =
   | { kind: 'agent'; text: string }
   | { kind: 'change'; text: string };
 
+export class PlanDraftPostingError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'PlanDraftPostingError';
+  }
+}
+
+type StageDraftReviewResult =
+  | { staged: true }
+  | { staged: false; reason: 'not_ready' | 'no_context' }
+  | { staged: false; reason: 'posting_error'; message: string; draftId: string };
+
+type AlertSurfaceEvent = Extract<SurfaceEvent, { type: 'alert' }>;
+
+function normalizeAlertSurfaceEvent(event: AlertSurfaceEvent): AlertSurfaceEvent {
+  const nested = (event as unknown as { alert?: Partial<AlertSurfaceEvent> }).alert;
+  if (!nested) return event;
+  const severity = nested.severity === 'info' || nested.severity === 'critical'
+    ? nested.severity
+    : 'warning';
+  return {
+    type: 'alert',
+    severity,
+    source: nested.source ?? '',
+    subject: nested.subject ?? '',
+    message: nested.message ?? '',
+    alertKey: nested.alertKey ?? '',
+  };
+}
+
 /**
  * Upper bound on stdout/stderr retained per stream while a local command runs.
  * Bounds process memory against noisy commands; only the tail is kept because
  * `formatLocalCommandResult` shows the last chars anyway.
  */
 const MAX_LOCAL_CAPTURE_CHARS = 65_536;
+const DEFAULT_ALERT_POST_COOLDOWN_MS = 30 * 60 * 1_000;
 
 // Internal marker for the "success with empty stdout" case so the runOneShotPlanner
 // retry wrapper can distinguish transient silent-success from user-actionable
@@ -219,6 +264,9 @@ const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
 const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
+const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
+const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
+const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -283,6 +331,7 @@ export function parsePlanningRequest(
   repositoryUrls?: string[];
   hasExplicitPreset?: boolean;
   confirmationMode?: PlanningConfirmationMode;
+  autoSubmitRequested?: boolean;
   text: string;
   unknownPreset?: string;
 } {
@@ -290,6 +339,7 @@ export function parsePlanningRequest(
   let presetKey = defaultPresetKey;
   let repo: string | undefined;
   let confirmationMode: PlanningConfirmationMode | undefined;
+  let autoSubmitRequested = false;
   let unknownPreset: string | undefined;
   let hasExplicitPreset = false;
   const keyset = new Set(presetKeys.map((k) => k.toLowerCase()));
@@ -306,7 +356,8 @@ export function parsePlanningRequest(
     }
     const normalized = raw.toLowerCase().replace(/\s+/g, '').replace(/^plain/, '');
     if (normalized === 'auto-submit' || normalized === 'autosubmit') {
-      confirmationMode = 'auto_submit';
+      confirmationMode = 'require';
+      autoSubmitRequested = true;
       rest = rest.slice(m[0].length);
       continue;
     }
@@ -331,6 +382,7 @@ export function parsePlanningRequest(
     ...(repositoryUrls.length > 0 ? { repositoryUrls } : {}),
     ...(hasExplicitPreset ? { hasExplicitPreset } : {}),
     ...(confirmationMode ? { confirmationMode } : {}),
+    ...(autoSubmitRequested ? { autoSubmitRequested } : {}),
     ...(unknownPreset ? { unknownPreset } : {}),
   };
 }
@@ -386,6 +438,45 @@ function repositoryIdentity(repoUrl: string): string {
   const host = parts.host.toLowerCase();
   const path = host === 'github.com' ? parts.path.toLowerCase() : parts.path;
   return `${host}/${path}`;
+}
+
+function channelRepoBindingWorkflowId(channelId: string): string {
+  return `${CHANNEL_REPO_BINDING_WORKFLOW_PREFIX}${channelId}`;
+}
+
+function isChannelRepoBinding(mapping: WorkflowChannel | undefined | null): boolean {
+  return !!mapping?.workflowId?.startsWith(CHANNEL_REPO_BINDING_WORKFLOW_PREFIX);
+}
+
+function normalizePublicChannelName(name: string): string {
+  return name.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+interface ChannelRepoSetupPair {
+  channelName: string;
+  repoUrl: string;
+}
+
+function parseChannelRepoSetupRequest(text: string): ChannelRepoSetupPair[] | null {
+  if (!CHANNEL_REPO_SETUP_INTENT_RE.test(text)) return null;
+  const repositoryUrls = extractRepositoryUrls(text);
+  if (repositoryUrls.length === 0) return null;
+
+  const pairs: ChannelRepoSetupPair[] = [];
+  const seenChannels = new Set<string>();
+  for (const match of text.matchAll(CHANNEL_REPO_PAIR_RE)) {
+    const channelName = normalizePublicChannelName(match[1]);
+    let rawRepo = (match[3] ?? match[2]).trim();
+    while (rawRepo && TRAILING_URL_PUNCTUATION.has(rawRepo.at(-1)!)) {
+      rawRepo = rawRepo.slice(0, -1);
+    }
+    const repoUrl = normalizeSupportedRepoCandidate(rawRepo);
+    if (!channelName || !repoUrl || seenChannels.has(channelName)) return null;
+    seenChannels.add(channelName);
+    pairs.push({ channelName, repoUrl });
+  }
+
+  return pairs.length === repositoryUrls.length ? pairs : null;
 }
 
 // ── Lobby intent routing ─────────────────────────────────────
@@ -455,6 +546,8 @@ interface ConversationLike {
   getDraftedPlan(): string | null;
   readonly history: readonly { role: 'user' | 'assistant'; content: string }[];
   readonly lastTurnDraftPlanText: string | null;
+  readonly approvedPlanningDraft: PlanningDraft | null;
+  readonly draftDoctorEnabled: boolean;
   readonly lastTurnPlanIntentSignal: PlanIntentSignal | null;
   readonly conversationMode: ConversationMode;
   readonly planSubmitted: boolean;
@@ -526,6 +619,7 @@ export class SlackSurface implements Surface {
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
   private conversationalPlanning: boolean;
+  private planDoctorScriptPath?: string;
   /** Minimum spacing between thread message posts to avoid Slack burst limits. */
   private readonly messagePacingMs = 1_100;
   /** Session lifecycle metrics */
@@ -551,12 +645,15 @@ export class SlackSurface implements Surface {
   private defaultHarnessPreset: string;
   private repoAliases: Record<string, string>;
   private defaultRepoUrl?: string;
+  private channelRepoBindings: Record<string, string>;
   private workflowChannelRepo?: WorkflowChannelRepository;
   private gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   private runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
   private onRestartInvoker?: () => Promise<void>;
   private instanceId: string;
   private harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
+  /** Guard key -> last lobby alert post timestamp, held in-process like watchdog cooldowns. */
+  private alertLastPostAt = new Map<string, number>();
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -585,6 +682,7 @@ export class SlackSurface implements Surface {
     this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
     this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
     this.conversationalPlanning = config.conversationalPlanning ?? false;
+    this.planDoctorScriptPath = config.planDoctorScriptPath;
     this.lobbyChannelId = config.lobbyChannelId ?? config.channelId;
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.prepareRepoCheckout = config.prepareRepoCheckout;
@@ -592,7 +690,8 @@ export class SlackSurface implements Surface {
     this.defaultHarnessPreset = config.defaultHarnessPreset ?? DEFAULT_HARNESS_PRESET;
     this.repoAliases = config.repoAliases ?? {};
     this.defaultRepoUrl = config.defaultRepoUrl ?? config.repoUrl;
-    this.defaultPlanningConfirmationMode = config.defaultPlanningConfirmationMode ?? 'require';
+    this.channelRepoBindings = config.channelRepoBindings ?? {};
+    this.defaultPlanningConfirmationMode = 'require';
     this.workflowChannelRepo = config.workflowChannelRepo;
     this.gatherWorkflowContext = config.gatherWorkflowContext;
     this.runWorkflowOp = config.runWorkflowOp;
@@ -619,6 +718,7 @@ export class SlackSurface implements Surface {
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
         conversationalPlanning: this.conversationalPlanning,
+        planDoctorScriptPath: this.planDoctorScriptPath,
         onHarnessSessionId: (id, sessionId) => this.persistHarnessSessionId(id.threadTs, sessionId),
       });
     }
@@ -662,6 +762,21 @@ export class SlackSurface implements Surface {
   async handleEvent(event: SurfaceEvent): Promise<void> {
     if (event.type === 'workflow_created') {
       await this.createWorkflowChannel(event);
+      return;
+    }
+
+    if (event.type === 'alert') {
+      const alert = normalizeAlertSurfaceEvent(event);
+      const lastPostAt = this.alertLastPostAt.get(alert.alertKey);
+      const now = Date.now();
+      if (lastPostAt !== undefined && now - lastPostAt < DEFAULT_ALERT_POST_COOLDOWN_MS) {
+        this.log('slack', 'info', `[ALERT] Suppressed cooldown duplicate (alertKey=${alert.alertKey})`);
+        return;
+      }
+      const message = formatSurfaceEvent(alert);
+      if (!message) return;
+      const ts = await this.postMessage(message, this.lobbyChannelId);
+      if (ts) this.alertLastPostAt.set(alert.alertKey, now);
       return;
     }
 
@@ -773,6 +888,39 @@ export class SlackSurface implements Surface {
     this.progressCardTs.clear();
     await this.app.stop();
     this.log('slack', 'info', 'Slack bot stopped');
+  }
+
+
+  /**
+   * Drive the same mention path Socket Mode uses, posting replies into a real
+   * Slack thread via the bot client. Used by the localhost-only smoke inject
+   * because Slack bots do not receive their own app_mention events.
+   */
+  async injectMention(request: InjectMentionRequest): Promise<void> {
+    const channel = request.channelId;
+    const threadTs = request.threadTs;
+    const text = request.text.includes('<@')
+      ? request.text
+      : (this.botUserId ? `<@${this.botUserId}> ${request.text}` : request.text);
+    const event: SlackMentionEvent = {
+      text,
+      ts: threadTs,
+      thread_ts: threadTs,
+      user: request.userId,
+      channel,
+    };
+    const say: SayFn = async ({ text: replyText, thread_ts, blocks }) => {
+      const res = await this.app.client.chat.postMessage({
+        channel,
+        text: replyText,
+        thread_ts,
+        ...(blocks ? { blocks: blocks as never } : {}),
+      });
+      return { ts: res.ts as string };
+    };
+    this.log('slack', 'info', `[SMOKE_INJECT] channel=${channel} thread_ts=${threadTs} user=${request.userId}`);
+    const mapping = this.workflowChannelRepo?.getByChannelId(channel);
+    await this.handleMention(event, say, channel, mapping ?? undefined);
   }
 
   // ── Slash Command ───────────────────────────────────────
@@ -966,7 +1114,7 @@ export class SlackSurface implements Surface {
     channel: string,
     mapping?: WorkflowChannel,
   ): Promise<void> {
-    if (mapping) {
+    if (mapping && !isChannelRepoBinding(mapping)) {
       this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=workflow workflow=${mapping.workflowId}`);
       await this.handleWorkflowAssistantMention(mapping, event, say);
       return;
@@ -1004,8 +1152,35 @@ export class SlackSurface implements Surface {
       return;
     }
     const threadTs = event.thread_ts ?? event.ts;
+    if (parsed.autoSubmitRequested) {
+      await say({
+        text: 'Auto-submit is unavailable in conversational planning. I will stage the draft for review instead.',
+        thread_ts: threadTs,
+      });
+    }
     if (/^\/plan\s*$/i.test(parsed.text)) {
       await this.handleExplicitPlanAction(channel, threadTs, event.user ?? 'unknown', say);
+      return;
+    }
+
+    const channelRepoSetup = parseChannelRepoSetupRequest(parsed.text);
+    if (channelRepoSetup) {
+      await this.handleChannelRepoSetup(channelRepoSetup, event, channel, say);
+      return;
+    }
+
+    const readyDraft = this.slackPlanDraftRepo?.getReady(channel, threadTs);
+    const submitAction = resolvePlanningSubmitAction(parsed.text, Boolean(readyDraft));
+    if (submitAction === 'submit_ready' && readyDraft) {
+      if (!event.user || readyDraft.requestedBy !== event.user) {
+        await say({ text: 'Only the user who requested this plan may submit it.', thread_ts: threadTs });
+        return;
+      }
+      try {
+        await this.submitSlackPlanDraft(readyDraft, { userId: event.user });
+      } catch (error) {
+        await say({ text: error instanceof Error ? error.message : String(error), thread_ts: threadTs });
+      }
       return;
     }
 
@@ -1031,10 +1206,19 @@ export class SlackSurface implements Surface {
       ? this.findMentionedRepoAlias(parsed.text)
       : undefined;
     const mentionedRepoResolution = mentionedRepoAlias ? this.resolveRepoUrl(mentionedRepoAlias) : {};
+    const channelDefaultRepoUrl = this.resolveChannelDefaultRepoUrl(channel);
     const routeRepoUrl = explicitRepoResolution.url
       ?? detectedRepoResolution.url
       ?? mentionedRepoResolution.url
+      ?? channelDefaultRepoUrl
       ?? this.resolveRepoUrl().url;
+
+    if ((parsed.repo || repositoryUrls.length === 1) && channelDefaultRepoUrl && routeRepoUrl && !sameRepoUrl(channelDefaultRepoUrl, routeRepoUrl)) {
+      await say({
+        text: `Using explicitly selected repository \`${repoDisplayName(routeRepoUrl)}\` instead of this channel's default \`${repoDisplayName(channelDefaultRepoUrl)}\`.`,
+        thread_ts: event.ts,
+      });
+    }
 
     if (/^\/plan\s+.+/i.test(parsed.text)) {
       const context: PlanningContext = {
@@ -1111,9 +1295,7 @@ export class SlackSurface implements Surface {
           return;
         }
       }
-      const effectiveConfirmationMode = parsed.confirmationMode
-        ?? storedContext?.confirmationMode
-        ?? this.defaultPlanningConfirmationMode;
+      const effectiveConfirmationMode: PlanningConfirmationMode = 'require';
       const context = storedContext
         ? { ...storedContext, confirmationMode: effectiveConfirmationMode }
         : {
@@ -1178,7 +1360,13 @@ export class SlackSurface implements Surface {
       return;
     }
     const plannerOutput = await conversation.runPlanConversion();
-    await this.stageDraftReviewFromPlannerOutput(plannerOutput, conversation, channel, threadTs, userId, say, { silentWhenNotReady: false });
+    const result = await this.stageDraftReviewFromPlannerOutput(plannerOutput, conversation, channel, threadTs, userId, say, { silentWhenNotReady: false });
+    if (result.staged === false && result.reason === 'posting_error') {
+      await this.sayWithRateLimitRetry(say, {
+        text: `I hit an error trying to prepare the plan review card: ${result.message}. An operator needs to look at draft ${result.draftId}.`,
+        thread_ts: threadTs,
+      });
+    }
   }
 
   private async stageDraftReviewFromPlannerOutput(
@@ -1189,8 +1377,8 @@ export class SlackSurface implements Surface {
     userId: string,
     say: SayFn,
     opts: { silentWhenNotReady: boolean },
-  ): Promise<void> {
-    if (!this.slackPlanDraftRepo) return;
+  ): Promise<StageDraftReviewResult> {
+    if (!this.slackPlanDraftRepo) return { staged: false, reason: 'not_ready' };
     const review = preparePlanningReview({
       plannerOutput,
       extractDraftPlanText: () => conversation.lastTurnDraftPlanText,
@@ -1200,26 +1388,38 @@ export class SlackSurface implements Surface {
       if (!opts.silentWhenNotReady) {
         await this.sayWithRateLimitRetry(say, { text: review.reply, thread_ts: threadTs });
       }
-      return;
+      return { staged: false, reason: 'not_ready' };
     }
     const draftReview = review;
     const context = this.loadPlanningContext(threadTs);
     if (!context?.repoUrl || !context.workingDir) {
       if (opts.silentWhenNotReady) {
         this.log('slack', 'warn', `[DRAFT_STAGE] Skipped staging draft for thread ${threadTs}: no pinned repository context.`);
-        return;
+        return { staged: false, reason: 'no_context' };
       }
       await this.sayWithRateLimitRetry(say, {
         text: 'This thread has no pinned repository context. Start a new thread with the repository selected.',
         thread_ts: threadTs,
       });
-      return;
+      return { staged: false, reason: 'no_context' };
     }
+    const approvedDraft = conversation.approvedPlanningDraft;
+    if (conversation.draftDoctorEnabled && !approvedDraft) {
+      throw new Error('The review text does not exactly match the immutable doctor-approved draft.');
+    }
+    const planTextForStage = approvedDraft && conversation.draftDoctorEnabled
+      ? approvedDraft.planText
+      : this.normalizeDraftedPlanRepoUrl(
+        approvedDraft?.planText ?? draftReview.planText,
+        context.repoUrl,
+      );
+    const planSummary = summarizePlanText(planTextForStage) ?? draftReview.summary;
     const draft = this.slackPlanDraftRepo.create({
       channelId: channel,
       threadTs,
-      planText: draftReview.planText,
-      summaryJson: JSON.stringify(draftReview.summary),
+      planningDraftId: approvedDraft?.id,
+      planText: planTextForStage,
+      summaryJson: JSON.stringify(planSummary),
       repoUrl: context.repoUrl,
       harnessPreset: context.presetKey,
       workingDir: context.workingDir,
@@ -1227,23 +1427,26 @@ export class SlackSurface implements Surface {
       confirmationMode: draftReview.confirmationMode,
     });
     try {
-      await this.postSlackPlanDraft(draft, draftReview.summary, say);
+      await this.postSlackPlanDraft(draft, planSummary, say);
+      return { staged: true };
     } catch (error) {
       // The draft row already exists at this point and postSlackPlanDraft has
-      // already surfaced the failure by updating the Slack message in place,
-      // so this must not propagate: letting it reach the button handler's
-      // catch would restore the pending confirmation and offer "click
-      // Approve to retry", which re-runs this whole method and creates a
+      // already surfaced the failure by updating the Slack message in place.
+      // Returning a result here (instead of throwing) matters: a caller that
+      // offers a retry button must not treat this as a fresh, unhandled
+      // failure to re-arm -- re-running this method on retry would create a
       // second, orphaned draft instead of reconciling the one that exists.
-      this.log('slack', 'error', `Posting plan draft ${draft.draftId}:${draft.version} failed: ${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    if (draftReview.confirmationMode === 'auto_submit') {
-      try {
-        await this.submitSlackPlanDraft(this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft, { userId });
-      } catch (error) {
-        this.log('slack', 'error', `Auto-submit failed for draft ${draft.draftId}:${draft.version}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.log('slack', 'error', `Posting plan draft ${draft.draftId}:${draft.version} failed: ${message}`);
+      await this.handleEvent({
+        type: 'alert',
+        severity: 'critical',
+        source: 'slack-plan-draft',
+        subject: draft.draftId,
+        message: `Plan review card failed to post: ${message}`,
+        alertKey: `plan-draft-post-failed:${draft.draftId}`,
+      });
+      return { staged: false, reason: 'posting_error', message, draftId: draft.draftId };
     }
   }
 
@@ -1251,14 +1454,15 @@ export class SlackSurface implements Surface {
     if (!this.slackPlanDraftRepo) {
       throw new Error('Slack plan reviews are not configured in this deployment.');
     }
-    const summary = summarizePlanText(input.planText);
+    const planText = this.normalizeDraftedPlanRepoUrl(input.planText, input.repoUrl);
+    const summary = summarizePlanText(planText);
     if (!summary) {
       throw new Error('The supplied plan YAML could not be summarized for Slack review.');
     }
     const draft = this.slackPlanDraftRepo.create({
       channelId: input.channelId,
       threadTs: input.threadTs,
-      planText: input.planText,
+      planText,
       summaryJson: JSON.stringify(summary),
       repoUrl: input.repoUrl,
       harnessPreset: input.harnessPreset,
@@ -1417,8 +1621,21 @@ export class SlackSurface implements Surface {
     return parsed;
   }
 
+  private describeOutboundActions(blocks: unknown[] | undefined): string {
+    if (!blocks?.length) return 'none';
+    const pairs: string[] = [];
+    for (const block of blocks as Array<{ elements?: Array<{ action_id?: string; value?: string }> }>) {
+      for (const el of block.elements ?? []) {
+        if (el.action_id) pairs.push(`${el.action_id}=${el.value ?? ''}`);
+      }
+    }
+    return pairs.length > 0 ? pairs.join(',') : 'none';
+  }
+
   private async replacePlanDraftMessage(draft: SlackPlanDraft, text: string, blocks: unknown[]): Promise<void> {
     if (!draft.messageTs) return;
+    this.log('slack', 'info',
+      `[OUTBOUND_MESSAGE] chat.update channel=${draft.channelId} thread_ts=${draft.threadTs} ts=${draft.messageTs} draft=${draft.draftId}:${draft.version} textPreview="${text.slice(0, 100).replace(/\n/g, '\\n')}" actions=${this.describeOutboundActions(blocks)}`);
     await this.app.client.chat.update({
       channel: draft.channelId,
       ts: draft.messageTs,
@@ -1434,10 +1651,16 @@ export class SlackSurface implements Surface {
     if (draft.status !== 'ready') {
       throw new Error(`This plan review is ${draft.status}.`);
     }
-    if (!draft.messageTs || !draft.slackFileId
-      || createHash('sha256').update(draft.planText).digest('hex') !== draft.contentHash) {
+    if (!draft.messageTs || !draft.slackFileId) {
       throw new Error('This plan review failed its integrity check and cannot be approved.');
     }
+    const approvedPlanText = this.slackPlanDraftRepo?.resolvePlanText(draft);
+    if (!approvedPlanText) {
+      throw new Error('This plan review has no resolvable immutable draft.');
+    }
+    const planTextForSubmit = draft.planningDraftId
+      ? approvedPlanText
+      : this.normalizeDraftedPlanRepoUrl(approvedPlanText, draft.repoUrl);
     const executionKey = this.slackPlanDraftRepo?.claim(draft);
     if (!executionKey) {
       throw new Error('This plan is already being submitted.');
@@ -1446,7 +1669,7 @@ export class SlackSurface implements Surface {
     try {
       const result = await this.onCommand?.({
         type: 'start_plan',
-        planText: draft.planText,
+        planText: planTextForSubmit,
         repoUrl: draft.repoUrl,
         harnessPreset: draft.harnessPreset,
         requestedBy: draft.requestedBy,
@@ -1466,12 +1689,34 @@ export class SlackSurface implements Surface {
     }
   }
 
+  private logDraftActionUnavailable(
+    actionName: string,
+    value: string,
+    key: { draftId: string; version: number } | undefined,
+    context: { channel?: string; threadTs?: string; userId?: string },
+    draft: SlackPlanDraft | undefined,
+  ): void {
+    const reasons: string[] = [];
+    if (!key) reasons.push('unparseable_button_value');
+    if (key && !draft) reasons.push('draft_row_not_found');
+    if (!context.channel) reasons.push('missing_context_channel');
+    if (!context.threadTs) reasons.push('missing_context_threadTs');
+    if (!context.userId) reasons.push('missing_context_userId');
+    if (draft && context.channel && draft.channelId !== context.channel) reasons.push(`channel_mismatch(draft=${draft.channelId},click=${context.channel})`);
+    if (draft && context.threadTs && draft.threadTs !== context.threadTs) reasons.push(`threadTs_mismatch(draft=${draft.threadTs},click=${context.threadTs})`);
+    if (draft && context.userId && draft.requestedBy !== context.userId) reasons.push(`requestedBy_mismatch(draft=${draft.requestedBy},click=${context.userId})`);
+    this.log('slack', 'warn',
+      `[PLAN_DRAFT_ACTION_UNAVAILABLE] action=${actionName} value="${value}" draft=${draft ? `${draft.draftId}:${draft.version}(status=${draft.status})` : 'none'} click_channel=${context.channel ?? 'none'} click_threadTs=${context.threadTs ?? 'none'} click_userId=${context.userId ?? 'none'} reasons=${reasons.join('|') || 'unknown'}`);
+  }
+
   private async approveSlackPlanDraft(value: string, body: unknown, respond?: RespondFn): Promise<void> {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
     const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs) {
+    if (!draft || !context.channel || !context.threadTs || !context.userId
+      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
+      || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('approve', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1486,8 +1731,10 @@ export class SlackSurface implements Surface {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
     const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs) {
+    if (!draft || !context.channel || !context.threadTs || !context.userId
+      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
+      || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('cancel', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1507,8 +1754,10 @@ export class SlackSurface implements Surface {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
     const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs) {
+    if (!draft || !context.channel || !context.threadTs || !context.userId
+      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
+      || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('discard', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1523,9 +1772,9 @@ export class SlackSurface implements Surface {
   private planDraftBlocks(
     summary: PlanSummary,
     draft: SlackPlanDraft,
-    state: 'plain' | 'ready' | 'kept',
+    state: 'ready' | 'kept',
   ): unknown[] {
-    const text = [`*${summary.name}*`, ...formatPlanSummaryLines(summary)].join('\n');
+    const text = clampMrkdwnText([`*${summary.name}*`, ...formatPlanSummaryLines(summary)].join('\n'));
     const actionButtons = state === 'ready'
       ? [
           {
@@ -1542,23 +1791,21 @@ export class SlackSurface implements Surface {
             value: `${draft.draftId}:${draft.version}`,
           },
         ]
-      : state === 'kept'
-        ? [
-            {
-              type: 'button',
-              action_id: 'plan_draft_approve',
-              style: 'primary',
-              text: { type: 'plain_text', text: 'Approve' },
-              value: `${draft.draftId}:${draft.version}`,
-            },
-            {
-              type: 'button',
-              action_id: 'plan_draft_discard',
-              text: { type: 'plain_text', text: 'Discard draft' },
-              value: `${draft.draftId}:${draft.version}`,
-            },
-          ]
-        : [];
+      : [
+          {
+            type: 'button',
+            action_id: 'plan_draft_approve',
+            style: 'primary',
+            text: { type: 'plain_text', text: 'Approve' },
+            value: `${draft.draftId}:${draft.version}`,
+          },
+          {
+            type: 'button',
+            action_id: 'plan_draft_discard',
+            text: { type: 'plain_text', text: 'Discard draft' },
+            value: `${draft.draftId}:${draft.version}`,
+          },
+        ];
     return [
       { type: 'section', text: { type: 'mrkdwn', text } },
       ...(actionButtons.length > 0 ? [{
@@ -1574,13 +1821,7 @@ export class SlackSurface implements Surface {
     say: SayFn,
   ): Promise<void> {
     if (!this.slackPlanDraftRepo) return;
-    const posted = await this.sayWithRateLimitRetry(say, {
-      text: `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}\nPreparing YAML attachment…`,
-      thread_ts: draft.threadTs,
-      blocks: this.planDraftBlocks(summary, draft, 'plain'),
-    });
-    if (!posted?.ts) throw new Error('Slack did not return a timestamp for the plan review message.');
-    this.slackPlanDraftRepo.bindMessage(draft, posted.ts);
+    let fileId: string | undefined;
     try {
       const upload = await this.app.client.files.uploadV2({
         channel_id: draft.channelId,
@@ -1591,23 +1832,46 @@ export class SlackSurface implements Surface {
           title: `${summary.name}.yaml`,
         }],
       }) as unknown as { files?: Array<{ files?: Array<{ id?: string }> }> };
-      const fileId = upload.files?.[0]?.files?.[0]?.id;
+      fileId = upload.files?.[0]?.files?.[0]?.id;
       if (!fileId) throw new Error('Slack did not return an uploaded YAML file id.');
-      this.slackPlanDraftRepo.bindAttachment(draft, fileId);
-      this.slackPlanDraftRepo.markReady(draft);
-      await this.replacePlanDraftMessage(
-        this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft,
-        `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}`,
-        this.planDraftBlocks(summary, draft, 'ready'),
-      );
     } catch (error) {
-      await this.app.client.chat.update({
-        channel: draft.channelId,
-        ts: posted.ts,
-        text: `Plan review could not attach YAML: ${error instanceof Error ? error.message : String(error)}`,
-        blocks: [],
-      });
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new PlanDraftPostingError(message, { cause: error });
+    }
+    this.slackPlanDraftRepo.bindAttachment(draft, fileId);
+    // files.uploadV2 resolving doesn't guarantee the file's share message has
+    // landed in the channel yet -- Slack attaches it to the thread slightly
+    // asynchronously. Confirm it's visible before posting the button message,
+    // so the file reliably appears above the Approve/Cancel card, not below it.
+    await this.waitForFileMessage(draft.channelId, draft.threadTs, fileId);
+
+    const posted = await this.sayWithRateLimitRetry(say, {
+      text: `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}`,
+      thread_ts: draft.threadTs,
+      blocks: this.planDraftBlocks(summary, draft, 'ready'),
+    });
+    if (!posted?.ts) throw new PlanDraftPostingError('Slack did not return a timestamp for the plan review message.');
+    this.slackPlanDraftRepo.bindMessage(draft, posted.ts);
+    this.slackPlanDraftRepo.markReady(draft);
+  }
+
+  private async waitForFileMessage(channelId: string, threadTs: string, fileId: string): Promise<void> {
+    const maxAttempts = 6;
+    const delayMs = 300;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const replies = await this.app.client.conversations.replies({
+          channel: channelId,
+          ts: threadTs,
+          limit: 20,
+        }) as unknown as { messages?: Array<{ files?: Array<{ id?: string }> }> };
+        if (replies.messages?.some((message) => message.files?.some((file) => file.id === fileId))) {
+          return;
+        }
+      } catch {
+        return;
+      }
+      await this.sleep(delayMs);
     }
   }
 
@@ -2157,6 +2421,106 @@ ${text}`;
     );
   }
 
+  private resolveChannelDefaultRepoUrl(channelId: string | undefined): string | undefined {
+    if (!channelId) return undefined;
+    const configured = this.channelRepoBindings[channelId];
+    if (configured) return this.normalizeRepositoryUrl(configured);
+    const mapping = this.workflowChannelRepo?.getByChannelId(channelId);
+    if (isChannelRepoBinding(mapping) && mapping?.repoUrl) {
+      return this.normalizeRepositoryUrl(mapping.repoUrl);
+    }
+    return undefined;
+  }
+
+  private async handleChannelRepoSetup(
+    pairs: ChannelRepoSetupPair[],
+    event: SlackMentionEvent,
+    channel: string,
+    say: SayFn,
+  ): Promise<void> {
+    const userId = event.user;
+    if (!userId || !this.adminUserIds.has(userId)) {
+      await say({ text: 'Permission denied. Slack channel repository setup requires admin access.', thread_ts: event.ts });
+      return;
+    }
+    if (!this.workflowChannelRepo) {
+      await say({ text: 'Slack channel repository setup is not available because channel persistence is not configured.', thread_ts: event.ts });
+      return;
+    }
+
+    const bound: string[] = [];
+    const failed: string[] = [];
+    const inviteFailed: string[] = [];
+    for (const pair of pairs) {
+      const channelId = await this.resolveOrCreatePublicChannel(pair.channelName);
+      if (!channelId) {
+        failed.push(`#${pair.channelName}`);
+        continue;
+      }
+      const repoUrl = this.normalizeRepositoryUrl(pair.repoUrl);
+      this.workflowChannelRepo.save({
+        workflowId: channelRepoBindingWorkflowId(channelId),
+        channelId,
+        requestedBy: userId,
+        lobbyChannelId: channel,
+        lobbyThreadTs: event.ts,
+        harnessPreset: this.defaultHarnessPreset,
+        repoUrl,
+        createdAt: new Date().toISOString(),
+      });
+      bound.push(`<#${channelId}> -> \`${repoDisplayName(repoUrl)}\``);
+      const inviteError = await this.inviteRequesterToChannel(channelId, userId);
+      if (inviteError) {
+        inviteFailed.push(`<#${channelId}> (${inviteError})`);
+      }
+    }
+
+    const lines = [
+      ...(bound.length ? [`Configured ${bound.length} channel repository default${bound.length === 1 ? '' : 's'}:`, ...bound.map((item) => `- ${item}`)] : []),
+      ...(inviteFailed.length ? [
+        `The repository default is bound, but I could not invite you to ${inviteFailed.join(', ')}. Ask a workspace admin to invite you, or check that the bot has permission to invite users to public channels and was reinstalled after permission changes.`,
+      ] : []),
+      ...(failed.length ? [`Failed to configure: ${failed.join(', ')}.`] : []),
+    ];
+    await say({ text: lines.join('\n') || 'No channel repository defaults were configured.', thread_ts: event.ts });
+  }
+
+  private async inviteRequesterToChannel(channelId: string, userId: string): Promise<string | undefined> {
+    try {
+      await this.app.client.conversations.invite({ channel: channelId, users: userId });
+      return undefined;
+    } catch (err) {
+      const code = this.slackErrorCode(err);
+      if (code === 'already_in_channel' || code === 'cant_invite_self') {
+        return undefined;
+      }
+      const error = code ?? (err instanceof Error ? err.message : String(err));
+      this.log('slack', 'warn', `Failed to invite ${userId} to public repo channel ${channelId}: ${err}`);
+      return error;
+    }
+  }
+
+  private async resolveOrCreatePublicChannel(name: string): Promise<string | undefined> {
+    const client = this.app.client;
+    try {
+      const created = await client.conversations.create({ name, is_private: false });
+      return created.channel?.id;
+    } catch (err) {
+      const code = this.slackErrorCode(err);
+      if (code !== 'name_taken') {
+        this.log('slack', 'error', `Failed to create public channel ${name}: ${err}`);
+        return undefined;
+      }
+      try {
+        const list = await client.conversations.list({ types: 'public_channel', limit: 1000 });
+        return (list.channels ?? []).find((candidate) => candidate.name === name && !candidate.is_private)?.id;
+      } catch (listErr) {
+        this.log('slack', 'error', `Failed to list public channels after name_taken for ${name}: ${listErr}`);
+        return undefined;
+      }
+    }
+  }
+
   private resolveRepoUrl(repo?: string): { url?: string; error?: string } {
     if (!repo) return { url: this.defaultRepoUrl && this.normalizeRepositoryUrl(this.defaultRepoUrl) };
     const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repo.toLowerCase());
@@ -2189,6 +2553,20 @@ ${text}`;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return planText;
 
     const plan = raw as Record<string, unknown>;
+    if (plan.scratch === true) return planText;
+    if (contextRepoUrl) {
+      plan.repoUrl = contextRepoUrl;
+      if (Array.isArray(plan.workflows)) {
+        for (const workflow of plan.workflows) {
+          if (workflow && typeof workflow === 'object' && !Array.isArray(workflow)) {
+            const child = workflow as Record<string, unknown>;
+            if (child.scratch !== true) child.repoUrl = contextRepoUrl;
+          }
+        }
+      }
+      return stringifyYaml(plan);
+    }
+
     if (typeof plan.repoUrl !== 'string') return planText;
     const repoUrl = plan.repoUrl.trim();
     const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repoUrl.toLowerCase());
@@ -2221,6 +2599,7 @@ ${text}`;
     say: SayFn,
   ): Promise<void> {
     const threadTs = event.thread_ts ?? event.ts;
+    const channel = event.channel ?? mapping.channelId;
     const text = (event.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
     this.log('slack', 'info', `[WORKFLOW_MENTION] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} workflow=${mapping.workflowId}`);
     if (!text) {
@@ -2242,14 +2621,65 @@ ${text}`;
       return;
     }
 
+    if (this.enableImmediateAck) {
+      await this.sendImmediateAck(threadTs, say);
+    }
+
+    const heartbeatMs = (this.planningHeartbeatIntervalSeconds ?? 120) * 1_000;
+    let heartbeatTimer: NodeJS.Timeout | undefined;
+    const heartbeatTimestamps: string[] = [];
+    let heartbeatInFlight = false;
+    const cleanupHeartbeats = async (): Promise<void> => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+      for (const hbTs of heartbeatTimestamps) {
+        try {
+          await this.deleteMessage(channel, hbTs);
+        } catch (err) {
+          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
+        }
+      }
+    };
+    if (heartbeatMs > 0) {
+      heartbeatTimer = setInterval(async () => {
+        if (heartbeatInFlight) return;
+        heartbeatInFlight = true;
+        try {
+          const result = await this.sayWithRateLimitRetry(say, {
+            text: ':hourglass_flowing_sand: Still thinking...',
+            thread_ts: threadTs,
+          });
+          if (result?.ts) heartbeatTimestamps.push(result.ts);
+          this.log('slack', 'info', `[HEARTBEAT] Sent planning heartbeat (thread_ts=${threadTs})`);
+        } catch (err) {
+          this.log('slack', 'error', `[HEARTBEAT] Failed to send planning heartbeat: ${err}`);
+        } finally {
+          heartbeatInFlight = false;
+        }
+      }, heartbeatMs);
+    }
+
     try {
       const ctx = await this.gatherWorkflowContext(mapping.workflowId);
       const harness = this.resolveHarnessPreset(mapping.harnessPreset ?? this.defaultHarnessPreset);
       this.log('slack', 'info', `[WORKFLOW_PLANNER] instance=${this.instanceId} event_ts=${event.ts} tool=${harness.tool} model=${harness.model ?? 'default'}`);
       const reply = await this.runOneShotPlanner(harness, buildAssistantPrompt(text, ctx));
       const chunks = splitForSlack(sanitizeSlackOutbound(reply));
-      for (let i = 0; i < chunks.length; i++) {
-        if (i > 0) await this.sleep(this.messagePacingMs);
+      const ackTs = this.ackMessages.get(threadTs);
+      if (ackTs && chunks[0]) {
+        const updated = await this.updateMessage(channel, ackTs, { text: chunks[0], blocks: [] });
+        this.ackMessages.delete(threadTs);
+        if (!updated) {
+          await this.deleteMessage(channel, ackTs);
+          await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
+        }
+      } else if (chunks[0]) {
+        await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
+      }
+      for (let i = 1; i < chunks.length; i++) {
+        await this.sleep(this.messagePacingMs);
         await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
       }
     } catch (err) {
@@ -2258,6 +2688,9 @@ ${text}`;
         text: `Error: ${err instanceof Error ? err.message : String(err)}`,
         thread_ts: threadTs,
       });
+    } finally {
+      await cleanupHeartbeats();
+      await this.clearImmediateAck(channel, threadTs);
     }
   }
 
@@ -2375,33 +2808,47 @@ ${text}`;
       let stdout = '';
       let stderr = '';
       let timedOut = false;
+      let settled = false;
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
       child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       const timer = setTimeout(() => {
         timedOut = true;
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-      }, timeoutMs);
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (timedOut) {
+        settle(() => {
           reject(new Error(`Planner timed out after ${timeoutMs}ms`));
-          return;
-        }
-        if (code === 0) {
-          const trimmed = stdout.trim();
-          if (trimmed) {
-            const message = formatCodexPlannerStdout(trimmed).message;
-            resolve(message || 'The planner completed without a final user-facing reply.');
-          } else {
-            reject(new EmptyOutputAttemptError(stderr));
+        });
+      }, timeoutMs);
+      const onProcessEnd = (code: number | null): void => {
+        settle(() => {
+          if (timedOut) {
+            reject(new Error(`Planner timed out after ${timeoutMs}ms`));
+            return;
           }
-        } else {
-          reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
-        }
-      });
+          if (code === 0) {
+            const trimmed = stdout.trim();
+            if (trimmed) {
+              const message = formatCodexPlannerStdout(trimmed).message;
+              resolve(message || 'The planner completed without a final user-facing reply.');
+            } else {
+              reject(new EmptyOutputAttemptError(stderr));
+            }
+          } else {
+            reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
+          }
+        });
+      };
+      child.on('exit', (code) => { onProcessEnd(code); });
+      child.on('close', (code) => { onProcessEnd(code); });
       child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(new Error(`Failed to spawn planner CLI: ${err.message}`));
+        settle(() => {
+          reject(new Error(`Failed to spawn planner CLI: ${err.message}`));
+        });
       });
     });
   }
@@ -2563,7 +3010,8 @@ ${text}`;
       if (this.botUserId && (msg.text ?? '').includes(`<@${this.botUserId}>`)) return;
 
       const channel = (msg.channel as string | undefined) ?? this.channelId;
-      if (msg.channel && this.workflowChannelRepo?.getByChannelId(msg.channel)) return;
+      const mapping = msg.channel ? this.workflowChannelRepo?.getByChannelId(msg.channel) : null;
+      if (mapping && !isChannelRepoBinding(mapping)) return;
 
       const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
       if (!text) return;
@@ -2755,8 +3203,14 @@ ${text}`;
 
       if (this.conversationalPlanning && conversation.conversationMode === 'plan' && conversation.lastTurnDraftPlanText) {
         try {
-          await this.stageDraftReviewFromPlannerOutput(reply, conversation, channel, threadTs,
+          const stageResult = await this.stageDraftReviewFromPlannerOutput(reply, conversation, channel, threadTs,
             planIntentContext?.userId ?? 'unknown', say, { silentWhenNotReady: true });
+          if (stageResult.staged === false && stageResult.reason === 'posting_error') {
+            await this.sayWithRateLimitRetry(say, {
+              text: `I hit an error trying to prepare the plan review card: ${stageResult.message}.`,
+              thread_ts: threadTs,
+            });
+          }
         } catch (err) {
           this.log('slack', 'error', `[DRAFT_STAGE] failed to stage conversational draft thread_ts=${threadTs}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
         }
@@ -2835,15 +3289,25 @@ ${text}`;
     say: SayFn,
     msg: { text: string; thread_ts: string; blocks?: unknown[] },
   ): Promise<any> {
+    const textPreview = (msg.text ?? '').slice(0, 100).replace(/\n/g, '\\n');
+    const actions = this.describeOutboundActions(msg.blocks);
+    let result: any;
     try {
-      return await say(msg);
+      result = await say(msg);
     } catch (err) {
       const retryAfterMs = this.getRetryAfterMs(err);
-      if (retryAfterMs === null) throw err;
+      if (retryAfterMs === null) {
+        this.log('slack', 'error',
+          `[OUTBOUND_MESSAGE] say FAILED thread_ts=${msg.thread_ts} textPreview="${textPreview}" actions=${actions} error=${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
       this.log('slack', 'warn', `[RATE_LIMIT] Delaying retry for ${retryAfterMs}ms (thread_ts=${msg.thread_ts})`);
       await this.sleep(retryAfterMs + 100);
-      return await say(msg);
+      result = await say(msg);
     }
+    this.log('slack', 'info',
+      `[OUTBOUND_MESSAGE] say thread_ts=${msg.thread_ts} ts=${result?.ts ?? 'unknown'} textPreview="${textPreview}" actions=${actions}`);
+    return result;
   }
 
   private isCursorCliMissingError(err: unknown): boolean {
@@ -3053,6 +3517,8 @@ ${text}`;
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
         conversationalPlanning: this.conversationalPlanning,
+        planningSurface: 'slack',
+        planDoctorScriptPath: this.planDoctorScriptPath,
         harnessSessionDriver: opts?.harnessSessionDriver,
         harnessSessionId: opts?.harnessSessionId,
         onHarnessSessionId: (sessionId) => this.persistHarnessSessionId(threadTs, sessionId),
@@ -3152,6 +3618,8 @@ ${text}`;
             plannerRetryLimit: this.plannerRetryLimit,
             plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
             conversationalPlanning: this.conversationalPlanning,
+            planningSurface: 'slack',
+            planDoctorScriptPath: this.planDoctorScriptPath,
             ...this.harnessDriverSessionOpts(harness, context ?? {}),
             onHarnessSessionId: (sessionId) => this.persistHarnessSessionId(entry.threadTs, sessionId),
           });

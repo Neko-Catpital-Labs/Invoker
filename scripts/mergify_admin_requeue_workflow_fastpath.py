@@ -10,16 +10,37 @@ from pathlib import Path
 try:
     from .mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from .mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from .mergify_admin_requeue_model import DEFAULT_INVOKER_REPO
+    from .mergify_admin_requeue_async_repair import (
+        rebase_onto_master_plan_name,
+        repair_bot_thread_plan_name,
+        repair_check_plan_name,
+        repair_conflict_plan_name,
+    )
 except ImportError:
     from mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from mergify_admin_requeue_model import DEFAULT_INVOKER_REPO
+    from mergify_admin_requeue_async_repair import (
+        rebase_onto_master_plan_name,
+        repair_bot_thread_plan_name,
+        repair_check_plan_name,
+        repair_conflict_plan_name,
+    )
 
 
-def resolve_workflow_for_pr(pr_number: int) -> str | None:
+def resolve_workflow_for_pr(pr_number: int, repo: str = DEFAULT_INVOKER_REPO) -> str | None:
     # See cron-pr-lib.sh's resolve_workflow_for_pr comment: review-gate exits 0
     # with `{}` for a genuine miss (no local workflow mapping). A non-zero exit
     # means the lookup mechanism itself is broken, which must propagate as an
     # exception rather than silently falling back to ad-hoc repair.
+    #
+    # Invoker only ever owns a workflow for a PR on its own repo -- a foreign
+    # repo's PR number can collide with an unrelated Invoker PR number, so
+    # skip the lookup entirely for any other repo instead of risking the
+    # fast-path reusing the wrong repo's workflow.
+    if repo != DEFAULT_INVOKER_REPO:
+        return None
     review_gate_cmd = os.environ.get("INVOKER_PR_CRON_REVIEW_GATE_CMD")
     if review_gate_cmd:
         try:
@@ -80,8 +101,74 @@ def submit_rebase_recreate(workflow_id: str) -> None:
 # machinery already understands (PR #7484, 2026-08-05: an accepted-but-starved
 # recreate looked "handled" while its three predecessors had already failed).
 
-_FASTPATH_SETTLE_KINDS = ("conflict-repair", "repair-check")
+_FASTPATH_SETTLE_KINDS = ("conflict-repair", "rebase-onto-master", "repair-check")
 _TERMINAL_WORKFLOW_STATUSES = frozenset({"completed", "failed", "cancelled", "review_ready", "merged"})
+_SSH_INFRA_FAILURE_CLASSES = frozenset({
+    "ssh-env-invalid-export",
+    "ssh-worktree-missing",
+    "ssh-invalid-reference",
+    "ssh-repo-mirror-corrupt",
+    "ssh-worktree-corrupt",
+    "ssh-oauth-session-expired",
+    "ssh-disk-full",
+})
+_OAUTH_INFRA_SIGNATURE = "Failed to authenticate: OAuth session expired and could not be refreshed"
+
+
+def list_workflow_tasks(workflow_id: str) -> list[dict] | None:
+    completed = _run_headless('headless_query query tasks "$2" --output json', workflow_id)
+    if completed.returncode != 0:
+        return None
+    text = completed.stdout.strip()
+    if not text:
+        return None
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            return [row for row in parsed if isinstance(row, dict)]
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return [row for row in parsed if isinstance(row, dict)] if isinstance(parsed, list) else None
+
+
+def classify_repair_outcome(workflow_id: str, status: str) -> str:
+    """Classify a terminal repair workflow for Mergify code-cap accounting.
+
+    `infra` and `superseded` must not spend the code-repair attempt budget.
+    Unknown/code failures still count so thrash cannot loop forever.
+    Inspect tasks before treating `completed` as success — a merge-gate
+    workflow can complete while safe-push failed with stale-head (PR #10278).
+    """
+    tasks = list_workflow_tasks(workflow_id) or []
+    for task in tasks:
+        execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
+        failure_class = execution.get("failureClass")
+        if isinstance(failure_class, str) and failure_class in _SSH_INFRA_FAILURE_CLASSES:
+            return "infra"
+        error = str(execution.get("error") or execution.get("pendingFixError") or "")
+        if "stale-head" in error:
+            return "superseded"
+        if "fatal: not a git repository" in error and "/.git/worktrees/" in error:
+            return "infra"
+        if _OAUTH_INFRA_SIGNATURE in error:
+            return "infra"
+        if "No space left on device" in error:
+            return "infra"
+        if "/Users/" in error and ("PermissionError" in error or "Permission denied" in error):
+            return "infra"
+    if status == "completed":
+        return "success"
+    if status in _TERMINAL_WORKFLOW_STATUSES:
+        return "code"
+    return "unknown"
 
 
 def _parse_last_json_object(stdout: str) -> dict | None:
@@ -139,9 +226,104 @@ def settle_workflow_fastpath_rows(ledger, now: int) -> int:
             continue
         status = workflow_status(str(workflow_id))
         if status in _TERMINAL_WORKFLOW_STATUSES:
+            outcome = classify_repair_outcome(str(workflow_id), status)
             ledger.record(
                 f"{kind}-settled", pr, head, key, now,
-                meta={"workflowId": str(workflow_id), "workflowStatus": status, "settledBy": "fastpath-observer"},
+                meta={
+                    "workflowId": str(workflow_id),
+                    "workflowStatus": status,
+                    "outcomeClass": outcome,
+                    "settledBy": "fastpath-observer",
+                },
+            )
+            settled += 1
+    return settled
+
+
+def list_workflows() -> list[dict] | None:
+    """List every known workflow. Used by settle_repairer_plan_rows, which
+    (unlike settle_workflow_fastpath_rows) has no workflowId to look up
+    directly and must find its match by name instead."""
+    completed = _run_headless('headless_query query workflows --output json')
+    if completed.returncode != 0:
+        return None
+    text = completed.stdout.strip()
+    if not text:
+        return None
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            return parsed
+    return None
+
+
+# repairer.py's ad-hoc repair plans (repair-check, rebase-onto-master,
+# repair-bot-thread; plus legacy conflict-repair) settle via their own plan's
+# `safe-push` task, which only runs if the upstream `repair` task succeeds.
+# When `repair` itself fails, `safe-push` never runs and the `-settled` row is
+# never written -- the row repairer.py records before submission (see
+# AdminBypassRepairer) carries no meta.workflowId, so
+# settle_workflow_fastpath_rows's lookup can't find it either. Unlike a
+# fast-path rebase-recreate, these plan names are fully deterministic from
+# (pr, headSha, key) via the same *_plan_name() helpers used to build the plan,
+# so the matching workflow can be found by name instead of by a recorded id
+# (PR #9172: a failed repair-bot-thread attempt left `repair_in_flight`
+# believing a repair was still running for the rest of its 90-minute TTL, even
+# though the workflow had already failed).
+_REPAIRER_PLAN_SETTLE_KINDS = ("repair-check", "conflict-repair", "rebase-onto-master", "repair-bot-thread")
+
+
+def _repairer_plan_name(kind: str, pr: int, head: str, key: str) -> str:
+    if kind == "repair-check":
+        return repair_check_plan_name(pr, key, head)
+    if kind == "conflict-repair":
+        return repair_conflict_plan_name(pr, head)
+    if kind == "rebase-onto-master":
+        return rebase_onto_master_plan_name(pr, head)
+    return repair_bot_thread_plan_name(pr, head)
+
+
+def settle_repairer_plan_rows(ledger, now: int) -> int:
+    """Write `<kind>-settled` rows for repairer.py's ad-hoc repair plans whose
+    workflow reached a terminal status but whose own safe-push task never ran
+    to write it. Returns how many rows were settled."""
+    pending = [row for row in ledger.rows if row.get("kind") in _REPAIRER_PLAN_SETTLE_KINDS]
+    if not pending:
+        return 0
+    workflows: list[dict] | None = None
+    settled = 0
+    for row in pending:
+        kind = str(row.get("kind"))
+        pr = int(row.get("pr", -1))
+        head = str(row.get("headSha") or "")
+        key = str(row.get("key") or "")
+        existing = ledger.latest(f"{kind}-settled", pr, head, key)
+        if existing is not None and int(existing.get("epoch", 0) or 0) >= int(row.get("epoch", 0) or 0):
+            continue
+        if workflows is None:
+            workflows = list_workflows() or []
+        plan_name = _repairer_plan_name(kind, pr, head, key)
+        match = next((w for w in workflows if w.get("name") == plan_name), None)
+        if match is None:
+            continue
+        status = match.get("status")
+        if status in _TERMINAL_WORKFLOW_STATUSES:
+            workflow_id = str(match.get("id") or "")
+            outcome = classify_repair_outcome(workflow_id, str(status)) if workflow_id else "unknown"
+            ledger.record(
+                f"{kind}-settled", pr, head, key, now,
+                meta={
+                    "workflowId": match.get("id"),
+                    "workflowStatus": status,
+                    "outcomeClass": outcome,
+                    "settledBy": "repairer-plan-observer",
+                },
             )
             settled += 1
     return settled

@@ -41,7 +41,7 @@ function makeLeg(kind) {
   writeFileSync(nodeLog, '');
   writeFileSync(
     join(bin, 'node'),
-    `#!/usr/bin/env bash\nprintf 'node %s\\n' "$*" >> ${JSON.stringify(nodeLog)}\nexit 0\n`,
+    `#!/usr/bin/env bash\nif [[ "$#" -ge 1 && ( "$1" == *"/scripts/retry-ledger.mjs" || ( "$1" == *"/scripts/repro/fixtures/fake-headless-ipc.js" && "$*" == *"repair-filing"* ) ) ]]; then\n  exec ${JSON.stringify(process.execPath)} "$@"\nfi\nprintf 'node %s\\n' "$*" >> ${JSON.stringify(nodeLog)}\nexit 0\n`,
     { mode: 0o755 },
   );
   const lines = [];
@@ -56,6 +56,7 @@ function makeLeg(kind) {
     FAKE_GH_STATE_DIR: state,
     INVOKER_GITHUB_TARGET_REPO: 'fake/repo',
     INVOKER_PR_CRON_AUTHOR: 'fake-bot',
+    INVOKER_HEADLESS_IPC_HELPER: join(ROOT, 'scripts/repro/fixtures/fake-headless-ipc.js'),
   };
   return { kind, legDir, bin, state, home, nodeLog, lines, logger, baseEnv };
 }
@@ -109,8 +110,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   assert(leg, has(leg, '[worker:pr-admin-bypass-land] spawning scripts/cron-pr-admin-bypass-land.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
-  assert(leg, has(leg, 'DRY-RUN repair-conflict PR #501'),
-    'conflicted PR triggered the admin-bypass repair-conflict path');
+  assert(leg, has(leg, 'DRY-RUN rebase-onto-master PR #501 GitHub reports merge conflict'),
+    'conflicted PR triggered the admin-bypass rebase-onto-master path');
 }
 
 // ---------------------------------------------------------------------------
