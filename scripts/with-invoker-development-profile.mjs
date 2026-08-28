@@ -21,10 +21,11 @@ function productionUserDataDir(homeDir) {
   return join(process.env.XDG_CONFIG_HOME ?? join(homeDir, '.config'), 'Invoker');
 }
 
-function developmentEnvironment(sourceRoot) {
+function developmentEnvironment(sourceRoot, env = process.env) {
   const canonicalRoot = realpathSync(resolve(sourceRoot));
   const id = createHash('sha256').update(canonicalRoot).digest('hex').slice(0, 10);
-  const homeRoot = join(homedir(), '.invoker', 'dev', id);
+  const defaultHomeRoot = join(homedir(), '.invoker', 'dev', id);
+  const homeRoot = env.INVOKER_DB_DIR?.trim() || defaultHomeRoot;
   const apiPort = 41000 + (Number.parseInt(id.slice(0, 8), 16) % 900);
   return {
     INVOKER_DEVELOPMENT_PROFILE: '1',
@@ -33,11 +34,11 @@ function developmentEnvironment(sourceRoot) {
     INVOKER_SOURCE_ROOT: canonicalRoot,
     INVOKER_PROFILE_ID: id,
     INVOKER_DB_DIR: homeRoot,
-    INVOKER_USER_DATA_DIR: join(homeRoot, 'electron'),
-    INVOKER_IPC_SOCKET: join(homeRoot, 'ipc-transport.sock'),
-    INVOKER_REPO_CONFIG_PATH: join(homeRoot, 'config.json'),
-    INVOKER_ENV_PATH: join(homeRoot, '.env'),
-    INVOKER_LOG_PATH: join(homeRoot, 'invoker.log'),
+    INVOKER_USER_DATA_DIR: env.INVOKER_USER_DATA_DIR?.trim() || join(homeRoot, 'electron'),
+    INVOKER_IPC_SOCKET: env.INVOKER_IPC_SOCKET?.trim() || join(homeRoot, 'ipc-transport.sock'),
+    INVOKER_REPO_CONFIG_PATH: env.INVOKER_REPO_CONFIG_PATH?.trim() || join(homeRoot, 'config.json'),
+    INVOKER_ENV_PATH: env.INVOKER_ENV_PATH?.trim() || join(homeRoot, '.env'),
+    INVOKER_LOG_PATH: env.INVOKER_LOG_PATH?.trim() || join(homeRoot, 'invoker.log'),
     INVOKER_API_PORT: String(apiPort),
     INVOKER_WEB_PORT: String(apiPort + 1000),
     INVOKER_DISABLE_AUTONOMOUS_WORKERS: '1',
