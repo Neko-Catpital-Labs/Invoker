@@ -470,6 +470,28 @@ describe('Slack plan submission restart repro contracts', () => {
     expect(commands).toHaveLength(1);
   });
 
+  it('lets the requester approve the current draft after a conversational (non-/plan) re-draft supersedes an older one', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands, { conversationalPlanning: true });
+    await start(slack, commands);
+
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'draft the first pass', 'conv-turn-1', 'thread-conversational');
+    const stale = slackPlanDrafts.getReady('C_LOBBY', 'thread-conversational')!;
+    expect(stale).toBeTruthy();
+
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'please try again', 'conv-turn-2', 'thread-conversational');
+    const current = slackPlanDrafts.getReady('C_LOBBY', 'thread-conversational')!;
+    expect(current).toBeTruthy();
+    expect(current.version).toBe(stale.version + 1);
+    expect(slackPlanDrafts.get(stale.draftId, stale.version)?.status).toBe('superseded');
+
+    const { respond } = await approveDraft(slack, current, 'current-ts');
+    expect(respond).not.toHaveBeenCalledWith(expect.objectContaining({ text: 'This plan review is no longer available.' }));
+    expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+  });
+
   it('reacquires an external repository checkout before restoring its thread', async () => {
     const commands: SurfaceCommand[] = [];
     const firstCheckout = vi.fn().mockResolvedValue('/planning-clones/proof-first');
