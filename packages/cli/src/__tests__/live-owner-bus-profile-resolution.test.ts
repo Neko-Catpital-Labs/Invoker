@@ -29,7 +29,8 @@ describe('createDefaultMessageBus profile-aware socket resolution', () => {
     for (const key of Object.keys(process.env)) {
       if (key.startsWith('INVOKER_')) delete process.env[key];
     }
-    tmpHome = mkdtempSync(join(tmpdir(), 'live-owner-bus-profile-'));
+    const socketTmpRoot = process.platform === 'darwin' ? '/tmp' : tmpdir();
+    tmpHome = mkdtempSync(join(socketTmpRoot, 'live-owner-bus-profile-'));
     process.env.HOME = tmpHome;
   });
 
