@@ -25,7 +25,11 @@ import {
   type MessageHandler,
   type Unsubscribe,
 } from '@invoker/transport';
-import { resolveInvokerHomeRoot, resolveInvokerIpcSocketPath } from '@invoker/contracts';
+import {
+  resolveActiveInvokerProfileEnv,
+  resolveInvokerHomeRoot,
+  resolveInvokerIpcSocketPath,
+} from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowStatus } from '@invoker/surfaces';
 
@@ -236,7 +240,9 @@ export class IpcInvokerClient implements InvokerClient {
   private readonly reconnectHandlers = new Set<() => void>();
 
   constructor(options: InvokerClientOptions) {
-    this.socketPath = options.socketPath ?? resolveInvokerIpcSocketPath();
+    const profileEnv = resolveActiveInvokerProfileEnv();
+    const mergedEnv = { ...process.env, ...profileEnv };
+    this.socketPath = options.socketPath ?? resolveInvokerIpcSocketPath(mergedEnv);
     this.healthUrl = options.healthUrl
       ?? `http://127.0.0.1:${process.env.INVOKER_API_PORT ?? 4100}/api/health`;
     this.spawnInvoker = options.spawnInvoker;
