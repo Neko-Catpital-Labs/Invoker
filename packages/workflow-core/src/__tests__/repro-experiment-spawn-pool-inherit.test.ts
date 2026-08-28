@@ -138,7 +138,7 @@ describe('repro: experiment spawn inherits pivot pool executor', () => {
     });
   });
 
-  it.fails('spawned experiment tasks keep the pivot poolId (and runnerKind)', () => {
+  it('spawned experiment tasks keep the pivot poolId (and runnerKind)', () => {
     const plan: PlanDefinition = {
       name: 'experiment-pool-inherit-repro',
       baseBranch: 'main',
@@ -173,5 +173,46 @@ describe('repro: experiment spawn inherits pivot pool executor', () => {
       expect(exp.config.runnerKind, `${local} runnerKind`).toBe(pivot.config.runnerKind);
       expect(exp.config.poolId, `${local} poolId`).toBe(pivot.config.poolId);
     }
+  });
+
+  it('spawn/graph-mutation throws when runnerKind=ssh without poolId', () => {
+    orchestrator.loadPlan({
+      name: 'experiment-pool-assert',
+      tasks: [{ id: 'pivot', description: 'Pivot', pivot: true, command: 'echo pivot' }],
+    });
+    orchestrator.startExecution();
+
+    const pivotId = sid(orchestrator, 0, 'pivot');
+    const wfId = orchestrator.getTask(pivotId)!.config.workflowId!;
+
+    expect(() =>
+      (orchestrator as unknown as {
+        applyGraphMutation(mutation: {
+          sourceNodeId: string;
+          sourceDisposition: 'complete';
+          newNodes: Array<{
+            id: string;
+            description: string;
+            dependencies: string[];
+            workflowId: string;
+            runnerKind: 'ssh';
+          }>;
+          outputNodeId: string;
+        }): unknown;
+      }).applyGraphMutation({
+        sourceNodeId: pivotId,
+        sourceDisposition: 'complete',
+        newNodes: [
+          {
+            id: sid(orchestrator, 0, 'bad-exp'),
+            description: 'Missing poolId',
+            dependencies: [pivotId],
+            workflowId: wfId,
+            runnerKind: 'ssh',
+          },
+        ],
+        outputNodeId: sid(orchestrator, 0, 'bad-exp'),
+      }),
+    ).toThrow(/runnerKind=ssh but no poolId/);
   });
 });

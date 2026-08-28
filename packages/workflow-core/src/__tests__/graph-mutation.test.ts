@@ -329,4 +329,32 @@ describe('applyGraphMutation', () => {
     expect(cRemap).toBeLessThan(bStale);
     expect(bStale).toBeLessThan(fixCreated);
   });
+
+  it('rejects pool-routed runnerKind without poolId at graph mutation', () => {
+    orchestrator.loadPlan({
+      name: 'test',
+      tasks: [{ id: 'A', description: 'A', command: 'echo A' }],
+    });
+    orchestrator.startExecution();
+
+    const s = (l: string) => sid(orchestrator, 0, l);
+    const wfId = orchestrator.getTask(s('A'))!.config.workflowId!;
+
+    expect(() =>
+      applyMutation(orchestrator, {
+        sourceNodeId: s('A'),
+        sourceDisposition: 'complete',
+        newNodes: [
+          {
+            id: s('exp-bad'),
+            description: 'Pool stamp without poolId',
+            dependencies: [s('A')],
+            workflowId: wfId,
+            runnerKind: 'ssh',
+          },
+        ],
+        outputNodeId: s('exp-bad'),
+      }),
+    ).toThrow(/runnerKind=ssh but no poolId/);
+  });
 });
