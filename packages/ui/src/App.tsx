@@ -44,6 +44,7 @@ import { BulkPoolReassignmentModal, type BulkPoolReassignmentResult } from './co
 import { WorkerDetailsPanel } from './components/WorkerDetailsPanel.js';
 import { WorkerDetailControl } from './components/WorkerDetailControl.js';
 import { WorkerActivityCard } from './components/WorkerActivityCard.js';
+import { VillageView } from './components/VillageView.js';
 import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
@@ -3548,6 +3549,14 @@ export function App() {
       setViewMode('dag');
       return;
     }
+    if (nextSurface === 'village') {
+      setSidebarSurface('village');
+      setInspectorCollapsed(true);
+      setInspectorManualOpen(false);
+      setStatusFilters(new Set<WorkflowStatus>());
+      setViewMode('dag');
+      return;
+    }
     if (nextSurface === 'home') {
       navigatePlanningHome('sidebar-home');
       return;
@@ -5062,6 +5071,12 @@ export function App() {
               renderGraphWorkspace('Plan graph', homeSubtitle, true)
             ) : sidebarSurface === 'workers' ? (
               renderWorkersSurface()
+            ) : sidebarSurface === 'village' ? (
+              <VillageView
+                snapshot={workerStatus}
+                remoteTargets={remoteTargets}
+                onSelectWorkerKind={setSelectedWorkerKind}
+              />
             ) : sidebarSurface !== 'home' ? (
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 {renderBrowserRail()}
@@ -5076,7 +5091,7 @@ export function App() {
             </KeepMounted>
           </main>
 
-          {sidebarSurface !== 'home' && sidebarSurface !== 'workers' && (
+          {sidebarSurface !== 'home' && sidebarSurface !== 'workers' && sidebarSurface !== 'village' && (
             <div
               data-testid="workflow-inspector-shell"
               data-keyboard-region="inspector"

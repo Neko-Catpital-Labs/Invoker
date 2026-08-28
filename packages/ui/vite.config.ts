@@ -11,6 +11,12 @@ function isFromPackage(id: string, pkg: string): boolean {
 export default defineConfig({
   plugins: [react()],
   base: './', // relative paths for Electron
+  server: {
+    fs: {
+      // Village canvas engine lives in packages/botvillage/static.
+      allow: ['..'],
+    },
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

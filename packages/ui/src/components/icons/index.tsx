@@ -10,6 +10,7 @@ import {
   GitMerge,
   GitPullRequest,
   Layers,
+  Map,
   Moon,
   Network,
   Play,
@@ -37,6 +38,7 @@ function withDefaults<C extends React.FC<LucideProps>>(Icon: C, defaults?: Lucid
 export const AttentionIcon = withDefaults(AlertTriangle);
 export const RunningIcon = withDefaults(Clock);
 export const WorkerIcon = withDefaults(Cpu);
+export const VillageIcon = withDefaults(Map);
 export const WorkflowsIcon = withDefaults(Layers);
 export const GraphIcon = withDefaults(Network);
 export const PlanningTerminalIcon = withDefaults(TerminalSquare);

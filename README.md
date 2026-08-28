@@ -103,6 +103,8 @@ Invoker background work is owned by the built-in worker registry. `autofix` is t
 
 Run workers on the Invoker owner host. Operators can start and stop them from the desktop Workers tab, inspect them with `invoker-ui --headless worker status --output text|json|jsonl`, or trigger one explicit scan with `invoker-ui --headless worker <kind>`. Each kind takes its own single-instance lock, so a second scan of the same worker is refused without blocking other worker kinds.
 
+The desktop **Village** tab (and optional Tailscale island in [`packages/botvillage`](packages/botvillage/README.md)) maps those workers onto a live MOBA-style board: heroes at barracks, illusion trips for parallel jobs, inspect-only cards. See that README for `go run . --demo` and Tailscale links.
+
 PR maintenance uses the same owner-host worker path. Enable `prMaintenance` to launch `pr-admin-bypass-land`, keep `pr-orphan-repair` available from the same built-in registry, and do not install separate cron jobs or external worker launchers for the supported setup.
 
 ## Install

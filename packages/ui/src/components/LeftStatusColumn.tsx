@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import type { WorkerStatusSnapshot } from '../types.js';
 import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
 import { countActiveWorkerActions } from '../lib/worker-display.js';
+import { countVillageActiveTrips } from '../lib/village-trips.js';
 import {
   AttentionIcon,
   ChevronLeftIcon,
@@ -11,6 +12,7 @@ import {
   MoonIcon,
   SettingsIcon,
   SunIcon,
+  VillageIcon,
   WorkerIcon,
   WorkflowsIcon,
 } from './icons/index.js';
@@ -81,10 +83,13 @@ export function LeftStatusColumn({
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
   const activeWorkerActions = workerStatus ? countActiveWorkerActions(workerStatus.workers) : 0;
+  const villageTripCount = countVillageActiveTrips(workerStatus);
+  const villageCount = villageTripCount > 0 ? villageTripCount : registeredWorkers;
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionCount, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
     { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
+    { key: 'village', label: 'Village', count: villageCount, tone: villageTripCount > 0 ? 'running' : 'neutral', icon: <VillageIcon className={ICON_CLASS} /> },
     { key: 'workflows', label: 'Workflows', count: workflowCount, tone: runningWorkflowCount > 0 ? 'running' : 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
 
@@ -242,6 +247,13 @@ export function LeftStatusColumn({
             workerStatus === null
               ? 'Worker status is not available yet.'
               : `${runningWorkers} process${runningWorkers === 1 ? '' : 'es'} running · ${activeWorkerActions} active action${activeWorkerActions === 1 ? '' : 's'}`
+          )}
+          {selectedSurface === 'village' && (
+            workerStatus === null
+              ? 'Village map is waiting for worker status.'
+              : villageTripCount > 0
+                ? `${villageTripCount} active trip${villageTripCount === 1 ? '' : 's'} on the map.`
+                : `${registeredWorkers} worker${registeredWorkers === 1 ? '' : 's'} on the map · idle.`
           )}
           {selectedSurface === 'home' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
           {selectedSurface === 'planning' && 'Workflow graph and task terminals.'}

@@ -20,7 +20,7 @@ const DEFAULT_RENDERER_RECOVERY_STATE: RendererRecoveryState = {
   inspectorCollapsed: false,
 };
 
-const SIDEBAR_SURFACES = new Set<SidebarSurface>(['home', 'planning', 'workflows', 'attention', 'workers']);
+const SIDEBAR_SURFACES = new Set<SidebarSurface>(['home', 'planning', 'workflows', 'attention', 'workers', 'village']);
 const VIEW_MODES = new Set<RendererRecoveryViewMode>(['dag', 'history', 'timeline', 'queue', 'actionGraph']);
 
 function nullableString(value: unknown): string | null {
