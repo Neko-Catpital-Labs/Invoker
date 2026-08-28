@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults, assertNoDuplicateTaskIds } from '../plan-parser.js';
+import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults, assertNoDuplicateTaskIds, assertRepoUrlCloneable } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -95,6 +95,37 @@ tasks:
 
     await expect(parsePlanFile(planPath)).rejects.toThrow(
       'repoUrl "https://example.invalid/repo.git" is not a readable git repository',
+    );
+    execFileSyncSpy.mockRestore();
+  });
+
+  it('survives a single transient failure of the remote clone probe', () => {
+    // Matches the real incident: a momentary git/network blip made
+    // assertRepoUrlCloneable's one-shot probe permanently wedge a PR's
+    // repair claim, because the caller's own error-recovery path also
+    // depends on the same infra and silently swallowed its own failure.
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync');
+    execFileSyncSpy.mockImplementationOnce(() => {
+      const err = new Error('git ls-remote failed');
+      (err as { stderr?: Buffer }).stderr = Buffer.from('fatal: unable to access: transient network error');
+      throw err;
+    });
+    execFileSyncSpy.mockImplementationOnce(() => Buffer.from(''));
+
+    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).not.toThrow();
+    expect(execFileSyncSpy).toHaveBeenCalledTimes(2);
+    execFileSyncSpy.mockRestore();
+  });
+
+  it('surfaces the real git error after all retry attempts are exhausted', () => {
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+      const err = new Error('git ls-remote failed');
+      (err as { stderr?: Buffer }).stderr = Buffer.from('fatal: could not resolve host: github.com');
+      throw err;
+    });
+
+    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).toThrow(
+      'fatal: could not resolve host: github.com',
     );
     execFileSyncSpy.mockRestore();
   });

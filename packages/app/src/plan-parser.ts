@@ -162,6 +162,21 @@ export function detectDefaultBranchRemote(repoUrl: string): string {
   return 'main';
 }
 
+const REMOTE_CLONE_PROBE_ATTEMPTS = 2;
+const REMOTE_CLONE_PROBE_RETRY_DELAY_MS = 500;
+
+function sleepSyncMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function describeCloneProbeError(err: unknown): string {
+  const stderr = (err as { stderr?: Buffer | string })?.stderr;
+  const stderrText = stderr ? stderr.toString().trim() : '';
+  if (stderrText) return stderrText.split('\n')[0]!;
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split('\n')[0]!;
+}
+
 function assertLocalGitRepoReadable(localPath: string): void {
   if (!existsSync(localPath)) throw new Error('Path does not exist');
   execFileSync('git', ['-c', 'safe.directory=*', '-C', localPath, 'rev-parse', '--git-dir'], {
@@ -182,24 +197,45 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
     );
   }
 
-  try {
-    if (isLocalPath) {
+  if (isLocalPath) {
+    try {
       assertLocalGitRepoReadable(trimmed);
       return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
     }
-    if (isFileUrl) {
+  }
+  if (isFileUrl) {
+    try {
       assertLocalGitRepoReadable(fileURLToPath(trimmed));
       return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
     }
-    execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-      timeout: 10_000,
-    });
-  } catch {
-    throw new PlanParseError(
-      `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials.`,
-    );
   }
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= REMOTE_CLONE_PROBE_ATTEMPTS; attempt += 1) {
+    try {
+      execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 10_000,
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < REMOTE_CLONE_PROBE_ATTEMPTS) {
+        sleepSyncMs(REMOTE_CLONE_PROBE_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw new PlanParseError(
+    `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(lastError)}, after ${REMOTE_CLONE_PROBE_ATTEMPTS} attempts)`,
+  );
 }
 
 export class PlanParseError extends Error {
