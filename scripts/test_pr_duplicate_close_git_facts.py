@@ -87,6 +87,66 @@ class IsEmptyDiff(GitFactsTestCase):
         self.assertTrue(self.client.is_empty_diff(feature_sha, "master"))
 
 
+class IsRebaseEquivalent(GitFactsTestCase):
+    def test_true_for_add_add_conflict_with_trivially_different_content(self):
+        # Matches the real PR #11149 vs #11159 shape: two open PRs
+        # independently add the same domain file, one with a couple of
+        # extra comment lines. Neither is_ancestor, is_empty_diff, nor
+        # all_commits_equivalent catches this -- the head still textually
+        # differs from master -- but rebasing it produces no real change.
+        run(self.repo, "checkout", "-q", "-b", "pr-a")
+        pr_a_sha = write_and_commit(
+            self.repo, "domain.mjs", "export function f() {}\n\nconst X = 1;\n", "PR A adds domain.mjs",
+        )
+        run(self.repo, "checkout", "-q", "master")
+        write_and_commit(
+            self.repo, "domain.mjs",
+            "export function f() {}\n\n// mirrors an existing convention\nconst X = 1;\n",
+            "master already has domain.mjs (landed via a sibling PR)",
+        )
+
+        self.assertFalse(self.client.is_ancestor(pr_a_sha, "master"))
+        self.assertFalse(self.client.is_empty_diff(pr_a_sha, "master"))
+        self.assertFalse(self.client.all_commits_equivalent(pr_a_sha, "master"))
+        self.assertTrue(self.client.is_rebase_equivalent(pr_a_sha, "master"))
+
+    def test_false_when_a_real_new_file_is_also_present(self):
+        # The add/add conflict alone is trivial, but this PR also carries a
+        # genuinely new, non-conflicting file -- rebasing it would NOT
+        # produce an empty diff, so it must not be flagged as landed.
+        run(self.repo, "checkout", "-q", "-b", "pr-a")
+        (self.repo / "domain.mjs").write_text("export function f() {}\n\nconst X = 1;\n", encoding="utf-8")
+        (self.repo / "unique.mjs").write_text("export const REAL_NEW_THING = 1;\n", encoding="utf-8")
+        run(self.repo, "add", "domain.mjs", "unique.mjs")
+        run(self.repo, "commit", "-q", "-m", "PR A adds domain.mjs and a real new file")
+        pr_a_sha = run(self.repo, "rev-parse", "HEAD")
+        run(self.repo, "checkout", "-q", "master")
+        write_and_commit(
+            self.repo, "domain.mjs",
+            "export function f() {}\n\n// mirrors an existing convention\nconst X = 1;\n",
+            "master already has domain.mjs",
+        )
+
+        self.assertFalse(self.client.is_rebase_equivalent(pr_a_sha, "master"))
+
+    def test_false_when_conflict_is_modify_modify_not_add_add(self):
+        # A modify/modify conflict means head and upstream genuinely diverge
+        # on content that already existed -- must never be auto-resolved in
+        # upstream's favor, since that could silently discard a real fix.
+        write_and_commit(self.repo, "shared.txt", "original\n", "shared base content")
+        run(self.repo, "checkout", "-q", "-b", "pr-a")
+        pr_a_sha = write_and_commit(self.repo, "shared.txt", "pr-a's real change\n", "PR A modifies shared.txt")
+        run(self.repo, "checkout", "-q", "master")
+        write_and_commit(self.repo, "shared.txt", "master's different change\n", "master modifies shared.txt")
+
+        self.assertFalse(self.client.is_rebase_equivalent(pr_a_sha, "master"))
+
+    def test_false_for_a_genuinely_unrelated_pr(self):
+        run(self.repo, "checkout", "-q", "-b", "feature")
+        feature_sha = write_and_commit(self.repo, "feature.txt", "feature\n", "feature commit")
+        self.assertFalse(self.client.is_rebase_equivalent(feature_sha, "master"))
+
+
 class AllCommitsEquivalent(GitFactsTestCase):
     def test_true_when_master_has_an_equivalent_commit(self):
         run(self.repo, "checkout", "-q", "-b", "feature")

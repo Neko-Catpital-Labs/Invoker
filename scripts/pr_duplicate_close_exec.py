@@ -45,13 +45,14 @@ def _compute_landed_facts(git_facts: GitFactsClient, head_sha: str) -> GitFacts:
     if merge_base_sha is None:
         return GitFacts(
             merge_base_sha=None, is_ancestor=False, is_empty_diff=False,
-            all_commits_equivalent=False,
+            all_commits_equivalent=False, is_rebase_equivalent=False,
         )
     return GitFacts(
         merge_base_sha=merge_base_sha,
         is_ancestor=git_facts.is_ancestor(head_sha),
         is_empty_diff=git_facts.is_empty_diff(head_sha),
         all_commits_equivalent=git_facts.all_commits_equivalent(head_sha),
+        is_rebase_equivalent=git_facts.is_rebase_equivalent(head_sha),
     )
 
 
