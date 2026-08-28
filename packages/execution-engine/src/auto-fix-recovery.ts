@@ -39,6 +39,8 @@ import {
   autoFixBareRetryExternalKey,
   checkAutoFixRetryCap,
   recordAutoFixRetryConsumed,
+  recordAutoFixRetryPending,
+  recordAutoFixRetryUnacknowledged,
 } from './auto-fix-retry-cap.js';
 import { recordWorkerDecisionRow, isMeaningfulSkipReason } from './worker-decision-ledger.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
@@ -618,12 +620,21 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
       }
 
       if (!hasBareRetryAlreadySubmitted(options, candidate)) {
-        const intentId = options.submitter.submit(
-          candidate.workflowId,
-          'normal',
-          AUTO_FIX_BARE_RETRY_CHANNEL,
-          [candidate.taskId],
-        );
+        recordAutoFixRetryPending(options.store, candidate.taskId, { workflowId: candidate.workflowId });
+        let intentId: number;
+        try {
+          intentId = options.submitter.submit(
+            candidate.workflowId,
+            'normal',
+            AUTO_FIX_BARE_RETRY_CHANNEL,
+            [candidate.taskId],
+          );
+        } catch (error) {
+          recordAutoFixRetryUnacknowledged(options.store, candidate.taskId, error, {
+            workflowId: candidate.workflowId,
+          });
+          throw error;
+        }
         submittedThisTick.add(candidate.taskId);
         logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-bare-retry-submitted', {
           workflowId: candidate.workflowId,
@@ -650,12 +661,21 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
       // Merge gates with a missing/non-git workspace cannot be fixed in-place.
       // Recreate the gate instead of burning fix-with-agent retry budget.
       if (shouldRecreateMergeGateInsteadOfAutoFix(candidate.task)) {
-        const intentId = options.submitter.submit(
-          candidate.workflowId,
-          'normal',
-          AUTO_FIX_RECREATE_CHANNEL,
-          [candidate.taskId],
-        );
+        recordAutoFixRetryPending(options.store, candidate.taskId, { workflowId: candidate.workflowId });
+        let intentId: number;
+        try {
+          intentId = options.submitter.submit(
+            candidate.workflowId,
+            'normal',
+            AUTO_FIX_RECREATE_CHANNEL,
+            [candidate.taskId],
+          );
+        } catch (error) {
+          recordAutoFixRetryUnacknowledged(options.store, candidate.taskId, error, {
+            workflowId: candidate.workflowId,
+          });
+          throw error;
+        }
         submittedThisTick.add(candidate.taskId);
         logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-recreate-submitted', {
           workflowId: candidate.workflowId,
@@ -710,7 +730,17 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
       });
       const args = buildFixWithAgentMutationArgs(candidate.task.id, selectedAgent, { autoFix: true });
-      const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
+      recordAutoFixRetryPending(options.store, candidate.taskId, { workflowId: candidate.workflowId });
+      let intentId: number;
+      try {
+        intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
+      } catch (error) {
+        options.attemptLedger.refund(autoFixAttemptLedgerKeyFromTask(candidate.task));
+        recordAutoFixRetryUnacknowledged(options.store, candidate.taskId, error, {
+          workflowId: candidate.workflowId,
+        });
+        throw error;
+      }
       submittedThisTick.add(candidate.taskId);
       logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-submitted', {
         workflowId: candidate.workflowId,
