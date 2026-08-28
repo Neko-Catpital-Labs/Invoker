@@ -223,8 +223,33 @@ def is_proof_tooling_policy_validation(value: Mapping[str, object]) -> bool:
     return bool(errors) and set(errors).issubset({PROOF_POLICY_LANE_ERROR, PROOF_TOOLING_POLICY_UNIT_ERROR})
 
 
+def is_incidental_tooling_docs_addition(value: Mapping[str, object]) -> bool:
+    """True when the only reason PR-body validation failed is that the repair
+    commit introduced tooling-policy and/or docs files beyond the PR's own
+    declared review unit -- regardless of that PR's own review lane/unit.
+    Generalizes is_proof_tooling_policy_validation (which only covers a
+    proof-lane PR picking up tooling-policy files) to any lane, as long as
+    the only extra unit(s) are ones a repair incidentally produces (a script
+    fix plus its own test/doc update), not a genuinely separate feature."""
+    errors = value.get("errors")
+    review_units = value.get("reviewUnits")
+    if not isinstance(errors, list) or not errors:
+        return False
+    if not isinstance(review_units, list):
+        return False
+    review_unit_set = {str(unit) for unit in review_units}
+    own_unit = str(value.get("reviewUnit") or "")
+    extra_units = review_unit_set - {own_unit}
+    if not extra_units or not extra_units.issubset({"tooling-policy", "docs"}):
+        return False
+    joined = "\n".join(str(error) for error in errors)
+    return "Split this into one Review Unit per PR." in joined
+
+
 def is_prereq_split_validation(value: Mapping[str, object], base_ref_name: str) -> bool:
-    return base_ref_name == TRUNK and is_proof_tooling_policy_validation(value)
+    if base_ref_name != TRUNK:
+        return False
+    return is_proof_tooling_policy_validation(value) or is_incidental_tooling_docs_addition(value)
 
 
 def is_manual_split_validation(value: Mapping[str, object]) -> bool:
