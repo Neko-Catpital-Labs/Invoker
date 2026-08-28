@@ -4,8 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
+const { shouldWrapInDevelopmentProfile } = require('./electron-development-profile-guard.cjs');
+
 const repoRoot = path.resolve(__dirname, '..');
-if (process.argv[2] !== '--install-only' && process.env.INVOKER_DEVELOPMENT_PROFILE_ACTIVE !== '1') {
+if (shouldWrapInDevelopmentProfile(process.argv[2], process.env)) {
   const launcher = path.join(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
   const result = spawnSync(process.execPath, [launcher, '--', process.execPath, __filename, ...process.argv.slice(2)], {
     stdio: 'inherit',
