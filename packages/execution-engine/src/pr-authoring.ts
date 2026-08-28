@@ -406,12 +406,34 @@ function normalizeReviewArtifactProviderId(url: string, providerId: string | und
   return providerId;
 }
 
+/**
+ * Extract a JSON object payload from agent output that may still be wrapped in
+ * a fenced code block or surrounded by commentary, despite the prompt
+ * explicitly forbidding both. Agents don't always follow that instruction.
+ */
+function extractJsonPayload(raw: string): string {
+  const trimmed = raw.trim();
+  const fenceMatch = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed);
+  if (fenceMatch) return fenceMatch[1].trim();
+
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
+  return trimmed;
+}
+
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.trim());
   } catch {
-    throw new Error('make-pr stack publisher must output JSON');
+    try {
+      parsed = JSON.parse(extractJsonPayload(raw));
+    } catch {
+      throw new Error('make-pr stack publisher must output JSON');
+    }
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
