@@ -380,6 +380,36 @@ describe('make-pr stack publish body contract', () => {
     // The caller validates this empty body and falls through to the next agent.
     expect(validateReviewStackPrBody(parsed[0]?.body ?? '').length).toBeGreaterThan(0);
   });
+
+  it('parses JSON wrapped in a ```json fenced code block despite the no-fences instruction', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = '```json\n' + payload + '\n```';
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('parses JSON wrapped in a bare ``` fenced code block', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = '```\n' + payload + '\n```';
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('extracts a JSON object surrounded by commentary the agent added despite instructions', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = `Here is the published review stack:\n${payload}\nLet me know if you need anything else.`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('still throws "must output JSON" for genuinely non-JSON output', () => {
+    expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
+      'make-pr stack publisher must output JSON',
+    );
+  });
 });
 
 // ── resolveSkillPathViaAgent ─────────────────────────────
