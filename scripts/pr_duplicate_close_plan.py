@@ -19,6 +19,7 @@ try:
         LANDED_ANCESTOR,
         LANDED_EMPTY_DIFF,
         LANDED_PATCH_EQUIVALENT,
+        LANDED_REBASE_EQUIVALENT,
         LEDGER_KIND_SUBMIT,
         CandidatePr,
         CloseAction,
@@ -35,6 +36,7 @@ except ImportError:
         LANDED_ANCESTOR,
         LANDED_EMPTY_DIFF,
         LANDED_PATCH_EQUIVALENT,
+        LANDED_REBASE_EQUIVALENT,
         LEDGER_KIND_SUBMIT,
         CandidatePr,
         CloseAction,
@@ -54,6 +56,8 @@ def classify_landed(pr: CandidatePr, facts: GitFacts | None) -> CloseAction | No
         signals.append(LANDED_EMPTY_DIFF)
     if facts.all_commits_equivalent:
         signals.append(LANDED_PATCH_EQUIVALENT)
+    if facts.is_rebase_equivalent:
+        signals.append(LANDED_REBASE_EQUIVALENT)
     if not signals:
         return None
     evidence = f"content already on origin/master ({', '.join(signals)}; head {pr.head_ref_oid})"
