@@ -355,6 +355,11 @@ export function handleSpawnExperimentsImpl(
   }
   const scopeLocal = (local: string) => scopePlanTaskId(wfId, local);
 
+  const parentPoolId = parentTask?.config.poolId;
+  const parentRunnerKind = parentTask?.config.runnerKind;
+  const parentDockerImage =
+    parentTask?.config.runnerKind === 'docker' ? parentTask.config.dockerImage : undefined;
+
   const experimentTasks: GraphMutationNodeDef[] = parsed.variants.map((v) => ({
     id: scopeLocal(v.id),
     description: v.description ?? `Experiment: ${v.id}`,
@@ -364,7 +369,9 @@ export function handleSpawnExperimentsImpl(
     experimentPrompt: v.prompt,
     prompt: v.prompt,
     command: v.command,
-    runnerKind: parentTask?.config.runnerKind,
+    runnerKind: parentRunnerKind,
+    poolId: parentPoolId,
+    dockerImage: parentDockerImage,
   }));
 
   const reconciliationId = `${taskId}-reconciliation`;
@@ -378,6 +385,9 @@ export function handleSpawnExperimentsImpl(
       parentTask: taskId,
       isReconciliation: true,
       requiresManualApproval: true,
+      runnerKind: parentRunnerKind,
+      poolId: parentPoolId,
+      dockerImage: parentDockerImage,
     },
   ];
 
