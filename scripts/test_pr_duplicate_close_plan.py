@@ -203,5 +203,74 @@ class PlanCloseActions(DuplicateCloseTestCase):
         self.assertEqual(len(actions), 1)
 
 
+class PlanFlagProbableDuplicates(DuplicateCloseTestCase):
+    # Reproduces the #11153-vs-#10820 shape: an open PR whose title exactly
+    # matches an already-merged PR's title, but the git-level content
+    # genuinely conflicts (a modify/modify rename, not add/add) so none of
+    # the safe landed/rebase-equivalent signals fire. is_rebase_equivalent
+    # only ever handles add/add — this is the residual gap it leaves.
+
+    def test_title_collision_with_conflict_is_flagged(self):
+        pr = candidate(number=11153, title="No-Mergify observed CI repair (2) Repair failed observed checks", head_ref_oid="bfc6")
+        actions = p.plan_flag_probable_duplicates(
+            [pr], {11153: facts(has_conflict=True)},
+            {"No-Mergify observed CI repair (2) Repair failed observed checks": 10820},
+            self._ledger(),
+        )
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].kind, dm.FLAG_DUPLICATE)
+        self.assertEqual(actions[0].pr_number, 11153)
+        self.assertEqual(actions[0].kept_pr_number, 10820)
+        self.assertEqual(actions[0].reason, dm.DUPLICATE_TITLE_COLLISION_MERGED)
+
+    def test_no_title_collision_is_not_flagged(self):
+        pr = candidate(number=1, title="Unrelated title", head_ref_oid="h1")
+        actions = p.plan_flag_probable_duplicates(
+            [pr], {1: facts(has_conflict=True)}, {"Something else": 999}, self._ledger(),
+        )
+        self.assertEqual(actions, ())
+
+    def test_no_conflict_is_not_flagged(self):
+        # A title collision with no actual git conflict isn't this signal's
+        # job — could be a legitimate re-run of the same generated title.
+        pr = candidate(number=1, title="dup title", head_ref_oid="h1")
+        actions = p.plan_flag_probable_duplicates(
+            [pr], {1: facts(has_conflict=False)}, {"dup title": 999}, self._ledger(),
+        )
+        self.assertEqual(actions, ())
+
+    def test_already_caught_by_a_safe_signal_is_not_flagged(self):
+        # is_rebase_equivalent (or any other safe signal) already closes this
+        # via the normal landed path — flagging it too would be redundant.
+        pr = candidate(number=1, title="dup title", head_ref_oid="h1")
+        actions = p.plan_flag_probable_duplicates(
+            [pr], {1: facts(has_conflict=True, is_rebase_equivalent=True)}, {"dup title": 999}, self._ledger(),
+        )
+        self.assertEqual(actions, ())
+
+    def test_title_collision_with_itself_is_not_flagged(self):
+        pr = candidate(number=999, title="dup title", head_ref_oid="h1")
+        actions = p.plan_flag_probable_duplicates(
+            [pr], {999: facts(has_conflict=True)}, {"dup title": 999}, self._ledger(),
+        )
+        self.assertEqual(actions, ())
+
+    def test_already_flagged_is_not_replanned(self):
+        pr = candidate(number=1, title="dup title", head_ref_oid="h1")
+        ledger = self._ledger()
+        ledger.record(dm.LEDGER_KIND_SUBMIT, 1, "h1", dm.ledger_key(dm.DUPLICATE_TITLE_COLLISION_MERGED, 999))
+        actions = p.plan_flag_probable_duplicates(
+            [pr], {1: facts(has_conflict=True)}, {"dup title": 999}, ledger,
+        )
+        self.assertEqual(actions, ())
+
+    def test_draft_pr_is_not_flagged(self):
+        pr = candidate(number=1, title="dup title", is_draft=True, head_ref_oid="h1")
+        actions = p.plan_flag_probable_duplicates(
+            [pr], {1: facts(has_conflict=True)}, {"dup title": 999}, self._ledger(),
+        )
+        self.assertEqual(actions, ())
+
+
 if __name__ == "__main__":
     unittest.main()

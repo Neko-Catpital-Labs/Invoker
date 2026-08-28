@@ -147,6 +147,30 @@ class IsRebaseEquivalent(GitFactsTestCase):
         self.assertFalse(self.client.is_rebase_equivalent(feature_sha, "master"))
 
 
+class HasConflict(GitFactsTestCase):
+    def test_true_for_modify_modify_conflict(self):
+        write_and_commit(self.repo, "shared.txt", "original\n", "shared base content")
+        run(self.repo, "checkout", "-q", "-b", "pr-a")
+        pr_a_sha = write_and_commit(self.repo, "shared.txt", "pr-a's real change\n", "PR A modifies shared.txt")
+        run(self.repo, "checkout", "-q", "master")
+        write_and_commit(self.repo, "shared.txt", "master's different change\n", "master modifies shared.txt")
+
+        self.assertTrue(self.client.has_conflict(pr_a_sha, "master"))
+
+    def test_true_for_add_add_conflict(self):
+        run(self.repo, "checkout", "-q", "-b", "pr-a")
+        pr_a_sha = write_and_commit(self.repo, "domain.mjs", "same\n", "PR A adds domain.mjs")
+        run(self.repo, "checkout", "-q", "master")
+        write_and_commit(self.repo, "domain.mjs", "different\n", "master already has domain.mjs")
+
+        self.assertTrue(self.client.has_conflict(pr_a_sha, "master"))
+
+    def test_false_for_a_clean_merge(self):
+        run(self.repo, "checkout", "-q", "-b", "feature")
+        feature_sha = write_and_commit(self.repo, "feature.txt", "feature\n", "feature commit")
+        self.assertFalse(self.client.has_conflict(feature_sha, "master"))
+
+
 class AllCommitsEquivalent(GitFactsTestCase):
     def test_true_when_master_has_an_equivalent_commit(self):
         run(self.repo, "checkout", "-q", "-b", "feature")

@@ -16,6 +16,8 @@ try:
         CLOSE_LANDED,
         DUPLICATE_SAME_BRANCH,
         DUPLICATE_SAME_DIFF,
+        DUPLICATE_TITLE_COLLISION_MERGED,
+        FLAG_DUPLICATE,
         LANDED_ANCESTOR,
         LANDED_EMPTY_DIFF,
         LANDED_PATCH_EQUIVALENT,
@@ -33,6 +35,8 @@ except ImportError:
         CLOSE_LANDED,
         DUPLICATE_SAME_BRANCH,
         DUPLICATE_SAME_DIFF,
+        DUPLICATE_TITLE_COLLISION_MERGED,
+        FLAG_DUPLICATE,
         LANDED_ANCESTOR,
         LANDED_EMPTY_DIFF,
         LANDED_PATCH_EQUIVALENT,
@@ -158,4 +162,55 @@ def plan_close_actions(
                 kept_pr_number=group.kept_pr_number,
             ))
 
+    return tuple(actions)
+
+
+def plan_flag_probable_duplicates(
+    prs: Sequence[CandidatePr],
+    facts_by_pr: Mapping[int, GitFacts],
+    merged_pr_number_by_title: Mapping[str, int],
+    ledger,
+) -> tuple[CloseAction, ...]:
+    """Comment-only flag (never a close) for a PR whose title exactly
+    matches an already-merged PR's title while genuinely conflicting with
+    master.
+
+    is_rebase_equivalent only auto-closes the add/add case; a modify/modify
+    conflict is deliberately left to "the normal (human/repair) path"
+    because auto-preferring either side could silently discard a real
+    change (see its docstring). A same-repo title collision plus a real
+    conflict is strong evidence of the near-duplicate-slice pattern (an
+    independently regenerated PR for a fix that already landed under a
+    different plan run), but proving the conflicting hunk itself is truly
+    equivalent needs a human or agent reading the diff -- exactly what
+    #11153 vs #10820 needed. This only ever posts a comment; it never
+    closes anything, so a false positive costs a comment, not a PR.
+    """
+    actions: list[CloseAction] = []
+    for pr in prs:
+        if pr.state != "OPEN" or pr.is_draft:
+            continue
+        facts = facts_by_pr.get(pr.number)
+        if facts is None or not facts.has_conflict:
+            continue
+        if facts.is_ancestor or facts.is_empty_diff or facts.all_commits_equivalent or facts.is_rebase_equivalent:
+            continue
+        merged_number = merged_pr_number_by_title.get(pr.title)
+        if merged_number is None or merged_number == pr.number:
+            continue
+        if _already_submitted(ledger, pr.number, pr.head_ref_oid, DUPLICATE_TITLE_COLLISION_MERGED, merged_number):
+            continue
+        evidence = (
+            f"title exactly matches already-merged #{merged_number}; GitHub reports a merge "
+            f"conflict, so this needs a human or agent to confirm the conflicting content is "
+            f"equivalent before closing (head {pr.head_ref_oid})"
+        )
+        actions.append(CloseAction(
+            kind=FLAG_DUPLICATE,
+            pr_number=pr.number,
+            expected_head_oid=pr.head_ref_oid,
+            reason=DUPLICATE_TITLE_COLLISION_MERGED,
+            evidence=evidence,
+            kept_pr_number=merged_number,
+        ))
     return tuple(actions)
