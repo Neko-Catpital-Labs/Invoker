@@ -16,6 +16,14 @@ const doors = [
   ['app:start', appPackage.scripts.start],
   ['app:dev', appPackage.scripts.dev],
 ];
+const profileResourceKeys = [
+  'INVOKER_DB_DIR',
+  'INVOKER_USER_DATA_DIR',
+  'INVOKER_IPC_SOCKET',
+  'INVOKER_REPO_CONFIG_PATH',
+  'INVOKER_ENV_PATH',
+  'INVOKER_LOG_PATH',
+];
 
 const failures = [];
 for (const [name, command] of doors) {
@@ -24,7 +32,7 @@ for (const [name, command] of doors) {
 
 function profileFor(sourceRoot) {
   const env = { ...process.env };
-  delete env.INVOKER_DB_DIR;
+  for (const key of profileResourceKeys) delete env[key];
   const result = spawnSync(process.execPath, [launcher, '--source-root', sourceRoot, '--print-env'], {
     cwd: root,
     encoding: 'utf8',
@@ -37,7 +45,7 @@ function profileFor(sourceRoot) {
 const first = profileFor(root);
 const second = profileFor(resolve(root, '..'));
 const productionHome = join(homedir(), '.invoker');
-for (const key of ['INVOKER_DB_DIR', 'INVOKER_USER_DATA_DIR', 'INVOKER_IPC_SOCKET', 'INVOKER_REPO_CONFIG_PATH', 'INVOKER_ENV_PATH', 'INVOKER_LOG_PATH']) {
+for (const key of profileResourceKeys) {
   if (!first[key] || first[key] === productionHome || !first[key].startsWith(`${productionHome}/dev/`)) {
     failures.push(`${key} is missing or not contained by the isolated development namespace`);
   }
@@ -53,6 +61,24 @@ const collision = spawnSync(process.execPath, [launcher, '--print-env'], {
 });
 if (collision.status === 0 || !collision.stderr.includes('production profile')) failures.push('production collision did not fail closed');
 
+const explicitResourcePaths = Object.fromEntries(
+  profileResourceKeys.map((key) => [key, join('/tmp', 'invoker-development-profile-override', key.toLowerCase())]),
+);
+const explicitOverride = spawnSync(
+  process.execPath,
+  [launcher, '--', process.execPath, '-e', `process.stdout.write(JSON.stringify(Object.fromEntries(${JSON.stringify(profileResourceKeys)}.map((key) => [key, process.env[key]]))))`],
+  {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, ...explicitResourcePaths },
+  },
+);
+if (explicitOverride.status !== 0) {
+  failures.push(`explicit resource override probe failed: ${explicitOverride.stderr.trim()}`);
+} else if (JSON.stringify(JSON.parse(explicitOverride.stdout)) !== JSON.stringify(explicitResourcePaths)) {
+  failures.push('development profile replaced explicit non-production resource paths');
+}
+
 const exception = spawnSync(process.execPath, [launcher, '--production-owner-service', '--print-env'], { cwd: root, encoding: 'utf8' });
 if (exception.status !== 0 || JSON.parse(exception.stdout).INVOKER_PRODUCTION_OWNER_SERVICE !== '1') failures.push('exact production-owner service exception dry-run failed');
 
@@ -63,4 +89,4 @@ if (failures.length > 0) {
   for (const failure of failures) process.stderr.write(`FAIL: ${failure}\n`);
   process.exit(1);
 }
-process.stdout.write(`PASS: ${doors.length}/${doors.length} developer launchers use isolated worktree profiles; production collisions and broad exceptions are rejected\n`);
+process.stdout.write(`PASS: ${doors.length}/${doors.length} developer launchers use isolated worktree profiles; explicit non-production resource paths survive; production collisions and broad exceptions are rejected\n`);
