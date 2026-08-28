@@ -297,6 +297,48 @@ class RepairNormalizeTests(unittest.TestCase):
         create_prereq.assert_called_once()
         self.assertTrue(normalize.PREREQ_SENTINEL.exists())
 
+    def test_non_proof_lane_tooling_docs_addition_on_trunk_auto_splits(self):
+        # Regression for wf-1787861446614-2/normalize (PR #10742, 2026-08-27):
+        # a "routing"-lane repair that fixed a tooling-policy file plus its
+        # test and docs was discarded (hard_reset_work_root + exit 1) instead
+        # of being auto-split, because only proof-lane PRs triggered
+        # create_repair_prerequisite. This must now split instead of block.
+        live_pr_10742_shape = {
+            "valid": False,
+            "errors": [
+                "Review lane behavior cannot ship with docs, policy files in "
+                "the same PR. Split behavior or cleanup from docs, policy, "
+                "repro, and benchmark slices.",
+                'PR body Review Unit "routing" cannot ship with '
+                "tooling-policy, docs files in the same PR. Split this into "
+                "one Review Unit per PR.",
+            ],
+            "reviewLane": "behavior",
+            "reviewUnit": "routing",
+            "reviewUnits": ["routing", "tooling-policy", "docs"],
+            "scopeKinds": ["docs", "policy"],
+        }
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=("commit-a",)) as git_lines:
+            git_lines.side_effect = lambda cwd, *args: ("commit-a",) if args[:1] == ("rev-list",) else ()
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=NEW_HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                        gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nrouting fix\n"}
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                            return_value=live_pr_10742_shape,
+                        ):
+                            with mock.patch(
+                                "scripts.mergify_admin_requeue_repair_normalize.create_repair_prerequisite",
+                                return_value={"prNumber": 11050, "branch": "stack/pr-babysit-prereq-10742-c2532d2"},
+                            ) as create_prereq:
+                                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root"):
+                                    code = normalize.main(self.argv(**{"--pr": "10742"}))
+        self.addCleanup(lambda: normalize.PREREQ_SENTINEL.unlink(missing_ok=True))
+        self.assertEqual(code, 0)
+        create_prereq.assert_called_once()
+        self.assertTrue(normalize.PREREQ_SENTINEL.exists())
+
     def test_invalid_non_trunk_blocks_human_split(self):
         with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
             with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
