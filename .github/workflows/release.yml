@@ -15,7 +15,37 @@ env:
   NODE_VERSION: '26'
 
 jobs:
+  guard-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Guard release is exactly a minor bump over the previous release
+        run: |
+          previous_tag="$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)"
+          if [ -z "$previous_tag" ]; then
+            echo "No previous v* tag found in ancestor history; skipping minor-bump guard."
+            exit 0
+          fi
+
+          previous_version="$(git show "${previous_tag}:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+          expected_version="$(node scripts/bump-release-version.mjs --type minor --dry-run --from "${previous_version}")"
+          current_version="$(node -p "require('./package.json').version")"
+
+          if [ "${current_version}" != "${expected_version}" ]; then
+            echo "Version guard failed: expected ${expected_version} (minor bump over ${previous_version} from ${previous_tag}), found ${current_version}" >&2
+            exit 1
+          fi
+
+          echo "Version guard passed: ${current_version} is a minor bump over ${previous_version} (${previous_tag})"
+
   build:
+    needs: guard-version
     uses: ./.github/workflows/reusable-release-build.yml
 
   publish-release:
