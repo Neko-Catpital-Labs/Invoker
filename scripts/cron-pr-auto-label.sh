@@ -53,6 +53,13 @@ pr_is_test_only_diff() {
   return 0
 }
 
+guarded_bypass_is_eligible() {
+  node "$(dirname "$0")/guarded-behavior-approval.mjs" \
+    --pr "$1" \
+    --repo "$TARGET_REPO" \
+    --json
+}
+
 # When sourced (e.g. by tests), expose the functions above without running
 # the scan/submit flow below.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
@@ -109,6 +116,11 @@ while IFS= read -r pr; do
     fi
   fi
   [ "$eligible" -eq 1 ] || continue
+
+  if ! approval_output="$(guarded_bypass_is_eligible "$num" 2>&1)"; then
+    log_line "PR #$num: guarded-behavior approval required; skipping: $approval_output"
+    continue
+  fi
 
   plan_file="$PLAN_DIR/label-pr-$num.yaml"
   {
