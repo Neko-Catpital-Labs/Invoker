@@ -16,6 +16,7 @@ const path = require('node:path');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const TRANSPORT_DIST = path.join(REPO_ROOT, 'packages', 'transport', 'dist', 'index.js');
+const CONTRACTS_DIST = path.join(REPO_ROOT, 'packages', 'contracts', 'dist', 'index.js');
 const HEADLESS_CLIENT_DIST = path.join(REPO_ROOT, 'packages', 'app', 'dist', 'headless-client.js');
 
 // ---------------------------------------------------------------------------
@@ -151,8 +152,30 @@ async function loadTransport() {
   return mod;
 }
 
+async function loadContracts() {
+  if (!existsSync(CONTRACTS_DIST)) {
+    return null;
+  }
+  try {
+    return await import(CONTRACTS_DIST);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveActiveProfileSocketPath() {
+  const contracts = await loadContracts();
+  if (!contracts) {
+    return undefined;
+  }
+  const profileEnv = contracts.resolveActiveInvokerProfileEnv();
+  const mergedEnv = { ...process.env, ...profileEnv };
+  return contracts.resolveInvokerIpcSocketPath(mergedEnv);
+}
+
 async function createBus(transport, timeoutMs) {
-  const bus = new transport.IpcBus(undefined, { allowServe: false });
+  const socketPath = await resolveActiveProfileSocketPath();
+  const bus = new transport.IpcBus(socketPath, { allowServe: false });
   try {
     await withTimeout(bus.ready(), timeoutMs);
   } catch (error) {
