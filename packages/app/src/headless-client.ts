@@ -361,7 +361,7 @@ async function delegateReadOnlyQuery(
   if (ownerResult.resolved) {
     messageBus = ownerResult.bus;
   } else if (
-    !isQueue ||
+    (!isQueue && !isActionGraph) ||
     !hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))
   ) {
     if (isQueue || isActionGraph) return false;
