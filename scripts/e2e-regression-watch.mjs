@@ -1357,6 +1357,9 @@ export function renderOptionalReflectTaskYaml(vars) {
       Safety invariant: This task never edits Invoker files and never merges
       a catstack PR on its own authority. If /reflect finds nothing durable,
       it makes no changes and exits 0.
+      Effectiveness measurement: The task summary names each Accepted
+      finding's catstack PR, or states "no durable finding"; either way
+      \`git diff --name-only\` in the Invoker checkout is empty.
       Slice rationale: Opt-in personal worker, downstream of verify, so
       default CI repair stays fix+verify only.
       Architectural effect: None to Invoker product code; accepted edits land
@@ -1429,7 +1432,19 @@ export function appendOptionalReflectTask(planPath, vars) {
       (match) => `${match.replace(/\n$/, '')}${waiver}`,
     );
   }
-  writeFileSync(planPath, `${next.trimEnd()}\n${renderOptionalReflectTaskYaml(vars)}`);
+  const reflectYaml = renderOptionalReflectTaskYaml(vars);
+  const scrubIdLine = '  - id: scrub-handoff-artifacts';
+  if (next.includes(scrubIdLine)) {
+    const reflectBlock = reflectYaml.replace(/^\n/, '').replace(/\n$/, '');
+    next = next.replace(scrubIdLine, `${reflectBlock}\n\n${scrubIdLine}`);
+    next = next.replace(
+      /(  - id: scrub-handoff-artifacts[\s\S]*?dependencies:\n)((?:      - .+\n?)*)/,
+      (match, head, deps) => `${head}${deps}      - reflect-ci-${vars.job_slug}\n`,
+    );
+    writeFileSync(planPath, `${next.trimEnd()}\n`);
+  } else {
+    writeFileSync(planPath, `${next.trimEnd()}\n${reflectYaml}`);
+  }
 }
 
 export function fileBugfixPlan(failure, opts = {}) {
