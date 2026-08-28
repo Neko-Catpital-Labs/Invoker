@@ -177,6 +177,65 @@ class RepairerPlanSettleObserver(unittest.TestCase):
         from mergify_admin_requeue_model import Ledger
         return Ledger(Path(tmpdir) / "state.jsonl")
 
+    def test_promotes_crash_left_pending_request_when_invoker_has_the_workflow(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "4f4e937" + "0" * 33
+            key = "rebase-onto-master:11149"
+            plan_name = f.rebase_onto_master_plan_name(11149, head)
+            ledger.record(
+                "rebase-onto-master-pending",
+                11149,
+                head,
+                key,
+                100,
+                meta={"dispatchState": "pending", "planName": plan_name},
+            )
+            workflows = [{"id": "wf-repair", "name": plan_name, "status": "running"}]
+            with mock.patch.object(f, "list_workflows", return_value=workflows):
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 1)
+
+            acknowledged = ledger.latest("rebase-onto-master", 11149, head, key)
+            self.assertEqual(acknowledged["meta"]["dispatchState"], "acknowledged")
+            self.assertEqual(acknowledged["meta"]["acknowledgedBy"], "pending-request-observer")
+            self.assertEqual(acknowledged["meta"]["workflowId"], "wf-repair")
+
+    def test_closes_unacknowledged_pending_request_without_creating_an_attempt(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "4f4e937" + "0" * 33
+            key = "rebase-onto-master:11149"
+            ledger.record(
+                "rebase-onto-master-pending",
+                11149,
+                head,
+                key,
+                100,
+                meta={
+                    "dispatchState": "pending",
+                    "planName": f.rebase_onto_master_plan_name(11149, head),
+                },
+            )
+            with mock.patch.object(f, "list_workflows", return_value=[]):
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 1)
+
+            self.assertIsNone(ledger.latest("rebase-onto-master", 11149, head, key))
+            closed = ledger.latest("rebase-onto-master-pending-settled", 11149, head, key)
+            self.assertEqual(closed["meta"]["dispatchState"], "not-acknowledged")
+
+    def test_leaves_pending_request_open_when_invoker_cannot_be_queried(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "4f4e937" + "0" * 33
+            key = "rebase-onto-master:11149"
+            ledger.record("rebase-onto-master-pending", 11149, head, key, 100)
+            with mock.patch.object(f, "list_workflows", return_value=None):
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 0)
+            self.assertIsNone(ledger.latest("rebase-onto-master-pending-settled", 11149, head, key))
+
     def test_settles_a_failed_bot_thread_repair_by_matching_its_plan_name(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:

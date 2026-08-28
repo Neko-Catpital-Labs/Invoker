@@ -70,6 +70,14 @@ class AsyncRepairPlan:
     yaml_text: str
 
 
+@dataclass(frozen=True)
+class RepairSubmissionAcknowledgement:
+    workflow_id: str | None = None
+
+
+_WORKFLOW_ID_RE = re.compile(r"(?:Workflow ID:|workflow:)\s*(wf-[^\s]+)")
+
+
 def _write_plan_header(*, name: str, base_branch: str, repo: str, merge_mode: str = "manual") -> str:
     return (
         f"name: {name}\n"
@@ -327,7 +335,7 @@ def build_repair_bot_thread_plan(
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
-def submit_async_repair_plan(plan: AsyncRepairPlan) -> None:
+def submit_async_repair_plan(plan: AsyncRepairPlan) -> RepairSubmissionAcknowledgement:
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".yaml", prefix=f"{plan.plan_name}-", delete=False
     ) as handle:
@@ -344,5 +352,7 @@ def submit_async_repair_plan(plan: AsyncRepairPlan) -> None:
                 f"submit_async_repair_plan failed for {plan.plan_name}: "
                 f"{completed.stderr.strip() or completed.stdout.strip()}"
             )
+        match = _WORKFLOW_ID_RE.search(completed.stdout)
+        return RepairSubmissionAcknowledgement(workflow_id=match.group(1) if match else None)
     finally:
         plan_path.unlink(missing_ok=True)

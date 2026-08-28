@@ -81,12 +81,13 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
         print(json.dumps(action.__dict__, sort_keys=True))
         return
     prefix = "DRY-RUN " if dry_run else ""
+    repair_prefix = prefix if dry_run else "PENDING "
     if action.kind == "requeue":
         head = pr.head_ref_oid if pr else ""
         print(f"{prefix}requeue PR #{action.pr_number} head={head} reason={action.detail}")
     elif action.kind == "repair_check":
         key = action.key.split(":", 1)[-1]
-        print(f"{prefix}repair-check PR #{action.pr_number} check={json.dumps(key)}")
+        print(f"{repair_prefix}repair-check PR #{action.pr_number} check={json.dumps(key)}")
     elif action.kind == "comment_blocked":
         print(f"BLOCK PR #{action.pr_number} {action.detail}")
     elif action.kind == "comment_admin_bypass_nudge":
@@ -100,13 +101,24 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
         head = pr.head_ref_oid if pr else ""
         print(f"{prefix}squash-merge PR #{action.pr_number} head={head} reason={action.detail}")
     elif action.kind == "rebase_onto_base":
-        print(f"{prefix}rebase-onto-base PR #{action.pr_number} onto={action.key}")
+        print(f"{repair_prefix}rebase-onto-base PR #{action.pr_number} onto={action.key}")
     elif action.kind == "rebase_onto_master":
-        print(f"{prefix}rebase-onto-master PR #{action.pr_number} {action.detail}")
+        print(f"{repair_prefix}rebase-onto-master PR #{action.pr_number} {action.detail}")
     elif action.kind == "remove_merge_hold":
         print(f"{prefix}remove-merge-hold PR #{action.pr_number}")
     elif action.kind == "resolve_bot_threads":
         print(f"{prefix}resolve-bot-threads PR #{action.pr_number} thread={action.key}")
+
+
+def print_repair_acknowledged(action: Action, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps({"event": "repair-dispatch-acknowledged", **action.__dict__}, sort_keys=True))
+        return
+    if action.kind == "repair_check":
+        key = action.key.split(":", 1)[-1]
+        print(f"ACKNOWLEDGED repair-check PR #{action.pr_number} check={json.dumps(key)}")
+    elif action.kind == "rebase_onto_master":
+        print(f"ACKNOWLEDGED rebase-onto-master PR #{action.pr_number} {action.detail}")
 
 
 def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClient, logger: AdminBypassLogger) -> dict[int, bool]:
@@ -133,6 +145,25 @@ def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClie
                 error=str(exc),
             )
     return stale_base_by_pr
+
+
+def report_repair_dispatch_failure(
+    executor: AdminBypassGhExecutor,
+    logger: AdminBypassLogger,
+    pr: PrSnapshot,
+    action_kind: str,
+    now: int,
+) -> None:
+    try:
+        executor.comment_repair_dispatch_failed(pr, action_kind, now)
+    except Exception as exc:
+        logger.trace(
+            "admin-bypass-repair-dispatch-failure-comment-failed",
+            repo=executor.repo,
+            pr_number=pr.number,
+            action_kind=action_kind,
+            error=str(exc),
+        )
 
 
 def run_cycle(
@@ -261,6 +292,7 @@ def run_cycle(
                                 "repair-check", action.pr_number, pr.head_ref_oid, check_name, now,
                                 meta={"workflowId": workflow_id, "via": "fastpath"},
                             )
+                            print_repair_acknowledged(action, args.json)
                             progressed = True
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
@@ -290,6 +322,8 @@ def run_cycle(
                                     pr_number=pr.number,
                                     check_name=check_name,
                                 )
+                            if outcome.status == "submitted":
+                                print_repair_acknowledged(action, args.json)
                             progressed = outcome.status in {"pushed", "prereq_created", "submitted", "queue_only_noop"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
@@ -325,6 +359,7 @@ def run_cycle(
                         release_repair_filing(kind, str(action.pr_number), pr.head_ref_oid)
                         if pr.latest_mergify is not None:
                             release_repair_filing(kind, str(action.pr_number), mergify_check_state_sha(pr, pr.latest_mergify))
+                    report_repair_dispatch_failure(executor, logger, pr, action.kind, now)
                     should_poll = True
                     continue
                 if progressed:
@@ -343,9 +378,12 @@ def run_cycle(
                             REBASE_ONTO_MASTER_LEDGER_KIND, action.pr_number, pr.head_ref_oid, action.key, now,
                             meta={"workflowId": workflow_id, "via": "fastpath"},
                         )
+                        print_repair_acknowledged(action, args.json)
                         progressed = True
                     else:
                         outcome = repairer.rebase_onto_master(pr, action.detail, now)
+                        if outcome.status == "submitted":
+                            print_repair_acknowledged(action, args.json)
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
@@ -361,6 +399,7 @@ def run_cycle(
                     )
                     if release_repair_filing is not None:
                         release_repair_filing(REBASE_ONTO_MASTER_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
+                    report_repair_dispatch_failure(executor, logger, pr, action.kind, now)
                     should_poll = True
                     continue
                 if progressed:
