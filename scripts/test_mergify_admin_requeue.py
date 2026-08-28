@@ -1180,6 +1180,26 @@ The merge conditions cannot be satisfied due to failing checks
         actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
         self.assertEqual(actions, ())
 
+    def test_empty_required_checks_failed_observed_catstack_ci_repairs_before_squash_or_requeue(self):
+        checks = {
+            "lint": check("lint"),
+            "test": check("test", "failure"),
+        }
+        stack = StackGroup("s", (pr(9003, base="master", labels={"admin-bypass"}, checks=checks, latest=None),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 9003, "test")])
+        self.assertNotIn("squash_merge", {a.kind for a in actions})
+        self.assertNotIn("requeue", {a.kind for a in actions})
+
+    def test_catstack_failing_test_plans_repair_not_squash_or_queue(self):
+        checks = {
+            "lint": check("lint"),
+            "test": check("test", "failure"),
+        }
+        stack = StackGroup("s", (pr(9010, base="main", labels={"admin-bypass"}, checks=checks, latest=None),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 9010, "test")])
+
     def test_squash_merge_waits_when_no_ci_signal_observed_yet(self):
         stack = StackGroup("s", (pr(9003, labels={"admin-bypass"}, checks={}),))
         actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
