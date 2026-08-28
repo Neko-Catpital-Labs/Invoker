@@ -144,7 +144,7 @@ describe('repro: experiment spawn inherits upstream dependency base', () => {
     });
   });
 
-  it.fails('after spawn, pivot execution carries the completed upstream dep tip (not bare main)', () => {
+  it('after spawn, pivot execution carries the completed upstream dep tip (not bare main)', () => {
     const discoverBranch = 'experiment/wf-repro/discover-50-eligible-cases-abc12345';
     const discoverCommit = 'd42945d0deadbeefcafe00112233445566778899';
 
