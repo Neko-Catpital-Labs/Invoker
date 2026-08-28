@@ -428,6 +428,7 @@ export interface PlanDefinition {
   repoUrl?: string;
   /** No-repo mode: every task runs in a plain temp directory, no git involved. Mutually exclusive with repoUrl. */
   scratch?: boolean;
+  poolId?: string;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId: string;
@@ -1451,7 +1452,7 @@ export class Orchestrator {
         : resolveExecutorRouting(
             taskDef.id,
             taskDef.command,
-            taskDef.poolId,
+            taskDef.poolId ?? plan.poolId,
             this.defaultPoolId,
             this.executorRoutingRules,
             this.availablePoolIds,
