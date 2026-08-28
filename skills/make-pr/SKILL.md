@@ -182,6 +182,10 @@ For Invoker stacked PRs, diff atomicity blockers are hard failures. Readability 
 
 If one branch mixes behavior, refactor, cleanup, or test-harness/proof work, split the work into separate PRs. Do not relabel the lane or weaken the checker to make a mixed branch pass.
 
+## Comment policy gate
+
+Before publishing, run `pnpm run check:comments` (`scripts/check-added-comments.mjs`). It covers `.cjs`/`.js`/`.jsx`/`.mjs`/`.py`/`.pyi`/`.sh`/`.ts`/`.tsx` and rejects any newly-added explanatory comment against this repo's Comment Policy (see root `CLAUDE.md`), including comments picked up from a cherry-picked or auto-generated commit. It runs in CI as `quality / Added Comment Policy`, so a failure here after publishing still blocks the PR — check it locally first rather than discovering it from a red check.
+
 ## Command surface
 
 Preferred repo-local flow:
@@ -294,6 +298,7 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - keep Test Plan and Revert Plan content inside their collapsed `<details><summary>Test Plan</summary>` / `<summary>Revert Plan</summary>` blocks
 - do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
 - validate the body against the current branch diff with `node scripts/validate-pr-body-local.mjs --body-file <file> --base <base-branch>`
+- run `pnpm run check:comments` and remove any newly-added comment it flags, including one carried in from a cherry-pick
 - for stacked PRs, treat diff-atomicity blockers as fatal, even when readability-only warnings still print
 - for stacked PRs, after any split or restack, re-audit the full rebuilt stack before publishing or updating PRs
 - for stacked PRs, auto-fold conflict-only, import-only, or other no-new-claim fixup slices into the previous slice before publication

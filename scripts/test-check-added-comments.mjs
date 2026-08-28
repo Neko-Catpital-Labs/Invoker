@@ -140,6 +140,36 @@ const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.me
 }
 
 {
+  const diff = [
+    'diff --git a/scripts/pr_worker_safe_push.py b/scripts/pr_worker_safe_push.py',
+    '+++ b/scripts/pr_worker_safe_push.py',
+    '@@ -0,0 +1,2 @@',
+    '+value = 1',
+    '+result = value  # a whole-file reformat could re-add this line verbatim',
+    '',
+  ].join('\n');
+  assert.equal(
+    collectAddedCommentViolations(diff).length,
+    0,
+    'a grandfathered legacy-comment Python file must stay exempt even for a genuinely new comment line',
+  );
+}
+
+{
+  const diff = [
+    'diff --git a/scripts/pr_worker_safe_push_new_helper.py b/scripts/pr_worker_safe_push_new_helper.py',
+    '+++ b/scripts/pr_worker_safe_push_new_helper.py',
+    '@@ -0,0 +1,2 @@',
+    '+value = 1',
+    '+result = value  # a new file must not inherit its neighbor\'s exemption',
+    '',
+  ].join('\n');
+  const violations = collectAddedCommentViolations(diff);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+}
+
+{
   const root = mkdtempSync(path.join(tmpdir(), 'invoker-comment-check-'));
   try {
     execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
