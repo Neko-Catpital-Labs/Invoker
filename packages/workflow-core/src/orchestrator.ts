@@ -550,6 +550,8 @@ export interface GraphMutationNodeDef {
   runnerKind?: RunnerKind;
   poolId?: string;
   dockerImage?: string;
+  executionAgent?: string;
+  executionModel?: string;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
   isMergeNode?: boolean;

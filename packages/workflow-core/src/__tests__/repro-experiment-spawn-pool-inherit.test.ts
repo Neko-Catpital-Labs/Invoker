@@ -138,7 +138,7 @@ describe('repro: experiment spawn inherits pivot pool executor', () => {
     });
   });
 
-  it('spawned experiment tasks keep the pivot poolId (and runnerKind)', () => {
+  it('spawned experiment tasks keep the pivot poolId, runnerKind, and execution agent/model', () => {
     const plan: PlanDefinition = {
       name: 'experiment-pool-inherit-repro',
       baseBranch: 'main',
@@ -148,6 +148,8 @@ describe('repro: experiment spawn inherits pivot pool executor', () => {
           description: 'Pivot with pool',
           pivot: true,
           poolId: 'local-mac-only',
+          executionAgent: 'codex',
+          executionModel: 'o3',
           experimentVariants: [
             { id: 'mine-00', description: 'Mine 0', command: 'echo 0' },
             { id: 'mine-01', description: 'Mine 1', command: 'echo 1' },
@@ -165,6 +167,8 @@ describe('repro: experiment spawn inherits pivot pool executor', () => {
     // Plan pools are currently stamped runnerKind=ssh at load; selectExecutor
     // remaps via pool members when poolId is present.
     expect(pivot.config.runnerKind).toBe('ssh');
+    expect(pivot.config.executionAgent).toBe('codex');
+    expect(pivot.config.executionModel).toBe('o3');
 
     orchestrator.handleWorkerResponse(spawnResponse(pivotId, ['mine-00', 'mine-01']));
 
@@ -172,7 +176,13 @@ describe('repro: experiment spawn inherits pivot pool executor', () => {
       const exp = orchestrator.getTask(sid(orchestrator, 0, local))!;
       expect(exp.config.runnerKind, `${local} runnerKind`).toBe(pivot.config.runnerKind);
       expect(exp.config.poolId, `${local} poolId`).toBe(pivot.config.poolId);
+      expect(exp.config.executionAgent, `${local} executionAgent`).toBe(pivot.config.executionAgent);
+      expect(exp.config.executionModel, `${local} executionModel`).toBe(pivot.config.executionModel);
     }
+
+    const recon = orchestrator.getTask(`${pivotId}-reconciliation`)!;
+    expect(recon.config.executionAgent).toBe('codex');
+    expect(recon.config.executionModel).toBe('o3');
   });
 
   it('spawn/graph-mutation throws when runnerKind=ssh without poolId', () => {

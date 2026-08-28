@@ -215,6 +215,8 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       requiresManualApproval: nodeDef.requiresManualApproval,
       isMergeNode: nodeDef.isMergeNode,
       ...(nodeDef.poolId ? { poolId: nodeDef.poolId } : {}),
+      ...(nodeDef.executionAgent ? { executionAgent: nodeDef.executionAgent } : {}),
+      ...(nodeDef.executionModel ? { executionModel: nodeDef.executionModel } : {}),
     } as const;
     let nodeConfig: TaskConfig;
     switch (nodeDef.runnerKind) {
