@@ -21,18 +21,28 @@ echo "PASS: required-builds.sh builds @invoker/contracts"
 # that exports what headless-ipc.js needs. A grep-only check could pass
 # even if the filter target is spelled correctly but the underlying build
 # silently fails or emits a stale artifact.
+BUILD_LOG="$(mktemp)"
+trap 'rm -f "$BUILD_LOG"' EXIT
+
 rm -f packages/contracts/dist/index.js
-pnpm --filter @invoker/contracts build >/tmp/test-required-builds-contracts.log 2>&1 || {
+pnpm --filter @invoker/contracts build >"$BUILD_LOG" 2>&1 || {
   echo "FAIL: pnpm --filter @invoker/contracts build failed" >&2
-  cat /tmp/test-required-builds-contracts.log >&2
+  cat "$BUILD_LOG" >&2
   exit 1
 }
 test -f packages/contracts/dist/index.js || {
   echo "FAIL: packages/contracts/dist/index.js was not produced" >&2
   exit 1
 }
-grep -q 'resolveActiveInvokerProfileEnv' packages/contracts/dist/index.js || {
-  echo "FAIL: built packages/contracts/dist/index.js does not export resolveActiveInvokerProfileEnv" >&2
-  exit 1
-}
-echo "PASS: pnpm --filter @invoker/contracts build produces a dist exporting resolveActiveInvokerProfileEnv"
+node -e "
+  import('$ROOT/packages/contracts/dist/index.js').then((mod) => {
+    if (typeof mod.resolveActiveInvokerProfileEnv !== 'function') {
+      console.error('FAIL: built packages/contracts/dist/index.js does not export resolveActiveInvokerProfileEnv as a function');
+      process.exit(1);
+    }
+    console.log('PASS: pnpm --filter @invoker/contracts build produces a dist exporting resolveActiveInvokerProfileEnv');
+  }).catch((err) => {
+    console.error('FAIL: could not import built packages/contracts/dist/index.js:', err.message);
+    process.exit(1);
+  });
+"
