@@ -63,6 +63,20 @@ class GitFactsClient:
         lines = [line for line in completed.stdout.splitlines() if line.strip()]
         return len(lines) > 0 and all(line.startswith("-") for line in lines)
 
+    def has_conflict(self, head_sha: str, upstream: str = "origin/master") -> bool:
+        """True when merging head onto upstream hits any conflict at all,
+        of any kind. Used only as a corroborating signal (never sufficient
+        on its own) for a probable-duplicate flag -- see
+        pr_duplicate_close_plan.plan_flag_probable_duplicates.
+        """
+        merge_base_sha = self.merge_base(upstream, head_sha)
+        if merge_base_sha is None:
+            return False
+        result = self._run([
+            "git", "merge-tree", "--write-tree", f"--merge-base={merge_base_sha}", upstream, head_sha,
+        ])
+        return result.returncode != 0
+
     def is_rebase_equivalent(self, head_sha: str, upstream: str = "origin/master") -> bool:
         """True when head's only differences from upstream are add/add
         conflicts (the same file independently added on both sides) and

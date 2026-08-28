@@ -141,6 +141,14 @@ class GhClient:
         value = self._run_json(args)
         return value if isinstance(value, list) else []
 
+    def list_merged_prs(self, repo: str, limit: int = 300) -> list[dict]:
+        args = [
+            "gh", "pr", "list", "--repo", repo, "--state", "merged", "--limit", str(limit),
+            "--json", "number,title",
+        ]
+        value = self._run_json(args)
+        return value if isinstance(value, list) else []
+
     def pr_detail(self, repo: str, number: int) -> dict:
         owner, name = repo.split("/", 1)
         query = (

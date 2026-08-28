@@ -13,16 +13,16 @@ try:
     from .mergify_admin_requeue_snapshot import GhClient
     from .pr_duplicate_close_executor import PrDuplicateCloseExecutor
     from .pr_duplicate_close_git_facts import GitFactsClient
-    from .pr_duplicate_close_model import CandidatePr, GitFacts
-    from .pr_duplicate_close_plan import plan_close_actions
+    from .pr_duplicate_close_model import FLAG_DUPLICATE, CandidatePr, GitFacts
+    from .pr_duplicate_close_plan import plan_close_actions, plan_flag_probable_duplicates
 except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger
     from mergify_admin_requeue_snapshot import GhClient
     from pr_duplicate_close_executor import PrDuplicateCloseExecutor
     from pr_duplicate_close_git_facts import GitFactsClient
-    from pr_duplicate_close_model import CandidatePr, GitFacts
-    from pr_duplicate_close_plan import plan_close_actions
+    from pr_duplicate_close_model import FLAG_DUPLICATE, CandidatePr, GitFacts
+    from pr_duplicate_close_plan import plan_close_actions, plan_flag_probable_duplicates
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,7 +45,7 @@ def _compute_landed_facts(git_facts: GitFactsClient, head_sha: str) -> GitFacts:
     if merge_base_sha is None:
         return GitFacts(
             merge_base_sha=None, is_ancestor=False, is_empty_diff=False,
-            all_commits_equivalent=False, is_rebase_equivalent=False,
+            all_commits_equivalent=False, is_rebase_equivalent=False, has_conflict=False,
         )
     return GitFacts(
         merge_base_sha=merge_base_sha,
@@ -53,7 +53,21 @@ def _compute_landed_facts(git_facts: GitFactsClient, head_sha: str) -> GitFacts:
         is_empty_diff=git_facts.is_empty_diff(head_sha),
         all_commits_equivalent=git_facts.all_commits_equivalent(head_sha),
         is_rebase_equivalent=git_facts.is_rebase_equivalent(head_sha),
+        has_conflict=git_facts.has_conflict(head_sha),
     )
+
+
+def _merged_pr_number_by_title(gh: GhClient, repo: str) -> dict[str, int]:
+    merged_by_title: dict[str, int] = {}
+    for item in gh.list_merged_prs(repo):
+        title = str(item.get("title") or "")
+        number = int(item.get("number") or 0)
+        if not title or not number:
+            continue
+        # `gh pr list --state merged` is newest-first; keep the first (most
+        # recent) match on a title collision among merged PRs themselves.
+        merged_by_title.setdefault(title, number)
+    return merged_by_title
 
 
 def _compute_patch_id(git_facts: GitFactsClient, pr: CandidatePr) -> str | None:
@@ -71,7 +85,8 @@ def _compute_patch_id(git_facts: GitFactsClient, pr: CandidatePr) -> str | None:
 def print_action(action, dry_run: bool) -> None:
     prefix = "DRY-RUN " if dry_run else ""
     kept = f" kept=#{action.kept_pr_number}" if action.kept_pr_number is not None else ""
-    print(f"{prefix}close PR #{action.pr_number} reason={action.reason}{kept} evidence={action.evidence}")
+    verb = "flag" if action.kind == FLAG_DUPLICATE else "close"
+    print(f"{prefix}{verb} PR #{action.pr_number} reason={action.reason}{kept} evidence={action.evidence}")
 
 
 def run_cycle(args: argparse.Namespace) -> bool:
@@ -110,6 +125,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
         patch_ids[pr.number] = _compute_patch_id(git_facts, pr)
 
     actions = plan_close_actions(prs, facts_by_pr, patch_ids, ledger)
+    merged_by_title = _merged_pr_number_by_title(gh, args.repo)
+    actions += plan_flag_probable_duplicates(prs, facts_by_pr, merged_by_title, ledger)
     logger.trace("pr-duplicate-close-scan-planned", repo=args.repo, action_count=len(actions))
 
     submitted = 0

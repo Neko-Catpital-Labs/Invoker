@@ -465,3 +465,64 @@ def submit_close_pr(pr_number: int, repo: str, reason: str, expected_head_oid: s
             f"submit_close_pr failed for PR #{pr_number}: "
             f"{completed.stderr.strip() or completed.stdout.strip()}"
         )
+
+
+def _flag_probable_duplicate_command_script(
+    pr_number: int, repo: str, evidence: str, expected_head_oid: str, merged_pr_number: int,
+) -> str:
+    # Comment-only -- never closes. See plan_flag_probable_duplicates' own
+    # docstring for why a modify/modify conflict can't be auto-resolved.
+    lines = [
+        "set -euo pipefail",
+        f"num={pr_number}",
+        f"repo={shlex.quote(repo)}",
+        f"expected={shlex.quote(expected_head_oid)}",
+        'current_json="$(gh pr view "$num" --repo "$repo" --json state,headRefOid)"',
+        'current_state="$(printf \'%s\' "$current_json" | jq -r \'.state\')"',
+        'current_head="$(printf \'%s\' "$current_json" | jq -r \'.headRefOid\')"',
+        'if [ "$current_state" != "OPEN" ] || [ "$current_head" != "$expected" ]; then',
+        '  echo "stale-pr: #$num is $current_state at $current_head; expected OPEN at $expected" >&2',
+        "  exit 20",
+        "fi",
+        f"merged={merged_pr_number}",
+        f"evidence={shlex.quote(evidence)}",
+        'gh pr comment "$num" --repo "$repo" --body "Invoker probable-duplicate flag: this PR looks like a duplicate of already-merged #$merged. $evidence Needs a human or agent to confirm the conflicting content is equivalent, then close as duplicate."',
+        'echo "pr-duplicate-close: flagged #$num as probable duplicate of #$merged"',
+    ]
+    return "\n".join(lines)
+
+
+def _flag_probable_duplicate_plan_yaml(
+    pr_number: int, repo: str, evidence: str, expected_head_oid: str, merged_pr_number: int,
+) -> str:
+    command_script = _flag_probable_duplicate_command_script(pr_number, repo, evidence, expected_head_oid, merged_pr_number)
+    indented_command = "\n".join(f"      {line}" if line else "" for line in command_script.splitlines())
+    safe_evidence = evidence.replace('"', "'").replace("\n", " ")
+    return (
+        f"name: flag-duplicate-pr-{pr_number}-vs-{merged_pr_number}\n"
+        "onFinish: none\n"
+        "baseBranch: master\n"
+        "tasks:\n"
+        "  - id: flag\n"
+        f'    description: "Flag PR #{pr_number} as a probable duplicate of #{merged_pr_number}: {safe_evidence}"\n'
+        "    command: |\n"
+        f"{indented_command}\n"
+    )
+
+
+def submit_flag_probable_duplicate(pr_number: int, repo: str, evidence: str, expected_head_oid: str, merged_pr_number: int) -> None:
+    plan_yaml = _flag_probable_duplicate_plan_yaml(pr_number, repo, evidence, expected_head_oid, merged_pr_number)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=f"-flag-duplicate-pr-{pr_number}.yaml", delete=False, encoding="utf-8",
+    ) as handle:
+        handle.write(plan_yaml)
+        plan_path = handle.name
+    try:
+        completed = _run_headless('headless_mutation run "$2"', plan_path)
+    finally:
+        Path(plan_path).unlink(missing_ok=True)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"submit_flag_probable_duplicate failed for PR #{pr_number}: "
+            f"{completed.stderr.strip() or completed.stdout.strip()}"
+        )
