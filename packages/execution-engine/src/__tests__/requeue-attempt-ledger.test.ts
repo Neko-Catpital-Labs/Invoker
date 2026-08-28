@@ -49,6 +49,15 @@ describe('requeue attempt ledger', () => {
     expect(ledger.hasEscalated(k)).toBe(true);
   });
 
+  it('refunds a decision when dispatch was not acknowledged', () => {
+    const ledger = createRequeueAttemptLedger();
+    const k = key('wf-1/gate', 5);
+    expect(ledger.decide(k, BUDGET, BACKOFF, 0)).toMatchObject({ kind: 'requeue', attemptsAfter: 1 });
+    expect(ledger.refund(k)).toBe(0);
+    expect(ledger.attempts(k)).toBe(0);
+    expect(ledger.decide(k, BUDGET, BACKOFF, 1)).toMatchObject({ kind: 'requeue', attemptsAfter: 1 });
+  });
+
   it('keys by taskId+generation so a new generation gets a fresh budget', () => {
     const ledger = createRequeueAttemptLedger();
     const gen5 = key('wf-1/gate', 5);

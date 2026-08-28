@@ -13,7 +13,7 @@ import {
   createAutoFixRecoveryTick,
   shouldRecreateMergeGateInsteadOfAutoFix,
 } from '../auto-fix-recovery.js';
-import { autoFixBareRetryExternalKey } from '../auto-fix-retry-cap.js';
+import { autoFixBareRetryExternalKey, autoFixRetryCapExternalKey } from '../auto-fix-retry-cap.js';
 import type {
   WorkerActionRecord,
   WorkerActionWrite,
@@ -305,5 +305,48 @@ describe('auto-fix recovery merge-gate recreate routing', () => {
     expect(channel).toBe(AUTO_FIX_RECREATE_CHANNEL);
     expect(args).toEqual([mergeTask.id]);
     expect(harness.attemptLedger.get(autoFixAttemptLedgerKeyFromTask(mergeTask))).toBe(0);
+  });
+});
+
+describe('auto-fix dispatch acknowledgement accounting', () => {
+  it('leaves both retry ledgers unspent when fix submission is not acknowledged', async () => {
+    const failedTask = makeFailedTask({
+      execution: {
+        generation: 2,
+        selectedAttemptId: 'attempt-1',
+        branch: 'feature/build',
+        error: 'TypeScript assertion failed',
+        failureClass: undefined,
+      },
+    });
+    const harness = makeHarness(failedTask);
+    harness.actions.set(`${AUTO_FIX_WORKER_KIND}:${autoFixBareRetryExternalKey(failedTask.id)}`, toRecord({
+      id: `${AUTO_FIX_WORKER_KIND}:${autoFixBareRetryExternalKey(failedTask.id)}`,
+      workerKind: AUTO_FIX_WORKER_KIND,
+      externalKey: autoFixBareRetryExternalKey(failedTask.id),
+      actionType: 'auto-retry',
+      subjectType: 'task',
+      subjectId: failedTask.id,
+      status: 'queued',
+      attemptCount: 1,
+      workflowId: 'wf-1',
+      taskId: failedTask.id,
+    }));
+    harness.submit.mockImplementation(() => { throw new Error('owner unavailable'); });
+    const tick = createAutoFixRecoveryTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 3,
+      getAutoFixAgent: () => 'codex',
+    });
+
+    await expect(tick({ reason: 'poll' } as never)).rejects.toThrow('owner unavailable');
+
+    expect(harness.attemptLedger.get(autoFixAttemptLedgerKeyFromTask(failedTask))).toBe(0);
+    const cap = harness.actions.get(`${AUTO_FIX_WORKER_KIND}:${autoFixRetryCapExternalKey(failedTask.id)}`);
+    expect(cap).toMatchObject({ status: 'failed', attemptCount: 0 });
+    expect(cap?.payload).toMatchObject({ dispatchState: 'not-acknowledged', failurePhase: 'submission' });
   });
 });
