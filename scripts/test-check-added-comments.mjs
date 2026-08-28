@@ -189,6 +189,88 @@ const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.me
   }
 }
 
+{
+  const diff = [
+    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
+    '+++ b/skills/foo/SKILL.md',
+    '@@ -0,0 +1,3 @@',
+    '+```js',
+    '+const value = true; // explains the obvious',
+    '+```',
+    '',
+  ].join('\n');
+  const violations = collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.js']]));
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+}
+
+{
+  const diff = [
+    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
+    '+++ b/skills/foo/SKILL.md',
+    '@@ -0,0 +1,3 @@',
+    '+```yaml',
+    '+# this yaml comment is not a checked language, so it is not flagged',
+    '+```',
+    '',
+  ].join('\n');
+  assert.equal(collectAddedCommentViolations(diff, 'diff', () => new Map()).length, 0);
+}
+
+{
+  const diff = [
+    'diff --git a/docs/foo.md b/docs/foo.md',
+    '+++ b/docs/foo.md',
+    '@@ -0,0 +1,3 @@',
+    '+```js',
+    '+const value = true; // outside skills/, never checked',
+    '+```',
+    '',
+  ].join('\n');
+  assert.equal(collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.js']])).length, 0);
+}
+
+{
+  const diff = [
+    'diff --git a/skills/admin-bypass-sweep/SKILL.md b/skills/admin-bypass-sweep/SKILL.md',
+    '+++ b/skills/admin-bypass-sweep/SKILL.md',
+    '@@ -0,0 +1,3 @@',
+    '+```js',
+    '+const value = true; // grandfathered file stays exempt',
+    '+```',
+    '',
+  ].join('\n');
+  assert.equal(
+    collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.js']])).length,
+    0,
+    'a grandfathered skill markdown file must stay exempt even for a genuinely new comment line',
+  );
+}
+
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'invoker-comment-check-md-'));
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: root, stdio: 'ignore' });
+    mkdirSync(path.join(root, 'skills/foo'), { recursive: true });
+    writeFileSync(path.join(root, 'skills/foo/SKILL.md'), '# Foo\n\nDo the thing.\n');
+    execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root, stdio: 'ignore' });
+
+    writeFileSync(
+      path.join(root, 'skills/foo/SKILL.md'),
+      ['# Foo', '', 'Do the thing.', '', '```js', 'const value = true; // explains the obvious', '```', ''].join('\n'),
+    );
+    assert.throws(
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--base', 'master'], { encoding: 'utf8' }),
+      /newly-added comment/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // Temp git case: a diff larger than Node's 1MB execFileSync default still runs.
 // `git diff` streams every changed file back before any path filtering, so a
 // large lockfile update used to kill the checker with ENOBUFS.
