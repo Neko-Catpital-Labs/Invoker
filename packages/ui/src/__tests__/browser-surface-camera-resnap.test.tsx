@@ -4,11 +4,14 @@
  *
  * The browser-surface camera effect in App used to depend on
  * `displayedSelectedWorkflowGraph`, which is a brand-new object on every streamed
- * task delta. Each tick therefore re-issued fitInitial + centerSelection and
+ * task delta. Each tick therefore re-issued fitInitial + centerTarget and
  * yanked the viewport back to the selection while the user was panning the graph.
- * The effect now keys off stable surface-entry signals, so live updates and
- * background-driven selection changes while already on the surface issue no
- * camera command; user selection still recenters explicitly.
+ * The effect now keys off stable surface-entry signals (viewMode/sidebarSurface
+ * changing), so live updates and any selection change — user-driven or
+ * background-driven — while already on the surface issue no camera command.
+ * Only entering the surface itself issues the explicit fitInitial +
+ * centerTarget framing pair, reading whatever task happens to be selected at
+ * that moment.
  *
  * The effect is shared by every non-home browser surface (its guard only excludes
  * `home`), so this drives the Workflows surface — the jsdom harness cannot render
@@ -113,7 +116,7 @@ async function flushFrames(count: number): Promise<void> {
 
 /**
  * Drain the nested requestAnimationFrame chains the initial framing schedules
- * (fitInitial + centerSelection re-issue commands, each consumed a frame later),
+ * (fitInitial + centerTarget re-issue commands, each consumed a frame later),
  * returning once the camera-move count holds steady across several frames. This
  * is what makes the post-update assertion deterministic: no late initial move
  * can leak past the point where we start measuring.
@@ -192,7 +195,7 @@ describe('Browser-surface camera (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   }, 20000);
 
-  it('re-centers without re-fitting when the user selects a task on a browser surface', async () => {
+  it('does not move the camera when the user selects a different task on a browser surface', async () => {
     mock.setTasks(tasks, workflows);
     render(<App />);
 
@@ -208,8 +211,9 @@ describe('Browser-surface camera (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task Two');
     });
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await flushFrames(6);
 
+    expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
