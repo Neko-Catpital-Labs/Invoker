@@ -121,8 +121,6 @@ if (productionOwnerService) {
 }
 
 assertNoProductionCollision(process.env);
-// Explicit non-production resource paths are test/CLI inputs, not profile
-// defaults. Preserve them after the collision guard has rejected production.
 const profile = developmentEnvironment(sourceRoot);
 const childEnv = { ...process.env, ...profile };
 delete childEnv.ELECTRON_RUN_AS_NODE;
