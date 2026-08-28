@@ -61,6 +61,7 @@ export interface WorkRequestInputs {
   baseBranch?: string;
   /** Already-resolved base commit for baseBranch, used to skip redundant base ref resolution. */
   baseCommit?: string;
+  specificationSnapshotCommit?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   executionAgent?: string;
   /** Agent-specific model selector. The selected CLI owns validation. */
