@@ -11,12 +11,26 @@
  * the validity functions in @invoker/graph.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig } from '@invoker/workflow-graph';
-import type { GraphMutation, OrchestratorPersistence, OrchestratorMessageBus } from './orchestrator.js';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, RunnerKind } from '@invoker/workflow-graph';
+import type { GraphMutation, GraphMutationNodeDef, OrchestratorPersistence, OrchestratorMessageBus } from './orchestrator.js';
 import { createTaskState } from '@invoker/workflow-graph';
 import { findLeafTaskIds } from '@invoker/workflow-graph';
 
 const TASK_DELTA_CHANNEL = 'task.delta';
+
+const POOL_ROUTED_RUNNER_KINDS = new Set<RunnerKind>(['ssh']);
+
+export function assertPoolRoutedGraphNodeHasPoolId(nodeDef: GraphMutationNodeDef): void {
+  if (!nodeDef.runnerKind || !POOL_ROUTED_RUNNER_KINDS.has(nodeDef.runnerKind)) {
+    return;
+  }
+  if (nodeDef.poolId) {
+    return;
+  }
+  throw new Error(
+    `Graph mutation node "${nodeDef.id}" has runnerKind=${nodeDef.runnerKind} but no poolId`,
+  );
+}
 
 // ── Host Interface ──────────────────────────────────────────
 
@@ -190,6 +204,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
 
   // 3. Create new nodes
   for (const nodeDef of mutation.newNodes) {
+    assertPoolRoutedGraphNodeHasPoolId(nodeDef);
     const nodeBase = {
       workflowId: nodeDef.workflowId,
       parentTask: nodeDef.parentTask,
@@ -199,6 +214,9 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       isReconciliation: nodeDef.isReconciliation,
       requiresManualApproval: nodeDef.requiresManualApproval,
       isMergeNode: nodeDef.isMergeNode,
+      ...(nodeDef.poolId ? { poolId: nodeDef.poolId } : {}),
+      ...(nodeDef.executionAgent ? { executionAgent: nodeDef.executionAgent } : {}),
+      ...(nodeDef.executionModel ? { executionModel: nodeDef.executionModel } : {}),
     } as const;
     let nodeConfig: TaskConfig;
     switch (nodeDef.runnerKind) {
@@ -206,7 +224,11 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
         nodeConfig = { ...nodeBase, runnerKind: 'merge' };
         break;
       case 'docker':
-        nodeConfig = { ...nodeBase, runnerKind: 'docker' };
+        nodeConfig = {
+          ...nodeBase,
+          runnerKind: 'docker',
+          ...(nodeDef.dockerImage ? { dockerImage: nodeDef.dockerImage } : {}),
+        };
         break;
       case 'ssh':
         nodeConfig = { ...nodeBase, runnerKind: 'ssh' };
