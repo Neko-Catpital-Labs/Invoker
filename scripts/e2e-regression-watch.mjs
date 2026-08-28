@@ -1294,7 +1294,7 @@ export function buildRepairFilingMetadata(failure) {
  * MUST call releaseRepairFilingClaim(failure) to undo the claim, or this key
  * would be permanently blocked from ever being retried.
  */
-export function claimRepairFiling(failure, insert = insertRepairFiling) {
+export function claimRepairFiling(failure, insert = insertRepairFiling, outcome = {}) {
   try {
     const result = insert({
       kind: repairFilingKind(failure),
@@ -1302,8 +1302,10 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
       stateSha: failure.firstBadSha,
       metadata: buildRepairFilingMetadata(failure),
     });
+    outcome.infraError = false;
     return !result.inserted;
   } catch (err) {
+    outcome.infraError = true;
     console.error(`ci-regression-watch: claimRepairFiling failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}", assuming already claimed: ${err instanceof Error ? err.message : String(err)}`);
     return true;
   }
@@ -1311,15 +1313,18 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
 
 /**
  * Returns true when this failure already has in-flight repair work or an open
- * repair PR, or when the attempt-scoped ledger claim is already held.
+ * repair PR, or when the attempt-scoped ledger claim is already held. When the
+ * skip came from the ledger claim itself, `outcome.infraError` distinguishes
+ * a genuine already-claimed conflict from the ledger call throwing (e.g. an
+ * unreachable owner) -- see claimRepairFiling.
  */
 export function shouldSkipFilingAlreadyAddressed(failure, {
   hasLiveWork = liveQueryHasNonTerminalWork,
   claim = claimRepairFiling,
   isRepairPrOpen,
-} = {}) {
+} = {}, outcome = {}) {
   if (hasLiveWork(failure, undefined, undefined, { isRepairPrOpen })) return true;
-  return claim(failure);
+  return claim(failure, undefined, outcome);
 }
 
 /**
@@ -1490,6 +1495,7 @@ export function processFailureFilingSweep(state, {
       groupsFound: failures.length,
       groupsFiled: 0,
       groupsSkippedAlreadyAddressed: 0,
+      groupsSkippedInfraError: 0,
       groupsDeferredByCap: 0,
       groupsNeedingHuman: 0,
       groupsInBackoff: 0,
@@ -1512,6 +1518,7 @@ export function processFailureFilingSweep(state, {
     groupsFound: failures.length,
     groupsFiled: 0,
     groupsSkippedAlreadyAddressed: 0,
+    groupsSkippedInfraError: 0,
     groupsDeferredByCap: 0,
     groupsNeedingHuman: prepared.groupsNeedingHuman ?? 0,
     groupsInBackoff: 0,
@@ -1558,8 +1565,13 @@ export function processFailureFilingSweep(state, {
       counts.groupsDeferredByCap += 1;
       continue;
     }
-    if (liveQuery(failure)) {
-      counts.groupsSkippedAlreadyAddressed += 1;
+    const filingOutcome = { infraError: false };
+    if (liveQuery(failure, undefined, filingOutcome)) {
+      if (filingOutcome.infraError) {
+        counts.groupsSkippedInfraError += 1;
+      } else {
+        counts.groupsSkippedAlreadyAddressed += 1;
+      }
       continue;
     }
 
