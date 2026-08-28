@@ -15,7 +15,34 @@ env:
   NODE_VERSION: '26'
 
 jobs:
+  guard-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Guard release is exactly a minor bump
+        run: |
+          CURRENT_REF="${{ github.sha }}"
+          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname --merged "$CURRENT_REF^" | head -1)
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "No previous v* release tag found; skipping guard for the first release."
+            exit 0
+          fi
+          PREVIOUS_VERSION=$(git show "$PREVIOUS_TAG:package.json" | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).version)")
+          EXPECTED_VERSION=$(node scripts/bump-release-version.mjs --type minor --dry-run --from "$PREVIOUS_VERSION")
+          CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
+          if [ "$CURRENT_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "Release version guard failed: expected a minor bump from $PREVIOUS_VERSION ($EXPECTED_VERSION), but package.json has $CURRENT_VERSION." >&2
+            exit 1
+          fi
+          echo "Release version guard passed: $PREVIOUS_VERSION -> $CURRENT_VERSION"
+
   build:
+    needs: guard-version
     uses: ./.github/workflows/reusable-release-build.yml
 
   publish-release:
