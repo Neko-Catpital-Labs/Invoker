@@ -481,6 +481,13 @@ function removeStandaloneSubmitInstruction(message: string): string {
   return filtered.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
+/** Repeated on every resumed continuity-harness plan-mode turn — see buildTurnPrompt. */
+function buildPlanDraftReminder(planFilePath: string | null): string {
+  return planFilePath
+    ? `Reminder: when the final YAML plan is ready, write the COMPLETE YAML to \`${planFilePath}\` using your file-writing tool, then reply with only a short summary. Never paste the YAML into chat.`
+    : 'Reminder: when the final YAML plan is ready, output the COMPLETE YAML inside a ```yaml code block, then keep the rest of your reply short.';
+}
+
 // ── PlanConversation ────────────────────────────────────────
 
 export class PlanConversation {
@@ -1030,9 +1037,16 @@ export class PlanConversation {
   private buildTurnPrompt(): string {
     if (this.harnessSessionDriver?.supportsSessionContinuity && this._harnessSessionId) {
       const latestMessage = this.messages[this.messages.length - 1]?.content ?? '';
-      return this.conversationalPlanning && this.planningSurface
-        ? formatPlanningHostedTurn(this.planningSurface, latestMessage)
-        : latestMessage;
+      if (!this.conversationalPlanning || !this.planningSurface) return latestMessage;
+      const hosted = formatPlanningHostedTurn(this.planningSurface, latestMessage);
+      // Turn 1 gets the plan-draft-file instruction via the full system prompt
+      // (buildCursorPrompt, below). A resumed continuity-harness turn skips
+      // that system prompt entirely, so on a long conversation the model can
+      // drift back to pasting YAML inline instead of writing the sidecar
+      // file — repeat the instruction here so it doesn't decay out of view.
+      return this.mode === 'plan'
+        ? `${hosted}\n\n${buildPlanDraftReminder(this.planDraftFilePath())}`
+        : hosted;
     }
     return this.buildCursorPrompt();
   }
