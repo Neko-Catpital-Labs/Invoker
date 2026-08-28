@@ -25,6 +25,7 @@ import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 import { loadLinearEnv } from './remote-agent-env.js';
+import { inspectTaskFreshness } from './task-specification-preflight.js';
 
 // Re-export for backward compatibility
 export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
@@ -402,6 +403,62 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           );
         }
         throw err;
+      }
+    }
+
+    if (request.actionType === 'ai_task') {
+      const taskText = [request.inputs.description, request.inputs.prompt]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join('\n');
+      const freshness = await inspectTaskFreshness({
+        cwd: acquired.worktreePath,
+        snapshotCommit: request.inputs.specificationSnapshotCommit,
+        taskText,
+        runGit: args => this.execGitSimple(args, acquired.worktreePath),
+      });
+      if (freshness.status === 'stale') {
+        const entry: WorktreeEntry = {
+          process: null,
+          request,
+          worktreeDir: acquired.worktreePath,
+          branch: acquired.branch,
+          phase: 'completed',
+          outputListeners: new Set(),
+          outputBuffer: [],
+          outputBufferBytes: 0,
+          evictedChunkCount: 0,
+          completeListeners: new Set(),
+          heartbeatListeners: new Set(),
+          completed: false,
+          poolSoftRelease: acquired.softRelease,
+          leaseResourceKey: acquired.leaseResourceKey,
+          leaseHolderId: acquired.leaseHolderId,
+        };
+        this.registerEntry(handle, entry);
+        handle.workspacePath = acquired.worktreePath;
+        handle.branch = acquired.branch;
+        handle.leaseResourceKey = acquired.leaseResourceKey;
+        handle.leaseHolderId = acquired.leaseHolderId;
+        setTimeout(() => {
+          const liveEntry = this.entries.get(executionId);
+          if (!liveEntry || liveEntry.completed) return;
+          liveEntry.completed = true;
+          this.emitComplete(executionId, {
+            requestId: request.requestId,
+            actionId: request.actionId,
+            executionGeneration: request.executionGeneration,
+            status: 'needs_input',
+            outputs: {
+              exitCode: 1,
+              error: freshness.message,
+              summary: freshness.message,
+              branch: acquired.branch,
+              workspacePath: acquired.worktreePath,
+            },
+          });
+          this.softReleasePoolSlot(liveEntry);
+        }, 0);
+        return handle;
       }
     }
 
