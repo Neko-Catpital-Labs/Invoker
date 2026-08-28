@@ -19,6 +19,7 @@ except ImportError:
 
 ADMIN_BYPASS_NUDGE_LEDGER_KIND = "comment-admin-bypass-nudge"
 RESTORE_ADMIN_BYPASS_LABEL_LEDGER_KIND = "restore-admin-bypass-label"
+REPAIR_DISPATCH_FAILURE_LEDGER_KIND = "comment-repair-dispatch-failed"
 
 
 def admin_bypass_nudge_body() -> str:
@@ -145,6 +146,17 @@ class AdminBypassGhExecutor:
                 now,
                 meta={"detail": detail},
             )
+
+    def comment_repair_dispatch_failed(self, pr: PrSnapshot, action_kind: str, now: int) -> None:
+        if self.ledger.count(REPAIR_DISPATCH_FAILURE_LEDGER_KIND, pr.number, pr.head_ref_oid, action_kind) != 0:
+            return
+        body = (
+            "Invoker repair dispatch was not acknowledged. The request was recorded as pending, "
+            "then closed without consuming the code-repair retry budget; "
+            f"automatic retry remains enabled for current head {pr.head_ref_oid[:7]}."
+        )
+        self.gh.comment(self.repo, pr.number, body)
+        self.ledger.record(REPAIR_DISPATCH_FAILURE_LEDGER_KIND, pr.number, pr.head_ref_oid, action_kind, now)
 
     def execute(self, action: Action, pr: PrSnapshot, now: int) -> bool:
         self.logger.trace("admin-bypass-action-execute", action=self.logger.action_payload(action))

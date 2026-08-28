@@ -10,11 +10,13 @@ Run:  python3 scripts/test_mergify_admin_requeue_plan.py
 
 from __future__ import annotations
 
+import io
 import shutil
 import sys
 import tempfile
 import unittest
 import unittest.mock
+from contextlib import redirect_stderr
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1400,9 +1402,13 @@ class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
         self.assertTrue(already_claimed)
 
     def test_fails_closed_when_the_ledger_call_raises(self):
+        stderr = io.StringIO()
         with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", side_effect=RuntimeError("headless_mutation timed out")):
-            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+            with redirect_stderr(stderr):
+                already_claimed = p.default_claim_repair_filing("k", "s", "sha")
         self.assertTrue(already_claimed)
+        self.assertIn("skipping this filing tick without consuming code-repair retry budget", stderr.getvalue())
+        self.assertNotIn("assuming already claimed", stderr.getvalue())
 
     def test_release_calls_through(self):
         with unittest.mock.patch.object(p.repair_filing_ledger, "release_repair_filing", return_value={"released": True}) as release:

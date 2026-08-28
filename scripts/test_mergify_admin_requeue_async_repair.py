@@ -232,7 +232,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
 
     def test_submit_async_repair_plan_calls_headless_run_and_cleans_up_temp_file(self):
         plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
-        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}\n", stderr="")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="Workflow ID: wf-ack\n", stderr="")
         written_paths = []
 
         def fake_run_headless(command, *extra_args):
@@ -242,8 +242,9 @@ class AsyncRepairPlanTests(unittest.TestCase):
             return completed
 
         with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", side_effect=fake_run_headless) as run:
-            async_repair.submit_async_repair_plan(plan)
+            acknowledgement = async_repair.submit_async_repair_plan(plan)
         run.assert_called_once()
+        self.assertEqual(acknowledgement.workflow_id, "wf-ack")
         self.assertFalse(written_paths[0].exists())
 
     def test_submit_async_repair_plan_honors_submit_test_seam(self):

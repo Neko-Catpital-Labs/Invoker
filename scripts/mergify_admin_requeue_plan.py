@@ -121,7 +121,7 @@ def default_claim_repair_filing(kind: str, subject: str, state_sha: str) -> bool
         return not result["inserted"]
     except Exception as exc:
         print(
-            f"mergify_admin_requeue: default_claim_repair_filing failed for kind={kind!r} subject={subject!r} state_sha={state_sha!r}, assuming already claimed: {exc}",
+            f"mergify_admin_requeue: repair-filing claim failed for kind={kind!r} subject={subject!r} state_sha={state_sha!r}; skipping this filing tick without consuming code-repair retry budget: {exc}",
             file=sys.stderr,
         )
         return True
@@ -496,8 +496,7 @@ def retry_decision(
     return decision
 
 
-# An async repair submission (repairer.py's ledger.record(submit_kind, ...), written
-# only after a successful `headless_mutation run` submission) is "in flight" until a
+# An acknowledged async repair submission is "in flight" until a
 # same-kind "-settled" row lands with an equal-or-later epoch. The submitted plan's
 # `normalize` task writes that settle row unconditionally as its first action, so
 # reaching `normalize` at all -- pushed, no-op, prereq-created, or still-invalid --

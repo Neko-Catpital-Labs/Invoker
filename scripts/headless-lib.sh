@@ -77,11 +77,11 @@ _headless_query_invoke() {
     run_with_optional_timeout "$seconds" "$INVOKER_HEADLESS_CLIENT_BIN" "$@"
     return $?
   fi
-  if command -v invoker-ui >/dev/null 2>&1; then
-    run_with_optional_timeout "$seconds" invoker-ui --headless "$@"
+  if [ -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
+    run_with_optional_timeout "$seconds" node "$REPO_ROOT/packages/app/dist/headless-client.js" "$@"
     return $?
   fi
-  run_with_optional_timeout "$seconds" node "$REPO_ROOT/packages/app/dist/headless-client.js" "$@"
+  run_with_optional_timeout "$seconds" invoker-ui --headless "$@"
 }
 
 headless_query() {
