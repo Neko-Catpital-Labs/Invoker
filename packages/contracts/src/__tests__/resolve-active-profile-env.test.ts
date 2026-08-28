@@ -2,9 +2,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { resolveActiveInvokerProfileEnv, resolveRepoRoot } from '../index.js';
+import { resolveActiveInvokerProfileEnv, resolveInvokerIpcSocketPath, resolveRepoRoot } from '../index.js';
 
 const tempDirs: string[] = [];
 
@@ -24,6 +24,37 @@ afterEach(() => {
 });
 
 describe('resolveActiveInvokerProfileEnv', () => {
+  describe('when spawned by the production owner service', () => {
+    const originalMarker = process.env.INVOKER_PRODUCTION_OWNER_SERVICE;
+
+    beforeEach(() => {
+      process.env.INVOKER_PRODUCTION_OWNER_SERVICE = '1';
+    });
+
+    afterEach(() => {
+      if (originalMarker === undefined) delete process.env.INVOKER_PRODUCTION_OWNER_SERVICE;
+      else process.env.INVOKER_PRODUCTION_OWNER_SERVICE = originalMarker;
+    });
+
+    it('skips dev-profile detection even on a git-checkout source root', () => {
+      const repoRoot = resolveRepoRoot(process.cwd());
+
+      const actual = resolveActiveInvokerProfileEnv({ repoRoot });
+
+      expect(actual).toEqual({ INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' });
+      expect(actual.INVOKER_DEVELOPMENT_PROFILE).toBeUndefined();
+    });
+
+    it('resolves the plain production socket path, not a dev-profile one', () => {
+      const repoRoot = resolveRepoRoot(process.cwd());
+      const profileEnv = resolveActiveInvokerProfileEnv({ repoRoot });
+      const socketPath = resolveInvokerIpcSocketPath(profileEnv);
+
+      expect(socketPath).not.toContain('/dev/');
+      expect(socketPath.endsWith('/.invoker/ipc-transport.sock')).toBe(true);
+    });
+  });
+
   it('matches the development profile script for this repository', () => {
     const repoRoot = resolveRepoRoot(process.cwd());
     const scriptPath = join(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');

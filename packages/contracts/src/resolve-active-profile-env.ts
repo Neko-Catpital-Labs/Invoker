@@ -22,6 +22,9 @@ function isEnvironmentOverrides(value: unknown): value is Record<string, string>
 export function resolveActiveInvokerProfileEnv(
   options: ResolveActiveInvokerProfileEnvOptions = {},
 ): Record<string, string> {
+  if (process.env.INVOKER_PRODUCTION_OWNER_SERVICE === '1') {
+    return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
+  }
   try {
     const repoRoot = resolve(options.repoRoot ?? resolveRepoRoot(process.cwd()));
     const scriptPath = resolve(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
