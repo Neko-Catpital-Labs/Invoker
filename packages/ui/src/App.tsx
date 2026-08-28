@@ -121,7 +121,6 @@ type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar' 
 type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
-type SelectByIdOptions = { recenter?: boolean };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
@@ -1547,10 +1546,6 @@ export function App() {
     return command;
   }, []);
 
-  const recenterForSelection = useCallback((scope: GraphScope, target: string) => {
-    issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'selection' });
-  }, [issueCameraCommand]);
-
   const handleWorkflowGraphViewportSnapshot = useCallback((viewport: GraphCameraViewport) => {
     workflowGraphViewportRef.current = viewport;
   }, []);
@@ -1568,7 +1563,7 @@ export function App() {
     });
   }, []);
 
-  const selectWorkflowById = useCallback((workflowId: string, options: SelectByIdOptions = {}) => {
+  const selectWorkflowById = useCallback((workflowId: string) => {
     armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
@@ -1576,12 +1571,9 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('workflowGraph');
-    if (options.recenter ?? true) {
-      recenterForSelection('workflow', workflowId);
-    }
-  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion, recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion]);
 
-  const selectTaskById = useCallback((taskId: string, options: SelectByIdOptions = {}) => {
+  const selectTaskById = useCallback((taskId: string) => {
     const task = tasksRef.current.get(taskId);
     if (!task) return;
     setSelectedTaskId(task.id);
@@ -1594,10 +1586,7 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('taskGraph');
-    if (options.recenter ?? true) {
-      recenterForSelection('task', task.id);
-    }
-  }, [focusKeyboardRegion, recenterForSelection]);
+  }, [focusKeyboardRegion]);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
@@ -1606,7 +1595,7 @@ export function App() {
         setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
         const task = tasksRef.current.get(failedTaskId);
         if (task) {
-          selectTaskById(task.id, { recenter: false });
+          selectTaskById(task.id);
         }
         return;
       }
@@ -1745,7 +1734,7 @@ export function App() {
         const scope: GraphScope = inTaskGraph ? 'task' : 'workflow';
         const target = inTaskGraph ? selectedTaskId : (selectedWorkflow?.id ?? selectedWorkflowId);
         if (target) {
-          issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'f1-center' });
+          issueCameraCommand({ kind: 'centerTarget', scope, target, reason: 'f1-center' });
         }
         return;
       }
@@ -1960,8 +1949,7 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    recenterForSelection('workflow', workflowId);
-  }, [armSuppressDagSurfaceDismiss, recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
     event.preventDefault();
@@ -1988,7 +1976,7 @@ export function App() {
       if (activeWorkflowId !== null && !selectedWorkflowVanished) {
         return;
       }
-      selectWorkflowById(workflowEntries[0].workflow.id, { recenter: false });
+      selectWorkflowById(workflowEntries[0].workflow.id);
       return;
     }
 
@@ -2004,7 +1992,7 @@ export function App() {
       if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
-      selectTaskById(attentionEntries[0].task.id, { recenter: false });
+      selectTaskById(attentionEntries[0].task.id);
       return;
     }
 
@@ -2048,7 +2036,7 @@ export function App() {
         if (cancelled) return;
         requestAnimationFrame(() => {
           if (cancelled) return;
-          issueCameraCommand({ kind: 'centerSelection', scope: 'task', target: selectedTaskId, reason: 'browser-selection' });
+          issueCameraCommand({ kind: 'centerTarget', scope: 'task', target: selectedTaskId, reason: 'browser-entry-focus' });
         });
       });
     });
