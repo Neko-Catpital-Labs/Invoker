@@ -1294,7 +1294,7 @@ export function buildRepairFilingMetadata(failure) {
  * MUST call releaseRepairFilingClaim(failure) to undo the claim, or this key
  * would be permanently blocked from ever being retried.
  */
-export function claimRepairFiling(failure, insert = insertRepairFiling) {
+export function claimRepairFiling(failure, insert = insertRepairFiling, outcome = {}) {
   try {
     const result = insert({
       kind: repairFilingKind(failure),
@@ -1302,8 +1302,10 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
       stateSha: failure.firstBadSha,
       metadata: buildRepairFilingMetadata(failure),
     });
+    outcome.infraError = false;
     return !result.inserted;
   } catch (err) {
+    outcome.infraError = true;
     console.error(`ci-regression-watch: claimRepairFiling failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}", assuming already claimed: ${err instanceof Error ? err.message : String(err)}`);
     return true;
   }
@@ -1311,15 +1313,18 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
 
 /**
  * Returns true when this failure already has in-flight repair work or an open
- * repair PR, or when the attempt-scoped ledger claim is already held.
+ * repair PR, or when the attempt-scoped ledger claim is already held. When the
+ * skip came from the ledger claim itself, `outcome.infraError` distinguishes
+ * a genuine already-claimed conflict from the ledger call throwing (e.g. an
+ * unreachable owner) -- see claimRepairFiling.
  */
 export function shouldSkipFilingAlreadyAddressed(failure, {
   hasLiveWork = liveQueryHasNonTerminalWork,
   claim = claimRepairFiling,
   isRepairPrOpen,
-} = {}) {
+} = {}, outcome = {}) {
   if (hasLiveWork(failure, undefined, undefined, { isRepairPrOpen })) return true;
-  return claim(failure);
+  return claim(failure, undefined, outcome);
 }
 
 /**
@@ -1357,6 +1362,9 @@ export function renderOptionalReflectTaskYaml(vars) {
       Safety invariant: This task never edits Invoker files and never merges
       a catstack PR on its own authority. If /reflect finds nothing durable,
       it makes no changes and exits 0.
+      Effectiveness measurement: The task summary names each Accepted
+      finding's catstack PR, or states "no durable finding"; either way
+      \`git diff --name-only\` in the Invoker checkout is empty.
       Slice rationale: Opt-in personal worker, downstream of verify, so
       default CI repair stays fix+verify only.
       Architectural effect: None to Invoker product code; accepted edits land
@@ -1429,7 +1437,23 @@ export function appendOptionalReflectTask(planPath, vars) {
       (match) => `${match.replace(/\n$/, '')}${waiver}`,
     );
   }
-  writeFileSync(planPath, `${next.trimEnd()}\n${renderOptionalReflectTaskYaml(vars)}`);
+  const reflectYaml = renderOptionalReflectTaskYaml(vars);
+  const scrubIdLine = '  - id: scrub-handoff-artifacts';
+  if (next.includes(scrubIdLine)) {
+    // The terminal scrub task must depend on every leaf task (see
+    // lint-task-atomicity.sh), and this reflect task -- inserted right
+    // before it -- becomes a new leaf, so wire it into scrub's
+    // dependencies rather than just appending it after scrub.
+    const reflectBlock = reflectYaml.replace(/^\n/, '').replace(/\n$/, '');
+    next = next.replace(scrubIdLine, `${reflectBlock}\n\n${scrubIdLine}`);
+    next = next.replace(
+      /(  - id: scrub-handoff-artifacts[\s\S]*?dependencies:\n)((?:      - .+\n?)*)/,
+      (match, head, deps) => `${head}${deps}      - reflect-ci-${vars.job_slug}\n`,
+    );
+    writeFileSync(planPath, `${next.trimEnd()}\n`);
+  } else {
+    writeFileSync(planPath, `${next.trimEnd()}\n${reflectYaml}`);
+  }
 }
 
 export function fileBugfixPlan(failure, opts = {}) {
@@ -1475,6 +1499,7 @@ export function processFailureFilingSweep(state, {
       groupsFound: failures.length,
       groupsFiled: 0,
       groupsSkippedAlreadyAddressed: 0,
+      groupsSkippedInfraError: 0,
       groupsDeferredByCap: 0,
       groupsNeedingHuman: 0,
       groupsInBackoff: 0,
@@ -1497,6 +1522,7 @@ export function processFailureFilingSweep(state, {
     groupsFound: failures.length,
     groupsFiled: 0,
     groupsSkippedAlreadyAddressed: 0,
+    groupsSkippedInfraError: 0,
     groupsDeferredByCap: 0,
     groupsNeedingHuman: prepared.groupsNeedingHuman ?? 0,
     groupsInBackoff: 0,
@@ -1543,8 +1569,13 @@ export function processFailureFilingSweep(state, {
       counts.groupsDeferredByCap += 1;
       continue;
     }
-    if (liveQuery(failure)) {
-      counts.groupsSkippedAlreadyAddressed += 1;
+    const filingOutcome = { infraError: false };
+    if (liveQuery(failure, undefined, filingOutcome)) {
+      if (filingOutcome.infraError) {
+        counts.groupsSkippedInfraError += 1;
+      } else {
+        counts.groupsSkippedAlreadyAddressed += 1;
+      }
       continue;
     }
 

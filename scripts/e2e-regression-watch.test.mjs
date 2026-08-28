@@ -56,7 +56,7 @@ function makeFailure(overrides = {}) {
     lastBadRunId: 100,
     lastJobDatabaseId: 200,
     lastJobUrl: 'https://example.test/job/200',
-    lastObservedAt: '2026-08-21T12:00:00Z',
+    lastObservedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     occurrences: 1,
     attempts: 0,
     lastFiledAt: null,
@@ -226,6 +226,44 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
     const failure = makeFailure({ firstBadSha: 'shaA' });
     const throwingInsert = () => { throw new Error('headless_mutation timed out'); };
     assert.equal(claimRepairFiling(failure, throwingInsert), true);
+  });
+
+  it('processFailureFilingSweep counts an unreachable ledger as an infra error, not an already-addressed conflict', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const state = stateWithFailure(failure);
+    const throwingInsert = () => { throw new Error('ECONNREFUSED'); };
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-21T12:00:01Z'),
+      liveQuery: (candidate, options, outcome) => shouldSkipFilingAlreadyAddressed(candidate, {
+        hasLiveWork: () => false,
+        claim: (inner, _insert, innerOutcome) => claimRepairFiling(inner, throwingInsert, innerOutcome),
+      }, outcome),
+      fileFailure: () => {},
+      isPaused: () => false,
+    });
+
+    assert.equal(counts.groupsSkippedInfraError, 1);
+    assert.equal(counts.groupsSkippedAlreadyAddressed, 0);
+  });
+
+  it('processFailureFilingSweep counts a genuine already-claimed ledger response as already-addressed, not an infra error', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const state = stateWithFailure(failure);
+    const alreadyClaimedInsert = () => ({ inserted: false, row: {} });
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-21T12:00:01Z'),
+      liveQuery: (candidate, options, outcome) => shouldSkipFilingAlreadyAddressed(candidate, {
+        hasLiveWork: () => false,
+        claim: (inner, _insert, innerOutcome) => claimRepairFiling(inner, alreadyClaimedInsert, innerOutcome),
+      }, outcome),
+      fileFailure: () => {},
+      isPaused: () => false,
+    });
+
+    assert.equal(counts.groupsSkippedAlreadyAddressed, 1);
+    assert.equal(counts.groupsSkippedInfraError, 0);
   });
 
   it('puts the fleet member list in metadata, not the key', () => {
