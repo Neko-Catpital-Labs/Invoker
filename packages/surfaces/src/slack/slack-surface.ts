@@ -1621,8 +1621,21 @@ export class SlackSurface implements Surface {
     return parsed;
   }
 
+  private describeOutboundActions(blocks: unknown[] | undefined): string {
+    if (!blocks?.length) return 'none';
+    const pairs: string[] = [];
+    for (const block of blocks as Array<{ elements?: Array<{ action_id?: string; value?: string }> }>) {
+      for (const el of block.elements ?? []) {
+        if (el.action_id) pairs.push(`${el.action_id}=${el.value ?? ''}`);
+      }
+    }
+    return pairs.length > 0 ? pairs.join(',') : 'none';
+  }
+
   private async replacePlanDraftMessage(draft: SlackPlanDraft, text: string, blocks: unknown[]): Promise<void> {
     if (!draft.messageTs) return;
+    this.log('slack', 'info',
+      `[OUTBOUND_MESSAGE] chat.update channel=${draft.channelId} thread_ts=${draft.threadTs} ts=${draft.messageTs} draft=${draft.draftId}:${draft.version} textPreview="${text.slice(0, 100).replace(/\n/g, '\\n')}" actions=${this.describeOutboundActions(blocks)}`);
     await this.app.client.chat.update({
       channel: draft.channelId,
       ts: draft.messageTs,
@@ -1676,6 +1689,26 @@ export class SlackSurface implements Surface {
     }
   }
 
+  private logDraftActionUnavailable(
+    actionName: string,
+    value: string,
+    key: { draftId: string; version: number } | undefined,
+    context: { channel?: string; threadTs?: string; userId?: string },
+    draft: SlackPlanDraft | undefined,
+  ): void {
+    const reasons: string[] = [];
+    if (!key) reasons.push('unparseable_button_value');
+    if (key && !draft) reasons.push('draft_row_not_found');
+    if (!context.channel) reasons.push('missing_context_channel');
+    if (!context.threadTs) reasons.push('missing_context_threadTs');
+    if (!context.userId) reasons.push('missing_context_userId');
+    if (draft && context.channel && draft.channelId !== context.channel) reasons.push(`channel_mismatch(draft=${draft.channelId},click=${context.channel})`);
+    if (draft && context.threadTs && draft.threadTs !== context.threadTs) reasons.push(`threadTs_mismatch(draft=${draft.threadTs},click=${context.threadTs})`);
+    if (draft && context.userId && draft.requestedBy !== context.userId) reasons.push(`requestedBy_mismatch(draft=${draft.requestedBy},click=${context.userId})`);
+    this.log('slack', 'warn',
+      `[PLAN_DRAFT_ACTION_UNAVAILABLE] action=${actionName} value="${value}" draft=${draft ? `${draft.draftId}:${draft.version}(status=${draft.status})` : 'none'} click_channel=${context.channel ?? 'none'} click_threadTs=${context.threadTs ?? 'none'} click_userId=${context.userId ?? 'none'} reasons=${reasons.join('|') || 'unknown'}`);
+  }
+
   private async approveSlackPlanDraft(value: string, body: unknown, respond?: RespondFn): Promise<void> {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
@@ -1683,6 +1716,7 @@ export class SlackSurface implements Surface {
     if (!draft || !context.channel || !context.threadTs || !context.userId
       || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
       || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('approve', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1700,6 +1734,7 @@ export class SlackSurface implements Surface {
     if (!draft || !context.channel || !context.threadTs || !context.userId
       || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
       || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('cancel', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1722,6 +1757,7 @@ export class SlackSurface implements Surface {
     if (!draft || !context.channel || !context.threadTs || !context.userId
       || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
       || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('discard', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -3253,15 +3289,25 @@ ${text}`;
     say: SayFn,
     msg: { text: string; thread_ts: string; blocks?: unknown[] },
   ): Promise<any> {
+    const textPreview = (msg.text ?? '').slice(0, 100).replace(/\n/g, '\\n');
+    const actions = this.describeOutboundActions(msg.blocks);
+    let result: any;
     try {
-      return await say(msg);
+      result = await say(msg);
     } catch (err) {
       const retryAfterMs = this.getRetryAfterMs(err);
-      if (retryAfterMs === null) throw err;
+      if (retryAfterMs === null) {
+        this.log('slack', 'error',
+          `[OUTBOUND_MESSAGE] say FAILED thread_ts=${msg.thread_ts} textPreview="${textPreview}" actions=${actions} error=${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
       this.log('slack', 'warn', `[RATE_LIMIT] Delaying retry for ${retryAfterMs}ms (thread_ts=${msg.thread_ts})`);
       await this.sleep(retryAfterMs + 100);
-      return await say(msg);
+      result = await say(msg);
     }
+    this.log('slack', 'info',
+      `[OUTBOUND_MESSAGE] say thread_ts=${msg.thread_ts} ts=${result?.ts ?? 'unknown'} textPreview="${textPreview}" actions=${actions}`);
+    return result;
   }
 
   private isCursorCliMissingError(err: unknown): boolean {
