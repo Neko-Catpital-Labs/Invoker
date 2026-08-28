@@ -1250,6 +1250,54 @@ describe('PlanConversation harness session driver', () => {
     expect(prompt).toContain('Approve/Cancel review card');
   });
 
+  // Real incident: on a long Slack planning thread, once a continuity harness
+  // (e.g. claude) resumes an existing session, only the latest user message
+  // plus host-ownership context was sent -- the turn-1 instruction to write
+  // the plan to the sidecar file and keep chat short was never repeated. The
+  // model drifted to pasting the full YAML inline, which a downstream
+  // word-count guard then truncated, and the plan was never captured.
+  // BUG (see fix in the next stack slice): the reminder is not repeated yet,
+  // so this currently fails. it.fails asserts that "still broken" state as
+  // the proof; the fix slice flips this back to a plain `it`.
+  it.fails('repeats the plan-draft-file reminder on a resumed plan-mode turn, not just turn one', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: true });
+    const conv = new PlanConversation({
+      mode: 'plan',
+      conversationalPlanning: true,
+      planningSurface: 'slack',
+      workingDir: '/tmp/worktree',
+      threadTs: 'thread-abc',
+      harnessSessionDriver: driver,
+      harnessSessionId: 'restored-slack-session',
+    });
+
+    mockCursorResponse('Reply after restart');
+    await conv.sendMessage('Continue where we left off');
+
+    const prompt = driver.append.mock.calls[0][1];
+    expect(prompt).toContain(String(conv.planDraftFilePath()));
+    expect(prompt).toContain('Never paste the YAML into chat');
+  });
+
+  it('does not add the plan-draft-file reminder to a resumed agent-mode turn', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: true });
+    const conv = new PlanConversation({
+      mode: 'agent',
+      conversationalPlanning: true,
+      planningSurface: 'slack',
+      workingDir: '/tmp/worktree',
+      threadTs: 'thread-abc',
+      harnessSessionDriver: driver,
+      harnessSessionId: 'restored-slack-session',
+    });
+
+    mockCursorResponse('Reply after restart');
+    await conv.sendMessage('Continue where we left off');
+
+    const prompt = driver.append.mock.calls[0][1];
+    expect(prompt).not.toContain('Never paste the YAML into chat');
+  });
+
   it('keeps sending full conversation history to a driver without session continuity', async () => {
     const driver = createMockDriver({ supportsSessionContinuity: false });
     const conv = new PlanConversation({ harnessSessionDriver: driver });
