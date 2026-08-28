@@ -184,7 +184,7 @@ If one branch mixes behavior, refactor, cleanup, or test-harness/proof work, spl
 
 ## Comment policy gate
 
-Before publishing, run `pnpm run check:comments` (`scripts/check-added-comments.mjs`). It covers `.cjs`/`.js`/`.jsx`/`.mjs`/`.py`/`.pyi`/`.sh`/`.ts`/`.tsx` and rejects any newly-added explanatory comment against this repo's Comment Policy (see root `CLAUDE.md`), including comments picked up from a cherry-picked or auto-generated commit. It runs in CI as `quality / Added Comment Policy`, so a failure here after publishing still blocks the PR — check it locally first rather than discovering it from a red check.
+Before publishing, run `pnpm run check:comments` (`scripts/check-added-comments.mjs`). It covers `.cjs`/`.js`/`.jsx`/`.mjs`/`.py`/`.pyi`/`.sh`/`.ts`/`.tsx` and rejects any newly-added explanatory comment against this repo's Comment Policy (see root `CLAUDE.md`), including comments picked up from a cherry-picked or auto-generated commit. It also covers fenced code blocks (```js, ```ts, ```sh, ```py, and aliases) inside `skills/**/*.md`, so a skill's own example snippets follow the same policy — untagged or non-code fences (yaml, json, prose) are not scanned. It runs in CI as `quality / Added Comment Policy`, so a failure here after publishing still blocks the PR — check it locally first rather than discovering it from a red check.
 
 ## Command surface
 
