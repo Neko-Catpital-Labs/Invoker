@@ -56,7 +56,7 @@ function makeFailure(overrides = {}) {
     lastBadRunId: 100,
     lastJobDatabaseId: 200,
     lastJobUrl: 'https://example.test/job/200',
-    lastObservedAt: '2026-08-21T12:00:00Z',
+    lastObservedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     occurrences: 1,
     attempts: 0,
     lastFiledAt: null,
