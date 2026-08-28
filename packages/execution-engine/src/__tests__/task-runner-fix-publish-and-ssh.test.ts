@@ -1434,6 +1434,73 @@ describe('TaskRunner', () => {
       }
     });
 
+    it('publishReviewStackWithMakePrSkill writes skill=invoker-make-pr onto merge task output', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const agent = {
+          name: 'claude',
+          stdinMode: 'ignore' as const,
+          bundledSkills: ['make-pr'],
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'),
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.exit(1)'],
+            sessionId: 'skill-visible',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const appendTaskOutput = vi.fn();
+        const onOutput = vi.fn();
+        const executor = new TaskRunner({
+          orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+          persistence: { appendTaskOutput } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: vi.fn().mockReturnValue(agent),
+            getOrThrow: vi.fn(),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([agent]),
+          } as any,
+          cwd: '/tmp',
+          callbacks: { onOutput },
+          logger: createMockLogger(),
+        });
+
+        await expect((executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-1',
+          mergeNodeTaskId: '__merge__wf-1',
+          title: 'Stack',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: 'summary',
+          cwd: '/tmp',
+        })).rejects.toThrow('make-pr skill is required to publish Invoker review stacks');
+
+        const output = [
+          ...onOutput.mock.calls.map((call) => String(call[1])),
+          ...appendTaskOutput.mock.calls.map((call) => String(call[1])),
+        ].join('\n');
+        expect(output).toContain('skill=invoker-make-pr');
+        expect(output).not.toContain('/pr-skill');
+        expect(onOutput).toHaveBeenCalledWith(
+          '__merge__wf-1',
+          expect.stringContaining('skill=invoker-make-pr'),
+        );
+        expect(appendTaskOutput).toHaveBeenCalledWith(
+          '__merge__wf-1',
+          expect.stringContaining('skill=invoker-make-pr'),
+        );
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
     it('publishReviewStackWithMakePrSkill throws when make-pr agents cannot publish valid JSON', async () => {
       const badAgent = {
         name: 'claude',
