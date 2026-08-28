@@ -18,7 +18,7 @@ jobs:
     outputs:
       tag: ${{ steps.decide.outputs.tag }}
       previous_tag: ${{ steps.decide.outputs.previous_tag }}
-      sha: ${{ steps.decide.outputs.sha }}
+      sha: ${{ steps.bump.outputs.sha }}
       should_run: ${{ steps.decide.outputs.should_run }}
       skip_reason: ${{ steps.decide.outputs.skip_reason }}
 
@@ -33,6 +33,19 @@ jobs:
       - name: Decide daily cut
         id: decide
         run: bash scripts/daily-release-decide.sh --tip HEAD --out "$GITHUB_OUTPUT"
+
+      - name: Bump nightly patch version
+        if: steps.decide.outputs.should_run == 'true'
+        run: |
+          node scripts/bump-release-version.mjs --type patch
+          git config user.name "invoker-release-bot"
+          git config user.email "invoker-release-bot@users.noreply.github.com"
+          git commit -am "chore(release): bump patch version for ${{ steps.decide.outputs.tag }}"
+          git push origin HEAD:master
+
+      - name: Resolve build sha
+        id: bump
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Skip summary
         if: steps.decide.outputs.should_run != 'true'
