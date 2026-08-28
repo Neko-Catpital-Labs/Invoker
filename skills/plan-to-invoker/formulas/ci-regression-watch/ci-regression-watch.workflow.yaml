@@ -15,6 +15,7 @@ tasks:
       Review claim: The change corrects the CI regression's root cause at its source, with no unrelated edits.
       Review lane: behavior
       Safety invariant: Other CI jobs and product behavior stay unchanged except for the corrected defect.
+      Effectiveness measurement: `{{verify_command}}` fails before this change and passes after; that transition is the effectiveness signal.
       Slice rationale: One behavior slice: the failing CI job's root cause and deterministic proof.
       Architectural effect: None expected; no new module boundaries unless the root cause requires it.
       Goal: Make the CI job `{{job_name}}` pass on current master.
@@ -74,6 +75,7 @@ tasks:
       Review claim: The command passes only when the CI regression is fixed.
       Review lane: proof
       Safety invariant: The command is identical before and after the fix.
+      Effectiveness measurement: Exit code of `{{verify_command}}` is the effectiveness signal for this proof slice.
       Slice rationale: One proof slice for the repaired CI job.
       Architectural effect: None; adds no product behavior.
       Goal: Prove the CI job repair locally.
@@ -87,3 +89,23 @@ tasks:
       {{verify_command}}
     dependencies:
       - fix-ci-{{job_slug}}
+
+  - id: scrub-handoff-artifacts
+    description: |
+      Purge ephemeral inter-task handoff files from the worktree before the merge gate.
+      Review claim: Only ephemeral handoff files are removed; no product or test file is touched.
+      Review lane: cleanup
+      Safety invariant: The scrub script only removes known ephemeral handoff paths and never touches the home Invoker ledger.
+      Effectiveness measurement: The scrub command exits zero and no handoff path remains afterward.
+      Slice rationale: One cleanup slice required on every implementation plan that opens a pull request, kept separate from behavior and proof work.
+      Architectural effect: None.
+      Goal: Leave a clean worktree for the pull request.
+      Motivation: Ephemeral inter-task files must not leak into the reviewed diff.
+      Alternative considerations: Skipping this step was rejected; it is a hard requirement for every plan that opens a pull request.
+      Implementation details: Run the repository's existing handoff-scrub script.
+      Non-goals: No product edits in this task.
+      Layer: e2e_regression
+      Feature state: active
+    command: bash scripts/scrub-handoff-artifacts.sh
+    dependencies:
+      - verify-ci-{{job_slug}}
