@@ -361,6 +361,7 @@ export function handleSpawnExperimentsImpl(
     parentTask?.config.runnerKind === 'docker' ? parentTask.config.dockerImage : undefined;
   const parentExecutionAgent = parentTask?.config.executionAgent;
   const parentExecutionModel = parentTask?.config.executionModel;
+  const parentMaxTurns = parentTask?.config.maxTurns;
 
   const experimentTasks: GraphMutationNodeDef[] = parsed.variants.map((v) => ({
     id: scopeLocal(v.id),
@@ -376,6 +377,7 @@ export function handleSpawnExperimentsImpl(
     dockerImage: parentDockerImage,
     executionAgent: parentExecutionAgent,
     executionModel: parentExecutionModel,
+    maxTurns: parentMaxTurns,
   }));
 
   const reconciliationId = `${taskId}-reconciliation`;
@@ -394,6 +396,7 @@ export function handleSpawnExperimentsImpl(
       dockerImage: parentDockerImage,
       executionAgent: parentExecutionAgent,
       executionModel: parentExecutionModel,
+      maxTurns: parentMaxTurns,
     },
   ];
 

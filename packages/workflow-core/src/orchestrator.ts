@@ -552,6 +552,7 @@ export interface GraphMutationNodeDef {
   dockerImage?: string;
   executionAgent?: string;
   executionModel?: string;
+  maxTurns?: number;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
   isMergeNode?: boolean;
