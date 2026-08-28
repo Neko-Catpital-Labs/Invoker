@@ -1256,10 +1256,7 @@ describe('PlanConversation harness session driver', () => {
   // the plan to the sidecar file and keep chat short was never repeated. The
   // model drifted to pasting the full YAML inline, which a downstream
   // word-count guard then truncated, and the plan was never captured.
-  // BUG (see fix in the next stack slice): the reminder is not repeated yet,
-  // so this currently fails. it.fails asserts that "still broken" state as
-  // the proof; the fix slice flips this back to a plain `it`.
-  it.fails('repeats the plan-draft-file reminder on a resumed plan-mode turn, not just turn one', async () => {
+  it('repeats the plan-draft-file reminder on a resumed plan-mode turn, not just turn one', async () => {
     const driver = createMockDriver({ supportsSessionContinuity: true });
     const conv = new PlanConversation({
       mode: 'plan',
