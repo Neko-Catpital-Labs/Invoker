@@ -24,11 +24,13 @@ class GitFacts:
     is_ancestor: bool
     is_empty_diff: bool
     all_commits_equivalent: bool
+    is_rebase_equivalent: bool = False
 
 
 LANDED_ANCESTOR = "landed:ancestor"
 LANDED_EMPTY_DIFF = "landed:empty-diff"
 LANDED_PATCH_EQUIVALENT = "landed:patch-equivalent"
+LANDED_REBASE_EQUIVALENT = "landed:rebase-equivalent"
 DUPLICATE_SAME_BRANCH = "duplicate:same-branch"
 DUPLICATE_SAME_DIFF = "duplicate:same-diff"
 

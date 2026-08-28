@@ -75,6 +75,10 @@ class ClassifyLanded(DuplicateCloseTestCase):
         action = p.classify_landed(candidate(), facts(all_commits_equivalent=True))
         self.assertEqual(action.reason, dm.LANDED_PATCH_EQUIVALENT)
 
+    def test_rebase_equivalent_signal_alone(self):
+        action = p.classify_landed(candidate(), facts(is_rebase_equivalent=True))
+        self.assertEqual(action.reason, dm.LANDED_REBASE_EQUIVALENT)
+
     def test_landed_action_carries_expected_head(self):
         pr = candidate(number=42, head_ref_oid="deadbeef")
         action = p.classify_landed(pr, facts(is_ancestor=True))
