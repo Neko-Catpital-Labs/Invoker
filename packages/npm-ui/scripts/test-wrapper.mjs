@@ -58,3 +58,16 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
+
+// invoker-ui --help must print usage and exit 0 without touching the
+// vendor Invoker.app (regression: it used to fall through to `open -a
+// Invoker.app --args --help`, launching a real second GUI instance).
+{
+  const invokerUiBin = join(packageRoot, 'bin', 'invoker-ui.js');
+  for (const flag of ['--help', '-h']) {
+    const output = execFileSync(process.execPath, [invokerUiBin, flag], { encoding: 'utf8' });
+    assert.match(output, /^Usage: invoker-ui/);
+    assert.doesNotMatch(output, /Invoker\.app is missing/);
+  }
+  console.log('ok invoker-ui --help prints usage without launching the GUI');
+}
