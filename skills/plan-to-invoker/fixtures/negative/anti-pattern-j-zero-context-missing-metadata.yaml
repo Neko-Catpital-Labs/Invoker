@@ -10,6 +10,8 @@ tasks:
       - This task makes one locally reviewable implementation claim.
       Safety invariant:
       - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-j-zero-context-missing-metadata.yaml` fails at lint-task-atomicity.
       Slice rationale:
       - This work is isolated from neighboring behavior or cleanup changes.
       Architectural effect:
@@ -44,6 +46,8 @@ tasks:
       - This task makes one locally reviewable implementation claim.
       Safety invariant:
       - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-j-zero-context-missing-metadata.yaml` fails at lint-task-atomicity.
       Slice rationale:
       - This work is isolated from neighboring behavior or cleanup changes.
       Architectural effect:

@@ -15,10 +15,18 @@ tasks:
   - id: ui-activation-setup
     description: |
       Prepare UI activation behavior for prompt editing.
+      Goal:
+      - Model a foundational layer task for the layer-ordering lint fixture.
+      Motivation:
+      - Prove skill-doctor rejects a lower layer task depending on a higher layer task.
+      Safety invariant:
+      - This fixture is documentation-only and is never submitted to a live Invoker workflow.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-h-layer-order-violation.yaml` fails at lint-task-atomicity.
       Layer: ui_activation
       Feature state: active
       Acceptance criteria:
-      - Ensure UI activation scaffolding is ready for downstream integration.
+      - `true` ensures UI activation scaffolding is ready for downstream integration.
     prompt: |
       Modify packages/ui/src/components/TaskPanel.tsx to prepare prompt-edit
       activation behavior and ensure the change preserves command-task editing
@@ -29,10 +37,18 @@ tasks:
   - id: domain-contract-adjustment
     description: |
       Adjust domain-layer prompt-edit contract after UI activation.
+      Goal:
+      - Model a domain task that intentionally depends on a higher layer task.
+      Motivation:
+      - Prove skill-doctor rejects a lower layer task depending on a higher layer task.
+      Safety invariant:
+      - This fixture is documentation-only and is never submitted to a live Invoker workflow.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-h-layer-order-violation.yaml` fails at lint-task-atomicity.
       Layer: domain
       Feature state: active
       Acceptance criteria:
-      - Ensure domain contract updates align with prompt-edit orchestration.
+      - `true` ensures domain contract updates align with prompt-edit orchestration.
     prompt: |
       Modify packages/app/src/headless-delegation.ts and packages/app/src/main.ts
       to refine domain-facing prompt-edit contracts. Ensure the change maintains

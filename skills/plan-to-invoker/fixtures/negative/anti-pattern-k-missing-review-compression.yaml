@@ -1,5 +1,5 @@
 # Expected outcome: skill-doctor fails lint-task-atomicity because implementation
-# tasks omit Review claim / Safety invariant / Slice rationale / Architectural effect.
+# tasks omit Review claim / Slice rationale / Architectural effect.
 name: "Anti-pattern K: missing review compression metadata"
 description: "Implementation plan missing review-compression headings."
 onFinish: pull_request
@@ -12,6 +12,10 @@ tasks:
       - Implement deterministic runtime flow updates.
       Motivation:
       - Keep remote execution instructions explicit and reproducible.
+      Safety invariant:
+      - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-k-missing-review-compression.yaml` fails at lint-task-atomicity.
       Alternative considerations:
       - Option A (chosen): targeted transport-layer update.
       - Option B: broad refactor across unrelated modules.
@@ -44,6 +48,10 @@ tasks:
       - Run final full-suite regression gate.
       Motivation:
       - Ensure implementation updates remain stable.
+      Safety invariant:
+      - This command changes no production behavior.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-k-missing-review-compression.yaml` fails at lint-task-atomicity.
       Alternative considerations:
       - Option A (chosen): full repository regression.
       - Option B: package-only checks.

@@ -21,6 +21,8 @@ tasks:
       - This intentionally combines ports, candidate scan, eligibility validation, stale guards, duplicate-intent checks, submit behavior, and tests to model the historical bloated diff.
       Architectural effect:
       - Auto-fix recovery policy moves into the recovery worker and bridges persisted task state to workflow mutation intents.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-n-broad-autofix-policy-review-unit.yaml` fails at lint-review-units.
       Goal:
       - Restore auto-fix work for failed tasks discovered by the recovery worker.
       Motivation:
@@ -58,6 +60,8 @@ tasks:
       - This intentionally combines ports, candidate scan, eligibility validation, stale guards, duplicate-intent checks, submit behavior, and tests to model the historical bloated diff.
       Architectural effect:
       - Auto-fix recovery policy moves into the recovery worker and bridges persisted task state to workflow mutation intents.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-n-broad-autofix-policy-review-unit.yaml` fails at lint-review-units.
       Goal:
       - Restore auto-fix work for failed tasks discovered by the recovery worker.
       Motivation:
@@ -85,6 +89,8 @@ tasks:
       - Terminal validation is separate from implementation work.
       Architectural effect:
       - No architecture change.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-n-broad-autofix-policy-review-unit.yaml` fails at lint-review-units.
       Goal:
       - Run final full-suite regression gate.
       Motivation:
@@ -100,3 +106,32 @@ tasks:
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-broad-autofix-recovery-policy]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-n-broad-autofix-policy-review-unit.yaml` fails at lint-review-units.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [final-regression]

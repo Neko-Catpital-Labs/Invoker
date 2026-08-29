@@ -19,6 +19,14 @@ tasks:
     description: |
       Add renderer callback wiring, IPC bridge registration, owner delegation behavior,
       TaskPanel activation behavior, and all regressions in one large task.
+      Goal:
+      - Model an oversized single-task GUI prompt-edit workflow for the lint fixture.
+      Motivation:
+      - Prove skill-doctor rejects a monolithic implementation task lacking Layer/Feature state metadata.
+      Safety invariant:
+      - This fixture is documentation-only and is never submitted to a live Invoker workflow.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` fails at lint-task-atomicity.
       Files:
       - packages/app/src/main.ts
       - packages/app/src/preload.ts
@@ -27,7 +35,7 @@ tasks:
       Change types:
       - modify
       Acceptance criteria:
-      - cd packages/app && pnpm test exits 0.
+      - `cd packages/app && pnpm test` exits 0.
     prompt: |
       Modify packages/app/src/main.ts, packages/app/src/preload.ts,
       packages/ui/src/components/TaskPanel.tsx, and packages/app/e2e/prompt-edit.spec.ts.

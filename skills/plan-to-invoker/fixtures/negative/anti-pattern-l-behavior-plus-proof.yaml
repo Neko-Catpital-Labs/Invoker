@@ -16,6 +16,8 @@ tasks:
       - This should be one behavior slice, so repro proof must not ride in the same workflow.
       Architectural effect:
       - Refresh requests can read local state without a live owner bridge.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-l-behavior-plus-proof.yaml` fails at lint-task-atomicity.
       Goal:
       - Implement the local refresh fallback.
       Motivation:
@@ -75,6 +77,8 @@ tasks:
       - Final regression stays separate from implementation.
       Architectural effect:
       - No architecture change.
+      Effectiveness measurement:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-l-behavior-plus-proof.yaml` fails at lint-task-atomicity.
       Goal:
       - Run the final regression gate.
       Motivation:
