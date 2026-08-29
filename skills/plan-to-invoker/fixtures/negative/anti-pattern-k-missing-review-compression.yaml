@@ -30,6 +30,10 @@ tasks:
       - Implement deterministic runtime flow updates in task-runner.
       Motivation:
       - Keep execution behavior stable under delegation.
+      Safety invariant:
+      - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - `cd packages/execution-engine && pnpm test` passes before and after.
       Alternative considerations:
       - Option A (chosen): targeted update.
       - Option B: broad refactor.
@@ -44,6 +48,10 @@ tasks:
       - Run final full-suite regression gate.
       Motivation:
       - Ensure implementation updates remain stable.
+      Safety invariant:
+      - This command changes no production behavior.
+      Effectiveness measurement:
+      - `pnpm run test:all` passes before and after.
       Alternative considerations:
       - Option A (chosen): full repository regression.
       - Option B: package-only checks.

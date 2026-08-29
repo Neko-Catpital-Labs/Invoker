@@ -12,6 +12,8 @@ tasks:
       - behavior
       Safety invariant:
       - The change is isolated to refresh fallback behavior and directly affected tests.
+      Effectiveness measurement:
+      - `pnpm --filter @invoker/app test` passes before and after.
       Slice rationale:
       - This should be one behavior slice, so repro proof must not ride in the same workflow.
       Architectural effect:
@@ -71,6 +73,8 @@ tasks:
       - proof
       Safety invariant:
       - This command changes no production behavior.
+      Effectiveness measurement:
+      - `pnpm run test:all` passes before and after.
       Slice rationale:
       - Final regression stays separate from implementation.
       Architectural effect:
