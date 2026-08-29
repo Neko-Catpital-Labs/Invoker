@@ -121,6 +121,8 @@ test_doctor_negative_fixture() {
   local expected_failed_step="lint-task-atomicity"
   if [[ "$fixture_name" == "anti-pattern-n-broad-autofix-policy-review-unit.yaml" || "$fixture_name" == "anti-pattern-o-all-in-one-autofix-review-unit.yaml" ]]; then
     expected_failed_step="lint-review-units"
+  elif [[ "$fixture_name" == "anti-pattern-k-missing-review-compression.yaml" ]]; then
+    expected_failed_step="check-planning-completeness"
   fi
   local output
   local stderr_file

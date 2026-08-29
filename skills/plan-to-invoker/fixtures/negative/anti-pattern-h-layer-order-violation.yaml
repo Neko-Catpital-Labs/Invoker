@@ -5,6 +5,7 @@ name: "Anti-pattern: lower layer depends on higher layer"
 description: |
   Demonstrates a dependency direction violation where a foundational layer task
   depends on a higher integration layer task without an explicit exception.
+  Verify: `cd packages/app && pnpm test` exits 0.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
@@ -15,6 +16,10 @@ tasks:
   - id: ui-activation-setup
     description: |
       Prepare UI activation behavior for prompt editing.
+      Goal: Prepare a stable UI activation surface for prompt editing.
+      Motivation: Downstream tasks need a stable activation surface to build on.
+      Safety invariant: Existing TaskPanel interactions must keep working.
+      Effectiveness measurement: `cd packages/ui && pnpm test` exits 0.
       Layer: ui_activation
       Feature state: active
       Acceptance criteria:
@@ -29,6 +34,10 @@ tasks:
   - id: domain-contract-adjustment
     description: |
       Adjust domain-layer prompt-edit contract after UI activation.
+      Goal: Align the domain-layer contract with prompt-edit orchestration.
+      Motivation: The domain contract must reflect the new UI activation surface.
+      Safety invariant: Existing recreate semantics must not regress.
+      Effectiveness measurement: `cd packages/app && pnpm test` exits 0.
       Layer: domain
       Feature state: active
       Acceptance criteria:
