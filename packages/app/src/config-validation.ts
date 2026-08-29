@@ -1,6 +1,7 @@
 import { assertExecutionModelSupported, registerBuiltinAgents } from '@invoker/execution-engine';
 import {
   normalizeGithubOwnerRepo,
+  type AdminBypassE2eBabysitConfig,
   type CatstackDeployConfig,
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
@@ -255,6 +256,37 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateAdminBypassE2eBabysitConfig(config: InvokerConfig): void {
+  const adminBypassE2eBabysit = config.adminBypassE2eBabysit;
+  if (adminBypassE2eBabysit === undefined) return;
+  if (
+    typeof adminBypassE2eBabysit !== 'object'
+    || adminBypassE2eBabysit === null
+    || Array.isArray(adminBypassE2eBabysit)
+  ) {
+    throw new Error('adminBypassE2eBabysit must be an object');
+  }
+  const typed = adminBypassE2eBabysit as AdminBypassE2eBabysitConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('adminBypassE2eBabysit.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.staleTtlMinutes !== undefined) {
+    if (
+      typeof typed.staleTtlMinutes !== 'number'
+      || !Number.isInteger(typed.staleTtlMinutes)
+      || typed.staleTtlMinutes <= 0
+    ) {
+      throw new Error('adminBypassE2eBabysit.staleTtlMinutes must be an integer > 0');
+    }
+  }
+}
+
 export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   const nestedExecutionAgent = config.defaultExecution?.executionAgent;
   const hasNestedExecutionAgent = typeof nestedExecutionAgent === 'string' && nestedExecutionAgent.trim().length > 0;
@@ -286,5 +318,6 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateAdminBypassE2eBabysitConfig(config);
   return config;
 }
