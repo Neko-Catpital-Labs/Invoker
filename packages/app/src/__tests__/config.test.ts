@@ -350,6 +350,24 @@ describe('loadConfig', () => {
     expect(config.diskHeadroom).toEqual({ cleanupEnabled: false });
   });
 
+  it('loads adminBypassE2eBabysit with unrestricted numeric values', () => {
+    const adminBypassE2eBabysit = {
+      enabled: true,
+      intervalMinutes: -1,
+      watchedWorkerKinds: ['pr-admin-bypass-land', 'e2e-autofix'],
+      staleTtlMinutes: 0,
+    };
+    writeUserConfig({ adminBypassE2eBabysit });
+
+    expect(loadConfig().adminBypassE2eBabysit).toEqual(adminBypassE2eBabysit);
+  });
+
+  it('loads config when adminBypassE2eBabysit is omitted', () => {
+    writeUserConfig({ defaultBranch: 'main' });
+
+    expect(loadConfig().adminBypassE2eBabysit).toBeUndefined();
+  });
+
   it('defaults removed opt-in worker gates to undefined when absent', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),

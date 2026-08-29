@@ -233,6 +233,13 @@ export const DEFAULT_CATSTACK_DEPLOY_REPO_URL = 'https://github.com/EdbertChan/c
 /** Default local/remote checkout path for catstack. */
 export const DEFAULT_CATSTACK_DEPLOY_REPO_PATH = '~/Documents/GitHub/catstack';
 
+export interface AdminBypassE2eBabysitConfig {
+  enabled?: boolean;
+  intervalMinutes?: number;
+  watchedWorkerKinds?: string[];
+  staleTtlMinutes?: number;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -589,6 +596,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
