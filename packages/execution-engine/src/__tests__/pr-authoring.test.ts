@@ -416,6 +416,16 @@ describe('make-pr stack publish body contract', () => {
     expect(parsed[0]?.title).toBe(title);
   });
 
+  it('does not let a valid-JSON decoy in leading commentary shadow the real artifacts payload', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    // "{}" is itself valid, parseable JSON -- a naive first-match scanner
+    // would stop here and never reach the real payload below it.
+    const raw = `Status: {}\nHere is the published review stack:\n${payload}`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
   it('still throws "must output JSON" for genuinely non-JSON output', () => {
     expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
       'make-pr stack publisher must output JSON',
