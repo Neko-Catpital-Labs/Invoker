@@ -4153,7 +4153,7 @@ export function App() {
         />
       ) : (
         <>
-          {sidebarSurface === 'planning' && (
+          {(sidebarSurface === 'planning' || ((sidebarSurface === 'workflows' || sidebarSurface === 'attention') && displayedSelectedWorkflowGraph === null)) && (
             <div data-testid="workflow-graph-content" className="relative z-0 h-full w-full">
               <WorkflowGraph
                 workflows={workflows}
