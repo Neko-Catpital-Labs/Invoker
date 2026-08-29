@@ -24,6 +24,7 @@ describe('headless worker registry', () => {
     expect(stdout).toContain('Worker kinds');
     expect(stdout).not.toContain('pr-summary-refresh');
     expect(stdout).toContain(INFRA_REPAIR_WORKER_KIND);
+    expect(stdout).toContain('admin-bypass-e2e-babysit');
   });
 
   it('maps configured SSH targets into disk-headroom worker dependencies', () => {
