@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { buildRemotePathNormalizeFunction } from './remote-shell-fragments.js';
 
 export interface TaskFreshnessAnchor {
   kind: 'path' | 'symbol';
@@ -247,7 +248,9 @@ export function buildRemoteTaskFreshnessScript(args: {
   const specification = parseTaskFreshnessSpecification(args.taskText);
   const lines = [
     'set -euo pipefail',
-    `cd ${shellQuote(args.cwd)}`,
+    buildRemotePathNormalizeFunction(),
+    `CWD=$(normalize_remote_path ${shellQuote(args.cwd)})`,
+    'cd "$CWD"',
     'CURRENT_COMMIT=$(git rev-parse HEAD)',
     'STALE_REASONS=""',
     'append_stale_reason() {',
