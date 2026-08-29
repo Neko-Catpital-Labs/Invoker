@@ -20,6 +20,8 @@ tasks:
       - Extract the helper without changing behavior.
       Motivation:
       - Make later fallback field changes easier to review.
+      Effectiveness measurement:
+      - `cd packages/app && pnpm test` exits 0 before and after distinguishes a regression.
       Alternative considerations:
       - Option A (chosen): extract the helper first.
       - Option B: add new fields during the extraction.
@@ -77,6 +79,8 @@ tasks:
       - Run the final regression gate.
       Motivation:
       - Confirm the workflow remains valid.
+      Effectiveness measurement:
+      - `pnpm run test:all` exits 0.
       Alternative considerations:
       - Option A (chosen): run pnpm run test:all last.
       Implementation details:

@@ -12,7 +12,7 @@ description: |
   record will be used for.
 onFinish: pull_request
 mergeMode: external_review
-baseBranch: master
+baseBranch: main
 repoUrl: git@github.com:EdbertChan/hidden.git
 
 tasks:

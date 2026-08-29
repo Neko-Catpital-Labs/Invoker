@@ -19,6 +19,10 @@ tasks:
     description: |
       Add renderer callback wiring, IPC bridge registration, owner delegation behavior,
       TaskPanel activation behavior, and all regressions in one large task.
+      Goal: Ship the entire GUI prompt-edit flow in a single task.
+      Motivation: Mirrors the oversized shape of wf-1777929074509-8 that must fail atomicity lint.
+      Safety invariant: Existing editTaskCommand behavior and recreate semantics stay unchanged.
+      Effectiveness measurement: `cd packages/app && pnpm test` exits 0 after the change.
       Files:
       - packages/app/src/main.ts
       - packages/app/src/preload.ts
@@ -27,7 +31,7 @@ tasks:
       Change types:
       - modify
       Acceptance criteria:
-      - cd packages/app && pnpm test exits 0.
+      - `cd packages/app && pnpm test` exits 0.
     prompt: |
       Modify packages/app/src/main.ts, packages/app/src/preload.ts,
       packages/ui/src/components/TaskPanel.tsx, and packages/app/e2e/prompt-edit.spec.ts.
