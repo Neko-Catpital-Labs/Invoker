@@ -12,11 +12,11 @@ export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
 # Keep shared WAL here so sqlite diagnostics can coexist with the owner.
 export INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK=1
 unset INVOKER_HEADLESS_STANDALONE
-unset INVOKER_DB_DIR
 
 TMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-home.XXXXXX")"
 export HOME="$TMP_HOME"
-mkdir -p "$HOME/.invoker"
+export INVOKER_DB_DIR="$HOME/.invoker-e2e"
+mkdir -p "$INVOKER_DB_DIR"
 git config --global --add safe.directory "$REPO_ROOT"
 export INVOKER_REPO_CONFIG_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX")"
 printf '{\n  "autoFixRetries": 1\n}\n' > "$INVOKER_REPO_CONFIG_PATH"
@@ -24,7 +24,7 @@ printf '{\n  "autoFixRetries": 1\n}\n' > "$INVOKER_REPO_CONFIG_PATH"
 OWNER_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-owner.XXXXXX")"
 SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-submit.XXXXXX")"
 PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-plan.XXXXXX")"
-DB_PATH="$HOME/.invoker/invoker.db"
+DB_PATH="$INVOKER_DB_DIR/invoker.db"
 OWNER_PID=""
 
 cleanup() {
@@ -50,7 +50,7 @@ for i in $(seq 1 120); do
     cat "$OWNER_LOG"
     exit 1
   fi
-  if [ -S "$HOME/.invoker/ipc-transport.sock" ] \
+  if [ -S "$INVOKER_DB_DIR/ipc-transport.sock" ] \
     && ./run.sh --headless query queue --output json >/dev/null 2>&1; then
     READY=1
     break
