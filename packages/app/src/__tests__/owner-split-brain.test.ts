@@ -44,6 +44,10 @@ describe('parseWriterLockHolderPid', () => {
   it('returns null when no pid is present', () => {
     expect(parseWriterLockHolderPid(new Error('[db-writer-lock] already held by PID unknown.'))).toBeNull();
   });
+
+  it('returns null for PID 0', () => {
+    expect(parseWriterLockHolderPid(new Error('[db-writer-lock] already held by PID 0.'))).toBeNull();
+  });
 });
 
 describe('probeLockHolderOwner', () => {
@@ -127,9 +131,23 @@ describe('buildGuiLockConflictPrompt', () => {
     expect(prompt.buttons).toEqual(['Quit']);
     expect(prompt.cancelId).toBe(0);
   });
+
+  it('does not offer to terminate PID 0', () => {
+    const prompt = buildGuiLockConflictPrompt(new Error('[db-writer-lock] already held by PID 0.'));
+    expect(prompt.holderPid).toBeNull();
+    expect(prompt.killButtonIndex).toBeNull();
+    expect(prompt.buttons).toEqual(['Quit']);
+  });
 });
 
 describe('terminateAndAwaitExit', () => {
+  it('rejects PID 0 without attempting to terminate it', async () => {
+    const terminatePid = vi.fn();
+
+    await expect(terminateAndAwaitExit(0, { terminatePid })).resolves.toBe(false);
+    expect(terminatePid).not.toHaveBeenCalled();
+  });
+
   it('sends SIGTERM and resolves true once isPidAlive flips to false', async () => {
     let aliveCalls = 0;
     const sleepCalls: number[] = [];

@@ -52,7 +52,7 @@ export function parseWriterLockHolderPid(err: unknown): number | null {
   const match = /already held by PID (\d+)/.exec(err.message);
   if (!match) return null;
   const pid = Number.parseInt(match[1], 10);
-  return Number.isFinite(pid) ? pid : null;
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
 export function isPidAlive(pid: number): boolean {
@@ -110,6 +110,7 @@ export async function terminateAndAwaitExit(
     timeoutMs?: number;
   } = {},
 ): Promise<boolean> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   const terminatePid = deps.terminatePid ?? ((p: number) => process.kill(p, 'SIGTERM'));
   const alive = deps.isPidAlive ?? isPidAlive;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));

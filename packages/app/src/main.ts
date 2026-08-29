@@ -2906,7 +2906,12 @@ startMainProcessBootstrap({
             cancelId: prompt.cancelId,
             defaultId: prompt.cancelId,
           });
-          if (prompt.killButtonIndex !== null && response === prompt.killButtonIndex && prompt.holderPid !== null) {
+          if (
+            prompt.killButtonIndex !== null
+            && response === prompt.killButtonIndex
+            && prompt.holderPid !== null
+            && prompt.holderPid > 0
+          ) {
             const exited = await terminateAndAwaitExit(prompt.holderPid);
             if (!exited) {
               showStartupErrorDialog(
