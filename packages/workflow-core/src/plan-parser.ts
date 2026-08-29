@@ -50,6 +50,7 @@ export interface RawPlan {
   reviewProvider?: string;
   repoUrl?: string;
   scratch?: boolean;
+  poolId?: string;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -206,6 +207,14 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
+  if (scratch && raw.poolId) {
+    throw new PlanParseError('Plan sets "poolId" but has "scratch: true" — scratch plans never use execution pools.');
+  }
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    throw new PlanParseError('Plan "poolId" must be a non-empty string when provided.');
+  }
+  const planPoolId = typeof raw.poolId === 'string' ? raw.poolId.trim() : undefined;
+
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
   const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
@@ -284,6 +293,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     reviewProvider,
     repoUrl: raw.repoUrl,
     scratch: scratch || undefined,
+    poolId: planPoolId,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,

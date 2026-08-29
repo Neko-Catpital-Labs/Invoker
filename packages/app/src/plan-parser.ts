@@ -102,6 +102,7 @@ export interface RawPlan {
   reviewProvider?: string;
   repoUrl?: string;
   scratch?: boolean;
+  poolId?: string;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -436,6 +437,16 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
+  if (scratch && raw.poolId) {
+    throw new PlanParseError(
+      `${ownerLabel} sets "poolId" but has "scratch: true" — scratch plans never use execution pools.`,
+    );
+  }
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    throw new PlanParseError(`${ownerLabel} "poolId" must be a non-empty string when provided.`);
+  }
+  const planPoolId = typeof raw.poolId === 'string' ? raw.poolId.trim() : undefined;
+
   const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
   const rawTasks = raw.tasks;
@@ -531,6 +542,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     reviewProvider,
     repoUrl: raw.repoUrl,
     scratch: scratch || undefined,
+    poolId: planPoolId,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
@@ -561,6 +573,7 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
     ...workflow,
     repoUrl: workflow.repoUrl ?? stack.repoUrl,
     scratch: workflow.scratch ?? stack.scratch,
+    poolId: workflow.poolId ?? stack.poolId,
     intermediateRepoUrl: workflow.intermediateRepoUrl ?? stack.intermediateRepoUrl,
     onFinish: workflow.onFinish ?? stack.onFinish,
     baseBranch: workflow.baseBranch ?? stack.baseBranch,

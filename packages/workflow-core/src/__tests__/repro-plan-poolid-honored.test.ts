@@ -90,7 +90,7 @@ class InMemoryBus implements OrchestratorMessageBus {
 }
 
 describe('repro: plan-level poolId honored over defaultPoolId', () => {
-  it.fails('parsePlan + loadPlan keep plan poolId when defaultPoolId differs', () => {
+  it('parsePlan + loadPlan keep plan poolId when defaultPoolId differs', () => {
     const plan = parsePlan(`
 name: Plan Pool Wins
 repoUrl: git@github.com:test/repo.git
