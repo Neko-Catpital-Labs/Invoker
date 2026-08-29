@@ -362,6 +362,19 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         if (deps.planningTerminals) return deps.planningTerminals.close(String(args[0]));
         return { ok: false, reason: 'unsupported' };
 
+      case 'invoker:start-worker':
+      case 'invoker:stop-worker':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        throw new WebDispatchError(
+          'worker_control_unavailable',
+          channel,
+          'Worker control is not available on this web surface. Use the desktop app or CLI to manage workers.',
+        );
+
+      case 'invoker:load-plan':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        return unsupported(channel);
+
       // ── Mutations not exposed on the facade / global lifecycle ──
       case 'invoker:select-experiment':
       case 'invoker:set-merge-branch':
@@ -370,7 +383,6 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:spawn-review-gate-ci-repair':
       case 'invoker:edit-task-pool':
       case 'invoker:replace-task':
-      case 'invoker:load-plan':
       case 'invoker:start':
       case 'invoker:stop':
       case 'invoker:clear':
