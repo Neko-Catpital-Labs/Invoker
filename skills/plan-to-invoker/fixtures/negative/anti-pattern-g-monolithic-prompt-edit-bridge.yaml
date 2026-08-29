@@ -8,6 +8,7 @@ description: |
   Mirrors the oversized shape of wf-1777929074509-8 as one implementation workflow.
   This should now fail decomposition lint because implementation tasks must include
   Layer and Feature state metadata and be split into reviewable dependency slices.
+  Verify: `cd packages/app && pnpm test` exits 0.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
@@ -17,6 +18,14 @@ featureBranch: plan/anti-pattern-monolithic-prompt-edit-bridge
 tasks:
   - id: implement-entire-prompt-edit-stack
     description: |
+      Goal:
+      - Implement the entire GUI prompt-edit flow end to end in one task.
+      Motivation:
+      - Mirror the historical monolithic wf-1777929074509-8 shape for this fixture.
+      Safety invariant:
+      - Behavior stays aligned with the existing editTaskCommand path.
+      Effectiveness measurement:
+      - `cd packages/app && pnpm test` exits 0.
       Add renderer callback wiring, IPC bridge registration, owner delegation behavior,
       TaskPanel activation behavior, and all regressions in one large task.
       Files:

@@ -12,6 +12,10 @@ tasks:
       - Implement deterministic runtime flow updates.
       Motivation:
       - Keep remote execution instructions explicit and reproducible.
+      Safety invariant:
+      - Runtime flow edits preserve existing behavior contracts.
+      Effectiveness measurement:
+      - `cd packages/execution-engine && pnpm test` exits 0.
       Alternative considerations:
       - Option A (chosen): targeted transport-layer update.
       - Option B: broad refactor across unrelated modules.
@@ -44,6 +48,10 @@ tasks:
       - Run final full-suite regression gate.
       Motivation:
       - Ensure implementation updates remain stable.
+      Safety invariant:
+      - This command changes no production behavior.
+      Effectiveness measurement:
+      - `pnpm run test:all` exits 0.
       Alternative considerations:
       - Option A (chosen): full repository regression.
       - Option B: package-only checks.

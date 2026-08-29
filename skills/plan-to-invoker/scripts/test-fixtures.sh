@@ -970,8 +970,8 @@ test_lint_requires_review_compression_sections() {
     echo "Expected Review claim lint error, got: $output" >&2
     return 1
   fi
-  if ! grep -q 'missing required "Safety invariant:" section' <<<"$output"; then
-    echo "Expected Safety invariant lint error, got: $output" >&2
+  if ! grep -q 'missing required "Slice rationale:" section' <<<"$output"; then
+    echo "Expected Slice rationale lint error, got: $output" >&2
     return 1
   fi
 }
