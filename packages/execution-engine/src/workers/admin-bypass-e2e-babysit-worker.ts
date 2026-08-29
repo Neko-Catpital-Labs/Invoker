@@ -48,13 +48,11 @@ export interface InvestigativePlanSubmitter {
 }
 
 export interface AdminBypassE2eBabysitWorkerConfig {
+  enabled?: boolean;
   intervalMs?: number;
   tickOnStart?: boolean;
   watchedWorkerKinds?: readonly string[];
   staleTtlMs?: number;
-  workerLifecycle: WorkerLifecycleReader & WorkerLifecycleStarter;
-  repairFilings: RepairFilingStore;
-  planSubmitter: InvestigativePlanSubmitter;
   store?: WorkerDecisionStore;
   onTick?: WorkerTick;
 }
@@ -262,7 +260,12 @@ export async function runAdminBypassE2eBabysitTick(
 }
 
 export function createAdminBypassE2eBabysitWorker(
-  config: AdminBypassE2eBabysitWorkerConfig & { logger: Logger },
+  config: AdminBypassE2eBabysitWorkerConfig & {
+    logger: Logger;
+    workerLifecycle: WorkerLifecycleReader & WorkerLifecycleStarter;
+    repairFilings: RepairFilingStore;
+    planSubmitter: InvestigativePlanSubmitter;
+  },
 ): WorkerRuntime {
   const options: AdminBypassE2eBabysitWorkerOptions = {
     logger: config.logger,
@@ -287,10 +290,6 @@ export function createAdminBypassE2eBabysitWorker(
   });
 }
 
-type UnwiredAdminBypassE2eBabysitDependencies = WorkerRuntimeDependencies & {
-  adminBypassE2eBabysit: AdminBypassE2eBabysitWorkerConfig;
-};
-
 export function registerAdminBypassE2eBabysitWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -299,10 +298,16 @@ export function registerAdminBypassE2eBabysitWorker(
     note: 'Restarts desired-enabled watched workers and expires stale repair-filing claims, then files investigations.',
     source: 'built-in',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime => {
-      const config = (deps as UnwiredAdminBypassE2eBabysitDependencies).adminBypassE2eBabysit;
+      const config = deps.adminBypassE2eBabysit ?? {};
+      if (!deps.workerLifecycleStarter || !deps.repairFilingStore || !deps.investigativePlanSubmitter) {
+        throw new Error('admin-bypass-e2e-babysit worker dependencies are not wired');
+      }
       return createAdminBypassE2eBabysitWorker({
         logger: deps.logger,
         ...config,
+        workerLifecycle: deps.workerLifecycleStarter,
+        repairFilings: deps.repairFilingStore,
+        planSubmitter: deps.investigativePlanSubmitter,
         store: config.store ?? deps.store,
       });
     },
