@@ -124,6 +124,100 @@ function sendJson(res: ServerResponse, status: number, body: unknown, req?: Inco
   res.end(responseBody);
 }
 
+function sendUnlockPage(res: ServerResponse): void {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoker Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      max-width: 400px;
+      padding: 2rem;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 1rem;
+      color: #fff;
+    }
+    p {
+      font-size: 0.95rem;
+      margin-bottom: 1.5rem;
+      color: #a0a0a0;
+    }
+    form { display: flex; flex-direction: column; gap: 0.75rem; }
+    input {
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #1a1a1a;
+      color: #fff;
+    }
+    input:focus { outline: none; border-color: #6366f1; }
+    button {
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      font-weight: 500;
+      border: none;
+      border-radius: 6px;
+      background: #6366f1;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #4f46e5; }
+    .error {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      background: #7f1d1d;
+      border-radius: 6px;
+      color: #fca5a5;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Invoker Demo</h1>
+    <p>Enter the demo token to continue.</p>
+    <form id="unlock-form">
+      <input type="password" id="token" name="token" placeholder="Demo token" required autocomplete="off">
+      <button type="submit">Unlock</button>
+    </form>
+    <div class="error" id="error">Invalid token. Please try again.</div>
+  </div>
+  <script>
+    document.getElementById('unlock-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      var token = document.getElementById('token').value;
+      window.location.href = '/?token=' + encodeURIComponent(token);
+    });
+    if (window.location.search.includes('token=') && !document.cookie.includes('invoker_web=')) {
+      document.getElementById('error').style.display = 'block';
+    }
+  </script>
+</body>
+</html>`;
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-cache',
+  });
+  res.end(html);
+}
+
 /**
  * Resolve the directory holding the built UI (`web.html` + assets), mirroring
  * window-lifecycle's packaged-vs-repo resolution. `appRootDir` is the main
@@ -287,7 +381,7 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
         const queryToken = url.searchParams.get('token');
         if (pathname === '/' && queryToken !== null) {
           if (!safeEqual(queryToken, token)) {
-            sendJson(res, 401, { error: 'unauthorized' });
+            sendUnlockPage(res);
             return;
           }
           res.writeHead(302, {
@@ -299,7 +393,7 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
         }
 
         if (!cookieValid(req)) {
-          sendJson(res, 401, { error: 'unauthorized' });
+          sendUnlockPage(res);
           return;
         }
         serveStatic(res, pathname);

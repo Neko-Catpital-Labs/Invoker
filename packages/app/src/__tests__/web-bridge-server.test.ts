@@ -125,10 +125,13 @@ describe('startWebBridge', () => {
     expect(String(res.headers['set-cookie'])).toContain('invoker_web=');
   });
 
-  it('rejects the handshake with a bad token', async () => {
+  it('shows the unlock page with an error hint on a bad token', async () => {
     const { port } = await startBridge();
     const res = await request(port, '/?token=wrong');
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.body).toContain('Invoker Demo');
+    expect(res.body).toContain('Demo token');
   });
 
   it('runs /invoke with a valid cookie and wraps the dispatch result', async () => {
@@ -286,10 +289,16 @@ describe('startWebBridge static serving', () => {
     return await bridge.whenReady;
   }
 
-  it('requires the cookie for the page and assets', async () => {
+  it('shows the unlock page when no cookie is present', async () => {
     const port = await startStaticBridge();
-    expect((await request(port, '/')).status).toBe(401);
-    expect((await request(port, '/assets/web-abc.js')).status).toBe(401);
+    const rootRes = await request(port, '/');
+    expect(rootRes.status).toBe(200);
+    expect(rootRes.headers['content-type']).toContain('text/html');
+    expect(rootRes.body).toContain('Invoker Demo');
+    expect(rootRes.body).toContain('Demo token');
+    const assetRes = await request(port, '/assets/web-abc.js');
+    expect(assetRes.status).toBe(200);
+    expect(assetRes.body).toContain('Invoker Demo');
   });
 
   it('serves the shell and assets with the right content types once authed', async () => {
