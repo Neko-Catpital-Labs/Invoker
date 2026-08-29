@@ -483,6 +483,14 @@ function buildRegisteredOwnerWorkerDeps(
   };
 }
 
+function toWorkerLifecycleSnapshots(workers: WorkerStatusSnapshot['workers']) {
+  return workers.map((worker) => ({
+    kind: worker.kind,
+    desiredEnabled: worker.desiredEnabled ?? worker.autoStarts,
+    lifecycle: worker.lifecycle,
+  }));
+}
+
 let startAdminBypassE2eBabysitWorker: ((kind: string) => unknown) | undefined;
 let submitAdminBypassE2eBabysitPlan: ((planText: string) => unknown) | undefined;
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -2110,14 +2118,14 @@ function startHeadlessMode(): void {
                   : invokerConfig.adminBypassE2eBabysit.staleTtlMinutes * 60_000,
               },
               workerLifecycleStarter: {
-                listWorkers: () => (
+                listWorkers: () => toWorkerLifecycleSnapshots((
                   workerRuntimeController?.snapshot()
                   ?? createLocalWorkerStatusSnapshot({
                     registry: createRegisteredWorkerRegistry(),
                     persistence,
                     autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
                   })
-                ).workers,
+                ).workers),
                 start: (kind) => {
                   if (!startAdminBypassE2eBabysitWorker) {
                     throw new Error('admin-bypass-e2e-babysit worker lifecycle starter is not ready');
@@ -3390,14 +3398,14 @@ startMainProcessBootstrap({
                 : invokerConfig.adminBypassE2eBabysit.staleTtlMinutes * 60_000,
             },
             workerLifecycleStarter: {
-              listWorkers: () => (
+              listWorkers: () => toWorkerLifecycleSnapshots((
                 workerRuntimeController?.snapshot()
                 ?? createLocalWorkerStatusSnapshot({
                   registry: createRegisteredWorkerRegistry(),
                   persistence,
                   autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
                 })
-              ).workers,
+              ).workers),
               start: (kind) => {
                 if (!startAdminBypassE2eBabysitWorker) {
                   throw new Error('admin-bypass-e2e-babysit worker lifecycle starter is not ready');
