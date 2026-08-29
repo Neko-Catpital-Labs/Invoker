@@ -15,7 +15,22 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, existsSync: vi.fn(actual.existsSync), mkdirSync: vi.fn() };
+  return {
+    ...actual,
+    existsSync: vi.fn(actual.existsSync),
+    mkdirSync: vi.fn(),
+    readFileSync: vi.fn((path: Parameters<typeof actual.readFileSync>[0], options?: Parameters<typeof actual.readFileSync>[1]) => {
+      // killProcessGroup's leader check reads /proc/<pid>/stat; mocked child
+      // processes have fake pids with no real process group, so report each
+      // mocked pid as its own group leader (matches real detached spawns).
+      const match = typeof path === 'string' && path.match(/^\/proc\/(\d+)\/stat$/);
+      if (match) {
+        const pid = match[1];
+        return `${pid} (mock) S 1 ${pid} ${pid} 0 -1 0\n`;
+      }
+      return actual.readFileSync(path as any, options as any);
+    }),
+  };
 });
 
 // Must import after mock setup
