@@ -40,6 +40,13 @@ import type {
   IdleTaskCleanupWorkerStore,
   IdleTaskCleanupWorkerSubmitter,
 } from './workers/idle-task-cleanup-worker.js';
+import type {
+  AdminBypassE2eBabysitWorkerConfig,
+  InvestigativePlanSubmitter,
+  RepairFilingStore,
+  WorkerLifecycleReader,
+  WorkerLifecycleStarter,
+} from './workers/admin-bypass-e2e-babysit-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -96,4 +103,12 @@ export interface WorkerRuntimeDependencies {
   mergifyQueueResearch?: MergifyQueueResearchWorkerConfig;
   /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
+  /** Admin-bypass e2e babysit worker configuration. */
+  adminBypassE2eBabysit?: AdminBypassE2eBabysitWorkerConfig;
+  /** Worker lifecycle read/start surface used by worker babysitting. */
+  workerLifecycleStarter?: WorkerLifecycleReader & WorkerLifecycleStarter;
+  /** Repair-filing persistence surface used by worker babysitting. */
+  repairFilingStore?: RepairFilingStore;
+  /** Investigative plan submission surface used by worker babysitting. */
+  investigativePlanSubmitter?: InvestigativePlanSubmitter;
 }
