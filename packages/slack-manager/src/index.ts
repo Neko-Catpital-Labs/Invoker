@@ -18,6 +18,7 @@ import { SlackSurface, type SlackSurfaceConfig } from '@invoker/surfaces';
 import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
 
 import { IpcInvokerClient } from './invoker-client.js';
+import { INVOKER_LAUNCH_HEALTH_TIMEOUT_MS } from './launch-health-timeout.js';
 import { createInvokerLauncher } from './invoker-launcher.js';
 import { readSlackRuntimeConfig, resolveDefaultHarnessPreset, resolveSlackAdminUserIds } from './runtime-config.js';
 import { createRunWorkflowOp } from './workflow-ops.js';
@@ -121,7 +122,12 @@ async function main(): Promise<void> {
     logPath: path.join(homedir(), '.invoker', 'gui.log'),
     log,
   });
-  const client = new IpcInvokerClient({ spawnInvoker: launcher.spawnInvoker, log, pingTimeoutMs: 10_000 });
+  const client = new IpcInvokerClient({
+    spawnInvoker: launcher.spawnInvoker,
+    log,
+    pingTimeoutMs: 10_000,
+    launchHealthTimeoutMs: INVOKER_LAUNCH_HEALTH_TIMEOUT_MS,
+  });
 
   const runWorkflowOp = createRunWorkflowOp(client, log);
   const gatherWorkflowContext = createGatherWorkflowContext({ client, conversationRepo, workflowChannelRepo, log });
