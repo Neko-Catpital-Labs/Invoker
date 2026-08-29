@@ -22,7 +22,7 @@ export class CodexPlanningAgent implements PlanningAgent {
   buildPlanningCommand(prompt: string, _options?: { model?: string }): { command: string; args: string[] } {
     const args = ['exec', '--json'];
     if (this.bypassApprovalsAndSandbox) args.push('--dangerously-bypass-approvals-and-sandbox');
-    else if (this.fullAuto) args.push('--full-auto');
+    else if (this.fullAuto) args.push('--sandbox', 'workspace-write');
     args.push(prompt);
     return { command: this.command, args };
   }
