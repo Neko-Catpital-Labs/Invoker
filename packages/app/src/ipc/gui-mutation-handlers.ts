@@ -11,6 +11,7 @@ import type {
   InAppPlanningCreateSessionRequest,
   InAppPlanningDiscardDraftRequest,
   InAppPlanningRebindRepoRequest,
+  InAppPlanningRepoBinding,
   InAppPlanningResetRequest,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
@@ -1294,7 +1295,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
 
   async function loadGeneratedPlanPreview(
     planText: string,
-    options?: { preserveTaskHandles?: boolean; logLabel?: string },
+    options?: {
+      preserveTaskHandles?: boolean;
+      logLabel?: string;
+      repositoryBinding?: InAppPlanningRepoBinding;
+    },
   ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
     return loadPlanSubmissionBundle(planText, {
       persistence,
@@ -1304,6 +1309,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }, {
       logLabel: options?.logLabel ?? 'plan-from-goal',
       preserveTaskHandles: options?.preserveTaskHandles,
+      repositoryBinding: options?.repositoryBinding,
       taskHandles,
       staged: true,
     });
@@ -1414,9 +1420,10 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
     return submitPlanningChatDraft(request as InAppPlanningSubmitRequest, {
       sessions: planningChatSessions,
-      loadGeneratedPlan: (planText) => loadGeneratedPlanPreview(planText, {
+      loadGeneratedPlan: (planText, repositoryBinding) => loadGeneratedPlanPreview(planText, {
         preserveTaskHandles: true,
         logLabel: 'planning-chat-submit',
+        repositoryBinding,
       }),
       planningSessionStore: ownerMode ? persistence : undefined,
     });

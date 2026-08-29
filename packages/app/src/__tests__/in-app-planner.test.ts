@@ -795,6 +795,34 @@ tasks:
     expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
   });
 
+  it('passes the bound repository to the submit loader', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'bound-repository-submit',
+      title: 'Bound repository submit',
+      status: 'draft_ready',
+      repoUrl: '/home/demo/demo-repo',
+      baseBranch: 'main',
+      draftPlanText: VALID_PLAN_TEXT,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+    });
+    sessions.set(session.id, session);
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    });
+
+    await expect(submitPlanningChatDraft({ sessionId: session.id }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toMatchObject({ ok: true, workflowId: 'wf-1' });
+
+    expect(loadGeneratedPlan).toHaveBeenCalledWith(
+      VALID_PLAN_TEXT,
+      { repoUrl: '/home/demo/demo-repo', baseBranch: 'main' },
+    );
+  });
+
   it('submits a valid final draft plan without a closing YAML fence', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN_WITHOUT_CLOSING_FENCE);
     const sessions = createInAppPlanningChatSessions();

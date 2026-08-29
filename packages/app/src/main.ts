@@ -66,6 +66,7 @@ import type {
   InAppPlanningDiscardDraftRequest,
   InAppPlanningListSessionsResponse,
   InAppPlanningRebindRepoRequest,
+  InAppPlanningRepoBinding,
   InAppPlanningResetRequest,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
@@ -1343,13 +1344,14 @@ function startHeadlessMode(): void {
 
       const loadGeneratedPlan = async (
         planText: string,
+        repositoryBinding?: InAppPlanningRepoBinding,
       ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => (
         loadPlanSubmissionBundle(planText, {
           persistence,
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        }, { staged: true })
+        }, { staged: true, repositoryBinding })
       );
 
       // Web clients get planning-chat token streaming over SSE. The bridge does
