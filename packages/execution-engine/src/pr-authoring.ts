@@ -408,10 +408,6 @@ function normalizeReviewArtifactProviderId(url: string, providerId: string | und
 
 function extractJsonPayload(raw: string): string {
   const trimmed = raw.trim();
-  // Prefer the LAST balanced, parseable top-level JSON object rather than the
-  // first: agent output can contain leading commentary that happens to
-  // include its own valid JSON object (even just "{}"), which would
-  // otherwise shadow the real payload appearing later in the same output.
   let lastValid: string | undefined;
   for (let start = 0; start < trimmed.length; start += 1) {
     if (trimmed[start] !== '{') continue;
@@ -443,9 +439,7 @@ function extractJsonPayload(raw: string): string {
           try {
             JSON.parse(candidate);
             lastValid = candidate;
-          } catch {
-            // Not valid JSON; fall through and keep scanning from end + 1.
-          }
+          } catch {}
           start = end;
           break;
         }
