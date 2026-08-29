@@ -134,6 +134,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No catstack-deploy runs recorded yet.',
     };
   }
+  if (kind === 'admin-bypass-e2e-babysit') {
+    return {
+      name: 'Admin-bypass/e2e babysit',
+      idleText: 'Idle. Restarts stopped admin-bypass/e2e workers and clears stale repair-filing claims when turned on.',
+      noActionText: 'No admin-bypass-e2e-babysit runs recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',
