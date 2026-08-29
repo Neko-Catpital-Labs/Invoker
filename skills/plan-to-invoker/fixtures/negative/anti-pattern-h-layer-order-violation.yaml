@@ -15,10 +15,18 @@ tasks:
   - id: ui-activation-setup
     description: |
       Prepare UI activation behavior for prompt editing.
+      Goal:
+      - Prepare UI activation behavior for prompt editing.
+      Motivation:
+      - Provide a stable higher-layer surface that other tasks can consume.
+      Safety invariant:
+      - Scoped to packages/ui/src/components/TaskPanel.tsx only.
+      Effectiveness measurement:
+      - `cd packages/ui && pnpm test` exits 0.
       Layer: ui_activation
       Feature state: active
       Acceptance criteria:
-      - Ensure UI activation scaffolding is ready for downstream integration.
+      - `cd packages/ui && pnpm test` exits 0.
     prompt: |
       Modify packages/ui/src/components/TaskPanel.tsx to prepare prompt-edit
       activation behavior and ensure the change preserves command-task editing
@@ -29,10 +37,18 @@ tasks:
   - id: domain-contract-adjustment
     description: |
       Adjust domain-layer prompt-edit contract after UI activation.
+      Goal:
+      - Adjust domain-layer prompt-edit contract after UI activation.
+      Motivation:
+      - Keep prompt-edit orchestration consistent across layers.
+      Safety invariant:
+      - Scoped to packages/app/src/headless-delegation.ts and packages/app/src/main.ts.
+      Effectiveness measurement:
+      - `cd packages/app && pnpm test` exits 0.
       Layer: domain
       Feature state: active
       Acceptance criteria:
-      - Ensure domain contract updates align with prompt-edit orchestration.
+      - `cd packages/app && pnpm test` exits 0.
     prompt: |
       Modify packages/app/src/headless-delegation.ts and packages/app/src/main.ts
       to refine domain-facing prompt-edit contracts. Ensure the change maintains

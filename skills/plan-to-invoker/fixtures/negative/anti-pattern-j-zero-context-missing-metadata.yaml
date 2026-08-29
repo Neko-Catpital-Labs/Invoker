@@ -10,6 +10,8 @@ tasks:
       - This task makes one locally reviewable implementation claim.
       Safety invariant:
       - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - `cd packages/execution-engine && pnpm test` exits 0.
       Slice rationale:
       - This work is isolated from neighboring behavior or cleanup changes.
       Architectural effect:
@@ -44,6 +46,8 @@ tasks:
       - This task makes one locally reviewable implementation claim.
       Safety invariant:
       - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - `pnpm run test:all` exits 0.
       Slice rationale:
       - This work is isolated from neighboring behavior or cleanup changes.
       Architectural effect:
