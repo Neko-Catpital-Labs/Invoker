@@ -263,7 +263,7 @@ export const SCHEMA_DDL = `
         session_id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         preset_key TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted')),
+        status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted', 'planner_error')),
         confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
         draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
         draft_plan_text TEXT,
