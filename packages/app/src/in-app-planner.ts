@@ -1233,7 +1233,10 @@ export async function submitPlanningChatDraft(
   request: InAppPlanningSubmitRequest,
   deps: {
     sessions: InAppPlanningChatSessions;
-    loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
+    loadGeneratedPlan: (
+      planText: string,
+      repositoryBinding?: InAppPlanningRepoBinding,
+    ) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
     planningSessionStore?: InAppPlanningSessionStore;
   },
 ): Promise<InAppPlanningSubmitResponse> {
@@ -1266,9 +1269,14 @@ export async function submitPlanningChatDraft(
         }
         planText = approvedDraft.planText;
       }
+      const repositoryBinding = session.repoUrl && session.baseBranch
+        ? { repoUrl: session.repoUrl, baseBranch: session.baseBranch }
+        : undefined;
       const approved = await submitPlanningReview({
         planText,
-        loadPlan: deps.loadGeneratedPlan,
+        loadPlan: repositoryBinding
+          ? (approvedPlanText) => deps.loadGeneratedPlan(approvedPlanText, repositoryBinding)
+          : deps.loadGeneratedPlan,
       });
       if (!approved.ok) {
         return approved;
