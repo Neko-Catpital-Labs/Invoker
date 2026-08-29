@@ -21,7 +21,7 @@ vi.mock('node:fs', async (importOriginal) => {
 // Must import after mock setup
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
+import { WorktreeExecutor, computeContentHash, isCloneableRepoUrl } from '../worktree-executor.js';
 import { BaseExecutor, isHeartbeatAliveDuringFinalize, normalizeRepoUrlForProvisionLookup } from '../base-executor.js';
 import { registerBuiltinAgents } from '../agents/index.js';
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
@@ -210,6 +210,28 @@ describe('normalizeRepoUrlForProvisionLookup', () => {
     'ssh://git@github.com/test/repo.git',
   ])('canonicalizes %s', (repoUrl) => {
     expect(normalizeRepoUrlForProvisionLookup(repoUrl)).toBe('github.com/test/repo');
+  });
+});
+
+describe('isCloneableRepoUrl', () => {
+  it.each([
+    ['https://github.com/owner/repo', true],
+    ['https://github.com/owner/repo.git', true],
+    ['http://example.com/repo.git', true],
+    ['git@github.com:owner/repo.git', true],
+    ['git@gitlab.com:group/project.git', true],
+    ['ssh://git@github.com/owner/repo.git', true],
+    ['file:///home/user/repo.git', true],
+    ['owner/repo', true],
+    ['.', false],
+    ['..', false],
+    ['./repo', false],
+    ['../repo', false],
+    ['', false],
+    ['  ', false],
+    ['just-a-name', false],
+  ])('isCloneableRepoUrl(%j) returns %s', (repoUrl, expected) => {
+    expect(isCloneableRepoUrl(repoUrl)).toBe(expected);
   });
 });
 
