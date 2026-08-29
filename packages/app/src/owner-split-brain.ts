@@ -52,7 +52,80 @@ export function parseWriterLockHolderPid(err: unknown): number | null {
   const match = /already held by PID (\d+)/.exec(err.message);
   if (!match) return null;
   const pid = Number.parseInt(match[1], 10);
-  return Number.isFinite(pid) ? pid : null;
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+export interface GuiLockConflictPrompt {
+  holderPid: number | null;
+  title: string;
+  message: string;
+  buttons: string[];
+  cancelId: number;
+  killButtonIndex: number | null;
+}
+
+export function buildGuiLockConflictPrompt(err: unknown): GuiLockConflictPrompt {
+  const holderPid = parseWriterLockHolderPid(err);
+  const title = 'Invoker is already running elsewhere';
+  if (holderPid === null) {
+    return {
+      holderPid: null,
+      title,
+      message:
+        'Another Invoker instance is holding the database, but it isn\'t reachable to share this window with. '
+        + 'Close that instance, then relaunch Invoker.',
+      buttons: ['Quit'],
+      cancelId: 0,
+      killButtonIndex: null,
+    };
+  }
+  return {
+    holderPid,
+    title,
+    message:
+      `Another Invoker instance (PID ${holderPid}) is holding the database, but it isn't reachable to share `
+      + 'this window with. You can quit that process and continue here, or quit this launch.',
+    buttons: ['Quit Other Instance and Retry', 'Quit'],
+    cancelId: 1,
+    killButtonIndex: 0,
+  };
+}
+
+export async function terminateAndAwaitExit(
+  pid: number,
+  deps: {
+    terminatePid?: (pid: number) => void;
+    isPidAlive?: (pid: number) => boolean;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    timeoutMs?: number;
+  } = {},
+): Promise<boolean> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  const terminatePid = deps.terminatePid ?? ((p: number) => process.kill(p, 'SIGTERM'));
+  const alive = deps.isPidAlive ?? isPidAlive;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? (() => Date.now());
+  const timeoutMs = deps.timeoutMs ?? 10_000;
+  try {
+    terminatePid(pid);
+  } catch {
+    return !alive(pid);
+  }
+  const deadline = now() + timeoutMs;
+  while (now() < deadline && alive(pid)) {
+    await sleep(200);
+  }
+  return !alive(pid);
 }
 
 function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

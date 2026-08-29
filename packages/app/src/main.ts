@@ -194,7 +194,12 @@ import {
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
-import { isWriterLockHeldError, resolveOwnerServeLockFailure } from './owner-split-brain.js';
+import {
+  buildGuiLockConflictPrompt,
+  isWriterLockHeldError,
+  resolveOwnerServeLockFailure,
+  terminateAndAwaitExit,
+} from './owner-split-brain.js';
 import { createOwnerSocketSentinel, type OwnerSocketSentinel } from './owner-socket-sentinel.js';
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
@@ -2821,6 +2826,10 @@ startMainProcessBootstrap({
     }, 0);
   }
 
+  const showStartupErrorDialog = (title: string, message: string): void => {
+    dialog.showErrorBox(title, message);
+  };
+
   const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
     const guiOwnerPreference = resolveGuiOwnerPreference();
@@ -2862,6 +2871,7 @@ startMainProcessBootstrap({
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+        showStartupErrorDialog('Invoker failed to start', message);
         process.exitCode = 1;
         app.quit();
         return;
@@ -2878,6 +2888,7 @@ startMainProcessBootstrap({
         const message = err instanceof Error ? err.message : String(err);
         if (!message.includes('[db-writer-lock]')) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          showStartupErrorDialog('Invoker failed to start', message);
           process.exitCode = 1;
           app.quit();
           return;
@@ -2886,16 +2897,57 @@ startMainProcessBootstrap({
         if (!isStandaloneCapable(owner)) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
           process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
-          process.exitCode = 1;
-          app.quit();
-          return;
+          const prompt = buildGuiLockConflictPrompt(err);
+          const { response } = await dialog.showMessageBox({
+            type: 'warning',
+            title: prompt.title,
+            message: prompt.message,
+            buttons: prompt.buttons,
+            cancelId: prompt.cancelId,
+            defaultId: prompt.cancelId,
+          });
+          if (
+            prompt.killButtonIndex !== null
+            && response === prompt.killButtonIndex
+            && prompt.holderPid !== null
+            && prompt.holderPid > 0
+          ) {
+            const exited = await terminateAndAwaitExit(prompt.holderPid);
+            if (!exited) {
+              showStartupErrorDialog(
+                'Could not stop the other instance',
+                `PID ${prompt.holderPid} is still running. Quit it manually (Activity Monitor, or `
+                  + `kill -9 ${prompt.holderPid}), then relaunch Invoker.`,
+              );
+              process.exitCode = 1;
+              app.quit();
+              return;
+            }
+            try {
+              recordStartupMark('initServices.retryAfterKill.start', { holderPid: prompt.holderPid });
+              await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+              recordStartupMark('initServices.retryAfterKill.end', { ownerMode: true });
+            } catch (retryErr) {
+              const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+              process.stderr.write(`${RED}Error:${RESET} ${retryMessage}\n`);
+              showStartupErrorDialog('Invoker failed to start', retryMessage);
+              process.exitCode = 1;
+              app.quit();
+              return;
+            }
+          } else {
+            process.exitCode = 1;
+            app.quit();
+            return;
+          }
+        } else {
+          recordStartupMark('initServices.readOnly.start', { ownerId: owner.ownerId });
+          await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+          ownerMode = false;
+          guiUsingDaemonOwner = false;
+          daemonOwnerLoss.clearConnectionLost();
+          recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
         }
-        recordStartupMark('initServices.readOnly.start', { ownerId: owner.ownerId });
-        await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
-        ownerMode = false;
-        guiUsingDaemonOwner = false;
-        daemonOwnerLoss.clearConnectionLost();
-        recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
       }
     }
 
