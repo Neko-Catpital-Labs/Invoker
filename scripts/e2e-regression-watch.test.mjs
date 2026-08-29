@@ -1294,6 +1294,19 @@ describe('per-test failure identity under one CI job', () => {
     assert.equal(identities.some((entry) => entry.failureId.includes('repro-babysit-pr-body-human-split')), true);
   });
 
+  it('ignores git ref-sync listings while preserving genuine failure identities', () => {
+    const log = [
+      '* [new branch]  experiment/wf-98378590220/repro-event-loop-block/390bb7f -> origin/experiment/wf-98378590220/repro-event-loop-block/390bb7f',
+      '* [new tag]  repro-asar-enotdir-snapshot -> repro-asar-enotdir-snapshot',
+      'FAIL packages/some-package/src/__tests__/real-distinct-failure.test.ts',
+    ].join('\n');
+    const identities = extractFailureIdentitiesFromLog(log);
+
+    assert.equal(identities.some((entry) => entry.failureId.includes('repro-event-loop-block')), false);
+    assert.equal(identities.some((entry) => entry.failureId.includes('repro-asar-enotdir')), false);
+    assert.equal(identities.some((entry) => entry.failureId.includes('real-distinct-failure')), true);
+  });
+
   it('reproduces the bug: two distinct repros under one job must each get their own repair lifecycle', () => {
     // Observed (pre-fix): after filing a repair for the first Mergify Admin
     // Requeue failure, a later red observation that failed in a different
