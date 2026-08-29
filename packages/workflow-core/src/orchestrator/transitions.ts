@@ -372,10 +372,11 @@ function resolveSpawnPivotSourceChanges(
     return { execution: depTips[0]! };
   }
 
-  if (depTips.length > 1) {
-    return undefined;
-  }
-
+  // depTips.length > 1: no single dependency tip can be inherited
+  // unambiguously, so fall through to the baseBranch fallback below rather
+  // than returning undefined — leaving execution unset here trips the
+  // completed-dependency branch guard in task-runner-prepare.ts and blocks
+  // every spawned variant from launching at all.
   if (baseBranch) {
     return { execution: { branch: baseBranch } };
   }

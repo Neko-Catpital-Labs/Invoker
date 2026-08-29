@@ -219,4 +219,71 @@ describe('repro: experiment spawn inherits upstream dependency base', () => {
       ).toBe(true);
     }
   });
+
+  it('falls back to baseBranch (not undefined) when a commandless pivot has more than one completed dependency tip', () => {
+    const plan: PlanDefinition = {
+      name: 'experiment-multi-dep-pivot-repro',
+      baseBranch: 'main',
+      tasks: [
+        { id: 'discover-a', description: 'Write a.json' },
+        { id: 'discover-b', description: 'Write b.json' },
+        {
+          id: 'pivot',
+          description: 'Spawn mines',
+          dependencies: ['discover-a', 'discover-b'],
+          pivot: true,
+          experimentVariants: [
+            { id: 'mine-00', description: 'Mine 0', command: 'echo 0' },
+          ],
+        },
+      ],
+    };
+
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+
+    const discoverAId = sid(orchestrator, 0, 'discover-a');
+    const discoverBId = sid(orchestrator, 0, 'discover-b');
+    const pivotId = sid(orchestrator, 0, 'pivot');
+
+    orchestrator.handleWorkerResponse({
+      requestId: 'req-discover-a',
+      actionId: discoverAId,
+      executionGeneration: 0,
+      status: 'completed',
+      outputs: {
+        exitCode: 0,
+        branch: 'experiment/wf-repro/discover-a-abc12345',
+        commitHash: 'a'.repeat(40),
+        summary: 'wrote a.json',
+      },
+    });
+    orchestrator.handleWorkerResponse({
+      requestId: 'req-discover-b',
+      actionId: discoverBId,
+      executionGeneration: 0,
+      status: 'completed',
+      outputs: {
+        exitCode: 0,
+        branch: 'experiment/wf-repro/discover-b-def67890',
+        commitHash: 'b'.repeat(40),
+        summary: 'wrote b.json',
+      },
+    });
+
+    expect(orchestrator.getTask(pivotId)!.status).toBe('running');
+
+    // Pivot spawn (commandless) with two completed dep tips — neither can be
+    // inherited unambiguously, so this must fall back to baseBranch instead
+    // of leaving execution.branch/commit unset (which would trip the
+    // completed-dependency branch guard and block every spawned variant).
+    orchestrator.handleWorkerResponse(spawnResponse(pivotId, ['mine-00']));
+
+    const pivotAfter = orchestrator.getTask(pivotId)!;
+    expect(pivotAfter.status).toBe('completed');
+    expect(
+      pivotAfter.execution.branch,
+      'pivot branch must fall back to workflow baseBranch when multiple dep tips are ambiguous',
+    ).toBe('main');
+  });
 });
