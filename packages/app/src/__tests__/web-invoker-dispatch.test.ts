@@ -297,6 +297,24 @@ describe('buildWebInvokerDispatch', () => {
     await expect(dispatch('invoker:start', [])).rejects.toMatchObject({ code: 'unsupported_on_web' });
   });
 
+  it('start-ready forwards the dry-run request through guiMutations when wired', async () => {
+    const response = { ok: true, ready: ['wf-1/task-1'] };
+    const guiMutations = vi.fn(async () => response);
+    const { dispatch } = makeDispatch({ guiMutations });
+    const request = { dryRun: true };
+
+    await expect(dispatch('invoker:start-ready', [request])).resolves.toBe(response);
+    expect(guiMutations).toHaveBeenCalledExactlyOnceWith('invoker:start-ready', [request]);
+  });
+
+  it('start-ready fails closed when guiMutations is absent', async () => {
+    const { dispatch } = makeDispatch();
+
+    await expect(dispatch('invoker:start-ready', [{ dryRun: true }])).rejects.toMatchObject({
+      code: 'unsupported_on_web',
+    });
+  });
+
   it('an unknown channel rejects with code unknown_channel', async () => {
     const { dispatch } = makeDispatch();
     await expect(dispatch('invoker:does-not-exist', [])).rejects.toMatchObject({ code: 'unknown_channel' });
