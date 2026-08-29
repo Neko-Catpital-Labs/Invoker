@@ -16,7 +16,10 @@ import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
-import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
+import {
+  buildRemotePathNormalizeFunction,
+  buildSourceInvokerEnvScript,
+} from './remote-shell-fragments.js';
 import { canonicalizeRemoteManagedWorkspacePath } from './conflict-resolver.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
@@ -32,6 +35,11 @@ import {
   createSshRemoteScriptError,
   parseOwnedWorktreePath,
 } from './ssh-git-exec.js';
+import {
+  buildRemoteTaskFreshnessScript,
+  formatRemoteTaskFreshnessMessage,
+  parseRemoteTaskFreshnessReport,
+} from './task-specification-preflight.js';
 
 // The post-task "record and push" step opens a fresh SSH connection after the
 // task's own child process has already exited. Unlike that first connection,
@@ -177,6 +185,66 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     }, { batchMode: true });
   }
 
+  private stopForStaleTask(
+    request: WorkRequest,
+    handle: ExecutorHandle,
+    message: string,
+    agentSessionId?: string,
+  ): ExecutorHandle {
+    const executionId = handle.executionId;
+    const entry: SshEntry = {
+      process: null,
+      request,
+      outputListeners: new Set(),
+      outputBuffer: [],
+      outputBufferBytes: 0,
+      evictedChunkCount: 0,
+      completeListeners: new Set(),
+      heartbeatListeners: new Set(),
+      completed: false,
+      agentSessionId,
+    };
+    this.registerEntry(handle, entry);
+    setTimeout(() => {
+      const liveEntry = this.entries.get(executionId);
+      if (!liveEntry || liveEntry.completed) return;
+      liveEntry.completed = true;
+      this.emitComplete(executionId, {
+        requestId: request.requestId,
+        actionId: request.actionId,
+        executionGeneration: request.executionGeneration,
+        status: 'needs_input',
+        outputs: {
+          exitCode: 1,
+          error: message,
+          summary: message,
+          branch: handle.branch,
+          workspacePath: handle.workspacePath,
+        },
+      });
+    }, 0);
+    return handle;
+  }
+
+  private async inspectRemoteTaskFreshness(
+    request: WorkRequest,
+    workspacePath: string,
+  ): Promise<string | undefined> {
+    if (request.actionType !== 'ai_task') return undefined;
+    const taskText = [request.inputs.description, request.inputs.prompt]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join('\n');
+    const output = await this.execRemoteCapture(buildRemoteTaskFreshnessScript({
+      cwd: workspacePath,
+      snapshotCommit: request.inputs.specificationSnapshotCommit,
+      taskText,
+    }), 'task_freshness_preflight');
+    const report = parseRemoteTaskFreshnessReport(output);
+    return report
+      ? formatRemoteTaskFreshnessMessage(request.inputs.specificationSnapshotCommit, report)
+      : undefined;
+  }
+
   /** SSH args without `BatchMode` so `-t` / interactive sessions work for external Terminal.app. */
   private buildSshArgsInteractive(): string[] {
     return buildSshConnectionArgs({
@@ -260,20 +328,6 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
 `;
   }
 
-  private remotePathNormalizeFunction(): string {
-    return `normalize_remote_path() {
-  local path="$1"
-  if [[ "$path" == '~' ]]; then
-    printf '%s\\n' "$HOME"
-  elif [[ "\${path:0:2}" == '~/' ]]; then
-    printf '%s/%s\\n' "$HOME" "\${path:2}"
-  else
-    printf '%s\\n' "$path"
-  fi
-}
-`;
-  }
-
   private buildRuntimeBootstrapScript(options: {
     executionId: string;
     actionId: string;
@@ -319,7 +373,7 @@ ensure_managed_pnpm_workspace
 }
 load_remote_profile_path
 set -euo pipefail
-${this.remotePathNormalizeFunction()}
+${buildRemotePathNormalizeFunction()}
 ${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
@@ -630,6 +684,11 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       hasAgentSessionId: !!agentSessionId,
     });
 
+    const staleTaskMessage = await this.inspectRemoteTaskFreshness(request, workspacePath);
+    if (staleTaskMessage) {
+      return this.stopForStaleTask(request, handle, staleTaskMessage, agentSessionId);
+    }
+
     // No-command tasks complete immediately
     if (!request.inputs.command && !request.inputs.prompt) {
       const response: WorkResponse = {
@@ -889,6 +948,11 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       }
       handle.workspacePath =
         remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
+    }
+
+    const staleTaskMessage = await this.inspectRemoteTaskFreshness(request, remoteWt);
+    if (staleTaskMessage) {
+      return this.stopForStaleTask(request, handle, staleTaskMessage, agentSessionId);
     }
 
     // Step 4: No-command tasks complete immediately
