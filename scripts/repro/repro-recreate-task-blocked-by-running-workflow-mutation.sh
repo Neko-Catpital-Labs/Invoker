@@ -20,7 +20,9 @@ done
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-repro-recreate-task-queue.XXXXXX")"
 HOME_DIR="$TMP_DIR/home"
-DB_DIR="$HOME_DIR/.invoker"
+# Not "$HOME_DIR/.invoker": the profile launcher fail-closes on that exact path as a
+# production collision, even under a disposable test HOME (see with-invoker-development-profile.mjs).
+DB_DIR="$HOME_DIR/.invoker-repro"
 PLAN_PATH="$TMP_DIR/repro-plan.yaml"
 CONFIG_PATH="$DB_DIR/config.json"
 REPO_FIXTURE_DIR="$TMP_DIR/repro-repo"
