@@ -1,4 +1,4 @@
-import type { Logger } from '@invoker/contracts';
+import type { InAppPlanningRepoBinding, Logger } from '@invoker/contracts';
 import { PINNED_WORKFLOW_BASE_BRANCH, type PlanDefinition } from '@invoker/workflow-core';
 import { backupPlan } from './plan-backup.js';
 
@@ -22,6 +22,7 @@ export interface PlanSubmissionLoadDeps {
 export interface PlanSubmissionLoadOptions {
   logLabel?: string;
   preserveTaskHandles?: boolean;
+  repositoryBinding?: InAppPlanningRepoBinding;
   taskHandles?: { clear(): void };
   staged?: boolean;
 }
@@ -48,7 +49,10 @@ export async function loadPlanSubmissionBundle(
   }
 
   for (const parsedPlan of submission.plans) {
-    let plan = applyConfiguredPlanDefaults(parsedPlan);
+    const resolvedPlan = parsedPlan.repoUrl === '.' && options?.repositoryBinding
+      ? { ...parsedPlan, repoUrl: options.repositoryBinding.repoUrl }
+      : parsedPlan;
+    let plan = applyConfiguredPlanDefaults(resolvedPlan);
     if (!submission.isStack) {
       plan = { ...plan, baseBranch: PINNED_WORKFLOW_BASE_BRANCH };
     }

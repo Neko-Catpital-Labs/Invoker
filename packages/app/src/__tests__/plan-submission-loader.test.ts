@@ -35,6 +35,36 @@ function makeDeps() {
 }
 
 describe('loadPlanSubmissionBundle', () => {
+  it('resolves only dot to the bound repository while preserving an explicit repository URL', async () => {
+    const { deps, loadedPlans } = makeDeps();
+
+    await loadPlanSubmissionBundle(`
+name: Bound Repository Stack
+repoUrl: .
+workflows:
+  - name: Bound Repository Workflow
+    featureBranch: plan/bound-repository
+    tasks:
+      - id: bound
+        description: Use the planning session repository
+  - name: Explicit Repository Workflow
+    repoUrl: git@github.com:test/explicit-repo.git
+    featureBranch: plan/explicit-repository
+    tasks:
+      - id: explicit
+        description: Keep the explicit repository
+`, deps, {
+      repositoryBinding: {
+        repoUrl: '/home/demo/demo-repo',
+        baseBranch: 'main',
+      },
+    });
+
+    expect(loadedPlans).toHaveLength(2);
+    expect(loadedPlans[0]?.repoUrl).toBe('/home/demo/demo-repo');
+    expect(loadedPlans[1]?.repoUrl).toBe('git@github.com:test/explicit-repo.git');
+  });
+
   it('passes staged state only when requested by the planning preview path', async () => {
     const { deps } = makeDeps();
     const plan = `
