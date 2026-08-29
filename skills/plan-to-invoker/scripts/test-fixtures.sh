@@ -121,6 +121,13 @@ test_doctor_negative_fixture() {
   local expected_failed_step="lint-task-atomicity"
   if [[ "$fixture_name" == "anti-pattern-n-broad-autofix-policy-review-unit.yaml" || "$fixture_name" == "anti-pattern-o-all-in-one-autofix-review-unit.yaml" ]]; then
     expected_failed_step="lint-review-units"
+  elif [[ "$fixture_name" == "anti-pattern-k-missing-review-compression.yaml" ]]; then
+    # This fixture's intentional defect (missing Safety invariant) is also
+    # required unconditionally by check-planning-completeness, which runs
+    # before lint-task-atomicity, so the doctor now fails there first.
+    # The direct lint assertions for this fixture still run separately in
+    # test_lint_requires_review_compression_sections below.
+    expected_failed_step="check-planning-completeness"
   fi
   local output
   local stderr_file
