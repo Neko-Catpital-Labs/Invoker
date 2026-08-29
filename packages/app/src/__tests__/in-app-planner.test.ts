@@ -271,6 +271,17 @@ describe('listInAppPlanningPresets', () => {
       { key: 'custom+omp', label: 'custom + omp', tool: 'omp', model: 'fast', isDefault: false, defaultConfirmationMode: 'require' },
     ]));
   });
+
+  it('promotes the first allowed preset to default when the configured default is filtered out', async () => {
+    const presets = await listInAppPlanningPresets({
+      defaultSlackHarnessPreset: 'cursor+claude',
+      enabledExecutionAgents: ['codex'],
+    });
+    const defaultPreset = presets.find((p) => p.isDefault);
+    expect(defaultPreset).toBeDefined();
+    expect(defaultPreset?.tool === 'codex' || defaultPreset?.model === 'codex').toBe(true);
+    expect(presets.every((p) => p.tool === 'codex' || p.model === 'codex')).toBe(true);
+  });
 });
 
 

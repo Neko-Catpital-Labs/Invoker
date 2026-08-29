@@ -866,7 +866,12 @@ export async function listInAppPlanningPresets(config: InvokerConfig): Promise<P
     isDefault: key === defaultPresetKey,
     defaultConfirmationMode,
   }));
-  return filterPlanningPresets(options, config);
+  const filtered = filterPlanningPresets(options, config);
+  const hasDefault = filtered.some((opt) => opt.isDefault);
+  if (!hasDefault && filtered.length > 0) {
+    filtered[0] = { ...filtered[0], isDefault: true };
+  }
+  return filtered;
 }
 
 export function createPlanningCommandBuilderFromRegistry(
