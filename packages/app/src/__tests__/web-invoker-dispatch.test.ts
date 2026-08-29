@@ -185,6 +185,35 @@ describe('buildWebInvokerDispatch', () => {
     expect(await dispatch('invoker:get-history-tasks', [])).toEqual(historyRows);
   });
 
+  it('get-worker-decisions mirrors the owner read handler', async () => {
+    const listWorkerActions = vi.fn(() => []);
+    const { dispatch } = makeDispatch({
+      persistence: {
+        listWorkflows: () => [],
+        listWorkerActions,
+      },
+    });
+
+    await expect(dispatch('invoker:get-worker-decisions', [{
+      workflowId: 'wf-1',
+      decision: 'act',
+      limit: 25,
+      offset: 0,
+    }])).resolves.toEqual({
+      workflowId: 'wf-1',
+      actions: [],
+      limit: 25,
+      offset: 0,
+      hasMore: false,
+    });
+    expect(listWorkerActions).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      decision: 'act',
+      limit: 26,
+      offset: 0,
+    });
+  });
+
   it('get-events returns a paginated page for a task', async () => {
     const events = [{ id: 1, taskId: 't1', eventType: 'task.running', createdAt: '2026-07-01T00:00:00Z' }];
     const getEvents = vi.fn(() => events);
