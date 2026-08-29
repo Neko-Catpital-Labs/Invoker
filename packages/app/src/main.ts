@@ -371,6 +371,13 @@ function buildRegisteredOwnerWorkerDeps(
   checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
   planningCommandBuilder: PlanningCommandBuilder,
   executionAgentRegistry: AgentRegistry,
+  adminBypassE2eBabysitDeps: Pick<
+    WorkerRuntimeDependencies,
+    | 'adminBypassE2eBabysit'
+    | 'workerLifecycleStarter'
+    | 'repairFilingStore'
+    | 'investigativePlanSubmitter'
+  >,
 ): WorkerRuntimeDependencies {
   const remoteTargets = Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
     name,
@@ -472,8 +479,20 @@ function buildRegisteredOwnerWorkerDeps(
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       }),
     },
+    ...adminBypassE2eBabysitDeps,
   };
 }
+
+function toWorkerLifecycleSnapshots(workers: WorkerStatusSnapshot['workers']) {
+  return workers.map((worker) => ({
+    kind: worker.kind,
+    desiredEnabled: worker.desiredEnabled ?? worker.autoStarts,
+    lifecycle: worker.lifecycle,
+  }));
+}
+
+let startAdminBypassE2eBabysitWorker: ((kind: string) => unknown) | undefined;
+let submitAdminBypassE2eBabysitPlan: ((planText: string) => unknown) | undefined;
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
   const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
@@ -1353,6 +1372,7 @@ function startHeadlessMode(): void {
           logger,
         }, { staged: true, repositoryBinding })
       );
+      submitAdminBypassE2eBabysitPlan = (planText) => loadGeneratedPlan(planText);
 
       // Web clients get planning-chat token streaming over SSE. The bridge does
       // not exist yet when these handlers are built, so route through a
@@ -2086,12 +2106,56 @@ function startHeadlessMode(): void {
             },
             planningCommandBuilder,
             agentRegistry,
+            {
+              adminBypassE2eBabysit: {
+                enabled: invokerConfig.adminBypassE2eBabysit?.enabled ?? false,
+                intervalMs: invokerConfig.adminBypassE2eBabysit?.intervalMinutes === undefined
+                  ? undefined
+                  : invokerConfig.adminBypassE2eBabysit.intervalMinutes * 60_000,
+                watchedWorkerKinds: invokerConfig.adminBypassE2eBabysit?.watchedWorkerKinds,
+                staleTtlMs: invokerConfig.adminBypassE2eBabysit?.staleTtlMinutes === undefined
+                  ? undefined
+                  : invokerConfig.adminBypassE2eBabysit.staleTtlMinutes * 60_000,
+              },
+              workerLifecycleStarter: {
+                listWorkers: () => toWorkerLifecycleSnapshots((
+                  workerRuntimeController?.snapshot()
+                  ?? createLocalWorkerStatusSnapshot({
+                    registry: createRegisteredWorkerRegistry(),
+                    persistence,
+                    autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+                  })
+                ).workers),
+                start: (kind) => {
+                  if (!startAdminBypassE2eBabysitWorker) {
+                    throw new Error('admin-bypass-e2e-babysit worker lifecycle starter is not ready');
+                  }
+                  return startAdminBypassE2eBabysitWorker(kind);
+                },
+              },
+              repairFilingStore: {
+                listRepairFilings: () => persistence.listRepairFilings(),
+                deleteRepairFiling: (kind, subject, stateSha) => (
+                  persistence.deleteRepairFiling(kind, subject, stateSha)
+                ),
+              },
+              investigativePlanSubmitter: {
+                submitPlan: (planText) => {
+                  if (!submitAdminBypassE2eBabysitPlan) {
+                    throw new Error('admin-bypass-e2e-babysit investigative plan submitter is not ready');
+                  }
+                  return submitAdminBypassE2eBabysitPlan(planText);
+                },
+              },
+            },
           ),
           autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
+        const activeWorkerRuntimeController = workerRuntimeController;
+        startAdminBypassE2eBabysitWorker = (kind) => activeWorkerRuntimeController.start(kind);
         if (!readOnlyMode) {
           const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
           if (reconciledWorkerActions > 0) {
@@ -3006,6 +3070,12 @@ startMainProcessBootstrap({
       buildCommandServiceInvalidationDeps,
     });
     guiMutationTaskActions = mutationActions;
+    submitAdminBypassE2eBabysitPlan = (planText) => loadPlanSubmissionBundle(planText, {
+      persistence,
+      orchestrator,
+      allowGraphMutation: invokerConfig.allowGraphMutation,
+      logger,
+    }, { staged: true });
 
     const guiMutationRegistrationContext: GuiMutationRegistrationContext = {
       ipcMain,
@@ -3316,12 +3386,56 @@ startMainProcessBootstrap({
           },
           planningCommandBuilder,
           agentRegistry,
+          {
+            adminBypassE2eBabysit: {
+              enabled: invokerConfig.adminBypassE2eBabysit?.enabled ?? false,
+              intervalMs: invokerConfig.adminBypassE2eBabysit?.intervalMinutes === undefined
+                ? undefined
+                : invokerConfig.adminBypassE2eBabysit.intervalMinutes * 60_000,
+              watchedWorkerKinds: invokerConfig.adminBypassE2eBabysit?.watchedWorkerKinds,
+              staleTtlMs: invokerConfig.adminBypassE2eBabysit?.staleTtlMinutes === undefined
+                ? undefined
+                : invokerConfig.adminBypassE2eBabysit.staleTtlMinutes * 60_000,
+            },
+            workerLifecycleStarter: {
+              listWorkers: () => toWorkerLifecycleSnapshots((
+                workerRuntimeController?.snapshot()
+                ?? createLocalWorkerStatusSnapshot({
+                  registry: createRegisteredWorkerRegistry(),
+                  persistence,
+                  autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+                })
+              ).workers),
+              start: (kind) => {
+                if (!startAdminBypassE2eBabysitWorker) {
+                  throw new Error('admin-bypass-e2e-babysit worker lifecycle starter is not ready');
+                }
+                return startAdminBypassE2eBabysitWorker(kind);
+              },
+            },
+            repairFilingStore: {
+              listRepairFilings: () => persistence.listRepairFilings(),
+              deleteRepairFiling: (kind, subject, stateSha) => (
+                persistence.deleteRepairFiling(kind, subject, stateSha)
+              ),
+            },
+            investigativePlanSubmitter: {
+              submitPlan: (planText) => {
+                if (!submitAdminBypassE2eBabysitPlan) {
+                  throw new Error('admin-bypass-e2e-babysit investigative plan submitter is not ready');
+                }
+                return submitAdminBypassE2eBabysitPlan(planText);
+              },
+            },
+          },
         ),
         autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
       });
+      const activeWorkerRuntimeController = workerRuntimeController;
+      startAdminBypassE2eBabysitWorker = (kind) => activeWorkerRuntimeController.start(kind);
     }
 
     // Fail orphaned in-flight tasks left by a previous crash, then start ready work.
