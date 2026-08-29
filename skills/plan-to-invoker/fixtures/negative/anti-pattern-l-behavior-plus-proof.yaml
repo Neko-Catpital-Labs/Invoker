@@ -20,6 +20,8 @@ tasks:
       - Implement the local refresh fallback.
       Motivation:
       - Keep the task graph fresh after owner detach.
+      Effectiveness measurement:
+      - `pnpm --filter @invoker/app test` exits 0.
       Alternative considerations:
       - Option A (chosen): split repro proof into its own workflow.
       - Option B: mix repro and behavior in one workflow.
@@ -79,6 +81,8 @@ tasks:
       - Run the final regression gate.
       Motivation:
       - Confirm the workflow remains valid.
+      Effectiveness measurement:
+      - `pnpm run test:all` exits 0.
       Alternative considerations:
       - Option A (chosen): run pnpm run test:all last.
       Implementation details:
