@@ -20,6 +20,8 @@ tasks:
       - Extract the helper without changing behavior.
       Motivation:
       - Make later fallback field changes easier to review.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Alternative considerations:
       - Option A (chosen): extract the helper first.
       - Option B: add new fields during the extraction.
@@ -77,6 +79,8 @@ tasks:
       - Run the final regression gate.
       Motivation:
       - Confirm the workflow remains valid.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Alternative considerations:
       - Option A (chosen): run pnpm run test:all last.
       Implementation details:

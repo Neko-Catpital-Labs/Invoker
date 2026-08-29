@@ -8,6 +8,7 @@ description: |
   Mirrors the oversized shape of wf-1777929074509-8 as one implementation workflow.
   This should now fail decomposition lint because implementation tasks must include
   Layer and Feature state metadata and be split into reviewable dependency slices.
+  Verify: `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` reports firstFailedStep lint-task-atomicity.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
@@ -19,6 +20,14 @@ tasks:
     description: |
       Add renderer callback wiring, IPC bridge registration, owner delegation behavior,
       TaskPanel activation behavior, and all regressions in one large task.
+      Goal:
+      - Reproduce the monolithic prompt-edit bridge shape so lint-task-atomicity can be proven to reject it.
+      Motivation:
+      - This fixture intentionally omits Layer/Feature state metadata and review decomposition.
+      Safety invariant:
+      - This fixture file only demonstrates a lint failure; it makes no product code changes.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Files:
       - packages/app/src/main.ts
       - packages/app/src/preload.ts

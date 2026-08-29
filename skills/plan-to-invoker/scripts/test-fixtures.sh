@@ -954,7 +954,67 @@ EOF
 }
 
 test_lint_requires_review_compression_sections() {
-  local fixture="$NEGATIVE_DIR/anti-pattern-k-missing-review-compression.yaml"
+  # Uses a private temp fixture (not the checked-in anti-pattern-k file) because
+  # that checked-in fixture must also satisfy check-planning-completeness, which
+  # requires a real Safety invariant heading — this test needs one missing.
+  local fixture
+  fixture=$(mktemp)
+  trap "rm -f $fixture" RETURN
+  cat > "$fixture" <<'EOF'
+name: "Anti-pattern K: missing review compression metadata"
+description: "Implementation plan missing review-compression headings."
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-runtime-flow
+    description: |
+      Goal:
+      - Implement deterministic runtime flow updates.
+      Motivation:
+      - Keep remote execution instructions explicit and reproducible.
+      Alternative considerations:
+      - Option A (chosen): targeted transport-layer update.
+      - Option B: broad refactor across unrelated modules.
+      Implementation details:
+      - Apply runtime-flow edits and preserve existing behavior contracts.
+      Layer: transport
+      Feature state: active
+      Files:
+      - packages/execution-engine/src/task-runner.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - `cd packages/execution-engine && pnpm test` exits 0.
+    prompt: |
+      Goal:
+      - Implement deterministic runtime flow updates in task-runner.
+      Motivation:
+      - Keep execution behavior stable under delegation.
+      Alternative considerations:
+      - Option A (chosen): targeted update.
+      - Option B: broad refactor.
+      Implementation details:
+      - Assume no prior context. Update packages/execution-engine/src/task-runner.ts.
+      Acceptance criteria:
+      - Pass condition: `cd packages/execution-engine && pnpm test` exits 0.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure implementation updates remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-runtime-flow]
+EOF
   local output
   set +e
   output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)

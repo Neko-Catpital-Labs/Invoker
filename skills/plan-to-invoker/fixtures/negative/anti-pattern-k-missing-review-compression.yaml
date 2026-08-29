@@ -1,5 +1,8 @@
 # Expected outcome: skill-doctor fails lint-task-atomicity because implementation
-# tasks omit Review claim / Safety invariant / Slice rationale / Architectural effect.
+# tasks omit Review claim / Slice rationale / Architectural effect.
+# (test-fixtures.sh's test_lint_requires_review_compression_sections uses its own
+# private temp fixture to additionally cover a missing Safety invariant heading,
+# since this checked-in fixture must also satisfy check-planning-completeness.)
 name: "Anti-pattern K: missing review compression metadata"
 description: "Implementation plan missing review-compression headings."
 onFinish: pull_request
@@ -12,6 +15,10 @@ tasks:
       - Implement deterministic runtime flow updates.
       Motivation:
       - Keep remote execution instructions explicit and reproducible.
+      Safety invariant:
+      - This fixture file only demonstrates a lint failure; it makes no product code changes.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Alternative considerations:
       - Option A (chosen): targeted transport-layer update.
       - Option B: broad refactor across unrelated modules.
@@ -44,6 +51,10 @@ tasks:
       - Run final full-suite regression gate.
       Motivation:
       - Ensure implementation updates remain stable.
+      Safety invariant:
+      - This command changes no production behavior; it only runs the regression gate.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Alternative considerations:
       - Option A (chosen): full repository regression.
       - Option B: package-only checks.

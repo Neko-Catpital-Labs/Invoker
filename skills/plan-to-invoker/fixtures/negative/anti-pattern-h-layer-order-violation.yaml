@@ -5,6 +5,7 @@ name: "Anti-pattern: lower layer depends on higher layer"
 description: |
   Demonstrates a dependency direction violation where a foundational layer task
   depends on a higher integration layer task without an explicit exception.
+  Verify: `bash skills/plan-to-invoker/scripts/skill-doctor.sh skills/plan-to-invoker/fixtures/negative/anti-pattern-h-layer-order-violation.yaml` reports firstFailedStep lint-task-atomicity.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
@@ -15,6 +16,14 @@ tasks:
   - id: ui-activation-setup
     description: |
       Prepare UI activation behavior for prompt editing.
+      Goal:
+      - Reproduce a foundational-layer task depending on a higher-layer task.
+      Motivation:
+      - This fixture intentionally omits a Layer exception so lint-task-atomicity's layer-ordering check can be proven to reject it.
+      Safety invariant:
+      - This fixture file only demonstrates a lint failure; it makes no product code changes.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Layer: ui_activation
       Feature state: active
       Acceptance criteria:
@@ -29,6 +38,14 @@ tasks:
   - id: domain-contract-adjustment
     description: |
       Adjust domain-layer prompt-edit contract after UI activation.
+      Goal:
+      - Reproduce a domain-layer task depending on a higher ui_activation-layer task.
+      Motivation:
+      - This fixture intentionally omits a Layer exception so lint-task-atomicity's layer-ordering check can be proven to reject it.
+      Safety invariant:
+      - This fixture file only demonstrates a lint failure; it makes no product code changes.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Layer: domain
       Feature state: active
       Acceptance criteria:

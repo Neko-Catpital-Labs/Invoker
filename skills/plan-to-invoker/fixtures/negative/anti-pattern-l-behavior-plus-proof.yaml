@@ -20,6 +20,8 @@ tasks:
       - Implement the local refresh fallback.
       Motivation:
       - Keep the task graph fresh after owner detach.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Alternative considerations:
       - Option A (chosen): split repro proof into its own workflow.
       - Option B: mix repro and behavior in one workflow.
@@ -79,6 +81,8 @@ tasks:
       - Run the final regression gate.
       Motivation:
       - Confirm the workflow remains valid.
+      Effectiveness measurement:
+      - Running skill-doctor.sh against this fixture reports firstFailedStep lint-task-atomicity, both before and after edits to this fixture.
       Alternative considerations:
       - Option A (chosen): run pnpm run test:all last.
       Implementation details:
