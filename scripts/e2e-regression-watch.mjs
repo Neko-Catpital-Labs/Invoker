@@ -266,6 +266,15 @@ export function buildMarkerComment(sha, jobName, failureId = JOB_LEVEL_FAILURE_I
   return `<!-- ${buildMarker(sha, jobName, failureId)} -->`;
 }
 
+// Git fetch ref-sync output can name an old, unrelated Invoker task branch
+// that looks like a repro-* match (incident 2026-08-29).
+function stripGitRefListingLines(text) {
+  return text
+    .split('\n')
+    .filter((line) => !/\[(?:new branch|new tag)\]|\s->\s+(?:origin\/|refs\/)/.test(line))
+    .join('\n');
+}
+
 /**
  * Derive stable per-test / per-repro identities from a CI job log.
  * Multiple distinct failures under one job must each get their own repair
@@ -273,7 +282,7 @@ export function buildMarkerComment(sha, jobName, failureId = JOB_LEVEL_FAILURE_I
  * repro after an earlier same-job repair had already been filed).
  */
 export function extractFailureIdentitiesFromLog(logText) {
-  const text = String(logText ?? '');
+  const text = stripGitRefListingLines(String(logText ?? ''));
   if (!text.trim()) return [];
 
   const found = new Map();
