@@ -15,8 +15,6 @@ unset INVOKER_HEADLESS_STANDALONE
 
 TMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-home.XXXXXX")"
 export HOME="$TMP_HOME"
-# Not "$HOME/.invoker": the profile launcher fail-closes on that exact path as a
-# production collision, even under a disposable test HOME (see with-invoker-development-profile.mjs).
 export INVOKER_DB_DIR="$HOME/.invoker-e2e"
 mkdir -p "$INVOKER_DB_DIR"
 git config --global --add safe.directory "$REPO_ROOT"
