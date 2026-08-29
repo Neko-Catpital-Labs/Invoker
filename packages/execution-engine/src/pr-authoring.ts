@@ -408,13 +408,42 @@ function normalizeReviewArtifactProviderId(url: string, providerId: string | und
 
 function extractJsonPayload(raw: string): string {
   const trimmed = raw.trim();
-  const fenceMatch = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed);
-  if (fenceMatch) return fenceMatch[1].trim();
+  for (let start = 0; start < trimmed.length; start += 1) {
+    if (trimmed[start] !== '{') continue;
 
-  const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < trimmed.length; end += 1) {
+      const character = trimmed[end];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (character === '"') {
+        inString = true;
+      } else if (character === '{') {
+        depth += 1;
+      } else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = trimmed.slice(start, end + 1);
+          try {
+            JSON.parse(candidate);
+            return candidate;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
   }
   return trimmed;
 }
