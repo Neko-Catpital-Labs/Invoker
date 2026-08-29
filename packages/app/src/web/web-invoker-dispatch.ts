@@ -320,6 +320,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       // ── Planning chat + planning terminals ──
       // Routed to the owner's shared GUI-mutation handlers / terminal adapter
       // when the host wires them; otherwise keep the historical downgrades.
+      case 'invoker:start-ready':
       case 'invoker:plan-from-goal':
       case 'invoker:planning-chat-create':
       case 'invoker:planning-chat-list':
@@ -364,7 +365,6 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:replace-task':
       case 'invoker:load-plan':
       case 'invoker:start':
-      case 'invoker:start-ready':
       case 'invoker:stop':
       case 'invoker:clear':
       case 'invoker:resume-workflow':
