@@ -14,6 +14,10 @@ featureBranch: plan/anti-pattern-layer-order-violation
 tasks:
   - id: ui-activation-setup
     description: |
+      Goal: Prepare UI activation behavior for prompt editing.
+      Motivation: Downstream domain work needs a stable activation surface.
+      Safety invariant: Existing command-task editing interactions stay unchanged.
+      Effectiveness measurement: `cd packages/ui && pnpm test` fails before this change and passes after.
       Prepare UI activation behavior for prompt editing.
       Layer: ui_activation
       Feature state: active
@@ -28,11 +32,15 @@ tasks:
 
   - id: domain-contract-adjustment
     description: |
+      Goal: Adjust domain-layer prompt-edit contract after UI activation.
+      Motivation: Domain orchestration must reflect the new activation surface.
+      Safety invariant: Recreate semantics stay unchanged.
+      Effectiveness measurement: `cd packages/app && pnpm test` fails before this change and passes after.
       Adjust domain-layer prompt-edit contract after UI activation.
       Layer: domain
       Feature state: active
       Acceptance criteria:
-      - Ensure domain contract updates align with prompt-edit orchestration.
+      - `cd packages/app && pnpm test` exits 0.
     prompt: |
       Modify packages/app/src/headless-delegation.ts and packages/app/src/main.ts
       to refine domain-facing prompt-edit contracts. Ensure the change maintains
