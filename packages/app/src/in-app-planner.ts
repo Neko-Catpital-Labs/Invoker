@@ -55,6 +55,7 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
+import { detectDefaultBranchRemote } from '@invoker/workflow-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import { filterPlanningPresets, type InvokerConfig } from './config.js';
 import {
@@ -807,7 +808,10 @@ async function createSession(
 export function resolvePlanningRepoBinding(config: InvokerConfig): InAppPlanningRepoBinding | undefined {
   const repoUrl = config.defaultRepoUrl?.trim();
   if (!repoUrl) return undefined;
-  return { repoUrl, baseBranch: config.defaultBranch ?? 'main' };
+  const baseBranch = config.defaultBranch?.trim()
+    || detectDefaultBranchRemote(repoUrl)
+    || 'main';
+  return { repoUrl, baseBranch };
 }
 
 async function activatePlanningSessionWorktree(
@@ -1435,7 +1439,10 @@ export async function rebindPlanningChatRepo(
   if (!requestedRepoUrl) {
     return { ok: false, error: 'No repository specified.' };
   }
-  const requestedBaseBranch = rawRequest?.baseBranch?.trim() || deps.config.defaultBranch || 'main';
+  const requestedBaseBranch = rawRequest?.baseBranch?.trim()
+    || deps.config.defaultBranch?.trim()
+    || detectDefaultBranchRemote(requestedRepoUrl)
+    || 'main';
 
   try {
     await repoPool.ensureCloneThroughRepoQueue(requestedRepoUrl);
