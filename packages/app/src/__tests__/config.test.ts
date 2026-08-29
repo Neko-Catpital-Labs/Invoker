@@ -350,16 +350,44 @@ describe('loadConfig', () => {
     expect(config.diskHeadroom).toEqual({ cleanupEnabled: false });
   });
 
-  it('loads adminBypassE2eBabysit with unrestricted numeric values', () => {
+  it('loads adminBypassE2eBabysit with positive numeric values', () => {
     const adminBypassE2eBabysit = {
       enabled: true,
-      intervalMinutes: -1,
+      intervalMinutes: 5,
       watchedWorkerKinds: ['pr-admin-bypass-land', 'e2e-autofix'],
-      staleTtlMinutes: 0,
+      staleTtlMinutes: 30,
     };
     writeUserConfig({ adminBypassE2eBabysit });
 
     expect(loadConfig().adminBypassE2eBabysit).toEqual(adminBypassE2eBabysit);
+  });
+
+  it.each([0, -1])('rejects adminBypassE2eBabysit.intervalMinutes of %s', (intervalMinutes) => {
+    writeUserConfig({ adminBypassE2eBabysit: { intervalMinutes } });
+
+    expect(() => loadConfig()).toThrow(
+      /adminBypassE2eBabysit.intervalMinutes must be an integer > 0/,
+    );
+  });
+
+  it.each([0, -1])('rejects adminBypassE2eBabysit.staleTtlMinutes of %s', (staleTtlMinutes) => {
+    writeUserConfig({ adminBypassE2eBabysit: { staleTtlMinutes } });
+
+    expect(() => loadConfig()).toThrow(
+      /adminBypassE2eBabysit.staleTtlMinutes must be an integer > 0/,
+    );
+  });
+
+  it.each([
+    { shape: 'null', value: null },
+    { shape: 'array', value: [] },
+    { shape: 'boolean', value: true },
+    { shape: 'number', value: 1 },
+    { shape: 'string', value: 'invalid' },
+  ])('rejects malformed adminBypassE2eBabysit shape: $shape', ({ value: adminBypassE2eBabysit }) => {
+    writeUserConfig({ adminBypassE2eBabysit });
+
+    expect(() => loadConfig()).toThrow(/adminBypassE2eBabysit must be an object/);
   });
 
   it('loads config when adminBypassE2eBabysit is omitted', () => {
