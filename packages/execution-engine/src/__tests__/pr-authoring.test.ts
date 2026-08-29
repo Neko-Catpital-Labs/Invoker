@@ -405,6 +405,17 @@ describe('make-pr stack publish body contract', () => {
     expect(parsed[0]?.id).toBe('a');
   });
 
+  it('extracts balanced JSON when surrounding commentary and quoted strings contain braces', () => {
+    const title = 'Keep } inside an escaped "quote" and { inside the string';
+    const payload = JSON.stringify({
+      artifacts: [{ id: 'a', url: 'https://x/1', title }],
+    });
+    const raw = `Preparing {draft} output.\n${payload}\nFinished with } commentary.`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.title).toBe(title);
+  });
+
   it('still throws "must output JSON" for genuinely non-JSON output', () => {
     expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
       'make-pr stack publisher must output JSON',
