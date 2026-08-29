@@ -202,6 +202,40 @@ describe('stale task specification preflight', () => {
     }
   });
 
+  it('expands a tilde-prefixed remote working directory before checking freshness', () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'invoker-stale-task-remote-home-'));
+    const repo = join(fakeHome, 'workspace');
+    try {
+      mkdirSync(repo);
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
+      mkdirSync(join(repo, 'packages/ui/src'), { recursive: true });
+      const appPath = join(repo, 'packages/ui/src/App.tsx');
+      writeFileSync(appPath, 'export const camera = "selection-only";\n');
+      execFileSync('git', ['add', '.'], { cwd: repo });
+      execFileSync('git', ['commit', '-qm', 'old camera base'], { cwd: repo });
+      const snapshotCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+      writeFileSync(appPath, 'export const camera = "selection-recenter";\n');
+      execFileSync('git', ['commit', '-qam', 'change camera behavior'], { cwd: repo });
+
+      const output = execFileSync('bash', ['-c', buildRemoteTaskFreshnessScript({
+        cwd: '~/workspace',
+        snapshotCommit,
+        taskText: 'Modify packages/ui/src/App.tsx.',
+      })], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome },
+      });
+
+      expect(parseRemoteTaskFreshnessReport(output)).toMatchObject({
+        reasons: ['path:packages/ui/src/App.tsx'],
+      });
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   it('is wired before command construction and stops with needs_input', () => {
     const executorSource = readFileSync(new URL('../worktree-executor.ts', import.meta.url), 'utf8');
     const freshnessIndex = executorSource.indexOf('const freshness = await inspectTaskFreshness');

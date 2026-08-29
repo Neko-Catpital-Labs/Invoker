@@ -16,7 +16,10 @@ import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
-import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
+import {
+  buildRemotePathNormalizeFunction,
+  buildSourceInvokerEnvScript,
+} from './remote-shell-fragments.js';
 import { canonicalizeRemoteManagedWorkspacePath } from './conflict-resolver.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
@@ -325,20 +328,6 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
 `;
   }
 
-  private remotePathNormalizeFunction(): string {
-    return `normalize_remote_path() {
-  local path="$1"
-  if [[ "$path" == '~' ]]; then
-    printf '%s\\n' "$HOME"
-  elif [[ "\${path:0:2}" == '~/' ]]; then
-    printf '%s/%s\\n' "$HOME" "\${path:2}"
-  else
-    printf '%s\\n' "$path"
-  fi
-}
-`;
-  }
-
   private buildRuntimeBootstrapScript(options: {
     executionId: string;
     actionId: string;
@@ -384,7 +373,7 @@ ensure_managed_pnpm_workspace
 }
 load_remote_profile_path
 set -euo pipefail
-${this.remotePathNormalizeFunction()}
+${buildRemotePathNormalizeFunction()}
 ${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
