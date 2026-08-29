@@ -1,0 +1,70 @@
+# Doctor-pipeline sibling of anti-pattern-k-missing-review-compression.yaml.
+# That fixture is exercised directly by lint-task-atomicity.sh (bypassing
+# check-planning-completeness), so it can omit Safety invariant entirely to
+# prove atomicity lint flags it missing. The full skill-doctor.sh pipeline
+# used by DOCTOR_NEGATIVE_FIXTURES also runs check-planning-completeness
+# first, which unconditionally requires Goal/Motivation/Safety invariant on
+# every implementation task — so this sibling keeps those three present and
+# still omits Review claim / Slice rationale / Architectural effect / Non-goals
+# so it still fails skill-doctor at lint-task-atomicity, not earlier.
+name: "Anti-pattern K: missing review compression metadata (doctor pipeline)"
+description: "Implementation plan missing review-compression headings."
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-runtime-flow
+    description: |
+      Goal:
+      - Implement deterministic runtime flow updates.
+      Motivation:
+      - Keep remote execution instructions explicit and reproducible.
+      Safety invariant:
+      - The change stays isolated to the transport-layer runtime flow update.
+      Effectiveness measurement:
+      - `cd packages/execution-engine && pnpm test` exits 0, as this task's own Acceptance criteria states.
+      Alternative considerations:
+      - Option A (chosen): targeted transport-layer update.
+      - Option B: broad refactor across unrelated modules.
+      Implementation details:
+      - Apply runtime-flow edits and preserve existing behavior contracts.
+      Layer: transport
+      Feature state: active
+      Files:
+      - packages/execution-engine/src/task-runner.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - `cd packages/execution-engine && pnpm test` exits 0.
+    prompt: |
+      Goal:
+      - Implement deterministic runtime flow updates in task-runner.
+      Motivation:
+      - Keep execution behavior stable under delegation.
+      Alternative considerations:
+      - Option A (chosen): targeted update.
+      - Option B: broad refactor.
+      Implementation details:
+      - Assume no prior context. Update packages/execution-engine/src/task-runner.ts.
+      Acceptance criteria:
+      - Pass condition: `cd packages/execution-engine && pnpm test` exits 0.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure implementation updates remain stable.
+      Safety invariant:
+      - This command changes no production behavior.
+      Effectiveness measurement:
+      - `pnpm run test:all` exits 0.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-runtime-flow]

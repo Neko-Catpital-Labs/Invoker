@@ -10,6 +10,8 @@ tasks:
       - This task makes one locally reviewable implementation claim.
       Safety invariant:
       - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - The task's own Acceptance criteria / command exiting 0 is the pass signal.
       Slice rationale:
       - This work is isolated from neighboring behavior or cleanup changes.
       Architectural effect:
@@ -44,6 +46,8 @@ tasks:
       - This task makes one locally reviewable implementation claim.
       Safety invariant:
       - The slice is safe because its verification remains local and explicit.
+      Effectiveness measurement:
+      - The task's own Acceptance criteria / command exiting 0 is the pass signal.
       Slice rationale:
       - This work is isolated from neighboring behavior or cleanup changes.
       Architectural effect:

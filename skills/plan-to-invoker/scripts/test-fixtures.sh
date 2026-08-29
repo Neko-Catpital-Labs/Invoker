@@ -22,6 +22,7 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-h-layer-order-violation.yaml"
   "anti-pattern-j-zero-context-missing-metadata.yaml"
   "anti-pattern-k-missing-review-compression.yaml"
+  "anti-pattern-k-missing-review-compression-doctor.yaml"
   "anti-pattern-l-behavior-plus-proof.yaml"
   "anti-pattern-m-refactor-plus-fields.yaml"
   "anti-pattern-n-broad-autofix-policy-review-unit.yaml"
@@ -121,6 +122,15 @@ test_doctor_negative_fixture() {
   local expected_failed_step="lint-task-atomicity"
   if [[ "$fixture_name" == "anti-pattern-n-broad-autofix-policy-review-unit.yaml" || "$fixture_name" == "anti-pattern-o-all-in-one-autofix-review-unit.yaml" ]]; then
     expected_failed_step="lint-review-units"
+  elif [[ "$fixture_name" == "anti-pattern-k-missing-review-compression.yaml" ]]; then
+    # This fixture omits Safety invariant entirely (exercised directly by
+    # lint-task-atomicity.sh in test_lint_requires_review_compression_sections),
+    # so through the full doctor pipeline it is caught one stage earlier by
+    # check-planning-completeness, which unconditionally requires Safety
+    # invariant on every implementation task. Its doctor-pipeline sibling
+    # anti-pattern-k-missing-review-compression-doctor.yaml keeps Safety
+    # invariant present so it still proves the lint-task-atomicity stage.
+    expected_failed_step="check-planning-completeness"
   fi
   local output
   local stderr_file
