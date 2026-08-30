@@ -7,19 +7,16 @@
  * Root cause: parsePlan does not validate task ids for path-unsafe characters.
  * Task ids with `..`, `/`, or `\` can escape the intended directory scope.
  *
- * TODO(chaos-e-fix): These tests are marked it.fails because the current
- * implementation accepts task ids with path traversal characters.
- *
- * After the fix applies:
- * - parsePlan will reject task ids containing path-unsafe characters
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - parsePlan now validates task ids with isPathSafeId()
+ * - Task ids containing "..", "/", "\", or starting with "." are rejected
  */
 
 import { describe, it, expect } from 'vitest';
 import { parsePlan, PlanParseError } from '../plan-parser.js';
 
 describe('path-traversal task id validation', () => {
-  it.fails('parsePlan should reject task id with ".." path traversal', () => {
+  it('parsePlan should reject task id with ".." path traversal', () => {
     const yamlContent = `
 name: Path traversal task
 repoUrl: git@github.com:example/repo.git
@@ -32,7 +29,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject task id with forward slash', () => {
+  it('parsePlan should reject task id with forward slash', () => {
     const yamlContent = `
 name: Forward slash task
 repoUrl: git@github.com:example/repo.git
@@ -45,12 +42,12 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject task id with backslash', () => {
+  it('parsePlan should reject task id with backslash', () => {
     const yamlContent = `
 name: Backslash task
 repoUrl: git@github.com:example/repo.git
 tasks:
-  - id: "foo\\bar"
+  - id: 'foo\\bar'
     description: Task with backslash in id
     command: echo test
 `;
@@ -58,7 +55,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject task id starting with dot', () => {
+  it('parsePlan should reject task id starting with dot', () => {
     const yamlContent = `
 name: Dot prefix task
 repoUrl: git@github.com:example/repo.git
@@ -97,5 +94,167 @@ tasks:
 
     const plan = parsePlan(yamlContent);
     expect(plan.tasks[0].id).toBe('my-task_v2');
+  });
+
+  it('parsePlan should reject task id with absolute path', () => {
+    const yamlContent = `
+name: Absolute path task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "/tmp/w3-escape"
+    description: Task with absolute path in id
+    command: echo pwned
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should reject task id with RTL override character', () => {
+    const yamlContent = `
+name: RTL task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "task\u202Ename"
+    description: Task with RTL override in id
+    command: echo test
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should reject experimentVariant id with path traversal', () => {
+    const yamlContent = `
+name: Variant escape task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "pivot-task"
+    description: Pivot task with malicious variant
+    command: echo test
+    pivot: true
+    experimentVariants:
+      - id: "../etc/passwd"
+        description: Malicious variant
+        command: echo pwned
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should reject experimentVariant id starting with dot', () => {
+    const yamlContent = `
+name: Hidden variant task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "pivot-task"
+    description: Pivot task with hidden variant
+    command: echo test
+    pivot: true
+    experimentVariants:
+      - id: ".hidden"
+        description: Hidden variant
+        command: echo test
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should accept experimentVariant id with safe characters', () => {
+    const yamlContent = `
+name: Safe variant task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "pivot-task"
+    description: Pivot task with safe variant
+    command: echo test
+    pivot: true
+    experimentVariants:
+      - id: "variant-v1"
+        description: Safe variant
+        command: echo test
+`;
+
+    const plan = parsePlan(yamlContent);
+    expect(plan.tasks[0].experimentVariants![0].id).toBe('variant-v1');
+  });
+
+  it('parsePlan should reject task id that is exactly ".."', () => {
+    const yamlContent = `
+name: Double dot task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: ".."
+    description: Task with .. as id
+    command: echo test
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should reject task id that is exactly "."', () => {
+    const yamlContent = `
+name: Single dot task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "."
+    description: Task with . as id
+    command: echo test
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should reject task id that is whitespace only', () => {
+    const yamlContent = `
+name: Whitespace task
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "   "
+    description: Task with whitespace-only id
+    command: echo test
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+});
+
+describe('path-traversal plan name validation', () => {
+  it('parsePlan should reject plan name with ".." path traversal', () => {
+    const yamlContent = `
+name: "../etc/passwd"
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: safe-task
+    description: Safe task
+    command: echo test
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should reject plan name with forward slash', () => {
+    const yamlContent = `
+name: "foo/bar"
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: safe-task
+    description: Safe task
+    command: echo test
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
+  });
+
+  it('parsePlan should accept plan name with safe characters', () => {
+    const yamlContent = `
+name: "My Safe Plan 2026"
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: safe-task
+    description: Safe task
+    command: echo test
+`;
+
+    const plan = parsePlan(yamlContent);
+    expect(plan.name).toBe('My Safe Plan 2026');
   });
 });

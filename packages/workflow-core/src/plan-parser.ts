@@ -9,6 +9,17 @@ export class PlanParseError extends Error {
   }
 }
 
+export function isPathSafeId(id: string): boolean {
+  if (!id || typeof id !== 'string') return false;
+  if (id.trim() === '') return false;
+  if (id.startsWith('.')) return false;
+  if (id.includes('..')) return false;
+  if (id.includes('/')) return false;
+  if (id.includes('\\')) return false;
+  if (/[\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(id)) return false;
+  return true;
+}
+
 interface TaskWithDeps {
   id: string;
   dependencies: string[];
@@ -206,6 +217,11 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 
   if (!raw || typeof raw !== 'object') throw new PlanParseError('Plan must be a YAML object');
   if (!raw.name || typeof raw.name !== 'string') throw new PlanParseError('Plan must have a "name" field');
+  if (!isPathSafeId(raw.name)) {
+    throw new PlanParseError(
+      `Plan name "${raw.name}" contains unsafe characters. Plan names must not contain "..", "/", "\\", or start with ".".`,
+    );
+  }
   if (!raw.tasks || !Array.isArray(raw.tasks) || raw.tasks.length === 0) {
     throw new PlanParseError('Plan must have a non-empty "tasks" array');
   }
@@ -271,6 +287,11 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
     }
     if (!task.id || typeof task.id !== 'string') throw new PlanParseError(`Task at index ${index} must have an "id" field`);
+    if (!isPathSafeId(task.id)) {
+      throw new PlanParseError(
+        `Task id "${task.id}" contains unsafe characters. Task ids must not contain "..", "/", "\\", or start with ".".`,
+      );
+    }
     if (seenTaskIds.has(task.id)) {
       throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
     }
@@ -322,12 +343,21 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       prompt: task.prompt,
       dependencies: task.dependencies ?? [],
       pivot: task.pivot,
-      experimentVariants: task.experimentVariants?.map((variant) => ({
-        id: variant.id ?? '',
-        description: variant.description ?? '',
-        prompt: variant.prompt,
-        command: variant.command,
-      })),
+      experimentVariants: task.experimentVariants?.map((variant, variantIndex) => {
+        const variantId = variant.id ?? '';
+        if (variantId && !isPathSafeId(variantId)) {
+          throw new PlanParseError(
+            `Task "${task.id}" experimentVariants[${variantIndex}] id "${variantId}" contains unsafe characters. ` +
+            'Variant ids must not contain "..", "/", "\\", control characters, or start with ".".',
+          );
+        }
+        return {
+          id: variantId,
+          description: variant.description ?? '',
+          prompt: variant.prompt,
+          command: variant.command,
+        };
+      }),
       requiresManualApproval: task.requiresManualApproval,
       featureBranch: task.featureBranch,
       dockerImage: task.dockerImage,
