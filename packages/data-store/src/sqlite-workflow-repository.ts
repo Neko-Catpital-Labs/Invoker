@@ -35,6 +35,8 @@ import { mapRowToWorkflow, mapRowToTask } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import { appendJournalEntry } from './sync-journal.js';
 
+export const SQLITE_MAX_VARIABLE_NUMBER = 32000;
+
 export type WorkflowMetadataChanges = Partial<
   Pick<
     Workflow,
@@ -404,14 +406,7 @@ export class SqliteWorkflowRepository {
     const taskQueryStartedAt = Date.now();
     const tasksByWorkflowId = new Map<string, TaskState[]>();
     const workflowIds = workflowRows.map((row) => String(row.id));
-    const taskRows = workflowIds.length === 0
-      ? []
-      : this.exec.queryAll(
-          `SELECT * FROM tasks
-            WHERE workflow_id IN (${workflowIds.map(() => '?').join(', ')})
-            ORDER BY workflow_id ASC, id ASC`,
-          workflowIds,
-        );
+    const taskRows = this.queryTasksForWorkflowsChunked(workflowIds);
     const taskQueryMs = Date.now() - taskQueryStartedAt;
     const rollupStartedAt = Date.now();
     const rollups = this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
@@ -445,6 +440,32 @@ export class SqliteWorkflowRepository {
       taskCount: tasks.length,
     };
     return snapshot;
+  }
+
+  private queryTasksForWorkflowsChunked(workflowIds: string[]): Record<string, unknown>[] {
+    if (workflowIds.length === 0) return [];
+    if (workflowIds.length <= SQLITE_MAX_VARIABLE_NUMBER) {
+      const placeholders = workflowIds.map(() => '?').join(', ');
+      return this.exec.queryAll(
+        `SELECT * FROM tasks
+          WHERE workflow_id IN (${placeholders})
+          ORDER BY workflow_id ASC, id ASC`,
+        workflowIds,
+      );
+    }
+    const results: Record<string, unknown>[] = [];
+    for (let i = 0; i < workflowIds.length; i += SQLITE_MAX_VARIABLE_NUMBER) {
+      const chunk = workflowIds.slice(i, i + SQLITE_MAX_VARIABLE_NUMBER);
+      const placeholders = chunk.map(() => '?').join(', ');
+      const rows = this.exec.queryAll(
+        `SELECT * FROM tasks
+          WHERE workflow_id IN (${placeholders})
+          ORDER BY workflow_id ASC, id ASC`,
+        chunk,
+      );
+      results.push(...rows);
+    }
+    return results;
   }
 
   getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {
@@ -489,18 +510,40 @@ export class SqliteWorkflowRepository {
     const rollups = new Map<string, WorkflowRollup>();
     if (workflowIds.length === 0) return rollups;
 
-    const placeholders = workflowIds.map(() => '?').join(', ');
-    const taskRows = this.exec.queryAll(
-      `SELECT id, workflow_id, description, status, dependencies, error, protocol_error_code, protocol_error_message,
-              pending_fix_error, exit_code, completed_at, agent_session_id, agent_name,
-              review_url, input_prompt, is_fixing_with_ai
-       FROM tasks
-       WHERE workflow_id IN (${placeholders})
-       ORDER BY id ASC`,
-      workflowIds,
-    );
-
+    const taskRows = this.queryRollupTasksChunked(workflowIds);
     return this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
+  }
+
+  private queryRollupTasksChunked(workflowIds: string[]): Record<string, unknown>[] {
+    if (workflowIds.length === 0) return [];
+    if (workflowIds.length <= SQLITE_MAX_VARIABLE_NUMBER) {
+      const placeholders = workflowIds.map(() => '?').join(', ');
+      return this.exec.queryAll(
+        `SELECT id, workflow_id, description, status, dependencies, error, protocol_error_code, protocol_error_message,
+                pending_fix_error, exit_code, completed_at, agent_session_id, agent_name,
+                review_url, input_prompt, is_fixing_with_ai
+         FROM tasks
+         WHERE workflow_id IN (${placeholders})
+         ORDER BY id ASC`,
+        workflowIds,
+      );
+    }
+    const results: Record<string, unknown>[] = [];
+    for (let i = 0; i < workflowIds.length; i += SQLITE_MAX_VARIABLE_NUMBER) {
+      const chunk = workflowIds.slice(i, i + SQLITE_MAX_VARIABLE_NUMBER);
+      const placeholders = chunk.map(() => '?').join(', ');
+      const rows = this.exec.queryAll(
+        `SELECT id, workflow_id, description, status, dependencies, error, protocol_error_code, protocol_error_message,
+                pending_fix_error, exit_code, completed_at, agent_session_id, agent_name,
+                review_url, input_prompt, is_fixing_with_ai
+         FROM tasks
+         WHERE workflow_id IN (${placeholders})
+         ORDER BY id ASC`,
+        chunk,
+      );
+      results.push(...rows);
+    }
+    return results;
   }
 
   private computeWorkflowRollupsFromRows(

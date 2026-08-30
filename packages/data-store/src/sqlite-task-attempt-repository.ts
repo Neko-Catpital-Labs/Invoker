@@ -19,6 +19,7 @@ import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { appendJournalEntry, appendJournalEntryWithoutReadback } from './sync-journal.js';
+import { SQLITE_MAX_VARIABLE_NUMBER } from './sqlite-workflow-repository.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -695,17 +696,35 @@ export class SqliteTaskAttemptRepository {
    * Orchestrator.refreshFromDb, which does this once per activeWorkflowIds
    * entry on every startExecution()/handleWorkerResponse() call) get
    * identical results in one round trip instead of N.
+   *
+   * Chunks queries when workflowIds exceeds SQLITE_MAX_VARIABLE_NUMBER to
+   * avoid "too many SQL variables" errors at scale.
    */
   loadTasksForWorkflows(workflowIds: string[]): TaskState[] {
     if (workflowIds.length === 0) return [];
-    const placeholders = workflowIds.map(() => '?').join(', ');
-    const rows = this.exec.queryAll(
-      `SELECT ${this.taskSelectColumns('t')}
-       FROM tasks t${this.taskSelectJoin('t')}
-       WHERE t.workflow_id IN (${placeholders})`,
-      workflowIds,
-    );
-    return rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
+    if (workflowIds.length <= SQLITE_MAX_VARIABLE_NUMBER) {
+      const placeholders = workflowIds.map(() => '?').join(', ');
+      const rows = this.exec.queryAll(
+        `SELECT ${this.taskSelectColumns('t')}
+         FROM tasks t${this.taskSelectJoin('t')}
+         WHERE t.workflow_id IN (${placeholders})`,
+        workflowIds,
+      );
+      return rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
+    }
+    const results: TaskState[] = [];
+    for (let i = 0; i < workflowIds.length; i += SQLITE_MAX_VARIABLE_NUMBER) {
+      const chunk = workflowIds.slice(i, i + SQLITE_MAX_VARIABLE_NUMBER);
+      const placeholders = chunk.map(() => '?').join(', ');
+      const rows = this.exec.queryAll(
+        `SELECT ${this.taskSelectColumns('t')}
+         FROM tasks t${this.taskSelectJoin('t')}
+         WHERE t.workflow_id IN (${placeholders})`,
+        chunk,
+      );
+      results.push(...rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row))));
+    }
+    return results;
   }
 
   loadTask(taskId: string): TaskState | undefined {
