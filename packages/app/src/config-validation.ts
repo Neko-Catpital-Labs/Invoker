@@ -3,6 +3,7 @@ import {
   normalizeGithubOwnerRepo,
   type AdminBypassE2eBabysitConfig,
   type CatstackDeployConfig,
+  type DbReaperConfig,
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
   type InvokerConfig,
@@ -256,6 +257,34 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateDbReaperConfig(config: InvokerConfig): void {
+  const dbReaper = config.dbReaper;
+  if (dbReaper === undefined) return;
+  if (typeof dbReaper !== 'object' || dbReaper === null || Array.isArray(dbReaper)) {
+    throw new Error('dbReaper must be an object');
+  }
+  const typed = dbReaper as DbReaperConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('dbReaper.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.eventsRetentionDays !== undefined) {
+    if (typeof typed.eventsRetentionDays !== 'number' || !Number.isInteger(typed.eventsRetentionDays)) {
+      throw new Error('dbReaper.eventsRetentionDays must be an integer');
+    }
+  }
+  if (typed.syncJournalRetentionDays !== undefined) {
+    if (typeof typed.syncJournalRetentionDays !== 'number' || !Number.isInteger(typed.syncJournalRetentionDays)) {
+      throw new Error('dbReaper.syncJournalRetentionDays must be an integer');
+    }
+  }
+}
+
 function validateAdminBypassE2eBabysitConfig(config: InvokerConfig): void {
   const adminBypassE2eBabysit = config.adminBypassE2eBabysit;
   if (adminBypassE2eBabysit === undefined) return;
@@ -318,6 +347,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);
   return config;
 }
