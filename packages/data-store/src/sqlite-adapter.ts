@@ -47,6 +47,8 @@ import type {
   ReviewGateLookup,
   Workflow,
   WorkflowReadOptions,
+  WorkflowPagedOptions,
+  WorkflowPagedResult,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -1219,6 +1221,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   listWorkflows(options?: WorkflowReadOptions): Workflow[] {
     return this.workflowRepo.listWorkflows(options);
+  }
+
+  listWorkflowsPaged(options: WorkflowPagedOptions): WorkflowPagedResult {
+    return this.workflowRepo.listWorkflowsPaged(options);
   }
 
   findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined {

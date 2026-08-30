@@ -74,7 +74,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     expect(memoryDelta).toBeLessThan(1_000_000);
   });
 
-  it.fails('sidebar should have a bounded workflow list option', () => {
+  it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
     for (let i = 0; i < 500; i++) {
       adapter.saveWorkflow({
         id: `wf-${i}`,
@@ -85,7 +85,37 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
       });
     }
 
-    const hasListWorkflowsPaged = typeof (adapter as any).listWorkflowsPaged === 'function';
-    expect(hasListWorkflowsPaged).toBe(true);
+    const page1 = adapter.listWorkflowsPaged({ limit: 100 });
+    expect(page1.workflows).toHaveLength(100);
+    expect(page1.total).toBe(500);
+    expect(page1.hasMore).toBe(true);
+
+    const page2 = adapter.listWorkflowsPaged({ limit: 100, offset: 100 });
+    expect(page2.workflows).toHaveLength(100);
+    expect(page2.hasMore).toBe(true);
+
+    const lastPage = adapter.listWorkflowsPaged({ limit: 100, offset: 400 });
+    expect(lastPage.workflows).toHaveLength(100);
+    expect(lastPage.hasMore).toBe(false);
+  });
+
+  it('listWorkflowsPaged respects limit at scale without loading all rows', () => {
+    for (let i = 0; i < 5000; i++) {
+      adapter.saveWorkflow({
+        id: `wf-${i}`,
+        name: `Workflow ${i}`,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    const started = performance.now();
+    const result = adapter.listWorkflowsPaged({ limit: 50 });
+    const elapsed = performance.now() - started;
+
+    expect(result.workflows).toHaveLength(50);
+    expect(result.total).toBe(5000);
+    expect(elapsed).toBeLessThan(500);
   });
 });

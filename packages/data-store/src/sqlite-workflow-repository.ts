@@ -28,6 +28,8 @@ import type {
   ReviewGateLookup,
   Workflow,
   WorkflowReadOptions,
+  WorkflowPagedOptions,
+  WorkflowPagedResult,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
 } from './adapter.js';
@@ -236,6 +238,38 @@ export class SqliteWorkflowRepository {
     const workflowIds = rows.map((row) => String(row.id));
     const rollups = this.loadWorkflowRollups(workflowIds);
     return rows.map((row) => this.rowToWorkflow(row, rollups.get(String(row.id))));
+  }
+
+  listWorkflowsPaged(options: WorkflowPagedOptions): WorkflowPagedResult {
+    const { limit, offset = 0, includeDeleted } = options;
+    const whereClause = includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+
+    const countRow = this.exec.queryOne(
+      `SELECT COUNT(*) AS total FROM workflows ${whereClause}`,
+    );
+    const total = Number(countRow?.total ?? 0);
+
+    if (limit <= 0 || offset >= total) {
+      return { workflows: [], total, hasMore: false };
+    }
+
+    const rows = this.exec.queryAll(
+      `SELECT * FROM workflows
+        ${whereClause}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?`,
+      [limit, offset],
+    );
+
+    const workflowIds = rows.map((row) => String(row.id));
+    const rollups = this.loadWorkflowRollups(workflowIds);
+    const workflows = rows.map((row) => this.rowToWorkflow(row, rollups.get(String(row.id))));
+
+    return {
+      workflows,
+      total,
+      hasMore: offset + workflows.length < total,
+    };
   }
 
   findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined {

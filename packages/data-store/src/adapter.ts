@@ -173,6 +173,17 @@ export interface WorkflowReadOptions {
   includeDeleted?: boolean;
 }
 
+export interface WorkflowPagedOptions extends WorkflowReadOptions {
+  limit: number;
+  offset?: number;
+}
+
+export interface WorkflowPagedResult {
+  workflows: Workflow[];
+  total: number;
+  hasMore: boolean;
+}
+
 /**
  * Result of resolving a published PR back to its Invoker workflow via the merge
  * node. The PR↔workflow link lives only on the `__merge__<workflowId>` task
@@ -399,6 +410,7 @@ export interface PersistenceAdapter {
   updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'staged' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined;
   listWorkflows(options?: WorkflowReadOptions): Workflow[];
+  listWorkflowsPaged?(options: WorkflowPagedOptions): WorkflowPagedResult;
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
   /** Resolve a GitHub PR number back to its Invoker workflow via the merge node.
    * When `repo` is set (owner/repo), prefer URL matches for that repo; bare
