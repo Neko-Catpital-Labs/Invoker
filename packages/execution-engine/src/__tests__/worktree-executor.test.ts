@@ -223,6 +223,7 @@ describe('isCloneableRepoUrl', () => {
     ['ssh://git@github.com/owner/repo.git', true],
     ['file:///home/user/repo.git', true],
     ['owner/repo', true],
+    ['/tmp/invoker-repro-fixture/repro-repo', true],
     ['.', false],
     ['..', false],
     ['./repo', false],
