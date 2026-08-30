@@ -270,15 +270,6 @@ export function probePrMaintenanceLock(options: PrMaintenanceLockProbeOptions): 
     timeout: 3_000,
     killSignal: 'SIGKILL',
   });
-  // `flock -n` is non-blocking: it always returns immediately, whether the
-  // lock is free or held. A timeout here means the probe process itself
-  // never got scheduled (e.g. the owner is under heavy CPU load) — it says
-  // nothing about the lock's real state. Treating that as `held: true`
-  // would make the worker skip forever under sustained load even when no
-  // one holds the lock. Report it as not-held instead: this probe is only
-  // an efficiency check, and the cron script's own real `flock -n 9` call
-  // (packages/../cron-pr-lib.sh) is the authoritative, second-layer check
-  // that still safely exits if the lock is genuinely contended.
   if (flockProbe.signal === 'SIGKILL' || (flockProbe.error && (flockProbe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')) {
     return { held: false, reason: 'probe-timeout' };
   }
