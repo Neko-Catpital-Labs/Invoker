@@ -268,7 +268,7 @@ export function autoStartReadyTasksImpl(
   }
 
   rebuildPendingLaunchQueue(host, candidateJobs, opts);
-  return drainSchedulerImpl(host, opts);
+  return drainSchedulerImpl(host, { ...opts, alreadyRefreshed: true });
 }
 
 export function enqueueIfNotScheduledImpl(
@@ -303,7 +303,7 @@ export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomain
     attemptId: task.execution.selectedAttemptId,
     priority: getCandidatePriority(host, task, 0),
   })));
-  started.push(...drainSchedulerImpl(host));
+  started.push(...drainSchedulerImpl(host, { alreadyRefreshed: true }));
   return started;
 }
 
@@ -329,7 +329,7 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
     });
   }
   rebuildPendingLaunchQueue(host, candidateJobs);
-  return drainSchedulerImpl(host);
+  return drainSchedulerImpl(host, { alreadyRefreshed: true });
 }
 
 // Public entry point: always refreshes first, for callers making a single
@@ -393,10 +393,15 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
   return undefined;
 }
 
-export function drainSchedulerImpl(host: SchedulerDomainHost, opts?: LaunchReadinessOptions): TaskState[] {
+export function drainSchedulerImpl(
+  host: SchedulerDomainHost,
+  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+): TaskState[] {
   // Refresh once for the whole drain pass, not once per dequeued job below
   // (see planPendingLaunchQueue for the same reasoning).
-  host.refreshFromDb();
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);
