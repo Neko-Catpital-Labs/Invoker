@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, unlinkSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
@@ -49,6 +49,7 @@ export function isCloneableRepoUrl(repoUrl: string): boolean {
   if (trimmed.startsWith(SSH_PREFIX)) return true;
   if (trimmed.startsWith(FILE_PREFIX)) return true;
   if (GITHUB_SHORTHAND_PATTERN.test(trimmed)) return true;
+  if (isAbsolute(trimmed)) return true;
   return false;
 }
 
