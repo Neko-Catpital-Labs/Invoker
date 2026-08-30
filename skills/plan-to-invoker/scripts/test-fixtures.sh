@@ -26,6 +26,7 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-m-refactor-plus-fields.yaml"
   "anti-pattern-n-broad-autofix-policy-review-unit.yaml"
   "anti-pattern-o-all-in-one-autofix-review-unit.yaml"
+  "anti-pattern-p-inter-task-ephemeral-carry.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -1550,6 +1551,80 @@ test_lint_rejects_refactor_plus_fields() {
   fi
 }
 
+test_lint_rejects_inter_task_ephemeral_carry_without_commit() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-p-inter-task-ephemeral-carry.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject inter-task ephemeral carry without commit" >&2
+    return 1
+  fi
+
+  if ! grep -q 'inter-task file carry must be via git commit' <<<"$output"; then
+    echo "Expected commit-to-carry lint error, got: $output" >&2
+    return 1
+  fi
+
+  local temp_scratch
+  temp_scratch="$(mktemp)"
+  cat >"$temp_scratch" <<'EOF'
+name: "Scratch exempt ephemeral carry"
+scratch: true
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: regenerate-citr-report
+    description: "Write CITR research report markdown under work/company-claims-dagster/state/artifacts/citr."
+    command: "mkdir -p work/company-claims-dagster/state/artifacts/citr && echo report > work/company-claims-dagster/state/artifacts/citr/research_report.md"
+    dependencies: []
+  - id: export-citr-pdf
+    description: "Export PDF from the CITR research report under work/company-claims-dagster/state/artifacts/citr."
+    command: "test -f work/company-claims-dagster/state/artifacts/citr/research_report.md"
+    dependencies: [regenerate-citr-report]
+EOF
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_scratch" 2>&1)
+  exit_code=$?
+  set -e
+  rm -f "$temp_scratch"
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected scratch:true plan to pass commit-to-carry lint, got: $output" >&2
+    return 1
+  fi
+
+  local temp_commit
+  temp_commit="$(mktemp)"
+  cat >"$temp_commit" <<'EOF'
+name: "Committed ephemeral carry is allowed"
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: regenerate-citr-report
+    description: "Write CITR research report under work/artifacts/citr and git commit the carry path."
+    command: "echo report > work/artifacts/citr.md && git add work/artifacts/citr.md && git commit -m carry"
+    dependencies: []
+  - id: export-citr-pdf
+    description: "Export PDF from the committed CITR research report under work/artifacts/citr."
+    command: "test -f work/artifacts/citr.md"
+    dependencies: [regenerate-citr-report]
+EOF
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_commit" 2>&1)
+  exit_code=$?
+  set -e
+  rm -f "$temp_commit"
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected producer with git commit to pass commit-to-carry lint, got: $output" >&2
+    return 1
+  fi
+}
+
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
@@ -1624,6 +1699,7 @@ run_test "Lint: reject missing review-compression sections" test_lint_requires_r
 run_test "Lint: reject missing review lane" test_lint_requires_review_lane
 run_test "Lint: reject behavior lane mixed with proof files" test_lint_rejects_behavior_plus_proof_files
 run_test "Lint: reject refactor lane mixed with field additions" test_lint_rejects_refactor_plus_fields
+run_test "Lint: reject inter-task ephemeral carry without commit" test_lint_rejects_inter_task_ephemeral_carry_without_commit
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
 run_test "Lint: reject missing design sections for command tasks" test_lint_requires_design_sections_for_command_tasks
 run_test "Lint strict: accept zero-context prompt contract" test_lint_strict_accepts_zero_context_prompt_contract
