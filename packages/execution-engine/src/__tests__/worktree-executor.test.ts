@@ -15,7 +15,20 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, existsSync: vi.fn(actual.existsSync), mkdirSync: vi.fn() };
+  return {
+    ...actual,
+    existsSync: vi.fn(actual.existsSync),
+    mkdirSync: vi.fn(),
+    readFileSync: vi.fn((path: unknown, options?: unknown) => {
+      const procStatMatch = typeof path === 'string' ? path.match(/^\/proc\/(\d+)\/stat$/) : null;
+      if (procStatMatch) {
+        // Report pgrp === pid so process-utils' leader check passes for mock pids.
+        const pid = procStatMatch[1];
+        return `${pid} (mock) S 1 ${pid} 0 0 -1 0`;
+      }
+      return actual.readFileSync(path as never, options as never);
+    }),
+  };
 });
 
 // Must import after mock setup
