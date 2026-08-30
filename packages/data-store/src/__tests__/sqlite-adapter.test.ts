@@ -6481,4 +6481,65 @@ describe('SQLiteAdapter', () => {
       expect(journalRowCount()).toBe(1);
     });
   });
+
+  describe('getFreelistPageCount / runIncrementalVacuum', () => {
+    function induceFragmentation(): void {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      for (let i = 0; i < 2_000; i += 1) {
+        adapter.logEvent('wf-1/t1', 'task.created', { padding: 'x'.repeat(500) });
+      }
+      (adapter as any).db.run('DELETE FROM events WHERE task_id = ?', ['wf-1/t1']);
+    }
+
+    it('returns 0 on a fresh database with no dead pages', () => {
+      expect(adapter.getFreelistPageCount()).toBe(0);
+    });
+
+    it('is a safe no-op while auto_vacuum is still the default NONE, even with real fragmentation', () => {
+      induceFragmentation();
+      const freelistBefore = adapter.getFreelistPageCount();
+      expect(freelistBefore).toBeGreaterThan(0);
+
+      const reclaimed = adapter.runIncrementalVacuum(10_000);
+
+      expect(reclaimed).toBe(0);
+      expect(adapter.getFreelistPageCount()).toBe(freelistBefore);
+    });
+
+    it('reclaims real freelist pages once auto_vacuum is switched to INCREMENTAL', () => {
+      (adapter as any).nativeDb.exec('PRAGMA auto_vacuum = INCREMENTAL');
+      (adapter as any).nativeDb.exec('VACUUM');
+      induceFragmentation();
+      const freelistBefore = adapter.getFreelistPageCount();
+      expect(freelistBefore).toBeGreaterThan(0);
+
+      const reclaimed = adapter.runIncrementalVacuum(freelistBefore + 1_000);
+
+      expect(reclaimed).toBeGreaterThan(0);
+      expect(adapter.getFreelistPageCount()).toBeLessThan(freelistBefore);
+    });
+
+    it('caps reclaimed pages at the requested maxPages', () => {
+      (adapter as any).nativeDb.exec('PRAGMA auto_vacuum = INCREMENTAL');
+      (adapter as any).nativeDb.exec('VACUUM');
+      induceFragmentation();
+      const freelistBefore = adapter.getFreelistPageCount();
+      expect(freelistBefore).toBeGreaterThan(5);
+
+      const reclaimed = adapter.runIncrementalVacuum(5);
+
+      expect(reclaimed).toBeLessThanOrEqual(5);
+      expect(adapter.getFreelistPageCount()).toBe(freelistBefore - reclaimed);
+    });
+
+    it('is a no-op for a non-positive maxPages', () => {
+      (adapter as any).nativeDb.exec('PRAGMA auto_vacuum = INCREMENTAL');
+      (adapter as any).nativeDb.exec('VACUUM');
+      induceFragmentation();
+
+      expect(adapter.runIncrementalVacuum(0)).toBe(0);
+      expect(adapter.runIncrementalVacuum(-1)).toBe(0);
+    });
+  });
 });

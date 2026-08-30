@@ -474,6 +474,8 @@ function buildRegisteredOwnerWorkerDeps(
       intervalMs: (invokerConfig.dbReaper?.intervalMinutes ?? 60) * 60_000,
       eventsRetentionDays: invokerConfig.dbReaper?.eventsRetentionDays,
       syncJournalRetentionDays: invokerConfig.dbReaper?.syncJournalRetentionDays,
+      vacuumFreelistThresholdPages: invokerConfig.dbReaper?.vacuumFreelistThresholdPages,
+      vacuumMaxPagesPerTick: invokerConfig.dbReaper?.vacuumMaxPagesPerTick,
     },
     idleTaskCleanup: {
       github: createPrMaintenanceGitHub({
