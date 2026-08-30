@@ -61,6 +61,16 @@ const collision = spawnSync(process.execPath, [launcher, '--print-env'], {
 });
 if (collision.status === 0 || !collision.stderr.includes('production profile')) failures.push('production collision did not fail closed');
 
+const sandboxedHome = join('/tmp', 'invoker-development-profile-sandboxed-home');
+const sandboxedNonCollision = spawnSync(process.execPath, [launcher, '--print-env'], {
+  cwd: root,
+  encoding: 'utf8',
+  env: { ...process.env, HOME: sandboxedHome, INVOKER_DB_DIR: join(sandboxedHome, '.invoker') },
+});
+if (sandboxedNonCollision.status !== 0) {
+  failures.push(`a caller's own sandboxed $HOME/.invoker was rejected as a production collision: ${sandboxedNonCollision.stderr.trim()}`);
+}
+
 const explicitResourcePaths = Object.fromEntries(
   profileResourceKeys.map((key) => [key, join('/tmp', 'invoker-development-profile-override', key.toLowerCase())]),
 );
