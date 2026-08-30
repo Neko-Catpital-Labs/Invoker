@@ -17,4 +17,12 @@ describe('getWorkerDisplayCopy', () => {
       noActionText: 'No catstack-deploy runs recorded yet.',
     });
   });
+
+  it('returns dedicated display copy for the db-reaper worker', () => {
+    expect(getWorkerDisplayCopy('db-reaper')).toEqual({
+      name: 'DB reaper',
+      idleText: 'Idle. Prunes old events for terminal-status tasks and fully-sent sync_journal rows on an interval.',
+      noActionText: 'No db-reaper runs recorded yet.',
+    });
+  });
 });
