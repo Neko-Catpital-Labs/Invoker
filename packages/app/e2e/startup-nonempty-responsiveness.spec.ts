@@ -156,6 +156,15 @@ async function waitForWorkflowGraphVisible(page: Page, timeoutMs: number): Promi
   return Date.now() - startedAt;
 }
 
+async function waitForSelectedWorkflowTaskGraphVisible(page: Page, timeoutMs: number): Promise<number> {
+  const startedAt = Date.now();
+  await page.locator('[data-testid="selected-workflow-mini-dag"] .react-flow__node').first().waitFor({
+    state: 'visible',
+    timeout: timeoutMs,
+  });
+  return Date.now() - startedAt;
+}
+
 async function dragGraphAndAssertViewportMoves(page: Page): Promise<void> {
   const viewport = page.locator('.react-flow__viewport').first();
   const pane = page.locator('.react-flow__pane').first();
@@ -194,6 +203,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10_000 });
       await waitForWorkflowGraphVisible(page, 5000);
       await dragGraphAndAssertViewportMoves(page);
+      await waitForSelectedWorkflowTaskGraphVisible(page, 20_000);
 
       const result = await page.evaluate(async () => {
         const tasksResult = await window.invoker.getTasks();
