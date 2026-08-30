@@ -312,6 +312,19 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     }
   }
 
+  if (raw.baseBranch !== undefined) {
+    if (typeof raw.baseBranch !== 'string') {
+      throw new PlanParseError('Plan "baseBranch" must be a string when provided.');
+    }
+    const trimmed = raw.baseBranch.trim();
+    if (trimmed === '' || !isValidGitRef(trimmed)) {
+      throw new PlanParseError(
+        `Plan "baseBranch" value "${raw.baseBranch}" is not a valid git ref. ` +
+        'Refs must not be empty, contain "..", start/end with "/", or contain control characters.',
+      );
+    }
+  }
+
   if (scratch && raw.poolId) {
     throw new PlanParseError('Plan sets "poolId" but has "scratch: true" — scratch plans never use execution pools.');
   }

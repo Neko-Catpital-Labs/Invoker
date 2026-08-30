@@ -11,19 +11,16 @@
  * Invariant: baseBranch must be a valid git ref format at parse time.
  * Missing refs should fail closed at load, not after leaf work is done.
  *
- * TODO(chaos-k-fix): These tests are marked it.fails because the current
- * implementation accepts invalid baseBranch values.
- *
- * After the fix applies:
- * - parsePlan will validate baseBranch as a valid git ref
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - parsePlan now validates baseBranch with isValidGitRef()
+ * - Invalid baseBranch values are rejected with a clear error message
  */
 
 import { describe, it, expect } from 'vitest';
 import { parsePlan, PlanParseError } from '../plan-parser.js';
 
 describe('baseBranch validation', () => {
-  it.fails('parsePlan should reject baseBranch with path traversal', () => {
+  it('parsePlan should reject baseBranch with path traversal', () => {
     const yamlContent = `
 name: Base escape test
 repoUrl: git@github.com:example/repo.git
@@ -37,7 +34,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject baseBranch with empty string', () => {
+  it('parsePlan should reject baseBranch with empty string', () => {
     const yamlContent = `
 name: Empty base test
 repoUrl: git@github.com:example/repo.git
@@ -51,7 +48,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject baseBranch with trailing slash', () => {
+  it('parsePlan should reject baseBranch with trailing slash', () => {
     const yamlContent = `
 name: Trailing slash base test
 repoUrl: git@github.com:example/repo.git
@@ -65,7 +62,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject baseBranch with control characters', () => {
+  it('parsePlan should reject baseBranch with control characters', () => {
     const yamlContent = `
 name: Control char base test
 repoUrl: git@github.com:example/repo.git
