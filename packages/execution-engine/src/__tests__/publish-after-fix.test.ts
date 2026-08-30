@@ -497,4 +497,93 @@ describe('publishAfterFixImpl integration (real git)', () => {
     expect(parsedError.failedBranch).toBe('invoker/t2');
     expect(Array.isArray(parsedError.conflictFiles)).toBe(true);
   }, REAL_GIT_TIMEOUT_MS);
+
+  it('skips make-pr review publication when the repaired branch has zero net diff vs base (Invoker repo)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pub-fix-zero-diff-'));
+    const originDir = join(root, 'origin.git');
+    const hostDir = join(root, 'host');
+    const gateDir = join(root, 'gate');
+
+    try {
+      execSync(`git init --bare -b master "${originDir}"`, { stdio: 'pipe' });
+
+      execSync(`git clone "${originDir}" "${hostDir}"`, { stdio: 'pipe' });
+      git('config user.email "test@test.com"', hostDir);
+      git('config user.name "Test"', hostDir);
+      // The task's work and the fix are already present on master (e.g. an
+      // earlier merge already landed the identical content), so consolidating
+      // task branches on top produces zero net diff against master.
+      writeFileSync(join(hostDir, 'initial.txt'), 'initial');
+      writeFileSync(join(hostDir, 't1.txt'), 'task 1 work');
+      writeFileSync(join(hostDir, 'fix.txt'), 'claude fix');
+      git('add -A', hostDir);
+      git('commit -m "initial (already contains task 1 + fix content)"', hostDir);
+      git('push origin master', hostDir);
+
+      git('checkout -b invoker/t1', hostDir);
+      gitExec(['commit', '--allow-empty', '-m', 'task 1 (no-op, already on master)'], hostDir);
+      git('push origin invoker/t1', hostDir);
+      git('checkout master', hostDir);
+
+      execSync(`git clone "${originDir}" "${gateDir}"`, { stdio: 'pipe' });
+      git('config user.email "test@test.com"', gateDir);
+      git('config user.name "Test"', gateDir);
+      gitExec(['commit', '--allow-empty', '-m', 'claude fix (no-op, already on master)'], gateDir);
+      const fixCommit = git('rev-parse HEAD', gateDir);
+
+      const mergeTask: TaskState = {
+        id: '__merge__wf-int',
+        description: 'Merge gate',
+        status: 'running',
+        dependencies: ['t1'],
+        createdAt: new Date(),
+        config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+        execution: { fixedIntegrationSha: fixCommit } as any,
+      };
+      const taskT1: TaskState = {
+        id: 't1',
+        description: 'Task 1',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: 'wf-int' } as any,
+        execution: { branch: 'invoker/t1' } as any,
+      };
+
+      const host = makeHost(hostDir, gateDir, [mergeTask, taskT1]);
+      (host.persistence as any).loadWorkflow = () => ({
+        id: 'wf-int',
+        onFinish: 'pull_request',
+        mergeMode: 'external_review',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        name: 'Integration Test',
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      });
+      host.publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
+        artifacts: [{ url: 'https://github.com/example/pr/1', providerId: '1' }],
+        sessionId: 'session-1',
+        agentName: 'claude',
+      });
+
+      await publishAfterFixImpl(host, mergeTask);
+
+      expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+      // Zero net diff vs base: the make-pr skill must not be invoked, since
+      // there is nothing for it to review.
+      expect(host.publishReviewStackWithMakePrSkill).not.toHaveBeenCalled();
+      expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-int', expect.objectContaining({
+        execution: expect.objectContaining({ branch: 'plan/feature' }),
+      }), expect.objectContaining({ generation: 0 }));
+      const reviewReadyCall = (host.orchestrator.setTaskReviewReady as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(reviewReadyCall?.[1]?.execution).not.toHaveProperty('reviewUrl');
+      expect(reviewReadyCall?.[1]?.execution).not.toHaveProperty('reviewGate');
+
+      git('fetch origin', hostDir);
+      const diffStat = gitSilent('diff --stat master origin/plan/feature', hostDir);
+      expect(diffStat).toBe('');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, REAL_GIT_TIMEOUT_MS);
 });
