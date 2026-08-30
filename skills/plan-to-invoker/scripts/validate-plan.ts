@@ -664,16 +664,40 @@ function validatePlan(yamlContent: string, repoRoot: string): ValidationError[] 
     });
   }
 
-  // Check for stacked baseBranch defaulting to master
-  const hasConcreteExtDep = allExtDeps.some(
-    (dep) => dep.workflowId && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
+  const TRUNK_BASE_BRANCHES = new Set(['master', 'main', 'trunk', 'develop']);
+  const concreteExtDeps = allExtDeps.filter(
+    (dep) => typeof dep.workflowId === 'string'
+      && dep.workflowId.trim() !== ''
+      && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
   );
+  const isMergeGateDep = (dep: ExternalDep): boolean =>
+    dep.taskId === undefined || dep.taskId === null || dep.taskId === '__merge__';
+  const concreteMergeGateDeps = concreteExtDeps.filter(isMergeGateDep);
   const baseBranch = raw.baseBranch ?? 'master';
-  if (hasConcreteExtDep && baseBranch === 'master') {
+  const isTrunkBase = TRUNK_BASE_BRANCHES.has(baseBranch);
+  const isIntentionalFanIn = concreteExtDeps.length >= 2;
+  if (
+    isTrunkBase
+    && !isIntentionalFanIn
+    && concreteExtDeps.length === 1
+    && concreteMergeGateDeps.length === 1
+  ) {
     errors.push({
       errorType: 'stacked_basebranch_default',
       field: 'baseBranch',
-      message: "Plan has externalDependencies but baseBranch is 'master'. For stacked workflows, set baseBranch to the upstream workflow's featureBranch, or use step-submit-stacked to auto-resolve.",
+      message: `Plan has a single concrete upstream merge-gate externalDependency but baseBranch is trunk '${baseBranch}'. Stacked-onto means externalDependencies on that workflow's __merge__ AND baseBranch == that workflow's featureBranch. Gate-only wait is not stacked-onto. Set baseBranch to the upstream featureBranch, or use submit-workflow-chain.sh --onto-workflow / step-submit-stacked.`,
+      value: baseBranch,
+    });
+  }
+
+  const onFinishValue = raw.onFinish ?? 'pull_request';
+  const featureBranch = typeof raw.featureBranch === 'string' ? raw.featureBranch.trim() : '';
+  if (onFinishValue === 'none' && featureBranch !== '') {
+    errors.push({
+      errorType: 'onfinish_none_stack_base_risk',
+      field: 'onFinish',
+      message: `Plan sets onFinish: none with featureBranch '${featureBranch}'. A workflow that will be a stack base for dependents must publish that featureBranch to origin (use onFinish: pull_request or merge); otherwise downstream merge gates fail with base branch not found on remote.`,
+      value: onFinishValue,
     });
   }
 

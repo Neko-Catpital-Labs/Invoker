@@ -266,9 +266,9 @@ test_unrendered_template_placeholder() {
   return 0
 }
 
-# Specific test for edge-stacked-basebranch-master
-test_stacked_basebranch_master() {
-  local fixture="$NEGATIVE_DIR/edge-stacked-basebranch-master.yaml"
+# Specific test for edge-stacked-basebranch-master / -main
+test_stacked_basebranch_trunk() {
+  local fixture="$1"
   local output
   set +e
   output=$(bash "$VALIDATE_SCRIPT" "$fixture" 2>&1)
@@ -276,7 +276,31 @@ test_stacked_basebranch_master() {
 
   # Should contain stacked_basebranch_default error
   if ! echo "$output" | jq -e '[.[] | select(.errorType == "stacked_basebranch_default")] | length > 0' &>/dev/null; then
-    echo "Expected stacked_basebranch_default error" >&2
+    echo "Expected stacked_basebranch_default error for $fixture" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+test_stacked_basebranch_master() {
+  test_stacked_basebranch_trunk "$NEGATIVE_DIR/edge-stacked-basebranch-master.yaml"
+}
+
+test_stacked_basebranch_main() {
+  test_stacked_basebranch_trunk "$NEGATIVE_DIR/edge-stacked-basebranch-main.yaml"
+}
+
+test_onfinish_none_stack_base() {
+  local fixture="$NEGATIVE_DIR/edge-onfinish-none-stack-base.yaml"
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$fixture" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "onfinish_none_stack_base_risk")] | length > 0' &>/dev/null; then
+    echo "Expected onfinish_none_stack_base_risk error" >&2
     echo "Output: $output" >&2
     return 1
   fi
@@ -1587,7 +1611,9 @@ run_test "Edge: missing_required_field for name" test_edge_missing_name
 run_test "Edge: empty_required_field for tasks" test_edge_empty_tasks
 run_test "Edge: invalid_dependency_reference" test_edge_invalid_dependency
 run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeholder
-run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
+run_test "Edge: stacked_basebranch_default (master)" test_stacked_basebranch_master
+run_test "Edge: stacked_basebranch_default (main)" test_stacked_basebranch_main
+run_test "Edge: onfinish_none_stack_base_risk" test_onfinish_none_stack_base
 run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
 run_test "Edge: unsupported legacy auto-fix fields" test_legacy_autofix_fields_are_unsupported
 run_test "Lint: allow focused verification without test:all" test_lint_allows_focused_verification_without_test_all

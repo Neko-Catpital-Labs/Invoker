@@ -204,16 +204,18 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
     `./submit-plan.sh <plan-file>`
     Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
 10a. `step-submit-stacked` (single plan with upstream dependency)
+     **Stacked onto WF-X** means both: `externalDependencies` on WF-X `__merge__` **and** `baseBranch == WF-X.featureBranch`. A concrete extDep alone is gate-only wait, not a branch stack.
      Use when the plan HAS `externalDependencies` with a concrete workflow ID (not `__UPSTREAM_WORKFLOW_ID__`).
      1. Query upstream workflow: `./run.sh --headless query workflows --output json | jq '.[] | select(.id == "<workflowId>")'`
      2. Extract the upstream workflow's `featureBranch`
      3. Rewrite baseBranch: `sed -E -i "s|^baseBranch:.*$|baseBranch: <featureBranch>|" <plan-file>`
      4. Submit: `./submit-plan.sh <plan-file>`
      5. Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
+     Prefer `./scripts/submit-workflow-chain.sh --onto-workflow <WF-X>` (or auto-detect) when submitting a chain whose head attaches to an already-running upstream.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
      Default path for implementation work with more than one review slice.
-     `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
-     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. Stop after workflow handoff unless the user separately asks for PR publication. For Invoker-on-Invoker work only, that later explicit publication action uses `mergify stack push` once the chain's commits are prepared.
+     `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] [--onto-workflow <id>] <plan1.yaml> <plan2.template.yaml> ...`
+     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. When plan[0] has a concrete externalDependency (or `--onto-workflow` is set), it rewrites plan[0] `baseBranch` to that upstream's `featureBranch` before submit — that is what makes the head stacked onto the prior workflow. Stop after workflow handoff unless the user separately asks for PR publication. For Invoker-on-Invoker work only, that later explicit publication action uses `mergify stack push` once the chain's commits are prepared.
      Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: review_ready` for upstream workflow dependencies.
 
 ## Runtime verification (Phase 1b)
