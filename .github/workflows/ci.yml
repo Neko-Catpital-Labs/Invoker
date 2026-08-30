@@ -795,6 +795,7 @@ jobs:
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
               e2e/planning-review-scroll.spec.ts
+              e2e/planning-submit-to-workflow-graph.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts
