@@ -227,6 +227,12 @@ export interface CatstackDeployConfig {
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
+export interface DbReaperConfig {
+  intervalMinutes?: number;
+  eventsRetentionDays?: number;
+  syncJournalRetentionDays?: number;
+}
+
 /** Default catstack clone URL. */
 export const DEFAULT_CATSTACK_DEPLOY_REPO_URL = 'https://github.com/EdbertChan/catstack.git';
 
@@ -597,6 +603,7 @@ export interface InvokerConfig {
    */
   catstackDeploy?: CatstackDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
+  dbReaper?: DbReaperConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
