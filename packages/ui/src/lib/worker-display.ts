@@ -134,6 +134,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No catstack-deploy runs recorded yet.',
     };
   }
+  if (kind === 'db-reaper') {
+    return {
+      name: 'DB reaper',
+      idleText: 'Idle. Prunes old events for terminal-status tasks and fully-sent sync_journal rows on an interval.',
+      noActionText: 'No db-reaper runs recorded yet.',
+    };
+  }
   if (kind === 'admin-bypass-e2e-babysit') {
     return {
       name: 'Admin-bypass/e2e babysit',
