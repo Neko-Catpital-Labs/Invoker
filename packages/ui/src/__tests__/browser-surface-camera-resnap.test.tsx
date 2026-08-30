@@ -20,7 +20,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -226,7 +226,7 @@ describe('Browser-surface camera (component)', () => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Empty Workflow');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Beta Empty Workflow/ }));
+    fireEvent.click(within(screen.getByTestId('workflows-rail-list')).getByRole('button', { name: /Beta Empty Workflow/ }));
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Beta Empty Workflow');
     });
