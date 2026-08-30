@@ -149,7 +149,7 @@ export function maxPlanningMessageId(sessions: PlanningSessionView[]): number {
 }
 
 export function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
-  return status === 'waiting_for_answer' || status === 'draft_ready';
+  return status === 'waiting_for_answer' || status === 'draft_ready' || status === 'planner_error';
 }
 
 export function planningRepoLabel(repoUrl: string): string {
@@ -178,6 +178,7 @@ export function planningSessionStatusLabel(session: PlanningSessionView): string
   if (session.status === 'draft_ready') return 'Draft ready';
   if (session.status === 'waiting_for_answer') return 'Waiting for answer';
   if (session.status === 'submitted') return 'Submitted';
+  if (session.status === 'planner_error') return 'Error';
   return 'Still discussing';
 }
 
