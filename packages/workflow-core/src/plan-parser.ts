@@ -9,6 +9,55 @@ export class PlanParseError extends Error {
   }
 }
 
+interface TaskWithDeps {
+  id: string;
+  dependencies: string[];
+}
+
+function detectDependencyCycle(tasks: TaskWithDeps[]): string | null {
+  const taskIds = new Set(tasks.map((t) => t.id));
+  const adjacency = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+
+  for (const task of tasks) {
+    adjacency.set(task.id, []);
+    inDegree.set(task.id, 0);
+  }
+
+  for (const task of tasks) {
+    for (const dep of task.dependencies) {
+      if (!taskIds.has(dep)) continue;
+      adjacency.get(dep)!.push(task.id);
+      inDegree.set(task.id, inDegree.get(task.id)! + 1);
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [id, degree] of inDegree) {
+    if (degree === 0) queue.push(id);
+  }
+
+  let processed = 0;
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    processed++;
+    for (const neighbor of adjacency.get(id)!) {
+      const newDegree = inDegree.get(neighbor)! - 1;
+      inDegree.set(neighbor, newDegree);
+      if (newDegree === 0) queue.push(neighbor);
+    }
+  }
+
+  if (processed < tasks.length) {
+    const cycleNodes = tasks
+      .filter((t) => inDegree.get(t.id)! > 0)
+      .map((t) => t.id);
+    return `Cycle detected in task dependencies involving: ${cycleNodes.join(', ')}. Task dependencies must form a directed acyclic graph (DAG).`;
+  }
+
+  return null;
+}
+
 export interface RawExperimentVariant {
   id?: string;
   description?: string;
@@ -281,6 +330,11 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       maxTurns: task.maxTurns,
     };
   });
+
+  const cycleError = detectDependencyCycle(tasks);
+  if (cycleError) {
+    throw new PlanParseError(cycleError);
+  }
 
   return applyPlanDefinitionDefaults({
     name: raw.name,
