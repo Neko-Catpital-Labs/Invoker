@@ -7,19 +7,16 @@
  * Root cause: parsePlan only validates id/description, not that at least one
  * of command|prompt is present. A task without either cannot run.
  *
- * TODO(chaos-d-fix): These tests are marked it.fails because the current
- * implementation accepts tasks with neither command nor prompt.
- *
- * After the fix applies:
- * - parsePlan will reject tasks that have neither command nor prompt
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - parsePlan now validates that each task has at least one of command|prompt
+ * - Tasks without either are rejected with a clear error message
  */
 
 import { describe, it, expect } from 'vitest';
 import { parsePlan, PlanParseError } from '../plan-parser.js';
 
 describe('command-less / prompt-less task validation', () => {
-  it.fails('parsePlan should reject task with neither command nor prompt', () => {
+  it('parsePlan should reject task with neither command nor prompt', () => {
     const yamlContent = `
 name: No action task
 repoUrl: git@github.com:example/repo.git
@@ -31,7 +28,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject task with empty command and no prompt', () => {
+  it('parsePlan should reject task with empty command and no prompt', () => {
     const yamlContent = `
 name: Empty command task
 repoUrl: git@github.com:example/repo.git
@@ -44,7 +41,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject task with whitespace-only command and no prompt', () => {
+  it('parsePlan should reject task with whitespace-only command and no prompt', () => {
     const yamlContent = `
 name: Whitespace command task
 repoUrl: git@github.com:example/repo.git
