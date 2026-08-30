@@ -31,8 +31,9 @@ const MAX_INVOKE_BODY_BYTES = 1024 * 1024; // 1 MiB
 const MAX_SSE_CLIENTS = 64;
 const SSE_PING_INTERVAL_MS = 20_000;
 const ACTIVITY_POLL_INTERVAL_MS = 2_000;
-const WORKFLOWS_POLL_INTERVAL_MS = 2_000;
-const SSE_DROP_BUFFER_BYTES = 8 * 1024 * 1024; // drop a client whose backlog exceeds this
+const WORKFLOWS_SAFETY_POLL_INTERVAL_MS = 30_000;
+const WORKFLOWS_PUSH_COALESCE_MS = 50;
+const SSE_DROP_BUFFER_BYTES = 8 * 1024 * 1024;
 const JSON_COMPRESSION_MIN_BYTES = 1024;
 
 export interface WebBridgeDeps {
@@ -45,6 +46,7 @@ export interface WebBridgeDeps {
   host: string;
   port: number;
   terminalEvents?: WebBridgeTerminalEvents;
+  onClientConnect?: (sendToClient: (channel: string, data: unknown) => void) => void;
 }
 export interface WebBridgeTerminalEvents {
   onOutput(cb: (payload: TerminalOutputEvent) => void): () => void;
@@ -53,12 +55,10 @@ export interface WebBridgeTerminalEvents {
 
 export interface WebBridge {
   close: () => Promise<void>;
-  /** Resolves with the actually-bound port once the server is listening. */
   whenReady: Promise<number>;
-  /** Best-effort current bound port (use `whenReady` when port was 0). */
   readonly port: number;
-  /** Push a Server-Sent Event to every connected client. */
   broadcast: (channel: string, data: unknown) => void;
+  requestWorkflowsPush: () => void;
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -259,6 +259,14 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     };
     req.on('close', cleanup);
     res.on('error', cleanup);
+    if (deps.onClientConnect) {
+      const sendToClient = (channel: string, data: unknown): void => {
+        if (res.writableEnded) return;
+        const frame = `event: ${channel}\ndata: ${JSON.stringify(data)}\n\n`;
+        res.write(frame);
+      };
+      deps.onClientConnect(sendToClient);
+    }
   };
 
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -345,7 +353,13 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
   activityTimer.unref?.();
 
   let workflowsSignature = '';
-  const workflowsTimer = setInterval(() => {
+  let workflowsPushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushWorkflowsPush = (): void => {
+    if (workflowsPushTimer) {
+      clearTimeout(workflowsPushTimer);
+      workflowsPushTimer = null;
+    }
+    if (clients.size === 0) return;
     try {
       const workflows = persistence.listWorkflows();
       const signature = workflows.map((w) => `${w.id}:${w.status}:${w.updatedAt}`).join('|');
@@ -355,7 +369,15 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     } catch {
       // DB may be briefly locked; next tick retries.
     }
-  }, WORKFLOWS_POLL_INTERVAL_MS);
+  };
+  const requestWorkflowsPush = (): void => {
+    if (workflowsPushTimer) return;
+    workflowsPushTimer = setTimeout(flushWorkflowsPush, WORKFLOWS_PUSH_COALESCE_MS);
+    workflowsPushTimer.unref?.();
+  };
+  const workflowsTimer = setInterval(() => {
+    flushWorkflowsPush();
+  }, WORKFLOWS_SAFETY_POLL_INTERVAL_MS);
   workflowsTimer.unref?.();
 
   const pingTimer = setInterval(() => {
@@ -377,6 +399,10 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     clearInterval(activityTimer);
     clearInterval(workflowsTimer);
     clearInterval(pingTimer);
+    if (workflowsPushTimer) {
+      clearTimeout(workflowsPushTimer);
+      workflowsPushTimer = null;
+    }
     logger?.error(
       `Web surface failed to bind http://${host}:${port} (${err.code ?? err.message}) — continuing without the web surface`,
       { module: 'web-bridge' },
@@ -394,6 +420,10 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     clearInterval(activityTimer);
     clearInterval(workflowsTimer);
     clearInterval(pingTimer);
+    if (workflowsPushTimer) {
+      clearTimeout(workflowsPushTimer);
+      workflowsPushTimer = null;
+    }
     unsubscribeOutput?.();
     unsubscribeTerminalOutput?.();
     unsubscribeTerminalExit?.();
@@ -408,6 +438,7 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     close,
     whenReady,
     broadcast,
+    requestWorkflowsPush,
     get port(): number {
       const address = server.address();
       return typeof address === 'object' && address ? address.port : port;
