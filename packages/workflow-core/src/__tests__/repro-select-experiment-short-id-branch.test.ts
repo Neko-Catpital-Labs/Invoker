@@ -144,7 +144,7 @@ describe('repro: selectExperiment short variant id stamps recon branch', () => {
     });
   });
 
-  it.fails(
+  it(
     'select with short variant id resolves experiment and stamps recon branch/commit',
     () => {
       const plan: PlanDefinition = {
