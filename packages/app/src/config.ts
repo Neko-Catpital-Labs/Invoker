@@ -231,6 +231,8 @@ export interface DbReaperConfig {
   intervalMinutes?: number;
   eventsRetentionDays?: number;
   syncJournalRetentionDays?: number;
+  vacuumFreelistThresholdPages?: number;
+  vacuumMaxPagesPerTick?: number;
 }
 
 /** Default catstack clone URL. */
