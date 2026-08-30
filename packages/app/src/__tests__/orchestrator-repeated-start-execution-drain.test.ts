@@ -17,8 +17,10 @@ import type { TaskState } from '@invoker/workflow-core';
  */
 
 const WORKFLOW_COUNT = 687;
+const TASK_COUNT = 2702;
 const ACTIVE_WORKFLOW_COUNT = 676;
 const REPEATED_CALLS = 20;
+const EXTRA_COMPLETED_TASK_COUNT = TASK_COUNT - (WORKFLOW_COUNT * 3);
 
 describe('orchestrator repeated startExecution() during backlog drain', () => {
   let dbDir: string | undefined;
@@ -68,12 +70,26 @@ describe('orchestrator repeated startExecution() during backlog drain', () => {
             execution: { exitCode: 0 },
           } as TaskState);
 
+          let readyTaskDependency = `${wfId}/b`;
+          if (i < EXTRA_COMPLETED_TASK_COUNT) {
+            readyTaskDependency = `${wfId}/extra-completed`;
+            seedAdapter.saveTask(wfId, {
+              id: readyTaskDependency,
+              description: realisticDescription,
+              status: 'completed',
+              dependencies: [`${wfId}/b`],
+              createdAt,
+              config: { workflowId: wfId },
+              execution: { exitCode: 0 },
+            } as TaskState);
+          }
+
           const isActive = i < ACTIVE_WORKFLOW_COUNT;
           seedAdapter.saveTask(wfId, {
             id: `${wfId}/c`,
             description: realisticDescription,
             status: isActive ? 'pending' : 'completed',
-            dependencies: [`${wfId}/b`],
+            dependencies: [readyTaskDependency],
             createdAt,
             config: { workflowId: wfId },
             execution: isActive ? {} : { exitCode: 0 },
@@ -92,6 +108,9 @@ describe('orchestrator repeated startExecution() during backlog drain', () => {
         });
 
         orchestrator.syncAllFromDb();
+        expect(orchestrator.getAllTasks()).toHaveLength(TASK_COUNT);
+        expect(orchestrator.getExecutableReadyTasks({ alreadyRefreshed: true }))
+          .toHaveLength(ACTIVE_WORKFLOW_COUNT);
 
         // Simulate the real DO1 backlog drain: one startExecution() call
         // per queued workflow-mutation intent, back to back, with nothing
