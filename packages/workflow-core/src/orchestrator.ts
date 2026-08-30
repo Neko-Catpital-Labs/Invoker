@@ -546,6 +546,7 @@ export interface GraphMutationNodeDef {
   dependencies: string[];
   workflowId?: string;
   parentTask?: string;
+  variantLocalId?: string;
   experimentPrompt?: string;
   prompt?: string;
   command?: string;

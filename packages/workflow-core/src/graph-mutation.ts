@@ -208,6 +208,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     const nodeBase = {
       workflowId: nodeDef.workflowId,
       parentTask: nodeDef.parentTask,
+      variantLocalId: nodeDef.variantLocalId,
       experimentPrompt: nodeDef.experimentPrompt,
       prompt: nodeDef.prompt,
       command: nodeDef.command,

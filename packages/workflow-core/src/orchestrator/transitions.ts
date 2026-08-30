@@ -415,6 +415,7 @@ export function handleSpawnExperimentsImpl(
     dependencies: [taskId, ...parentDepIds],
     workflowId: wfId,
     parentTask: taskId,
+    variantLocalId: v.localId,
     experimentPrompt: v.prompt,
     prompt: v.prompt,
     command: v.command,
