@@ -1954,6 +1954,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((row: any) => this.rowToTaskEvent(row));
   }
 
+  /**
+   * Bounded, newest-first lookup for a single task_id + event_type pair.
+   * Prefer this over a full getEvents(taskId) scan when a caller only needs
+   * the most recent occurrences of one event type (e.g. walking back through
+   * `task.executor.selected` attempts) — it stays cheap even when the task
+   * has accumulated a large unrelated event history (debug/progress logs).
+   */
+  getRecentEventsOfType(taskId: string, eventType: string, limit: number): TaskEvent[] {
+    if (limit <= 0) return [];
+    const rows = this.queryAll(
+      'SELECT * FROM events WHERE task_id = ? AND event_type = ? ORDER BY id DESC LIMIT ?',
+      [taskId, eventType, Math.floor(limit)],
+    );
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
   getEventsByTypes(
     eventTypes: readonly string[],
     sortBy: 'asc' | 'desc' = 'desc',

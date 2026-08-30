@@ -2980,6 +2980,41 @@ describe('SQLiteAdapter', () => {
       expect(second[0]!.eventType).toBe(`event-${29 - 10}`);
     });
 
+    it('getRecentEventsOfType returns only the matching type, newest first, bounded by limit', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.logEvent('t1', 'task.executor.selected', { poolMemberId: 'target-1' });
+      adapter.logEvent('t1', 'debug.noise', {});
+      adapter.logEvent('t1', 'task.executor.selected', { poolMemberId: 'target-2' });
+      adapter.logEvent('t1', 'debug.noise', {});
+      adapter.logEvent('t1', 'task.executor.selected', { poolMemberId: 'target-3' });
+
+      const latestTwo = adapter.getRecentEventsOfType('t1', 'task.executor.selected', 2);
+      expect(latestTwo.map((event) => JSON.parse(event.payload!).poolMemberId)).toEqual([
+        'target-3',
+        'target-2',
+      ]);
+
+      expect(adapter.getRecentEventsOfType('t1', 'task.executor.selected', 0)).toEqual([]);
+      expect(adapter.getRecentEventsOfType('t1', 'no-such-type', 5)).toEqual([]);
+    });
+
+    it('uses an index lookup for getRecentEventsOfType instead of a full task-history scan', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const planRows = (adapter as any).db
+        .prepare('EXPLAIN QUERY PLAN SELECT * FROM events WHERE task_id = ? AND event_type = ? ORDER BY id DESC LIMIT ?')
+        .all('t1', 'task.executor.selected', 20) as Array<{ detail: string }>;
+      const detail = planRows.map((row) => row.detail).join('\n');
+
+      // Either the (task_id, id) or (event_type, id) index keeps this bounded;
+      // the invariant under test is "indexed SEARCH", not a specific index name.
+      expect(detail).toContain('SEARCH events USING INDEX');
+      expect(detail).not.toContain('SCAN events');
+      expect(detail).not.toContain('USE TEMP B-TREE');
+    });
+
     it('lists recent task events across tasks by event type', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
