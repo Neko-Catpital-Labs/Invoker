@@ -20,6 +20,13 @@ export function isPathSafeId(id: string): boolean {
   return true;
 }
 
+const RESERVED_TASK_ID_PREFIXES = ['__merge__'] as const;
+
+export function hasReservedTaskIdPrefix(id: string): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return RESERVED_TASK_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
 interface TaskWithDeps {
   id: string;
   dependencies: string[];
@@ -290,6 +297,11 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     if (!isPathSafeId(task.id)) {
       throw new PlanParseError(
         `Task id "${task.id}" contains unsafe characters. Task ids must not contain "..", "/", "\\", or start with ".".`,
+      );
+    }
+    if (hasReservedTaskIdPrefix(task.id)) {
+      throw new PlanParseError(
+        `Task id "${task.id}" uses a reserved prefix. Task ids must not start with "__merge__".`,
       );
     }
     if (seenTaskIds.has(task.id)) {

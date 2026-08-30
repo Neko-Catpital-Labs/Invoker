@@ -13,19 +13,16 @@
  * Invariant: `__merge__*` is reserved; plan-local ids must always be scoped;
  * a user task must not become the merge node or an unscoped experiment branch.
  *
- * TODO(chaos-h-fix): These tests are marked it.fails because the current
- * implementation accepts task ids with reserved prefixes.
- *
- * After the fix applies:
- * - parsePlan will reject task ids starting with reserved prefixes
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - parsePlan now validates that task ids don't start with reserved prefixes
+ * - Task ids starting with `__merge__` are rejected with a clear error
  */
 
 import { describe, it, expect } from 'vitest';
 import { parsePlan, PlanParseError } from '../plan-parser.js';
 
 describe('reserved task id prefix validation', () => {
-  it.fails('parsePlan should reject task id starting with __merge__', () => {
+  it('parsePlan should reject task id starting with __merge__', () => {
     const yamlContent = `
 name: Merge impersonation
 repoUrl: git@github.com:example/repo.git
@@ -38,7 +35,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject task id exactly matching __merge__', () => {
+  it('parsePlan should reject task id exactly matching __merge__', () => {
     const yamlContent = `
 name: Exact merge impersonation
 repoUrl: git@github.com:example/repo.git
@@ -51,7 +48,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject task id with __merge__ prefix and workflow-like suffix', () => {
+  it('parsePlan should reject task id with __merge__ prefix and workflow-like suffix', () => {
     const yamlContent = `
 name: Workflow merge impersonation
 repoUrl: git@github.com:example/repo.git
@@ -90,5 +87,18 @@ tasks:
 
     const plan = parsePlan(yamlContent);
     expect(plan.tasks[0].id).toBe('_private_task');
+  });
+
+  it('parsePlan should reject task id attempting cross-workflow gate steal', () => {
+    const yamlContent = `
+name: Cross-workflow gate steal
+repoUrl: git@github.com:example/repo.git
+tasks:
+  - id: "__merge__wf-1788115593379-67"
+    description: Task stealing another workflow gate
+    command: echo stolen-gate
+`;
+
+    expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 });
