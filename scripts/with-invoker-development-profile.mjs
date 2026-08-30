@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
+import { homedir, platform, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -50,8 +50,19 @@ function resolveValue(name, value) {
   return name.endsWith('_PORT') ? String(value) : resolve(String(value));
 }
 
+function realHomeDir() {
+  // Unlike os.homedir(), userInfo().homedir ignores an overridden $HOME —
+  // needed so a caller's own sandboxed $HOME/.invoker isn't mistaken for
+  // the real production namespace this guard protects.
+  try {
+    return userInfo().homedir;
+  } catch {
+    return homedir();
+  }
+}
+
 function assertNoProductionCollision(env) {
-  const homeDir = homedir();
+  const homeDir = realHomeDir();
   const productionHome = join(homeDir, '.invoker');
   const forbidden = new Map([
     ['INVOKER_DB_DIR', productionHome],
