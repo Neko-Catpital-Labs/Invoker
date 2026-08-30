@@ -54,6 +54,8 @@ export {
   WORKFLOW_DELEGATION_TIMEOUT_MS,
   delegationTimeoutMs,
   isDelegated,
+  isTimeout,
+  isNoHandler,
   resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,

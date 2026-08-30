@@ -155,6 +155,7 @@ import { assertAllWorkerMutationChannelsRegistered, buildWorkerMutationHandlers 
 import {
   runHeadless,
   isDelegated,
+  isTimeout,
   tryDelegateRun,
   tryDelegateResume,
   resolveDelegationTimeoutMs,
@@ -164,6 +165,7 @@ import {
   createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   type HeadlessDeps,
+  type DelegationOutcome,
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
@@ -1030,25 +1032,25 @@ async function tryDelegateHeadlessMutationToBus(
   args: string[],
   bus: MessageBus,
   command: string | undefined,
-): Promise<boolean> {
+): Promise<DelegationOutcome> {
   if (command === 'run') {
     const planPath = args[1];
     if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-    return isDelegated(await tryDelegateRun(planPath, bus, waitForApproval, noTrack));
+    return tryDelegateRun(planPath, bus, waitForApproval, noTrack);
   }
   if (command === 'resume') {
     const workflowId = args[1];
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-    return isDelegated(await tryDelegateResume(workflowId, bus, waitForApproval, noTrack));
+    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack);
   }
   const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(args);
-  return isDelegated(await tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs));
+  return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 
 async function tryDelegateHeadlessMutationToExistingOwner(
   args: string[],
   command: string | undefined,
-): Promise<'delegated' | 'no-compatible-owner' | 'failed'> {
+): Promise<'delegated' | 'no-compatible-owner' | 'timeout' | 'failed'> {
   let delegationBus = new IpcBus(undefined, { allowServe: false });
   try {
     await delegationBus.ready();
@@ -1058,9 +1060,10 @@ async function tryDelegateHeadlessMutationToExistingOwner(
         : EXISTING_HEADLESS_MUTATION_OWNER_REFRESH_TIMEOUT_MS;
       const owner = await discoverOwner(delegationBus, timeoutMs);
       if (isStandaloneCapable(owner)) {
-        return await tryDelegateHeadlessMutationToBus(args, delegationBus, command)
-          ? 'delegated'
-          : 'failed';
+        const outcome = await tryDelegateHeadlessMutationToBus(args, delegationBus, command);
+        if (isDelegated(outcome)) return 'delegated';
+        if (isTimeout(outcome)) return 'timeout';
+        return 'failed';
       }
       if (attempt === 0) {
         delegationBus.disconnect();
@@ -1157,26 +1160,31 @@ function startHeadlessMode(): void {
         try {
           await delegationBus.ready();
 
-          const delegated = await tryDelegateHeadlessMutationToBus(cliArgs, delegationBus, command);
-          if (delegated) {
-            // Successfully delegated to owner
+          const outcome = await tryDelegateHeadlessMutationToBus(cliArgs, delegationBus, command);
+          if (isDelegated(outcome)) {
             delegationBus.disconnect();
             await flushStdoutAndStderr();
             process.exit(process.exitCode ?? 0);
-            return; // Guard: process.exit() may not halt in Electron async context
+            return;
           }
 
-          // Delegation failed: no owner handler available.
           delegationBus.disconnect();
-          process.stderr.write(
-            `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
-            `\n${BOLD}Options:${RESET}\n` +
-            `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
-            `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
-            `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.\n`
-          );
+          if (isTimeout(outcome)) {
+            process.stderr.write(
+              `${RED}Error:${RESET} Mutation command "${command}" timed out waiting for the owner process.\n` +
+              `The owner may be busy processing another request. Try again in a moment.\n`,
+            );
+          } else {
+            process.stderr.write(
+              `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
+              `\n${BOLD}Options:${RESET}\n` +
+              `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
+              `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
+              `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.\n`,
+            );
+          }
           process.exit(1);
-          return; // Guard: process.exit() may not halt in Electron async context
+          return;
         } catch (err) {
           process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
           delegationBus.disconnect();
