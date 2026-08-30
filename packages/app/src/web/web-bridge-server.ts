@@ -29,6 +29,29 @@ import type { WebInvokerDispatch } from './web-invoker-dispatch.js';
 const COOKIE_NAME = 'invoker_web';
 const MAX_INVOKE_BODY_BYTES = 1024 * 1024; // 1 MiB
 const MAX_SSE_CLIENTS = 64;
+
+interface MappedError {
+  message: string;
+  code: string;
+}
+
+const INVOKE_ERROR_PATTERNS: ReadonlyArray<[pattern: RegExp, code: string]> = [
+  [/^Validation failed:/i, 'VALIDATION_ERROR'],
+  [/not found/i, 'NOT_FOUND'],
+  [/^Cannot (approve|reject|delete|edit|cancel)/i, 'INVALID_OPERATION'],
+  [/is required|must be|must have|missing/i, 'VALIDATION_ERROR'],
+  [/limit must be/i, 'VALIDATION_ERROR'],
+  [/invalid (mode|value|option|argument)/i, 'INVALID_ARGUMENT'],
+];
+
+function mapInvokeError(message: string): MappedError | null {
+  for (const [pattern, code] of INVOKE_ERROR_PATTERNS) {
+    if (pattern.test(message)) {
+      return { message, code };
+    }
+  }
+  return null;
+}
 const SSE_PING_INTERVAL_MS = 20_000;
 const ACTIVITY_POLL_INTERVAL_MS = 2_000;
 const WORKFLOWS_SAFETY_POLL_INTERVAL_MS = 30_000;
@@ -235,6 +258,11 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
         return;
       }
       const errorMessage = err instanceof Error ? err.message : String(err);
+      const mappedError = mapInvokeError(errorMessage);
+      if (mappedError) {
+        sendJson(res, 200, { ok: false, error: mappedError }, req);
+        return;
+      }
       logger?.warn(`web invoke failed for ${parsed.channel}: ${errorMessage}`, {
         module: 'web-bridge',
       });

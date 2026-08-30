@@ -12,12 +12,10 @@
  * Invariant: Validation/domain errors must surface code+message, not a
  * generic mask. Known error types should map to specific codes.
  *
- * TODO(chaos-l-fix): These tests are marked it.fails because the current
- * implementation masks validation errors as "internal server error".
- *
- * After the fix applies:
- * - Known error types will be mapped to specific error codes
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - Known error patterns are mapped to specific error codes
+ * - Validation, not-found, and invalid-operation errors are surfaced
+ * - Unknown errors are still masked to avoid leaking stack traces
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -113,27 +111,30 @@ describe('/invoke error handling', () => {
     expect(res.body.error.code).toBe('TASK_NOT_FOUND');
   });
 
-  it.fails('should surface validation error message, not mask as internal server error', async () => {
+  it('should surface validation error message with code', async () => {
     const res = await invoke('test:validation-error');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(false);
     expect(res.body.error.message).not.toBe('internal server error');
     expect(res.body.error.message).toContain('Validation failed');
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 
-  it.fails('should surface not-found error message', async () => {
+  it('should surface not-found error message with code', async () => {
     const res = await invoke('test:not-found');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(false);
     expect(res.body.error.message).not.toBe('internal server error');
     expect(res.body.error.message).toContain('not found');
+    expect(res.body.error.code).toBe('NOT_FOUND');
   });
 
-  it.fails('should surface invalid operation error message', async () => {
+  it('should surface invalid operation error message with code', async () => {
     const res = await invoke('test:invalid-operation');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(false);
     expect(res.body.error.message).not.toBe('internal server error');
     expect(res.body.error.message).toContain('Cannot approve');
+    expect(res.body.error.code).toBe('INVALID_OPERATION');
   });
 });
