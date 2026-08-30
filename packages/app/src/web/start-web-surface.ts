@@ -270,6 +270,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
   return {
     whenReady: bridge.whenReady,
     broadcast: bridge.broadcast,
+    requestWorkflowsPush: bridge.requestWorkflowsPush,
     get port(): number {
       return bridge!.port;
     },
