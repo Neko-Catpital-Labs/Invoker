@@ -470,11 +470,6 @@ function buildRegisteredOwnerWorkerDeps(
         connection: target.connection,
       })),
     },
-    dbReaper: {
-      intervalMs: (invokerConfig.dbReaper?.intervalMinutes ?? 60) * 60_000,
-      eventsRetentionDays: invokerConfig.dbReaper?.eventsRetentionDays,
-      syncJournalRetentionDays: invokerConfig.dbReaper?.syncJournalRetentionDays,
-    },
     idleTaskCleanup: {
       github: createPrMaintenanceGitHub({
         run: spawnPrMaintenanceCommand,
