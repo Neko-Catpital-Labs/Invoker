@@ -438,6 +438,7 @@ export interface PersistenceAdapter {
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number, beforeId?: number): TaskEvent[];
   /** Bounded, newest-first lookup — prefer this over a full getEvents(taskId) scan when only recent events of one type are needed. */
   getRecentEventsOfType?(taskId: string, eventType: string, limit: number): TaskEvent[];
+  getEventsSlim?(taskId: string, sortBy: 'asc' | 'desc', limit: number, payloadMaxChars: number): TaskEvent[];
   getEventsByTypes?(eventTypes: readonly string[], sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
   countEventsByTypes?(eventTypes: readonly string[]): Array<{
     eventType: string;

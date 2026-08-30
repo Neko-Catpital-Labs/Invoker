@@ -7,6 +7,8 @@ import {
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
 
+const ACTION_GRAPH_PAYLOAD_MAX_CHARS = 2500;
+
 function needsActionGraphDetail(status: string): boolean {
   switch (status) {
     case 'running':
@@ -41,7 +43,11 @@ export function buildCurrentActionGraphSnapshot(args: {
       task.id,
       args.persistence.loadActionGraphAttempts(task.id, task.execution.selectedAttemptId),
     );
-    eventsByTaskId.set(task.id, args.persistence.getEvents(task.id, 'desc', 20));
+    eventsByTaskId.set(
+      task.id,
+      args.persistence.getEventsSlim?.(task.id, 'desc', 20, ACTION_GRAPH_PAYLOAD_MAX_CHARS)
+        ?? args.persistence.getEvents(task.id, 'desc', 20),
+    );
   }
 
   return buildActionGraphDiagnostics({
