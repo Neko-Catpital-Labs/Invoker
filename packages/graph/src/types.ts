@@ -26,7 +26,6 @@ export type TaskStatus =
 export interface TaskConfig {
   readonly workflowId?: string;
   readonly parentTask?: string;
-  /** Short variant id from the spawning experimentVariants entry (e.g. "mine-02"), before workflow/pivot scoping is composed into the task id. */
   readonly variantLocalId?: string;
   readonly command?: string;
   readonly prompt?: string;

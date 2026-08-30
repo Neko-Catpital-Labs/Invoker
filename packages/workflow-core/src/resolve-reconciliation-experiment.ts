@@ -12,6 +12,12 @@ export function resolveReconciliationExperiment(
     const dep = getTask(depId);
     if (!dep) continue;
     if (dep.config.variantLocalId === experimentId) return dep;
+    if (depId.endsWith(`-exp-${experimentId}`)) return dep;
+    const slash = depId.lastIndexOf('/');
+    const local = slash >= 0 ? depId.slice(slash + 1) : depId;
+    if (local === experimentId || local.endsWith(`-exp-${experimentId}`)) {
+      return dep;
+    }
   }
   return undefined;
 }
