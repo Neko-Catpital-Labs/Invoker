@@ -439,8 +439,8 @@ function extractJsonPayload(raw: string): string {
           try {
             JSON.parse(candidate);
             lastValid = candidate;
+            start = end;
           } catch {}
-          start = end;
           break;
         }
       }

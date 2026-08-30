@@ -426,6 +426,14 @@ describe('make-pr stack publish body contract', () => {
     expect(parsed[0]?.id).toBe('a');
   });
 
+  it('extracts nested artifact JSON from an invalid enclosing brace span', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = `Note: {payload follows: ${payload}}`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
   it('still throws "must output JSON" for genuinely non-JSON output', () => {
     expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
       'make-pr stack publisher must output JSON',
