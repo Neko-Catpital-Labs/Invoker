@@ -236,7 +236,7 @@ export function autoStartReadyTasksImpl(
   host: SchedulerDomainHost,
   taskIds: string[],
   priority: number = 0,
-  opts?: LaunchReadinessOptions,
+  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
 ): TaskState[] {
   const candidateJobs: TaskJob[] = [];
   for (const taskId of taskIds) {
@@ -393,10 +393,12 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
   return undefined;
 }
 
-export function drainSchedulerImpl(host: SchedulerDomainHost, opts?: LaunchReadinessOptions): TaskState[] {
+export function drainSchedulerImpl(host: SchedulerDomainHost, opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean }): TaskState[] {
   // Refresh once for the whole drain pass, not once per dequeued job below
   // (see planPendingLaunchQueue for the same reasoning).
-  host.refreshFromDb();
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);

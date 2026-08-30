@@ -106,7 +106,7 @@ export interface LifecycleHost {
   ): string;
   buildUpdateDelta(before: TaskState, after: TaskState, changes: TaskStateChanges): TaskDelta;
   touchWorkflow(workflowId: string): void;
-  autoStartReadyTasks(taskIds: string[], priority?: number): TaskState[];
+  autoStartReadyTasks(taskIds: string[], priority?: number, opts?: { alreadyRefreshed?: boolean }): TaskState[];
   getExternalDependencyBlocker(task: TaskState): string | undefined;
   cancelActiveBeforeInvalidation(scope: 'task' | 'workflow', id: string): string[];
   cancelActiveCandidates(candidates: readonly TaskState[], scope: 'task' | 'workflow'): string[];
@@ -259,7 +259,13 @@ export function resetSubgraphToPendingImpl(
 }
 
 export function retryTaskImpl(host: LifecycleHost, taskId: string): TaskState[] {
-  host.refreshFromDb();
+  const existingTask = host.stateGetTask(taskId);
+  const workflowId = existingTask?.config.workflowId;
+  if (workflowId) {
+    host.refreshWorkflowFromDb(workflowId);
+  } else {
+    host.refreshFromDb();
+  }
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
   const id = task.id;
@@ -331,7 +337,7 @@ export function retryTaskImpl(host: LifecycleHost, taskId: string): TaskState[] 
   const isReady = readyTasks.some((t) => t.id === id);
   host.logger.info('[orchestrator] retryTask ready check', { taskId: id, ready: isReady });
   if (isReady) {
-    const started = host.autoStartReadyTasks([id], EXPEDITED_PRIORITY);
+    const started = host.autoStartReadyTasks([id], EXPEDITED_PRIORITY, { alreadyRefreshed: true });
     if (started.some((t) => t.id === id)) return started;
 
     const current = host.stateGetTask(id);
@@ -431,7 +437,7 @@ export function retryWorkflowImpl(host: LifecycleHost, workflowId: string): Task
       return !!task
         && task.config.workflowId === workflowId;
     });
-  const started = host.autoStartReadyTasks(readyIds, EXPEDITED_PRIORITY);
+  const started = host.autoStartReadyTasks(readyIds, EXPEDITED_PRIORITY, { alreadyRefreshed: true });
   const retryEndMs = Date.now();
   host.logger.info('[orchestrator] retryWorkflow timing', {
     workflowId,
@@ -450,7 +456,13 @@ export function retryWorkflowImpl(host: LifecycleHost, workflowId: string): Task
  * ready tasks within that affected subgraph.
  */
 export function recreateTaskImpl(host: LifecycleHost, taskId: string): TaskState[] {
-  host.refreshFromDb();
+  const existingTask = host.stateGetTask(taskId);
+  const workflowId = existingTask?.config.workflowId;
+  if (workflowId) {
+    host.refreshWorkflowFromDb(workflowId);
+  } else {
+    host.refreshFromDb();
+  }
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
@@ -508,7 +520,7 @@ export function applyRecreateResetImpl(host: LifecycleHost, plan: InvalidationPl
     .map((t) => t.id)
     .filter((id) => toResetSet.has(id));
   host.lastInvalidationPlan = withSchedulerEnqueueCandidates(plan, readyIds);
-  return host.autoStartReadyTasks(readyIds, EXPEDITED_PRIORITY);
+  return host.autoStartReadyTasks(readyIds, EXPEDITED_PRIORITY, { alreadyRefreshed: true });
 }
 
 /**
@@ -517,7 +529,13 @@ export function applyRecreateResetImpl(host: LifecycleHost, plan: InvalidationPl
  * Calling it on a leaf is a no-op.
  */
 export function recreateDownstreamImpl(host: LifecycleHost, taskId: string): TaskState[] {
-  host.refreshFromDb();
+  const existingTask = host.stateGetTask(taskId);
+  const workflowId = existingTask?.config.workflowId;
+  if (workflowId) {
+    host.refreshWorkflowFromDb(workflowId);
+  } else {
+    host.refreshFromDb();
+  }
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
@@ -568,7 +586,7 @@ export function bumpWorkflowGenerationImpl(host: LifecycleHost, workflowId: stri
  * Used when a rebase conflicts and the entire DAG needs to re-execute.
  */
 export function recreateWorkflowImpl(host: LifecycleHost, workflowId: string): TaskState[] {
-  host.refreshFromDb();
+  host.refreshWorkflowFromDb(workflowId);
 
   const allTasks = host.stateMachine.getAllTasks().filter(
     (t) => t.config.workflowId === workflowId,
@@ -656,7 +674,7 @@ export function recreateWorkflowImpl(host: LifecycleHost, workflowId: string): T
     .filter((id) => host.stateGetTask(id)?.config.workflowId === workflowId);
   plan = withSchedulerEnqueueCandidates(plan, readyIds);
   host.lastInvalidationPlan = plan;
-  return host.autoStartReadyTasks(readyIds, EXPEDITED_PRIORITY);
+  return host.autoStartReadyTasks(readyIds, EXPEDITED_PRIORITY, { alreadyRefreshed: true });
 }
 
 /**
