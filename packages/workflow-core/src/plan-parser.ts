@@ -27,6 +27,26 @@ export function hasReservedTaskIdPrefix(id: string): boolean {
   return RESERVED_TASK_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
 }
 
+const RESERVED_GIT_REFS = ['HEAD', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'] as const;
+
+export function isValidGitRef(ref: string): boolean {
+  if (!ref || typeof ref !== 'string') return false;
+  if (ref.trim() === '') return false;
+  if (ref.includes('..')) return false;
+  if (ref.startsWith('/') || ref.endsWith('/')) return false;
+  if (ref.includes('//')) return false;
+  if (ref.startsWith('.') || ref.includes('/.')) return false;
+  if (ref.endsWith('.lock')) return false;
+  if (ref.includes('@{')) return false;
+  if (ref.includes('\\')) return false;
+  if (/[\x00-\x1f\x7f~^:?*\[]/.test(ref)) return false;
+  if (ref.startsWith('-')) return false;
+  if (RESERVED_GIT_REFS.includes(ref as typeof RESERVED_GIT_REFS[number])) return false;
+  if (/^(origin|upstream|remote)\//.test(ref)) return false;
+  if (ref.startsWith('refs/') && ref.includes('..')) return false;
+  return true;
+}
+
 interface TaskWithDeps {
   id: string;
   dependencies: string[];
@@ -277,6 +297,19 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       throw new PlanParseError('Plan "intermediateRepoUrl" must be a non-empty string when provided.');
     }
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
+  }
+
+  if (raw.featureBranch !== undefined) {
+    if (typeof raw.featureBranch !== 'string') {
+      throw new PlanParseError('Plan "featureBranch" must be a string when provided.');
+    }
+    const trimmed = raw.featureBranch.trim();
+    if (trimmed === '' || !isValidGitRef(trimmed)) {
+      throw new PlanParseError(
+        `Plan "featureBranch" value "${raw.featureBranch}" is not a valid git ref. ` +
+        'Refs must not be empty, contain "..", start/end with "/", or contain control characters.',
+      );
+    }
   }
 
   if (scratch && raw.poolId) {
