@@ -281,6 +281,7 @@ export function classifyReviewUnitsForPath(filePath) {
     path === 'skills/make-pr/SKILL.md'
     || path.startsWith('skills/chat-submit/')
     || path.startsWith('skills/plan-to-invoker/')
+    || path.startsWith('skills/workflow-chain-submit/')
     || path === 'skills/land-stack/SKILL.md'
     || path === 'skills/visual-proof/SKILL.md'
     || path === 'skills/prove-it/SKILL.md'
