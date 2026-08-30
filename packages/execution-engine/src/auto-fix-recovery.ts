@@ -95,6 +95,7 @@ export interface AutoFixRecoveryStore {
   listWorkflows(): ReadonlyArray<{ id: string; name?: string }>;
   loadWorkflow?(workflowId: string): { name?: string | null } | undefined;
   loadTasks(workflowId: string): TaskState[];
+  loadTasksForWorkflows?(workflowIds: string[]): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents(
     workflowId?: string,
@@ -240,14 +241,34 @@ export function listAutoFixRecoveryScanCandidates(
   options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
 ): AutoFixRecoveryCandidate[] {
   const candidates: AutoFixRecoveryCandidate[] = [];
-  for (const workflow of options.store.listWorkflows()) {
-    for (const task of options.store.loadTasks(workflow.id)) {
+  const workflows = options.store.listWorkflows();
+  const tasksByWorkflow = options.store.loadTasksForWorkflows
+    ? groupTasksByWorkflowId(options.store.loadTasksForWorkflows(workflows.map((workflow) => workflow.id)))
+    : undefined;
+  for (const workflow of workflows) {
+    const tasks = tasksByWorkflow ? (tasksByWorkflow.get(workflow.id) ?? []) : options.store.loadTasks(workflow.id);
+    for (const task of tasks) {
       if (task.status !== 'failed') continue;
       const candidate = candidateFromTask(task);
       if (candidate) candidates.push(candidate);
     }
   }
   return candidates;
+}
+
+function groupTasksByWorkflowId(tasks: TaskState[]): Map<string, TaskState[]> {
+  const grouped = new Map<string, TaskState[]>();
+  for (const task of tasks) {
+    const workflowId = workflowIdForTask(task);
+    if (!workflowId) continue;
+    const existing = grouped.get(workflowId);
+    if (existing) {
+      existing.push(task);
+    } else {
+      grouped.set(workflowId, [task]);
+    }
+  }
+  return grouped;
 }
 
 function retryBudgetForTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): number {

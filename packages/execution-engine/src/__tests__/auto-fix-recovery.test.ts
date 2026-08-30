@@ -11,6 +11,7 @@ import {
   AUTO_FIX_WORKER_KIND,
   collectValidatedAutoFixRecoveryCandidates,
   createAutoFixRecoveryTick,
+  listAutoFixRecoveryScanCandidates,
   shouldRecreateMergeGateInsteadOfAutoFix,
 } from '../auto-fix-recovery.js';
 import { autoFixBareRetryExternalKey, autoFixRetryCapExternalKey } from '../auto-fix-retry-cap.js';
@@ -181,6 +182,53 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
       'debug.auto-fix',
       expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'admin-bypass-excluded' }),
     );
+  });
+});
+
+describe('listAutoFixRecoveryScanCandidates', () => {
+  it('batches task loads across workflows in one call instead of one call per workflow', () => {
+    const workflowCount = 50;
+    const workflows = Array.from({ length: workflowCount }, (_, i) => ({ id: `wf-${i}` }));
+    const tasksByWorkflow = new Map(
+      workflows.map((wf) => [
+        wf.id,
+        [makeFailedTask({ id: `${wf.id}/build`, config: { workflowId: wf.id, command: 'pnpm build' } })],
+      ]),
+    );
+    let loadTasksCalls = 0;
+    let loadTasksForWorkflowsCalls = 0;
+    const store = {
+      listWorkflows: vi.fn(() => workflows),
+      loadTasks: vi.fn((workflowId: string) => {
+        loadTasksCalls += 1;
+        return tasksByWorkflow.get(workflowId) ?? [];
+      }),
+      loadTasksForWorkflows: vi.fn((workflowIds: string[]) => {
+        loadTasksForWorkflowsCalls += 1;
+        return workflowIds.flatMap((id) => tasksByWorkflow.get(id) ?? []);
+      }),
+      listWorkflowMutationIntents: vi.fn(() => []),
+    };
+
+    const candidates = listAutoFixRecoveryScanCandidates({ store });
+
+    expect(candidates).toHaveLength(workflowCount);
+    expect(loadTasksForWorkflowsCalls).toBe(1);
+    expect(loadTasksCalls).toBe(0);
+  });
+
+  it('falls back to per-workflow loadTasks when loadTasksForWorkflows is not implemented', () => {
+    const task = makeFailedTask();
+    const store = {
+      listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+      loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-1' ? [task] : [])),
+      listWorkflowMutationIntents: vi.fn(() => []),
+    };
+
+    const candidates = listAutoFixRecoveryScanCandidates({ store });
+
+    expect(candidates).toHaveLength(1);
+    expect(store.loadTasks).toHaveBeenCalledWith('wf-1');
   });
 });
 
