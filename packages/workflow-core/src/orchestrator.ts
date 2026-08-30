@@ -36,6 +36,7 @@ import {
 } from './executor-routing.js';
 import { requireDefaultBranchRemote } from './repo-default-branch.js';
 import { unapprovedRequiredReviewArtifacts } from './review-gate-artifacts.js';
+import { resolveReconciliationExperiment } from './resolve-reconciliation-experiment.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -2136,8 +2137,17 @@ export class Orchestrator {
     if (!task || !task.config.isReconciliation) return [];
     const reconId = task.id;
 
-    const winner = this.stateGetTask(experimentId);
-    const winnerId = winner?.id ?? experimentId;
+    const winner = resolveReconciliationExperiment(
+      task,
+      experimentId,
+      (id) => this.stateGetTask(id),
+    );
+    if (!winner) {
+      throw new Error(
+        `selectExperiment: experiment "${experimentId}" not found under reconciliation ${reconId}`,
+      );
+    }
+    const winnerId = winner.id;
     const previousSet = task.execution.selectedExperiments
       ?? (task.execution.selectedExperiment !== undefined
         ? [task.execution.selectedExperiment]
@@ -2169,16 +2179,16 @@ export class Orchestrator {
       execution: {
         selectedExperiment: winnerId,
         completedAt: new Date(),
-        branch: winner?.execution.branch,
-        commit: winner?.execution.commit,
+        branch: winner.execution.branch,
+        commit: winner.execution.commit,
       },
     };
     const reconUpdated = this.writeAndSync(reconId, changes);
     this.updateSelectedAttempt(reconId, {
       status: 'completed',
       completedAt: changes.execution?.completedAt,
-      branch: winner?.execution.branch,
-      commit: winner?.execution.commit,
+      branch: winner.execution.branch,
+      commit: winner.execution.commit,
     });
     const delta: TaskDelta = this.buildUpdateDelta(task, reconUpdated, changes);
     this.persistence.logEvent?.(reconId, 'task.completed', changes);
@@ -2219,13 +2229,28 @@ export class Orchestrator {
     if (!task || !task.config.isReconciliation) return [];
     const reconId = task.id;
 
+    const resolvedIds: string[] = [];
+    for (const experimentId of experimentIds) {
+      const winner = resolveReconciliationExperiment(
+        task,
+        experimentId,
+        (id) => this.stateGetTask(id),
+      );
+      if (!winner) {
+        throw new Error(
+          `selectExperiments: experiment "${experimentId}" not found under reconciliation ${reconId}`,
+        );
+      }
+      resolvedIds.push(winner.id);
+    }
+
     const previousSet = task.execution.selectedExperiments
       ?? (task.execution.selectedExperiment !== undefined
           ? [task.execution.selectedExperiment]
           : undefined);
     const canonicalize = (ids: readonly string[]) =>
       Array.from(new Set(ids)).slice().sort();
-    const newCanon = canonicalize(experimentIds);
+    const newCanon = canonicalize(resolvedIds);
     const prevCanon = previousSet ? canonicalize(previousSet) : undefined;
     const sameAsPrev =
       prevCanon !== undefined &&
@@ -2250,8 +2275,8 @@ export class Orchestrator {
     const changes: TaskStateChanges = {
       status: 'completed',
       execution: {
-        selectedExperiment: experimentIds[0],
-        selectedExperiments: experimentIds,
+        selectedExperiment: resolvedIds[0],
+        selectedExperiments: resolvedIds,
         completedAt: new Date(),
         branch: combinedBranch,
         commit: combinedCommit,
