@@ -647,10 +647,10 @@ describe('WorktreeExecutor', () => {
       executor.onComplete(handle, (res) => resolve(res));
     });
 
-    // When kill sends SIGTERM, simulate process exit
-    const origKill = process.kill;
-    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
-      // Simulate the process closing after receiving the signal
+    // When kill sends SIGTERM, simulate process exit. The mocked pid does
+    // not lead a real process group, so killProcessGroup falls back to
+    // child.kill() rather than process.kill(-pid) — mock that fallback.
+    vi.mocked(taskProcess.kill).mockImplementation((_signal?) => {
       setTimeout(() => taskProcess.emit('close', null, 'SIGTERM'), 0);
       return true;
     });
@@ -665,8 +665,6 @@ describe('WorktreeExecutor', () => {
         (call[1] as string[])?.includes('remove'),
     );
     expect(removeCalls.length).toBe(0);
-
-    vi.mocked(process.kill).mockRestore();
   });
 
   it('kill returns when process close already fired during finalization', async () => {
@@ -715,16 +713,15 @@ describe('WorktreeExecutor', () => {
 
     expect(taskProcesses).toHaveLength(2);
 
-    // Simulate processes closing when SIGTERM is sent
-    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
-      for (const tp of taskProcesses) {
-        if (!(tp as any)._closed) {
-          (tp as any)._closed = true;
-          setTimeout(() => tp.emit('close', null, 'SIGTERM'), 0);
-        }
-      }
-      return true;
-    });
+    // Simulate processes closing when SIGTERM is sent. The mocked pids do
+    // not lead real process groups, so killProcessGroup falls back to
+    // child.kill() rather than process.kill(-pid) — mock that fallback.
+    for (const tp of taskProcesses) {
+      vi.mocked(tp.kill).mockImplementation((_signal?) => {
+        setTimeout(() => tp.emit('close', null, 'SIGTERM'), 0);
+        return true;
+      });
+    }
 
     await executor.destroyAll();
 
@@ -736,8 +733,6 @@ describe('WorktreeExecutor', () => {
         (call[1] as string[])?.includes('remove'),
     );
     expect(removeCalls.length).toBe(0);
-
-    vi.mocked(process.kill).mockRestore();
   });
 
 
