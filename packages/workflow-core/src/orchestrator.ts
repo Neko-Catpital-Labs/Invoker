@@ -3418,13 +3418,24 @@ export class Orchestrator {
   }
 
   getExecutableReadyTasks(opts?: { alreadyRefreshed?: boolean; includeStaged?: boolean }): TaskState[] {
+    const allWorkflows = this.persistence.listWorkflows();
     const stagedWorkflowIds = opts?.includeStaged
       ? new Set<string>()
-      : new Set(this.persistence.listWorkflows().filter((workflow) => workflow.staged === true).map((workflow) => workflow.id));
+      : new Set(allWorkflows.filter((workflow) => workflow.staged === true).map((workflow) => workflow.id));
+    const workflowLookup = new Map(allWorkflows.map((workflow) => [workflow.id, workflow]));
+    const workflowBlockerCache = new Map<string, string | undefined>();
+    const isExternallyBlocked = (task: TaskState): boolean => {
+      const workflowId = task.config.workflowId;
+      if (!workflowId) return false;
+      if (!workflowBlockerCache.has(workflowId)) {
+        workflowBlockerCache.set(workflowId, this.getWorkflowDependencyBlocker(workflowId, workflowLookup));
+      }
+      return workflowBlockerCache.get(workflowId) !== undefined;
+    };
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => !task.config.workflowId || !stagedWorkflowIds.has(task.config.workflowId))
-      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+      .filter((task) => !isExternallyBlocked(task));
     const readyTasksById = new Map(readyTasks.map((task) => [task.id, task]));
     return getPendingLaunchQueueSnapshotImpl(
       this as unknown as SchedulerDomainHost,
@@ -4041,14 +4052,21 @@ export class Orchestrator {
     return tasks.find((t) => t.id === scopedId || t.id === normalizedTaskId);
   }
 
-  private getWorkflowExternalDependencies(workflowId: string): ExternalDependency[] {
-    const workflow = this.persistence.loadWorkflow?.(workflowId)
+  private getWorkflowExternalDependencies(
+    workflowId: string,
+    workflowLookup?: Map<string, { externalDependencies?: ExternalDependency[] }>,
+  ): ExternalDependency[] {
+    const workflow = workflowLookup?.get(workflowId)
+      ?? this.persistence.loadWorkflow?.(workflowId)
       ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
     return workflow?.externalDependencies ?? [];
   }
 
-  private getWorkflowDependencyBlocker(workflowId: string): string | undefined {
-    const deps = this.getWorkflowExternalDependencies(workflowId);
+  private getWorkflowDependencyBlocker(
+    workflowId: string,
+    workflowLookup?: Map<string, { externalDependencies?: ExternalDependency[] }>,
+  ): string | undefined {
+    const deps = this.getWorkflowExternalDependencies(workflowId, workflowLookup);
     if (!deps || deps.length === 0) return undefined;
 
     for (const dep of deps) {
@@ -4075,10 +4093,13 @@ export class Orchestrator {
     return undefined;
   }
 
-  private getExternalDependencyBlocker(task: TaskState): string | undefined {
+  private getExternalDependencyBlocker(
+    task: TaskState,
+    workflowLookup?: Map<string, { externalDependencies?: ExternalDependency[] }>,
+  ): string | undefined {
     const workflowId = task.config.workflowId;
     if (!workflowId) return undefined;
-    return this.getWorkflowDependencyBlocker(workflowId);
+    return this.getWorkflowDependencyBlocker(workflowId, workflowLookup);
   }
 
   private collectWorkflowDependencyEdges(): Map<string, Set<string>> {
