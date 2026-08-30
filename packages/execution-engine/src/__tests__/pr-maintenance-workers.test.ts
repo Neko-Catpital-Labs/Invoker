@@ -27,9 +27,11 @@ import {
   createPrAutoLabelWorker,
   createPrDuplicateCloseWorker,
   createPrOrphanRepairWorker,
+  probePrMaintenanceLock,
   registerPrMaintenanceWorkers,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
+import { chmodSync } from 'node:fs';
 
 type SpawnCall = {
   command: string;
@@ -130,6 +132,37 @@ describe('PR maintenance workers', () => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'invoker-pr-maintenance-test-'));
     return tmpRoot;
   }
+
+  it(
+    'probePrMaintenanceLock treats a spawnSync timeout as not-held, not as a genuine lock holder',
+    async () => {
+      // Real repro, no mocking: `flock -n` is non-blocking and always returns
+      // immediately regardless of the lock's state, so the only way the probe's
+      // spawnSync call can hit its own timeout is if the child process itself
+      // never got scheduled (e.g. the owner is under heavy CPU load) -- which
+      // says nothing about whether the lock is actually held. This installs a
+      // real, slow `flock` shim ahead of the real one on PATH so the probe's
+      // spawnSync call genuinely times out, then asserts it does not falsely
+      // report the lock as held.
+      const repoRoot = makeRepoRoot();
+      const lockPath = join(repoRoot, 'pr-crons.lock');
+      const fakeBinDir = join(repoRoot, 'fake-bin');
+      const { mkdirSync, writeFileSync: writeFile } = await import('node:fs');
+      mkdirSync(fakeBinDir, { recursive: true });
+      const fakeFlockPath = join(fakeBinDir, 'flock');
+      writeFile(fakeFlockPath, '#!/bin/bash\nsleep 5\n');
+      chmodSync(fakeFlockPath, 0o755);
+
+      const result = probePrMaintenanceLock({
+        lockPath,
+        env: { ...process.env, PATH: `${fakeBinDir}:${process.env.PATH ?? ''}` },
+      });
+
+      expect(result.held).toBe(false);
+      expect(result.reason).toBe('probe-timeout');
+    },
+    8_000,
+  );
 
   it('spawns the admin-bypass shell entrypoint with the configured cwd and env', async () => {
     const repoRoot = makeRepoRoot();
