@@ -2998,6 +2998,7 @@ describe('TaskRunner', () => {
         }
         // merge-base --is-ancestor exits non-zero when branch is NOT an ancestor of HEAD
         if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
