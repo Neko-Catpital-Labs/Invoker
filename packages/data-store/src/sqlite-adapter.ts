@@ -1723,6 +1723,36 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.taskAttemptRepo.loadAllHistoryTasks();
   }
 
+  pruneOldEvents(retentionDays: number): number {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+    const cutoff = `-${Math.floor(retentionDays)} days`;
+    this.db.run(
+      `DELETE FROM events
+        WHERE created_at < datetime('now', ?)
+          AND task_id IN (
+            SELECT id FROM tasks
+             WHERE status IN ('completed', 'failed', 'closed', 'review_ready', 'stale')
+          )`,
+      [cutoff],
+    );
+    return this.db.getRowsModified();
+  }
+
+  pruneOldSyncJournal(retentionDays: number): number {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+    const cutoff = `-${Math.floor(retentionDays)} days`;
+    this.db.run(
+      `DELETE FROM sync_journal
+        WHERE created_at < datetime('now', ?)
+          AND (
+            NOT EXISTS (SELECT 1 FROM sync_cursors)
+            OR seq <= (SELECT MIN(last_sent_seq) FROM sync_cursors)
+          )`,
+      [cutoff],
+    );
+    return this.db.getRowsModified();
+  }
+
   deleteTask(taskId: string): void {
     this.runTransaction(() => {
       this.db.run('DELETE FROM task_launch_dispatch WHERE task_id = ?', [taskId]);
