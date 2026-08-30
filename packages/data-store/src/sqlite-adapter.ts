@@ -1754,6 +1754,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.db.getRowsModified();
   }
 
+  getFreelistPageCount(): number {
+    const row = this.nativeDb.prepare('PRAGMA freelist_count').get() as { freelist_count?: number } | undefined;
+    return Number(row?.freelist_count ?? 0);
+  }
+
+  runIncrementalVacuum(maxPages: number): number {
+    if (!Number.isFinite(maxPages) || maxPages <= 0) return 0;
+    const autoVacuumRow = this.nativeDb.prepare('PRAGMA auto_vacuum').get() as { auto_vacuum?: number } | undefined;
+    if (Number(autoVacuumRow?.auto_vacuum ?? 0) === 0) return 0;
+    const before = this.getFreelistPageCount();
+    this.nativeDb.exec(`PRAGMA incremental_vacuum(${Math.floor(maxPages)})`);
+    const after = this.getFreelistPageCount();
+    return Math.max(0, before - after);
+  }
+
   deleteTask(taskId: string): void {
     this.runTransaction(() => {
       this.db.run('DELETE FROM task_launch_dispatch WHERE task_id = ?', [taskId]);
