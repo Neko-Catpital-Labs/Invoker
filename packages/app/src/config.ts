@@ -228,11 +228,8 @@ export interface CatstackDeployConfig {
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
 export interface DbReaperConfig {
-  /** Poll cadence in minutes. Default: 60. */
   intervalMinutes?: number;
-  /** Days of events to keep for terminal-status tasks. Default: 14. <= 0 disables events pruning. */
   eventsRetentionDays?: number;
-  /** Days of sync_journal rows to keep. Default: 14. <= 0 disables sync_journal pruning. */
   syncJournalRetentionDays?: number;
 }
 
@@ -606,7 +603,6 @@ export interface InvokerConfig {
    */
   catstackDeploy?: CatstackDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
-  /** DB-reaper worker: events/sync_journal retention cadence and windows. */
   dbReaper?: DbReaperConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {

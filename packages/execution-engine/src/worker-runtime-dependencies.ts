@@ -105,7 +105,6 @@ export interface WorkerRuntimeDependencies {
   mergifyQueueResearch?: MergifyQueueResearchWorkerConfig;
   /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
-  /** DB-reaper worker configuration (events/sync_journal retention). */
   dbReaper?: DbReaperWorkerConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitWorkerConfig;
   workerLifecycleStarter?: WorkerLifecycleReader & WorkerLifecycleStarter;

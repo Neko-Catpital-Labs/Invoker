@@ -17,11 +17,8 @@ export interface DbReaperWorkerStore {
 }
 
 export interface DbReaperWorkerConfig {
-  /** Poll cadence in milliseconds. Defaults to one hour. */
   intervalMs?: number;
-  /** Days of events to keep for terminal-status tasks. <= 0 disables events pruning. */
   eventsRetentionDays?: number;
-  /** Days of sync_journal rows to keep. <= 0 disables sync_journal pruning. */
   syncJournalRetentionDays?: number;
   tickOnStart?: boolean;
   store?: WorkerDecisionStore;
@@ -76,7 +73,6 @@ export function createDbReaperWorker(options: DbReaperWorkerOptions): WorkerRunt
   });
 }
 
-/** Register the built-in db-reaper worker (bounded events/sync_journal retention). */
 export function registerDbReaperWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
