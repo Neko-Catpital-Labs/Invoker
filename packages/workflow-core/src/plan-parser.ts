@@ -29,6 +29,14 @@ export function hasReservedTaskIdPrefix(id: string): boolean {
 
 const RESERVED_GIT_REFS = ['HEAD', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'] as const;
 
+export function isValidAgentName(name: string): boolean {
+  if (!name || typeof name !== 'string') return false;
+  if (name.trim() === '') return false;
+  if (/[;\n\r`$(){}|&<>]/.test(name)) return false;
+  if (/[\x00-\x1f\x7f]/.test(name)) return false;
+  return true;
+}
+
 export function isValidGitRef(ref: string): boolean {
   if (!ref || typeof ref !== 'string') return false;
   if (ref.trim() === '') return false;
@@ -426,7 +434,16 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       featureBranch: task.featureBranch,
       dockerImage: task.dockerImage,
       poolId: task.poolId,
-      executionAgent: task.executionAgent?.trim() || undefined,
+      executionAgent: (() => {
+        const agent = task.executionAgent?.trim();
+        if (agent && !isValidAgentName(agent)) {
+          throw new PlanParseError(
+            `Task "${task.id}" executionAgent "${task.executionAgent}" contains invalid characters. ` +
+            'Agent names must not contain shell metacharacters (;$`|&<>), newlines, or control characters.',
+          );
+        }
+        return agent || undefined;
+      })(),
       executionModel: task.executionModel?.trim() || undefined,
       maxTurns: task.maxTurns,
     };

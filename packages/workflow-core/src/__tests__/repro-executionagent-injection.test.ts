@@ -13,19 +13,16 @@
  * Values with newlines, semicolons, or other shell metacharacters
  * should be rejected immediately to avoid injection risks.
  *
- * TODO(chaos-n-fix): These tests are marked it.fails because the current
- * implementation does not validate executionAgent format at parse time.
- *
- * After the fix applies:
- * - parsePlan will reject executionAgent values with dangerous characters
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - parsePlan now validates executionAgent with isValidAgentName()
+ * - Values with shell metacharacters are rejected at parse time
  */
 
 import { describe, it, expect } from 'vitest';
 import { parsePlan, PlanParseError } from '../plan-parser.js';
 
 describe('executionAgent format validation', () => {
-  it.fails('parsePlan should reject executionAgent with semicolon (shell injection)', () => {
+  it('parsePlan should reject executionAgent with semicolon (shell injection)', () => {
     const yamlContent = `
 name: Injection test
 repoUrl: git@github.com:example/repo.git
@@ -39,7 +36,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject executionAgent with newline', () => {
+  it('parsePlan should reject executionAgent with newline', () => {
     const yamlContent = `
 name: Newline test
 repoUrl: git@github.com:example/repo.git
@@ -53,7 +50,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject executionAgent with backtick (command substitution)', () => {
+  it('parsePlan should reject executionAgent with backtick (command substitution)', () => {
     const yamlContent = `
 name: Backtick test
 repoUrl: git@github.com:example/repo.git
@@ -67,7 +64,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject executionAgent with $() (command substitution)', () => {
+  it('parsePlan should reject executionAgent with $() (command substitution)', () => {
     const yamlContent = `
 name: Command sub test
 repoUrl: git@github.com:example/repo.git
