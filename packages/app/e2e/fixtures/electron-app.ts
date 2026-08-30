@@ -449,7 +449,7 @@ export async function injectTaskStates(
 
 /** Start the loaded plan via the IPC bridge. */
 export async function startPlan(page: Page): Promise<void> {
-  await page.evaluate(() => window.invoker.start());
+  await page.evaluate(() => window.invoker.startReady());
 }
 
 /** Get all current tasks via the IPC bridge. */
