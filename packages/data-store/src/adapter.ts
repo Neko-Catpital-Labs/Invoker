@@ -445,7 +445,6 @@ export interface PersistenceAdapter {
 
   // Events (audit trail)
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
-  /** Unbounded history — internal/tests only. Public IPC must use the limited overload. */
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number, beforeId?: number): TaskEvent[];
   /** Bounded, newest-first lookup — prefer this over a full getEvents(taskId) scan when only recent events of one type are needed. */

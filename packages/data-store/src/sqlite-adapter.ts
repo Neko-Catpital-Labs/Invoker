@@ -107,7 +107,8 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
-// activity_log is capped to its most recent rows so the DB file stays bounded; 0 disables.
+export const GET_EVENTS_DEFAULT_LIMIT = 10_000;
+
 const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
 const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000; // prune at most once per N writes
 
@@ -1953,15 +1954,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     beforeId?: number,
   ): TaskEvent[] {
     const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
-    if (limit === undefined) {
-      const rows = this.queryAll(
-        `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy}`,
-        [taskId],
-      );
-      return rows.map((row: any) => this.rowToTaskEvent(row));
-    }
-    if (limit <= 0) return [];
-    const pageLimit = Math.floor(limit);
+    const effectiveLimit = limit ?? GET_EVENTS_DEFAULT_LIMIT;
+    if (effectiveLimit <= 0) return [];
+    const pageLimit = Math.floor(effectiveLimit);
     if (beforeId !== undefined) {
       const rows = this.queryAll(
         `SELECT * FROM events WHERE task_id = ? AND id < ? ORDER BY id ${orderBy} LIMIT ?`,

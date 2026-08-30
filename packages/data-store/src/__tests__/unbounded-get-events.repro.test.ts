@@ -2,14 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { SQLiteAdapter, GET_EVENTS_DEFAULT_LIMIT } from '../sqlite-adapter.js';
 
-describe('unbounded getEvents (ui-read-scale proof)', () => {
+describe('getEvents default limit (ui-read-scale)', () => {
   let tmpDir: string;
   let adapter: SQLiteAdapter;
 
   beforeEach(async () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'unbounded-events-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'bounded-events-'));
     adapter = await SQLiteAdapter.create(join(tmpDir, 'invoker.db'), { ownerCapability: true });
     adapter.saveWorkflow({
       id: 'wf-1',
@@ -35,18 +35,17 @@ describe('unbounded getEvents (ui-read-scale proof)', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it.fails('1-arg getEvents overload has no LIMIT and returns entire event history', () => {
-    const eventCount = 50_000;
+  it('1-arg getEvents overload applies GET_EVENTS_DEFAULT_LIMIT', () => {
+    const eventCount = GET_EVENTS_DEFAULT_LIMIT + 5000;
     for (let i = 0; i < eventCount; i++) {
-      adapter.logEvent('wf-1/t1', 'task.progress', { i, data: 'x'.repeat(100) });
+      adapter.logEvent('wf-1/t1', 'task.progress', { i });
     }
 
     const events = adapter.getEvents('wf-1/t1');
-    expect(events).toHaveLength(eventCount);
-    expect(events.length).toBeLessThan(1000);
+    expect(events).toHaveLength(GET_EVENTS_DEFAULT_LIMIT);
   });
 
-  it('bounded getEvents with limit works correctly', () => {
+  it('bounded getEvents with explicit limit works correctly', () => {
     const eventCount = 1000;
     for (let i = 0; i < eventCount; i++) {
       adapter.logEvent('wf-1/t1', 'task.progress', { i });
@@ -56,4 +55,7 @@ describe('unbounded getEvents (ui-read-scale proof)', () => {
     expect(events).toHaveLength(100);
   });
 
+  it('GET_EVENTS_DEFAULT_LIMIT is exported and equals 10000', () => {
+    expect(GET_EVENTS_DEFAULT_LIMIT).toBe(10_000);
+  });
 });
