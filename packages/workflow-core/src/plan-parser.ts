@@ -283,6 +283,12 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   if (scratch && raw.mergeMode !== undefined && raw.mergeMode !== 'no_op') {
     throw new PlanParseError('Plan with "scratch: true" must use mergeMode: "no_op" (or omit it) — there is no repo/branch to merge.');
   }
+  if (raw.mergeMode === 'no_op' && onFinish !== 'none') {
+    throw new PlanParseError(
+      `Plan with "mergeMode: no_op" must use "onFinish: none". Got onFinish: "${onFinish}". ` +
+      'The no_op mode skips merging, so onFinish: merge/pull_request would silently do nothing.',
+    );
+  }
   const mergeMode = (raw.mergeMode as (typeof validMergeModes)[number] | undefined) ?? (scratch ? 'no_op' : undefined);
   const reviewProvider = raw.reviewProvider ?? (raw.mergeMode === 'external_review' ? 'github' : undefined);
 

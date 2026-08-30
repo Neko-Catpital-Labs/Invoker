@@ -11,19 +11,16 @@
  * Invariant: mergeMode: no_op must use onFinish: none, or load must
  * reject the combination to prevent silent skipping of merge/PR.
  *
- * TODO(chaos-m-fix): These tests are marked it.fails because the current
- * implementation accepts the contradictory combination.
- *
- * After the fix applies:
- * - parsePlan will reject mergeMode: no_op with onFinish: merge/pull_request
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - parsePlan now throws for mergeMode: no_op with onFinish: merge/pull_request
+ * - The contradictory combination is refused at parse time
  */
 
 import { describe, it, expect } from 'vitest';
 import { parsePlan, PlanParseError } from '../plan-parser.js';
 
 describe('mergeMode no_op + onFinish validation', () => {
-  it.fails('parsePlan should reject mergeMode: no_op with onFinish: merge', () => {
+  it('parsePlan should reject mergeMode: no_op with onFinish: merge', () => {
     const yamlContent = `
 name: No-op merge mismatch
 repoUrl: git@github.com:example/repo.git
@@ -38,7 +35,7 @@ tasks:
     expect(() => parsePlan(yamlContent)).toThrow(PlanParseError);
   });
 
-  it.fails('parsePlan should reject mergeMode: no_op with onFinish: pull_request', () => {
+  it('parsePlan should reject mergeMode: no_op with onFinish: pull_request', () => {
     const yamlContent = `
 name: No-op PR mismatch
 repoUrl: git@github.com:example/repo.git
