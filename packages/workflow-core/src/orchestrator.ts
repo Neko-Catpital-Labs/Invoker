@@ -4138,9 +4138,9 @@ export class Orchestrator {
    * `fixReject`, `none`) skip the cascade per `MUTATION_POLICIES`.
    */
   cascadeInvalidationToDownstream(workflowId: string): TaskState[] {
-    this.refreshFromDb();
     const downstreamWorkflowIds = this.collectDownstreamWorkflowIds(workflowId);
     if (downstreamWorkflowIds.length === 0) return [];
+    this.refreshFromDb();
 
     this.logger.info('[orchestrator] cascadeInvalidationToDownstream', {
       upstreamWorkflowId: workflowId,
