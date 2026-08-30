@@ -151,6 +151,22 @@ function isModuleResolutionError(error: unknown): boolean {
   );
 }
 
+function isAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('oauth')
+    || message.includes('401')
+    || message.includes('unauthorized')
+    || message.includes('failed to authenticate')
+    || message.includes('authentication failed')
+    || message.includes('token has expired')
+    || message.includes('re-authenticate')
+    || message.includes('session expired')
+    || message.includes('api error: 401')
+  );
+}
+
 type PlanConversationConstructor = new (config: PlanConversationConfig) => PlanConversation;
 
 interface PlannerSurfacesModule {
@@ -267,6 +283,8 @@ function planningStatusLabel(status: InAppPlanningSessionStatus): string {
       return 'draft ready';
     case 'submitted':
       return 'submitted';
+    case 'planner_error':
+      return 'error';
   }
 }
 
@@ -306,6 +324,8 @@ function planningNextActionLine(session: InAppPlanningChatSession): string {
       return 'Next: Review or submit the draft in chat; use this shell for manual context checks.';
     case 'submitted':
       return 'Next: Review the submitted workflow in Invoker; submitted planning sessions stay read-only.';
+    case 'planner_error':
+      return 'Next: Re-authenticate or fix the error, then retry the last message.';
   }
 }
 
@@ -1203,6 +1223,15 @@ export async function sendPlanningChatMessage(
         const failureMessage = error instanceof Error ? error.message : String(error);
         activeSession.activeTurnStatus = 'failed';
         activeSession.activeTurnError = failureMessage;
+        if (isAuthenticationError(error)) {
+          activeSession.status = 'planner_error';
+          appendSessionMessage(
+            activeSession,
+            'system',
+            'Authentication failed. The planner could not complete this turn. Re-authenticate and try again.',
+            'error',
+          );
+        }
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
         deps.onRawPlannerOutput?.({
           sessionId: activeSession.id,

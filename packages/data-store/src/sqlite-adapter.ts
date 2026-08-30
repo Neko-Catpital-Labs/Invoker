@@ -684,6 +684,7 @@ function isInAppPlanningSessionStatus(value: unknown): value is InAppPlanningSes
   return value === 'still_discussing'
     || value === 'waiting_for_answer'
     || value === 'draft_ready'
+    || value === 'planner_error'
     || value === 'submitted';
 }
 
