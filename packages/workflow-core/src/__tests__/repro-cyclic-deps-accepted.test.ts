@@ -5,13 +5,10 @@
  * Tasks stay `pending` forever. `__merge__` becomes `review_ready` with deps: [].
  * Rollup `review_ready` with 2 tasks still pending.
  *
- * TODO(chaos-c-fix): These tests are marked it.fails because the current
- * implementation does not detect cycles in parsePlan or loadPlan.
- *
- * After the fix applies:
- * - parsePlan will detect cycles using Kahn's algorithm
- * - loadPlan will also detect cycles before any state mutation
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - parsePlan now detects cycles using Kahn's algorithm
+ * - loadPlan also detects cycles before any state mutation
+ * - Cyclic plans are rejected with a clear error message
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -123,11 +120,11 @@ tasks:
     dependencies: [task-a]
 `;
 
-  it.fails('parsePlan should reject cyclic dependencies', () => {
+  it('parsePlan should reject cyclic dependencies', () => {
     expect(() => parsePlan(cyclicPlanYaml)).toThrow(PlanParseError);
   });
 
-  it.fails('loadPlan should reject cyclic dependencies', () => {
+  it('loadPlan should reject cyclic dependencies', () => {
     const plan: PlanDefinition = {
       name: 'Cyclic deps',
       repoUrl: 'git@github.com:example/repo.git',
@@ -140,7 +137,7 @@ tasks:
     expect(() => orchestrator.loadPlan(plan)).toThrow(/cycle/i);
   });
 
-  it.fails('loadPlan should reject self-referential dependencies', () => {
+  it('loadPlan should reject self-referential dependencies', () => {
     const plan: PlanDefinition = {
       name: 'Self-referential',
       repoUrl: 'git@github.com:example/repo.git',
@@ -152,7 +149,7 @@ tasks:
     expect(() => orchestrator.loadPlan(plan)).toThrow(/cycle/i);
   });
 
-  it.fails('loadPlan should reject transitive cycles (a->b->c->a)', () => {
+  it('loadPlan should reject transitive cycles (a->b->c->a)', () => {
     const plan: PlanDefinition = {
       name: 'Transitive cycle',
       repoUrl: 'git@github.com:example/repo.git',
