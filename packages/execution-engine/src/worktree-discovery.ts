@@ -47,6 +47,17 @@ export function canonicalPathForComparison(p: string): string {
   }
 }
 
+const PLANNING_BRANCH_PREFIX = 'invoker/planning/';
+
+export function isPlanningBranch(branch: string | undefined): boolean {
+  return branch?.startsWith(PLANNING_BRANCH_PREFIX) ?? false;
+}
+
+export function countPlanningWorktreesFromPorcelain(porcelain: string): number {
+  const entries = parseGitWorktreePorcelain(porcelain);
+  return entries.filter((e) => isPlanningBranch(e.branch)).length;
+}
+
 /** True if `worktreePath` is exactly `prefix` or a descendant (Invoker-owned tree). */
 export function pathIsUnderManagedPrefixes(worktreePath: string, managedPathPrefixes: string[]): boolean {
   const nw = canonicalPathForComparison(worktreePath);

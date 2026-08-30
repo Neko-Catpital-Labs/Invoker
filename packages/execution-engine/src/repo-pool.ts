@@ -8,9 +8,11 @@ import { planManagedWorktree } from './managed-worktree-controller.js';
 import {
   abbrevRefMatchesBranch,
   canonicalPathForComparison,
+  countPlanningWorktreesFromPorcelain,
   findContentHashCollisions,
   findManagedWorktreeByContent,
   findManagedWorktreeForBranch,
+  isPlanningBranch,
   pathIsUnderManagedPrefixes,
   parseGitWorktreePorcelain,
   parseExperimentBranch,
@@ -799,17 +801,42 @@ export class RepoPool {
     const clonePath = await this.ensureCloneUnqueued(repoUrl);
     bench('RepoPool.doAcquireWorktree.ensureCloneUnqueued.after', { clonePath });
     const repoKey = this.repoKey(repoUrl);
-    const active = this.activeWorktrees.get(repoKey) ?? new Set();
-    bench('RepoPool.doAcquireWorktree.activeWorktreeCount', { activeCount: active.size, maxWorktrees: this.maxWorktrees });
-    if (active.size >= this.maxWorktrees) {
-      throw new ResourceLimitError(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
+
+    let porcelain = '';
+    try {
+      bench('RepoPool.doAcquireWorktree.gitWorktreeList.before', { clonePath });
+      porcelain = await this.execGit(['worktree', 'list', '--porcelain'], clonePath);
+      bench('RepoPool.doAcquireWorktree.gitWorktreeList.after', { clonePath });
+    } catch {
+      porcelain = '';
+      bench('RepoPool.doAcquireWorktree.gitWorktreeList.failed', { clonePath });
     }
 
-    // DB-backed lease: additive to the in-memory Set above, never a way to
-    // grant more capacity than it already allows. Skipped (not a hard
-    // failure) when persistence or a holder id isn't supplied, so every
-    // existing no-persistence caller (all current repo-pool.test.ts cases)
-    // behaves exactly as before.
+    const active = this.activeWorktrees.get(repoKey) ?? new Set();
+    const isPlanning = isPlanningBranch(branch);
+    const planningWorktreeCount = isPlanning ? countPlanningWorktreesFromPorcelain(porcelain) : 0;
+    const branchAlreadyExists = parseGitWorktreePorcelain(porcelain).some((e) => e.branch === branch);
+
+    bench('RepoPool.doAcquireWorktree.worktreeCount', {
+      activeCount: active.size,
+      planningWorktreeCount,
+      branchAlreadyExists,
+      isPlanning,
+      maxWorktrees: this.maxWorktrees,
+    });
+
+    if (isPlanning) {
+      if (!branchAlreadyExists && planningWorktreeCount >= this.maxWorktrees) {
+        throw new ResourceLimitError(
+          `Planning worktree limit reached for ${repoUrl}: ${planningWorktreeCount}/${this.maxWorktrees} on disk`,
+        );
+      }
+    } else {
+      if (active.size >= this.maxWorktrees) {
+        throw new ResourceLimitError(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
+      }
+    }
+
     let leaseHolderId: string | undefined = opts?.leaseHolderId;
     if (this.leasePersistence && leaseHolderId) {
       let claimed = true;
@@ -848,16 +875,6 @@ export class RepoPool {
           : `${clonePath}/worktrees`,
       ),
     ];
-
-    let porcelain = '';
-    try {
-      bench('RepoPool.doAcquireWorktree.gitWorktreeList.before', { clonePath });
-      porcelain = await this.execGit(['worktree', 'list', '--porcelain'], clonePath);
-      bench('RepoPool.doAcquireWorktree.gitWorktreeList.after', { clonePath });
-    } catch {
-      porcelain = '';
-      bench('RepoPool.doAcquireWorktree.gitWorktreeList.failed', { clonePath });
-    }
 
     const allowReuse = opts?.forceFresh !== true;
     bench('RepoPool.doAcquireWorktree.findReuseCandidates.before', { allowReuse });
