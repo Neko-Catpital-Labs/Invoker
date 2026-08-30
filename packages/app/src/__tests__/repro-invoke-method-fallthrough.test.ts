@@ -11,12 +11,9 @@
  * Invariant: /invoke is POST-only; other methods should return 405 before
  * any static fallback.
  *
- * TODO(chaos-g-fix): These tests are marked it.fails because the current
- * implementation serves GET /invoke as SPA HTML instead of returning 405.
- *
- * After the fix applies:
- * - GET/HEAD /invoke will return 405 method_not_allowed
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - /invoke path now checks method first
+ * - Non-POST requests to /invoke return 405 method_not_allowed
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -98,19 +95,19 @@ describe('/invoke method validation', () => {
     expect(res.status).toBe(405);
   });
 
-  it.fails('GET /invoke without auth should return 405, not 401', async () => {
+  it('GET /invoke without auth returns 405', async () => {
     const res = await makeRequest('GET', '/invoke');
     expect(res.status).toBe(405);
   });
 
-  it.fails('GET /invoke with auth should return 405, not 200 HTML', async () => {
+  it('GET /invoke with auth returns 405', async () => {
     const cookie = `invoker_web_token=${token}`;
     const res = await makeRequest('GET', '/invoke', cookie);
     expect(res.status).toBe(405);
     expect(res.contentType).not.toContain('text/html');
   });
 
-  it.fails('HEAD /invoke with auth should return 405', async () => {
+  it('HEAD /invoke with auth returns 405', async () => {
     const cookie = `invoker_web_token=${token}`;
     const res = await makeRequest('HEAD', '/invoke', cookie);
     expect(res.status).toBe(405);

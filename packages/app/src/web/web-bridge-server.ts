@@ -276,7 +276,11 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
         const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
         const pathname = url.pathname;
 
-        if (method === 'POST' && pathname === '/invoke') {
+        if (pathname === '/invoke') {
+          if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method_not_allowed' });
+            return;
+          }
           if (!cookieValid(req) && !headerValid(req)) {
             sendJson(res, 401, { error: 'unauthorized' });
             return;
