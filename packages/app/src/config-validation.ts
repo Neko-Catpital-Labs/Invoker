@@ -283,6 +283,24 @@ function validateDbReaperConfig(config: InvokerConfig): void {
       throw new Error('dbReaper.syncJournalRetentionDays must be an integer');
     }
   }
+  if (typed.vacuumFreelistThresholdPages !== undefined) {
+    if (
+      typeof typed.vacuumFreelistThresholdPages !== 'number'
+      || !Number.isInteger(typed.vacuumFreelistThresholdPages)
+      || typed.vacuumFreelistThresholdPages <= 0
+    ) {
+      throw new Error('dbReaper.vacuumFreelistThresholdPages must be an integer > 0');
+    }
+  }
+  if (typed.vacuumMaxPagesPerTick !== undefined) {
+    if (
+      typeof typed.vacuumMaxPagesPerTick !== 'number'
+      || !Number.isInteger(typed.vacuumMaxPagesPerTick)
+      || typed.vacuumMaxPagesPerTick <= 0
+    ) {
+      throw new Error('dbReaper.vacuumMaxPagesPerTick must be an integer > 0');
+    }
+  }
 }
 
 function validateAdminBypassE2eBabysitConfig(config: InvokerConfig): void {
