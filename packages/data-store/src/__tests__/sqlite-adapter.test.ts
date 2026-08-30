@@ -517,6 +517,57 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('migrates the legacy planning status constraint and preserves existing sessions', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-status-migration-'));
+      const dbPath = join(dir, 'invoker.db');
+      const legacyStatuses = ['still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted'] as const;
+      try {
+        const legacy = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        for (const status of legacyStatuses) {
+          legacy.upsertInAppPlanningSession(makePlanningSession(`planning-${status}`, { status }));
+        }
+
+        const schema = (legacy as any).queryOne(
+          `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'in_app_planning_sessions'`,
+        ).sql as string;
+        const legacySchema = schema
+          .replace('CREATE TABLE in_app_planning_sessions', 'CREATE TABLE in_app_planning_sessions_legacy')
+          .replace(", 'planner_error'", '');
+        (legacy as any).db.run('PRAGMA foreign_keys = OFF');
+        (legacy as any).db.run(legacySchema);
+        (legacy as any).db.run(
+          'INSERT INTO in_app_planning_sessions_legacy SELECT * FROM in_app_planning_sessions',
+        );
+        (legacy as any).db.run('DROP TABLE in_app_planning_sessions');
+        (legacy as any).db.run(
+          'ALTER TABLE in_app_planning_sessions_legacy RENAME TO in_app_planning_sessions',
+        );
+        (legacy as any).db.run('PRAGMA foreign_keys = ON');
+        (legacy as any).dirty = true;
+        legacy.close();
+
+        const migrated = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(legacyStatuses.map((status) => migrated.loadInAppPlanningSession(`planning-${status}`)?.status))
+          .toEqual(legacyStatuses);
+        expect(migrated.loadInAppPlanningSession('planning-still_discussing')?.messages)
+          .toEqual(makePlanningSession('planning-still_discussing').messages);
+        expect(tableIndexes(migrated, 'in_app_planning_sessions'))
+          .toContain('idx_in_app_planning_sessions_updated');
+        expect(tableForeignKeys(migrated, 'in_app_planning_messages'))
+          .toContain('in_app_planning_sessions.session_id:NO ACTION');
+        migrated.upsertInAppPlanningSession(makePlanningSession('planning-error', {
+          status: 'planner_error',
+        }));
+        migrated.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadInAppPlanningSession('planning-error')?.status).toBe('planner_error');
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('round-trips planning tmux ownership across adapter reopen', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-tmux-sessions-'));
       const dbPath = join(dir, 'invoker.db');
