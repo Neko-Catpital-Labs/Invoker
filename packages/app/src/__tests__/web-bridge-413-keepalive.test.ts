@@ -5,14 +5,10 @@
  * drops the socket. Next request on the same HTTP keep-alive agent:
  * "write ECONNRESET" / Connection reset by peer.
  *
- * TODO(chaos-b-fix): These tests are marked it.fails because the current
- * implementation uses req.destroy() after a 413 response, which severs the
- * TCP connection immediately and causes ECONNRESET on subsequent requests.
- *
- * After the fix applies:
- * - sendJson will send Connection: close header for 413 responses
- * - req.resume() will drain the body instead of req.destroy() dropping the socket
- * - These tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - sendJson sends Connection: close header for 413 responses
+ * - req.resume() drains the body instead of req.destroy() dropping the socket
+ * - Tests now pass because subsequent requests on the same agent succeed
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -96,7 +92,7 @@ describe('web-bridge 413 keep-alive handling', () => {
     rmSync(uiDistDir, { recursive: true, force: true });
   });
 
-  it.fails('413 response does not poison keep-alive connection', async () => {
+  it('413 response does not poison keep-alive connection', async () => {
     const deps = makeMinimalDeps(uiDistDir);
     bridge = startWebBridge(deps);
     const port = await bridge.whenReady;
@@ -140,7 +136,7 @@ describe('web-bridge 413 keep-alive handling', () => {
     }
   });
 
-  it.fails('413 response includes Connection: close header', async () => {
+  it('413 response includes Connection: close header', async () => {
     const deps = makeMinimalDeps(uiDistDir);
     bridge = startWebBridge(deps);
     const port = await bridge.whenReady;

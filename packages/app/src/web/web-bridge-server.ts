@@ -102,12 +102,21 @@ function contentTypeFor(filePath: string): string {
   return CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown, req?: IncomingMessage): void {
+function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  req?: IncomingMessage,
+  opts?: { forceClose?: boolean },
+): void {
   const payload = Buffer.from(JSON.stringify(body), 'utf8');
   const headers: Record<string, string> = {
     'content-type': 'application/json; charset=utf-8',
     vary: 'Accept-Encoding',
   };
+  if (opts?.forceClose) {
+    headers.connection = 'close';
+  }
   const accepted = typeof req?.headers['accept-encoding'] === 'string' ? req.headers['accept-encoding'] : '';
   let responseBody = payload;
   if (payload.length >= JSON_COMPRESSION_MIN_BYTES) {
@@ -196,8 +205,8 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
       total += (chunk as Buffer).length;
       if (total > MAX_INVOKE_BODY_BYTES) {
         aborted = true;
-        sendJson(res, 413, { ok: false, error: { message: 'request body too large' } }, req);
-        req.destroy();
+        sendJson(res, 413, { ok: false, error: { message: 'request body too large' } }, req, { forceClose: true });
+        req.resume();
         return;
       }
       chunks.push(chunk as Buffer);
