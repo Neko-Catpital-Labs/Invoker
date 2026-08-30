@@ -7,6 +7,17 @@ test.use({
   },
 });
 
+test('workers surface shows db-reaper registered', async ({ page }) => {
+  await page.getByTestId('sidebar-workers').click();
+  await expect(page.getByTestId('worker-process-list')).toBeVisible();
+  await expect(page.getByTestId('worker-row-db-reaper')).toBeVisible();
+
+  await page.getByTestId('worker-row-db-reaper').click();
+  await expect(page.getByTestId('worker-detail-start-stop')).toBeVisible();
+
+  await captureScreenshot(page, 'workers-db-reaper-registered');
+});
+
 test('workers surface shows the worker control in the details panel', async ({ page }) => {
   await page.getByTestId('sidebar-workers').click();
 
