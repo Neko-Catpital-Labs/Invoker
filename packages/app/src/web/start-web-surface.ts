@@ -193,6 +193,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     const d = delta as TaskDelta;
     const rollups = projection.applyDelta(d);
     publisher.publishDelta(d, rollups);
+    bridge?.requestWorkflowsPush();
   });
 
   const refreshTaskGraph = async (): Promise<void> => {
@@ -233,6 +234,15 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     logger: deps.logger,
   });
 
+  const buildSnapshot = () => {
+    deps.orchestrator.syncAllFromDb();
+    const tasks = deps.orchestrator.getAllTasks();
+    const workflows = deps.persistence.listWorkflows();
+    const streamSequence = streamSeq.current();
+    projection.replaceAll(tasks);
+    return { tasks, workflows, streamSequence };
+  };
+
   bridge = startWebBridge({
     logger: deps.logger,
     dispatch,
@@ -243,6 +253,17 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     host,
     port,
     terminalEvents,
+    onClientConnect: (sendToClient) => {
+      const snapshot = buildSnapshot();
+      sendToClient('invoker:task-graph-event', {
+        type: 'snapshot',
+        tasks: snapshot.tasks,
+        workflows: snapshot.workflows,
+        streamSequence: snapshot.streamSequence,
+        reason: 'sse-connect',
+        forced: true,
+      });
+    },
   });
 
   const originalClose = bridge.close;
