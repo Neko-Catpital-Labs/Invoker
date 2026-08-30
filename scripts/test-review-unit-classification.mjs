@@ -40,6 +40,7 @@ const stillToolingPolicy = [
   'skills/chat-submit/scripts/check-contract.sh',
   'skills/plan-to-invoker/SKILL.md',
   'skills/plan-to-invoker/references/local-vs-remote-mcp.md',
+  'skills/workflow-chain-submit/SKILL.md',
   'skills/land-stack/SKILL.md',
   'skills/visual-proof/SKILL.md',
   'skills/prove-it/SKILL.md',
