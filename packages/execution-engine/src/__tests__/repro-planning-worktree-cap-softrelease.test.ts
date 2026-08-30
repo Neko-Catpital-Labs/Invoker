@@ -9,14 +9,11 @@
  * the worktree from disk, so later creates see <maxWorktrees and keep minting
  * new directories/sessions.
  *
- * TODO(chaos-a-fix): These tests are marked it.fails because the current
- * implementation only checks in-memory activeWorktrees, not on-disk planning
- * worktrees. The limit is not enforced for planning sessions that call
- * softRelease() immediately after acquire.
- *
- * After the fix applies:
- * - RepoPool will count on-disk planning worktrees when enforcing maxWorktrees
- * - Tests will pass and should be changed from it.fails to it
+ * Fix applied:
+ * - RepoPool now counts on-disk planning worktrees when enforcing maxWorktrees
+ * - For branches starting with invoker/planning/, the limit is checked against
+ *   the git worktree list, not just in-memory activeWorktrees
+ * - Tests now pass because on-disk count stays <= maxWorktrees
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -24,7 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync } from 'nod
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { RepoPool } from '../repo-pool.js';
+import { RepoPool, ResourceLimitError } from '../repo-pool.js';
 import { parseGitWorktreePorcelain } from '../worktree-discovery.js';
 
 function createTempRepo(): string {
@@ -73,7 +70,7 @@ describe('planning worktree cap with softRelease', () => {
     rmSync(localRepoUrl, { recursive: true, force: true });
   });
 
-  it.fails('sequential acquire+softRelease should not exceed maxWorktrees on disk', async () => {
+  it('sequential acquire+softRelease should not exceed maxWorktrees on disk', async () => {
     const MAX_WORKTREES = 6;
     const SESSIONS_TO_CREATE = 15;
 
@@ -84,20 +81,33 @@ describe('planning worktree cap with softRelease', () => {
     });
 
     const clonePath = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
+    let succeeded = 0;
+    let rejected = 0;
 
     for (let i = 0; i < SESSIONS_TO_CREATE; i++) {
       const sessionId = `session-${i}`;
       const branch = resolvePlanningWorktreeBranch(sessionId);
-      const acquired = await pool.acquireWorktree(localRepoUrl, branch, undefined, sessionId);
-      acquired.softRelease();
+      try {
+        const acquired = await pool.acquireWorktree(localRepoUrl, branch, undefined, sessionId);
+        acquired.softRelease();
+        succeeded++;
+      } catch (err) {
+        if (err instanceof ResourceLimitError) {
+          rejected++;
+        } else {
+          throw err;
+        }
+      }
     }
 
     const onDiskCount = countPlanningWorktrees(clonePath);
 
     expect(onDiskCount).toBeLessThanOrEqual(MAX_WORKTREES);
+    expect(succeeded).toBe(MAX_WORKTREES);
+    expect(rejected).toBe(SESSIONS_TO_CREATE - MAX_WORKTREES);
   });
 
-  it.fails('concurrent acquire+softRelease should not exceed maxWorktrees on disk', async () => {
+  it('concurrent acquire+softRelease should not exceed maxWorktrees on disk', async () => {
     const MAX_WORKTREES = 6;
     const CONCURRENT_SESSIONS = 25;
 
@@ -122,12 +132,17 @@ describe('planning worktree cap with softRelease', () => {
     );
 
     const succeeded = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter(
+      (r) => r.status === 'rejected' && r.reason instanceof ResourceLimitError
+    );
     const onDiskCount = countPlanningWorktrees(clonePath);
 
     expect(onDiskCount).toBeLessThanOrEqual(MAX_WORKTREES);
+    expect(succeeded.length).toBeLessThanOrEqual(MAX_WORKTREES);
+    expect(rejected.length).toBeGreaterThanOrEqual(CONCURRENT_SESSIONS - MAX_WORKTREES);
   });
 
-  it.fails('live planning worktree count should not exceed maxWorktrees', async () => {
+  it('live planning worktree count should not exceed maxWorktrees', async () => {
     const MAX_WORKTREES = 6;
     const SESSIONS_TO_CREATE = 20;
 
@@ -143,8 +158,14 @@ describe('planning worktree cap with softRelease', () => {
     for (let i = 0; i < SESSIONS_TO_CREATE; i++) {
       const sessionId = `tracked-session-${i}`;
       const branch = resolvePlanningWorktreeBranch(sessionId);
-      const acquired = await pool.acquireWorktree(localRepoUrl, branch, undefined, sessionId);
-      acquired.softRelease();
+      try {
+        const acquired = await pool.acquireWorktree(localRepoUrl, branch, undefined, sessionId);
+        acquired.softRelease();
+      } catch (err) {
+        if (!(err instanceof ResourceLimitError)) {
+          throw err;
+        }
+      }
 
       const currentOnDisk = countPlanningWorktrees(clonePath);
       if (currentOnDisk > maxOnDiskObserved) {
