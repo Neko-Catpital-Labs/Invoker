@@ -14,10 +14,13 @@ import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.j
 class FakeDbReaperStore implements DbReaperWorkerStore {
   readonly pruneOldEventsCalls: number[] = [];
   readonly pruneOldSyncJournalCalls: number[] = [];
+  readonly runIncrementalVacuumCalls: number[] = [];
 
   constructor(
     private readonly eventsPruned = 0,
     private readonly syncJournalPruned = 0,
+    private readonly freelistPages = 0,
+    private readonly pagesVacuumed = 0,
   ) {}
 
   pruneOldEvents(retentionDays: number): number {
@@ -28,6 +31,15 @@ class FakeDbReaperStore implements DbReaperWorkerStore {
   pruneOldSyncJournal(retentionDays: number): number {
     this.pruneOldSyncJournalCalls.push(retentionDays);
     return this.syncJournalPruned;
+  }
+
+  getFreelistPageCount(): number {
+    return this.freelistPages;
+  }
+
+  runIncrementalVacuum(maxPages: number): number {
+    this.runIncrementalVacuumCalls.push(maxPages);
+    return this.pagesVacuumed;
   }
 }
 
@@ -51,6 +63,44 @@ describe('createDbReaperWorker', () => {
 
     expect(store.pruneOldEventsCalls).toEqual([7]);
     expect(store.pruneOldSyncJournalCalls).toEqual([21]);
+  });
+
+  it('does not run incremental vacuum when the freelist is below the configured threshold', async () => {
+    const store = new FakeDbReaperStore(0, 0, 500, 0);
+    const worker = createDbReaperWorker({
+      logger: makeLogger(),
+      store,
+      eventsRetentionDays: 7,
+      syncJournalRetentionDays: 21,
+      vacuumFreelistThresholdPages: 1_000,
+      tickOnStart: false,
+    });
+
+    await worker.tick();
+
+    expect(store.runIncrementalVacuumCalls).toEqual([]);
+  });
+
+  it('runs incremental vacuum with the configured page cap once the freelist exceeds the threshold', async () => {
+    const store = new FakeDbReaperStore(0, 0, 15_000, 800);
+    const logger = makeLogger();
+    const worker = createDbReaperWorker({
+      logger,
+      store,
+      eventsRetentionDays: 7,
+      syncJournalRetentionDays: 21,
+      vacuumFreelistThresholdPages: 10_000,
+      vacuumMaxPagesPerTick: 2_500,
+      tickOnStart: false,
+    });
+
+    await worker.tick();
+
+    expect(store.runIncrementalVacuumCalls).toEqual([2_500]);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('800 freelist page(s) reclaimed'),
+      expect.anything(),
+    );
   });
 
   it('uses the documented default retention windows when none are configured', async () => {
