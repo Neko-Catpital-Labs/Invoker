@@ -6233,4 +6233,166 @@ describe('SQLiteAdapter', () => {
       expect(() => assertOwnerCapabilityForWritableOpen(false, true, undefined)).not.toThrow();
     });
   });
+
+  describe('pruneOldEvents', () => {
+    function backdateEvent(eventId: number, daysAgo: number): void {
+      (adapter as any).db.run(
+        `UPDATE events SET created_at = datetime('now', ?) WHERE id = ?`,
+        [`-${daysAgo} days`, eventId],
+      );
+    }
+
+    function insertEvent(taskId: string): number {
+      adapter.logEvent(taskId, 'task.created');
+      const row = (adapter as any).queryOne(
+        'SELECT id FROM events WHERE task_id = ? ORDER BY id DESC LIMIT 1',
+        [taskId],
+      );
+      return Number(row.id);
+    }
+
+    it('prunes old events belonging to a terminal-status task', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 30);
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(1);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(0);
+    });
+
+    it('does not prune recent events even for a terminal-status task', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      insertEvent('wf-1/t1');
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+
+    it('does not prune old events for a task that is still running (not terminal)', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'running', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 30);
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+
+    it('does not prune old events for a task the user reopened back to a non-terminal status', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 30);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'running', config: { workflowId: 'wf-1' } }));
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+
+    it('is a no-op for a non-positive retention window', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 3650);
+
+      expect(adapter.pruneOldEvents(0)).toBe(0);
+      expect(adapter.pruneOldEvents(-1)).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+  });
+
+  describe('pruneOldSyncJournal', () => {
+    function insertJournalRow(daysAgo: number, seq?: number): number {
+      (adapter as any).db.run(
+        `INSERT INTO sync_journal (entity_type, entity_id, op, payload, origin, created_at)
+         VALUES ('workflow', 'wf-x', 'upsert', '{}', 'home', datetime('now', ?))`,
+        [`-${daysAgo} days`],
+      );
+      const row = (adapter as any).queryOne(
+        'SELECT seq FROM sync_journal ORDER BY seq DESC LIMIT 1',
+      );
+      return Number(row.seq);
+    }
+
+    function insertCursor(peerId: string, lastSentSeq: number): void {
+      (adapter as any).db.run(
+        `INSERT INTO sync_cursors (peer_id, last_sent_seq, last_received_seq, updated_at)
+         VALUES (?, ?, 0, datetime('now'))`,
+        [peerId, lastSentSeq],
+      );
+    }
+
+    function journalRowCount(): number {
+      const row = (adapter as any).queryOne('SELECT COUNT(*) AS c FROM sync_journal');
+      return Number(row.c);
+    }
+
+    it('prunes an old row when no peer has ever registered a cursor', () => {
+      insertJournalRow(30);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(1);
+      expect(journalRowCount()).toBe(0);
+    });
+
+    it('does not prune a recent row even with no registered peer', () => {
+      insertJournalRow(1);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+
+    it('does not prune an old row a registered peer has not yet been sent', () => {
+      const seq = insertJournalRow(30);
+      insertCursor('peer-a', seq - 1);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+
+    it('prunes an old row once every registered peer has been sent past it', () => {
+      const seq = insertJournalRow(30);
+      insertCursor('peer-a', seq);
+      insertCursor('peer-b', seq + 5);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(1);
+      expect(journalRowCount()).toBe(0);
+    });
+
+    it('does not prune an old row when even one of several peers has not been sent past it', () => {
+      const seq = insertJournalRow(30);
+      insertCursor('peer-a', seq);
+      insertCursor('peer-b', seq - 1);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+
+    it('is a no-op for a non-positive retention window', () => {
+      insertJournalRow(3650);
+
+      expect(adapter.pruneOldSyncJournal(0)).toBe(0);
+      expect(adapter.pruneOldSyncJournal(-1)).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+  });
 });
