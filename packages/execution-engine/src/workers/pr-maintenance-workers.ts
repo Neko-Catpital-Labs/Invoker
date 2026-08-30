@@ -270,6 +270,9 @@ export function probePrMaintenanceLock(options: PrMaintenanceLockProbeOptions): 
     timeout: 3_000,
     killSignal: 'SIGKILL',
   });
+  if (flockProbe.signal === 'SIGKILL' || (flockProbe.error && (flockProbe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')) {
+    return { held: false, reason: 'probe-timeout' };
+  }
   if (!flockProbe.error || (flockProbe.error as NodeJS.ErrnoException).code !== 'ENOENT') {
     return flockProbe.status === 0
       ? { held: false }
