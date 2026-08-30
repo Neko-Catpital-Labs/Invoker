@@ -380,6 +380,65 @@ describe('make-pr stack publish body contract', () => {
     // The caller validates this empty body and falls through to the next agent.
     expect(validateReviewStackPrBody(parsed[0]?.body ?? '').length).toBeGreaterThan(0);
   });
+
+  it('parses JSON wrapped in a ```json fenced code block despite the no-fences instruction', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = '```json\n' + payload + '\n```';
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('parses JSON wrapped in a bare ``` fenced code block', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = '```\n' + payload + '\n```';
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('extracts a JSON object surrounded by commentary the agent added despite instructions', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = `Here is the published review stack:\n${payload}\nLet me know if you need anything else.`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('extracts balanced JSON when surrounding commentary and quoted strings contain braces', () => {
+    const title = 'Keep } inside an escaped "quote" and { inside the string';
+    const payload = JSON.stringify({
+      artifacts: [{ id: 'a', url: 'https://x/1', title }],
+    });
+    const raw = `Preparing {draft} output.\n${payload}\nFinished with } commentary.`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.title).toBe(title);
+  });
+
+  it('does not let a valid-JSON decoy in leading commentary shadow the real artifacts payload', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    // "{}" is itself valid, parseable JSON -- a naive first-match scanner
+    // would stop here and never reach the real payload below it.
+    const raw = `Status: {}\nHere is the published review stack:\n${payload}`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('extracts nested artifact JSON from an invalid enclosing brace span', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = `Note: {payload follows: ${payload}}`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('still throws "must output JSON" for genuinely non-JSON output', () => {
+    expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
+      'make-pr stack publisher must output JSON',
+    );
+  });
 });
 
 // ── resolveSkillPathViaAgent ─────────────────────────────
