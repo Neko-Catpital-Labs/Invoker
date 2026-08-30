@@ -98,7 +98,8 @@ export interface InfraRepairWorkerStore {
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   updateTask?(taskId: string, changes: TaskStateChanges): void;
-  getEvents?(taskId: string): TaskEvent[];
+  /** Bounded, newest-first lookup — see SQLiteAdapter.getRecentEventsOfType. */
+  getRecentEventsOfType?(taskId: string, eventType: string, limit: number): TaskEvent[];
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -370,11 +371,11 @@ export function classifyGenericSshInfraFailure(errorText: unknown): InfraRepairR
 }
 
 function resolveRemoteTargetId(
-  store: Pick<InfraRepairWorkerStore, 'getEvents'>,
+  store: Pick<InfraRepairWorkerStore, 'getRecentEventsOfType'>,
   task: TaskState,
 ): string | undefined {
   return resolveSelectedRemoteTargetId(
-    { persistence: { getEvents: store.getEvents?.bind(store) } } as unknown as ConflictResolverHost,
+    { persistence: { getRecentEventsOfType: store.getRecentEventsOfType?.bind(store) } } as unknown as ConflictResolverHost,
     task.id,
     task,
   );

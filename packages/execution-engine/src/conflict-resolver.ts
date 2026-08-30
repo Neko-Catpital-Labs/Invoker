@@ -324,14 +324,20 @@ export function buildRemoteAgentCommand(
   return { shellCommand: cmd, sessionId };
 }
 
+/** How many recent `task.executor.selected` events to check for a usable poolMemberId before giving up. */
+const RECENT_EXECUTOR_SELECTED_EVENTS_TO_CHECK = 20;
+
 export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
   const direct = (task.config as { poolMemberId?: string }).poolMemberId;
   if (direct) return direct;
 
-  const events = host.persistence.getEvents?.(taskId) ?? [];
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (event?.eventType !== 'task.executor.selected' || !event.payload) continue;
+  const events = host.persistence.getRecentEventsOfType?.(
+    taskId,
+    'task.executor.selected',
+    RECENT_EXECUTOR_SELECTED_EVENTS_TO_CHECK,
+  ) ?? [];
+  for (const event of events) {
+    if (!event.payload) continue;
     try {
       const payload = JSON.parse(event.payload) as { poolMemberId?: unknown };
       if (typeof payload.poolMemberId === 'string' && payload.poolMemberId.trim()) {

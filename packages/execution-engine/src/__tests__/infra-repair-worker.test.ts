@@ -103,7 +103,7 @@ function makeHarness(
     loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
     loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
     updateTask,
-    getEvents: vi.fn(() => []),
+    getRecentEventsOfType: vi.fn(() => []),
     getWorkerAction: vi.fn((workerKind: string, externalKey: string) => actions.get(`${workerKind}:${externalKey}`)),
     upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
       const existing = actions.get(`${write.workerKind}:${write.externalKey}`);
