@@ -583,7 +583,6 @@ describe('WorktreeExecutor', () => {
     });
     mockPool(provisionedExecutor);
 
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => true);
     try {
       const startPromise = provisionedExecutor.start(makeRequest());
       const rejection = expect(startPromise).rejects.toThrow('provision command timed out after 25ms');
@@ -596,10 +595,11 @@ describe('WorktreeExecutor', () => {
       await vi.advanceTimersByTimeAsync(25 + SIGKILL_TIMEOUT_MS);
 
       await rejection;
-      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
-      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGKILL');
+      // The mocked pid does not lead a real process group, so killProcessGroup
+      // falls back to child.kill() rather than process.kill(-pid).
+      expect(provisionProcess.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(provisionProcess.kill).toHaveBeenCalledWith('SIGKILL');
     } finally {
-      killSpy.mockRestore();
       if (previousTimeout === undefined) {
         delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
       } else {
