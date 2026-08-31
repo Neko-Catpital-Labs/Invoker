@@ -208,8 +208,10 @@ function workflowIdForTask(task: TaskState): string | undefined {
 function workflowNameForId(
   options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
   workflowId: string,
+  workflowsById?: ReadonlyMap<string, { name?: string; repoUrl?: string }>,
 ): string | undefined {
-  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  const listed = workflowsById?.get(workflowId)
+    ?? options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
   if (typeof listed?.name === 'string' && listed.name.length > 0) return listed.name;
   const loaded = options.store.loadWorkflow?.(workflowId);
   if (typeof loaded?.name === 'string' && loaded.name.length > 0) return loaded.name;
@@ -219,8 +221,10 @@ function workflowNameForId(
 function workflowRepoUrlForId(
   options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
   workflowId: string,
+  workflowsById?: ReadonlyMap<string, { name?: string; repoUrl?: string }>,
 ): string | undefined {
-  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  const listed = workflowsById?.get(workflowId)
+    ?? options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
   if (typeof listed?.repoUrl === 'string' && listed.repoUrl.length > 0) return listed.repoUrl;
   const loaded = options.store.loadWorkflow?.(workflowId);
   if (typeof loaded?.repoUrl === 'string' && loaded.repoUrl.length > 0) return loaded.repoUrl;
@@ -521,6 +525,7 @@ function compareAutoFixCandidateSnapshot(
 function validateAutoFixCandidate(
   candidate: AutoFixRecoveryCandidate,
   options: AutoFixRecoveryPolicyOptions,
+  workflowsById?: ReadonlyMap<string, { name?: string; repoUrl?: string }>,
 ): ValidatedAutoFixRecoveryCandidate | undefined {
   const latest = loadLatestTask(candidate, options);
   if (!latest) {
@@ -535,7 +540,7 @@ function validateAutoFixCandidate(
   }
   const latestRef = snapshotComparison.ref;
 
-  const workflowName = workflowNameForId(options, latestRef.workflowId);
+  const workflowName = workflowNameForId(options, latestRef.workflowId, workflowsById);
   if (isAdminBypassNamedWorkflow(workflowName)) {
     skipAutoFixCandidate(options, candidate, 'admin-bypass-excluded', {
       workflowName: workflowName ?? null,
@@ -543,7 +548,7 @@ function validateAutoFixCandidate(
     return undefined;
   }
 
-  if (!workflowRepoUrlForId(options, latestRef.workflowId)) {
+  if (!workflowRepoUrlForId(options, latestRef.workflowId, workflowsById)) {
     skipAutoFixCandidate(options, candidate, 'no-repo-workflow', {
       workflowName: workflowName ?? null,
     });
@@ -595,8 +600,11 @@ export function collectValidatedAutoFixRecoveryCandidates(
   options: AutoFixRecoveryPolicyOptions,
   candidates: AutoFixRecoveryCandidate[] = listAutoFixRecoveryScanCandidates(options),
 ): ValidatedAutoFixRecoveryCandidate[] {
+  const workflowsById = new Map(
+    options.store.listWorkflows().map((workflow) => [workflow.id, workflow]),
+  );
   return candidates
-    .map((candidate) => validateAutoFixCandidate(candidate, options))
+    .map((candidate) => validateAutoFixCandidate(candidate, options, workflowsById))
     .filter((candidate): candidate is ValidatedAutoFixRecoveryCandidate => Boolean(candidate));
 }
 

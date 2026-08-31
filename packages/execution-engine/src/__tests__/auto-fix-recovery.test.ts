@@ -91,6 +91,53 @@ function makeHarness(task = makeFailedTask()) {
 }
 
 describe('collectValidatedAutoFixRecoveryCandidates', () => {
+  it('loads workflow metadata once for the whole candidate batch', () => {
+    const workflowCount = 20;
+    const workflows = Array.from({ length: workflowCount }, (_, index) => ({
+      id: `wf-${index}`,
+      repoUrl: 'https://example.com/repo.git',
+    }));
+    const tasks = new Map(workflows.map((workflow, index) => {
+      const task = makeFailedTask({
+        id: `${workflow.id}/build`,
+        config: { workflowId: workflow.id, command: 'pnpm build' },
+        execution: {
+          generation: index,
+          selectedAttemptId: `attempt-${index}`,
+          branch: `feature/${index}`,
+          error: 'TypeScript compilation failed',
+          failureClass: undefined,
+        },
+      });
+      return [task.id, task] as const;
+    }));
+    const store = {
+      listWorkflows: vi.fn(() => workflows),
+      loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
+      listWorkflowMutationIntents: vi.fn(() => []),
+      logEvent: vi.fn(),
+    };
+    const candidates = [...tasks.values()].map((task) => ({
+      taskId: task.id,
+      workflowId: task.config.workflowId!,
+      generation: task.execution.generation ?? 0,
+      taskStateVersion: task.taskStateVersion,
+      attemptId: task.execution.selectedAttemptId,
+      source: 'scan' as const,
+    }));
+
+    const validated = collectValidatedAutoFixRecoveryCandidates({
+      store,
+      submitter: { submit: vi.fn(() => 1) },
+      logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 3,
+    }, candidates);
+
+    expect(validated).toHaveLength(workflowCount);
+    expect(store.listWorkflows).toHaveBeenCalledTimes(1);
+  });
+
   it('lists only failed liveness-classed tasks as candidates', () => {
     const task = makeFailedTask();
     const store = {
