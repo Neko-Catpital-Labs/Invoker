@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { WORKER_SUBMITTED_MUTATION_CHANNELS, WORKFLOW_RESUME_COMMAND_CHANNEL } from '@invoker/execution-engine';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL,
+  WORKER_SUBMITTED_MUTATION_CHANNELS,
+  WORKFLOW_RESUME_COMMAND_CHANNEL,
+} from '@invoker/execution-engine';
 
 import { assertAllWorkerMutationChannelsRegistered, buildWorkerMutationHandlers } from '../workflow-mutation-handlers.js';
 
@@ -23,6 +27,28 @@ describe('buildWorkerMutationHandlers', () => {
       expect(handlers.has(channel)).toBe(true);
     }
     expect(handlers.has(WORKFLOW_RESUME_COMMAND_CHANNEL)).toBe(false);
+  });
+
+  it('routes a checked cleanup workflow ID through CommandService workflow retirement', async () => {
+    const deleteWorkflow = vi.fn(async () => ({ ok: true, data: undefined }));
+    const handlers = buildWorkerMutationHandlers({
+      ...fakeDeps(),
+      commandService: { deleteWorkflow } as never,
+    });
+    const retire = handlers.get(IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL)!;
+
+    await expect(retire('wf-retire')).resolves.toEqual({ ok: true });
+    expect(deleteWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: 'idle-task-cleanup-retire-workflow',
+        source: 'surface',
+        scope: 'workflow',
+        payload: { workflowId: 'wf-retire' },
+      }),
+    );
+
+    await expect(retire('  ')).rejects.toThrow(/requires a workflow ID/);
+    expect(deleteWorkflow).toHaveBeenCalledTimes(1);
   });
 });
 

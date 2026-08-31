@@ -127,7 +127,7 @@ describe('planIdleTaskCleanup', () => {
   });
 });
 
-describe('createIdleTaskCleanupWorker: hard-disabled deletion', () => {
+describe('createIdleTaskCleanupWorker: live workflow retirement', () => {
   function makeGithub(): PrMaintenanceGitHub {
     return {
       listOpenPullRequests: vi.fn(async () => []),
@@ -138,7 +138,7 @@ describe('createIdleTaskCleanupWorker: hard-disabled deletion', () => {
     };
   }
 
-  it('logs one workflow retirement without submitting or touching PRs and branches', async () => {
+  it('submits a workflow retirement without calling GitHub or submitting a task mutation', async () => {
     const github = makeGithub();
     const submit = vi.fn(() => 1);
     const logger = {
@@ -163,12 +163,17 @@ describe('createIdleTaskCleanupWorker: hard-disabled deletion', () => {
 
     await worker.tick('manual');
 
-    expect(submit).not.toHaveBeenCalled();
     expect(github.viewPullRequest).not.toHaveBeenCalled();
     expect(github.closePullRequest).not.toHaveBeenCalled();
-    expect(logger.info.mock.calls).toEqual([[
-      expect.stringContaining('(dry-run) would delete workflow wf-completed'),
-      { module: 'idle-task-cleanup', workflowId: 'wf-completed' },
-    ]]);
+    expect(submit).toHaveBeenCalledExactlyOnceWith(
+      'wf-completed',
+      'high',
+      'invoker:delete-workflow',
+      ['wf-completed'],
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('submitted workflow retirement for wf-completed'),
+      expect.objectContaining({ workflowId: 'wf-completed', intentId: 1 }),
+    );
   });
 });
