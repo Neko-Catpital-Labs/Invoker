@@ -1,34 +1,97 @@
-/**
- * Duplicated from `scripts/e2e-regression-watch.mjs`'s `MARKER_PREFIX` — that
- * file is not importable from this TS package (plain .mjs script, no build
- * step shared with @invoker/execution-engine). Keep the two in sync by hand;
- * `idle-task-cleanup-policy.test.ts` pins the literal value.
- *
- * The marker lives on the *workflow's* description (the plan's top-level
- * `description:`, set from `ci-regression-watch.workflow.yaml`), not on any
- * individual task — confirmed against `liveQueryHasNonTerminalWork`
- * (`scripts/e2e-regression-watch.mjs:885-889`), which checks `w.description`
- * on `query workflows` rows.
- */
-const E2E_REPAIR_MARKER = 'invoker-ci-regression-watch: first-bad-sha=';
+import {
+  TASK_STATUSES,
+  type TaskStatus,
+  type WorkflowDerivedStatus,
+} from '@invoker/workflow-core';
 
-const ADMIN_BYPASS_REPAIR_NAME_PATTERN = /^repair-pr-\d+-.+$/;
+export const WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS = 48 * 60 * 60_000;
 
-/** Matches the `repair-pr-<num>-<fingerprint>` plans filed by `scripts/cron-pr-orphan-repair.sh`. */
-export function isAdminBypassRepairTask(workflowName: string | undefined): boolean {
-  return typeof workflowName === 'string' && ADMIN_BYPASS_REPAIR_NAME_PATTERN.test(workflowName);
-}
-
-/** Matches workflows filed by `scripts/e2e-regression-watch.mjs`, tagged via their description marker. */
-export function isE2eRepairWorkflow(workflowDescription: string | undefined): boolean {
-  return typeof workflowDescription === 'string' && workflowDescription.includes(E2E_REPAIR_MARKER);
-}
+const KNOWN_TASK_STATUS_SET: ReadonlySet<string> = new Set(TASK_STATUSES);
 
 /**
- * Whether a workflow belongs to one of the two automated repair families this
- * cleanup worker is scoped to. Every task in a non-matching workflow is left
- * alone, no matter its status or idle time.
+ * These outcomes contain no work that can still advance. Every other known
+ * task status remains active for retirement purposes. Keeping the inactive
+ * allowlist narrow makes a newly-added task status fail closed automatically.
  */
-export function isCleanupEligibleWorkflow(workflow: { name?: string; description?: string }): boolean {
-  return isAdminBypassRepairTask(workflow.name) || isE2eRepairWorkflow(workflow.description);
+const INACTIVE_TASK_STATUS_SET: ReadonlySet<TaskStatus> = new Set([
+  'completed',
+  'failed',
+  'closed',
+  'stale',
+]);
+
+const KNOWN_WORKFLOW_STATUSES = [
+  'pending',
+  'running',
+  'fixing_with_ai',
+  'completed',
+  'failed',
+  'closed',
+  'blocked',
+  'review_ready',
+  'awaiting_approval',
+  'stale',
+] as const satisfies readonly WorkflowDerivedStatus[];
+
+const KNOWN_WORKFLOW_STATUS_SET: ReadonlySet<string> = new Set(KNOWN_WORKFLOW_STATUSES);
+
+export interface WorkflowRetirementCandidate {
+  readonly status?: string;
+  readonly updatedAt?: string | Date;
+}
+
+export interface WorkflowRetirementTask {
+  readonly status?: string;
+}
+
+export type WorkflowRetirementDecision =
+  | { readonly kind: 'retain' }
+  | {
+      readonly kind: 'retire';
+      readonly reason: 'completed' | 'inactive-over-threshold';
+    };
+
+function isKnownTaskStatus(status: string | undefined): status is TaskStatus {
+  return status !== undefined && KNOWN_TASK_STATUS_SET.has(status);
+}
+
+function isKnownWorkflowStatus(status: string | undefined): status is WorkflowDerivedStatus {
+  return status !== undefined && KNOWN_WORKFLOW_STATUS_SET.has(status);
+}
+
+export function hasActiveOrUnknownTask(tasks: readonly WorkflowRetirementTask[]): boolean {
+  return tasks.some((task) =>
+    !isKnownTaskStatus(task.status) || !INACTIVE_TASK_STATUS_SET.has(task.status),
+  );
+}
+
+/**
+ * Completed workflows retire immediately once all tasks are inactive. Other
+ * known workflow states retire only when their last update is strictly older
+ * than the threshold. Unknown states and malformed timestamps are retained.
+ */
+export function decideWorkflowRetirement(
+  workflow: WorkflowRetirementCandidate,
+  tasks: readonly WorkflowRetirementTask[],
+  options: {
+    readonly now: number;
+    readonly idleThresholdMs?: number;
+  },
+): WorkflowRetirementDecision {
+  if (!isKnownWorkflowStatus(workflow.status)) return { kind: 'retain' };
+  if (hasActiveOrUnknownTask(tasks)) return { kind: 'retain' };
+
+  if (workflow.status === 'completed') {
+    return { kind: 'retire', reason: 'completed' };
+  }
+
+  const updatedAtMs = workflow.updatedAt instanceof Date
+    ? workflow.updatedAt.getTime()
+    : Date.parse(workflow.updatedAt ?? '');
+  if (!Number.isFinite(updatedAtMs)) return { kind: 'retain' };
+
+  const idleThresholdMs = options.idleThresholdMs ?? WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS;
+  if (options.now - updatedAtMs <= idleThresholdMs) return { kind: 'retain' };
+
+  return { kind: 'retire', reason: 'inactive-over-threshold' };
 }

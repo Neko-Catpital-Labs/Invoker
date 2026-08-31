@@ -1,159 +1,133 @@
-import { describe, it, expect, vi } from 'vitest';
-import type { TaskState } from '@invoker/workflow-core';
+import { describe, expect, it, vi } from 'vitest';
+import type { TaskState, TaskStatus } from '@invoker/workflow-core';
+
 import {
-  planIdleTaskCleanup,
   createIdleTaskCleanupWorker,
+  planIdleTaskCleanup,
   type IdleTaskCleanupWorkflowRow,
 } from '../workers/idle-task-cleanup-worker.js';
+import { WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS } from '../workers/idle-task-cleanup-policy.js';
 import type { PrMaintenanceGitHub } from '../workers/pr-maintenance-github.js';
 
 const NOW = new Date('2026-08-15T12:00:00.000Z').getTime();
-const IDLE_15M = 15 * 60_000;
+const OVER_48_HOURS_AGO = new Date(NOW - WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS - 1).toISOString();
 
-function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
+function makeWorkflow(
+  id: string,
+  status: string,
+  updatedAt: string = new Date(NOW).toISOString(),
+): IdleTaskCleanupWorkflowRow {
+  return { id, name: id, status, updatedAt };
+}
+
+function makeTask(id: string, status: TaskStatus): TaskState {
   return {
-    id: overrides.id,
-    description: overrides.description ?? 'task',
-    status: overrides.status ?? 'pending',
-    dependencies: overrides.dependencies ?? [],
-    createdAt: overrides.createdAt ?? new Date(NOW - 60 * 60_000),
-    config: { workflowId: 'wf-1', ...overrides.config },
-    execution: { generation: 0, ...overrides.execution },
+    id,
+    description: id,
+    status,
+    dependencies: [],
+    createdAt: new Date(NOW - 60 * 60_000),
+    config: { workflowId: id.split('/')[0] },
+    execution: { generation: 0 },
     taskStateVersion: 1,
   } as TaskState;
 }
 
-const adminBypassWorkflow: IdleTaskCleanupWorkflowRow = {
-  id: 'wf-admin',
-  name: 'repair-pr-801-ab12cd34ef56ab12',
-  description: 'repair admin-bypass PR #801',
-};
-
-const e2eWorkflow: IdleTaskCleanupWorkflowRow = {
-  id: 'wf-e2e',
-  name: 'CI regression: abc123-unit',
-  description: 'invoker-ci-regression-watch: first-bad-sha=abc123; job=unit',
-};
-
-const unrelatedWorkflow: IdleTaskCleanupWorkflowRow = {
-  id: 'wf-other',
-  name: 'my-feature-workflow',
-  description: 'just a normal feature',
-};
-
-async function plan(
+function plan(
   workflows: IdleTaskCleanupWorkflowRow[],
   tasksByWorkflow: Record<string, TaskState[]>,
-  overrides: { isPullRequestMerged?: (prNumber: number) => Promise<boolean>; idleThresholdMs?: number } = {},
 ) {
-  return planIdleTaskCleanup(workflows, (id) => tasksByWorkflow[id] ?? [], {
-    now: NOW,
-    idleThresholdMs: overrides.idleThresholdMs ?? IDLE_15M,
-    isPullRequestMerged: overrides.isPullRequestMerged ?? (async () => false),
-  });
+  return planIdleTaskCleanup(workflows, (id) => tasksByWorkflow[id] ?? [], { now: NOW });
 }
 
-describe('planIdleTaskCleanup: scope', () => {
-  it('ignores workflows that match neither the admin-bypass-repair nor e2e-repair family', async () => {
-    const task = makeTask({ id: 'wf-other/task', status: 'failed', execution: { completedAt: new Date(NOW - IDLE_15M) } });
-    const actions = await plan([unrelatedWorkflow], { 'wf-other': [task] });
-    expect(actions).toEqual([]);
+describe('planIdleTaskCleanup', () => {
+  it('plans one workflow retirement for a completed workflow with no active tasks', () => {
+    const workflow = makeWorkflow('wf-completed', 'completed');
+    const tasks = [
+      makeTask('wf-completed/task-1', 'completed'),
+      makeTask('wf-completed/task-2', 'closed'),
+      makeTask('wf-completed/task-3', 'stale'),
+    ];
+
+    expect(plan([workflow], { 'wf-completed': tasks })).toEqual([
+      { kind: 'delete-workflow', workflowId: 'wf-completed', reason: 'workflow completed' },
+    ]);
   });
 
-  it('ignores non-closable statuses even in an eligible workflow', async () => {
-    const task = makeTask({ id: 'wf-admin/task', status: 'running', execution: { completedAt: new Date(NOW - IDLE_15M) } });
-    const actions = await plan([adminBypassWorkflow], { 'wf-admin': [task] });
-    expect(actions).toEqual([]);
+  it('plans one workflow retirement, not one action per task, when inactive beyond 48 hours', () => {
+    const workflow = makeWorkflow('wf-old', 'failed', OVER_48_HOURS_AGO);
+    const tasks = [
+      makeTask('wf-old/task-1', 'failed'),
+      makeTask('wf-old/task-2', 'closed'),
+      makeTask('wf-old/task-3', 'completed'),
+    ];
+
+    expect(plan([workflow], { 'wf-old': tasks })).toEqual([
+      {
+        kind: 'delete-workflow',
+        workflowId: 'wf-old',
+        reason: 'workflow inactive beyond retirement threshold',
+      },
+    ]);
+  });
+
+  it('retains a non-completed workflow at exactly 48 hours', () => {
+    const workflow = makeWorkflow(
+      'wf-boundary',
+      'failed',
+      new Date(NOW - WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS).toISOString(),
+    );
+
+    expect(plan([workflow], { 'wf-boundary': [makeTask('wf-boundary/task', 'failed')] })).toEqual([]);
+  });
+
+  it('retains a fresh non-completed workflow', () => {
+    const workflow = makeWorkflow('wf-fresh', 'failed');
+
+    expect(plan([workflow], { 'wf-fresh': [makeTask('wf-fresh/task', 'failed')] })).toEqual([]);
+  });
+
+  it.each<TaskStatus>([
+    'pending',
+    'queued',
+    'running',
+    'fixing_with_ai',
+    'needs_input',
+    'blocked',
+    'review_ready',
+    'awaiting_approval',
+  ])('retains an old workflow while a task is %s', (status) => {
+    const workflow = makeWorkflow(`wf-active-${status}`, 'failed', OVER_48_HOURS_AGO);
+
+    expect(plan([workflow], {
+      [workflow.id]: [makeTask(`${workflow.id}/task`, status)],
+    })).toEqual([]);
+  });
+
+  it('retains a completed workflow when its task state is active', () => {
+    const workflow = makeWorkflow('wf-completed-active', 'completed', OVER_48_HOURS_AGO);
+
+    expect(plan([workflow], {
+      [workflow.id]: [makeTask(`${workflow.id}/task`, 'running')],
+    })).toEqual([]);
+  });
+
+  it('retains unknown workflow and task states', () => {
+    const unknownWorkflow = makeWorkflow('wf-unknown-workflow', 'future_workflow_state', OVER_48_HOURS_AGO);
+    const unknownTaskWorkflow = makeWorkflow('wf-unknown-task', 'failed', OVER_48_HOURS_AGO);
+    const unknownTask = {
+      ...makeTask('wf-unknown-task/task', 'failed'),
+      status: 'future_task_state',
+    } as unknown as TaskState;
+
+    expect(plan([unknownWorkflow, unknownTaskWorkflow], {
+      'wf-unknown-workflow': [makeTask('wf-unknown-workflow/task', 'failed')],
+      'wf-unknown-task': [unknownTask],
+    })).toEqual([]);
   });
 });
 
-describe('planIdleTaskCleanup: idle threshold', () => {
-  it('does not act just under 15 minutes idle', async () => {
-    const task = makeTask({
-      id: 'wf-admin/task',
-      status: 'failed',
-      execution: { completedAt: new Date(NOW - (IDLE_15M - 1000)) },
-    });
-    const actions = await plan([adminBypassWorkflow], { 'wf-admin': [task] });
-    expect(actions).toEqual([]);
-  });
-
-  it('acts once idle reaches exactly 15 minutes', async () => {
-    const task = makeTask({
-      id: 'wf-admin/task',
-      status: 'failed',
-      execution: { completedAt: new Date(NOW - IDLE_15M) },
-    });
-    const actions = await plan([adminBypassWorkflow], { 'wf-admin': [task] });
-    expect(actions).toHaveLength(1);
-  });
-
-  it('skips a task with no completedAt (never actually terminal)', async () => {
-    const task = makeTask({ id: 'wf-admin/task', status: 'failed' });
-    const actions = await plan([adminBypassWorkflow], { 'wf-admin': [task] });
-    expect(actions).toEqual([]);
-  });
-});
-
-describe('planIdleTaskCleanup: status branching', () => {
-  it('failed in an admin-bypass-repair workflow: unconditional close-task-and-pr, PR from workflow name', async () => {
-    const task = makeTask({ id: 'wf-admin/task', status: 'failed', execution: { completedAt: new Date(NOW - IDLE_15M) } });
-    const actions = await plan([adminBypassWorkflow], { 'wf-admin': [task] });
-    expect(actions).toEqual([
-      expect.objectContaining({ kind: 'close-task-and-pr', taskId: 'wf-admin/task', prNumber: 801, deleteBranch: true }),
-    ]);
-  });
-
-  it('review_ready in an e2e-repair workflow: unconditional close-task-and-pr, PR from execution.reviewId', async () => {
-    const mergeTask = makeTask({
-      id: '__merge__wf-e2e',
-      status: 'review_ready',
-      execution: { completedAt: new Date(NOW - IDLE_15M), reviewId: '4242' },
-    });
-    const actions = await plan([e2eWorkflow], { 'wf-e2e': [mergeTask] });
-    expect(actions).toEqual([
-      expect.objectContaining({ kind: 'close-task-and-pr', taskId: '__merge__wf-e2e', prNumber: 4242, deleteBranch: true }),
-    ]);
-  });
-
-  it('failed/review_ready with no resolvable PR: close-task-only', async () => {
-    const task = makeTask({
-      id: 'wf-e2e/fix-ci-abc',
-      status: 'failed',
-      execution: { completedAt: new Date(NOW - IDLE_15M) }, // no reviewId: not the merge node
-    });
-    const actions = await plan([e2eWorkflow], { 'wf-e2e': [task] });
-    expect(actions).toEqual([
-      expect.objectContaining({ kind: 'close-task-only', taskId: 'wf-e2e/fix-ci-abc' }),
-    ]);
-  });
-
-  it('completed with an already-merged PR: close-task-and-pr', async () => {
-    const mergeTask = makeTask({
-      id: '__merge__wf-e2e',
-      status: 'completed',
-      execution: { completedAt: new Date(NOW - IDLE_15M), reviewId: '4242' },
-    });
-    const actions = await plan([e2eWorkflow], { 'wf-e2e': [mergeTask] }, { isPullRequestMerged: async () => true });
-    expect(actions).toEqual([
-      expect.objectContaining({ kind: 'close-task-and-pr', taskId: '__merge__wf-e2e', prNumber: 4242, deleteBranch: true }),
-    ]);
-  });
-
-  it('completed with a not-yet-merged PR: close-task-only, PR/branch untouched', async () => {
-    const mergeTask = makeTask({
-      id: '__merge__wf-e2e',
-      status: 'completed',
-      execution: { completedAt: new Date(NOW - IDLE_15M), reviewId: '4242' },
-    });
-    const actions = await plan([e2eWorkflow], { 'wf-e2e': [mergeTask] }, { isPullRequestMerged: async () => false });
-    expect(actions).toEqual([
-      expect.objectContaining({ kind: 'close-task-only', taskId: '__merge__wf-e2e' }),
-    ]);
-  });
-});
-
-describe('createIdleTaskCleanupWorker: dry-run', () => {
+describe('createIdleTaskCleanupWorker: hard-disabled deletion', () => {
   function makeGithub(): PrMaintenanceGitHub {
     return {
       listOpenPullRequests: vi.fn(async () => []),
@@ -164,20 +138,20 @@ describe('createIdleTaskCleanupWorker: dry-run', () => {
     };
   }
 
-  it('never calls closePullRequest or submit — dry-run only logs', async () => {
+  it('logs one workflow retirement without submitting or touching PRs and branches', async () => {
     const github = makeGithub();
     const submit = vi.fn(() => 1);
     const logger = {
       debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
       child: vi.fn(function (this: unknown) { return this; }),
     } as any;
-    const task = makeTask({ id: 'wf-admin/task', status: 'failed', execution: { completedAt: new Date(NOW - IDLE_15M) } });
+    const workflow = makeWorkflow('wf-completed', 'completed');
 
     const worker = createIdleTaskCleanupWorker({
       logger,
       store: {
-        listWorkflows: () => [adminBypassWorkflow],
-        loadTasks: (id) => (id === 'wf-admin' ? [task] : []),
+        listWorkflows: () => [workflow],
+        loadTasks: () => [makeTask('wf-completed/task', 'completed')],
         logEvent: vi.fn(),
       },
       submitter: { submit },
@@ -189,11 +163,12 @@ describe('createIdleTaskCleanupWorker: dry-run', () => {
 
     await worker.tick('manual');
 
-    expect(github.closePullRequest).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining('(dry-run) would close task + PR #801'),
-      expect.objectContaining({ taskId: 'wf-admin/task' }),
-    );
+    expect(github.viewPullRequest).not.toHaveBeenCalled();
+    expect(github.closePullRequest).not.toHaveBeenCalled();
+    expect(logger.info.mock.calls).toEqual([[
+      expect.stringContaining('(dry-run) would delete workflow wf-completed'),
+      { module: 'idle-task-cleanup', workflowId: 'wf-completed' },
+    ]]);
   });
 });
