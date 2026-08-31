@@ -2112,6 +2112,7 @@ function startHeadlessMode(): void {
             );
           }
         }
+        logger.info('[debug-instrument] first workerRuntimeController constructed (~2115)', { module: 'debug' });
         workerRuntimeController = createWorkerRuntimeController({
           registry: createRegisteredWorkerRegistry(),
           deps: buildRegisteredOwnerWorkerDeps(
@@ -2180,6 +2181,7 @@ function startHeadlessMode(): void {
             );
           }
         }
+        logger.info('[debug-instrument] startAutoStartedWorkers call site A (~2183) firing', { module: 'debug' });
         if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -3451,6 +3453,7 @@ startMainProcessBootstrap({
       });
       const activeWorkerRuntimeController = workerRuntimeController;
       startAdminBypassE2eBabysitWorker = (kind) => activeWorkerRuntimeController.start(kind);
+      logger.info('[debug-instrument] second workerRuntimeController constructed (~3395); NOT calling startAutoStartedWorkers here', { module: 'debug' });
     }
 
     // Fail orphaned in-flight tasks left by a previous crash, then start ready work.
