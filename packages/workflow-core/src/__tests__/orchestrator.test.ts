@@ -256,7 +256,13 @@ class InMemoryPersistence implements OrchestratorPersistence {
 
 class CountingPersistence extends InMemoryPersistence {
   loadTasksCalls: string[] = [];
+  loadWorkflowCalls: string[] = [];
   transactionCalls = 0;
+
+  override loadWorkflow(workflowId: string): ReturnType<InMemoryPersistence['loadWorkflow']> {
+    this.loadWorkflowCalls.push(workflowId);
+    return super.loadWorkflow(workflowId);
+  }
 
   override loadTasks(workflowId: string): TaskState[] {
     this.loadTasksCalls.push(workflowId);
@@ -6189,6 +6195,29 @@ describe('Orchestrator', () => {
   // ── startExecution scaling ───────────────────────────────
 
   describe('startExecution scaling', () => {
+    it('does not reload one workflow rollup once per ready task', () => {
+      const persistence = new CountingPersistence();
+      const o = new Orchestrator({
+        persistence,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 100,
+      });
+
+      o.loadPlan({
+        name: 'single-workflow-rollup-scaling',
+        tasks: Array.from({ length: 24 }, (_, index) => ({
+          id: `task-${index}`,
+          prompt: 'go',
+        })),
+      });
+      persistence.loadWorkflowCalls = [];
+
+      const started = o.startExecution();
+
+      expect(started).toHaveLength(24);
+      expect(persistence.loadWorkflowCalls.length).toBeLessThanOrEqual(4);
+    });
+
     it('does not reload every active workflow once per ready task (N+1 regression)', () => {
       const persistence = new CountingPersistence();
       const bus = new InMemoryBus();

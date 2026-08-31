@@ -125,6 +125,20 @@ function hasPendingLaunchRuntimeState(task: TaskState): boolean {
   );
 }
 
+type ExternalDependencyBlockerResolver = (task: TaskState) => string | undefined;
+
+function createExternalDependencyBlockerResolver(host: SchedulerDomainHost): ExternalDependencyBlockerResolver {
+  const blockersByWorkflow = new Map<string, string | undefined>();
+  return (task) => {
+    const workflowId = task.config.workflowId;
+    if (!workflowId) return host.getExternalDependencyBlocker(task);
+    if (!blockersByWorkflow.has(workflowId)) {
+      blockersByWorkflow.set(workflowId, host.getExternalDependencyBlocker(task));
+    }
+    return blockersByWorkflow.get(workflowId);
+  };
+}
+
 function planPendingLaunchQueue(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
@@ -137,11 +151,12 @@ function planPendingLaunchQueue(
   if (!opts?.alreadyRefreshed) {
     host.refreshFromDb();
   }
+  const getExternalDependencyBlocker = createExternalDependencyBlockerResolver(host);
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
     const task = host.stateGetTask(sourceJob.taskId);
     if (!task || (task.status !== 'pending' && (task.status as string) !== 'queued')) continue;
-    if (host.getExternalDependencyBlocker(task) !== undefined) continue;
+    if (getExternalDependencyBlocker(task) !== undefined) continue;
     const knownAttemptId = sourceJob.attemptId ?? task.execution.selectedAttemptId;
     if (opts?.activePersistedAttempts !== 0 && hasActiveLaunchAttempt(host, task, knownAttemptId)) continue;
     const existing = mergedJobs.get(task.id);
@@ -176,7 +191,7 @@ function planPendingLaunchQueue(
         task,
         ready: getTaskLaunchReadinessCore(host, job.taskId, {
           bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
-        }).ready,
+        }, getExternalDependencyBlocker).ready,
       };
     })
     .filter((entry): entry is { job: TaskJob; task: TaskState; ready: boolean } => entry !== undefined);
@@ -239,10 +254,11 @@ export function autoStartReadyTasksImpl(
   opts?: LaunchReadinessOptions,
 ): TaskState[] {
   const candidateJobs: TaskJob[] = [];
+  const getExternalDependencyBlocker = createExternalDependencyBlockerResolver(host);
   for (const taskId of taskIds) {
     let task = host.stateGetTask(taskId);
     if (!task) continue;
-    if (host.getExternalDependencyBlocker(task) !== undefined) continue;
+    if (getExternalDependencyBlocker(task) !== undefined) continue;
 
     // Unblock: if a blocked task's deps are all complete, it's genuinely ready
     if (task.status === 'blocked') {
@@ -294,9 +310,10 @@ export function enqueueIfNotScheduledImpl(
 
 export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomainHost): TaskState[] {
   const started = autoStartUnblockedTasksImpl(host);
+  const getExternalDependencyBlocker = createExternalDependencyBlockerResolver(host);
   const readyTasks = host.stateMachine
     .getReadyTasks()
-    .filter((task) => host.getExternalDependencyBlocker(task) === undefined);
+    .filter((task) => getExternalDependencyBlocker(task) === undefined);
 
   rebuildPendingLaunchQueue(host, readyTasks.map((task) => ({
     taskId: task.id,
@@ -309,10 +326,11 @@ export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomain
 
 export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskState[] {
   const candidateJobs: TaskJob[] = [];
+  const getExternalDependencyBlocker = createExternalDependencyBlockerResolver(host);
   for (const task of host.stateMachine.getAllTasks()) {
     if (task.status !== 'blocked') continue;
     if (!areLocalDependenciesSatisfiedImpl(host, task)) continue;
-    if (host.getExternalDependencyBlocker(task) !== undefined) continue;
+    if (getExternalDependencyBlocker(task) !== undefined) continue;
 
     host.replaceSelectedAttempt(task, { status: 'pending' });
     const resetBefore = host.stateGetTask(task.id);
@@ -351,6 +369,7 @@ function getTaskLaunchReadinessCore(
   host: SchedulerDomainHost,
   taskId: string,
   opts?: LaunchReadinessOptions,
+  getExternalDependencyBlocker: ExternalDependencyBlockerResolver = (task) => host.getExternalDependencyBlocker(task),
 ): TaskLaunchReadiness {
   const task = host.stateGetTask(taskId);
   if (!task) {
@@ -367,7 +386,7 @@ function getTaskLaunchReadinessCore(
     }
   }
 
-  const externalBlocker = host.getExternalDependencyBlocker(task);
+  const externalBlocker = getExternalDependencyBlocker(task);
   if (externalBlocker) {
     return { ready: false, reason: externalBlocker, task };
   }
@@ -410,11 +429,12 @@ export function drainSchedulerImpl(
     maxConcurrency: host.maxConcurrency,
     availableSlots,
   });
+  const getExternalDependencyBlocker = createExternalDependencyBlockerResolver(host);
   let job = availableSlots > 0 ? host.scheduler.takeNext() : null;
   while (job && availableSlots > 0) {
     const readiness = getTaskLaunchReadinessCore(host, job.taskId, {
       bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
-    });
+    }, getExternalDependencyBlocker);
     host.logger.info('[orchestrator] drainScheduler: dequeued', {
       taskId: job.taskId,
       actualStatus: readiness.task?.status ?? 'NOT_FOUND',
