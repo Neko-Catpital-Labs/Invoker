@@ -18,19 +18,17 @@ import type { TaskState } from '@invoker/workflow-core';
  * already keeps the in-memory graph current). retryTask() and
  * startExecution() both go through this path on every dispatch.
  *
- * On this baseline (plain master; PR #11431's workflow-scoped
- * refreshWorkflowFromDb for retryTaskImpl's own initial refresh is not yet
- * merged), retryTaskImpl still makes one additional full refreshFromDb
- * call of its own before reaching autoStartReadyTasks, so the expected
- * count here is 2 (down from 3), not 1 (down from 2). Once #11431 lands,
- * that first call becomes workflow-scoped and stops going through
- * loadTasksForWorkflows, and this count should drop to 1.
+ * With syncFromDb(workflowId) now scoped to a single workflow (instead of
+ * clearing and reloading ALL active workflows), retryTaskImpl's initial
+ * refresh uses the per-workflow loadTasks path instead of the batched
+ * loadTasksForWorkflows, so the batchLoadCalls count is now 1 (the single
+ * call inside autoStartReadyTasks).
  */
 
 const SMALL_WORKFLOW_COUNT = 686;
 const BIG_WORKFLOW_TASK_COUNT = 828;
 
-describe('autoStartReadyTasks pays a full refreshFromDb twice per dispatch', () => {
+describe('autoStartReadyTasks pays one full refreshFromDb per dispatch', () => {
   let dbDir: string | undefined;
 
   afterEach(() => {
@@ -39,7 +37,7 @@ describe('autoStartReadyTasks pays a full refreshFromDb twice per dispatch', () 
   });
 
   it(
-    'refreshFromDb is called twice (not three times) per retryTask dispatch',
+    'refreshFromDb is called once per retryTask dispatch (syncFromDb is now workflow-scoped)',
     async () => {
       dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-double-refresh-'));
       const dbPath = path.join(dbDir, 'invoker.db');
@@ -132,7 +130,7 @@ describe('autoStartReadyTasks pays a full refreshFromDb twice per dispatch', () 
             + `full-batch refreshFromDb calls during dispatch: ${batchLoadCalls}`,
         );
 
-        expect(batchLoadCalls).toBe(2);
+        expect(batchLoadCalls).toBe(1);
       } finally {
         bootAdapter.close();
       }
