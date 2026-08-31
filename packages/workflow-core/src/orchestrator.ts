@@ -1354,8 +1354,14 @@ export class Orchestrator {
     return freshAttempt.id;
   }
 
-  prepareTaskForNewAttempt(taskId: string, reason: string): TaskState {
-    this.refreshFromDb();
+  prepareTaskForNewAttempt(
+    taskId: string,
+    reason: string,
+    options?: { alreadyRefreshed?: boolean },
+  ): TaskState {
+    if (!options?.alreadyRefreshed) {
+      this.refreshFromDb();
+    }
     const task = this.stateGetTask(taskId);
     if (!task) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
