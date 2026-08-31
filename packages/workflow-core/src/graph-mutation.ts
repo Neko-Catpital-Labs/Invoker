@@ -67,9 +67,12 @@ function sameStringSet(left: readonly string[], right: readonly string[]): boole
  * Active (non-stale, non-merge) leaf tasks become the merge gate's deps.
  * No-ops if deps are already correct.
  */
-function getExpectedMergeLeafIds(host: GraphMutationHost, workflowId: string): string[] {
-  const allTasks = host.stateMachine.getAllTasks();
-  const activeTasks = allTasks.filter(
+function getExpectedMergeLeafIds(
+  host: GraphMutationHost,
+  workflowId: string,
+  workflowTasks?: readonly TaskState[],
+): string[] {
+  const activeTasks = (workflowTasks ?? host.stateMachine.getAllTasks()).filter(
     (t) =>
       t.config.workflowId === workflowId &&
       !t.config.isMergeNode &&
@@ -78,10 +81,16 @@ function getExpectedMergeLeafIds(host: GraphMutationHost, workflowId: string): s
   return findLeafTaskIds(activeTasks);
 }
 
-export function assertMergeLeavesInvariantImpl(host: GraphMutationHost, workflowId: string): void {
-  const mergeNode = host.getMergeNode(workflowId);
+export function assertMergeLeavesInvariantImpl(
+  host: GraphMutationHost,
+  workflowId: string,
+  workflowTasks?: readonly TaskState[],
+): void {
+  const mergeNode = workflowTasks
+    ? workflowTasks.find((task) => task.config.isMergeNode)
+    : host.getMergeNode(workflowId);
   if (!mergeNode) return;
-  const leafIds = getExpectedMergeLeafIds(host, workflowId);
+  const leafIds = getExpectedMergeLeafIds(host, workflowId, workflowTasks);
 
   if (sameStringSet(mergeNode.dependencies, leafIds)) {
     return;
@@ -101,8 +110,9 @@ export function assertMergeLeavesInvariantImpl(host: GraphMutationHost, workflow
 export function assertMergeExperimentDependenciesInvariantImpl(
   host: GraphMutationHost,
   workflowId: string,
+  workflowTasks?: readonly TaskState[],
 ): void {
-  const allTasks = host.stateMachine.getAllTasks().filter((t) => t.config.workflowId === workflowId);
+  const allTasks = workflowTasks ?? host.stateMachine.getAllTasks().filter((t) => t.config.workflowId === workflowId);
   for (const task of allTasks) {
     const parentTask = task.config.parentTask;
     if (!parentTask) continue;

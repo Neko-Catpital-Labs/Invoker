@@ -4921,6 +4921,20 @@ describe('Orchestrator', () => {
       expect(orchestrator.getAllTasks()).toHaveLength(4);
     });
 
+    it('syncAllFromDb validates bulk-snapshot invariants without rescanning the whole state per workflow', () => {
+      for (let index = 0; index < 20; index += 1) {
+        orchestrator.loadPlan({
+          name: `Plan ${index}`,
+          tasks: [{ id: `task-${index}`, description: `Task ${index}`, command: 'true' }],
+        });
+      }
+      const getAllTasksSpy = vi.spyOn((orchestrator as any).stateMachine, 'getAllTasks');
+
+      orchestrator.syncAllFromDb();
+
+      expect(getAllTasksSpy).not.toHaveBeenCalled();
+    });
+
     it('tasks have correct workflowId after loadPlan', () => {
       orchestrator.loadPlan({
         name: 'Plan A',

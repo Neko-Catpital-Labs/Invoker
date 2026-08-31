@@ -3035,9 +3035,9 @@ export class Orchestrator {
     });
   }
 
-  private assertMergeLeavesInvariant(workflowId: string): void {
-    assertMergeLeavesInvariantImpl(this as unknown as GraphMutationHost, workflowId);
-    assertMergeExperimentDependenciesInvariantImpl(this as unknown as GraphMutationHost, workflowId);
+  private assertMergeLeavesInvariant(workflowId: string, workflowTasks?: readonly TaskState[]): void {
+    assertMergeLeavesInvariantImpl(this as unknown as GraphMutationHost, workflowId, workflowTasks);
+    assertMergeExperimentDependenciesInvariantImpl(this as unknown as GraphMutationHost, workflowId, workflowTasks);
   }
 
   /**
@@ -3050,15 +3050,17 @@ export class Orchestrator {
     this.activeWorkflowIds.clear();
     const snapshot = this.persistence.loadWorkflowTaskSnapshot?.();
     const workflows = snapshot?.workflows ?? this.persistence.listWorkflows();
+    const hydratedTasksByWorkflowId = new Map<string, TaskState[]>();
     for (const wf of workflows) {
       this.activeWorkflowIds.add(wf.id);
       const tasks = snapshot?.tasksByWorkflowId.get(wf.id) ?? this.persistence.loadTasks(wf.id);
+      hydratedTasksByWorkflowId.set(wf.id, tasks);
       for (const task of tasks) {
         this.stateMachine.restoreTask(task);
       }
     }
     for (const wf of workflows) {
-      this.assertMergeLeavesInvariant(wf.id);
+      this.assertMergeLeavesInvariant(wf.id, hydratedTasksByWorkflowId.get(wf.id) ?? []);
     }
   }
 
