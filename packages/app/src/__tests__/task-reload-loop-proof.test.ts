@@ -101,7 +101,7 @@ describe('task reload loop during LaunchDispatcher poll', () => {
     }
   });
 
-  it('PROOF: refreshFromDb reloads ALL workflows on every startExecution call', async () => {
+  it('startExecution does not trigger full-table reload when in-memory state is current', async () => {
     dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-refreshfromdb-loop-'));
     const dbPath = path.join(dbDir, 'invoker.db');
 
@@ -165,19 +165,20 @@ describe('task reload loop during LaunchDispatcher poll', () => {
 
       expect(
         loadTasksForWorkflowsCalls,
-        `PROOF: ${START_EXECUTION_CALLS} startExecution calls triggered ${loadTasksForWorkflowsCalls} full-table reloads (should be at most ${START_EXECUTION_CALLS}, but refreshFromDb is called multiple times per startExecution)`,
-      ).toBeGreaterThanOrEqual(START_EXECUTION_CALLS);
+        `${START_EXECUTION_CALLS} startExecution calls should trigger 0 full-table reloads ` +
+          `(in-memory state from syncAllFromDb is already current), got ${loadTasksForWorkflowsCalls}`,
+      ).toBe(0);
 
       expect(
         totalTasksLoaded,
-        `Total tasks loaded across all refreshFromDb calls: ${totalTasksLoaded} (${WORKFLOW_COUNT * 2} tasks × ${loadTasksForWorkflowsCalls} reloads)`,
-      ).toBe(loadTasksForWorkflowsCalls * WORKFLOW_COUNT * 2);
+        `Total tasks loaded should be 0 (no refreshFromDb during startExecution), got ${totalTasksLoaded}`,
+      ).toBe(0);
     } finally {
       adapter.close();
     }
   });
 
-  it('PROOF: dispatcher poll triggers multiple full reloads via refreshFromDb', async () => {
+  it('dispatcher poll does not trigger full-table reload after syncAllFromDb', async () => {
     dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-dispatch-reload-'));
     const dbPath = path.join(dbDir, 'invoker.db');
 
@@ -247,19 +248,20 @@ describe('task reload loop during LaunchDispatcher poll', () => {
 
       expect(
         loadTasksForWorkflowsCalls,
-        `PROOF: single dispatcher poll triggered ${loadTasksForWorkflowsCalls} loadTasksForWorkflows calls (full-table reloads via refreshFromDb)`,
-      ).toBeGreaterThan(1);
+        `Single dispatcher poll should trigger 0 full-table loadTasksForWorkflows calls ` +
+          `(in-memory state is current after syncAllFromDb), got ${loadTasksForWorkflowsCalls}`,
+      ).toBe(0);
 
       expect(
         totalWorkflowsLoaded,
-        `PROOF: total workflows loaded: ${totalWorkflowsLoaded} = ${loadTasksForWorkflowsCalls} calls × ${WORKFLOW_COUNT} workflows each`,
-      ).toBe(loadTasksForWorkflowsCalls * WORKFLOW_COUNT);
+        `Total workflows loaded should be 0 (no refreshFromDb during dispatch), got ${totalWorkflowsLoaded}`,
+      ).toBe(0);
     } finally {
       adapter.close();
     }
   });
 
-  it('PROOF: combined loop count during boot + first poll matches observed pattern', async () => {
+  it('multiple dispatcher poll ticks do not trigger excessive reloads', async () => {
     dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-combined-loop-'));
     const dbPath = path.join(dbDir, 'invoker.db');
 
@@ -314,6 +316,14 @@ describe('task reload loop during LaunchDispatcher poll', () => {
         }
       }
 
+      const orchestrator = new Orchestrator({
+        persistence: adapter as any,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 200,
+      });
+
+      orchestrator.syncAllFromDb();
+
       let totalLoadTasksCalls = 0;
       let totalLoadTasksForWorkflowsCalls = 0;
 
@@ -328,14 +338,6 @@ describe('task reload loop during LaunchDispatcher poll', () => {
         totalLoadTasksForWorkflowsCalls += 1;
         return realLoadTasksForWorkflows(workflowIds);
       };
-
-      const orchestrator = new Orchestrator({
-        persistence: adapter as any,
-        messageBus: new InMemoryBus(),
-        maxConcurrency: 200,
-      });
-
-      orchestrator.syncAllFromDb();
 
       const launchDispatcher = new LaunchDispatcher({
         persistence: adapter as any,
@@ -352,17 +354,21 @@ describe('task reload loop during LaunchDispatcher poll', () => {
         launchDispatcher.poll();
       }
 
-      const totalFullReloads = totalLoadTasksForWorkflowsCalls + Math.floor(totalLoadTasksCalls / WORKFLOW_COUNT);
+      expect(
+        totalLoadTasksForWorkflowsCalls,
+        `${POLL_TICKS} dispatcher poll ticks should trigger 0 full-table loadTasksForWorkflows ` +
+          `(in-memory state is current), got ${totalLoadTasksForWorkflowsCalls}`,
+      ).toBe(0);
 
       expect(
-        totalFullReloads,
-        `PROOF: ${POLL_TICKS} dispatcher polls triggered ${totalFullReloads} full-table reloads (via refreshFromDb/syncFromDb). ` +
-        `loadTasksForWorkflows: ${totalLoadTasksForWorkflowsCalls}, loadTasks: ${totalLoadTasksCalls}`,
-      ).toBeGreaterThan(POLL_TICKS);
+        totalLoadTasksCalls,
+        `${POLL_TICKS} dispatcher poll ticks should trigger 0 per-workflow loadTasks ` +
+          `(no syncFromDb calls needed when graph is current), got ${totalLoadTasksCalls}`,
+      ).toBe(0);
 
       console.log(`
 ================================================================================
-TASK RELOAD LOOP PROOF SUMMARY
+TASK RELOAD LOOP FIX VERIFIED
 ================================================================================
 Workflows: ${WORKFLOW_COUNT}
 Tasks per workflow: 2 (1 completed root + 1 running/pending)
@@ -372,12 +378,10 @@ Dispatcher poll ticks: ${POLL_TICKS}
 OBSERVED:
 - loadTasksForWorkflows (batched full reload): ${totalLoadTasksForWorkflowsCalls} calls
 - loadTasks (per-workflow): ${totalLoadTasksCalls} calls
-- Estimated full-table reloads: ${totalFullReloads}
 
-EXPECTED AFTER FIX:
-- Full reloads during boot: 1 (syncAllFromDb)
-- Full reloads during dispatch: 0 (syncFromDb should be workflow-scoped)
-- Per-dispatch workflow loads: proportional to dispatched tasks, not all workflows
+EXPECTED:
+- Full reloads during boot: 1 (syncAllFromDb) — counted before spy installed
+- Full reloads during dispatch: 0 (startExecution no longer calls refreshFromDb)
 ================================================================================
 `);
     } finally {
