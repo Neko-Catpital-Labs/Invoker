@@ -65,6 +65,7 @@ export interface SchedulerDomainHost {
   ): string;
   ensureCurrentPendingAttempt(task: TaskState): string;
   loadAttemptById(attemptId: string | undefined): Attempt | undefined;
+  loadAttemptsByIds(attemptIds: string[]): Map<string, Attempt>;
   isAttemptLeaseActive(attempt: Attempt | undefined, now?: number): boolean;
   countActivePersistedAttempts(now?: number): number;
   getExecutionGeneration(task: TaskState | undefined): number;
@@ -74,11 +75,37 @@ function byCreatedAtThenId(left: TaskState, right: TaskState): number {
   return (left.createdAt.getTime() - right.createdAt.getTime()) || left.id.localeCompare(right.id);
 }
 
-function getCandidatePriority(host: SchedulerDomainHost, task: TaskState, fallback: number): number {
-  const attempt = task.execution.selectedAttemptId
-    ? host.loadAttemptById(task.execution.selectedAttemptId)
+function getCandidatePriority(
+  host: SchedulerDomainHost,
+  task: TaskState,
+  fallback: number,
+  attemptsById?: ReadonlyMap<string, Attempt | undefined>,
+): number {
+  const attemptId = task.execution.selectedAttemptId;
+  const attempt = attemptId
+    ? attemptsById?.has(attemptId)
+      ? attemptsById.get(attemptId)
+      : host.loadAttemptById(attemptId)
     : undefined;
   return Math.max(fallback, attempt?.queuePriority ?? fallback);
+}
+
+function loadSelectedAttempts(
+  host: SchedulerDomainHost,
+  tasks: readonly TaskState[],
+  seed?: ReadonlyMap<string, Attempt | undefined>,
+): Map<string, Attempt | undefined> {
+  const attemptsById = new Map(seed);
+  const missingIds = [...new Set(tasks
+    .map((task) => task.execution.selectedAttemptId)
+    .filter((attemptId): attemptId is string => Boolean(attemptId) && !attemptsById.has(attemptId)))];
+  for (const attempt of host.loadAttemptsByIds(missingIds).values()) {
+    attemptsById.set(attempt.id, attempt);
+  }
+  for (const attemptId of missingIds) {
+    if (!attemptsById.has(attemptId)) attemptsById.set(attemptId, undefined);
+  }
+  return attemptsById;
 }
 
 function hasActiveLaunchAttempt(
@@ -239,13 +266,22 @@ function rebuildPendingLaunchQueue(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
   opts?: LaunchReadinessOptions,
-): void {
+): ReadonlyMap<string, Attempt | undefined> {
+  const queuedAndCandidateTasks = [...host.scheduler.getQueuedJobs(), ...candidateJobs]
+    .map((job) => host.stateGetTask(job.taskId))
+    .filter((task): task is TaskState => task !== undefined);
+  const attemptsById = loadSelectedAttempts(host, queuedAndCandidateTasks, opts?.attemptsById);
   const orderedJobs: TaskJob[] = [];
-  for (const job of planPendingLaunchQueue(host, candidateJobs, opts)) {
+  for (const job of planPendingLaunchQueue(host, candidateJobs, { ...opts, attemptsById })) {
     const task = host.stateGetTask(job.taskId);
     if (!task) continue;
-    const attemptId = host.ensureCurrentPendingAttempt(task);
-    const currentAttempt = host.loadAttemptById(attemptId);
+    let attemptId = job.attemptId;
+    let currentAttempt = attemptId ? attemptsById.get(attemptId) : undefined;
+    if (!isReusableLaunchAttempt(host, task, currentAttempt)) {
+      attemptId = host.ensureCurrentPendingAttempt(task);
+      currentAttempt = host.loadAttemptById(attemptId);
+      attemptsById.set(attemptId, currentAttempt);
+    }
     if ((currentAttempt?.queuePriority ?? 0) !== job.priority) {
       host.taskRepository.updateAttempt(attemptId, { queuePriority: job.priority });
     }
@@ -257,6 +293,7 @@ function rebuildPendingLaunchQueue(
     });
   }
   host.scheduler.replaceQueue(orderedJobs);
+  return attemptsById;
 }
 
 
@@ -270,6 +307,10 @@ export function autoStartReadyTasksImpl(
 ): TaskState[] {
   const candidateJobs: TaskJob[] = [];
   const getExternalDependencyBlocker = createExternalDependencyBlockerResolver(host);
+  const candidateTasks = taskIds
+    .map((taskId) => host.stateGetTask(taskId))
+    .filter((task): task is TaskState => task !== undefined);
+  const attemptsById = loadSelectedAttempts(host, candidateTasks, opts?.attemptsById);
   for (const taskId of taskIds) {
     let task = host.stateGetTask(taskId);
     if (!task) continue;
@@ -293,13 +334,13 @@ export function autoStartReadyTasksImpl(
     candidateJobs.push({
       taskId,
       attemptId: task.execution.selectedAttemptId,
-      priority: getCandidatePriority(host, task, priority),
+      priority: getCandidatePriority(host, task, priority, attemptsById),
       ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
     });
   }
 
-  rebuildPendingLaunchQueue(host, candidateJobs, opts);
-  return drainSchedulerImpl(host, { ...opts, alreadyRefreshed: true });
+  const rebuiltAttemptsById = rebuildPendingLaunchQueue(host, candidateJobs, { ...opts, attemptsById });
+  return drainSchedulerImpl(host, { ...opts, attemptsById: rebuiltAttemptsById, alreadyRefreshed: true });
 }
 
 export function enqueueIfNotScheduledImpl(
@@ -330,12 +371,13 @@ export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomain
     .getReadyTasks()
     .filter((task) => getExternalDependencyBlocker(task) === undefined);
 
-  rebuildPendingLaunchQueue(host, readyTasks.map((task) => ({
+  const attemptsById = loadSelectedAttempts(host, readyTasks);
+  const rebuiltAttemptsById = rebuildPendingLaunchQueue(host, readyTasks.map((task) => ({
     taskId: task.id,
     attemptId: task.execution.selectedAttemptId,
-    priority: getCandidatePriority(host, task, 0),
-  })));
-  started.push(...drainSchedulerImpl(host, { alreadyRefreshed: true }));
+    priority: getCandidatePriority(host, task, 0, attemptsById),
+  })), { attemptsById });
+  started.push(...drainSchedulerImpl(host, { attemptsById: rebuiltAttemptsById, alreadyRefreshed: true }));
   return started;
 }
 
@@ -361,8 +403,8 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
       priority: getCandidatePriority(host, pendingTask, 0),
     });
   }
-  rebuildPendingLaunchQueue(host, candidateJobs);
-  return drainSchedulerImpl(host, { alreadyRefreshed: true });
+  const rebuiltAttemptsById = rebuildPendingLaunchQueue(host, candidateJobs);
+  return drainSchedulerImpl(host, { attemptsById: rebuiltAttemptsById, alreadyRefreshed: true });
 }
 
 // Public entry point: always refreshes first, for callers making a single
@@ -472,7 +514,12 @@ export function drainSchedulerImpl(
       && launchTask.status === 'pending'
       && !hasPendingLaunchRuntimeState(launchTask)
       && Boolean(attemptId);
-    let currentAttempt = canClaimWithoutAttemptLoad ? undefined : host.loadAttemptById(attemptId);
+    const attemptsById = opts?.attemptsById;
+    let currentAttempt = canClaimWithoutAttemptLoad
+      ? undefined
+      : attemptId && attemptsById?.has(attemptId)
+        ? attemptsById.get(attemptId)
+        : host.loadAttemptById(attemptId);
     if (!canClaimWithoutAttemptLoad && !isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
       attemptId = host.ensureCurrentPendingAttempt(task);
       launchTask = host.stateGetTask(job.taskId) ?? task;

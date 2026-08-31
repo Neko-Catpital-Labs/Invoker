@@ -6321,6 +6321,35 @@ describe('Orchestrator', () => {
       expect(ready).toHaveLength(24);
       expect(persistence.loadAttemptCalls.length).toBeLessThanOrEqual(2);
     });
+
+    it('batch-loads selected attempts while rebuilding and starting a large ready queue', () => {
+      const persistence = new CountingPersistence();
+      const o = new Orchestrator({
+        persistence,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 100,
+      });
+
+      o.loadPlan({
+        name: 'ready-rebuild-attempt-scaling',
+        tasks: Array.from({ length: 24 }, (_, index) => ({
+          id: `task-${index}`,
+          prompt: 'go',
+        })),
+      });
+      for (const [index, task] of o.getAllTasks().filter((task) => !task.config.isMergeNode).entries()) {
+        const attempt = createAttempt(task.id, { status: 'pending', queuePriority: index });
+        persistence.saveAttempt(attempt);
+        persistence.updateTask(task.id, { execution: { selectedAttemptId: attempt.id } });
+      }
+      (o as any).refreshFromDb();
+      persistence.loadAttemptCalls = [];
+
+      const started = o.startExecution();
+
+      expect(started).toHaveLength(24);
+      expect(persistence.loadAttemptCalls.length).toBeLessThanOrEqual(2);
+    });
   });
 
   // ── retryWorkflow ────────────────────────────────────────

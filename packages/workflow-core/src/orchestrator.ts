@@ -261,7 +261,11 @@ export interface ExecutionResourceLeaseReleaseRow {
 export type TaskLaunchReadiness =
   | { ready: true; task: TaskState }
   | { ready: false; reason: string; task?: TaskState };
-export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean; activePersistedAttempts?: number };
+export type LaunchReadinessOptions = {
+  bypassLocalDependencyReadiness?: boolean;
+  activePersistedAttempts?: number;
+  attemptsById?: ReadonlyMap<string, Attempt | undefined>;
+};
 export type StartExecutionOptions = { limit?: number };
 
 export interface OrchestratorPersistence {
