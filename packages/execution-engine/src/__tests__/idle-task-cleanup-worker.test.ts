@@ -71,7 +71,7 @@ describe('planIdleTaskCleanup', () => {
     ]);
   });
 
-  it.fails('retires an old failed workflow with an inert pending merge task', () => {
+  it('retires an old failed workflow with an inert pending merge task', () => {
     const workflow = makeWorkflow('wf-old-pending-merge', 'failed', OVER_48_HOURS_AGO);
     const pendingMergeTask = {
       ...makeTask('wf-old-pending-merge/__merge__', 'pending'),
@@ -123,7 +123,7 @@ describe('planIdleTaskCleanup', () => {
     }]);
   });
 
-  it.fails.each<TaskStatus>([
+  it.each<TaskStatus>([
     'pending',
     'queued',
     'needs_input',
