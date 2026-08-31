@@ -27,6 +27,7 @@ export function assertCompletedDependencyHasBranch(
   depLabel: string,
   dep: TaskState | undefined,
 ): void {
+  if (dep?.config.runnerKind === 'scratch') return;
   if (dep && dep.status === 'completed' && !dep.execution.branch) {
     throw new Error(
       `Task "${taskId}": ${depLabel} completed without branch metadata` +

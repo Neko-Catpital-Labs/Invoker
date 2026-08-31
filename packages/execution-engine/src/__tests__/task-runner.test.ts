@@ -1892,6 +1892,20 @@ describe('TaskRunner', () => {
       ).toThrow('completed without branch metadata');
     });
 
+    it('assertCompletedDependencyHasBranch does not throw when the dep is a scratch-mode task with no branch', () => {
+      // ScratchExecutor never sets a branch by design (no git worktree at
+      // all in scratch mode), so the guard must not apply to scratch deps.
+      const dep = makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        config: { runnerKind: 'scratch' },
+      });
+
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep),
+      ).not.toThrow();
+    });
+
     it('assertCompletedDependencyHasBranch does not throw when the dep has a branch', () => {
       const dep = makeTask({
         id: 'dep-a',
