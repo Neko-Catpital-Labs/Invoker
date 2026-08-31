@@ -1,25 +1,25 @@
 import type { Logger } from '@invoker/contracts';
-import type { WorkflowMutationPriority } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 import type { PrMaintenanceGitHub } from './pr-maintenance-github.js';
-import { isCleanupEligibleWorkflow } from './idle-task-cleanup-policy.js';
+import {
+  IDLE_WORKFLOW_RETENTION_MS,
+  isInactiveCleanupTaskStatus,
+  isKnownCleanupWorkflowStatus,
+  isWorkflowPastRetention,
+} from './idle-task-cleanup-policy.js';
 
 export const IDLE_TASK_CLEANUP_WORKER_KIND = 'idle-task-cleanup';
-export const CLOSE_IDLE_TASK_CHANNEL = 'invoker:close-idle-task';
 
 const DEFAULT_IDLE_TASK_CLEANUP_INTERVAL_MS = 5 * 60_000;
-const DEFAULT_IDLE_THRESHOLD_MS = 15 * 60_000;
-const CLOSABLE_STATUSES = new Set(['failed', 'completed', 'review_ready']);
-const ADMIN_BYPASS_REPAIR_PR_NUMBER = /^repair-pr-(\d+)-.+$/;
 
 /**
- * Hardcoded, not env-gated: this ships dry-run only. Flipping to live is a
- * separate, explicitly-reviewed follow-up that removes this constant — no
- * config toggle can accidentally turn on real PR/branch/task mutation.
+ * Hardcoded, not env-gated: this slice can only prepare and log retirement
+ * actions. A separately reviewed owner handoff must remove this guard and add
+ * the workflow deletion path.
  */
 const FORCE_DRY_RUN = true;
 
@@ -27,6 +27,9 @@ export interface IdleTaskCleanupWorkflowRow {
   readonly id: string;
   readonly name: string;
   readonly description?: string;
+  readonly status: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface IdleTaskCleanupWorkerStore {
@@ -35,148 +38,50 @@ export interface IdleTaskCleanupWorkerStore {
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
-export interface IdleTaskCleanupWorkerSubmitter {
-  submit(
-    workflowId: string,
-    priority: WorkflowMutationPriority,
-    channel: typeof CLOSE_IDLE_TASK_CHANNEL,
-    args: unknown[],
-    options?: { deferDrain?: boolean },
-  ): number;
-}
+/** Retained as an injected dependency boundary; this dormant slice never calls it. */
+export type IdleTaskCleanupWorkerSubmitter = object;
 
-export interface CloseIdleTaskMutationArgs {
-  readonly taskId: string;
-}
-
-export function buildCloseIdleTaskMutationArgs(taskId: string): unknown[] {
-  return [{ taskId } satisfies CloseIdleTaskMutationArgs];
-}
-
-export function parseCloseIdleTaskMutationArgs(args: unknown[]): CloseIdleTaskMutationArgs {
-  const [raw] = args;
-  if (!raw || typeof raw !== 'object' || typeof (raw as { taskId?: unknown }).taskId !== 'string') {
-    throw new Error('invoker:close-idle-task mutation requires { taskId: string }');
-  }
-  return { taskId: (raw as CloseIdleTaskMutationArgs).taskId };
-}
-
-export type CleanupAction =
-  | { kind: 'close-task-only'; taskId: string; workflowId: string; reason: string }
-  | {
-      kind: 'close-task-and-pr';
-      taskId: string;
-      workflowId: string;
-      prNumber: number;
-      deleteBranch: boolean;
-      reason: string;
-    };
-
-/**
- * Resolve the PR this task's family owns, if any:
- *   - admin-bypass-repair: the PR number is embedded directly in the
- *     `repair-pr-<num>-<fingerprint>` workflow name (the PR being repaired).
- *   - e2e-repair: only the workflow's merge-node task carries a PR — its
- *     `execution.reviewId` is the provider identifier set by
- *     `GitHubMergeGateProvider.createReview` (`merge-runner.ts`). A non-merge
- *     task in the same workflow has no PR of its own.
- */
-function resolvePrNumber(workflow: IdleTaskCleanupWorkflowRow, task: TaskState): number | undefined {
-  const adminBypassMatch = workflow.name.match(ADMIN_BYPASS_REPAIR_PR_NUMBER);
-  if (adminBypassMatch) return Number(adminBypassMatch[1]);
-  const reviewId = task.execution.reviewId;
-  if (reviewId) {
-    const n = Number(reviewId);
-    if (Number.isFinite(n)) return n;
-  }
-  return undefined;
-}
-
-function idleMinutes(idleMs: number): number {
-  return Math.round(idleMs / 60_000);
+export interface CleanupAction {
+  readonly kind: 'delete-workflow';
+  readonly workflowId: string;
+  readonly reason: string;
 }
 
 /**
- * Pure decision function: given the candidate workflows/tasks and a
- * merged-PR checker, decide what cleanup (if anything) each idle task needs.
- * No side effects — the worker tick executes (or, in dry-run, only logs)
- * whatever this returns. Kept separate from the tick so the decision logic
- * (scope, idle threshold, unconditional vs merged-only PR teardown) is
- * testable without a real WorkerRuntime.
+ * Prepare at most one workflow-retirement action per workflow. Tasks are only
+ * retention evidence: this planner never prepares task, PR, or branch edits.
  */
 export async function planIdleTaskCleanup(
   workflows: ReadonlyArray<IdleTaskCleanupWorkflowRow>,
   loadTasks: (workflowId: string) => TaskState[],
   opts: {
     now: number;
-    idleThresholdMs: number;
-    isPullRequestMerged: (prNumber: number) => Promise<boolean>;
+    retentionMs?: number;
   },
 ): Promise<CleanupAction[]> {
   const actions: CleanupAction[] = [];
 
   for (const workflow of workflows) {
-    if (!isCleanupEligibleWorkflow(workflow)) continue;
+    if (!isKnownCleanupWorkflowStatus(workflow.status)) continue;
 
-    for (const task of loadTasks(workflow.id)) {
-      if (!CLOSABLE_STATUSES.has(task.status)) continue;
-      const completedAt = task.execution.completedAt;
-      if (!completedAt) continue;
-      const idleMs = opts.now - new Date(completedAt).getTime();
-      if (idleMs < opts.idleThresholdMs) continue;
+    const tasks = loadTasks(workflow.id);
+    if (!tasks.every((task) => isInactiveCleanupTaskStatus(task.status))) continue;
 
-      const prNumber = resolvePrNumber(workflow, task);
+    if (workflow.status === 'completed') {
+      actions.push({
+        kind: 'delete-workflow',
+        workflowId: workflow.id,
+        reason: 'completed with no active tasks',
+      });
+      continue;
+    }
 
-      if (task.status === 'failed' || task.status === 'review_ready') {
-        actions.push(
-          prNumber === undefined
-            ? {
-                kind: 'close-task-only',
-                taskId: task.id,
-                workflowId: workflow.id,
-                reason: `${task.status}, idle ${idleMinutes(idleMs)}m, no associated PR`,
-              }
-            : {
-                kind: 'close-task-and-pr',
-                taskId: task.id,
-                workflowId: workflow.id,
-                prNumber,
-                deleteBranch: true,
-                reason: `${task.status}, idle ${idleMinutes(idleMs)}m`,
-              },
-        );
-        continue;
-      }
-
-      // completed: only close the PR/branch once it's already merged;
-      // otherwise task-only bookkeeping, leaving an in-flight PR untouched.
-      if (prNumber === undefined) {
-        actions.push({
-          kind: 'close-task-only',
-          taskId: task.id,
-          workflowId: workflow.id,
-          reason: `completed, idle ${idleMinutes(idleMs)}m, no associated PR`,
-        });
-        continue;
-      }
-      const merged = await opts.isPullRequestMerged(prNumber);
-      actions.push(
-        merged
-          ? {
-              kind: 'close-task-and-pr',
-              taskId: task.id,
-              workflowId: workflow.id,
-              prNumber,
-              deleteBranch: true,
-              reason: `completed, idle ${idleMinutes(idleMs)}m, PR already merged`,
-            }
-          : {
-              kind: 'close-task-only',
-              taskId: task.id,
-              workflowId: workflow.id,
-              reason: `completed, idle ${idleMinutes(idleMs)}m, PR not yet merged`,
-            },
-      );
+    if (isWorkflowPastRetention(workflow.updatedAt, opts.now, opts.retentionMs)) {
+      actions.push({
+        kind: 'delete-workflow',
+        workflowId: workflow.id,
+        reason: 'inactive for more than 48 hours',
+      });
     }
   }
 
@@ -184,9 +89,9 @@ export async function planIdleTaskCleanup(
 }
 
 export interface IdleTaskCleanupWorkerConfig {
+  /** Compatibility-only until the owner handoff; workflow cleanup performs no GitHub IO. */
   github: PrMaintenanceGitHub;
   intervalMs?: number;
-  idleThresholdMs?: number;
   tickOnStart?: boolean;
   now?: () => number;
   onTick?: WorkerTick;
@@ -198,14 +103,7 @@ export interface IdleTaskCleanupWorkerOptions extends IdleTaskCleanupWorkerConfi
   submitter: IdleTaskCleanupWorkerSubmitter;
 }
 
-function describeAction(action: CleanupAction): string {
-  return action.kind === 'close-task-and-pr'
-    ? `close task + PR #${action.prNumber}${action.deleteBranch ? ' + delete branch' : ''}`
-    : 'close task only';
-}
-
 export function createIdleTaskCleanupWorker(options: IdleTaskCleanupWorkerOptions): WorkerRuntime {
-  const idleThresholdMs = options.idleThresholdMs ?? DEFAULT_IDLE_THRESHOLD_MS;
   const now = options.now ?? (() => Date.now());
 
   return createWorkerRuntime({
@@ -218,58 +116,21 @@ export function createIdleTaskCleanupWorker(options: IdleTaskCleanupWorkerOption
       await options.onTick?.(ctx);
       ctx.signal?.throwIfAborted();
 
-      const workflows = options.store.listWorkflows();
       const actions = await planIdleTaskCleanup(
-        workflows,
+        options.store.listWorkflows(),
         (workflowId) => options.store.loadTasks(workflowId),
-        {
-          now: now(),
-          idleThresholdMs,
-          isPullRequestMerged: async (prNumber) => {
-            const pr = await options.github.viewPullRequest(prNumber, ['state', 'mergedAt']);
-            return pr.state === 'MERGED' || Boolean(pr.mergedAt);
-          },
-        },
+        { now: now(), retentionMs: IDLE_WORKFLOW_RETENTION_MS },
       );
 
       for (const action of actions) {
         if (ctx.signal?.aborted) return;
-
-        if (FORCE_DRY_RUN) {
-          options.logger.info(
-            `[idle-task-cleanup] (dry-run) would ${describeAction(action)}: ${action.taskId} (${action.reason})`,
-            { module: 'idle-task-cleanup', taskId: action.taskId, workflowId: action.workflowId },
-          );
-          continue;
+        if (!FORCE_DRY_RUN) {
+          throw new Error('idle-task-cleanup live workflow retirement is not implemented');
         }
-
-        if (action.kind === 'close-task-and-pr') {
-          const closed = await options.github.closePullRequest(action.prNumber, {
-            deleteBranch: action.deleteBranch,
-          });
-          options.logger.info(
-            `[idle-task-cleanup] ${closed ? 'closed' : 'failed to close'} PR #${action.prNumber} for task ${action.taskId}`,
-            {
-              module: 'idle-task-cleanup',
-              taskId: action.taskId,
-              workflowId: action.workflowId,
-              prNumber: action.prNumber,
-            },
-          );
-        }
-
-        const intentId = options.submitter.submit(
-          action.workflowId,
-          'normal',
-          CLOSE_IDLE_TASK_CHANNEL,
-          buildCloseIdleTaskMutationArgs(action.taskId),
+        options.logger.info(
+          `[idle-task-cleanup] (dry-run) would delete workflow ${action.workflowId} (${action.reason})`,
+          { module: 'idle-task-cleanup', workflowId: action.workflowId },
         );
-        options.store.logEvent?.(action.taskId, 'idle-task-cleanup.submit', {
-          worker: IDLE_TASK_CLEANUP_WORKER_KIND,
-          intentId,
-          channel: CLOSE_IDLE_TASK_CHANNEL,
-          reason: action.reason,
-        });
       }
     },
   });
@@ -281,11 +142,11 @@ export function registerIdleTaskCleanupWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: IDLE_TASK_CLEANUP_WORKER_KIND,
-    note: 'Dry-run: reports failed/completed/review_ready admin-bypass-repair and e2e-repair tasks idle 15+ minutes.',
+    note: 'Dry-run: reports completed workflows immediately and inactive workflows older than 48 hours.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime => {
       const config = deps.idleTaskCleanup;
       if (!config) {
-        throw new Error('idle-task-cleanup worker requires deps.idleTaskCleanup (github client) to be configured');
+        throw new Error('idle-task-cleanup worker requires deps.idleTaskCleanup to be configured');
       }
       return createIdleTaskCleanupWorker({
         logger: deps.logger,
@@ -293,7 +154,6 @@ export function registerIdleTaskCleanupWorker(
         submitter: deps.submitter,
         github: config.github,
         intervalMs: config.intervalMs,
-        idleThresholdMs: config.idleThresholdMs,
         tickOnStart: config.tickOnStart,
         now: config.now,
       });
