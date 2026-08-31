@@ -388,4 +388,70 @@ EXPECTED:
       adapter.close();
     }
   });
+
+  it('PROOF: drainScheduler() without alreadyRefreshed triggers full-table reload (known gap to fix)', async () => {
+    dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-drain-scheduler-refresh-'));
+    const dbPath = path.join(dbDir, 'invoker.db');
+
+    const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+
+    try {
+      for (let i = 0; i < WORKFLOW_COUNT; i++) {
+        const wfId = `wf-${i}`;
+        const nowIso = new Date().toISOString();
+        adapter.saveWorkflow({
+          id: wfId,
+          name: wfId,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        } as any);
+
+        const createdAt = new Date();
+        adapter.saveTask(wfId, {
+          id: `${wfId}/root`,
+          description: 'root',
+          status: 'completed',
+          dependencies: [],
+          createdAt,
+          config: { workflowId: wfId },
+          execution: { exitCode: 0 },
+        } as TaskState);
+
+        adapter.saveTask(wfId, {
+          id: `${wfId}/pending`,
+          description: 'pending work',
+          status: 'pending',
+          dependencies: [`${wfId}/root`],
+          createdAt,
+          config: { workflowId: wfId },
+          execution: {},
+        } as TaskState);
+      }
+
+      const orchestrator = new Orchestrator({
+        persistence: adapter as any,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 200,
+      });
+
+      orchestrator.syncAllFromDb();
+
+      let loadTasksForWorkflowsCalls = 0;
+      const realLoadTasksForWorkflows = adapter.loadTasksForWorkflows.bind(adapter);
+      (adapter as any).loadTasksForWorkflows = (workflowIds: string[]) => {
+        loadTasksForWorkflowsCalls += 1;
+        return realLoadTasksForWorkflows(workflowIds);
+      };
+
+      (orchestrator as any).drainScheduler();
+
+      expect(
+        loadTasksForWorkflowsCalls,
+        `drainScheduler() without alreadyRefreshed should trigger 0 full-table reloads ` +
+          `when in-memory state is current, but got ${loadTasksForWorkflowsCalls}`,
+      ).toBe(0);
+    } finally {
+      adapter.close();
+    }
+  });
 });
