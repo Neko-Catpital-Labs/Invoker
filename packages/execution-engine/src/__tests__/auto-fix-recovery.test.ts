@@ -113,6 +113,7 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
     }));
     const store = {
       listWorkflows: vi.fn(() => workflows),
+      loadWorkflow: vi.fn(() => undefined),
       loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
       listWorkflowMutationIntents: vi.fn(() => []),
       logEvent: vi.fn(),
@@ -136,6 +137,7 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
 
     expect(validated).toHaveLength(workflowCount);
     expect(store.listWorkflows).toHaveBeenCalledTimes(1);
+    expect(store.loadWorkflow).not.toHaveBeenCalled();
   });
 
   it('lists only failed liveness-classed tasks as candidates', () => {

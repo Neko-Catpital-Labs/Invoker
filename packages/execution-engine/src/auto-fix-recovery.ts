@@ -211,8 +211,9 @@ function workflowNameForId(
   workflowsById?: ReadonlyMap<string, { name?: string; repoUrl?: string }>,
 ): string | undefined {
   const listed = workflowsById?.get(workflowId)
-    ?? options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+    ?? (workflowsById ? undefined : options.store.listWorkflows().find((workflow) => workflow.id === workflowId));
   if (typeof listed?.name === 'string' && listed.name.length > 0) return listed.name;
+  if (workflowsById?.has(workflowId)) return undefined;
   const loaded = options.store.loadWorkflow?.(workflowId);
   if (typeof loaded?.name === 'string' && loaded.name.length > 0) return loaded.name;
   return undefined;
@@ -224,8 +225,9 @@ function workflowRepoUrlForId(
   workflowsById?: ReadonlyMap<string, { name?: string; repoUrl?: string }>,
 ): string | undefined {
   const listed = workflowsById?.get(workflowId)
-    ?? options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+    ?? (workflowsById ? undefined : options.store.listWorkflows().find((workflow) => workflow.id === workflowId));
   if (typeof listed?.repoUrl === 'string' && listed.repoUrl.length > 0) return listed.repoUrl;
+  if (workflowsById?.has(workflowId)) return undefined;
   const loaded = options.store.loadWorkflow?.(workflowId);
   if (typeof loaded?.repoUrl === 'string' && loaded.repoUrl.length > 0) return loaded.repoUrl;
   return undefined;
