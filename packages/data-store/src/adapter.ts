@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions, TrustedVerificationEvidenceRecord, VerificationEvidenceRecord } from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
@@ -138,6 +138,16 @@ export interface RepairFilingInsertResult {
   /** True only when this call created the row; false means an identical (kind, subject, stateSha) row already existed. */
   inserted: boolean;
   row: RepairFiling;
+}
+
+/** Every trusted-evidence dimension is explicit; null means an exact no-attempt scope. */
+export interface TrustedVerificationEvidenceScope {
+  repository: string;
+  workflowId: string;
+  taskId: string;
+  generation: number;
+  attemptId: string | null;
+  commitSha: string;
 }
 
 // ── Workflow Types ──────────────────────────────────────────
@@ -511,6 +521,13 @@ export interface PersistenceAdapter {
   listRepairFilings(kind?: string, subject?: string): RepairFiling[];
   /** Release a claimed (kind, subject, stateSha) row -- e.g. the actual filing failed after the claim succeeded -- so a later attempt can reclaim it. Returns true iff a row was deleted. */
   deleteRepairFiling(kind: string, subject: string, stateSha: string): boolean;
+
+  // Verification evidence (append-only authorization input and audit history)
+  appendVerificationEvidence(record: unknown): VerificationEvidenceRecord;
+  loadTrustedVerificationEvidence(
+    scope: TrustedVerificationEvidenceScope,
+  ): TrustedVerificationEvidenceRecord[];
+  listVerificationEvidenceForAudit(): VerificationEvidenceRecord[];
 
   // Workflow channels (Slack workflow↔channel mapping)
   saveWorkflowChannel(rec: WorkflowChannel): void;

@@ -35,8 +35,8 @@ import type {
   ExternalDependencyChange,
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
-import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import { DISPATCH_LEASE_MS, parseVerificationEvidenceRecord } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions, TrustedVerificationEvidenceRecord, VerificationEvidenceRecord } from '@invoker/contracts';
 import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
@@ -45,6 +45,7 @@ import type {
   RepairFilingInsertInput,
   RepairFilingInsertResult,
   ReviewGateLookup,
+  TrustedVerificationEvidenceScope,
   Workflow,
   WorkflowReadOptions,
   WorkflowPagedOptions,
@@ -2922,6 +2923,73 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
       return this.db.getRowsModified() > 0;
     });
+  }
+
+  // ── Verification Evidence (immutable ledger) ──────────────
+
+  private parseVerificationEvidenceRows(
+    rows: Record<string, unknown>[],
+  ): VerificationEvidenceRecord[] {
+    return rows.map((row) => parseVerificationEvidenceRecord(
+      JSON.parse(String(row.record_json)),
+    ));
+  }
+
+  appendVerificationEvidence(record: unknown): VerificationEvidenceRecord {
+    const parsed = parseVerificationEvidenceRecord(record);
+    const scope = parsed.version === 2 ? parsed.attestation : undefined;
+    this.execRun(
+      `INSERT INTO verification_evidence (
+        receipt_id, version, trust, repository, workflow_id, task_id,
+        generation, attempt_id, commit_sha, record_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        parsed.receipt.id,
+        parsed.version,
+        parsed.trust,
+        scope?.repository ?? null,
+        scope?.workflowId ?? null,
+        scope?.taskId ?? null,
+        scope?.generation ?? null,
+        scope?.attemptId ?? null,
+        scope?.commitSha ?? null,
+        JSON.stringify(parsed),
+      ],
+    );
+    return parsed;
+  }
+
+  loadTrustedVerificationEvidence(
+    scope: TrustedVerificationEvidenceScope,
+  ): TrustedVerificationEvidenceRecord[] {
+    const rows = this.queryAll(
+      `SELECT record_json
+       FROM verification_evidence
+       WHERE version = 2
+         AND trust = 'trusted'
+         AND repository = ?
+         AND workflow_id = ?
+         AND task_id = ?
+         AND generation = ?
+         AND attempt_id IS ?
+         AND commit_sha = ?
+       ORDER BY sequence ASC`,
+      [
+        scope.repository,
+        scope.workflowId,
+        scope.taskId,
+        scope.generation,
+        scope.attemptId,
+        scope.commitSha,
+      ],
+    );
+    return this.parseVerificationEvidenceRows(rows) as TrustedVerificationEvidenceRecord[];
+  }
+
+  listVerificationEvidenceForAudit(): VerificationEvidenceRecord[] {
+    return this.parseVerificationEvidenceRows(this.queryAll(
+      'SELECT record_json FROM verification_evidence ORDER BY sequence ASC',
+    ));
   }
 
   // ── Workflow Channels (Slack workflow↔channel mapping) ──

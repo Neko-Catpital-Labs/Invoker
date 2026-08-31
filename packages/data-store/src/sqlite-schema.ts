@@ -572,6 +572,48 @@ export const SCHEMA_DDL = `
       CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_filings_kind_subject_sha
         ON repair_filings(kind, subject, state_sha);
 
+      CREATE TABLE IF NOT EXISTS verification_evidence (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_id TEXT NOT NULL UNIQUE,
+        version INTEGER NOT NULL CHECK (version IN (1, 2)),
+        trust TEXT NOT NULL CHECK (trust IN ('untrusted', 'trusted')),
+        repository TEXT,
+        workflow_id TEXT,
+        task_id TEXT,
+        generation INTEGER,
+        attempt_id TEXT,
+        commit_sha TEXT,
+        record_json TEXT NOT NULL CHECK (json_valid(record_json)),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (
+          (version = 1 AND trust = 'untrusted'
+            AND repository IS NULL AND workflow_id IS NULL AND task_id IS NULL
+            AND generation IS NULL AND attempt_id IS NULL AND commit_sha IS NULL)
+          OR
+          (version = 2 AND trust = 'trusted'
+            AND repository IS NOT NULL AND workflow_id IS NOT NULL AND task_id IS NOT NULL
+            AND typeof(generation) = 'integer' AND generation >= 0 AND commit_sha IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_verification_evidence_trusted_scope
+        ON verification_evidence(
+          repository, workflow_id, task_id, generation, attempt_id, commit_sha, sequence
+        )
+        WHERE version = 2 AND trust = 'trusted';
+
+      CREATE TRIGGER IF NOT EXISTS trg_verification_evidence_reject_update
+        BEFORE UPDATE ON verification_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'verification_evidence rows are immutable');
+        END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_verification_evidence_reject_delete
+        BEFORE DELETE ON verification_evidence
+        BEGIN
+          SELECT RAISE(ABORT, 'verification_evidence rows are immutable');
+        END;
+
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
