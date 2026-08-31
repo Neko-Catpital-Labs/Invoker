@@ -68,6 +68,10 @@ export interface PrMaintenanceConfig {
   targetRepos?: string[];
 }
 
+export interface JailbreakLandConfig {
+  live?: boolean;
+}
+
 export const DEFAULT_PR_MAINTENANCE_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
 
 /**
@@ -577,6 +581,7 @@ export interface InvokerConfig {
    * Process on/off is SQLite `worker_desired_states`, not a config boolean.
    */
   prMaintenance?: PrMaintenanceConfig;
+  jailbreakLand?: JailbreakLandConfig;
   /**
    * Owner-side disk-headroom policy. `cleanupEnabled` controls whether the
    * always-running disk-headroom worker may delete files on critical disks;
@@ -820,6 +825,9 @@ export function resolvePrMaintenanceWorkerConfig(
   if (prMaintenance.intervalMs !== undefined) launch.intervalMs = prMaintenance.intervalMs;
   if (prMaintenance.lockPath !== undefined) launch.lockPath = prMaintenance.lockPath;
   if (prMaintenance.shell !== undefined) launch.shell = prMaintenance.shell;
+  if (config.jailbreakLand?.live !== undefined) {
+    launch.jailbreakLive = config.jailbreakLand.live;
+  }
 
   const targetRepos = resolvePrMaintenanceTargetRepos(config);
   // Config is authoritative; always inject the scan list for the shell entrypoints.
