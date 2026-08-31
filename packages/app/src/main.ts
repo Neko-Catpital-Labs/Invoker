@@ -108,6 +108,7 @@ import {
   submitRepairWorkflowFromCiFailure,
   createPrMaintenanceGitHub,
   spawnPrMaintenanceCommand,
+  WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -1887,6 +1888,11 @@ function startHeadlessMode(): void {
             }),
             getTaskExecutor: createStandaloneTaskExecutor,
             getMutationTiming: () => activeMutationContext?.mutationTiming,
+            idleTaskCleanup: {
+              store: persistence,
+              now: () => Date.now(),
+              idleThresholdMs: WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS,
+            },
             contextLabel: 'standalone',
           });
           for (const [channel, handler] of standaloneWorkerHandlers) {
@@ -3238,6 +3244,11 @@ startMainProcessBootstrap({
           runHeadlessCommand: (args) => mutationActions.executeHeadlessExec({ args, waitForApproval: false, noTrack: true }),
           getTaskExecutor: requireTaskExecutor,
           getMutationTiming: () => activeMutationContext?.mutationTiming,
+          idleTaskCleanup: {
+            store: persistence,
+            now: () => Date.now(),
+            idleThresholdMs: WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS,
+          },
           contextLabel: 'owner',
         });
         for (const [channel, handler] of ownerWorkerHandlers) {
