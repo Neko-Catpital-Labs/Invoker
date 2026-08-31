@@ -1,34 +1,51 @@
-/**
- * Duplicated from `scripts/e2e-regression-watch.mjs`'s `MARKER_PREFIX` — that
- * file is not importable from this TS package (plain .mjs script, no build
- * step shared with @invoker/execution-engine). Keep the two in sync by hand;
- * `idle-task-cleanup-policy.test.ts` pins the literal value.
- *
- * The marker lives on the *workflow's* description (the plan's top-level
- * `description:`, set from `ci-regression-watch.workflow.yaml`), not on any
- * individual task — confirmed against `liveQueryHasNonTerminalWork`
- * (`scripts/e2e-regression-watch.mjs:885-889`), which checks `w.description`
- * on `query workflows` rows.
- */
-const E2E_REPAIR_MARKER = 'invoker-ci-regression-watch: first-bad-sha=';
+import type { TaskStatus, WorkflowDerivedStatus } from '@invoker/workflow-core';
 
-const ADMIN_BYPASS_REPAIR_NAME_PATTERN = /^repair-pr-\d+-.+$/;
+export const IDLE_WORKFLOW_RETENTION_MS = 48 * 60 * 60_000;
 
-/** Matches the `repair-pr-<num>-<fingerprint>` plans filed by `scripts/cron-pr-orphan-repair.sh`. */
-export function isAdminBypassRepairTask(workflowName: string | undefined): boolean {
-  return typeof workflowName === 'string' && ADMIN_BYPASS_REPAIR_NAME_PATTERN.test(workflowName);
+const INACTIVE_CLEANUP_TASK_STATUSES = [
+  'completed',
+  'failed',
+  'closed',
+  'stale',
+] as const satisfies readonly TaskStatus[];
+
+const KNOWN_CLEANUP_WORKFLOW_STATUSES = [
+  'pending',
+  'running',
+  'fixing_with_ai',
+  'completed',
+  'failed',
+  'closed',
+  'blocked',
+  'review_ready',
+  'awaiting_approval',
+  'stale',
+] as const satisfies readonly WorkflowDerivedStatus[];
+
+const INACTIVE_CLEANUP_TASK_STATUS_SET = new Set<string>(INACTIVE_CLEANUP_TASK_STATUSES);
+const KNOWN_CLEANUP_WORKFLOW_STATUS_SET = new Set<string>(KNOWN_CLEANUP_WORKFLOW_STATUSES);
+
+export function isInactiveCleanupTaskStatus(status: unknown): status is TaskStatus {
+  return typeof status === 'string' && INACTIVE_CLEANUP_TASK_STATUS_SET.has(status);
 }
 
-/** Matches workflows filed by `scripts/e2e-regression-watch.mjs`, tagged via their description marker. */
-export function isE2eRepairWorkflow(workflowDescription: string | undefined): boolean {
-  return typeof workflowDescription === 'string' && workflowDescription.includes(E2E_REPAIR_MARKER);
+export function isKnownCleanupWorkflowStatus(status: unknown): status is WorkflowDerivedStatus {
+  return typeof status === 'string' && KNOWN_CLEANUP_WORKFLOW_STATUS_SET.has(status);
 }
 
 /**
- * Whether a workflow belongs to one of the two automated repair families this
- * cleanup worker is scoped to. Every task in a non-matching workflow is left
- * alone, no matter its status or idle time.
+ * `updatedAt` is the workflow's canonical activity timestamp: the orchestrator
+ * touches it on task status changes. The boundary is deliberately strict;
+ * exactly 48 hours old is retained.
  */
-export function isCleanupEligibleWorkflow(workflow: { name?: string; description?: string }): boolean {
-  return isAdminBypassRepairTask(workflow.name) || isE2eRepairWorkflow(workflow.description);
+export function isWorkflowPastRetention(
+  updatedAt: string | undefined,
+  now: number,
+  retentionMs: number = IDLE_WORKFLOW_RETENTION_MS,
+): boolean {
+  if (updatedAt === undefined || !Number.isFinite(now) || !Number.isFinite(retentionMs) || retentionMs < 0) {
+    return false;
+  }
+  const updatedAtMs = Date.parse(updatedAt);
+  return Number.isFinite(updatedAtMs) && now - updatedAtMs > retentionMs;
 }
