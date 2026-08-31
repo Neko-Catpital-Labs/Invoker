@@ -1,13 +1,26 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
+import type { InvokerRuntimeKind } from '@invoker/contracts';
 
 export const OWNER_BOOTSTRAP_LOCK_DIR = 'headless-owner-bootstrap.lock';
 
-export type OwnerRuntimeKind = 'packaged' | 'source-development';
+export type OwnerRuntimeKind = InvokerRuntimeKind;
 
 const PACKAGED_KIND: OwnerRuntimeKind = 'packaged';
 const SOURCE_DEVELOPMENT_KIND: OwnerRuntimeKind = 'source-development';
+const TEST_KIND: OwnerRuntimeKind = 'test';
+
+const TEST_PROFILE_KEYS = [
+  'INVOKER_DB_DIR',
+  'INVOKER_USER_DATA_DIR',
+  'INVOKER_IPC_SOCKET',
+  'INVOKER_REPO_CONFIG_PATH',
+  'INVOKER_ENV_PATH',
+  'INVOKER_LOG_PATH',
+  'INVOKER_API_PORT',
+  'INVOKER_WEB_PORT',
+] as const;
 
 /**
  * Every environment variable that carries the parent's selected-profile
@@ -21,14 +34,7 @@ const SOURCE_DEVELOPMENT_PROFILE_KEYS = [
   'INVOKER_DEVELOPMENT_PROFILE_ACTIVE',
   'INVOKER_SOURCE_ROOT',
   'INVOKER_PROFILE_ID',
-  'INVOKER_DB_DIR',
-  'INVOKER_USER_DATA_DIR',
-  'INVOKER_IPC_SOCKET',
-  'INVOKER_REPO_CONFIG_PATH',
-  'INVOKER_ENV_PATH',
-  'INVOKER_LOG_PATH',
-  'INVOKER_API_PORT',
-  'INVOKER_WEB_PORT',
+  ...TEST_PROFILE_KEYS,
 ] as const;
 
 export class OwnerChildProfileError extends Error {
@@ -40,7 +46,12 @@ export class OwnerChildProfileError extends Error {
 
 function determineOwnerParentRuntimeKind(parentEnv: NodeJS.ProcessEnv): OwnerRuntimeKind {
   const declaredKind = parentEnv.INVOKER_RUNTIME_KIND;
-  if (declaredKind !== undefined && declaredKind !== PACKAGED_KIND && declaredKind !== SOURCE_DEVELOPMENT_KIND) {
+  if (
+    declaredKind !== undefined
+    && declaredKind !== PACKAGED_KIND
+    && declaredKind !== SOURCE_DEVELOPMENT_KIND
+    && declaredKind !== TEST_KIND
+  ) {
     throw new OwnerChildProfileError(`Unknown Invoker runtime kind "${declaredKind}".`);
   }
 
@@ -56,6 +67,7 @@ function determineOwnerParentRuntimeKind(parentEnv: NodeJS.ProcessEnv): OwnerRun
     );
   }
 
+  if (declaredKind === TEST_KIND) return TEST_KIND;
   return declaredKind === SOURCE_DEVELOPMENT_KIND || developmentProfileActive ? SOURCE_DEVELOPMENT_KIND : PACKAGED_KIND;
 }
 
@@ -78,6 +90,14 @@ export function resolveOwnerChildProfileEnv(parentEnv: NodeJS.ProcessEnv): Recor
       );
     }
     return { INVOKER_RUNTIME_KIND: PACKAGED_KIND };
+  }
+
+  if (kind === TEST_KIND) {
+    const childEnv: Record<string, string> = { INVOKER_RUNTIME_KIND: TEST_KIND };
+    for (const key of TEST_PROFILE_KEYS) {
+      if (parentEnv[key] !== undefined) childEnv[key] = parentEnv[key];
+    }
+    return childEnv;
   }
 
   const missing = SOURCE_DEVELOPMENT_PROFILE_KEYS.filter((key) => !parentEnv[key]);

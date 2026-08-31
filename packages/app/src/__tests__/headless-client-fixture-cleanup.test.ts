@@ -118,6 +118,17 @@ describe('detached owner child profile identity', () => {
     expect(childEnv).toEqual({ INVOKER_RUNTIME_KIND: 'packaged' });
   });
 
+  it('passes isolated test locations to a detached owner child', () => {
+    const testEnv = {
+      INVOKER_RUNTIME_KIND: 'test',
+      INVOKER_DB_DIR: '/tmp/invoker-e2e-test',
+      INVOKER_IPC_SOCKET: '/tmp/invoker-e2e-test/ipc-transport.sock',
+      INVOKER_REPO_CONFIG_PATH: '/tmp/invoker-e2e-test/config.json',
+    };
+
+    expect(resolveOwnerChildProfileEnv(testEnv)).toEqual(testEnv);
+  });
+
   it('passes the same source profile and disjoint locations from a source-development parent to the child', () => {
     const childEnv = resolveOwnerChildProfileEnv(sourceDevelopmentEnv);
 

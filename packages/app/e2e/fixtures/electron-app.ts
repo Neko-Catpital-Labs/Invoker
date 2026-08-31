@@ -232,6 +232,7 @@ exit 64
       env: {
         ...process.env,
         NODE_ENV: 'test',
+        INVOKER_RUNTIME_KIND: 'test',
         INVOKER_TEST_WORKFLOW_IDS: '1',
         INVOKER_DISABLE_SLACK: '1',
         TZ: 'UTC',
