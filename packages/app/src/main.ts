@@ -2772,12 +2772,6 @@ startMainProcessBootstrap({
     if (deferredStartupTriggered) return;
     deferredStartupTriggered = true;
     recordStartupMark('deferred-startup.begin');
-    if (ownerMode && workerRuntimeController) {
-      setTimeout(() => {
-        if (!sourceDevelopmentProfile) workerRuntimeController?.startAutoStartedWorkers();
-        recordStartupMark('workers.auto-started');
-      }, 0);
-    }
     const configuredStartupPollDelayMs = Number.parseInt(process.env.INVOKER_STARTUP_POLL_DELAY_MS ?? '10000', 10);
     const startupPollDelayMs = Number.isFinite(configuredStartupPollDelayMs)
       ? configuredStartupPollDelayMs
@@ -3451,6 +3445,10 @@ startMainProcessBootstrap({
       });
       const activeWorkerRuntimeController = workerRuntimeController;
       startAdminBypassE2eBabysitWorker = (kind) => activeWorkerRuntimeController.start(kind);
+      if (!sourceDevelopmentProfile) {
+        workerRuntimeController.startAutoStartedWorkers();
+        recordStartupMark('workers.auto-started');
+      }
     }
 
     // Fail orphaned in-flight tasks left by a previous crash, then start ready work.
