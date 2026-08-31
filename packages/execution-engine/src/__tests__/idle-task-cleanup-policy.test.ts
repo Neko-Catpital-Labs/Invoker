@@ -3,7 +3,7 @@ import type { TaskStatus, WorkflowDerivedStatus } from '@invoker/workflow-core';
 import {
   IDLE_WORKFLOW_RETENTION_MS,
   isInactiveCleanupTaskStatus,
-  isKnownCleanupWorkflowStatus,
+  isInactiveCleanupWorkflowStatus,
   isWorkflowPastRetention,
 } from '../workers/idle-task-cleanup-policy.js';
 
@@ -32,24 +32,24 @@ describe('isInactiveCleanupTaskStatus', () => {
   });
 });
 
-describe('isKnownCleanupWorkflowStatus', () => {
+describe('isInactiveCleanupWorkflowStatus', () => {
+  it.each(['completed', 'failed', 'closed', 'stale'] as const)('accepts inactive workflow status %s', (status) => {
+    expect(isInactiveCleanupWorkflowStatus(status)).toBe(true);
+  });
+
   it.each([
     'pending',
     'running',
     'fixing_with_ai',
-    'completed',
-    'failed',
-    'closed',
     'blocked',
     'review_ready',
     'awaiting_approval',
-    'stale',
-  ] as const)('accepts known workflow status %s', (status) => {
-    expect(isKnownCleanupWorkflowStatus(status)).toBe(true);
+  ] as const)('retains active workflow status %s', (status) => {
+    expect(isInactiveCleanupWorkflowStatus(status)).toBe(false);
   });
 
   it('retains an unknown status', () => {
-    expect(isKnownCleanupWorkflowStatus('new-future-status' as WorkflowDerivedStatus)).toBe(false);
+    expect(isInactiveCleanupWorkflowStatus('new-future-status' as WorkflowDerivedStatus)).toBe(false);
   });
 });
 

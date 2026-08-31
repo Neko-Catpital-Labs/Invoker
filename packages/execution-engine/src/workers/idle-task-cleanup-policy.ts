@@ -9,21 +9,15 @@ const INACTIVE_CLEANUP_TASK_STATUSES = [
   'stale',
 ] as const satisfies readonly TaskStatus[];
 
-const KNOWN_CLEANUP_WORKFLOW_STATUSES = [
-  'pending',
-  'running',
-  'fixing_with_ai',
+const INACTIVE_CLEANUP_WORKFLOW_STATUSES = [
   'completed',
   'failed',
   'closed',
-  'blocked',
-  'review_ready',
-  'awaiting_approval',
   'stale',
 ] as const satisfies readonly WorkflowDerivedStatus[];
 
 const INACTIVE_CLEANUP_TASK_STATUS_SET = new Set<string>(INACTIVE_CLEANUP_TASK_STATUSES);
-const KNOWN_CLEANUP_WORKFLOW_STATUS_SET = new Set<string>(KNOWN_CLEANUP_WORKFLOW_STATUSES);
+const INACTIVE_CLEANUP_WORKFLOW_STATUS_SET = new Set<string>(INACTIVE_CLEANUP_WORKFLOW_STATUSES);
 
 /**
  * Cleanup treats only terminal task states as inactive. Every live, waiting,
@@ -33,9 +27,9 @@ export function isInactiveCleanupTaskStatus(status: unknown): status is TaskStat
   return typeof status === 'string' && INACTIVE_CLEANUP_TASK_STATUS_SET.has(status);
 }
 
-/** Unknown workflow states are retained until cleanup policy handles them explicitly. */
-export function isKnownCleanupWorkflowStatus(status: unknown): status is WorkflowDerivedStatus {
-  return typeof status === 'string' && KNOWN_CLEANUP_WORKFLOW_STATUS_SET.has(status);
+/** Active, waiting, and unknown workflow states are retained. */
+export function isInactiveCleanupWorkflowStatus(status: unknown): status is WorkflowDerivedStatus {
+  return typeof status === 'string' && INACTIVE_CLEANUP_WORKFLOW_STATUS_SET.has(status);
 }
 
 /**

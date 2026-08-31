@@ -137,6 +137,26 @@ describe('planIdleTaskCleanup: workflow retirement', () => {
     expect(actions).toEqual([]);
   });
 
+  it.each([
+    'pending',
+    'running',
+    'fixing_with_ai',
+    'blocked',
+    'review_ready',
+    'awaiting_approval',
+  ] as const)('retains an old workflow with active status %s even when its tasks appear inactive', async (status) => {
+    const workflow = makeWorkflow(`wf-active-${status}`, {
+      status,
+      updatedAt: new Date(NOW - RETENTION_MS - HOUR_MS).toISOString(),
+    });
+
+    const actions = await plan([workflow], {
+      [workflow.id]: [makeTask({ id: `${workflow.id}/task`, status: 'failed' })],
+    });
+
+    expect(actions).toEqual([]);
+  });
+
   it('retains unknown workflow and task statuses regardless of age', async () => {
     const unknownWorkflow = makeWorkflow('wf-unknown-workflow', {
       status: 'new-future-status' as WorkflowDerivedStatus,

@@ -8,7 +8,7 @@ import type { PrMaintenanceGitHub } from './pr-maintenance-github.js';
 import {
   IDLE_WORKFLOW_RETENTION_MS,
   isInactiveCleanupTaskStatus,
-  isKnownCleanupWorkflowStatus,
+  isInactiveCleanupWorkflowStatus,
   isWorkflowPastRetention,
 } from './idle-task-cleanup-policy.js';
 
@@ -62,7 +62,7 @@ export async function planIdleTaskCleanup(
   const actions: CleanupAction[] = [];
 
   for (const workflow of workflows) {
-    if (!isKnownCleanupWorkflowStatus(workflow.status)) continue;
+    if (!isInactiveCleanupWorkflowStatus(workflow.status)) continue;
 
     const tasks = loadTasks(workflow.id);
     if (!tasks.every((task) => isInactiveCleanupTaskStatus(task.status))) continue;
