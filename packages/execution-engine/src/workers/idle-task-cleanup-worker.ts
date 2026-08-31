@@ -1,4 +1,5 @@
 import type { Logger } from '@invoker/contracts';
+import type { WorkflowMutationPriority } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -13,15 +14,9 @@ import {
 } from './idle-task-cleanup-policy.js';
 
 export const IDLE_TASK_CLEANUP_WORKER_KIND = 'idle-task-cleanup';
+export const IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL = 'invoker:delete-workflow';
 
 const DEFAULT_IDLE_TASK_CLEANUP_INTERVAL_MS = 5 * 60_000;
-
-/**
- * Hardcoded, not env-gated: this slice can only prepare and log retirement
- * actions. A separately reviewed owner handoff must remove this guard and add
- * the workflow deletion path.
- */
-const FORCE_DRY_RUN = true;
 
 export interface IdleTaskCleanupWorkflowRow {
   readonly id: string;
@@ -38,7 +33,27 @@ export interface IdleTaskCleanupWorkerStore {
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
-export type IdleTaskCleanupWorkerSubmitter = object;
+export interface IdleTaskCleanupWorkerSubmitter {
+  submit(
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: typeof IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ): number;
+}
+
+export function buildIdleTaskCleanupRetireWorkflowMutationArgs(workflowId: string): unknown[] {
+  return [workflowId];
+}
+
+export function parseIdleTaskCleanupRetireWorkflowMutationArgs(args: unknown[]): { workflowId: string } {
+  const [workflowId] = args;
+  if (typeof workflowId !== 'string' || workflowId.trim().length === 0) {
+    throw new Error(`${IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL} mutation requires a workflow ID`);
+  }
+  return { workflowId };
+}
 
 export interface CleanupAction {
   readonly kind: 'delete-workflow';
@@ -122,25 +137,27 @@ export function createIdleTaskCleanupWorker(options: IdleTaskCleanupWorkerOption
 
       for (const action of actions) {
         if (ctx.signal?.aborted) return;
-        if (!FORCE_DRY_RUN) {
-          throw new Error('idle-task-cleanup live workflow retirement is not implemented');
-        }
+        const intentId = options.submitter.submit(
+          action.workflowId,
+          'high',
+          IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL,
+          buildIdleTaskCleanupRetireWorkflowMutationArgs(action.workflowId),
+        );
         options.logger.info(
-          `[idle-task-cleanup] (dry-run) would delete workflow ${action.workflowId} (${action.reason})`,
-          { module: 'idle-task-cleanup', workflowId: action.workflowId },
+          `[idle-task-cleanup] submitted workflow retirement for ${action.workflowId} (${action.reason})`,
+          { module: 'idle-task-cleanup', workflowId: action.workflowId, intentId },
         );
       }
     },
   });
 }
 
-/** Register the built-in idle-task-cleanup worker (dry-run only in this version). */
 export function registerIdleTaskCleanupWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: IDLE_TASK_CLEANUP_WORKER_KIND,
-    note: 'Dry-run: reports completed workflows immediately and inactive workflows older than 48 hours.',
+    note: 'Retires completed workflows immediately and inactive workflows older than 48 hours.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime => {
       const config = deps.idleTaskCleanup;
       if (!config) {
