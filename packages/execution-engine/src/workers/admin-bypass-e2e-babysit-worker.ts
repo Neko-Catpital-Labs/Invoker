@@ -15,6 +15,20 @@ export const DEFAULT_WATCHED_WORKER_KINDS = [
   'claude-oauth-refresh',
 ] as const;
 
+/**
+ * Prefix for repair_filings rows scripts/e2e-regression-watch.mjs inserts
+ * (via claimNeedsHumanRepairFiling) when a failure exhausts its automated
+ * fix-attempt retry budget. Matches needsHumanRepairFilingKind() there.
+ */
+export const E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX = 'ci-regression-needs-human:';
+
+/**
+ * Prefix for the companion claim this worker inserts once it has filed an
+ * investigation for a given needs-human row, so a later tick does not
+ * re-file for the same (subject, stateSha) every cycle.
+ */
+export const E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX = 'ci-regression-needs-human-investigated:';
+
 const DEFAULT_INTERVAL_MS = 10 * 60_000;
 
 export interface WorkerLifecycleSnapshot {
@@ -38,9 +52,18 @@ export interface RepairFilingRow {
   readonly createdAt: string;
 }
 
+export interface RepairFilingInsertResult {
+  readonly inserted: boolean;
+}
+
 export interface RepairFilingStore {
   listRepairFilings(): readonly RepairFilingRow[] | Promise<readonly RepairFilingRow[]>;
   deleteRepairFiling(kind: string, subject: string, stateSha: string): unknown;
+  insertRepairFiling(input: {
+    kind: string;
+    subject: string;
+    stateSha: string;
+  }): RepairFilingInsertResult | Promise<RepairFilingInsertResult>;
 }
 
 export interface InvestigativePlanSubmitter {
@@ -81,6 +104,12 @@ export type AdminBypassE2eBabysitAction =
       readonly subject: string;
       readonly stateSha: string;
       readonly createdAt: string;
+    }
+  | {
+      readonly type: 'e2e-regression-needs-human';
+      readonly kind: string;
+      readonly subject: string;
+      readonly stateSha: string;
     };
 
 function yamlString(value: string): string {
@@ -96,13 +125,24 @@ function investigativePrompt(action: AdminBypassE2eBabysitAction): string {
       + 'and what would durably prevent recurrence. Support conclusions with evidence and propose a concrete prevention.'
     );
   }
+  if (action.type === 'repair-filing-delete') {
+    return (
+      'Assume zero prior context. Investigate a production repair-filings finding: '
+      + `the admin-bypass-e2e-babysit worker attempted to delete a stale repair_filings row with kind `
+      + `${JSON.stringify(action.kind)}, subject ${JSON.stringify(action.subject)}, stateSha `
+      + `${JSON.stringify(action.stateSha)}, and createdAt ${JSON.stringify(action.createdAt)}. `
+      + 'Determine what caused the claim to remain stale and what would durably prevent recurrence. '
+      + 'Support conclusions with evidence and propose a concrete prevention.'
+    );
+  }
   return (
-    'Assume zero prior context. Investigate a production repair-filings finding: '
-    + `the admin-bypass-e2e-babysit worker attempted to delete a stale repair_filings row with kind `
-    + `${JSON.stringify(action.kind)}, subject ${JSON.stringify(action.subject)}, stateSha `
-    + `${JSON.stringify(action.stateSha)}, and createdAt ${JSON.stringify(action.createdAt)}. `
-    + 'Determine what caused the claim to remain stale and what would durably prevent recurrence. '
-    + 'Support conclusions with evidence and propose a concrete prevention.'
+    'Assume zero prior context. Investigate a production e2e-regression-watch finding: '
+    + `scripts/e2e-regression-watch.mjs exhausted its automated fix-attempt retry budget and marked a `
+    + `failure needsHuman -- repair_filings kind ${JSON.stringify(action.kind)}, subject `
+    + `${JSON.stringify(action.subject)}, first-bad stateSha ${JSON.stringify(action.stateSha)}. `
+    + 'Determine why the automated fix attempts did not land (read the actual CI job log and any repair '
+    + 'PR history for this failure) and propose a concrete fix or escalation. '
+    + 'Support conclusions with evidence.'
   );
 }
 
@@ -245,6 +285,69 @@ export async function runAdminBypassE2eBabysitTick(
         payload: { ...row, staleTtlMs, error: detail },
       });
     }
+  }
+
+  const needsHumanRows = repairFilings.filter((row) => row.kind.startsWith(E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX));
+  const alreadyInvestigatedKeys = new Set(
+    repairFilings
+      .filter((row) => row.kind.startsWith(E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX))
+      .map((row) => `${row.subject}:${row.stateSha}`),
+  );
+  for (const row of needsHumanRows) {
+    const dedupeKey = `${row.subject}:${row.stateSha}`;
+    if (alreadyInvestigatedKeys.has(dedupeKey)) continue;
+
+    const investigatedKind = E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX
+      + row.kind.slice(E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX.length);
+    const subjectId = `${row.kind}:${row.subject}:${row.stateSha}`;
+    let claim: RepairFilingInsertResult;
+    try {
+      claim = await options.repairFilings.insertRepairFiling({
+        kind: investigatedKind,
+        subject: row.subject,
+        stateSha: row.stateSha,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      options.logger.error(
+        `[${ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND}] failed to claim e2e-regression needs-human finding ${subjectId}: ${detail}`,
+        { module: ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND, kind: row.kind, subject: row.subject, stateSha: row.stateSha },
+      );
+      recordDecision(options.store, {
+        actionType: 'e2e-regression-needs-human',
+        externalKey: `repair-filing:${subjectId}`,
+        subjectType: 'repair-filing',
+        subjectId,
+        status: 'failed',
+        summary: `Failed to claim e2e-regression needs-human finding ${subjectId}: ${detail}`,
+        payload: { ...row, error: detail },
+      });
+      continue;
+    }
+    // Another concurrent tick already claimed and is filing this one.
+    if (!claim.inserted) continue;
+
+    actions.push({
+      type: 'e2e-regression-needs-human',
+      kind: row.kind,
+      subject: row.subject,
+      stateSha: row.stateSha,
+    });
+    options.logger.info(`[${ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND}] filing investigation for e2e-regression needs-human finding`, {
+      module: ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
+      kind: row.kind,
+      subject: row.subject,
+      stateSha: row.stateSha,
+    });
+    recordDecision(options.store, {
+      actionType: 'e2e-regression-needs-human',
+      externalKey: `repair-filing:${subjectId}`,
+      subjectType: 'repair-filing',
+      subjectId,
+      status: 'completed',
+      summary: `Filed investigation for e2e-regression needs-human finding ${subjectId}`,
+      payload: { ...row },
+    });
   }
 
   if (actions.length === 0) return;

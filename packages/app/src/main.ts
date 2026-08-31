@@ -2153,6 +2153,7 @@ function startHeadlessMode(): void {
                 deleteRepairFiling: (kind, subject, stateSha) => (
                   persistence.deleteRepairFiling(kind, subject, stateSha)
                 ),
+                insertRepairFiling: (input) => persistence.insertRepairFiling(input),
               },
               investigativePlanSubmitter: {
                 submitPlan: (planText) => {
@@ -3433,6 +3434,7 @@ startMainProcessBootstrap({
               deleteRepairFiling: (kind, subject, stateSha) => (
                 persistence.deleteRepairFiling(kind, subject, stateSha)
               ),
+              insertRepairFiling: (input) => persistence.insertRepairFiling(input),
             },
             investigativePlanSubmitter: {
               submitPlan: (planText) => {
