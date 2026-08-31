@@ -342,6 +342,7 @@ export interface OrchestratorPersistence {
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
+  loadAttemptsByIds?(attemptIds: string[]): Attempt[];
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
   deleteTask?(taskId: string): void;
   failTaskAndAttempt?(
@@ -1130,6 +1131,17 @@ export class Orchestrator {
     const loadAttempt = (this.persistence as Partial<OrchestratorPersistence>).loadAttempt;
     if (typeof loadAttempt !== 'function') return undefined;
     return loadAttempt.call(this.persistence, attemptId);
+  }
+
+  private loadAttemptsByIds(attemptIds: string[]): Map<string, Attempt> {
+    const uniqueIds = [...new Set(attemptIds)];
+    const loadAttemptsByIds = this.persistence.loadAttemptsByIds;
+    const attempts = typeof loadAttemptsByIds === 'function'
+      ? loadAttemptsByIds.call(this.persistence, uniqueIds)
+      : uniqueIds
+        .map((attemptId) => this.loadAttemptById(attemptId))
+        .filter((attempt): attempt is Attempt => attempt !== undefined);
+    return new Map(attempts.map((attempt) => [attempt.id, attempt]));
   }
 
   private attemptLeaseAnchor(attempt: Attempt): Date | undefined {
@@ -3443,14 +3455,21 @@ export class Orchestrator {
       .filter((task) => !task.config.workflowId || !stagedWorkflowIds.has(task.config.workflowId))
       .filter((task) => !isExternallyBlocked(task));
     const readyTasksById = new Map(readyTasks.map((task) => [task.id, task]));
+    const attemptsById = this.loadAttemptsByIds(
+      readyTasks
+        .map((task) => task.execution.selectedAttemptId)
+        .filter((attemptId): attemptId is string => attemptId !== undefined),
+    );
     return getPendingLaunchQueueSnapshotImpl(
       this as unknown as SchedulerDomainHost,
       readyTasks.map((task) => ({
         taskId: task.id,
         attemptId: task.execution.selectedAttemptId,
-        priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
+        priority: task.execution.selectedAttemptId
+          ? attemptsById.get(task.execution.selectedAttemptId)?.queuePriority ?? 0
+          : 0,
       })),
-      opts,
+      { ...opts, attemptsById },
     )
       .map((job) => readyTasksById.get(job.taskId))
       .filter((task): task is TaskState => task !== undefined);

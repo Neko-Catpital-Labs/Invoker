@@ -85,10 +85,11 @@ function hasActiveLaunchAttempt(
   host: SchedulerDomainHost,
   task: TaskState,
   attemptId: string | undefined,
+  loadAttemptById: (attemptId: string | undefined) => Attempt | undefined = (id) => host.loadAttemptById(id),
 ): boolean {
   if (!attemptId) return false;
   if (task.execution.selectedAttemptId !== attemptId) return false;
-  const attempt = host.loadAttemptById(attemptId);
+  const attempt = loadAttemptById(attemptId);
   if (!host.isAttemptLeaseActive(attempt)) return false;
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
@@ -142,7 +143,10 @@ function createExternalDependencyBlockerResolver(host: SchedulerDomainHost): Ext
 function planPendingLaunchQueue(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
-  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+  opts?: LaunchReadinessOptions & {
+    alreadyRefreshed?: boolean;
+    attemptsById?: ReadonlyMap<string, Attempt | undefined>;
+  },
 ): TaskJob[] {
   // Refresh once for the whole batch, not once per candidate job below --
   // readiness for every job in this pass is evaluated against the same
@@ -152,13 +156,21 @@ function planPendingLaunchQueue(
     host.refreshFromDb();
   }
   const getExternalDependencyBlocker = createExternalDependencyBlockerResolver(host);
+  const attemptsById = new Map(opts?.attemptsById);
+  const loadAttemptById = (attemptId: string | undefined): Attempt | undefined => {
+    if (!attemptId) return undefined;
+    if (!attemptsById.has(attemptId)) {
+      attemptsById.set(attemptId, host.loadAttemptById(attemptId));
+    }
+    return attemptsById.get(attemptId);
+  };
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
     const task = host.stateGetTask(sourceJob.taskId);
     if (!task || (task.status !== 'pending' && (task.status as string) !== 'queued')) continue;
     if (getExternalDependencyBlocker(task) !== undefined) continue;
     const knownAttemptId = sourceJob.attemptId ?? task.execution.selectedAttemptId;
-    if (opts?.activePersistedAttempts !== 0 && hasActiveLaunchAttempt(host, task, knownAttemptId)) continue;
+    if (opts?.activePersistedAttempts !== 0 && hasActiveLaunchAttempt(host, task, knownAttemptId, loadAttemptById)) continue;
     const existing = mergedJobs.get(task.id);
     mergedJobs.set(task.id, {
       taskId: task.id,
@@ -215,7 +227,10 @@ function planPendingLaunchQueue(
 export function getPendingLaunchQueueSnapshotImpl(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
-  opts?: { alreadyRefreshed?: boolean },
+  opts?: {
+    alreadyRefreshed?: boolean;
+    attemptsById?: ReadonlyMap<string, Attempt | undefined>;
+  },
 ): TaskJob[] {
   return planPendingLaunchQueue(host, candidateJobs, opts);
 }

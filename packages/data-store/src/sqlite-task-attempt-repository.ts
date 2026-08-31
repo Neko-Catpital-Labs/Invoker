@@ -1040,6 +1040,21 @@ export class SqliteTaskAttemptRepository {
     return mapRowToAttempt(row);
   }
 
+  loadAttemptsByIds(attemptIds: string[]): Attempt[] {
+    const uniqueIds = [...new Set(attemptIds)];
+    const attempts: Attempt[] = [];
+    for (let i = 0; i < uniqueIds.length; i += SQLITE_MAX_VARIABLE_NUMBER) {
+      const chunk = uniqueIds.slice(i, i + SQLITE_MAX_VARIABLE_NUMBER);
+      if (chunk.length === 0) continue;
+      const placeholders = chunk.map(() => '?').join(', ');
+      attempts.push(...this.exec.queryAll(
+        `SELECT * FROM attempts WHERE id IN (${placeholders})`,
+        chunk,
+      ).map((row) => mapRowToAttempt(row)));
+    }
+    return attempts;
+  }
+
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];

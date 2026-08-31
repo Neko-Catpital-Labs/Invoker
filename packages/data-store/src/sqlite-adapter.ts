@@ -3194,6 +3194,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.taskAttemptRepo.loadAttempt(attemptId);
   }
 
+  loadAttemptsByIds(attemptIds: string[]): Attempt[] {
+    return this.taskAttemptRepo.loadAttemptsByIds(attemptIds);
+  }
+
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     this.taskAttemptRepo.updateAttempt(attemptId, changes);
   }

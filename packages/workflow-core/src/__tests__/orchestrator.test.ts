@@ -6,6 +6,7 @@ import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } 
 import { computeWorkflowRollup } from '../task-types.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
+import { createAttempt } from '@invoker/workflow-graph';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
 
@@ -230,6 +231,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return undefined;
   }
 
+  loadAttemptsByIds(attemptIds: string[]): Attempt[] {
+    return attemptIds
+      .map((attemptId) => this.loadAttempt(attemptId))
+      .filter((attempt): attempt is Attempt => attempt !== undefined);
+  }
+
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     for (const list of this.attempts.values()) {
       const idx = list.findIndex(a => a.id === attemptId);
@@ -257,6 +264,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
 class CountingPersistence extends InMemoryPersistence {
   loadTasksCalls: string[] = [];
   loadWorkflowCalls: string[] = [];
+  loadAttemptCalls: string[] = [];
   transactionCalls = 0;
 
   override loadWorkflow(workflowId: string): ReturnType<InMemoryPersistence['loadWorkflow']> {
@@ -267,6 +275,17 @@ class CountingPersistence extends InMemoryPersistence {
   override loadTasks(workflowId: string): TaskState[] {
     this.loadTasksCalls.push(workflowId);
     return super.loadTasks(workflowId);
+  }
+
+  override loadAttempt(attemptId: string): Attempt | undefined {
+    this.loadAttemptCalls.push(attemptId);
+    return super.loadAttempt(attemptId);
+  }
+
+  override loadAttemptsByIds(attemptIds: string[]): Attempt[] {
+    return attemptIds
+      .map((attemptId) => super.loadAttempt(attemptId))
+      .filter((attempt): attempt is Attempt => attempt !== undefined);
   }
 
   runInTransaction<T>(work: () => T): T {
@@ -6258,6 +6277,35 @@ describe('Orchestrator', () => {
       // The queued launch pass now reuses the queue-planning snapshot for
       // draining, so refreshFromDb() stays both constant and minimal.
       expect(refreshCount).toBeLessThanOrEqual(3);
+    });
+
+    it('batch-loads selected attempts for a ready-queue snapshot', () => {
+      const persistence = new CountingPersistence();
+      const o = new Orchestrator({
+        persistence,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 100,
+      });
+
+      o.loadPlan({
+        name: 'ready-attempt-scaling',
+        tasks: Array.from({ length: 24 }, (_, index) => ({
+          id: `task-${index}`,
+          prompt: 'go',
+        })),
+      });
+      for (const [index, task] of o.getAllTasks().filter((task) => !task.config.isMergeNode).entries()) {
+        const attempt = createAttempt(task.id, { status: 'pending', queuePriority: index });
+        persistence.saveAttempt(attempt);
+        persistence.updateTask(task.id, { execution: { selectedAttemptId: attempt.id } });
+      }
+      (o as any).refreshFromDb();
+      persistence.loadAttemptCalls = [];
+
+      const ready = o.getExecutableReadyTasks({ alreadyRefreshed: true });
+
+      expect(ready).toHaveLength(24);
+      expect(persistence.loadAttemptCalls.length).toBeLessThanOrEqual(2);
     });
   });
 
