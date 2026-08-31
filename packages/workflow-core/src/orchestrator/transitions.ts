@@ -75,7 +75,7 @@ export interface TransitionHost {
   autoStartReadyTasks(taskIds: string[], priority?: number, opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean }): TaskState[];
   autoStartUnblockedTasks(): TaskState[];
   autoStartExternallyUnblockedReadyTasks(): TaskState[];
-  drainScheduler(): TaskState[];
+  drainScheduler(opts?: { alreadyRefreshed?: boolean }): TaskState[];
 }
 
 // ── Extracted Functions ─────────────────────────────────────

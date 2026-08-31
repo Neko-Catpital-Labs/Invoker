@@ -4323,8 +4323,8 @@ export class Orchestrator {
   }
 
   /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */
-  private drainScheduler(): TaskState[] {
-    return drainSchedulerImpl(this as unknown as SchedulerDomainHost);
+  private drainScheduler(opts?: { alreadyRefreshed?: boolean }): TaskState[] {
+    return drainSchedulerImpl(this as unknown as SchedulerDomainHost, opts);
   }
 
   /**
