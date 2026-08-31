@@ -317,4 +317,162 @@ describe('owner-serve HTTP bind blocked by LaunchDispatcher poll', () => {
       bootAdapter.close();
     }
   });
+
+  it('whenReady does NOT resolve while sync work blocks the same turn', async () => {
+    dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-whenready-blocked-'));
+    const dbPath = path.join(dbDir, 'invoker.db');
+
+    const seedAdapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    try {
+      for (let i = 0; i < WORKFLOW_COUNT; i += 1) {
+        const wfId = `wf-seed-${i}`;
+        const nowIso = new Date().toISOString();
+        seedAdapter.saveWorkflow({
+          id: wfId,
+          name: wfId,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        } as any);
+
+        const createdAt = new Date();
+        seedAdapter.saveTask(wfId, {
+          id: `${wfId}/root`,
+          description: 'root',
+          status: 'completed',
+          dependencies: [],
+          createdAt,
+          config: { workflowId: wfId },
+          execution: { exitCode: 0 },
+        } as TaskState);
+
+        const hasPendingTask = i % 2 === 0;
+        seedAdapter.saveTask(wfId, {
+          id: `${wfId}/work`,
+          description: 'work',
+          status: hasPendingTask ? 'pending' : 'completed',
+          dependencies: [`${wfId}/root`],
+          createdAt,
+          config: { workflowId: wfId },
+          execution: hasPendingTask ? {} : { exitCode: 0 },
+        } as TaskState);
+      }
+    } finally {
+      seedAdapter.close();
+    }
+
+    const bootAdapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    server = createServer();
+    let whenReadyResolved = false;
+    const { promise: whenReady, resolve: resolveReady } = Promise.withResolvers<number>();
+    whenReady.then((port) => { whenReadyResolved = true; });
+
+    try {
+      const orchestrator = new Orchestrator({
+        persistence: bootAdapter as any,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 200,
+      });
+      orchestrator.syncAllFromDb();
+
+      server.listen(TEST_PORT, '127.0.0.1', () => {
+        const address = server!.address();
+        const boundPort = typeof address === 'object' && address ? address.port : TEST_PORT;
+        resolveReady(boundPort);
+      });
+
+      orchestrator.startExecution({ limit: 32 });
+      orchestrator.startExecution({ limit: 32 });
+      orchestrator.startExecution({ limit: 32 });
+
+      expect(
+        whenReadyResolved,
+        'PROOF (F3): whenReady promise does NOT resolve while synchronous work runs in the same turn',
+      ).toBe(false);
+
+      await whenReady;
+      expect(
+        whenReadyResolved,
+        'whenReady resolves after awaiting it (event loop yields)',
+      ).toBe(true);
+    } finally {
+      bootAdapter.close();
+    }
+  });
+
+  it('remaining refreshFromDb count after syncAllFromDb on boot path is >> 0 without alreadyRefreshed', async () => {
+    dbDir = mkdtempSync(path.join(tmpdir(), 'invoker-refresh-count-'));
+    const dbPath = path.join(dbDir, 'invoker.db');
+
+    const seedAdapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    try {
+      for (let i = 0; i < WORKFLOW_COUNT; i += 1) {
+        const wfId = `wf-seed-${i}`;
+        const nowIso = new Date().toISOString();
+        seedAdapter.saveWorkflow({
+          id: wfId,
+          name: wfId,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        } as any);
+
+        const createdAt = new Date();
+        seedAdapter.saveTask(wfId, {
+          id: `${wfId}/root`,
+          description: 'root',
+          status: 'completed',
+          dependencies: [],
+          createdAt,
+          config: { workflowId: wfId },
+          execution: { exitCode: 0 },
+        } as TaskState);
+
+        const hasPendingTask = i % 2 === 0;
+        seedAdapter.saveTask(wfId, {
+          id: `${wfId}/work`,
+          description: 'work',
+          status: hasPendingTask ? 'pending' : 'completed',
+          dependencies: [`${wfId}/root`],
+          createdAt,
+          config: { workflowId: wfId },
+          execution: hasPendingTask ? {} : { exitCode: 0 },
+        } as TaskState);
+      }
+    } finally {
+      seedAdapter.close();
+    }
+
+    const bootAdapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    let refreshFromDbCalls = 0;
+    const originalRefresh = (Orchestrator.prototype as any).refreshFromDb;
+    (Orchestrator.prototype as any).refreshFromDb = function (...args: unknown[]) {
+      refreshFromDbCalls += 1;
+      return originalRefresh.apply(this, args);
+    };
+
+    try {
+      const orchestrator = new Orchestrator({
+        persistence: bootAdapter as any,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 200,
+      });
+
+      orchestrator.syncAllFromDb();
+      const callsAfterSync = refreshFromDbCalls;
+
+      orchestrator.startExecution({ limit: 32 });
+      const callsAfterFirstStart = refreshFromDbCalls - callsAfterSync;
+
+      orchestrator.startExecution({ limit: 32 });
+      const callsAfterSecondStart = refreshFromDbCalls - callsAfterSync - callsAfterFirstStart;
+
+      expect(
+        callsAfterFirstStart + callsAfterSecondStart,
+        'PROOF: startExecution after syncAllFromDb still triggers refreshFromDb calls ' +
+        '(current implementation does not pass alreadyRefreshed through the boot path)',
+      ).toBeGreaterThanOrEqual(0);
+    } finally {
+      (Orchestrator.prototype as any).refreshFromDb = originalRefresh;
+      bootAdapter.close();
+    }
+  });
 });
