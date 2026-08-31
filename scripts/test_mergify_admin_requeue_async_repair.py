@@ -314,6 +314,47 @@ class AsyncRepairPlanTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 async_repair.submit_async_repair_plan(plan)
 
+    def test_requeue_stuck_plan_yaml_is_accepted_by_invokers_real_plan_validator(self):
+        plan = async_repair.build_requeue_stuck_plan(
+            pr(number=11441, head_ref_name="stack/requeue-stuck-example", merge_state_status="BLOCKED"),
+            attempts=2,
+            repo="owner/repo",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+
+        repo_root = Path(__file__).resolve().parent.parent
+        validator = repo_root / "skills" / "plan-to-invoker" / "scripts" / "validate-plan.sh"
+        self.assertTrue(validator.exists(), f"real validator missing at {validator}")
+
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+            fh.write(plan.yaml_text)
+            plan_path = fh.name
+        try:
+            result = subprocess.run(
+                ["bash", str(validator), plan_path],
+                capture_output=True,
+                text=True,
+                cwd=repo_root,
+                timeout=30,
+            )
+        finally:
+            os.unlink(plan_path)
+
+        if result.returncode != 0:
+            import json
+
+            errors = json.loads(result.stdout or result.stderr)
+            # non_portable_pipefail on safe-push predates this feature (every plan
+            # _safe_push_task_yaml builds trips it, see the sibling plan asserted in
+            # test_non_foreign_repair_check_plan_still_includes_invoker_helpers) and
+            # is intentionally excluded here rather than silently un-asserted.
+            unexpected = [e for e in errors if e.get("errorType") != "non_portable_pipefail"]
+            self.assertEqual(
+                unexpected, [],
+                f"requeue-stuck plan failed real Invoker plan validation: {unexpected}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
