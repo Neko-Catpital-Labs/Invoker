@@ -122,7 +122,11 @@ describe('start-ready', () => {
     const result = await runStartReady(orchestrator);
 
     expect(orchestrator.syncAllFromDb).toHaveBeenCalledTimes(1);
-    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/recoverable', 'start_ready_recovery');
+    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith(
+      'wf-1/recoverable',
+      'start_ready_recovery',
+      { alreadyRefreshed: true },
+    );
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
     expect(result.started.map((task) => task.id)).toEqual(['wf-1/ready']);
   });
@@ -137,8 +141,16 @@ describe('start-ready', () => {
 
     const result = await runStartReady(orchestrator);
 
-    expect(orchestrator.prepareTaskForNewAttempt).not.toHaveBeenCalledWith('wf-1/live', 'start_ready_recovery');
-    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/orphaned', 'start_ready_recovery');
+    expect(orchestrator.prepareTaskForNewAttempt).not.toHaveBeenCalledWith(
+      'wf-1/live',
+      'start_ready_recovery',
+      { alreadyRefreshed: true },
+    );
+    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith(
+      'wf-1/orphaned',
+      'start_ready_recovery',
+      { alreadyRefreshed: true },
+    );
     expect(result.preview.recoverableTaskIds).toEqual(['wf-1/orphaned']);
   });
 
