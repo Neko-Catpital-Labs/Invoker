@@ -92,7 +92,7 @@ export class SqliteWorkflowRepository {
 
   constructor(
     private readonly exec: SqliteExecutor,
-    private readonly reconcileTaskFromSelectedAttempt: (task: TaskState) => TaskState,
+    private readonly reconcileTasksFromSelectedAttempts: (tasks: TaskState[]) => TaskState[],
   ) {}
 
   private loadWorkflowJournalPayload(workflowId: string): Record<string, unknown> | undefined {
@@ -448,8 +448,10 @@ export class SqliteWorkflowRepository {
     const tasks: TaskState[] = [];
 
     const deserializeStartedAt = Date.now();
-    for (const row of taskRows) {
-      const task = this.reconcileTaskFromSelectedAttempt(mapRowToTask(row));
+    const reconciledTasks = this.reconcileTasksFromSelectedAttempts(
+      taskRows.map((row) => mapRowToTask(row)),
+    );
+    for (const task of reconciledTasks) {
       tasks.push(task);
       const workflowId = task.config.workflowId ?? '';
       if (!workflowId) continue;

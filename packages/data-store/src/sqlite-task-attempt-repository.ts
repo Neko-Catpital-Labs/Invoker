@@ -703,7 +703,7 @@ export class SqliteTaskAttemptRepository {
     return taskIsTerminal ? undefined : attemptId;
   }
 
-  private reconcileTasksFromSelectedAttempts(tasks: TaskState[]): TaskState[] {
+  reconcileTasksFromSelectedAttempts(tasks: TaskState[]): TaskState[] {
     const attemptIds = [...new Set(
       tasks
         .map((task) => this.selectedAttemptIdForReconciliation(task))

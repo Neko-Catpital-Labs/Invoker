@@ -244,6 +244,11 @@ describe('Attempt persistence', () => {
 
     expect(tasks).toHaveLength(20);
     expect(scalarAttemptLoads).toHaveBeenCalledTimes(0);
+
+    scalarAttemptLoads.mockClear();
+    const snapshot = adapter.loadWorkflowTaskSnapshot();
+    expect(snapshot.tasks.filter((task) => task.id.startsWith('batch-task-'))).toHaveLength(20);
+    expect(scalarAttemptLoads).toHaveBeenCalledTimes(0);
   });
 
   it('merge conflict JSON round-trip', () => {
