@@ -307,6 +307,11 @@ describe('worker-submitted mutation channel repro', () => {
         runHeadlessCommand: async () => ({ ok: true }),
         getTaskExecutor: () => ({}) as never,
         getMutationTiming: () => undefined,
+        idleTaskCleanup: {
+          store: adapter,
+          now: () => Date.now(),
+          idleThresholdMs: 48 * 60 * 60_000,
+        },
         contextLabel: 'test.owner',
       });
       const { submit } = makeCoordinatorAndSubmit(adapter, dispatcher, logger);

@@ -74,6 +74,11 @@ describe('worker mutation channel completeness', () => {
       runHeadlessCommand: async () => ({ ok: true }),
       getTaskExecutor: () => ({}) as never,
       getMutationTiming: () => undefined,
+      idleTaskCleanup: {
+        store: { listWorkflows: () => [], loadTasks: () => [] },
+        now: () => Date.now(),
+        idleThresholdMs: 48 * 60 * 60_000,
+      },
       contextLabel: 'test',
     });
 
