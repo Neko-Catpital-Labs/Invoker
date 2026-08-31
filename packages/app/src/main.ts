@@ -2181,8 +2181,17 @@ function startHeadlessMode(): void {
             );
           }
         }
-        if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
-        // Owner discovery and exec handlers must exist before dispatch polling starts.
+        // Start the web surface BEFORE workers/dispatcher for owner-serve so HTTP
+        // bind is not blocked by any boot-time scheduler drains or worker init.
+        // This prevents the DO1 incident pattern where HTTP never binds because
+        // startAutoStartedWorkers or standaloneLaunchDispatcher.poll() triggers
+        // synchronous full-table task reloads before the server.listen callback.
+        //
+        // CRITICAL (F3 fix): Awaiting whenReady BEFORE any sync boot work ensures
+        // the listen callback fires and HTTP is bound before workers/dispatcher/recovery
+        // run. Just reordering the listen() call above workers in source order is NOT
+        // enough — the listen callback is async and will never fire if sync work
+        // blocks the event loop in the same turn.
         if (command === 'owner-serve') {
           const ownerServeTaskExecutor = createStandaloneTaskExecutor();
           const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
@@ -2207,7 +2216,11 @@ function startHeadlessMode(): void {
             headlessWebBridge?.broadcast('invoker:planning-chat-stream', event);
           };
           startOwnerSocketSentinelForBus(messageBus);
+          await headlessWebBridge.whenReady;
+          logger.info('Web surface ready, proceeding with workers/dispatcher/recovery', { module: 'headless' });
         }
+        if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
+        // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
           standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
             headlessDeps,
