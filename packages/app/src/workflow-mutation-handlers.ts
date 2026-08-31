@@ -4,11 +4,13 @@ import {
   AUTO_FIX_COMMAND_CHANNEL,
   AUTO_FIX_RECREATE_CHANNEL,
   buildHeadlessFixArgs,
+  IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL,
   INFRA_REPAIR_RECREATE_TASK_CHANNEL,
   INFRA_REPAIR_RETRY_TASK_CHANNEL,
   parseFixWithAgentMutationArgs,
   parseInfraRepairRecreateTaskMutationArgs,
   parseInfraRepairRetryTaskMutationArgs,
+  parseIdleTaskCleanupRetireWorkflowMutationArgs,
   parseRequeueMutationArgs,
   REQUEUE_COMMAND_CHANNEL,
   REQUEUE_ESCALATE_CHANNEL,
@@ -16,7 +18,7 @@ import {
   type TaskRunner,
 } from '@invoker/execution-engine';
 
-import type { Logger } from '@invoker/contracts';
+import { makeEnvelope, type Logger } from '@invoker/contracts';
 import type { CommandService, Orchestrator } from '@invoker/workflow-core';
 
 import { executeApproveTaskMutation } from './standalone-approve-task-dispatcher.js';
@@ -95,6 +97,15 @@ export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Ma
   handlers.set(INFRA_REPAIR_RECREATE_TASK_CHANNEL, async (...recreateArgs: unknown[]) => {
     const { taskId } = parseInfraRepairRecreateTaskMutationArgs(recreateArgs);
     return runHeadlessCommand(['recreate-task', taskId]);
+  });
+
+  handlers.set(IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL, async (...retireArgs: unknown[]) => {
+    const { workflowId } = parseIdleTaskCleanupRetireWorkflowMutationArgs(retireArgs);
+    const result = await commandService.deleteWorkflow(
+      makeEnvelope('idle-task-cleanup-retire-workflow', 'surface', 'workflow', { workflowId }),
+    );
+    if (!result.ok) throw new Error(result.error.message);
+    return { ok: true };
   });
 
   handlers.set(AUTO_APPROVE_COMMAND_CHANNEL, async (...args: unknown[]) => {
