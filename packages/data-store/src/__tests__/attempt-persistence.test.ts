@@ -218,6 +218,34 @@ describe('Attempt persistence', () => {
     expect(task.execution.selectedAttemptId).toBe(attempt.id);
   });
 
+  it('batch-loads selected attempts when hydrating tasks for many workflows', () => {
+    for (let i = 0; i < 20; i += 1) {
+      const workflowId = `batch-wf-${i}`;
+      const taskId = `batch-task-${i}`;
+      adapter.saveWorkflow({
+        id: workflowId,
+        name: `Batch ${i}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      adapter.saveTask(workflowId, createTaskState(taskId, `Batch task ${i}`, [], { workflowId }));
+      const attempt = createAttempt(taskId, { status: 'pending' });
+      adapter.saveAttempt(attempt);
+      adapter.updateTask(taskId, {
+        execution: { selectedAttemptId: attempt.id },
+      });
+    }
+
+    const taskAttemptRepo = (adapter as any).taskAttemptRepo;
+    const scalarAttemptLoads = vi.spyOn(taskAttemptRepo, 'loadAttempt');
+    const tasks = adapter.loadTasksForWorkflows(
+      Array.from({ length: 20 }, (_, i) => `batch-wf-${i}`),
+    );
+
+    expect(tasks).toHaveLength(20);
+    expect(scalarAttemptLoads).toHaveBeenCalledTimes(0);
+  });
+
   it('merge conflict JSON round-trip', () => {
     const attempt = createAttempt('taskA', {
       mergeConflict: {
