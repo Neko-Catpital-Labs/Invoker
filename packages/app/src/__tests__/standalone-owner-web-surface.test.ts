@@ -50,11 +50,17 @@ describe('standalone owner web surface wiring', () => {
     expect(autoStartedWorkersIdx, 'owner-serve must auto-start workers before exposing the web surface').toBeLessThan(
       startWebSurfaceIdx,
     );
-    expect(launchDispatcherIdx, 'owner-serve must start the launch dispatcher before exposing the web surface').toBeLessThan(
-      startWebSurfaceIdx,
+    expect(startWebSurfaceIdx, 'owner-serve must start the web surface before the launch dispatcher starts polling').toBeLessThan(
+      launchDispatcherIdx,
     );
     expect(startWebSurfaceIdx, 'owner-serve must start the web surface before the idle loop begins').toBeLessThan(
       runHeadlessIdx,
     );
+  });
+
+  it('passes deferFirstPollUntil to the launch dispatcher for owner-serve', () => {
+    const source = readFileSync(MAIN, 'utf8');
+    const deferOptionIdx = source.indexOf('deferFirstPollUntil: headlessWebBridge?.whenReady');
+    expect(deferOptionIdx, 'launch dispatcher must receive deferFirstPollUntil option').toBeGreaterThan(-1);
   });
 });
