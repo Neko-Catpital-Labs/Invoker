@@ -60,3 +60,10 @@ When asked what happened, why it happened, or to investigate/diagnose/debug a pr
 
 - `scripts/validate-pr-body.mjs` rejects a `## Visual Proof` section that has media but no `Manually inspected:` line describing what was actually seen.
 - Everything else on this page is a discipline, not a mechanical gate. Treat the gate as the floor, not the ceiling — the rest still applies even where nothing will stop you from skipping it.
+
+## Invoker UI / live-path routing
+
+For Invoker desktop UI or live-owner claims, pick the command with `skills/verify/SKILL.md`
+(`node skills/verify/control-invoker.mjs doctor|prove|owner|visual-proof|…`) before asserting
+done. This skill still owns the evidence gate; verify only chooses the lever.
+
