@@ -257,6 +257,28 @@ class AdminBypassRepairer:
         self.submit_repair_plan(plan, "repair-check", pr.number, start_head, check_name, now)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
+    def escalate_stuck_requeue(self, pr: PrSnapshot, requeue_key: str, attempts: int, now: int | None = None) -> RepairOutcome:
+        start_head = pr.head_ref_oid
+        plan = async_repair.build_requeue_stuck_plan(
+            pr,
+            attempts,
+            repo=self.repo,
+            start_head=start_head,
+            state_file=self.ledger.path,
+            foreign=self.is_foreign,
+        )
+        self.logger.trace(
+            "admin-bypass-requeue-stuck-escalation-start",
+            repo=self.repo,
+            pr_number=pr.number,
+            requeue_key=requeue_key,
+            attempts=attempts,
+            head_sha=start_head,
+            plan_name=plan.plan_name,
+        )
+        self.submit_repair_plan(plan, "requeue-escalation", pr.number, start_head, requeue_key, now)
+        return self.blocked_outcome("submitted", requeue_key, start_head, start_head)
+
     def rebase_onto_master(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
         check_name = "rebase-onto-master"
         start_head = pr.head_ref_oid

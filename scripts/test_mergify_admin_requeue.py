@@ -276,12 +276,21 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("requeue", 2605, "m1")])
 
-    def test_requeue_same_dequeue_event_hits_cap(self):
+    def test_requeue_same_dequeue_event_hits_cap_and_escalates_to_agent(self):
         ledger = self.ledger()
         ledger.record("requeue", 2605, HEAD, "m1", 1)
         ledger.record("requeue", 2605, HEAD, "m1", 2)
         stack = StackGroup("s", (pr(2605, latest=mergify(comment_id="m1")),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 3)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("escalate_requeue_stuck", 2605, "m1")])
+
+    def test_requeue_cap_falls_back_to_comment_once_already_escalated(self):
+        ledger = self.ledger()
+        ledger.record("requeue", 2605, HEAD, "m1", 1)
+        ledger.record("requeue", 2605, HEAD, "m1", 2)
+        ledger.record("requeue-escalation", 2605, HEAD, "m1", 3)
+        stack = StackGroup("s", (pr(2605, latest=mergify(comment_id="m1")),))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("comment_blocked", 2605, "capped")])
 
     def test_failed_check_repairs_before_requeue(self):

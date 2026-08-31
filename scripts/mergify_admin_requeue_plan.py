@@ -1512,6 +1512,13 @@ def plan_bottom_progress(
         requeue_reason = "eligible-after-dequeued-label"
     attempts = ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key)
     if attempts >= max_requeue_attempts:
+        if ledger.count("requeue-escalation", bottom.number, bottom.head_ref_oid, requeue_key) == 0:
+            return Action(
+                "escalate_requeue_stuck",
+                bottom.number,
+                requeue_key,
+                f"requeue capped after {attempts} attempt(s) at head {bottom.head_ref_oid}; escalating to an agent",
+            )
         return cap_action(bottom, Blocker(requeue_key, "capped", bottom.number, "requeue"), "requeue")
     return Action("requeue", bottom.number, requeue_key, requeue_reason)
 

@@ -47,6 +47,10 @@ def repair_bot_thread_plan_name(pr_number: int, start_head: str) -> str:
     return f"admin-bypass-repair-bot-thread-pr-{pr_number}-{start_head[:7]}"
 
 
+def requeue_stuck_plan_name(pr_number: int, start_head: str) -> str:
+    return f"admin-bypass-requeue-stuck-pr-{pr_number}-{start_head[:7]}"
+
+
 def _yaml_str(value: str) -> str:
     # JSON string encoding is a valid YAML flow scalar and, unlike naive shell
     # quoting, correctly escapes quotes/colons/backslashes in PR titles/branch
@@ -323,6 +327,45 @@ def build_repair_bot_thread_plan(
         name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review"
     )
     yaml_text += _repair_task_yaml(description=f"Resolve bot review thread on PR #{pr.number}", prompt=prompt)
+    yaml_text += _safe_push_task_yaml(
+        task_id="safe-push",
+        description=f"Safely push PR #{pr.number} only if its head did not move",
+        dependencies="repair",
+        head_ref=pr.head_ref_name,
+        start_head=start_head,
+        skip_if_prereq=False,
+        foreign=foreign,
+    )
+    return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
+
+
+def build_requeue_stuck_plan(
+    pr: PrSnapshot,
+    attempts: int,
+    *,
+    repo: str,
+    start_head: str,
+    state_file: Path,
+    foreign: bool = False,
+) -> AsyncRepairPlan:
+    name = requeue_stuck_plan_name(pr.number, start_head)
+    prompt = (
+        f"PR #{pr.number} has been requeued {attempts} time(s) at head {start_head} without landing, "
+        "and the automated requeue attempts have stopped. Investigate why it is not merging and fix it.\n\n"
+        "Check the PR's real current state directly (checks, review status, mergeability) rather than "
+        "trusting any cached summary. If a required check's own status page is stuck reporting an old "
+        "result after a later run actually passed, or any other blocker has genuinely already cleared, "
+        "push a small real commit (e.g. an empty commit, or a real fix if you find one) so the next "
+        "automated requeue attempt gets a fresh check run against a new commit. If a real blocker remains "
+        "(a genuine failing check, a merge conflict, requested changes), fix it with a real code change "
+        "and commit locally. Do not push if you make no change. Do not merge or bypass CI yourself.\n\n"
+        f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {start_head}\n"
+        f"Base branch: {pr.base_ref_name}\nRequeue attempts so far: {attempts}\n"
+    )
+    yaml_text = _write_plan_header(
+        name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review"
+    )
+    yaml_text += _repair_task_yaml(description=f"Investigate why PR #{pr.number} is stuck in the merge queue", prompt=prompt)
     yaml_text += _safe_push_task_yaml(
         task_id="safe-push",
         description=f"Safely push PR #{pr.number} only if its head did not move",

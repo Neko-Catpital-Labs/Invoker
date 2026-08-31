@@ -90,6 +90,8 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
         print(f"{repair_prefix}repair-check PR #{action.pr_number} check={json.dumps(key)}")
     elif action.kind == "comment_blocked":
         print(f"BLOCK PR #{action.pr_number} {action.detail}")
+    elif action.kind == "escalate_requeue_stuck":
+        print(f"{repair_prefix}escalate-requeue-stuck PR #{action.pr_number} {action.detail}")
     elif action.kind == "comment_admin_bypass_nudge":
         print(f"{prefix}comment-admin-bypass-nudge PR #{action.pr_number}")
     elif action.kind == "restore_admin_bypass_label":
@@ -119,6 +121,8 @@ def print_repair_acknowledged(action: Action, as_json: bool) -> None:
         print(f"ACKNOWLEDGED repair-check PR #{action.pr_number} check={json.dumps(key)}")
     elif action.kind == "rebase_onto_master":
         print(f"ACKNOWLEDGED rebase-onto-master PR #{action.pr_number} {action.detail}")
+    elif action.kind == "escalate_requeue_stuck":
+        print(f"ACKNOWLEDGED escalate-requeue-stuck PR #{action.pr_number} {action.detail}")
 
 
 def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClient, logger: AdminBypassLogger) -> dict[int, bool]:
@@ -399,6 +403,35 @@ def run_cycle(
                     )
                     if release_repair_filing is not None:
                         release_repair_filing(REBASE_ONTO_MASTER_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
+                    report_repair_dispatch_failure(executor, logger, pr, action.kind, now)
+                    should_poll = True
+                    continue
+                if progressed:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_succeeded += 1
+                    any_progress = True
+                else:
+                    should_poll = True
+                continue
+            elif action.kind == "escalate_requeue_stuck":
+                try:
+                    attempts = ledger.count("requeue", action.pr_number, pr.head_ref_oid, action.key)
+                    outcome = repairer.escalate_stuck_requeue(pr, action.key, attempts, now)
+                    if outcome.status == "submitted":
+                        print_repair_acknowledged(action, args.json)
+                    progressed = outcome.status == "submitted"
+                except Exception as exc:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_failed += 1
+                    repair_dispatch_last_error = str(exc)
+                    logger.trace(
+                        "admin-bypass-repair-attempt-failed",
+                        repo=args.repo,
+                        pr_number=action.pr_number,
+                        action_kind=action.kind,
+                        key=action.key,
+                        error=str(exc),
+                    )
                     report_repair_dispatch_failure(executor, logger, pr, action.kind, now)
                     should_poll = True
                     continue
