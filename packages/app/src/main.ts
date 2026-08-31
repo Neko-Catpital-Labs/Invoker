@@ -2216,7 +2216,7 @@ function startHeadlessMode(): void {
             headlessWebBridge?.broadcast('invoker:planning-chat-stream', event);
           };
           startOwnerSocketSentinelForBus(messageBus);
-          await headlessWebBridge.whenReady;
+          await headlessWebBridge?.whenReady;
           logger.info('Web surface ready, proceeding with workers/dispatcher/recovery', { module: 'headless' });
         }
         if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();

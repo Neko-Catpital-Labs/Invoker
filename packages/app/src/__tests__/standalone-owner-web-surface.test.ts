@@ -64,7 +64,7 @@ describe('standalone owner web surface wiring', () => {
     expect(deferOptionIdx, 'launch dispatcher must receive deferFirstPollUntil option').toBeGreaterThan(-1);
   });
 
-  it('awaits whenReady inside the owner-serve guard before workers/dispatcher/recovery', () => {
+  it('awaits the optional web bridge inside the owner-serve guard before workers/dispatcher/recovery', () => {
     const source = readFileSync(MAIN, 'utf8');
 
     const ownerServeGuardIdx = source.indexOf("if (command === 'owner-serve') {");
@@ -86,7 +86,7 @@ describe('standalone owner web surface wiring', () => {
     }
 
     const startWebSurfaceIdx = source.indexOf('headlessWebBridge = startWebSurfaceForHeadless(');
-    const awaitWhenReadyIdx = source.indexOf('await headlessWebBridge.whenReady');
+    const awaitWhenReadyIdx = source.indexOf('await headlessWebBridge?.whenReady');
     const autoStartedWorkersIdx = source.indexOf('workerRuntimeController.startAutoStartedWorkers();');
     const launchDispatcherIdx = source.indexOf(
       'standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({',
@@ -96,7 +96,7 @@ describe('standalone owner web surface wiring', () => {
     expect(startWebSurfaceIdx, 'headless owner web surface startup not found').toBeGreaterThan(-1);
     expect(
       awaitWhenReadyIdx,
-      'F3 fix: owner-serve must await headlessWebBridge.whenReady to ensure HTTP binds ' +
+      'F3 fix: owner-serve must await headlessWebBridge?.whenReady to ensure HTTP binds ' +
       'before any sync boot work — source-line ordering alone is not enough',
     ).toBeGreaterThan(-1);
     expect(autoStartedWorkersIdx, 'worker auto-start initialization not found').toBeGreaterThan(-1);
