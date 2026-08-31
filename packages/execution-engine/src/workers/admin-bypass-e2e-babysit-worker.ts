@@ -109,11 +109,12 @@ function investigativePrompt(action: AdminBypassE2eBabysitAction): string {
 export function buildInvestigativePlanYaml(actions: readonly AdminBypassE2eBabysitAction[]): string {
   const taskLines = actions.flatMap((action, index) => {
     const prompt = investigativePrompt(action);
+    const dependencies = index === 0 ? '[]' : `[investigate-finding-${index}]`;
     return [
       `  - id: investigate-finding-${index + 1}`,
       `    description: ${yamlString(prompt)}`,
       `    prompt: ${yamlString(prompt)}`,
-      '    dependencies: []',
+      `    dependencies: ${dependencies}`,
     ];
   });
   return [

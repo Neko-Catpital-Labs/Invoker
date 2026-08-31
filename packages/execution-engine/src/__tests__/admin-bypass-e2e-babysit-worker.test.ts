@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildInvestigativePlanYaml,
   DEFAULT_WATCHED_WORKER_KINDS,
   REPAIR_FILING_STALE_TTL_MS,
   runAdminBypassE2eBabysitTick,
@@ -82,6 +83,21 @@ function makeDecisionStore(): {
 }
 
 describe('runAdminBypassE2eBabysitTick', () => {
+  it('serializes investigative tasks so one stale-filing sweep cannot saturate the owner host', () => {
+    const plan = buildInvestigativePlanYaml([
+      { type: 'worker-start', kind: 'worker-a' },
+      { type: 'worker-start', kind: 'worker-b' },
+      { type: 'worker-start', kind: 'worker-c' },
+    ]);
+
+    expect(plan).toContain('  - id: investigate-finding-1\n');
+    expect(plan).toContain('    dependencies: []\n');
+    expect(plan).toContain('  - id: investigate-finding-2\n');
+    expect(plan).toContain('    dependencies: [investigate-finding-1]\n');
+    expect(plan).toContain('  - id: investigate-finding-3\n');
+    expect(plan).toContain('    dependencies: [investigate-finding-2]\n');
+  });
+
   it('starts only a watched worker that is desired-enabled and stopped, then files one investigation', async () => {
     const workerLifecycle = new FakeWorkerLifecycle([
       { kind: DEFAULT_WATCHED_WORKER_KINDS[0], desiredEnabled: true, lifecycle: 'stopped' },
