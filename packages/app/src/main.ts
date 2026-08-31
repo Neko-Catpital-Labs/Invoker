@@ -2216,8 +2216,10 @@ function startHeadlessMode(): void {
             headlessWebBridge?.broadcast('invoker:planning-chat-stream', event);
           };
           startOwnerSocketSentinelForBus(messageBus);
-          await headlessWebBridge.whenReady;
-          logger.info('Web surface ready, proceeding with workers/dispatcher/recovery', { module: 'headless' });
+          if (headlessWebBridge) {
+            await headlessWebBridge.whenReady;
+            logger.info('Web surface ready, proceeding with workers/dispatcher/recovery', { module: 'headless' });
+          }
         }
         if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
         // Owner discovery and exec handlers must exist before dispatch polling starts.
