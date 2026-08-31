@@ -114,7 +114,7 @@ submit_workflow_with_retry() {
       continue
     fi
 
-    if rg -q 'requires an owner process|No request handler registered' "$SUBMIT_STDERR"; then
+    if grep -Eq 'requires an owner process|No request handler registered' "$SUBMIT_STDERR"; then
       sleep 0.2
       continue
     fi
