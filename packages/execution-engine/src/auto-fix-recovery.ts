@@ -92,8 +92,8 @@ const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 
 };
 
 export interface AutoFixRecoveryStore {
-  listWorkflows(): ReadonlyArray<{ id: string; name?: string }>;
-  loadWorkflow?(workflowId: string): { name?: string | null } | undefined;
+  listWorkflows(): ReadonlyArray<{ id: string; name?: string; repoUrl?: string | null }>;
+  loadWorkflow?(workflowId: string): { name?: string | null; repoUrl?: string | null } | undefined;
   loadTasks(workflowId: string): TaskState[];
   loadTasksForWorkflows?(workflowIds: string[]): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
@@ -213,6 +213,17 @@ function workflowNameForId(
   if (typeof listed?.name === 'string' && listed.name.length > 0) return listed.name;
   const loaded = options.store.loadWorkflow?.(workflowId);
   if (typeof loaded?.name === 'string' && loaded.name.length > 0) return loaded.name;
+  return undefined;
+}
+
+function workflowRepoUrlForId(
+  options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
+  workflowId: string,
+): string | undefined {
+  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  if (typeof listed?.repoUrl === 'string' && listed.repoUrl.length > 0) return listed.repoUrl;
+  const loaded = options.store.loadWorkflow?.(workflowId);
+  if (typeof loaded?.repoUrl === 'string' && loaded.repoUrl.length > 0) return loaded.repoUrl;
   return undefined;
 }
 
@@ -527,6 +538,13 @@ function validateAutoFixCandidate(
   const workflowName = workflowNameForId(options, latestRef.workflowId);
   if (isAdminBypassNamedWorkflow(workflowName)) {
     skipAutoFixCandidate(options, candidate, 'admin-bypass-excluded', {
+      workflowName: workflowName ?? null,
+    });
+    return undefined;
+  }
+
+  if (!workflowRepoUrlForId(options, latestRef.workflowId)) {
+    skipAutoFixCandidate(options, candidate, 'no-repo-workflow', {
       workflowName: workflowName ?? null,
     });
     return undefined;

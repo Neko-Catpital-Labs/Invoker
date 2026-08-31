@@ -71,7 +71,7 @@ function makeHarness(task = makeFailedTask()) {
   const actions = new Map<string, WorkerActionRecord>();
   const submit = vi.fn((_workflowId: string, _priority: WorkflowMutationPriority, _channel: string, _args: unknown[]) => 99);
   const store = {
-    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    listWorkflows: vi.fn(() => [{ id: 'wf-1', repoUrl: 'https://example.com/repo.git' }]),
     loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
     loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
     listWorkflowMutationIntents: vi.fn(() => []),
@@ -181,6 +181,41 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
       task.id,
       'debug.auto-fix',
       expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'admin-bypass-excluded' }),
+    );
+  });
+
+  it('skips a failed task in a repo-less workflow, since a fix can never be published as a branch', () => {
+    const task = makeFailedTask({
+      id: 'wf-scratch/investigate',
+      config: { workflowId: 'wf-scratch', prompt: 'Investigate a production finding.' },
+      execution: {
+        generation: 1,
+        selectedAttemptId: 'attempt-1',
+        branch: undefined,
+        error: 'Task wf-scratch/investigate has no branch for approved-fix publish',
+        failureClass: undefined,
+      },
+    });
+    const store = {
+      listWorkflows: vi.fn(() => [{ id: 'wf-scratch', name: 'Investigate a production finding', repoUrl: undefined }]),
+      loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-scratch' ? [task] : [])),
+      loadTask: vi.fn((taskId: string) => (taskId === task.id ? task : undefined)),
+      listWorkflowMutationIntents: vi.fn(() => []),
+      logEvent: vi.fn(),
+    };
+    const options = {
+      store,
+      submitter: { submit: vi.fn(() => 1) },
+      logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 3,
+    };
+
+    expect(collectValidatedAutoFixRecoveryCandidates(options)).toEqual([]);
+    expect(store.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'debug.auto-fix',
+      expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'no-repo-workflow' }),
     );
   });
 });
