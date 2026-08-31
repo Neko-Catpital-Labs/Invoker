@@ -129,7 +129,9 @@ run_mode() {
   local mode="$1"
   TMP_DIR="$(mktemp -d)"
   HOME_DIR="$TMP_DIR/home"
-  DB_DIR="$HOME_DIR/.invoker"
+  # Not "$HOME_DIR/.invoker": the profile launcher fail-closes on that exact path as a
+  # production collision, even under a disposable test HOME (see with-invoker-development-profile.mjs).
+  DB_DIR="$HOME_DIR/.invoker-repro"
   PLAN_PATH="$TMP_DIR/repro-plan.yaml"
   CONFIG_PATH="$DB_DIR/config.json"
   IPC_SOCKET_PATH="$DB_DIR/repro-ipc.sock"

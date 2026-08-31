@@ -25,7 +25,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 HOME_DIR="$TMP_DIR/home"
-DB_DIR="$HOME_DIR/.invoker"
+DB_DIR="$HOME_DIR/.invoker-repro"
 IPC_SOCKET="$TMP_DIR/ipc-transport.sock"
 BLOCKER_PLAN_PATH="$TMP_DIR/blocker-plan.yaml"
 PLAN_PATH="$TMP_DIR/storm-plan.yaml"
