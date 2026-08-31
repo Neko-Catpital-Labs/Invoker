@@ -55,7 +55,7 @@ function realHomeDir() {
   // needed so a caller's own sandboxed $HOME/.invoker isn't mistaken for
   // the real production namespace this guard protects.
   try {
-    return userInfo().homedir;
+    return userInfo().homedir || homedir();
   } catch {
     return homedir();
   }
