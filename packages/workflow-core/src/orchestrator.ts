@@ -1652,7 +1652,6 @@ export class Orchestrator {
    * existing callers.
    */
   startExecution(opts?: StartExecutionOptions): TaskState[] {
-    this.refreshFromDb();
     this.pruneLaunchDeferrals();
 
     const activeAttempts = this.countActivePersistedAttempts();
@@ -1685,6 +1684,7 @@ export class Orchestrator {
 
     return this.taskRepository.runInTransaction(() => this.autoStartReadyTasks(readyTaskIds, 0, {
       activePersistedAttempts: activeAttempts,
+      alreadyRefreshed: true,
     }));
   }
 
@@ -3808,6 +3808,7 @@ export class Orchestrator {
           attemptId: task.execution.selectedAttemptId,
           priority: loadAttemptCached(task.execution.selectedAttemptId)?.queuePriority ?? 0,
         })),
+        { alreadyRefreshed: refresh },
       );
       queuedTasks = queuedJobs
         .map((job) => {
@@ -3953,7 +3954,7 @@ export class Orchestrator {
     checkWorkflowCompletionImpl(this as unknown as TransitionHost, transitionedWorkflowId);
   }
 
-  private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions): TaskState[] {
+  private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean }): TaskState[] {
     return autoStartReadyTasksImpl(this as unknown as SchedulerDomainHost, taskIds, priority, opts);
   }
 

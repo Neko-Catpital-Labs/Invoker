@@ -72,7 +72,7 @@ export interface TransitionHost {
 
   // Scheduler-domain entrypoints (kept as Orchestrator methods that delegate
   // to scheduler-domain.ts); transitions trigger downstream work through them.
-  autoStartReadyTasks(taskIds: string[], priority?: number, opts?: LaunchReadinessOptions): TaskState[];
+  autoStartReadyTasks(taskIds: string[], priority?: number, opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean }): TaskState[];
   autoStartUnblockedTasks(): TaskState[];
   autoStartExternallyUnblockedReadyTasks(): TaskState[];
   drainScheduler(): TaskState[];
