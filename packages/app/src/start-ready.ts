@@ -334,7 +334,7 @@ async function runStartReadyAsync(
 
   const recoverableTasks = collectRecoverableTasks(orchestrator);
   for (const task of recoverableTasks) {
-    orchestrator.prepareTaskForNewAttempt(task.id, 'start_ready_recovery');
+    orchestrator.prepareTaskForNewAttempt(task.id, 'start_ready_recovery', { alreadyRefreshed: true });
   }
 
   started.push(...orchestrator.startExecution());

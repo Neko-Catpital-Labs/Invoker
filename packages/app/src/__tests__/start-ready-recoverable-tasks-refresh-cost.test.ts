@@ -98,8 +98,8 @@ describe('runStartReady pays one full refreshFromDb per recoverable task', () =>
     // seedAndRun cleans up its own temp dir.
   });
 
-  it.fails(
-    'batch-reload call count scales with recoverable-task count instead of staying constant',
+  it(
+    'batch-reload call count does not scale with recoverable-task count',
     async () => {
       const zero = await seedAndRun(0);
       const withRecoverable = await seedAndRun(RECOVERABLE_TASK_COUNT);
