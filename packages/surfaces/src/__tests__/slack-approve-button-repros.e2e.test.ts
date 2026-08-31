@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 type MockHandlerFn = (args: Record<string, unknown>) => Promise<void> | void;
 
@@ -188,6 +189,7 @@ describe('Slack approve-button repro contracts', () => {
       planningHeartbeatIntervalSeconds: 0,
       workingDir,
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     surfaces.push(created);
     return created;
@@ -223,6 +225,10 @@ describe('Slack approve-button repro contracts', () => {
     const draft = slackPlanDrafts.getReady('C_LOBBY', 'thread-a1');
     expect(draft?.planText).toContain('name: Good');
     expect(actionValueFromUpdatedCard(planSay, 'plan_draft_approve')).toBe(`${draft?.draftId}:${draft?.version}`);
+    // Proves the default harness preset really spawned codex sessions.
+    for (const call of mockSpawn.mock.calls) {
+      expect(call[0]).toBe('codex');
+    }
   });
 
   it('carries the Approve/Cancel actions on the same message as the drafted plan brief', async () => {

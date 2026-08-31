@@ -183,7 +183,7 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
   claude: { tool: 'claude' },
 };
 
-export const DEFAULT_HARNESS_PRESET = 'cursor+claude';
+export const DEFAULT_HARNESS_PRESET = 'codex';
 
 interface PlanningContext {
   repoUrl?: string;
