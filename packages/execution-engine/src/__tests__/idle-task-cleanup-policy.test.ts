@@ -64,15 +64,47 @@ describe('decideWorkflowRetirement', () => {
     'blocked',
     'review_ready',
     'awaiting_approval',
-  ])('retains workflows with %s work regardless of completion or age', (taskStatus) => {
+  ])('retains a completed workflow with active %s work', (taskStatus) => {
     expect(decide('completed', JUST_OVER_48_HOURS_AGO, [taskStatus])).toEqual({ kind: 'retain' });
-    expect(decide('failed', JUST_OVER_48_HOURS_AGO, [taskStatus])).toEqual({ kind: 'retain' });
+  });
+
+  it.each<TaskStatus>([
+    'pending',
+    'queued',
+    'completed',
+    'failed',
+    'closed',
+    'needs_input',
+    'blocked',
+    'review_ready',
+    'awaiting_approval',
+    'stale',
+  ])('retires an old known workflow with inert %s work', (taskStatus) => {
+    expect(decide('failed', JUST_OVER_48_HOURS_AGO, [taskStatus])).toEqual({
+      kind: 'retire',
+      reason: 'inactive-over-threshold',
+    });
+  });
+
+  it.each<TaskStatus>(['running', 'fixing_with_ai'])(
+    'retains an old workflow with executing %s work',
+    (taskStatus) => {
+      expect(decide('failed', JUST_OVER_48_HOURS_AGO, [taskStatus])).toEqual({ kind: 'retain' });
+    },
+  );
+
+  it('retains an old workflow when any task is executing', () => {
+    expect(decide('failed', JUST_OVER_48_HOURS_AGO, ['failed', 'running'])).toEqual({
+      kind: 'retain',
+    });
   });
 
   it('retains unknown workflow and task statuses', () => {
     expect(decide('future_workflow_state', JUST_OVER_48_HOURS_AGO, ['failed']))
       .toEqual({ kind: 'retain' });
     expect(decide('completed', JUST_OVER_48_HOURS_AGO, ['future_task_state']))
+      .toEqual({ kind: 'retain' });
+    expect(decide('failed', JUST_OVER_48_HOURS_AGO, ['future_task_state']))
       .toEqual({ kind: 'retain' });
   });
 
