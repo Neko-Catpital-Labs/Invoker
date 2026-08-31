@@ -125,40 +125,46 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
           candidate.readyTaskId !== null)
       : listAllWorkflowsWithReadyPendingTasks(options.store);
 
-    const submitted = new Set<string>();
-    for (const candidate of candidates) {
-      const { workflowId } = candidate;
-      if (submitted.has(workflowId)) continue;
+    const eligibleCandidates = candidates.filter(({ workflowId }) => {
       if (!options.ledger.shouldSubmit(workflowId, nowMs)) {
         options.logger.debug?.(`[worker:${WORKFLOW_RESUME_WORKER_KIND}] cooldown-skip`, {
           module: 'workflow-resume-worker',
           workflowId,
           cooldownMs,
         });
-        continue;
+        return false;
       }
-      submitted.add(workflowId);
+      return true;
+    });
+    const representative = eligibleCandidates[0];
+    if (!representative) return;
 
-      const intentId = options.submitter.submit(
-        workflowId,
-        'normal',
-        WORKFLOW_RESUME_COMMAND_CHANNEL,
-        [{}],
-      );
+    // start-ready is global: one dispatch refreshes and starts ready work across
+    // every workflow. Submitting it once per candidate repeats that full scan N
+    // times and can monopolize the owner event loop on a large persisted DB.
+    const intentId = options.submitter.submit(
+      representative.workflowId,
+      'normal',
+      WORKFLOW_RESUME_COMMAND_CHANNEL,
+      [{}],
+    );
+    for (const { workflowId } of eligibleCandidates) {
       options.ledger.markSubmitted(workflowId, nowMs + cooldownMs);
-      options.store.logEvent?.(candidate.readyTaskId, 'recovery.worker.submit', {
-        worker: WORKFLOW_RESUME_WORKER_KIND,
-        phase: 'start-ready',
-        workflowId,
-        intentId,
-        channel: WORKFLOW_RESUME_COMMAND_CHANNEL,
-      });
-      options.logger.info(`[worker:${WORKFLOW_RESUME_WORKER_KIND}] submitted start-ready for pending work`, {
-        module: 'workflow-resume-worker',
-        workflowId,
-        intentId,
-      });
     }
+    options.store.logEvent?.(representative.readyTaskId, 'recovery.worker.submit', {
+      worker: WORKFLOW_RESUME_WORKER_KIND,
+      phase: 'start-ready',
+      workflowId: representative.workflowId,
+      candidateWorkflowCount: eligibleCandidates.length,
+      intentId,
+      channel: WORKFLOW_RESUME_COMMAND_CHANNEL,
+    });
+    options.logger.info(`[worker:${WORKFLOW_RESUME_WORKER_KIND}] submitted global start-ready for pending work`, {
+      module: 'workflow-resume-worker',
+      workflowId: representative.workflowId,
+      candidateWorkflowCount: eligibleCandidates.length,
+      intentId,
+    });
   };
 }
 

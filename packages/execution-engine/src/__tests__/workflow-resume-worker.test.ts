@@ -125,6 +125,23 @@ describe('workflow resume worker tick', () => {
     expect(args).toEqual([{}]);
   });
 
+  it('submits one global start-ready intent when many workflows have ready pending work', async () => {
+    const h = harness({
+      workflows: Array.from({ length: 20 }, (_, index) => ({
+        id: `wf-${index}`,
+        tasks: [makeTask({
+          id: `wf-${index}/task`,
+          status: 'pending' as TaskState['status'],
+          config: { workflowId: `wf-${index}` },
+        })],
+      })),
+    });
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).toHaveBeenCalledTimes(1);
+  });
+
   it('skips pending work whose local dependencies are not completed', async () => {
     const h = harness({
       workflows: [
