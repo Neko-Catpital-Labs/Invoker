@@ -9,15 +9,20 @@ export const WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS = 48 * 60 * 60_000;
 const KNOWN_TASK_STATUS_SET: ReadonlySet<string> = new Set(TASK_STATUSES);
 
 /**
- * These outcomes contain no work that can still advance. Every other known
- * task status remains active for retirement purposes. Keeping the inactive
- * allowlist narrow makes a newly-added task status fail closed automatically.
+ * These outcomes contain no work that can still advance, so they permit
+ * immediate retirement of a completed workflow. Every other known task status
+ * blocks that path. Unknown statuses fail closed automatically.
  */
 const INACTIVE_TASK_STATUS_SET: ReadonlySet<TaskStatus> = new Set([
   'completed',
   'failed',
   'closed',
   'stale',
+]);
+
+const EXECUTING_TASK_STATUS_SET: ReadonlySet<TaskStatus> = new Set([
+  'running',
+  'fixing_with_ai',
 ]);
 
 const KNOWN_WORKFLOW_STATUSES = [
@@ -65,10 +70,17 @@ export function hasActiveOrUnknownTask(tasks: readonly WorkflowRetirementTask[])
   );
 }
 
+function hasExecutingOrUnknownTask(tasks: readonly WorkflowRetirementTask[]): boolean {
+  return tasks.some((task) =>
+    !isKnownTaskStatus(task.status) || EXECUTING_TASK_STATUS_SET.has(task.status),
+  );
+}
+
 /**
  * Completed workflows retire immediately once all tasks are inactive. Other
  * known workflow states retire only when their last update is strictly older
- * than the threshold. Unknown states and malformed timestamps are retained.
+ * than the threshold and no task is executing. Unknown states and malformed
+ * timestamps are retained.
  */
 export function decideWorkflowRetirement(
   workflow: WorkflowRetirementCandidate,
@@ -79,11 +91,13 @@ export function decideWorkflowRetirement(
   },
 ): WorkflowRetirementDecision {
   if (!isKnownWorkflowStatus(workflow.status)) return { kind: 'retain' };
-  if (hasActiveOrUnknownTask(tasks)) return { kind: 'retain' };
 
   if (workflow.status === 'completed') {
+    if (hasActiveOrUnknownTask(tasks)) return { kind: 'retain' };
     return { kind: 'retire', reason: 'completed' };
   }
+
+  if (hasExecutingOrUnknownTask(tasks)) return { kind: 'retain' };
 
   const updatedAtMs = workflow.updatedAt instanceof Date
     ? workflow.updatedAt.getTime()

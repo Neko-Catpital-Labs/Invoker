@@ -80,7 +80,7 @@ describe('decideWorkflowRetirement', () => {
     });
   });
 
-  it.fails.each<TaskStatus>([
+  it.each<TaskStatus>([
     'pending',
     'queued',
     'needs_input',

@@ -70,7 +70,7 @@ describe('buildWorkerMutationHandlers', () => {
     expect(deleteWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it.fails.each(['running', 'fixing_with_ai', 'future_task_state'])(
+  it.each(['running', 'fixing_with_ai', 'future_task_state'])(
     'revalidates a queued age-based retirement against current %s task state',
     async (currentStatus) => {
       const workflow = {
