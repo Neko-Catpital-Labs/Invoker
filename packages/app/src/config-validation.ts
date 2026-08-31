@@ -7,6 +7,7 @@ import {
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
   type InvokerConfig,
+  type JailbreakLandConfig,
   type MergifyQueueResearchConfig,
   type MergifyQueueResearchSource,
   DEFAULT_CROSS_REPO_RESEARCH_LOOKBACK_DAYS,
@@ -257,6 +258,18 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateJailbreakLandConfig(config: InvokerConfig): void {
+  const jailbreakLand = config.jailbreakLand;
+  if (jailbreakLand === undefined) return;
+  if (typeof jailbreakLand !== 'object' || jailbreakLand === null || Array.isArray(jailbreakLand)) {
+    throw new Error('jailbreakLand must be an object');
+  }
+  const typed = jailbreakLand as JailbreakLandConfig;
+  if (typed.live !== undefined && typeof typed.live !== 'boolean') {
+    throw new Error('jailbreakLand.live must be a boolean when set');
+  }
+}
+
 function validateDbReaperConfig(config: InvokerConfig): void {
   const dbReaper = config.dbReaper;
   if (dbReaper === undefined) return;
@@ -365,6 +378,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateJailbreakLandConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);
   return config;
