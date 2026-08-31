@@ -2182,15 +2182,6 @@ function startHeadlessMode(): void {
         }
         if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
         // Owner discovery and exec handlers must exist before dispatch polling starts.
-        if (!readOnlyMode) {
-          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
-            headlessDeps,
-            ownerId: workflowMutationOwnerId,
-            createTaskExecutor: createStandaloneTaskExecutor,
-            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
-            topUpReadyLaunchesEnabled: () => !sourceDevelopmentProfile && !invokerConfig.disableAutoRunOnStartup,
-          });
-        }
         if (command === 'owner-serve') {
           const ownerServeTaskExecutor = createStandaloneTaskExecutor();
           const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
@@ -2215,6 +2206,16 @@ function startHeadlessMode(): void {
             headlessWebBridge?.broadcast('invoker:planning-chat-stream', event);
           };
           startOwnerSocketSentinelForBus(messageBus);
+        }
+        if (!readOnlyMode) {
+          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
+            headlessDeps,
+            ownerId: workflowMutationOwnerId,
+            createTaskExecutor: createStandaloneTaskExecutor,
+            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
+            topUpReadyLaunchesEnabled: () => !sourceDevelopmentProfile && !invokerConfig.disableAutoRunOnStartup,
+            deferFirstPollUntil: headlessWebBridge?.whenReady,
+          });
         }
 
         void recoverWorkflowMutationsOnStartup({
