@@ -137,6 +137,309 @@ export type VerificationReceipt =
   | DeployedVersionReceipt
   | IndependentJudgmentReceipt;
 
+export type VerificationAttestationProviderKind = 'executor' | 'judge';
+
+export interface VerificationAttestationProvider {
+  kind: VerificationAttestationProviderKind;
+  providerId: string;
+}
+
+export type VerificationSignatureAlgorithm = 'Ed25519';
+
+export interface VerificationAttestationV2 {
+  repository: string;
+  workflowId: string;
+  taskId: string;
+  generation: number;
+  attemptId?: string;
+  commitSha: string;
+  canonicalPayloadDigest: string;
+  signatureAlgorithm: VerificationSignatureAlgorithm;
+  signature: string;
+  trustedKeyId: string;
+  provider: VerificationAttestationProvider;
+  actorId: string;
+  issuedAt: string;
+  recordedAt: string;
+}
+
+export interface LegacyUntrustedVerificationEvidenceRecord {
+  version: 1;
+  trust: 'untrusted';
+  receipt: VerificationReceipt;
+}
+
+export interface TrustedVerificationEvidenceRecord {
+  version: 2;
+  trust: 'trusted';
+  receipt: VerificationReceipt;
+  attestation: VerificationAttestationV2;
+}
+
+export type VerificationEvidenceRecord =
+  | LegacyUntrustedVerificationEvidenceRecord
+  | TrustedVerificationEvidenceRecord;
+
+type UnknownRecord = Record<string, unknown>;
+
+function isUnknownRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function evidenceObject(value: unknown, field: string): UnknownRecord {
+  if (!isUnknownRecord(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value;
+}
+
+function evidenceText(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function evidenceTimestamp(value: unknown, field: string): string {
+  const timestamp = evidenceText(value, field);
+  if (Number.isNaN(Date.parse(timestamp))) {
+    throw new Error(`${field} must be a valid timestamp`);
+  }
+  return timestamp;
+}
+
+function evidenceInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new Error(`${field} must be an integer`);
+  }
+  return value;
+}
+
+function evidenceNonNegativeInteger(value: unknown, field: string): number {
+  const integer = evidenceInteger(value, field);
+  if (integer < 0) throw new Error(`${field} must be non-negative`);
+  return integer;
+}
+
+function evidenceBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`${field} must be a boolean`);
+  return value;
+}
+
+function parseVerificationActor(value: unknown, field: string): VerificationActor {
+  const actor = evidenceObject(value, field);
+  const role = actor.role;
+  if (role !== 'builder' && role !== 'verifier' && role !== 'judge') {
+    throw new Error(`${field}.role must be builder, verifier, or judge`);
+  }
+  return {
+    id: evidenceText(actor.id, `${field}.id`),
+    role,
+  };
+}
+
+interface ParsedReceiptBase {
+  id: string;
+  commitSha: string;
+  recordedAt: string;
+  actor: VerificationActor;
+  status: 'passed' | 'failed';
+}
+
+function parseReceiptBase(receipt: UnknownRecord): ParsedReceiptBase {
+  const status = receipt.status;
+  if (status !== 'passed' && status !== 'failed') {
+    throw new Error('receipt.status must be passed or failed');
+  }
+  return {
+    id: evidenceText(receipt.id, 'receipt.id'),
+    commitSha: evidenceText(receipt.commitSha, 'receipt.commitSha'),
+    recordedAt: evidenceTimestamp(receipt.recordedAt, 'receipt.recordedAt'),
+    actor: parseVerificationActor(receipt.actor, 'receipt.actor'),
+    status,
+  };
+}
+
+interface ParsedCommandResult {
+  command: string;
+  exitCode: number;
+  output: string;
+}
+
+function parseCommandResult(value: unknown, field: string): ParsedCommandResult {
+  const result = evidenceObject(value, field);
+  return {
+    command: evidenceText(result.command, `${field}.command`),
+    exitCode: evidenceInteger(result.exitCode, `${field}.exitCode`),
+    output: evidenceText(result.output, `${field}.output`),
+  };
+}
+
+export function parseVerificationReceipt(value: unknown): VerificationReceipt {
+  const receipt = evidenceObject(value, 'receipt');
+  const base = parseReceiptBase(receipt);
+
+  switch (receipt.kind) {
+    case 'deterministic_command':
+      return {
+        ...base,
+        kind: 'deterministic_command',
+        command: evidenceText(receipt.command, 'receipt.command'),
+        exitCode: evidenceInteger(receipt.exitCode, 'receipt.exitCode'),
+        output: evidenceText(receipt.output, 'receipt.output'),
+      };
+    case 'bug_repro_fail_pass':
+      return {
+        ...base,
+        kind: 'bug_repro_fail_pass',
+        before: parseCommandResult(receipt.before, 'receipt.before'),
+        after: parseCommandResult(receipt.after, 'receipt.after'),
+      };
+    case 'opened_visual_proof':
+      return {
+        ...base,
+        kind: 'opened_visual_proof',
+        mediaPath: evidenceText(receipt.mediaPath, 'receipt.mediaPath'),
+        openedAt: evidenceTimestamp(receipt.openedAt, 'receipt.openedAt'),
+        observation: evidenceText(receipt.observation, 'receipt.observation'),
+      };
+    case 'external_effect_reconciliation':
+      return {
+        ...base,
+        kind: 'external_effect_reconciliation',
+        system: evidenceText(receipt.system, 'receipt.system'),
+        expectedState: evidenceText(receipt.expectedState, 'receipt.expectedState'),
+        observedState: evidenceText(receipt.observedState, 'receipt.observedState'),
+        reconciled: evidenceBoolean(receipt.reconciled, 'receipt.reconciled'),
+      };
+    case 'deployed_version':
+      return {
+        ...base,
+        kind: 'deployed_version',
+        environment: evidenceText(receipt.environment, 'receipt.environment'),
+        deployedCommitSha: evidenceText(receipt.deployedCommitSha, 'receipt.deployedCommitSha'),
+        version: evidenceText(receipt.version, 'receipt.version'),
+      };
+    case 'independent_judgment': {
+      const verdict = receipt.verdict;
+      if (verdict !== 'approve' && verdict !== 'reject') {
+        throw new Error('receipt.verdict must be approve or reject');
+      }
+      return {
+        ...base,
+        kind: 'independent_judgment',
+        verdict,
+        rationale: evidenceText(receipt.rationale, 'receipt.rationale'),
+      };
+    }
+    default:
+      throw new Error('receipt.kind is not a supported verification receipt kind');
+  }
+}
+
+function parseVerificationAttestationV2(value: unknown): VerificationAttestationV2 {
+  const attestation = evidenceObject(value, 'attestation');
+  const provider = evidenceObject(attestation.provider, 'attestation.provider');
+  const providerKind = provider.kind;
+  if (providerKind !== 'executor' && providerKind !== 'judge') {
+    throw new Error('attestation.provider.kind must be executor or judge');
+  }
+  if (attestation.signatureAlgorithm !== 'Ed25519') {
+    throw new Error('attestation.signatureAlgorithm must be Ed25519');
+  }
+
+  const attemptId = attestation.attemptId === undefined
+    ? undefined
+    : evidenceText(attestation.attemptId, 'attestation.attemptId');
+
+  return {
+    repository: evidenceText(attestation.repository, 'attestation.repository'),
+    workflowId: evidenceText(attestation.workflowId, 'attestation.workflowId'),
+    taskId: evidenceText(attestation.taskId, 'attestation.taskId'),
+    generation: evidenceNonNegativeInteger(attestation.generation, 'attestation.generation'),
+    ...(attemptId === undefined ? {} : { attemptId }),
+    commitSha: evidenceText(attestation.commitSha, 'attestation.commitSha'),
+    canonicalPayloadDigest: evidenceText(
+      attestation.canonicalPayloadDigest,
+      'attestation.canonicalPayloadDigest',
+    ),
+    signatureAlgorithm: 'Ed25519',
+    signature: evidenceText(attestation.signature, 'attestation.signature'),
+    trustedKeyId: evidenceText(attestation.trustedKeyId, 'attestation.trustedKeyId'),
+    provider: {
+      kind: providerKind,
+      providerId: evidenceText(provider.providerId, 'attestation.provider.providerId'),
+    },
+    actorId: evidenceText(attestation.actorId, 'attestation.actorId'),
+    issuedAt: evidenceTimestamp(attestation.issuedAt, 'attestation.issuedAt'),
+    recordedAt: evidenceTimestamp(attestation.recordedAt, 'attestation.recordedAt'),
+  };
+}
+
+function assertAttestationMatchesReceipt(
+  receipt: VerificationReceipt,
+  attestation: VerificationAttestationV2,
+): void {
+  if (attestation.commitSha.trim().toLowerCase() !== receipt.commitSha.trim().toLowerCase()) {
+    throw new Error('attestation.commitSha must match receipt.commitSha');
+  }
+  if (attestation.actorId !== receipt.actor.id) {
+    throw new Error('attestation.actorId must match receipt.actor.id');
+  }
+  const isJudgment = receipt.kind === 'independent_judgment';
+  if (isJudgment && receipt.actor.role !== 'judge') {
+    throw new Error('trusted independent judgments require receipt.actor.role judge');
+  }
+  if (isJudgment && attestation.provider.kind !== 'judge') {
+    throw new Error('trusted independent judgments require a judge provider');
+  }
+  if (!isJudgment && attestation.provider.kind !== 'executor') {
+    throw new Error('trusted non-judgment receipts require an executor provider');
+  }
+}
+
+export function parseVerificationEvidenceRecord(value: unknown): VerificationEvidenceRecord {
+  const record = evidenceObject(value, 'verification evidence record');
+  const receipt = parseVerificationReceipt(record.receipt);
+
+  if (record.version === 1) {
+    if (record.trust !== 'untrusted') {
+      throw new Error('version-1 verification evidence must be untrusted');
+    }
+    return { version: 1, trust: 'untrusted', receipt };
+  }
+
+  if (record.version === 2) {
+    if (record.trust !== 'trusted') {
+      throw new Error('version-2 verification evidence must be trusted');
+    }
+    const attestation = parseVerificationAttestationV2(record.attestation);
+    assertAttestationMatchesReceipt(receipt, attestation);
+    return { version: 2, trust: 'trusted', receipt, attestation };
+  }
+
+  throw new Error('verification evidence record.version must be 1 or 2');
+}
+
+export function isVerificationEvidenceRecord(value: unknown): value is VerificationEvidenceRecord {
+  try {
+    parseVerificationEvidenceRecord(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isTrustedVerificationEvidenceRecord(
+  value: unknown,
+): value is TrustedVerificationEvidenceRecord {
+  try {
+    return parseVerificationEvidenceRecord(value).version === 2;
+  } catch {
+    return false;
+  }
+}
+
 const requirementOrder: VerificationRequirementKind[] = [
   'deterministic_command',
   'bug_repro_fail_pass',
