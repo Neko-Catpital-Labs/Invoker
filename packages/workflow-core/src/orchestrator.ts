@@ -3051,18 +3051,14 @@ export class Orchestrator {
   }
 
   /**
-   * Load tasks from a single workflow. Kept for backward compatibility
-   * (e.g. resuming a specific workflow).
+   * Load tasks from a single workflow incrementally. Does NOT clear the
+   * entire state machine - only reloads the target workflow's tasks into
+   * the existing graph. This avoids the O(workflows) full reload that
+   * caused the DO1 incident (743× full-table task loads during dispatcher
+   * poll with 900 active workflows).
    */
   syncFromDb(workflowId: string): void {
-    this.activeWorkflowIds.add(workflowId);
-    this.stateMachine.clear();
-    for (const wfId of this.activeWorkflowIds) {
-      const tasks = this.persistence.loadTasks(wfId);
-      for (const task of tasks) {
-        this.stateMachine.restoreTask(task);
-      }
-    }
+    this.refreshWorkflowFromDb(workflowId);
     this.assertMergeLeavesInvariant(workflowId);
   }
 
