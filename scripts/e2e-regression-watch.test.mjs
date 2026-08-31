@@ -8,6 +8,7 @@ import {
   buildFailureKey,
   buildMarker,
   buildRepairFilingMetadata,
+  claimNeedsHumanRepairFiling,
   claimRepairFiling,
   CATSTACK_REPO_URL,
   DEFAULT_TARGET_REPO,
@@ -24,6 +25,7 @@ import {
   loadEmptyState,
   liveQueryHasNonTerminalWork,
   loadWatchConfigFile,
+  needsHumanRepairFilingKind,
   normalizeState,
   parseTargetRepoFlag,
   parseWatchConfigFlag,
@@ -143,23 +145,24 @@ describe('liveQueryHasNonTerminalWork', () => {
   });
 });
 
+function makeFakeLedger() {
+  const rows = new Map();
+  return {
+    rows,
+    insert: ({ kind, subject, stateSha, metadata }) => {
+      const key = `${kind} ${subject} ${stateSha}`;
+      if (rows.has(key)) return { inserted: false, row: rows.get(key) };
+      const row = { kind, subject, stateSha, metadata };
+      rows.set(key, row);
+      return { inserted: true, row };
+    },
+    release: ({ kind, subject, stateSha }) => {
+      rows.delete(`${kind} ${subject} ${stateSha}`);
+    },
+  };
+}
+
 describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingClaim)', () => {
-  function makeFakeLedger() {
-    const rows = new Map();
-    return {
-      rows,
-      insert: ({ kind, subject, stateSha, metadata }) => {
-        const key = `${kind} ${subject} ${stateSha}`;
-        if (rows.has(key)) return { inserted: false, row: rows.get(key) };
-        const row = { kind, subject, stateSha, metadata };
-        rows.set(key, row);
-        return { inserted: true, row };
-      },
-      release: ({ kind, subject, stateSha }) => {
-        rows.delete(`${kind} ${subject} ${stateSha}`);
-      },
-    };
-  }
 
   it('kind is namespaced per CI job, failure identity, and attempt ordinal', () => {
     assert.equal(
@@ -304,6 +307,67 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
     });
 
     assert.equal(filedCount, 1, 'the second sweep must not file a duplicate for the identical key');
+    assert.equal(ledger.rows.size, 1);
+  });
+});
+
+describe('needs-human repair-filings claim (claimNeedsHumanRepairFiling)', () => {
+  it('kind is namespaced per CI job and failure identity, with no attempt ordinal (needs-human is terminal per sha)', () => {
+    assert.equal(
+      needsHumanRepairFilingKind(makeFailure({ jobName: 'required-fast / Guardrails' })),
+      'ci-regression-needs-human:required-fast-guardrails:job',
+    );
+    assert.equal(
+      needsHumanRepairFilingKind(makeFailure({
+        jobName: 'fleet / abc123d',
+        markerJobName: 'fleet',
+        failureId: 'job',
+        attempts: 5,
+      })),
+      'ci-regression-needs-human:fleet:job',
+    );
+  });
+
+  it('claims the key once; a second claim for the identical (kind, subject, stateSha) is rejected', () => {
+    const ledger = makeFakeLedger();
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+
+    assert.equal(claimNeedsHumanRepairFiling(failure, ledger.insert), true, 'first claim must succeed');
+    assert.equal(ledger.rows.size, 1);
+
+    assert.equal(claimNeedsHumanRepairFiling(failure, ledger.insert), false, 'second claim for the identical key must be rejected');
+    assert.equal(ledger.rows.size, 1, 'exactly one row must exist for this key, not two');
+  });
+
+  it('fails closed to false (no crash) when the ledger call throws', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const throwingInsert = () => { throw new Error('headless_mutation timed out'); };
+    assert.equal(claimNeedsHumanRepairFiling(failure, throwingInsert), false);
+  });
+
+  it('processFailureFilingSweep end-to-end: reaching the attempt cap claims the needs-human key exactly once across repeated sweeps', () => {
+    const ledger = makeFakeLedger();
+    const state = stateWithFailure(makeFailure({ attempts: 3, firstBadSha: 'shaA' }));
+    let claims = 0;
+
+    const sweepOnce = (sweepState) => processFailureFilingSweep(sweepState, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      maxAttempts: 3,
+      liveQuery: () => false,
+      fileFailure: () => {},
+      onNeedsHuman: (failure) => {
+        if (claimNeedsHumanRepairFiling(failure, ledger.insert)) claims += 1;
+      },
+    });
+
+    sweepOnce(state);
+    assert.equal(claims, 1);
+    assert.equal(ledger.rows.size, 1);
+
+    // A second sweep still under the same cap (same firstBadSha, still
+    // needsHuman) must not claim a duplicate key.
+    sweepOnce(state);
+    assert.equal(claims, 1, 'a repeat sweep for the identical (kind, subject, stateSha) must not re-claim');
     assert.equal(ledger.rows.size, 1);
   });
 });

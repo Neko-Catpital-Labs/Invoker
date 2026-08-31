@@ -1341,6 +1341,45 @@ export function shouldSkipFilingAlreadyAddressed(failure, {
  * must not crash the sweep; it just means this key stays claimed until a
  * human clears it or the sha changes.
  */
+/**
+ * Kind for the needs-human signal claimed once a failure exhausts
+ * shouldFileFailure's retry budget. Unlike repairFilingKind, this is NOT
+ * attempt-scoped: needs-human is a terminal state for a given firstBadSha,
+ * so ON CONFLICT DO NOTHING naturally suppresses duplicate claims across
+ * every sweep until the sha changes (the test is actually fixed). This is
+ * the row admin-bypass-e2e-babysit-worker.ts watches for and files a
+ * production investigation against (see E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX
+ * there).
+ */
+export function needsHumanRepairFilingKind(failure) {
+  const job = failure.markerJobName ?? failure.jobName;
+  const test = failure.failureId && failure.failureId !== JOB_LEVEL_FAILURE_ID
+    ? failure.failureId
+    : JOB_LEVEL_FAILURE_ID;
+  return `ci-regression-needs-human:${slugify(job)}:${slugify(test)}`;
+}
+
+/**
+ * Claims the needs-human signal for admin-bypass-e2e-babysit-worker.ts to
+ * pick up. Never throws -- a failed claim just means the worker's next
+ * periodic sweep of desired-enabled/stopped workers still runs; it only
+ * costs one missed cap-notification, not a crashed sweep.
+ */
+export function claimNeedsHumanRepairFiling(failure, insert = insertRepairFiling) {
+  try {
+    const result = insert({
+      kind: needsHumanRepairFilingKind(failure),
+      subject: resolveRepairFilingSubject(TARGET_REPO),
+      stateSha: failure.firstBadSha,
+      metadata: buildRepairFilingMetadata(failure),
+    });
+    return result.inserted;
+  } catch (err) {
+    console.error(`ci-regression-watch: claimNeedsHumanRepairFiling failed for kind="${needsHumanRepairFilingKind(failure)}" sha="${failure.firstBadSha}": ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
 export function releaseRepairFilingClaim(failure, release = releaseRepairFiling) {
   try {
     release({ kind: repairFilingKind(failure), subject: resolveRepairFilingSubject(TARGET_REPO), stateSha: failure.firstBadSha });
@@ -1690,6 +1729,7 @@ export async function main() {
     save: saveState,
     onNeedsHuman: (failure, attemptGate) => {
       console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName, failure.failureId)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
+      if (!dryRun) claimNeedsHumanRepairFiling(failure);
     },
     onRetired: (failure, reason) => {
       const detail = reason === 'stale-observation'
