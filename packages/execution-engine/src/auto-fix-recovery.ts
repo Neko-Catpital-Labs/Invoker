@@ -464,6 +464,19 @@ function skipAutoFixCandidate(
   reason: string,
   details: Record<string, unknown> = {},
 ): void {
+  const meaningful = isMeaningfulSkipReason(reason);
+  if (meaningful) {
+    const existing = options.store.getWorkerAction?.(
+      AUTO_FIX_WORKER_KIND,
+      autoFixDecisionExternalKey(candidate),
+    );
+    const payload = existing?.payload && typeof existing.payload === 'object'
+      ? existing.payload as Record<string, unknown>
+      : undefined;
+    if (existing?.status === 'skipped' && payload?.reason === reason) {
+      return;
+    }
+  }
   logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-skip', {
     reason,
     source: candidate.source,
@@ -473,7 +486,7 @@ function skipAutoFixCandidate(
     attemptId: candidate.attemptId ?? null,
     ...details,
   });
-  if (isMeaningfulSkipReason(reason)) {
+  if (meaningful) {
     recordAutoFixDecisionRow(options, candidate, {
       status: 'skipped',
       summary: `Skipped auto-fix: ${reason}`,

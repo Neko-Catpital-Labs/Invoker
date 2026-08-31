@@ -267,6 +267,35 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
       expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'no-repo-workflow' }),
     );
   });
+
+  it('does not rewrite durable diagnostics for an unchanged terminal skip decision', () => {
+    const task = makeFailedTask({
+      execution: {
+        generation: 2,
+        selectedAttemptId: 'attempt-1',
+        error: 'TypeScript compilation failed',
+        failureClass: undefined,
+      },
+    });
+    const h = makeHarness(task);
+    h.store.listWorkflows.mockReturnValue([{ id: 'wf-1', repoUrl: undefined }]);
+    const options = {
+      store: h.store,
+      submitter: { submit: h.submit },
+      logger,
+      attemptLedger: h.attemptLedger,
+      defaultAutoFixRetries: 3,
+    };
+
+    expect(collectValidatedAutoFixRecoveryCandidates(options)).toEqual([]);
+    const eventWritesAfterFirstScan = h.store.logEvent.mock.calls.length;
+    const decisionWritesAfterFirstScan = h.store.upsertWorkerAction.mock.calls.length;
+
+    expect(collectValidatedAutoFixRecoveryCandidates(options)).toEqual([]);
+
+    expect(h.store.logEvent).toHaveBeenCalledTimes(eventWritesAfterFirstScan);
+    expect(h.store.upsertWorkerAction).toHaveBeenCalledTimes(decisionWritesAfterFirstScan);
+  });
 });
 
 describe('listAutoFixRecoveryScanCandidates', () => {
