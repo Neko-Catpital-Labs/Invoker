@@ -53,8 +53,7 @@ function resolveValue(name, value) {
 function realHomeDir() {
   // Unlike os.homedir(), userInfo().homedir ignores an overridden $HOME —
   // needed so a caller's own sandboxed $HOME/.invoker isn't mistaken for
-  // the real production namespace this guard protects. It can also return an
-  // empty string instead of throwing on some sandboxes, so fall back to homedir().
+  // the real production namespace this guard protects.
   try {
     return userInfo().homedir || homedir();
   } catch {
