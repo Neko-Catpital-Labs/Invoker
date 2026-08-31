@@ -3,6 +3,7 @@ import { SQLiteAdapter } from '@invoker/data-store';
 import {
   AUTO_APPROVE_COMMAND_CHANNEL,
   createAutoApproveTick,
+  createIdleTaskCleanupWorker,
   createRequeueAttemptLedger,
   createRequeueRecoveryTick,
   REQUEUE_ESCALATE_CHANNEL,
@@ -14,6 +15,7 @@ import { executeApproveTaskMutation } from '../standalone-approve-task-dispatche
 import { executeRequeueEscalateMutation } from '../standalone-requeue-escalate-dispatcher.js';
 import { PersistedWorkflowMutationCoordinator } from '../persisted-workflow-mutation-coordinator.js';
 import { submitWorkflowMutationOrAcknowledgeDeleted } from '../workflow-mutation-submit.js';
+import { buildWorkerMutationHandlers } from '../workflow-mutation-handlers.js';
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
 
 // Incident 2026-08-06/07: three separate worker-submitted mutation channels
@@ -255,6 +257,92 @@ describe('worker-submitted mutation channel repro', () => {
       expect(intents[0]).toMatchObject({ channel: REQUEUE_ESCALATE_CHANNEL, status: 'completed' });
       expect(adapter.listWorkflowMutationIntents(workflowId, ['failed'])).toEqual([]);
       expect(orchestrator.getTask(taskId)?.status).toBe('needs_input');
+    });
+  });
+
+  describe('idle-task-cleanup workflow retirement', () => {
+    it('retires a qualifying workflow and all tasks through the real owner mutation path while retaining controls', async () => {
+      const adapter = await SQLiteAdapter.create(':memory:');
+      adapters.push(adapter);
+      const orchestrator = new Orchestrator({
+        persistence: adapter,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 1,
+      } as never);
+
+      const loadSingleTaskWorkflow = (name: string): { workflowId: string } => {
+        const existingIds = new Set(orchestrator.getWorkflowIds());
+        orchestrator.loadPlan({
+          name,
+          onFinish: 'none',
+          tasks: [{ id: 'build', description: 'build', command: 'pnpm build' }],
+        });
+        const workflowId = orchestrator.getWorkflowIds().find((id) => !existingIds.has(id))!;
+        return { workflowId };
+      };
+      const setPersistedTaskStatus = (workflowId: string, status: 'completed' | 'failed' | 'running'): void => {
+        for (const task of adapter.loadTasks(workflowId)) {
+          adapter.saveTask(workflowId, { ...task, status });
+        }
+      };
+
+      const eligible = loadSingleTaskWorkflow('idle cleanup eligible completed');
+      setPersistedTaskStatus(eligible.workflowId, 'completed');
+      const freshInactive = loadSingleTaskWorkflow('idle cleanup fresh inactive control');
+      setPersistedTaskStatus(freshInactive.workflowId, 'failed');
+      const active = loadSingleTaskWorkflow('idle cleanup active control');
+      setPersistedTaskStatus(active.workflowId, 'running');
+
+      expect(adapter.loadWorkflow(eligible.workflowId)).toBeDefined();
+      expect(adapter.loadTasks(eligible.workflowId)).toHaveLength(2);
+      expect(adapter.loadWorkflow(freshInactive.workflowId)).toBeDefined();
+      expect(adapter.loadWorkflow(active.workflowId)).toBeDefined();
+
+      const logger = makeLogger();
+      const commandService = new CommandService(orchestrator);
+      const dispatcher = buildWorkerMutationHandlers({
+        orchestrator,
+        commandService,
+        logger,
+        runHeadlessCommand: async () => ({ ok: true }),
+        getTaskExecutor: () => ({}) as never,
+        getMutationTiming: () => undefined,
+        idleTaskCleanup: {
+          store: adapter,
+          now: () => Date.now(),
+          idleThresholdMs: 48 * 60 * 60_000,
+        },
+        contextLabel: 'test.owner',
+      });
+      const { submit } = makeCoordinatorAndSubmit(adapter, dispatcher, logger);
+      const github = {
+        listOpenPullRequests: vi.fn(async () => []),
+        viewPullRequest: vi.fn(async () => ({ state: 'OPEN' as const })),
+        fetchCoderabbitComments: vi.fn(async () => []),
+        postPullRequestComment: vi.fn(async () => true),
+        closePullRequest: vi.fn(async () => true),
+      };
+      const worker = createIdleTaskCleanupWorker({
+        logger,
+        store: adapter,
+        submitter: { submit },
+        github,
+        now: () => Date.now(),
+        tickOnStart: false,
+        intervalMs: 0,
+      });
+
+      await worker.tick('manual');
+      await waitFor(() => adapter.loadWorkflow(eligible.workflowId) === undefined);
+
+      expect(adapter.loadWorkflow(eligible.workflowId)).toBeUndefined();
+      expect(adapter.loadTasks(eligible.workflowId)).toEqual([]);
+      expect(adapter.loadWorkflow(active.workflowId)).toBeDefined();
+      expect(adapter.loadTasks(active.workflowId)).toHaveLength(2);
+      expect(adapter.loadWorkflow(freshInactive.workflowId)).toBeDefined();
+      expect(adapter.loadTasks(freshInactive.workflowId)).toHaveLength(2);
+      expect(github.viewPullRequest).not.toHaveBeenCalled();
+      expect(github.closePullRequest).not.toHaveBeenCalled();
     });
   });
 });
