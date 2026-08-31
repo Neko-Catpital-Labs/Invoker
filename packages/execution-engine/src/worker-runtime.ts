@@ -142,6 +142,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let stopped = false;
   let interval: ReturnType<typeof setInterval> | null = null;
   let startDelayTimer: ReturnType<typeof setTimeout> | null = null;
+  let startupTickHandle: ReturnType<typeof setImmediate> | null = null;
   let inFlight: Promise<void> | null = null;
   let pendingReason: WorkerTickReason | null = null;
   let tickNumber = 0;
@@ -244,6 +245,10 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       clearTimeout(startDelayTimer);
       startDelayTimer = null;
     }
+    if (startupTickHandle) {
+      clearImmediate(startupTickHandle);
+      startupTickHandle = null;
+    }
     for (const [signal, handler] of signalHandlers) {
       process.removeListener(signal, handler);
     }
@@ -323,7 +328,16 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
         }, intervalMs);
         watchdogTimer.unref?.();
       }
-      if (tickOnStart) wake('startup');
+      if (tickOnStart) {
+        // Do not execute a worker's synchronous scan inline from start(). The
+        // owner controller must be able to install every sibling runtime and
+        // its timers before any one worker monopolizes the event loop.
+        startupTickHandle = setImmediate(() => {
+          startupTickHandle = null;
+          if (!stopped) wake('startup');
+        });
+        startupTickHandle.unref?.();
+      }
     };
 
     if (startDelayMs > 0) {

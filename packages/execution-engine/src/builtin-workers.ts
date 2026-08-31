@@ -24,6 +24,9 @@ import { registerMergifyQueueResearchWorker } from './workers/mergify-queue-rese
 export function registerBuiltinWorkers(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
+  // PR maintenance must install its runtime and startup tick before recovery
+  // workers begin potentially expensive persisted-backlog scans.
+  registerPrMaintenanceWorkers(registry);
   registerAutoFixWorker(registry);
   registerRequeueWorker(registry);
   registerWorkflowResumeWorker(registry);
@@ -34,7 +37,6 @@ export function registerBuiltinWorkers(
   registerReaperWorker(registry);
   registerDbReaperWorker(registry);
   registerAutoApproveWorker(registry);
-  registerPrMaintenanceWorkers(registry);
   registerE2eAutoFixWorker(registry);
   registerWorkerSessionMineWorker(registry);
   registerSlackBugScanWorker(registry);

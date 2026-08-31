@@ -80,6 +80,11 @@ describe('worker registry', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
 
     expect(registry.list().map((d) => d.kind)).toEqual([
+      PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+      PR_ORPHAN_REPAIR_WORKER_KIND,
+      PR_DUPLICATE_CLOSE_WORKER_KIND,
+      PR_JAILBREAK_LAND_WORKER_KIND,
+      PR_AUTO_LABEL_WORKER_KIND,
       AUTO_FIX_WORKER_KIND,
       REQUEUE_WORKER_KIND,
       WORKFLOW_RESUME_WORKER_KIND,
@@ -90,11 +95,6 @@ describe('worker registry', () => {
       REAPER_WORKER_KIND,
       DB_REAPER_WORKER_KIND,
       AUTO_APPROVE_WORKER_KIND,
-      PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-      PR_ORPHAN_REPAIR_WORKER_KIND,
-      PR_DUPLICATE_CLOSE_WORKER_KIND,
-      PR_JAILBREAK_LAND_WORKER_KIND,
-      PR_AUTO_LABEL_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
       WORKER_SESSION_MINE_WORKER_KIND,
       SLACK_BUG_SCAN_WORKER_KIND,
