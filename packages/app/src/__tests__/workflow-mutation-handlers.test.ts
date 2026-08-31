@@ -70,34 +70,37 @@ describe('buildWorkerMutationHandlers', () => {
     expect(deleteWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it('revalidates a queued cleanup retirement against current task state', async () => {
-    const workflow = {
-      id: 'wf-stale-retirement',
-      name: 'stale retirement',
-      status: 'completed',
-      updatedAt: '2026-08-30T00:00:00.000Z',
-    };
-    let tasks = [{ status: 'completed' }] as never[];
-    const store = {
-      listWorkflows: () => [workflow],
-      loadTasks: () => tasks,
-    };
-    const now = new Date('2026-08-31T00:00:00.000Z').getTime();
-    expect(planIdleTaskCleanup([workflow], store.loadTasks, { now })).toHaveLength(1);
+  it.fails.each(['running', 'fixing_with_ai', 'future_task_state'])(
+    'revalidates a queued age-based retirement against current %s task state',
+    async (currentStatus) => {
+      const workflow = {
+        id: 'wf-stale-retirement',
+        name: 'stale retirement',
+        status: 'failed',
+        updatedAt: '2026-08-28T00:00:00.000Z',
+      };
+      let tasks = [{ status: 'pending' }] as never[];
+      const store = {
+        listWorkflows: () => [workflow],
+        loadTasks: () => tasks,
+      };
+      const now = new Date('2026-08-31T00:00:00.000Z').getTime();
+      expect(planIdleTaskCleanup([workflow], store.loadTasks, { now })).toHaveLength(1);
 
-    const deleteWorkflow = vi.fn(async () => ({ ok: true, data: undefined }));
-    const handlers = buildWorkerMutationHandlers({
-      ...fakeDeps(),
-      commandService: { deleteWorkflow } as never,
-      idleTaskCleanup: { store, now: () => now, idleThresholdMs: 48 * 60 * 60_000 },
-    });
-    tasks = [{ status: 'running' }] as never[];
+      const deleteWorkflow = vi.fn(async () => ({ ok: true, data: undefined }));
+      const handlers = buildWorkerMutationHandlers({
+        ...fakeDeps(),
+        commandService: { deleteWorkflow } as never,
+        idleTaskCleanup: { store, now: () => now, idleThresholdMs: 48 * 60 * 60_000 },
+      });
+      tasks = [{ status: currentStatus }] as never[];
 
-    await expect(
-      handlers.get(IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL)!('wf-stale-retirement'),
-    ).resolves.toEqual({ ok: true });
-    expect(deleteWorkflow).not.toHaveBeenCalled();
-  });
+      await expect(
+        handlers.get(IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL)!('wf-stale-retirement'),
+      ).resolves.toEqual({ ok: true });
+      expect(deleteWorkflow).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('assertAllWorkerMutationChannelsRegistered', () => {

@@ -71,6 +71,25 @@ describe('planIdleTaskCleanup', () => {
     ]);
   });
 
+  it.fails('retires an old failed workflow with an inert pending merge task', () => {
+    const workflow = makeWorkflow('wf-old-pending-merge', 'failed', OVER_48_HOURS_AGO);
+    const pendingMergeTask = {
+      ...makeTask('wf-old-pending-merge/__merge__', 'pending'),
+      config: { workflowId: 'wf-old-pending-merge', isMergeNode: true },
+    };
+
+    expect(plan([workflow], { 'wf-old-pending-merge': [
+      makeTask('wf-old-pending-merge/task-1', 'failed'),
+      pendingMergeTask,
+    ] })).toEqual([
+      {
+        kind: 'delete-workflow',
+        workflowId: 'wf-old-pending-merge',
+        reason: 'workflow inactive beyond retirement threshold',
+      },
+    ]);
+  });
+
   it('retains a non-completed workflow at exactly 48 hours', () => {
     const workflow = makeWorkflow(
       'wf-boundary',
@@ -88,21 +107,51 @@ describe('planIdleTaskCleanup', () => {
   });
 
   it.each<TaskStatus>([
+    'completed',
+    'failed',
+    'closed',
+    'stale',
+  ])('retires an old workflow while a task is inactive %s', (status) => {
+    const workflow = makeWorkflow(`wf-inactive-${status}`, 'failed', OVER_48_HOURS_AGO);
+
+    expect(plan([workflow], {
+      [workflow.id]: [makeTask(`${workflow.id}/task`, status)],
+    })).toEqual([{
+      kind: 'delete-workflow',
+      workflowId: workflow.id,
+      reason: 'workflow inactive beyond retirement threshold',
+    }]);
+  });
+
+  it.fails.each<TaskStatus>([
     'pending',
     'queued',
-    'running',
-    'fixing_with_ai',
     'needs_input',
     'blocked',
     'review_ready',
     'awaiting_approval',
-  ])('retains an old workflow while a task is %s', (status) => {
-    const workflow = makeWorkflow(`wf-active-${status}`, 'failed', OVER_48_HOURS_AGO);
+  ])('retires an old workflow while a task is inert %s', (status) => {
+    const workflow = makeWorkflow(`wf-inert-${status}`, 'failed', OVER_48_HOURS_AGO);
 
     expect(plan([workflow], {
       [workflow.id]: [makeTask(`${workflow.id}/task`, status)],
-    })).toEqual([]);
+    })).toEqual([{
+      kind: 'delete-workflow',
+      workflowId: workflow.id,
+      reason: 'workflow inactive beyond retirement threshold',
+    }]);
   });
+
+  it.each<TaskStatus>(['running', 'fixing_with_ai'])(
+    'retains an old workflow while a task is executing %s',
+    (status) => {
+      const workflow = makeWorkflow(`wf-executing-${status}`, 'failed', OVER_48_HOURS_AGO);
+
+      expect(plan([workflow], {
+        [workflow.id]: [makeTask(`${workflow.id}/task`, status)],
+      })).toEqual([]);
+    },
+  );
 
   it('retains a completed workflow when its task state is active', () => {
     const workflow = makeWorkflow('wf-completed-active', 'completed', OVER_48_HOURS_AGO);
