@@ -59,7 +59,7 @@ export function parseTaskFreshnessSpecification(text: string): TaskFreshnessSpec
   ]);
   const anchors: TaskFreshnessAnchor[] = [];
 
-  for (const rawClause of text.split(/\r?\n/)) {
+  for (const rawClause of text.split(/\r?\n|(?<=[.!?])\s+/)) {
     const clause = rawClause.trim();
     if (!clause || !ANCHOR_CLAUSE_PATTERN.test(clause)) continue;
     const paths = normalizedRepoPaths(clause);
