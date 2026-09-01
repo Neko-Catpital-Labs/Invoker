@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
 import { IpcChannels } from '@invoker/contracts';
 import { registerGuiMutationHandler } from '../ipc/ipc-registration.js';
+import { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 
 const CHANNEL = 'invoker:planning-chat-rebind-repo';
 const REPORTED_URL = 'https://github.com/Neko-Catpital-Labs/Invoker';
@@ -33,7 +34,7 @@ function getTranslatorSource(): string {
 
 function getWrapperSource(): string {
   const start = mainSource.indexOf('translateGuiMutationToHeadless: (payload) => {');
-  const end = mainSource.indexOf('guiMutationHandlers,', start);
+  const end = mainSource.indexOf('ownerCapabilities,', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return mainSource.slice(start, end);
@@ -81,6 +82,7 @@ async function invokeFollower(channel: string, args: unknown[]) {
       ipcMain,
       getOwnerMode: () => false,
       getMessageBus: () => ({ request }),
+      ownerCapabilities: new OwnerCapabilityRegistry(),
       translateGuiMutationToHeadless: productionTranslate,
     },
     channel,
