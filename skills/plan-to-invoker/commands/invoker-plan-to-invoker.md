@@ -13,6 +13,18 @@ Write the planning artifact to `plans/invoker-handoff.md`.
 
 Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 
+Freshness metadata is optional. When explicit freshness data is available, add it under the task's `freshness` object with `watchPaths`, `pathPreconditions`, and/or `guardedBehaviorIds`; omit it otherwise. Keep task descriptions as authored prose: structured metadata supplements the prose and does not replace or rewrite it. Do not derive freshness from task prose through post-generation extraction or a semantic regex.
+
+```yaml
+tasks:
+  - id: implement
+    description: Preserve this task prose.
+    freshness:
+      watchPaths: [packages/app/src]
+      pathPreconditions: [{path: packages/app/src, expected: present}]
+      guardedBehaviorIds: [plan-authoring]
+```
+
 Call `invoker_prepare_plan_review` on `plans/invoker-handoff.yaml`, show the returned ordered steps and `confirmationText`, and use that review output as the only approval gate.
 
 Plain approval authorizes the reviewed `onFinish` outcome. After Invoker submission, park on `invoker-cli wait` rather than abandoning the session, then complete that outcome on wake.
