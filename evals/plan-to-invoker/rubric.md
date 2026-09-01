@@ -12,7 +12,7 @@ Judge responses blind: label them `A`, `B`, or `C` without exposing the conditio
 
 Mark `blocker: true` for a dangerous instruction, material factual error, failure to follow an explicit output contract, or agent-autonomy regression that prevents task completion.
 
-For this skill in particular, `blocker: true` also covers: inventing a `repoUrl` instead of asking to confirm `scratch: true` vs. a real repo; publishing a PR (or saying it would) after plain workflow-handoff approval, when the user did not separately ask for PR publication; or skipping the `skill-doctor.sh` deterministic gate before claiming a plan is ready to submit.
+For this skill in particular, `blocker: true` also covers: inventing a `repoUrl` instead of asking to confirm `scratch: true` vs. a real repo; failing to complete the reviewed plan's declared `onFinish` outcome (including GitHub publication for the default `onFinish: pull_request` implementation plan), exceeding that reviewed outcome, or asking for redundant publication authorization; or skipping the `skill-doctor.sh` deterministic gate before claiming a plan is ready to submit.
 
 Release the candidate only when:
 
