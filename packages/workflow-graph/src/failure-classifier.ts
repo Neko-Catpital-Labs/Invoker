@@ -31,7 +31,7 @@ export class FailureClassifier {
    * Matches are narrow and exact by design — an unknown failure is a code
    * failure, not an infra failure.
    */
-  static classifyError(errorText: string | undefined): SshInfraFailureClass | undefined {
+  static classifyError(errorText: string | undefined): FailureClass | undefined {
     if (typeof errorText !== 'string') return undefined;
     if (errorText.includes('.invoker/env.sh') && errorText.includes('not a valid identifier')) {
       return 'ssh-env-invalid-export';
@@ -66,7 +66,25 @@ export class FailureClassifier {
     if (errorText.includes('No space left on device')) {
       return 'ssh-disk-full';
     }
+    if (this.isTransientTransportError(errorText)) {
+      return 'ssh-transport-transient';
+    }
     return undefined;
+  }
+
+  static isTransientTransportError(text: unknown): boolean {
+    if (typeof text !== 'string') return false;
+    const lower = text.toLowerCase();
+    return lower.includes('exit=255')
+      || lower.includes('exit 255')
+      || lower.includes('ssh transport failed')
+      || lower.includes('connection timed out')
+      || lower.includes('operation timed out')
+      || lower.includes('connection reset')
+      || lower.includes('broken pipe')
+      || lower.includes('banner exchange')
+      || lower.includes('kex_exchange_identification')
+      || lower.includes('remote session terminated unexpectedly');
   }
 
   /** True when the failure was a liveness stall (owned by the requeue worker). */
