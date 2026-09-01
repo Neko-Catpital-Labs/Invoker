@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from '../../../execution-engine/src/__tests__/fixtures/pr-6976-oauth-session-expired.js';
 import { FailureClassifier, SSH_INFRA_FAILURE_CLASSES } from '../failure-classifier.js';
+import { isTransientFailureClass } from '../types.js';
 
 const GIT_REF_PATH_CONFLICT_ERROR =
   "fatal: cannot lock ref 'refs/heads/experiment/child': "
@@ -82,6 +83,27 @@ describe('FailureClassifier.classifyError', () => {
     expect(FailureClassifier.classifyError(undefined)).toBeUndefined();
     expect(FailureClassifier.classifyError(42 as unknown as string)).toBeUndefined();
   });
+
+  it('classifies transient SSH transport failures after definitive matchers miss', () => {
+    for (const signature of [
+      'exit=255',
+      'exit 255',
+      'ssh transport failed',
+      'connection timed out',
+      'operation timed out',
+      'connection reset',
+      'broken pipe',
+      'banner exchange',
+      'kex_exchange_identification',
+      'remote session terminated unexpectedly',
+    ]) {
+      expect(FailureClassifier.classifyError(`SSH transport diagnostic: ${signature}`)).toBe('ssh-transport-transient');
+    }
+  });
+
+  it('leaves run-task exit 1 failures unclassified', () => {
+    expect(FailureClassifier.classifyError('SSH remote script failed (exit=1, phase=run_task)')).toBeUndefined();
+  });
 });
 
 describe('FailureClassifier predicates', () => {
@@ -97,6 +119,12 @@ describe('FailureClassifier predicates', () => {
     }
     expect(FailureClassifier.isSshInfra('liveness_stall')).toBe(false);
     expect(FailureClassifier.isSshInfra(undefined)).toBe(false);
+  });
+
+  it('isTransientFailureClass only matches SSH transport transient failures', () => {
+    expect(isTransientFailureClass('ssh-transport-transient')).toBe(true);
+    expect(isTransientFailureClass('ssh-disk-full')).toBe(false);
+    expect(isTransientFailureClass(undefined)).toBe(false);
   });
 
   it('isCancellation matches operator cancellations only', () => {
