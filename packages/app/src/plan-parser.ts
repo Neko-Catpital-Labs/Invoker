@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { normalizeWorkflowBaseBranch, parseTaskFreshnessSpec } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch, parseTaskFreshnessSpec, planPublicationAuthorityViolation } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
@@ -408,6 +408,10 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     );
   }
   const rawMergeMode = (raw.mergeMode as (typeof validMergeModes)[number] | undefined) ?? (scratch ? 'no_op' : undefined);
+  const publicationAuthorityViolation = planPublicationAuthorityViolation(onFinish, rawMergeMode);
+  if (publicationAuthorityViolation) {
+    throw new PlanParseError(publicationAuthorityViolation);
+  }
   const mergeMode = rawMergeMode !== undefined
     ? normalizeMergeModeForPersistence(rawMergeMode)
     : undefined;
