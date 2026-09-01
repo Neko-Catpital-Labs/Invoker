@@ -81,6 +81,16 @@ describe('stale task specification preflight', () => {
     });
   });
 
+  it('does not inherit an earlier anchor marker in a later create sentence', () => {
+    const specification = parseTaskFreshnessSpecification('packages/ui/src/App.tsx already exists; do not create it. Create packages/ui/src/NewPanel.tsx.');
+
+    expect(specification.anchors).toEqual([{
+      kind: 'path',
+      value: 'packages/ui/src/App.tsx',
+      clause: 'packages/ui/src/App.tsx already exists; do not create it.',
+    }]);
+  });
+
   it('allows unrelated base changes and current-base attempts', () => {
     const specification = parseTaskFreshnessSpecification(CAMERA_TASK);
 
