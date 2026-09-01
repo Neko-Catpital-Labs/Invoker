@@ -18,6 +18,7 @@ import { SlackSurface, type SlackSurfaceConfig } from '@invoker/surfaces';
 import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
 
 import { IpcInvokerClient } from './invoker-client.js';
+import { INVOKER_LAUNCH_HEALTH_TIMEOUT_MS } from './launch-health-timeout.js';
 import { createInvokerLauncher } from './invoker-launcher.js';
 import { readSlackRuntimeConfig, resolveDefaultHarnessPreset, resolveSlackAdminUserIds } from './runtime-config.js';
 import { createRunWorkflowOp } from './workflow-ops.js';
@@ -28,7 +29,8 @@ import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
 import { loadSlackOwnerEnv, runComplaintScoutDraftCommand } from './complaint-scout-bridge.js';
-const VERSION = '0.0.13';
+import { startLocalSmokeInject } from './local-smoke-inject.js';
+const VERSION = '0.0.15';
 let runDaemon = true;
 
 if (process.argv.includes('--version') || process.argv.includes('-V')) {
@@ -120,7 +122,12 @@ async function main(): Promise<void> {
     logPath: path.join(homedir(), '.invoker', 'gui.log'),
     log,
   });
-  const client = new IpcInvokerClient({ spawnInvoker: launcher.spawnInvoker, log, pingTimeoutMs: 10_000 });
+  const client = new IpcInvokerClient({
+    spawnInvoker: launcher.spawnInvoker,
+    log,
+    pingTimeoutMs: 10_000,
+    launchHealthTimeoutMs: INVOKER_LAUNCH_HEALTH_TIMEOUT_MS,
+  });
 
   const runWorkflowOp = createRunWorkflowOp(client, log);
   const gatherWorkflowContext = createGatherWorkflowContext({ client, conversationRepo, workflowChannelRepo, log });
@@ -175,6 +182,10 @@ async function main(): Promise<void> {
 
   await slack.start(commandHandler);
   watchdog.start();
+  const stopSmokeInject = startLocalSmokeInject({
+    injectMention: (request) => slack.injectMention(request),
+    log,
+  });
   // Establish the IPC connection (and re-apply subscriptions) if Invoker is already up.
   void client.ping();
   log('info', `slack-manager started (store=${managerHome})`);
@@ -184,6 +195,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     log('info', `received ${signal}, shutting down`);
+    stopSmokeInject();
     watchdog.stop();
     stopEvents();
     await slack.stop().catch((err) => log('warn', `slack.stop failed: ${errMessage(err)}`));
