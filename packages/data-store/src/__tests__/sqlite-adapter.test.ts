@@ -5368,6 +5368,64 @@ describe('SQLiteAdapter', () => {
 
   // ── Output Spool Regression Tests ──────────────────────
 
+  it('isolates in-memory output files when INVOKER_DB_DIR is configured', async () => {
+    const originalDbDir = process.env.INVOKER_DB_DIR;
+    const configuredDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-configured-db-dir-'));
+    let first: SQLiteAdapter | undefined;
+    let second: SQLiteAdapter | undefined;
+
+    try {
+      process.env.INVOKER_DB_DIR = configuredDbDir;
+      first = await SQLiteAdapter.create(':memory:');
+      first.appendOutputChunk('shared-task-id', 'first adapter\n');
+      first.close();
+      first = undefined;
+
+      second = await SQLiteAdapter.create(':memory:');
+      expect(second.replayOutputFrom('shared-task-id', 0)).toEqual([]);
+    } finally {
+      first?.close();
+      second?.close();
+      if (originalDbDir === undefined) {
+        delete process.env.INVOKER_DB_DIR;
+      } else {
+        process.env.INVOKER_DB_DIR = originalDbDir;
+      }
+      rmSync(configuredDbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('colocates output files with each file-backed database', async () => {
+    const originalDbDir = process.env.INVOKER_DB_DIR;
+    const configuredDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-configured-db-dir-'));
+    const firstDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-first-db-'));
+    const secondDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-second-db-'));
+    let first: SQLiteAdapter | undefined;
+    let second: SQLiteAdapter | undefined;
+
+    try {
+      process.env.INVOKER_DB_DIR = configuredDbDir;
+      first = await SQLiteAdapter.create(join(firstDbDir, 'invoker.db'), { ownerCapability: true });
+      first.appendOutputChunk('shared-task-id', 'first database\n');
+      first.close();
+      first = undefined;
+
+      second = await SQLiteAdapter.create(join(secondDbDir, 'invoker.db'), { ownerCapability: true });
+      expect(second.replayOutputFrom('shared-task-id', 0)).toEqual([]);
+    } finally {
+      first?.close();
+      second?.close();
+      if (originalDbDir === undefined) {
+        delete process.env.INVOKER_DB_DIR;
+      } else {
+        process.env.INVOKER_DB_DIR = originalDbDir;
+      }
+      rmSync(configuredDbDir, { recursive: true, force: true });
+      rmSync(firstDbDir, { recursive: true, force: true });
+      rmSync(secondDbDir, { recursive: true, force: true });
+    }
+  });
+
   describe('output spool: monotonic offsets', () => {
     it('appends chunks with strictly increasing offset values', () => {
       adapter.saveWorkflow(testWorkflow);
