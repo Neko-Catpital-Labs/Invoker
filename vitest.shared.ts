@@ -9,6 +9,7 @@ export default defineConfig({
     env: {
       INVOKER_TEST_WORKFLOW_IDS: '1',
     },
+    setupFiles: [new URL('./vitest.setup.ts', import.meta.url).pathname],
     exclude: [...configDefaults.exclude, '**/dist/**'],
     globals: true,
     // App plan-parser tests call git ls-remote (execSync timeout 10s); Vitest default 5s flakes.

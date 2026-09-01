@@ -750,7 +750,7 @@ export class PlanConversation {
     const tSave = Date.now();
 
     this.log('plan-conversation', 'info', `[PERF] sendMessage: init=${tInit - t0}ms, buildPrompt=${tPrompt - tInit}ms, cursor=${tCursor - tPrompt}ms, saveState=${tSave - tCursor}ms, total=${tSave - t0}ms`);
-    return nextDraft ? redactEmbeddedPlanFence(message) : message;
+    return nextDraft && this.planningSurface === 'slack' ? redactEmbeddedPlanFence(message) : message;
   }
 
   private resolvePlanDoctorRepairLimit(isFirstDraft: boolean): number {
