@@ -106,6 +106,43 @@ class AdminBypassRepairer:
             },
         )
 
+    def submit_aggregated_repair_plan(
+        self,
+        plan: async_repair.AsyncRepairPlan,
+        pr_number: int,
+        head_sha: str,
+        check_names: Sequence[str],
+        now: int | None,
+    ) -> None:
+        """Record every filing before submitting their single shared workflow."""
+        for check_name in check_names:
+            self.ledger.record(
+                "repair-check-pending", pr_number, head_sha, check_name, now,
+                meta={"planName": plan.plan_name, "dispatchState": "pending"},
+            )
+        try:
+            acknowledgement = async_repair.submit_async_repair_plan(plan)
+        except Exception as exc:
+            for check_name in check_names:
+                self.ledger.record(
+                    "repair-check-pending-settled", pr_number, head_sha, check_name, now,
+                    meta={"outcomeClass": "infra", "failurePhase": "submission", "dispatchState": "not-acknowledged",
+                          "planName": plan.plan_name, "error": str(exc)},
+                )
+            raise
+        metadata = {
+            "dispatchState": "acknowledged",
+            "planName": plan.plan_name,
+            **(
+                {"workflowId": acknowledgement.workflow_id}
+                if isinstance(acknowledgement, async_repair.RepairSubmissionAcknowledgement)
+                and isinstance(acknowledgement.workflow_id, str)
+                else {}
+            ),
+        }
+        for check_name in check_names:
+            self.ledger.record("repair-check", pr_number, head_sha, check_name, now, meta=metadata)
+
     def blocked_outcome(
         self,
         status: str,
@@ -175,7 +212,43 @@ class AdminBypassRepairer:
         except OSError:
             return False
 
+    def repair_checks(self, pr: PrSnapshot, check_names: Sequence[str], now: int | None = None) -> RepairOutcome:
+        if not check_names:
+            raise ValueError("at least one repair check is required")
+        latest = pr.latest_mergify
+        start_head = pr.head_ref_oid
+        specs = []
+        for check_name in check_names:
+            ctx = pr.checks.get(check_name)
+            queue_only = ctx is None and is_queue_only_required_check(check_name)
+            mergify_urls = mergify_check_urls(latest, check_name)
+            details_url = (ctx.details_url if ctx and ctx.details_url else "") or (mergify_urls[0] if mergify_urls else "")
+            if queue_only and not details_url:
+                return self.blocked_outcome(
+                    "blocked_invalid", check_name, start_head, start_head,
+                    errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
+                )
+            log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
+            if queue_only and not self.job_log_has_evidence(log_path):
+                continue
+            specs.append(async_repair.RepairCheckSpec(
+                check_name=check_name, details_url=details_url, log_path=log_path,
+                queue_only=queue_only, queue_pr_number=latest.queue_pr_number if latest else 0, latest=latest,
+            ))
+        if not specs:
+            return self.blocked_outcome("queue_only_noop", check_names[0], start_head, start_head)
+        plan = async_repair.build_aggregated_repair_check_plan(
+            pr, specs, repo=self.repo, start_head=start_head, state_file=self.ledger.path, foreign=self.is_foreign,
+        )
+        self.submit_aggregated_repair_plan(plan, pr.number, start_head, [spec.check_name for spec in specs], now)
+        return self.blocked_outcome("submitted", ",".join(check_names), start_head, start_head)
+
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
+        # A single planner action can represent several simultaneous Mergify
+        # failures for this exact PR head. Collapse them before submission so
+        # only one workflow owns the branch and its terminal push.
+        if pr.latest_mergify and len(pr.latest_mergify.failing_checks) > 1:
+            return self.repair_checks(pr, pr.latest_mergify.failing_checks, now)
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
         queue_only = ctx is None and is_queue_only_required_check(check_name)

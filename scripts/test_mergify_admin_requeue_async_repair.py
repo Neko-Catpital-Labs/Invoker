@@ -46,6 +46,28 @@ def pr(**kw):
 
 
 class AsyncRepairPlanTests(unittest.TestCase):
+    def test_aggregated_checks_are_ordered_and_have_one_guarded_terminal_push(self):
+        plan = async_repair.build_aggregated_repair_check_plan(
+            pr(),
+            [
+                async_repair.RepairCheckSpec("lint", "https://example.invalid/lint", "/missing/lint", False, 0, None),
+                async_repair.RepairCheckSpec("tests", "https://example.invalid/tests", "/missing/tests", False, 0, None),
+            ],
+            repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+        )
+        doc = yaml.safe_load(plan.yaml_text)
+        self.assertEqual(
+            [task["id"] for task in doc["tasks"]],
+            ["repair-1", "repair-2", "normalize", "safe-push"],
+        )
+        self.assertEqual(doc["tasks"][1]["dependencies"], ["repair-1"])
+        self.assertEqual(doc["tasks"][2]["dependencies"], ["repair-2"])
+        self.assertEqual(doc["tasks"][3]["dependencies"], ["normalize"])
+        self.assertEqual(plan.yaml_text.count("git push origin"), 0)
+        self.assertEqual(plan.yaml_text.count("pr_worker_safe_push.py"), 1)
+        self.assertIn("--expected-head '" + HEAD + "'", plan.yaml_text)
+        self.assertIn("committed history left by the preceding repair task", plan.yaml_text)
+
     def test_all_three_plan_kinds_produce_parseable_yaml_with_expected_task_ids(self):
         checks_plan = async_repair.build_repair_check_plan(
             pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",

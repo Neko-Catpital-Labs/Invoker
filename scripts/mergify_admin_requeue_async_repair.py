@@ -7,6 +7,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 try:
     from .mergify_admin_requeue_headless_shell import run_headless
@@ -75,6 +76,16 @@ class AsyncRepairPlan:
 
 
 @dataclass(frozen=True)
+class RepairCheckSpec:
+    check_name: str
+    details_url: str
+    log_path: str
+    queue_only: bool
+    queue_pr_number: int
+    latest: MergifyQueueEvent | None
+
+
+@dataclass(frozen=True)
 class RepairSubmissionAcknowledgement:
     workflow_id: str | None = None
 
@@ -82,22 +93,32 @@ class RepairSubmissionAcknowledgement:
 _WORKFLOW_ID_RE = re.compile(r"(?:Workflow ID:|workflow:)\s*(wf-[^\s]+)")
 
 
-def _write_plan_header(*, name: str, base_branch: str, repo: str, merge_mode: str = "manual") -> str:
+def _write_plan_header(
+    *, name: str, base_branch: str, repo: str, merge_mode: str = "manual", on_finish: str = "none",
+    description: str | None = None,
+) -> str:
+    description_line = f"description: {_yaml_str(description)}\n" if description else ""
     return (
         f"name: {name}\n"
-        "onFinish: none\n"
+        f"onFinish: {on_finish}\n"
         f"mergeMode: {merge_mode}\n"
         f"repoUrl: {_yaml_str(_repo_url(repo))}\n"
         f"baseBranch: {_yaml_str(base_branch)}\n"
+        f"{description_line}"
         "tasks:\n"
     )
 
 
-def _repair_task_yaml(*, description: str, prompt: str, max_turns: int | None = 30) -> str:
+def _repair_task_yaml(
+    *, description: str, prompt: str, task_id: str = "repair", dependencies: str | None = None,
+    max_turns: int | None = 30,
+) -> str:
+    dependency_line = f"    dependencies: [{dependencies}]\n" if dependencies else ""
     max_turns_line = f"    maxTurns: {max_turns}\n" if max_turns is not None else ""
     return (
-        "  - id: repair\n"
+        f"  - id: {task_id}\n"
         f"    description: {_yaml_str(description)}\n"
+        f"{dependency_line}"
         f"{max_turns_line}"
         "    prompt: |\n"
         f"{_indent_block(prompt, 6)}\n"
@@ -263,6 +284,79 @@ def build_repair_check_plan(
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
+def build_aggregated_repair_check_plan(
+    pr: PrSnapshot,
+    checks: Sequence[RepairCheckSpec],
+    *,
+    repo: str,
+    start_head: str,
+    state_file: Path,
+    foreign: bool = False,
+) -> AsyncRepairPlan:
+    """Build one ordered workflow for all checks observed on one PR head.
+
+    Each repair task must commit locally and depends on the prior task, so the
+    next worker receives the previous worker's committed history. Only the
+    final task may push, and it retains the expected-head guard.
+    """
+    if not checks:
+        raise ValueError("at least one repair check is required")
+    name = f"admin-bypass-repair-aggregate-pr-{pr.number}-{start_head[:7]}"
+    yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
+    previous_task = None
+    for index, spec in enumerate(checks, start=1):
+        prompt = (
+            "This PR's CI check is failing. Diagnose why it is failing, then fix it. Add or "
+            "update a repro if the failure is reproducible.\n\n"
+            "Work from the checkout and committed history left by the preceding repair task. "
+            "If a code change fixes this check, commit it locally and do not push. If local proof "
+            "shows the check is already green on the current history, make no commit and exit 0.\n\n"
+            f"Repair PR #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
+            f"PR URL: {pr.url}\nHead branch: {pr.head_ref_name} (initially at {start_head}), "
+            f"base branch: {pr.base_ref_name}\n\nFailed check: {spec.check_name}\n"
+            f"Details URL: {spec.details_url}\nJob log (tail):\n{_job_log_excerpt(spec.log_path)}\n"
+            f"Latest Mergify event: {json.dumps(dataclasses.asdict(spec.latest) if spec.latest else None, sort_keys=True)}\n"
+        )
+        if spec.queue_only:
+            prompt += f"Queue draft PR: #{spec.queue_pr_number}\nRepair the real PR head, using only evidence from the queue draft failure.\n"
+        task_id = f"repair-{index}"
+        yaml_text += _repair_task_yaml(
+            task_id=task_id,
+            dependencies=previous_task,
+            description=f"Repair PR #{pr.number} (failed check {spec.check_name})",
+            prompt=prompt,
+        )
+        previous_task = task_id
+
+    if foreign:
+        yaml_text += _safe_push_task_yaml(
+            task_id="safe-push", description=f"Safely push PR #{pr.number} only if its head did not move",
+            dependencies=previous_task or "", head_ref=pr.head_ref_name, start_head=start_head,
+            skip_if_prereq=False, foreign=True,
+        )
+    else:
+        normalize_command = (
+            "set -euo pipefail\n"
+            "python3 -B scripts/mergify_admin_requeue_repair_normalize.py \\\n"
+            f"  --repo {_shlex(repo)} --pr {pr.number} --check {_shlex(checks[-1].check_name)} \\\n"
+            f"  --start-head {_shlex(start_head)} --base {_shlex(pr.base_ref_name)} --trunk master\n"
+        )
+        yaml_text += (
+            "  - id: normalize\n"
+            f"    description: {_yaml_str(f'Normalize PR #{pr.number} aggregate repair commit')}\n"
+            f"    dependencies: [{previous_task}]\n"
+            "    command: |\n"
+            f"{_indent_block(normalize_command, 6)}\n"
+        )
+        previous_task = "normalize"
+        yaml_text += _safe_push_task_yaml(
+            task_id="safe-push", description=f"Safely push PR #{pr.number} only if its head did not move",
+            dependencies=previous_task, head_ref=pr.head_ref_name, start_head=start_head,
+            skip_if_prereq=True,
+        )
+    return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
+
+
 def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, onto: str | None = None) -> str:
     onto_ref = onto or pr.base_ref_name or "master"
     return (
@@ -363,7 +457,8 @@ def build_requeue_stuck_plan(
         f"Base branch: {pr.base_ref_name}\nRequeue attempts so far: {attempts}\n"
     )
     yaml_text = _write_plan_header(
-        name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review"
+        name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review", on_finish="pull_request",
+        description=f"Investigate and repair PR #{pr.number} when automated requeue attempts remain stuck.",
     )
     yaml_text += _repair_task_yaml(description=f"Investigate why PR #{pr.number} is stuck in the merge queue", prompt=prompt)
     yaml_text += _safe_push_task_yaml(
