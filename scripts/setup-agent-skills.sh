@@ -30,6 +30,9 @@ check_required_commands() {
 }
 
 build_headless_installer() {
+  log "Checking shared shell policy..."
+  pnpm --filter @invoker/shell test
+
   log "Building bundled invoker-cli artifact..."
   pnpm --filter @invoker/cli build
 
