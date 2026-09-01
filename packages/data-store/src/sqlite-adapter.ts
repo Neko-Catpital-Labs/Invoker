@@ -3573,11 +3573,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     args: unknown[],
     priority: WorkflowMutationPriority,
   ): number {
+    const createdAt = new Date().toISOString();
     this.execRun(
       `INSERT INTO workflow_mutation_intents (
-        workflow_id, channel, args_json, priority, status
-      ) VALUES (?, ?, ?, ?, 'queued')`,
-      [workflowId, channel, JSON.stringify(args), priority],
+        workflow_id, channel, args_json, priority, status, created_at
+      ) VALUES (?, ?, ?, ?, 'queued', ?)`,
+      [workflowId, channel, JSON.stringify(args), priority, createdAt],
     );
     const row = this.queryOne('SELECT MAX(id) AS id FROM workflow_mutation_intents');
     return Number(row?.id ?? 0);
