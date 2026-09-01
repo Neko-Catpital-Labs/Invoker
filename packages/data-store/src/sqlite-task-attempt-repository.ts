@@ -219,6 +219,7 @@ export class SqliteTaskAttemptRepository {
       'execution_agent',
       'execution_model',
       'agent_name',
+      'freshness',
       'task_state_version',
     ];
     const sql = `
@@ -245,6 +246,7 @@ export class SqliteTaskAttemptRepository {
         execution_agent,
         execution_model,
         agent_name,
+        freshness,
         task_state_version
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
@@ -261,6 +263,7 @@ export class SqliteTaskAttemptRepository {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -330,6 +333,7 @@ export class SqliteTaskAttemptRepository {
       cfg.executionAgent ?? null,
       cfg.executionModel ?? null,
       exec.agentName ?? null,
+      cfg.freshness !== undefined ? JSON.stringify(cfg.freshness) : null,
       task.taskStateVersion ?? 1,
     ];
     assertSaveTaskPersistsSelectedAttemptId(columns, values, exec);
@@ -443,6 +447,10 @@ export class SqliteTaskAttemptRepository {
       if ('externalDependencies' in changes.config) {
         setClauses.push('external_dependencies = ?');
         values.push(changes.config.externalDependencies ? JSON.stringify(changes.config.externalDependencies) : null);
+      }
+      if ('freshness' in changes.config) {
+        setClauses.push('freshness = ?');
+        values.push(changes.config.freshness !== undefined ? JSON.stringify(changes.config.freshness) : null);
       }
     }
 

@@ -67,6 +67,7 @@ export function mapRowToTask(row: any): TaskState {
       parentTask: row.parent_task ?? undefined,
       command: row.command ?? undefined,
       prompt: row.prompt ?? undefined,
+      ...(row.freshness ? { freshness: JSON.parse(row.freshness) } : {}),
       externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
       experimentPrompt: row.experiment_prompt ?? undefined,
       pivot: row.pivot === 1 ? true : undefined,
