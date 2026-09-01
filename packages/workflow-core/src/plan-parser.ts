@@ -1,6 +1,7 @@
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from './orchestrator.js';
 import { normalizeWorkflowBaseBranch } from './repo-default-branch.js';
+import { parseTaskFreshnessSpec } from './task-freshness.js';
 
 export class PlanParseError extends Error {
   constructor(message: string) {
@@ -132,6 +133,7 @@ export interface RawPlanTask {
   executionAgent?: string;
   executionModel?: string;
   maxTurns?: number;
+  freshness?: unknown;
 }
 
 export interface RawPlan {
@@ -408,6 +410,14 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       }
     }
 
+    const freshness = (() => {
+      try {
+        return parseTaskFreshnessSpec(task.freshness, `Task "${task.id}"`);
+      } catch (error) {
+        throw new PlanParseError(error instanceof Error ? error.message : String(error));
+      }
+    })();
+
     return {
       id: task.id,
       description: task.description,
@@ -446,6 +456,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       })(),
       executionModel: task.executionModel?.trim() || undefined,
       maxTurns: task.maxTurns,
+      ...(freshness !== undefined ? { freshness } : {}),
     };
   });
 
