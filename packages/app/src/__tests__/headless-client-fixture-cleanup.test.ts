@@ -21,9 +21,10 @@ vi.mock('node:child_process', async (importOriginal) => {
 import { readdir, readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'node:child_process';
-import { cleanupStandaloneOwnersForTestDir } from '../../e2e/fixtures/headless-client.js';
+import { cleanupStandaloneOwnersForTestDir, headlessTestEnv } from '../../e2e/fixtures/headless-client.js';
 import {
   OwnerChildProfileError,
+  resolveDetachedOwnerCommand,
   resolveOwnerChildProfileEnv,
   spawnDetachedStandaloneOwner,
 } from '../headless-owner-bootstrap.js';
@@ -118,12 +119,59 @@ describe('detached owner child profile identity', () => {
     expect(childEnv).toEqual({ INVOKER_RUNTIME_KIND: 'packaged' });
   });
 
+  it('launches main.js directly when the parent process is Electron', () => {
+    expect(resolveDetachedOwnerCommand('/repo/checkout', {
+      executablePath: '/electron',
+      isElectron: true,
+      platform: 'linux',
+    })).toEqual({
+      command: '/electron',
+      args: [
+        '--no-sandbox',
+        '/repo/checkout/packages/app/dist/main.js',
+        '--headless',
+        'owner-serve',
+      ],
+    });
+  });
+
+  it('keeps the launcher wrapper when the parent process is Node', () => {
+    expect(resolveDetachedOwnerCommand('/repo/checkout', {
+      executablePath: '/node',
+      isElectron: false,
+      platform: 'linux',
+    })).toEqual({
+      command: '/node',
+      args: [
+        '/repo/checkout/scripts/electron.cjs',
+        '--no-sandbox',
+        '/repo/checkout/packages/app/dist/main.js',
+        '--headless',
+        'owner-serve',
+      ],
+    });
+  });
+
   it('passes the same source profile and disjoint locations from a source-development parent to the child', () => {
     const childEnv = resolveOwnerChildProfileEnv(sourceDevelopmentEnv);
 
     expect(childEnv).toEqual({ INVOKER_RUNTIME_KIND: 'source-development', ...sourceDevelopmentEnv });
     expect(childEnv.INVOKER_DB_DIR).not.toBe('/Users/dev/.invoker');
     expect(childEnv.INVOKER_IPC_SOCKET).not.toBe('/Users/dev/.invoker/ipc-transport.sock');
+  });
+
+  it('gives headless E2E clients a complete source-development profile', () => {
+    const testDir = '/tmp/invoker-headless-profile-test';
+    const env = headlessTestEnv(testDir);
+
+    expect(env).toMatchObject({
+      INVOKER_RUNTIME_KIND: 'source-development',
+      INVOKER_DEVELOPMENT_PROFILE: '1',
+      INVOKER_DEVELOPMENT_PROFILE_ACTIVE: '1',
+      INVOKER_DB_DIR: testDir,
+      INVOKER_IPC_SOCKET: `${testDir}/ipc-transport.sock`,
+      INVOKER_REPO_CONFIG_PATH: `${testDir}/e2e-config.json`,
+    });
   });
 
   it('fails before spawn when a source-development parent has a partial profile', () => {
