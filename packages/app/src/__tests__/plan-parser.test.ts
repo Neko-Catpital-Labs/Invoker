@@ -233,6 +233,67 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(/dockerImage.*poolId/);
   });
 
+  it('parses and deterministically normalizes task freshness', () => {
+    const plan = parsePlan(`
+name: Freshness Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    freshness:
+      watchPaths: [" packages/z.ts ", packages/a.ts, packages/a.ts]
+      pathPreconditions:
+        - path: generated/output.json
+          expected: absent
+        - path: packages/a.ts
+          expected: present
+      guardedBehaviorIds: [z_guard, a-guard, a-guard]
+`);
+
+    expect(plan.tasks[0].freshness).toEqual({
+      watchPaths: ['packages/a.ts', 'packages/z.ts'],
+      pathPreconditions: [
+        { path: 'generated/output.json', expected: 'absent' },
+        { path: 'packages/a.ts', expected: 'present' },
+      ],
+      guardedBehaviorIds: ['a-guard', 'z_guard'],
+    });
+  });
+
+  it('keeps omitted task freshness omitted', () => {
+    const plan = parsePlan(`
+name: Legacy Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+`);
+
+    expect(plan.tasks[0]).not.toHaveProperty('freshness');
+  });
+
+  it.each([
+    ['unknown field', 'freshness: { unknown: true }', /unsupported field "unknown"/],
+    ['absolute watch path', 'freshness: { watchPaths: ["/tmp/out"] }', /repo-relative path/],
+    ['invalid expectation', 'freshness: { pathPreconditions: [{ path: out.txt, expected: maybe }] }', /present.*absent/],
+    ['invalid behavior id', 'freshness: { guardedBehaviorIds: ["bad id"] }', /identifier/],
+  ])('rejects invalid task freshness: %s', (_label, freshnessYaml, expected) => {
+    const yaml = `
+name: Bad Freshness Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    ${freshnessYaml}
+`;
+
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(expected);
+  });
+
   it('does not require repoUrl to be cloneable when scratch: true is set', async () => {
     const planPath = join(tmpdir(), `invoker-scratch-plan-${process.pid}.yaml`);
     writeFileSync(planPath, `

@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch, parseTaskFreshnessSpec } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
@@ -89,6 +89,7 @@ export interface RawPlanTask {
   executionAgent?: string;
   executionModel?: string;
   maxTurns?: number;
+  freshness?: unknown;
 }
 
 export interface RawPlan {
@@ -514,6 +515,14 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       }
     }
 
+    const freshness = (() => {
+      try {
+        return parseTaskFreshnessSpec(task.freshness, `Task "${task.id}"`);
+      } catch (error) {
+        throw new PlanParseError(error instanceof Error ? error.message : String(error));
+      }
+    })();
+
     return {
       id: task.id,
       description: task.description,
@@ -529,6 +538,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       executionAgent: task.executionAgent?.trim() || undefined,
       executionModel: task.executionModel?.trim() || undefined,
       maxTurns: task.maxTurns,
+      ...(freshness !== undefined ? { freshness } : {}),
     };
   });
 
