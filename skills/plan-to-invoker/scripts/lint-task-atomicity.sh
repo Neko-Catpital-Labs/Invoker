@@ -695,12 +695,14 @@ END {
   if (enforce_layering == 1 && is_scratch == 0) {
     scrub_idx = task_id_to_index["scrub-handoff-artifacts"]
     if (scrub_idx == 0) {
-      errors[++errn] = "Plan with onFinish != none requires a task with id \"scrub-handoff-artifacts\" that scrubs ephemeral inter-task handoff files before the PR merge gate"
+      errors[++errn] = "Plan with onFinish != none requires a task with id \"scrub-handoff-artifacts\" that checks for ephemeral inter-task handoff files before the PR merge gate"
     } else {
       if (task_has_command[scrub_idx] != 1) {
         errors[++errn] = "Task \"scrub-handoff-artifacts\" must define a shell \"command\" (not a prompt task)"
       } else if (tolower(task_command_line[scrub_idx]) !~ /scrub[-_a-z]*handoff[-_a-z]*artifacts[-_a-z]*\.sh/) {
         errors[++errn] = "Task \"scrub-handoff-artifacts\" command must run scripts/scrub-handoff-artifacts.sh (or an equivalent handoff-scrub script)"
+      } else if (tolower(task_command_line[scrub_idx]) ~ /--apply/) {
+        errors[++errn] = "Task \"scrub-handoff-artifacts\" must be a read-only absence check and cannot pass --apply"
       }
 
       for (idx = 1; idx <= taskn; idx++) {
@@ -724,7 +726,7 @@ END {
         if (idx == scrub_idx) continue
         if (has_dependent[idx] == 1) continue
         if (!csv_has(scrub_deps_csv, task_ids[idx])) {
-          errors[++errn] = "Task \"scrub-handoff-artifacts\" must depend on leaf task \"" task_ids[idx] "\" so handoff artifacts are scrubbed after every implement/verify task completes"
+          errors[++errn] = "Task \"scrub-handoff-artifacts\" must depend on leaf task \"" task_ids[idx] "\" so handoff artifacts are checked after every implement/verify task completes"
         }
       }
     }
