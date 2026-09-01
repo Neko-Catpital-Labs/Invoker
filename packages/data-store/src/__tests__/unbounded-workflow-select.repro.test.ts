@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { seedWorkflowScaleFixture } from './sqlite-scale-test-fixture.js';
 
 describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   let tmpDir: string;
@@ -20,15 +21,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('listWorkflows has no LIMIT and returns all workflows regardless of count', () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    seedWorkflowScaleFixture(adapter, workflowCount);
 
     const workflows = adapter.listWorkflows();
     expect(workflows).toHaveLength(workflowCount);
@@ -37,53 +30,26 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('loadWorkflowTaskSnapshot has no LIMIT and returns all workflows regardless of count', () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    seedWorkflowScaleFixture(adapter, workflowCount);
 
     const snapshot = adapter.loadWorkflowTaskSnapshot();
     expect(snapshot.workflows).toHaveLength(workflowCount);
     expect(snapshot.workflows.length).toBeLessThan(1000);
   });
 
-  it.fails('listWorkflows materializes every row into JS objects', () => {
+  it.fails('listWorkflows materializes more than 1 MB of workflow data into JS objects', () => {
     const workflowCount = 5_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i} with a longer name to increase memory footprint`,
-        description: `Description for workflow ${i} that adds more bytes per row`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    seedWorkflowScaleFixture(adapter, workflowCount, { longMetadata: true });
 
-    const before = process.memoryUsage().heapUsed;
     const workflows = adapter.listWorkflows();
-    const after = process.memoryUsage().heapUsed;
-    const memoryDelta = after - before;
+    const materializedBytes = Buffer.byteLength(JSON.stringify(workflows));
 
     expect(workflows).toHaveLength(workflowCount);
-    expect(memoryDelta).toBeLessThan(1_000_000);
+    expect(materializedBytes).toBeLessThan(1_000_000);
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
-    for (let i = 0; i < 500; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    seedWorkflowScaleFixture(adapter, 500);
 
     const page1 = adapter.listWorkflowsPaged({ limit: 100 });
     expect(page1.workflows).toHaveLength(100);
@@ -100,15 +66,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   });
 
   it('listWorkflowsPaged respects limit at scale without loading all rows', () => {
-    for (let i = 0; i < 5000; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    seedWorkflowScaleFixture(adapter, 5000);
 
     const started = performance.now();
     const result = adapter.listWorkflowsPaged({ limit: 50 });
