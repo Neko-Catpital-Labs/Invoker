@@ -300,6 +300,28 @@ workflows:
 When submitted, Invoker creates one workflow per child in listed order. Each downstream workflow is based on the previous workflow's feature branch and waits on the previous merge gate.`;
 }
 
+const TASK_FRESHNESS_PROMPT = `
+Typed task freshness (optional):
+Add a task-level \`freshness\` object only when the user's request contains an explicit freshness assumption. Freshness belongs in YAML as structured data; never encode it only in a task description or prompt, and never infer it from generated prose.
+
+Use this shape:
+\`\`\`yaml
+freshness:
+  watchPaths: [packages/example/src/index.ts] # files whose changes invalidate this task
+  pathPreconditions:
+    - path: packages/example/src/index.ts
+      expected: present # or absent; only explicit assumptions
+  guardedBehaviorIds: [example-behavior-id] # named guarded behaviors whose changes invalidate this task
+\`\`\`
+
+Rules for \`freshness\`:
+- It is optional. If the user makes no explicit assumption about files, paths, or guarded behaviors, omit \`freshness\` entirely.
+- \`watchPaths\` names exact normalized repo-relative paths to watch; do not use absolute paths, \`./\`, \`../\`, globs, or prose descriptions.
+- \`pathPreconditions\` records only explicit path assumptions. Each entry has an exact normalized repo-relative \`path\` and \`expected: present\` or \`expected: absent\`; do not invent a precondition because a file is mentioned as an implementation target.
+- \`guardedBehaviorIds\` contains exact named behavior IDs from the repository or the user's request, not natural-language summaries.
+- Synonyms and ordering do not change the object: “watch changes to X” and “invalidate if X changes” both become the same \`watchPaths: [X]\`; “X must exist” becomes \`pathPreconditions: [{ path: X, expected: present }]\`; “X must be gone” becomes \`expected: absent\`. Reorder fields or entries as needed, while preserving the same structured meaning.
+`;
+
 export interface BuildPlanSystemPromptOptions {
   conversationalPlanning?: boolean;
   draftingAuthorized?: boolean;
@@ -355,6 +377,7 @@ tasks:
     requiresManualApproval: false
 
 \`\`\`
+${TASK_FRESHNESS_PROMPT}
 ${stackedWorkflowSection}
 Rules:
 1. Explore the codebase first (list directories, read key files). Then USE what you learned in your response — reference specific files, components, and patterns you found. Do NOT give generic responses that ignore the code you read.
@@ -416,6 +439,8 @@ Before drafting is authorized:
 ${hostContext}
 
 This session is a planning conversation before any task plan exists. Your job is to help scope the work clearly before drafting.
+
+${TASK_FRESHNESS_PROMPT}
 
 For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase), answer directly without drafting a plan.
 
