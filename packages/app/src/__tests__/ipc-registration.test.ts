@@ -10,6 +10,7 @@ import {
   type WorkflowScopedGuiMutationRegistrationContext,
 } from '../ipc/ipc-registration.js';
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
+import { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 
 type HandleHandler = (_event: unknown, ...args: unknown[]) => Promise<unknown>;
 type OnHandler = (event: { returnValue?: unknown }, ...args: unknown[]) => void;
@@ -31,7 +32,7 @@ function createFakeIpcMain() {
 describe('ipc-registration', () => {
   it('runs mutation handlers locally in owner mode and records the channel', async () => {
     const { ipcMain, handleHandlers } = createFakeIpcMain();
-    const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const ownerCapabilities = new OwnerCapabilityRegistry();
     const handler = vi.fn(async (value: unknown) => `owner:${String(value)}`);
 
     registerGuiMutationHandler(
@@ -40,7 +41,7 @@ describe('ipc-registration', () => {
         getOwnerMode: () => true,
         getMessageBus: () => ({ request: vi.fn() }),
         translateGuiMutationToHeadless: vi.fn(),
-        guiMutationHandlers,
+        guiMutationHandlers: ownerCapabilities,
       },
       'invoker:test',
       handler,
@@ -48,7 +49,7 @@ describe('ipc-registration', () => {
 
     await expect(handleHandlers.get('invoker:test')?.({}, 'a')).resolves.toBe('owner:a');
     expect(handler).toHaveBeenCalledWith('a');
-    expect(guiMutationHandlers.get('invoker:test')).toBe(handler);
+    expect(ownerCapabilities.has('invoker:test')).toBe(true);
   });
 
   it('delegates mutation handlers through the translated headless route in follower mode', async () => {
@@ -63,6 +64,7 @@ describe('ipc-registration', () => {
         ipcMain,
         getOwnerMode: () => false,
         getMessageBus: () => ({ request }),
+        guiMutationHandlers: new OwnerCapabilityRegistry(),
         translateGuiMutationToHeadless: ({ channel, args }) => ({
           channel: 'headless.exec',
           request: { source: channel, args },
@@ -96,6 +98,7 @@ describe('ipc-registration', () => {
           },
         }),
         onMutationOwnerUnavailable,
+        guiMutationHandlers: new OwnerCapabilityRegistry(),
         translateGuiMutationToHeadless: () => ({ channel: 'headless.exec', request: {} }),
       },
       'invoker:cancel-task',
@@ -122,6 +125,7 @@ describe('ipc-registration', () => {
         getOwnerMode: () => false,
         getMessageBus: () => ({ request }),
         refreshOwnerRoute,
+        guiMutationHandlers: new OwnerCapabilityRegistry(),
         translateGuiMutationToHeadless: () => ({
           channel: 'headless.gui-mutation',
           request: { channel: 'invoker:start', args: [] },
@@ -146,6 +150,7 @@ describe('ipc-registration', () => {
       getOwnerMode: () => true,
       getMessageBus: () => ({ request: vi.fn() }),
       translateGuiMutationToHeadless: vi.fn(),
+      guiMutationHandlers: new OwnerCapabilityRegistry(),
       workflowMutationDispatcher,
       submitWorkflowMutation,
     };
@@ -173,7 +178,7 @@ describe('ipc-registration', () => {
 
   it('creates typed registrars that preserve channel registration outputs', async () => {
     const { ipcMain, handleHandlers } = createFakeIpcMain();
-    const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const ownerCapabilities = new OwnerCapabilityRegistry();
     const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
     const submitWorkflowMutation = vi.fn(() => ({ ok: true as const, accepted: true as const, intentId: 456, workflowId: 'wf:task-1', channel: 'invoker:scoped' }));
     const guiContext: GuiMutationRegistrationContext = {
@@ -181,7 +186,7 @@ describe('ipc-registration', () => {
       getOwnerMode: () => true,
       getMessageBus: () => ({ request: vi.fn() }),
       translateGuiMutationToHeadless: vi.fn(),
-      guiMutationHandlers,
+      guiMutationHandlers: ownerCapabilities,
     };
     const workflowContext: WorkflowScopedGuiMutationRegistrationContext = {
       ...guiContext,
@@ -204,7 +209,8 @@ describe('ipc-registration', () => {
 
     await expect(handleHandlers.get('invoker:plain')?.({}, 'a')).resolves.toBe('plain:a');
     await expect(handleHandlers.get('invoker:scoped')?.({}, 'task-1')).resolves.toEqual({ ok: true, accepted: true, intentId: 456, workflowId: 'wf:task-1', channel: 'invoker:scoped' });
-    expect([...guiMutationHandlers.keys()]).toEqual(['invoker:plain', 'invoker:scoped']);
+    expect(ownerCapabilities.has('invoker:plain')).toBe(true);
+    expect(ownerCapabilities.has('invoker:scoped')).toBe(true);
     expect([...workflowMutationDispatcher.keys()]).toEqual(['invoker:scoped']);
     expect(submitWorkflowMutation).toHaveBeenCalledWith(
       'wf:task-1',
