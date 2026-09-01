@@ -10,7 +10,12 @@ import { tmpdir } from 'node:os';
 import { stringify as yamlStringify } from 'yaml';
 import type { Page } from '@playwright/test';
 
-import { closeElectronApp, E2E_REPO_URL, waitForInvokerBridge } from './fixtures/electron-app.js';
+import {
+  closeElectronApp,
+  E2E_REPO_URL,
+  selectFirstWorkflow,
+  waitForInvokerBridge,
+} from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
   activityLogWatermark,
@@ -194,6 +199,14 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10_000 });
       await waitForWorkflowGraphVisible(page, 5000);
       await dragGraphAndAssertViewportMoves(page);
+      await selectFirstWorkflow(page);
+      await expect.poll(async () => {
+        const payloads = await uiPerfPayloadsSince(page, 0);
+        return payloads.some((payload) => (
+          payload.metric === 'startup_graph_visible'
+          && payload.nodeCount === tasksPerWorkflow
+        ));
+      }).toBe(true);
 
       const result = await page.evaluate(async () => {
         const tasksResult = await window.invoker.getTasks();

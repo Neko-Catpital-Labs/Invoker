@@ -353,6 +353,7 @@ async function selectWorkflowNode(page: Page, workflowId?: string): Promise<void
   await workflowNode.waitFor({ state: 'attached', timeout: 10000 });
   await workflowNode.dispatchEvent('click', { bubbles: true });
   await miniDag.waitFor({ state: 'visible', timeout: 10000 });
+  await miniDag.locator('.react-flow__node').first().waitFor({ state: 'visible', timeout: 10000 });
 }
 
 /** Select the first workflow node so the reskinned mini-DAG renders task nodes. */
