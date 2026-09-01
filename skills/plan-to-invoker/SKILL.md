@@ -74,9 +74,9 @@ Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP
 - Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit. Any task whose description or prompt carries a `Safety invariant:` heading must also carry a real `Effectiveness measurement:` heading (how success is measured beyond fixture e2e) — missing or placeholder values fail the gate the same way.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
-- Plain approval authorizes workflow handoff only: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only. Do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
-- After `invoker_submit_plan` (or the documented `invoker-cli run ... --live` fallback), do **not** abandon the session: arm `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`, then **end the turn**. On wake, continue the parent job from Invoker status (ops on blockers; next step on success). PR publication remains a separate explicit request.
-- Later PR publication is a separate explicit action. When the user separately asks about creating, updating, publishing, or splitting pull requests or PR stacks after workflow handoff, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
+- Approval authorizes the reviewed plan's declared `onFinish` outcome. Generated implementation plans default to `onFinish: pull_request`, so approval includes pushing the prepared branch and creating or updating the GitHub PR/stack. `onFinish: none` publishes nothing; `onFinish: merge` authorizes only the merge behavior shown in the reviewed plan. Never broaden beyond that reviewed outcome.
+- After `invoker_submit_plan` (or the documented `invoker-cli run ... --live` fallback), do **not** abandon the session: arm `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`, then **end the turn**. On wake, continue the parent job from Invoker status (ops on blockers; complete the reviewed `onFinish` outcome on success).
+- Before branch or PR/stack publication implied by `onFinish: pull_request` or `onFinish: merge`, read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available). This is the publication procedure, not a second authorization gate.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
 ### Self-triggered delegation routing (agents and subagents)
@@ -102,7 +102,7 @@ In both paths, the delegating agent chooses `poolId` best-effort per `references
 3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts — prefer rendering a matching formula (`skills/plan-to-invoker/formulas/`) and specializing its slots over authoring the shape from scratch.
 5. Validate with deterministic scripts.
-6. Present plan and submit on confirmation. That confirmation authorizes workflow handoff only; later PR publication requires a separate explicit request.
+6. Present plan and submit on confirmation. That confirmation authorizes the reviewed `onFinish` outcome; implementation plans default to GitHub publication through `onFinish: pull_request` without a second approval prompt.
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
 
@@ -136,7 +136,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Stateful bug lifecycle matrix:** When a bug involves conversation, session, file, cache, or workflow state, Phase 1a must enumerate the transitions that can lose or reuse state. The implementation plan must verify at least one non-happy-path sequence, such as plan creation → intervening message → summary-only reply → authorization/submit. If the state type is shared by multiple surfaces, include a verification case for each affected surface or record why it is unaffected.
 
-**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), be explicit that any later GitHub PR publishing should use **Mergify Stacks** after the work is ready: keep `onFinish: pull_request` + `mergeMode: external_review` during workflow handoff. PR publication still requires a separate explicit request; then publish/update the resulting commit stack with `mergify stack push`. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
+**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), approved implementation plans use **Mergify Stacks** for their declared GitHub publication outcome: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push` after the work is ready without asking again. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
 
 **Review-gate artifact intent:** Plans may include optional top-level `reviewGate.artifacts` metadata to describe an ordered review PR stack. Each artifact needs a unique `id`; `required` defaults to `true` when omitted; the first artifact has no dependency; every later artifact must depend on exactly the immediately previous artifact. Do not use fixed PR-count fields or Mergify-specific fields in the plan YAML. This metadata does not affect scheduler readiness, task dependencies, or workflow `externalDependencies`.
 
@@ -204,7 +204,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 10. `step-submit-standalone-waived` (exception path)
     Use only for verify-only plans, explicitly requested single-workflow plans, or implementation plans that satisfy the `Standalone workflow waiver:` rule.
     `./submit-plan.sh <plan-file>`
-    Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
+    Complete the reviewed `onFinish` outcome after workflow execution. For approved Invoker implementation plans, publish the prepared stack with `mergify stack push` from the working branch after the commits are ready.
 10a. `step-submit-stacked` (single plan with upstream dependency)
      **Stacked onto WF-X** means both: `externalDependencies` on WF-X `__merge__` **and** `baseBranch == WF-X.featureBranch`. A concrete extDep alone is gate-only wait, not a branch stack.
      Use when the plan HAS `externalDependencies` with a concrete workflow ID (not `__UPSTREAM_WORKFLOW_ID__`).
@@ -212,12 +212,12 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
      2. Extract the upstream workflow's `featureBranch`
      3. Rewrite baseBranch: `sed -E -i "s|^baseBranch:.*$|baseBranch: <featureBranch>|" <plan-file>`
      4. Submit: `./submit-plan.sh <plan-file>`
-     5. Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
+     5. Complete the reviewed `onFinish` outcome. For approved Invoker implementation plans, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
      Prefer `./scripts/submit-workflow-chain.sh --onto-workflow <WF-X>` (or auto-detect) when submitting a chain whose head attaches to an already-running upstream.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
      Default path for implementation work with more than one review slice.
      `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] [--onto-workflow <id>] <plan1.yaml> <plan2.template.yaml> ...`
-     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. When plan[0] has a concrete externalDependency (or `--onto-workflow` is set), it rewrites plan[0] `baseBranch` to that upstream's `featureBranch` before submit — that is what makes the head stacked onto the prior workflow. Stop after workflow handoff unless the user separately asks for PR publication. For Invoker-on-Invoker work only, that later explicit publication action uses `mergify stack push` once the chain's commits are prepared.
+     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. When plan[0] has a concrete externalDependency (or `--onto-workflow` is set), it rewrites plan[0] `baseBranch` to that upstream's `featureBranch` before submit — that is what makes the head stacked onto the prior workflow. After execution, complete the reviewed `onFinish` outcome. For approved Invoker-on-Invoker implementation work, publish the prepared chain with `mergify stack push` without another authorization prompt.
      Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: review_ready` for upstream workflow dependencies.
 
 ## Runtime verification (Phase 1b)
@@ -262,7 +262,7 @@ For clean PR history, run plan-to-invoker hardening as a dependent workflow chai
 
 Use `scripts/submit-workflow-chain.sh` to preserve dependency order and readable stacked PRs.
 
-When those hardening workflows target Invoker itself, the branch/PR publication layer should use Mergify Stacks (`mergify stack push`) after the commits are ready. Keep external target repos on their own normal PR workflow unless they independently opt into Mergify.
+When those hardening workflows target Invoker itself, their reviewed `onFinish: pull_request` outcome uses Mergify Stacks (`mergify stack push`) after the commits are ready. Keep external target repos on their own normal PR workflow unless they independently opt into Mergify.
 
 ## Routing (see playbook/references)
 

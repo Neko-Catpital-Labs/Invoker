@@ -52,7 +52,7 @@ Do **not** use this skill for one-slice same-repo feature iteration, one-file fi
 8. On `INVOKER_WAKE`, continue the parent job (same as a background subagent return):
    - Read `invoker_get_workflow` / `invoker_list_tasks` for status (do not paste task logs into chat).
    - On blocker / approval gate → `skill://invoker-ops/SKILL.md`.
-   - On success → next parent step. Do **not** publish PRs unless the original ask included that.
+   - On success → complete the reviewed plan's declared `onFinish` outcome. Implementation plans default to `onFinish: pull_request`, so push the prepared branch and create or update the GitHub PR/stack without asking again. `onFinish: none` publishes nothing; never exceed the reviewed outcome.
 9. For retries/cancels/approvals against the running workflow, switch to `skill://invoker-ops/SKILL.md`.
 
 ## Hard rules
@@ -62,6 +62,7 @@ Do **not** use this skill for one-slice same-repo feature iteration, one-file fi
 - Never invent SQLite reads or recovery paths — Invoker owns persistence.
 - Never submit without the review token from the matching prepare call.
 - If plan content changed after review, prepare again and re-approve.
+- Plan approval authorizes the reviewed `onFinish` outcome: `pull_request` includes GitHub branch/PR/stack publication, `none` publishes nothing, and `merge` includes only the merge behavior explicitly shown in the reviewed plan.
 - If MCP tools are missing, tell the user to run `invoker-cli setup` / the bootstrap one-liner (or use `/invoker-plan-to-invoker`) instead of falling back to raw database access.
 - Never invent HTTP/SSE MCP; remote means SSH stdio to `invoker-cli mcp` after a successful probe.
 - After submit, prefer `invoker-cli wait` + end-turn over in-turn `invoker_wait_for_workflow` polling.
