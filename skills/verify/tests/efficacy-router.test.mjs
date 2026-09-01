@@ -20,6 +20,21 @@ const FIRE_CASES = [
     proveMustInclude: 'command-palette-open.spec.ts',
   },
   {
+    id: 'home',
+    promptIncludes: ['sidebar navigation', 'visible navigation flow'],
+    proveMustInclude: 'keyboard-navigation.spec.ts',
+  },
+  {
+    id: 'queue-task-panel',
+    promptIncludes: ['queue task panel', 'spacing'],
+    proveMustInclude: 'queue-running-vs-queued.spec.ts',
+  },
+  {
+    id: 'workflows',
+    promptIncludes: ['workflow detail screen', 'UI change'],
+    proveMustInclude: 'workflow-lifecycle.spec.ts',
+  },
+  {
     id: 'workers',
     promptIncludes: ['workers surface', 'sidebar-workers'],
     proveMustInclude: 'workers-surface.spec.ts',
