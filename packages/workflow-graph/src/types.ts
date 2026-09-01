@@ -26,6 +26,15 @@ export type TaskStatus = typeof TASK_STATUSES[number];
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config
 
+export interface TaskFreshnessSpec {
+  readonly watchPaths?: readonly string[];
+  readonly pathPreconditions?: readonly {
+    readonly path: string;
+    readonly expected: 'present' | 'absent';
+  }[];
+  readonly guardedBehaviorIds?: readonly string[];
+}
+
 export interface BaseTaskConfig {
   readonly workflowId?: string;
   readonly parentTask?: string;
@@ -50,6 +59,7 @@ export interface BaseTaskConfig {
   readonly executionModel?: string;
   /** Finite agent turn budget (Claude `--max-turns`) when set. */
   readonly maxTurns?: number;
+  readonly freshness?: TaskFreshnessSpec;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
