@@ -180,7 +180,7 @@ describe('window-lifecycle', () => {
     expect(electronMock.fakeWindow.loadURL).not.toHaveBeenCalled();
   });
 
-  it('maps and focuses e2e compositor windows', () => {
+  it('maps e2e compositor windows without showing or focusing them by default', () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
     const recordStartupMark = vi.fn();
     const setUiInteractive = vi.fn();
@@ -203,8 +203,9 @@ describe('window-lifecycle', () => {
     expect(options.skipTaskbar).toBe(true);
     expect(options.x).toBeUndefined();
     expect(options.y).toBeUndefined();
-    expect(electronMock.fakeWindow.show).toHaveBeenCalledTimes(1);
-    expect(electronMock.fakeWindow.focus).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.show).not.toHaveBeenCalled();
+    expect(electronMock.fakeWindow.showInactive).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.focus).not.toHaveBeenCalled();
     expect(setUiInteractive).not.toHaveBeenCalled();
     expect(recordStartupMark).toHaveBeenCalledWith('window.mapped');
 
@@ -212,9 +213,9 @@ describe('window-lifecycle', () => {
     expect(readyHandler).toBeDefined();
     readyHandler?.();
 
-    expect(electronMock.fakeWindow.show).toHaveBeenCalledTimes(1);
-    expect(electronMock.fakeWindow.showInactive).not.toHaveBeenCalled();
-    expect(electronMock.fakeWindow.focus).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.show).not.toHaveBeenCalled();
+    expect(electronMock.fakeWindow.showInactive).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.focus).not.toHaveBeenCalled();
     expect(setUiInteractive).toHaveBeenCalledWith(true);
     expect(startDeferredStartupWork).toHaveBeenCalledTimes(1);
     expect(recordStartupMark).toHaveBeenCalledWith('window.show');
