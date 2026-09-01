@@ -150,7 +150,10 @@ function receiptCandidates(plan) {
   return plan.verificationEvidence
     .map((record) => {
       if (!isRecord(record)) return null;
-      return isRecord(record.receipt) ? record.receipt : record;
+      if (record.version !== 2 || record.trust !== 'trusted' || !isRecord(record.attestation)) {
+        return null;
+      }
+      return isRecord(record.receipt) ? record.receipt : null;
     })
     .filter(Boolean);
 }
