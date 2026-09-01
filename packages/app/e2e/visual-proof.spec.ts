@@ -31,6 +31,7 @@ import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import { _electron as electron, type Locator, type Page } from '@playwright/test';
 import { SQLiteAdapter, type WorkerActionWrite, type InAppPlanningSessionRecord } from '@invoker/data-store';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-graph';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
@@ -99,6 +100,20 @@ const QUEUE_ASSIGNING_PLAN = {
   onFinish: 'none' as const,
   tasks: [
     { id: 'assigning-task', description: 'Assigning queue task', command: 'echo assign', dependencies: [] },
+  ],
+};
+
+const REQUIRED_EXECUTOR_POOL_PLAN = {
+  name: 'Required executor pool visual proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    {
+      id: 'required-executor-pool-task',
+      description: 'Ordinary repository task without an explicit pool',
+      command: 'echo required executor pool',
+      dependencies: [] as string[],
+    },
   ],
 };
 
@@ -1918,6 +1933,21 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('sleep 5 && echo hello-alpha')).toBeVisible();
     await captureScreenshot(page, 'task-panel');
     await assertPageScreenshot(page, 'task-panel');
+  });
+
+  test('ordinary task inspector shows the built-in local executor pool', async ({ page }) => {
+    await loadPlan(page, REQUIRED_EXECUTOR_POOL_PLAN);
+    await page.locator('.react-flow__node[data-testid$="required-executor-pool-task"]').click();
+
+    const inspector = page.getByTestId('workflow-inspector-shell');
+    const poolSelect = page.getByTestId('executor-pool-select');
+    await expect(inspector).toBeVisible();
+    await expect(poolSelect).toHaveValue(BUILT_IN_LOCAL_EXECUTION_POOL_ID);
+    await expect(poolSelect).not.toContainText('No pool');
+    await expect(poolSelect.locator('option')).not.toContainText('No pool');
+    await expect(poolSelect.locator('option', { hasText: BUILT_IN_LOCAL_EXECUTION_POOL_ID })).toHaveCount(1);
+    if (process.env.CAPTURE_VIDEO) await page.waitForTimeout(1_000);
+    await captureScreenshot(page, 'required-executor-pool-local-default');
   });
 
   test('embedded-tabbed-terminal — drawer opens partial with active task tab', async ({ page, testDir }) => {
