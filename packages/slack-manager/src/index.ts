@@ -30,7 +30,7 @@ import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
 import { loadSlackOwnerEnv, runComplaintScoutDraftCommand } from './complaint-scout-bridge.js';
 import { startLocalSmokeInject } from './local-smoke-inject.js';
-const VERSION = '0.0.17';
+const VERSION = '0.0.18';
 let runDaemon = true;
 
 if (process.argv.includes('--version') || process.argv.includes('-V')) {
