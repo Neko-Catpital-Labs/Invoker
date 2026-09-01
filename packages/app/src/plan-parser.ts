@@ -165,6 +165,7 @@ export function detectDefaultBranchRemote(repoUrl: string): string {
 
 const REMOTE_CLONE_PROBE_ATTEMPTS = 2;
 const REMOTE_CLONE_PROBE_RETRY_DELAY_MS = 500;
+const REMOTE_CLONE_PROBE_TIMEOUT_MS = 30_000;
 
 function sleepSyncMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -224,7 +225,7 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
     try {
       execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 10_000,
+        timeout: REMOTE_CLONE_PROBE_TIMEOUT_MS,
       });
       return;
     } catch (err) {
@@ -235,7 +236,7 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
     }
   }
   throw new PlanParseError(
-    `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(lastError)}, after ${REMOTE_CLONE_PROBE_ATTEMPTS} attempts)`,
+    `repoUrl "${repoUrl}" is not a readable git repository. Check network reachability, its clone URL, and credentials. (${describeCloneProbeError(lastError)}, after ${REMOTE_CLONE_PROBE_ATTEMPTS} attempts)`,
   );
 }
 
