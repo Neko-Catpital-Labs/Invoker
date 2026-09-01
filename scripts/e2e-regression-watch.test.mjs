@@ -12,7 +12,6 @@ import {
   claimRepairFiling,
   CATSTACK_REPO_URL,
   DEFAULT_TARGET_REPO,
-  extractFailureIdentitiesFromLog,
   failureStorageKey,
   fileBugfixPlan,
   getVerifyCommandForFailure,
@@ -1048,8 +1047,8 @@ describe('retired CI job filing gate', () => {
   });
 });
 
-describe('failure-focused verification', () => {
-  it('narrows Playwright repair to the failing spec', () => {
+describe('repair verification scope', () => {
+  it('does not infer a Playwright spec from failure prose', () => {
     const command = "env INVOKER_PLAYWRIGHT_FILES='e2e/a.spec.ts e2e/b.spec.ts' bash scripts/test-suites/optional/40-playwright-app.sh";
     const focused = getVerifyCommandForFailure({
       jobName: 'playwright / 1-of-9',
@@ -1057,18 +1056,17 @@ describe('failure-focused verification', () => {
       failureLabel: 'e2e/headless-thundering-herd.spec.ts',
       verifyCommand: command,
     }, new Map());
-    assert.match(focused, /INVOKER_PLAYWRIGHT_FILES='e2e\/headless-thundering-herd\.spec\.ts'/);
-    assert.doesNotMatch(focused, /e2e\/a\.spec\.ts e2e\/b\.spec\.ts/);
+    assert.equal(focused, command);
   });
 
-  it('narrows required-fast to the failing package test file', () => {
+  it('keeps Vitest workspace verification broad without structured identity', () => {
     const focused = getVerifyCommandForFailure({
       jobName: 'required-fast / Vitest Workspace',
       failureId: 'packages-app-src-tests-start-ready-test-ts',
       failureLabel: 'packages/app/src/__tests__/start-ready.test.ts',
       verifyCommand: 'bash scripts/test-suites/required/10-vitest-workspace.sh',
     }, new Map());
-    assert.equal(focused, "pnpm --filter './packages/app' test -- --run 'src/__tests__/start-ready.test.ts'");
+    assert.equal(focused, 'bash scripts/test-suites/required/10-vitest-workspace.sh');
   });
 
   it('preserves the original command when no safe adapter exists', () => {
@@ -1379,30 +1377,6 @@ describe('a poison-pill failure must not abort the whole sweep', () => {
 
 describe('per-test failure identity under one CI job', () => {
   const jobName = 'required-fast / Mergify Admin Requeue';
-
-  it('extracts distinct repro identities from the production Mergify Admin Requeue log shape', () => {
-    const log = [
-      "Cloning into '/tmp/repro-babysit-pr-body-human-split.ERdycn/seed'...",
-      "To /tmp/repro-babysit-pr-body-human-split.ERdycn/origin.git",
-      "rm: cannot remove '/tmp/repro-babysit-pr-body-human-split.ERdycn/seed/.git/objects': Directory not empty",
-      '##[error]Process completed with exit code 1.',
-    ].join('\n');
-    const identities = extractFailureIdentitiesFromLog(log);
-    assert.equal(identities.some((entry) => entry.failureId.includes('repro-babysit-pr-body-human-split')), true);
-  });
-
-  it('ignores git ref-sync listings while preserving genuine failure identities', () => {
-    const log = [
-      '* [new branch]  experiment/wf-98378590220/repro-event-loop-block/390bb7f -> origin/experiment/wf-98378590220/repro-event-loop-block/390bb7f',
-      '* [new tag]  repro-asar-enotdir-snapshot -> repro-asar-enotdir-snapshot',
-      'FAIL packages/some-package/src/__tests__/real-distinct-failure.test.ts',
-    ].join('\n');
-    const identities = extractFailureIdentitiesFromLog(log);
-
-    assert.equal(identities.some((entry) => entry.failureId.includes('repro-event-loop-block')), false);
-    assert.equal(identities.some((entry) => entry.failureId.includes('repro-asar-enotdir')), false);
-    assert.equal(identities.some((entry) => entry.failureId.includes('real-distinct-failure')), true);
-  });
 
   it('reproduces the bug: two distinct repros under one job must each get their own repair lifecycle', () => {
     // Observed (pre-fix): after filing a repair for the first Mergify Admin

@@ -266,80 +266,6 @@ export function buildMarkerComment(sha, jobName, failureId = JOB_LEVEL_FAILURE_I
   return `<!-- ${buildMarker(sha, jobName, failureId)} -->`;
 }
 
-function stripGitRefListingLines(text) {
-  return text
-    .split('\n')
-    .filter((line) => !/\[(?:new branch|new tag)\]|\s->\s+(?:origin\/|refs\/)/.test(line))
-    .join('\n');
-}
-
-/**
- * Derive stable per-test / per-repro identities from a CI job log.
- * Multiple distinct failures under one job must each get their own repair
- * lifecycle (incident 2026-08-21: Mergify Admin Requeue stayed red on a new
- * repro after an earlier same-job repair had already been filed).
- */
-export function extractFailureIdentitiesFromLog(logText) {
-  const text = stripGitRefListingLines(String(logText ?? ''));
-  if (!text.trim()) return [];
-
-  const found = new Map();
-  const add = (id, kind, label, evidence) => {
-    const normalized = slugify(id, 96);
-    if (!normalized || normalized === 'ci-job') return;
-    if (found.has(normalized)) return;
-    found.set(normalized, {
-      failureId: normalized,
-      kind,
-      label: label || normalized,
-      evidence: evidence || '',
-    });
-  };
-
-  for (const match of text.matchAll(/(?:scripts\/repro\/)?(repro-[a-z0-9][a-z0-9._-]*)(?:\.sh)?/gi)) {
-    add(match[1].replace(/\.sh$/i, ''), 'repro', match[1], match[0]);
-  }
-  for (const match of text.matchAll(/\/tmp\/(repro-[a-z0-9][a-z0-9._-]*)\.[A-Za-z0-9]+\b/gi)) {
-    add(match[1], 'repro', match[1], match[0]);
-  }
-  for (const match of text.matchAll(/^(?:FAIL|ERROR):\s+([^\n(]+)/gm)) {
-    add(match[1].trim(), 'unittest', match[1].trim(), match[0]);
-  }
-  for (const match of text.matchAll(/\b(scripts\/test_[a-z0-9_]+\.py)\b/gi)) {
-    add(match[1], 'unittest-file', match[1], match[0]);
-  }
-  for (const match of text.matchAll(/FAIL\s+([^\n]+?\.test\.[jt]sx?[^\n]*)/g)) {
-    add(match[1].trim(), 'vitest', match[1].trim(), match[0]);
-  }
-  for (const match of text.matchAll(/\b((?:e2e|src)\/[^\s:]+\.(?:spec|test)\.[jt]sx?)\b/g)) {
-    add(match[1], 'playwright-or-vitest-file', match[1], match[0]);
-  }
-  for (const match of text.matchAll(/^\s*[×x]\s+(.+)$/gm)) {
-    const label = match[1].trim();
-    if (label.length >= 8 && label.length <= 160) add(label, 'test-title', label, match[0]);
-  }
-
-  if (found.size > 0) return Array.from(found.values());
-
-  const errorLine = text
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^\S+\s+UNKNOWN STEP\s+\S+\s+/, '').trim())
-    .filter((line) => /(?:error|failed|cannot remove|exception)/i.test(line))
-    .at(-1);
-  if (errorLine) {
-    const fingerprint = slugify(errorLine.replace(/\b[0-9a-f]{7,}\b/gi, 'HEX').slice(0, 120), 72);
-    if (fingerprint && fingerprint !== 'ci-job') {
-      return [{
-        failureId: `err-${fingerprint}`,
-        kind: 'error-fingerprint',
-        label: errorLine.slice(0, 160),
-        evidence: errorLine,
-      }];
-    }
-  }
-  return [];
-}
-
 export function resolveJobFailureIdentities(job, opts = {}) {
   if (Array.isArray(job?.failureIdentities) && job.failureIdentities.length > 0) {
     return job.failureIdentities.map((entry) => {
@@ -357,11 +283,9 @@ export function resolveJobFailureIdentities(job, opts = {}) {
       };
     });
   }
-  const logText = typeof job?.logText === 'string'
-    ? job.logText
-    : (typeof opts.fetchJobLog === 'function' ? opts.fetchJobLog(job) : '');
-  const extracted = extractFailureIdentitiesFromLog(logText);
-  if (extracted.length > 0) return extracted;
+  // Plain CI logs are evidence, not identity. Without an explicit structured
+  // identity from the provider/reporter, keep the repair at job scope rather
+  // than guessing from paths or prose that may change after a rename.
   return [{
     failureId: JOB_LEVEL_FAILURE_ID,
     kind: 'job',
@@ -701,42 +625,12 @@ export function recordFailureFiled(state, failure, filedAt = new Date()) {
   return normalized;
 }
 
-function focusVerifyCommandForFailure(failure, command) {
-  const jobName = String(failure?.jobName ?? '');
-  if (!failure?.failureId || failure.failureId === JOB_LEVEL_FAILURE_ID) return command;
-
-  const evidence = [failure.failureLabel, failure.failureId, failure.failureEvidence]
-    .filter((value) => typeof value === 'string')
-    .join(' ');
-  const playwrightSpec = evidence.match(/(?:e2e|src)\/[^\s:`'"()]+\.(?:spec|test)\.[jt]sx?/i)?.[0];
-  if (/^playwright\s*\//i.test(jobName) && playwrightSpec) {
-    return command.replace(
-      /INVOKER_PLAYWRIGHT_FILES=(?:'[^']*'|"[^"]*"|[^\s]+)/,
-      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(playwrightSpec)}`,
-    );
-  }
-
-  const packageTest = evidence.match(/packages\/([^/]+)\/((?:src|e2e)\/[^\s:`'"()]+\.(?:test|spec)\.[jt]sx?)/i);
-  if (/^required-fast\s*\/\s*Vitest Workspace$/i.test(jobName) && packageTest) {
-    const [, packageName, relativePath] = packageTest;
-    return `pnpm --filter ${shellSingleQuote(`./packages/${packageName}`)} test -- --run ${shellSingleQuote(relativePath)}`;
-  }
-
-  const repro = evidence.match(/(?:^|\s)((?:scripts\/repro\/|scripts\/test-)[^\s:`'"()]+\.(?:sh|mjs|py))/i)?.[1];
-  if (/^repro|^scheduled-repros/i.test(String(failure?.failureKind ?? '')) && repro) {
-    const runner = repro.endsWith('.py') ? 'python3' : repro.endsWith('.mjs') ? 'node' : 'bash';
-    return `${runner} ${shellSingleQuote(repro)}`;
-  }
-
-  return command;
-}
-
 export function getVerifyCommandForFailure(failure, jobDefinitions) {
   if (typeof failure?.verifyCommand === 'string' && failure.verifyCommand.trim()) {
-    return focusVerifyCommandForFailure(failure, failure.verifyCommand.trim());
+    return failure.verifyCommand.trim();
   }
   const definition = jobDefinitions?.get(failure?.jobName);
-  return focusVerifyCommandForFailure(failure, definition?.verifyCommand?.trim() ?? '');
+  return definition?.verifyCommand?.trim() ?? '';
 }
 
 function failureIsMapped(failure, jobDefinitions) {
