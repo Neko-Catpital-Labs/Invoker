@@ -136,7 +136,15 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Stateful bug lifecycle matrix:** When a bug involves conversation, session, file, cache, or workflow state, Phase 1a must enumerate the transitions that can lose or reuse state. The implementation plan must verify at least one non-happy-path sequence, such as plan creation → intervening message → summary-only reply → authorization/submit. If the state type is shared by multiple surfaces, include a verification case for each affected surface or record why it is unaffected.
 
-**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), approved implementation plans use **Mergify Stacks** for their declared GitHub publication outcome: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push` after the work is ready without asking again. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
+**Baseline evidence authoring contract:** A future execution command expresses intent, not evidence about the current baseline. Do not treat a task such as `command: npm test` as proof that the pre-existing suite is green, and do not run arbitrary plan commands from the completeness gate. A present-tense or pre-existing green claim is acceptable only in one of these forms:
+
+- A fresh deterministic-command receipt with `kind`, `status`, `command`, `exitCode`, non-empty `output`, a 40-hex `commitSha`, and a valid `recordedAt`; its `commitSha` must equal the plan's declared baseline commit.
+- An explicit `UNVERIFIED:` qualification that removes the unsupported green claim.
+- A declared baseline-repair prompt task, with every feature implementation task depending on that repair task.
+
+For example, “The existing test suite is green; verify with `npm test`” is unsupported because the future command is not a current-state receipt.
+
+**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), approved implementation plans use **Mergify Stacks** for their declared GitHub publication outcome: keep `onFinish: pull_request` + `mergeMode: external_review`. Then publish/update the resulting commit stack with `mergify stack push` after the work is ready without asking again. **Do not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
 
 **Review-gate artifact intent:** Plans may include optional top-level `reviewGate.artifacts` metadata to describe an ordered review PR stack. Each artifact needs a unique `id`; `required` defaults to `true` when omitted; the first artifact has no dependency; every later artifact must depend on exactly the immediately previous artifact. Do not use fixed PR-count fields or Mergify-specific fields in the plan YAML. This metadata does not affect scheduler readiness, task dependencies, or workflow `externalDependencies`.
 
