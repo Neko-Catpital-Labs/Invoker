@@ -205,6 +205,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
   // 3. Create new nodes
   for (const nodeDef of mutation.newNodes) {
     assertPoolRoutedGraphNodeHasPoolId(nodeDef);
+    const isMergeNode = nodeDef.isMergeNode === true || nodeDef.runnerKind === 'merge';
     const nodeBase = {
       workflowId: nodeDef.workflowId,
       parentTask: nodeDef.parentTask,
@@ -214,14 +215,14 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       command: nodeDef.command,
       isReconciliation: nodeDef.isReconciliation,
       requiresManualApproval: nodeDef.requiresManualApproval,
-      isMergeNode: nodeDef.isMergeNode,
+      isMergeNode,
       ...(nodeDef.poolId ? { poolId: nodeDef.poolId } : {}),
       ...(nodeDef.executionAgent ? { executionAgent: nodeDef.executionAgent } : {}),
       ...(nodeDef.executionModel ? { executionModel: nodeDef.executionModel } : {}),
       ...(nodeDef.maxTurns !== undefined ? { maxTurns: nodeDef.maxTurns } : {}),
     } as const;
     let nodeConfig: TaskConfig;
-    switch (nodeDef.runnerKind) {
+    switch (isMergeNode ? 'merge' : nodeDef.runnerKind) {
       case 'merge':
         nodeConfig = { ...nodeBase, runnerKind: 'merge' };
         break;
