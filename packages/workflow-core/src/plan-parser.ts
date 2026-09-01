@@ -10,6 +10,16 @@ export class PlanParseError extends Error {
   }
 }
 
+export function planPublicationAuthorityViolation(
+  onFinish: PlanDefinition['onFinish'],
+  mergeMode: PlanDefinition['mergeMode'],
+): string | undefined {
+  if (onFinish === 'none' && mergeMode === 'external_review') {
+    return '"mergeMode: external_review" cannot be combined with "onFinish: none". External review publishes a pull request, while onFinish: none authorizes no publication.';
+  }
+  return undefined;
+}
+
 export function isPathSafeId(id: string): boolean {
   if (!id || typeof id !== 'string') return false;
   if (id.trim() === '') return false;
@@ -300,6 +310,10 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     );
   }
   const mergeMode = (raw.mergeMode as (typeof validMergeModes)[number] | undefined) ?? (scratch ? 'no_op' : undefined);
+  const publicationAuthorityViolation = planPublicationAuthorityViolation(onFinish, mergeMode);
+  if (publicationAuthorityViolation) {
+    throw new PlanParseError(publicationAuthorityViolation);
+  }
   const reviewProvider = raw.reviewProvider ?? (raw.mergeMode === 'external_review' ? 'github' : undefined);
 
   if (scratch && raw.repoUrl !== undefined) {
