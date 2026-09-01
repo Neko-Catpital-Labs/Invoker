@@ -24,8 +24,8 @@ function getStandaloneClassifierSource(): string {
   return guiMutationHandlersSource.slice(start, end);
 }
 
-function getStandaloneGuiMutationSource(): string {
-  const start = mainSource.indexOf('const executeStandaloneGuiMutation = async');
+function getStandaloneCapabilityRegistrySource(): string {
+  const start = mainSource.indexOf('const standaloneOwnerCapabilities = new OwnerCapabilityRegistry()');
   const end = mainSource.indexOf('      // In standalone owner mode, serve delegated requests from peer headless processes.', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -118,17 +118,17 @@ describe('GUI mutation translation', () => {
     expect(classifierSource).toContain("priority: 'high'");
   });
 
-  it('handles start-ready in the standalone owner GUI mutation switch', () => {
-    const standaloneGuiMutationSource = getStandaloneGuiMutationSource();
-    expect(standaloneGuiMutationSource).toMatch(
-      /case 'invoker:start-ready':\s*\{[\s\S]*workflowMutationDispatcher\.get\('invoker:start-ready'\)[\s\S]*return handler\(payload\.args\[0\] as StartReadyRequest \| undefined\);/,
+  it('registers start-ready in the standalone owner capability registry', () => {
+    const standaloneCapabilitySource = getStandaloneCapabilityRegistrySource();
+    expect(standaloneCapabilitySource).toMatch(
+      /registerStandaloneOwnerCapability\('invoker:start-ready',[\s\S]*workflowMutationDispatcher\.get\('invoker:start-ready'\)[\s\S]*return handler\(payload\.args\[0\] as StartReadyRequest \| undefined\);/,
     );
   });
 
-  it('handles edit-task-pool in the standalone owner GUI mutation switch', () => {
-    const standaloneGuiMutationSource = getStandaloneGuiMutationSource();
-    expect(standaloneGuiMutationSource).toMatch(
-      /case 'invoker:edit-task-pool':\s*\{[\s\S]*commandService\.editTaskPool\(envelope\)[\s\S]*dispatchStartedTasksWithGlobalTopup\(/,
+  it('registers edit-task-pool in the standalone owner capability registry', () => {
+    const standaloneCapabilitySource = getStandaloneCapabilityRegistrySource();
+    expect(standaloneCapabilitySource).toMatch(
+      /registerStandaloneOwnerCapability\('invoker:edit-task-pool',[\s\S]*commandService\.editTaskPool\(envelope\)[\s\S]*dispatchStartedTasksWithGlobalTopup\(/,
     );
   });
 
@@ -215,7 +215,7 @@ function wrapperChannels(block: string): string[] {
 
 function getMainTranslatorWrapperSource(): string {
   const start = mainSource.indexOf('translateGuiMutationToHeadless: (payload) => {');
-  const end = mainSource.indexOf('guiMutationHandlers,', start);
+  const end = mainSource.indexOf('ownerCapabilities,', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return mainSource.slice(start, end);
