@@ -4,6 +4,8 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Document the new terminal `skipped` task status: it means the task was not run because an upstream task failed, and retrying the upstream task can resurrect the skipped task.
+
 ## 0.0.14
 
 - Fix packaged desktop owner-serve: bundle `@invoker/surfaces` and `@slack/bolt` into the Electron main bundle so loading the in-app planner no longer depends on pnpm-nested asar deps (npm 0.0.13 died with `Cannot find module 'form-data'`).
