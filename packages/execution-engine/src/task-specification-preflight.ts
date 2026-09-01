@@ -30,9 +30,13 @@ export type TaskFreshnessDecision =
 const REPO_PATH_PATTERN = /(?:^|[\s`'"(])((?:\.github|corpus|docs|engine|packages|scripts|tests)\/[A-Za-z0-9_@./-]+)/g;
 const BACKTICK_TOKEN_PATTERN = /`([^`]+)`/g;
 const ANCHOR_CLAUSE_PATTERN = /\b(?:already exists?|existing|do not create|must not create|without creating)\b/i;
+const CREATE_PATH_PATTERN = /\b(?:create|creating)\b/i;
+const PATH_INTENT_BOUNDARY_PATTERN = /\s*;\s*|(?:,\s*|\s+)\b(?:but|and)\s+(?=(?:do not create|must not create|without creating|create|creating|existing)\b)|,\s*(?=(?:do not create|must not create|without creating|create|creating|existing)\b)/i;
 const GUARDED_MARKER_PATTERN = /guarded-behavior:\s*([A-Za-z0-9][\w-]*)/gi;
 const GUARDED_PROSE_PATTERN = /guarded behavior(?:\s+(?:id|marker))?\s*(?:`|"|')?([A-Za-z0-9][\w-]*)/gi;
 const REMOTE_REPORT_MARKER = '__INVOKER_TASK_FRESHNESS_STALE__';
+
+type PathIntent = 'existing' | 'create' | 'reference';
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -51,6 +55,20 @@ function normalizedRepoPaths(text: string): string[] {
   return uniqueSorted(paths);
 }
 
+function pathIntent(text: string): PathIntent {
+  if (ANCHOR_CLAUSE_PATTERN.test(text)) return 'existing';
+  if (CREATE_PATH_PATTERN.test(text)) return 'create';
+  return 'reference';
+}
+
+function pathIntentRegions(clause: string): Array<{ text: string; intent: PathIntent }> {
+  return clause
+    .split(PATH_INTENT_BOUNDARY_PATTERN)
+    .map(text => text.trim())
+    .filter(Boolean)
+    .map(text => ({ text, intent: pathIntent(text) }));
+}
+
 export function parseTaskFreshnessSpecification(text: string): TaskFreshnessSpecification {
   const referencedPaths = normalizedRepoPaths(text);
   const guardedBehaviorIds = uniqueSorted([
@@ -61,9 +79,15 @@ export function parseTaskFreshnessSpecification(text: string): TaskFreshnessSpec
 
   for (const rawClause of text.split(/\r?\n|(?<=[.!?])\s+/)) {
     const clause = rawClause.trim();
-    if (!clause || !ANCHOR_CLAUSE_PATTERN.test(clause)) continue;
+    if (!clause) continue;
     const paths = normalizedRepoPaths(clause);
-    for (const value of paths) anchors.push({ kind: 'path', value, clause });
+    for (const region of pathIntentRegions(clause)) {
+      if (region.intent !== 'existing') continue;
+      for (const value of normalizedRepoPaths(region.text)) {
+        anchors.push({ kind: 'path', value, clause });
+      }
+    }
+    if (!ANCHOR_CLAUSE_PATTERN.test(clause)) continue;
     for (const tokenMatch of clause.matchAll(BACKTICK_TOKEN_PATTERN)) {
       const value = tokenMatch[1]?.trim();
       if (!value || paths.includes(value) || !/^[A-Za-z_$][\w$]*$/.test(value)) continue;
