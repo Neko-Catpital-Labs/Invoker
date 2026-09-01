@@ -13,7 +13,7 @@
  * downstream auto-start / deferred re-enqueue sequence are preserved exactly.
  */
 
-import { FailureClassifier, type FailureClass, type TaskState, type TaskDelta, type TaskStateChanges } from '@invoker/workflow-graph';
+import { FailureClassifier, getTransitiveDependents, type FailureClass, type TaskState, type TaskDelta, type TaskStateChanges } from '@invoker/workflow-graph';
 import type { Logger } from '@invoker/contracts';
 import type { ParsedResponse } from '../response-handler.js';
 import { scopePlanTaskId } from '../task-id-scope.js';
@@ -245,6 +245,36 @@ export function finalizeFailedTaskImpl(
   host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
   checkExperimentCompletionImpl(host, taskId);
+
+  const taskMap = new Map(host.stateMachine.getAllTasks().map((task) => [task.id, task]));
+  const dependentIds = getTransitiveDependents(
+    taskId,
+    taskMap,
+    (task) => task.status === 'completed' || task.status === 'stale',
+  );
+  const upstreamLabel = taskId.includes('/') && !taskId.startsWith('__merge__')
+    ? taskId.slice(taskId.indexOf('/') + 1)
+    : taskId;
+  for (const dependentId of dependentIds) {
+    const dependent = host.stateGetTask(dependentId);
+    if (
+      !dependent ||
+      dependent.config.isReconciliation ||
+      dependent.execution.startedAt ||
+      (dependent.status !== 'pending' && dependent.status !== 'queued' && dependent.status !== 'blocked')
+    ) continue;
+
+    host.clearQueuedSchedulerEntries(dependentId, dependent.execution.selectedAttemptId);
+    host.deferredTaskIds.delete(dependentId);
+    const skippedChanges: TaskStateChanges = {
+      status: 'skipped',
+      execution: { blockedBy: `upstream task "${upstreamLabel}" failed` },
+    };
+    const skipped = host.writeAndSync(dependentId, skippedChanges);
+    const skippedDelta = host.buildUpdateDelta(dependent, skipped, skippedChanges);
+    host.persistence.logEvent?.(dependentId, 'task.skipped', skippedChanges);
+    host.messageBus.publish(TASK_DELTA_CHANNEL, skippedDelta);
+  }
 
   const readyTaskIds = host.stateMachine.findNewlyReadyTasks(taskId);
   host.logger.info('[orchestrator] finalizeFailedTask', {

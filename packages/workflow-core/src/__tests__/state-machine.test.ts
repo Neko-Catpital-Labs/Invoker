@@ -169,6 +169,14 @@ describe('TaskStateMachine', () => {
 
       expect(sm.findNewlyReadyTasks('exp2')).toEqual([]);
     });
+
+    it('does not treat skipped dependencies as ready or unblock normal tasks', () => {
+      sm.restoreTask(makeTask('upstream', [], 'skipped'));
+      sm.restoreTask(makeTask('downstream', ['upstream'], 'pending'));
+
+      expect(sm.getReadyTasks()).toEqual([]);
+      expect(sm.findNewlyReadyTasks('upstream')).toEqual([]);
+    });
   });
 
   // ── clear ──────────────────────────────────────────────

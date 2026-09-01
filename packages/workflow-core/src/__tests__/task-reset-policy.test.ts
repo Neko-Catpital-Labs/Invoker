@@ -132,6 +132,10 @@ describe('task reset policy', () => {
     expect(patchKeys).not.toContain('fixedIntegrationSha');
   });
 
+  it('clears blockedBy when retrying a skipped task', () => {
+    expect(buildTaskResetExecutionPatch('retryTask')).toMatchObject({ blockedBy: undefined });
+  });
+
   it('keeps retryWorkflow work context while clearing workflow retry failure state', () => {
     const patch = buildTaskResetExecutionPatch('retryWorkflow');
     const patchKeys = Object.keys(patch);
@@ -147,7 +151,7 @@ describe('task reset policy', () => {
     expect(patchKeys).not.toContain('workspacePath');
     expect(patchKeys).not.toContain('agentSessionId');
     expect(patchKeys).not.toContain('containerId');
-    expect(patchKeys).not.toContain('blockedBy');
+    expect(patchKeys).toContain('blockedBy');
   });
 
   it('keeps detach as the broad downstream reset', () => {
@@ -295,4 +299,3 @@ describe('task reset policy', () => {
       .not.toThrow();
   });
 });
-

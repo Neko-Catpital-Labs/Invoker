@@ -196,11 +196,12 @@ function retryStop(task: TaskState): boolean {
   return task.status === 'completed' || task.status === 'stale';
 }
 
-function defaultRetryStatuses(): ReadonlySet<TaskState['status']> {
+export function defaultRetryStatuses(): ReadonlySet<TaskState['status']> {
   return new Set<TaskState['status']>([
     'failed',
     'needs_input',
     'blocked',
+    'skipped',
     'stale',
     'fixing_with_ai',
     'awaiting_approval',

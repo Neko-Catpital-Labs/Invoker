@@ -5,6 +5,7 @@ import {
   ACTION_SPECS,
   MUTATION_POLICIES,
   buildCancelInFlight,
+  defaultRetryStatuses,
   type InvalidationAction,
   type InvalidationDeps,
 } from '../invalidation-policy.js';
@@ -33,6 +34,10 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
 }
 
 describe('MUTATION_POLICIES', () => {
+  it('includes skipped tasks in the default retry statuses', () => {
+    expect(defaultRetryStatuses()).toContain('skipped');
+  });
+
   it('matches the chart Decision Table for execution-spec mutations', () => {
     expect(MUTATION_POLICIES.command.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.prompt.action).toBe('recreateTask');

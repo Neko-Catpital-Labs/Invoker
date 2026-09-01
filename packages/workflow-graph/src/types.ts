@@ -14,6 +14,7 @@ export const TASK_STATUSES = [
   'fixing_with_ai',
   'completed',
   'failed',
+  'skipped',
   'closed',
   'needs_input',
   'blocked',

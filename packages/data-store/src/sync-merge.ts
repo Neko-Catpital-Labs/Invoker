@@ -200,6 +200,7 @@ const TASK_STATUS_RANK: Record<string, number> = {
   review_ready: 5,
   fixing_with_ai: 6,
   failed: 7,
+  skipped: 8,
   closed: 8,
   cancelled: 8,
   canceled: 8,

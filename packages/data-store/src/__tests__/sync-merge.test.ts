@@ -158,6 +158,25 @@ describe('sync merge', () => {
     expect(b.loadTask('task-1')?.status).toBe('completed');
   });
 
+  it('ranks skipped above failed but below stale', () => {
+    seed(a);
+    seed(b);
+
+    a.updateTask('task-1', { status: 'skipped' });
+    b.updateTask('task-1', { status: 'failed' });
+    exchange(a, b, 'peer-a');
+    exchange(b, a, 'peer-b');
+    expect(a.loadTask('task-1')?.status).toBe('skipped');
+    expect(b.loadTask('task-1')?.status).toBe('skipped');
+
+    a.updateTask('task-1', { status: 'stale' });
+    b.updateTask('task-1', { status: 'skipped' });
+    exchange(a, b, 'peer-a');
+    exchange(b, a, 'peer-b');
+    expect(a.loadTask('task-1')?.status).toBe('stale');
+    expect(b.loadTask('task-1')?.status).toBe('stale');
+  });
+
   it('keeps tombstones while parking late progress under the soft-deleted workflow', () => {
     seed(a, 'wf-delete', 'task-delete');
     seed(b, 'wf-delete', 'task-delete');
