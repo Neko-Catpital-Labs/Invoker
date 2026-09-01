@@ -1141,6 +1141,133 @@ EOF
   return 0
 }
 
+test_freshness_structured_values_validate() {
+  local temp_plan output
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: typed-freshness-valid
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: freshness-task
+    description: Explicit structured freshness contract
+    command: true
+    freshness:
+      watchPaths:
+        - packages/z.ts
+        - packages/a.ts
+      pathPreconditions:
+        - path: packages/generated.ts
+          expected: present
+        - path: packages/optional.ts
+          expected: absent
+      guardedBehaviorIds:
+        - camera_guard
+        - behavior-2
+EOF
+
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  if ! echo "$output" | grep -q '"valid"[[:space:]]*:[[:space:]]*true'; then
+    echo "Expected structured freshness plan to validate, got: $output" >&2
+    return 1
+  fi
+}
+
+test_freshness_omission_validates() {
+  local temp_plan output
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: typed-freshness-omitted
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: legacy-task
+    description: No freshness metadata
+    command: true
+EOF
+
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  if ! echo "$output" | grep -q '"valid"[[:space:]]*:[[:space:]]*true'; then
+    echo "Expected omitted freshness to validate, got: $output" >&2
+    return 1
+  fi
+}
+
+test_freshness_unsafe_paths_rejected() {
+  local temp_plan output exit_code
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: typed-freshness-unsafe-paths
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: unsafe-freshness
+    description: Unsafe freshness paths
+    command: true
+    freshness:
+      watchPaths: [/tmp/out, ../outside, packages/./file, packages\\file]
+      pathPreconditions:
+        - path: packages/../secret
+          expected: present
+EOF
+
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  exit_code=$?
+  set -e
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected unsafe freshness paths to fail, got: $output" >&2
+    return 1
+  fi
+  if [[ $(echo "$output" | jq '[.[] | select(.errorType == "invalid_freshness_value")] | length') -lt 4 ]]; then
+    echo "Expected path errors for unsafe freshness paths, got: $output" >&2
+    return 1
+  fi
+}
+
+test_freshness_malformed_values_rejected() {
+  local temp_plan output exit_code
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: typed-freshness-malformed
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: malformed-freshness
+    description: Malformed freshness values
+    command: true
+    freshness:
+      watchPaths: not-an-array
+      pathPreconditions:
+        - path: packages/out.ts
+          expected: maybe
+      guardedBehaviorIds: [bad id]
+EOF
+
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  exit_code=$?
+  set -e
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected malformed freshness values to fail, got: $output" >&2
+    return 1
+  fi
+  for field in freshness.watchPaths freshness.pathPreconditions[0].expected freshness.guardedBehaviorIds[0]; do
+    if ! echo "$output" | jq -e --arg field "$field" '[.[] | select(.errorType == "invalid_freshness_value" and .field == $field)] | length == 1' &>/dev/null; then
+      echo "Missing malformed freshness error for $field: $output" >&2
+      return 1
+    fi
+  done
+}
+
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
@@ -1186,6 +1313,10 @@ run_test "Error objects should have correct field structure" test_error_field_st
 run_test "baseBranch must match the literal remote ref" test_basebranch_remote_ref_is_matched_literally
 run_test "Remote-qualified baseBranch refs must be accepted" test_basebranch_remote_qualified_refs_are_accepted
 run_test "repoUrl credentials must be redacted from validator output" test_repourl_credentials_are_redacted
+run_test "Structured freshness values should validate" test_freshness_structured_values_validate
+run_test "Omitted freshness should validate" test_freshness_omission_validates
+run_test "Unsafe freshness paths should be rejected" test_freshness_unsafe_paths_rejected
+run_test "Malformed freshness values should be rejected" test_freshness_malformed_values_rejected
 
 echo ""
 echo "========================================="
@@ -1198,4 +1329,3 @@ if [[ $pass_count -eq $test_count ]]; then
 else
   fail "Some validator tests failed"
 fi
-
