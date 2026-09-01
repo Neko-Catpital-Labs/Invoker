@@ -99,6 +99,38 @@ export type OwnerBootstrapLock = {
   release: () => void;
 };
 
+type OwnerParentRuntime = {
+  executablePath: string;
+  isElectron: boolean;
+  platform: NodeJS.Platform;
+};
+
+export function resolveDetachedOwnerCommand(
+  repoRoot: string,
+  runtime: OwnerParentRuntime = {
+    executablePath: process.execPath,
+    isElectron: Boolean(process.versions.electron),
+    platform: process.platform,
+  },
+): { command: string; args: string[] } {
+  const mainJs = resolve(repoRoot, 'packages', 'app', 'dist', 'main.js');
+  const electronArgs = [
+    ...(runtime.platform === 'linux' ? ['--no-sandbox'] : []),
+    mainJs,
+    '--headless',
+    'owner-serve',
+  ];
+
+  if (runtime.isElectron) {
+    return { command: runtime.executablePath, args: electronArgs };
+  }
+
+  return {
+    command: runtime.executablePath,
+    args: [resolve(repoRoot, 'scripts', 'electron.cjs'), ...electronArgs],
+  };
+}
+
 export function tryAcquireOwnerBootstrapLock(invokerHomeRoot: string): OwnerBootstrapLock | null {
   const lockDir = join(invokerHomeRoot, OWNER_BOOTSTRAP_LOCK_DIR);
 
@@ -144,16 +176,8 @@ export function spawnDetachedStandaloneOwner(
   extraEnv: NodeJS.ProcessEnv = {},
 ): void {
   const profileEnv = resolveOwnerChildProfileEnv(process.env);
-  const electronLauncher = resolve(repoRoot, 'scripts', 'electron.cjs');
-  const mainJs = resolve(repoRoot, 'packages', 'app', 'dist', 'main.js');
-  const args = [
-    electronLauncher,
-    ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
-    mainJs,
-    '--headless',
-    'owner-serve',
-  ];
-  const child = spawn(process.execPath, args, {
+  const childCommand = resolveDetachedOwnerCommand(repoRoot);
+  const child = spawn(childCommand.command, childCommand.args, {
     cwd: repoRoot,
     detached: true,
     stdio: 'ignore',
