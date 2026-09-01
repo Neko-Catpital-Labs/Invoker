@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody, validatePrScope, visualProofNeedsAnimation } from './validate-pr-body.mjs';
+import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validateGuardedBehaviorMarkers, validatePrBody, validatePrScope, visualProofNeedsAnimation } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -1389,6 +1389,18 @@ const guardedBehaviorClaimedErrors = await validatePrBody(guardedBehaviorClaimed
 assert(
   !guardedBehaviorClaimedErrors.some((error) => error.includes('Guarded behavior "dag-surface-background-click-noop"')),
   'a diff touching a guarded-behavior marker line should pass when the PR body names the marker id in Safety Invariant or Non-goals',
+);
+
+const guardedBehaviorSubstringClaimErrors = validateGuardedBehaviorMarkers({
+  diffText: guardedBehaviorTouchingDiff,
+  body: validMinimal.replace(
+    'Only the refresh path changes.',
+    'Only not-dag-surface-background-click-noop-suffix changes.',
+  ),
+});
+assert(
+  guardedBehaviorSubstringClaimErrors.some((error) => error.includes('Guarded behavior "dag-surface-background-click-noop"')),
+  'a longer body token must not claim a guarded-behavior marker id by substring',
 );
 
 const guardedBehaviorNonTouchingErrors = await validatePrBody(validMinimal, { diffText: guardedBehaviorNonTouchingDiff });
