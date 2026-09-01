@@ -72,6 +72,17 @@ Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
 - Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit. Any task whose description or prompt carries a `Safety invariant:` heading must also carry a real `Effectiveness measurement:` heading (how success is measured beyond fixture e2e) — missing or placeholder values fail the gate the same way.
+
+### Baseline evidence for preservation claims
+
+Future execution intent is not evidence that the current baseline is green. If a plan says a pre-existing or present-tense baseline is green, provide one of these forms:
+
+- A fresh, deterministic-command receipt bound to the plan's declared baseline commit. Use the existing receipt vocabulary: `kind`, `status`, `command`, `exitCode`, non-empty `output`, 40-hex `commitSha`, and valid `recordedAt`; the receipt's `commitSha` must match that baseline commit.
+- An explicit `UNVERIFIED:` qualification that removes the green claim.
+- A declared baseline-repair prompt task, with every feature implementation task depending on that repair task.
+
+For example, a future task such as `command: npm test` does not prove that the pre-existing suite is green; without one of the forms above, the preservation claim is unsupported.
+
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
 - Approval authorizes the reviewed plan's declared `onFinish` outcome. Generated implementation plans default to `onFinish: pull_request`, so approval includes pushing the prepared branch and creating or updating the GitHub PR/stack. `onFinish: none` publishes nothing; `onFinish: merge` authorizes only the merge behavior shown in the reviewed plan. Never broaden beyond that reviewed outcome.
