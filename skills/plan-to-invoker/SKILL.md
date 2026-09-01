@@ -8,11 +8,11 @@ description: >
   skill (then chat-submit / auto_submit after the completeness gate) unless the user says "do it locally". Uninstall with `install-skills uninstall`. Trigger: "convert to invoker",
   "submit to invoker", "create invoker plan",
   "invoker-plan-to-invoker", "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
-  Invoker tasks. For benchmark/direct-output
-  prompts with "Required output path", write a complete YAML document directly
+  Invoker tasks. For benchmark/direct-output prompts with
+  "Required output path", write a complete YAML document directly
   to that literal path; it must start with top-level name, onFinish, mergeMode,
-  repoUrl (or scratch: true for no-repo mode), and tasks, never version or
-  metadata wrappers, and must not scan, validate, submit, or discover env vars.
+  repoUrl (or scratch: true for no-repo mode), and tasks, never version or metadata wrappers,
+  and must not scan, validate, submit, or discover env vars.
 ---
 
 # plan-to-invoker
@@ -71,10 +71,11 @@ Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
-- Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit.
+- Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit. Any task whose description or prompt carries a `Safety invariant:` heading must also carry a real `Effectiveness measurement:` heading (how success is measured beyond fixture e2e) — missing or placeholder values fail the gate the same way.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
-- Plain approval stops after workflow handoff: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only, then report the submitted workflow status and stop. Stop after `invoker_submit_plan` or the documented `invoker-cli run ... --live` fallback; do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
+- Plain approval authorizes workflow handoff only: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only. Do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
+- After `invoker_submit_plan` (or the documented `invoker-cli run ... --live` fallback), do **not** abandon the session: arm `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`, then **end the turn**. On wake, continue the parent job from Invoker status (ops on blockers; next step on success). PR publication remains a separate explicit request.
 - Later PR publication is a separate explicit action. When the user separately asks about creating, updating, publishing, or splitting pull requests or PR stacks after workflow handoff, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
@@ -126,6 +127,10 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 **Implementation-rationale headings (required for all implementation tasks):** For plans whose `onFinish` is not `none`, every task (prompt or command) must include `Review claim:`, `Review lane:`, `Safety invariant:`, `Slice rationale:`, `Architectural effect:`, `Goal:`, `Motivation:`, `Alternative considerations:` (or `Alternatives:`), `Implementation details:` (or `Implementation:`), and `Non-goals:` in the task `description`. In addition, prompt tasks must include the same rationale headings directly in `prompt` so execution instructions contain explicit intent (not only metadata). This is a hard requirement enforced by `lint-task-atomicity.sh` and `lint-review-units.mjs` so implementation intent is explicit and reviewable in authored workflow YAML.
 
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
+
+**Handoff scrub gate (hard requirement for implementation plans):** For plans whose `onFinish` is not `none` and that do not set `scratch: true`, `tasks:` must include a shell command task with id exactly `scrub-handoff-artifacts`. That task must depend on every leaf task (any task nothing else depends on) so it runs after every implement/verify task completes, and its `command` must run `scripts/scrub-handoff-artifacts.sh` (or an equivalent handoff-scrub script) to purge ephemeral inter-task handoff files (e.g. `candidates.json`, `research-*.json`, `lens-*.json`, `plans/invoker-handoff.{md,yaml}`) from the worktree, fail if any remain, and commit when tracked paths changed. Never point this task at the home Invoker `ledger.json`; it only touches the target repo's worktree. `onFinish: none` and `scratch: true` plans are exempt. This is a hard requirement enforced by `lint-task-atomicity.sh`.
+
+**Inter-task file carry (hard):** Downstream Invoker tasks get fresh worktrees from **committed** history only. If task B must see files produced by task A, task A MUST `git add` / `git commit` those paths on the task branch (or both produce+consume must live in one command task). Uncommitted local paths under `work/`, `state/artifacts/`, caches, and similar do **not** flow across task dependencies. Object-store / remote artifact APIs are OK when the plan names them explicitly; silent "same machine path" handoff is not. Prefer a single command that both writes and reads ephemeral local state, or commit an allowed tracked path (for example under `docs/` / `outputs/`) before the dependent task. Enforced as a footgun lint in `lint-task-atomicity.sh` (carve-out: `scratch: true`). See `references/task-patterns.md` § *Inter-task file carry*.
 
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. Never reference local-only repo files unless they are already checked into the branch the plan will run on. Use repo-relative paths like `scripts/...`; do not use parent-directory paths like `../../..`. `skill-doctor` rejects repo-relative references to files that exist locally but are not in `HEAD`, rejects parent-directory references, and rejects missing shell scripts used by command tasks, instead of silently treating local-only proof as valid. See `references/task-patterns.md` § *Bugfix repro*.
 
@@ -182,7 +187,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so stack slices are validated with stack context. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings directly in prompt text, and cross-layer dependency-direction violations.
+  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so stack slices are validated with stack context. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings directly in prompt text, cross-layer dependency-direction violations, and (unless `scratch: true`) a missing `scrub-handoff-artifacts` terminal task per the Handoff scrub gate above.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 
@@ -201,16 +206,18 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
     `./submit-plan.sh <plan-file>`
     Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
 10a. `step-submit-stacked` (single plan with upstream dependency)
+     **Stacked onto WF-X** means both: `externalDependencies` on WF-X `__merge__` **and** `baseBranch == WF-X.featureBranch`. A concrete extDep alone is gate-only wait, not a branch stack.
      Use when the plan HAS `externalDependencies` with a concrete workflow ID (not `__UPSTREAM_WORKFLOW_ID__`).
      1. Query upstream workflow: `./run.sh --headless query workflows --output json | jq '.[] | select(.id == "<workflowId>")'`
      2. Extract the upstream workflow's `featureBranch`
      3. Rewrite baseBranch: `sed -E -i "s|^baseBranch:.*$|baseBranch: <featureBranch>|" <plan-file>`
      4. Submit: `./submit-plan.sh <plan-file>`
      5. Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
+     Prefer `./scripts/submit-workflow-chain.sh --onto-workflow <WF-X>` (or auto-detect) when submitting a chain whose head attaches to an already-running upstream.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
      Default path for implementation work with more than one review slice.
-     `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
-     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. Stop after workflow handoff unless the user separately asks for PR publication. For Invoker-on-Invoker work only, that later explicit publication action uses `mergify stack push` once the chain's commits are prepared.
+     `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] [--onto-workflow <id>] <plan1.yaml> <plan2.template.yaml> ...`
+     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. When plan[0] has a concrete externalDependency (or `--onto-workflow` is set), it rewrites plan[0] `baseBranch` to that upstream's `featureBranch` before submit — that is what makes the head stacked onto the prior workflow. Stop after workflow handoff unless the user separately asks for PR publication. For Invoker-on-Invoker work only, that later explicit publication action uses `mergify stack push` once the chain's commits are prepared.
      Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: review_ready` for upstream workflow dependencies.
 
 ## Runtime verification (Phase 1b)

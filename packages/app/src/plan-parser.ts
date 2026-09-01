@@ -88,6 +88,7 @@ export interface RawPlanTask {
   poolId?: string;
   executionAgent?: string;
   executionModel?: string;
+  maxTurns?: number;
 }
 
 export interface RawPlan {
@@ -101,6 +102,7 @@ export interface RawPlan {
   reviewProvider?: string;
   repoUrl?: string;
   scratch?: boolean;
+  poolId?: string;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -161,6 +163,21 @@ export function detectDefaultBranchRemote(repoUrl: string): string {
   return 'main';
 }
 
+const REMOTE_CLONE_PROBE_ATTEMPTS = 2;
+const REMOTE_CLONE_PROBE_RETRY_DELAY_MS = 500;
+
+function sleepSyncMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function describeCloneProbeError(err: unknown): string {
+  const stderr = (err as { stderr?: Buffer | string })?.stderr;
+  const stderrText = stderr ? stderr.toString().trim() : '';
+  if (stderrText) return stderrText.split('\n')[0]!;
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split('\n')[0]!;
+}
+
 function assertLocalGitRepoReadable(localPath: string): void {
   if (!existsSync(localPath)) throw new Error('Path does not exist');
   execFileSync('git', ['-c', 'safe.directory=*', '-C', localPath, 'rev-parse', '--git-dir'], {
@@ -181,24 +198,45 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
     );
   }
 
-  try {
-    if (isLocalPath) {
+  if (isLocalPath) {
+    try {
       assertLocalGitRepoReadable(trimmed);
       return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
     }
-    if (isFileUrl) {
+  }
+  if (isFileUrl) {
+    try {
       assertLocalGitRepoReadable(fileURLToPath(trimmed));
       return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
     }
-    execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-      timeout: 10_000,
-    });
-  } catch {
-    throw new PlanParseError(
-      `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials.`,
-    );
   }
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= REMOTE_CLONE_PROBE_ATTEMPTS; attempt += 1) {
+    try {
+      execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 10_000,
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < REMOTE_CLONE_PROBE_ATTEMPTS) {
+        sleepSyncMs(REMOTE_CLONE_PROBE_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw new PlanParseError(
+    `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(lastError)}, after ${REMOTE_CLONE_PROBE_ATTEMPTS} attempts)`,
+  );
 }
 
 export class PlanParseError extends Error {
@@ -399,6 +437,16 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
+  if (scratch && raw.poolId) {
+    throw new PlanParseError(
+      `${ownerLabel} sets "poolId" but has "scratch: true" — scratch plans never use execution pools.`,
+    );
+  }
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    throw new PlanParseError(`${ownerLabel} "poolId" must be a non-empty string when provided.`);
+  }
+  const planPoolId = typeof raw.poolId === 'string' ? raw.poolId.trim() : undefined;
+
   const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
   const rawTasks = raw.tasks;
@@ -459,6 +507,11 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
       throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);
     }
+    if (task.maxTurns !== undefined) {
+      if (typeof task.maxTurns !== 'number' || !Number.isInteger(task.maxTurns) || task.maxTurns < 1) {
+        throw new PlanParseError(`Task "${task.id}" field "maxTurns" must be a positive integer when provided`);
+      }
+    }
 
     return {
       id: task.id,
@@ -474,6 +527,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
       executionModel: task.executionModel?.trim() || undefined,
+      maxTurns: task.maxTurns,
     };
   });
 
@@ -488,6 +542,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     reviewProvider,
     repoUrl: raw.repoUrl,
     scratch: scratch || undefined,
+    poolId: planPoolId,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
@@ -518,6 +573,7 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
     ...workflow,
     repoUrl: workflow.repoUrl ?? stack.repoUrl,
     scratch: workflow.scratch ?? stack.scratch,
+    poolId: workflow.poolId ?? stack.poolId,
     intermediateRepoUrl: workflow.intermediateRepoUrl ?? stack.intermediateRepoUrl,
     onFinish: workflow.onFinish ?? stack.onFinish,
     baseBranch: workflow.baseBranch ?? stack.baseBranch,

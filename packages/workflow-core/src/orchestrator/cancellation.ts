@@ -95,7 +95,7 @@ export interface CancellationHost {
   clearQueuedSchedulerEntries(taskId: string, attemptId?: string): void;
   invalidateLaunchArtifactsForTasks(taskIds: readonly string[], reason: string, now?: Date): void;
   checkWorkflowCompletion(transitionedWorkflowId?: string): void;
-  drainScheduler(): TaskState[];
+  drainScheduler(opts?: { alreadyRefreshed?: boolean }): TaskState[];
 }
 
 // ── Extracted Functions ─────────────────────────────────────
@@ -478,5 +478,5 @@ export function deferTaskImpl(
   host.deferredTaskIds.add(id);
 
   // Let other ready tasks fill the freed slot
-  host.drainScheduler();
+  host.drainScheduler({ alreadyRefreshed: true });
 }

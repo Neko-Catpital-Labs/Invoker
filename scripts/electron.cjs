@@ -4,7 +4,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
+const { shouldWrapInDevelopmentProfile } = require('./electron-development-profile-guard.cjs');
+
 const repoRoot = path.resolve(__dirname, '..');
+if (require.main === module && shouldWrapInDevelopmentProfile(process.argv[2], process.env)) {
+  const launcher = path.join(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
+  const result = spawnSync(process.execPath, [launcher, '--', process.execPath, __filename, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}
 const ELECTRON_INSTALL_ATTEMPTS = 3;
 const MISSING_ELECTRON_MESSAGE =
   'Electron is not installed. Provision this machine before running Invoker: ' +
@@ -282,7 +291,11 @@ async function main() {
   });
 }
 
+module.exports = { systemUnzipIsAvailable, extractZipWithSystemUnzip };
+
+if (require.main === module) {
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
+}

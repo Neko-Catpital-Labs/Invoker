@@ -68,6 +68,7 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
       }
     }
   }
+  migrateInAppPlanningSessionStatusConstraint(exec);
   migrateWorkflowStatusColumn(exec);
   dropTaskAutoFixAttemptsColumn(exec);
 
@@ -340,6 +341,45 @@ export function runCompatibilityMigration(exec: SqliteExecutor): {
     }
   });
   return report;
+}
+
+export function migrateInAppPlanningSessionStatusConstraint(exec: SqliteExecutor): void {
+  if (exec.readOnly) return;
+  const row = exec.queryOne(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'in_app_planning_sessions'`,
+  ) as { sql?: unknown } | undefined;
+  const tableSql = typeof row?.sql === 'string' ? row.sql : undefined;
+  if (!tableSql || tableSql.includes("'planner_error'")) return;
+
+  const legacyCheck = "CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted'))";
+  const expandedCheck = "CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted', 'planner_error'))";
+  const replacementTable = tableSql
+    .replace(
+      /^CREATE TABLE(?: IF NOT EXISTS)?\s+["`]?in_app_planning_sessions["`]?/i,
+      'CREATE TABLE in_app_planning_sessions_new',
+    )
+    .replace(legacyCheck, expandedCheck);
+  if (replacementTable === tableSql || !replacementTable.includes(expandedCheck)) {
+    throw new Error('Unable to migrate the in_app_planning_sessions status constraint');
+  }
+
+  const foreignKeys = exec.queryOne('PRAGMA foreign_keys') as { foreign_keys?: number } | undefined;
+  const foreignKeysEnabled = foreignKeys?.foreign_keys === 1;
+  if (foreignKeysEnabled) exec.run('PRAGMA foreign_keys = OFF');
+  try {
+    exec.runTransaction(() => {
+      exec.run(replacementTable);
+      exec.run('INSERT INTO in_app_planning_sessions_new SELECT * FROM in_app_planning_sessions');
+      exec.run('DROP TABLE in_app_planning_sessions');
+      exec.run('ALTER TABLE in_app_planning_sessions_new RENAME TO in_app_planning_sessions');
+      exec.run(
+        'CREATE INDEX IF NOT EXISTS idx_in_app_planning_sessions_updated ON in_app_planning_sessions(updated_at)',
+      );
+    });
+    exec.markDirty();
+  } finally {
+    if (foreignKeysEnabled) exec.run('PRAGMA foreign_keys = ON');
+  }
 }
 
 export function migrateWorkflowStatusColumn(exec: SqliteExecutor): void {

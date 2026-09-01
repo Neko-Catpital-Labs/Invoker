@@ -1,0 +1,11 @@
+{
+  "periodDays": 14,
+  "generatedAt": null,
+  "source": "unpopulated: no 14-day fleet rates were included in the task text this file was written from",
+  "rates": {
+    "sessions": 0,
+    "discoveryTaxRate": null,
+    "terminalFailureRate": null,
+    "classSearchInPromptRate": null
+  }
+}

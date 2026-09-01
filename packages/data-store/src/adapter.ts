@@ -163,6 +163,7 @@ export interface Workflow {
   /** Read-only provenance for dependencies removed by `detachWorkflow`. Never re-read by scheduling. */
   detachedExternalDependencies?: DetachedExternalDependency[];
   generation?: number;
+  staged?: boolean;
   deletedAt?: number;
   createdAt: string;
   updatedAt: string;
@@ -170,6 +171,17 @@ export interface Workflow {
 export type WorkflowSaveInput = Omit<Workflow, 'status' | 'rollup'>;
 export interface WorkflowReadOptions {
   includeDeleted?: boolean;
+}
+
+export interface WorkflowPagedOptions extends WorkflowReadOptions {
+  limit: number;
+  offset?: number;
+}
+
+export interface WorkflowPagedResult {
+  workflows: Workflow[];
+  total: number;
+  hasMore: boolean;
 }
 
 /**
@@ -395,9 +407,10 @@ export type InAppPlanningSessionPatch = Partial<Pick<
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void;
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'staged' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined;
   listWorkflows(options?: WorkflowReadOptions): Workflow[];
+  listWorkflowsPaged?(options: WorkflowPagedOptions): WorkflowPagedResult;
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
   /** Resolve a GitHub PR number back to its Invoker workflow via the merge node.
    * When `repo` is set (owner/repo), prefer URL matches for that repo; bare
@@ -432,9 +445,11 @@ export interface PersistenceAdapter {
 
   // Events (audit trail)
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
-  /** Unbounded history — internal/tests only. Public IPC must use the limited overload. */
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number, beforeId?: number): TaskEvent[];
+  /** Bounded, newest-first lookup — prefer this over a full getEvents(taskId) scan when only recent events of one type are needed. */
+  getRecentEventsOfType?(taskId: string, eventType: string, limit: number): TaskEvent[];
+  getEventsSlim?(taskId: string, sortBy: 'asc' | 'desc', limit: number, payloadMaxChars: number): TaskEvent[];
   getEventsByTypes?(eventTypes: readonly string[], sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
   countEventsByTypes?(eventTypes: readonly string[]): Array<{
     eventType: string;

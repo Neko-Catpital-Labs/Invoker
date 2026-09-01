@@ -31,6 +31,7 @@ mkdir -p \
   "$TMP_DIR/repo/node_modules/extract-zip" \
   "$TMP_DIR/empty-path"
 cp "$ROOT_DIR/scripts/electron.cjs" "$TMP_DIR/repo/scripts/electron.cjs"
+cp "$ROOT_DIR/scripts/electron-development-profile-guard.cjs" "$TMP_DIR/repo/scripts/electron-development-profile-guard.cjs"
 
 cat >"$TMP_DIR/repo/node_modules/electron/package.json" <<'JSON'
 {
@@ -105,7 +106,7 @@ JS
 set +e
 (
   cd "$TMP_DIR/repo"
-  node scripts/electron.cjs --ensure-only
+  INVOKER_DEVELOPMENT_PROFILE_ACTIVE=1 node scripts/electron.cjs --ensure-only
 ) >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
 STATUS=$?
 set -e

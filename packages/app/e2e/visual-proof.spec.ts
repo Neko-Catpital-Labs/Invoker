@@ -261,6 +261,12 @@ const MENU_PROOF_PLAN = {
 const TERMINAL_PLANNED_PLAN = {
   ...TEST_PLAN,
   name: 'Terminal Planned Flow',
+  tasks: TEST_PLAN.tasks.map((task, index) => index === 0
+    ? {
+        ...task,
+        description: 'Review claim: Preserve `multiline` task descriptions.\nReview lane: behavior\nSafety invariant: Submission content remains unchanged.\n\nFiles:\n- `src/greeter.js`\n- `test/greeter.test.js`',
+      }
+    : task),
 };
 
 
@@ -841,6 +847,11 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Terminal Planned Flow');
+    const markdownTask = page.getByTestId('draft-step-summary').first();
+    await expect(markdownTask).toContainText('Review lane: behavior');
+    await expect(markdownTask.locator('code').first()).toHaveText('multiline');
+    await expect(markdownTask.getByRole('list')).toBeVisible();
+    await expect(markdownTask.getByRole('listitem')).toHaveCount(2);
     // planning-draft-locked-note is a net-new element; this spec also runs
     // against the pre-change base branch for before/after visual proof, where
     // the testid does not exist yet.
@@ -1650,6 +1661,63 @@ test.describe('Visual proof capture', () => {
     console.log(`[dag-full-graph-bg-click-noop] main graph viewport: initial="${beforeSelect}" after-select="${afterSelect}" after-bg-click="${afterClick}"`);
     expect(miniDagStillVisible, 'mini-DAG panel should still be visible after clicking empty background').toBe(true);
     expect(afterClick, 'camera viewport should stay exactly where it was after clicking empty background').toBe(afterSelect);
+  });
+
+  test('graph-selection-camera-stable — main graph viewport is unchanged across workflow selection and background deselection', async ({ page }) => {
+    const beforeIds = await page.evaluate(async () => {
+      const workflows = await window.invoker.listWorkflows();
+      return workflows.map((workflow: { id: string }) => workflow.id);
+    });
+    await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MENU_PROOF_PLAN));
+    const findNewWorkflowId = async (): Promise<string | null> => page.evaluate(async (knownIds) => {
+      const workflows = await window.invoker.listWorkflows();
+      return workflows.find((candidate: { id: string }) => !knownIds.includes(candidate.id))?.id ?? null;
+    }, beforeIds);
+    await expect.poll(findNewWorkflowId, { timeout: 10000 }).not.toBeNull();
+    const workflowId = await findNewWorkflowId();
+    expect(workflowId).toBeTruthy();
+
+    await openPlanGraph(page);
+    await page.getByTestId('rail-refresh').click();
+    await page.waitForTimeout(300);
+    await page.getByTestId(`workflow-node-${workflowId}`).first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const surface = page.getByTestId('workflow-graph-surface');
+    const mainViewport = surface.getByTestId('workflow-graph-content').locator('.react-flow__viewport').first();
+    const beforeSelect = await waitForStableViewportTransform(page, mainViewport);
+    await captureScreenshot(page, 'graph-selection-camera-stable-before-select');
+
+    await selectWorkflowNode(page, workflowId!, 'Menu Proof Workflow');
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible();
+    const afterSelect = await waitForStableViewportTransform(page, mainViewport);
+    await captureScreenshot(page, 'graph-selection-camera-stable-after-select');
+
+    const pane = surface.locator('.react-flow__pane').first();
+    const paneBox = await pane.boundingBox();
+    if (!paneBox) throw new Error('workflow graph pane has no bounding box');
+    const workflowNodeBox = await surface.locator('[data-testid^="workflow-node-"]').first().boundingBox();
+    const miniDagBox = await miniDag.boundingBox();
+    const isInsideBox = (x: number, y: number, box: { x: number; y: number; width: number; height: number } | null) =>
+      !!box && x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
+    const candidates = [
+      { x: paneBox.x + 24, y: paneBox.y + paneBox.height - 24 },
+      { x: paneBox.x + paneBox.width - 24, y: paneBox.y + paneBox.height - 24 },
+      { x: paneBox.x + 24, y: paneBox.y + 24 },
+    ];
+    const clickPoint = candidates.find(
+      (point) => !isInsideBox(point.x, point.y, workflowNodeBox) && !isInsideBox(point.x, point.y, miniDagBox),
+    );
+    if (!clickPoint) throw new Error('could not find an empty background point to click');
+    await page.mouse.click(clickPoint.x, clickPoint.y);
+    await page.waitForTimeout(200);
+
+    const afterBackground = await waitForStableViewportTransform(page, mainViewport);
+    await captureScreenshot(page, 'graph-selection-camera-stable-after-background');
+
+    console.log(`[graph-selection-camera-stable] main graph viewport: initial="${beforeSelect}" after-select="${afterSelect}" after-background="${afterBackground}"`);
+    expect(afterSelect, 'camera viewport should stay exactly where it was after selecting a workflow').toBe(beforeSelect);
+    expect(afterBackground, 'camera viewport should stay exactly where it was after clicking empty background').toBe(afterSelect);
   });
 
   test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {

@@ -19,6 +19,7 @@ import type { ChildProcess } from 'node:child_process';
 import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 type MockHandlerFn = (args: Record<string, unknown>) => Promise<void> | void;
 
@@ -235,6 +236,7 @@ describe('Slack confirmation expiry repro contracts', () => {
       planningHeartbeatIntervalSeconds: 0,
       workingDir: process.cwd(),
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     surfaces.push(created);
     return created;
@@ -268,6 +270,10 @@ describe('Slack confirmation expiry repro contracts', () => {
       type: 'start_plan',
       planText: expect.stringContaining('name: First'),
     }));
+    // Proves the default harness preset really spawned codex sessions.
+    for (const call of mockSpawn.mock.calls) {
+      expect(call[0]).toBe('codex');
+    }
   });
 
   it('reports a superseded sibling draft honestly after the current draft is approved', async () => {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import re
@@ -140,6 +141,14 @@ class GhClient:
         value = self._run_json(args)
         return value if isinstance(value, list) else []
 
+    def list_merged_prs(self, repo: str, limit: int = 300) -> list[dict]:
+        args = [
+            "gh", "pr", "list", "--repo", repo, "--state", "merged", "--limit", str(limit),
+            "--json", "number,title",
+        ]
+        value = self._run_json(args)
+        return value if isinstance(value, list) else []
+
     def pr_detail(self, repo: str, number: int) -> dict:
         owner, name = repo.split("/", 1)
         query = (
@@ -184,6 +193,12 @@ class GhClient:
     def retarget_base(self, repo: str, number: int, base: str) -> None:
         run_logged(["gh", "api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"base={base}"])
 
+    def merge_squash(self, repo: str, number: int) -> None:
+        # No --admin: this must only merge a PR GitHub itself already
+        # reports as MERGEABLE with green CI (see plan_bottom_progress's
+        # all_observed_checks_green gate) -- never an admin override.
+        run_logged(["gh", "pr", "merge", str(number), "--repo", repo, "--squash"])
+
     def compare_status(self, repo: str, base: str, head: str) -> str:
         out = run_logged(["gh", "api", f"repos/{repo}/compare/{base}...{head}"])
         return str(json.loads(out).get("status") or "")
@@ -191,6 +206,24 @@ class GhClient:
     def resolve_review_thread(self, thread_id: str) -> None:
         query = "mutation($threadId:ID!) { resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } } }"
         run_logged(["gh", "api", "graphql", "-f", f"threadId={thread_id}", "-f", f"query={query}"])
+
+    def default_branch(self, repo: str) -> str:
+        out = self._run(["gh", "api", f"repos/{repo}"])
+        return str(json.loads(out).get("default_branch") or "")
+
+    def file_text(self, repo: str, path: str) -> str | None:
+        # A missing file (no admin-bypass Mergify rule in this repo) is the
+        # expected case for most foreign repos. A 404 is not in
+        # TRANSIENT_GH_ERROR_MARKERS, so run_logged raises it on the first
+        # attempt without retrying/backing off.
+        try:
+            out = self._run(["gh", "api", f"repos/{repo}/contents/{path}", "--jq", ".content"])
+        except (subprocess.CalledProcessError, RuntimeError):
+            return None
+        encoded = out.strip()
+        if not encoded:
+            return None
+        return base64.b64decode(encoded).decode("utf-8", errors="replace")
 
 
 def run_logged(

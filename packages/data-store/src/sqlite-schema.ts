@@ -27,6 +27,7 @@ export const SCHEMA_DDL = `
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
         detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
+        staged INTEGER NOT NULL DEFAULT 0 CHECK (staged IN (0, 1)),
         deleted_at INTEGER,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -262,7 +263,7 @@ export const SCHEMA_DDL = `
         session_id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         preset_key TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted')),
+        status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted', 'planner_error')),
         confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
         draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
         draft_plan_text TEXT,
@@ -673,6 +674,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE slack_plan_drafts ADD COLUMN planning_draft_id TEXT',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_id TEXT',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_hash TEXT',
+  'ALTER TABLE workflows ADD COLUMN staged INTEGER NOT NULL DEFAULT 0 CHECK (staged IN (0, 1))',
 ];
 
 /**

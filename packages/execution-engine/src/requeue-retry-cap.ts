@@ -29,6 +29,51 @@ export function checkRequeueRetryCap(
   return { allowed, consumed, budget };
 }
 
+export function recordRequeueRetryPending(
+  store: WorkerDecisionStore,
+  taskId: string,
+  fields: { workflowId?: string; summary?: string } = {},
+): void {
+  recordWorkerDecisionRow(store, {
+    workerKind: REQUEUE_RETRY_CAP_WORKER_KIND,
+    actionType: REQUEUE_RETRY_CAP_ACTION_TYPE,
+    externalKey: requeueRetryCapExternalKey(taskId),
+    subjectType: 'task',
+    subjectId: taskId,
+    ...(fields.workflowId !== undefined ? { workflowId: fields.workflowId } : {}),
+    taskId,
+    status: 'pending',
+    summary: fields.summary ?? 'Requeue request awaiting queue acknowledgement',
+    incrementAttempt: false,
+    payload: { dispatchState: 'pending' },
+  });
+}
+
+export function recordRequeueRetryUnacknowledged(
+  store: WorkerDecisionStore,
+  taskId: string,
+  error: unknown,
+  fields: { workflowId?: string; summary?: string } = {},
+): void {
+  recordWorkerDecisionRow(store, {
+    workerKind: REQUEUE_RETRY_CAP_WORKER_KIND,
+    actionType: REQUEUE_RETRY_CAP_ACTION_TYPE,
+    externalKey: requeueRetryCapExternalKey(taskId),
+    subjectType: 'task',
+    subjectId: taskId,
+    ...(fields.workflowId !== undefined ? { workflowId: fields.workflowId } : {}),
+    taskId,
+    status: 'failed',
+    summary: fields.summary ?? 'Requeue request was not acknowledged',
+    incrementAttempt: false,
+    payload: {
+      dispatchState: 'not-acknowledged',
+      failurePhase: 'submission',
+      error: error instanceof Error ? error.message : String(error),
+    },
+  });
+}
+
 export function recordRequeueRetryConsumed(
   store: WorkerDecisionStore,
   taskId: string,
@@ -45,5 +90,6 @@ export function recordRequeueRetryConsumed(
     status: 'queued',
     summary: fields.summary ?? 'Durable per-task requeue retry counter',
     incrementAttempt: true,
+    payload: { dispatchState: 'acknowledged' },
   });
 }

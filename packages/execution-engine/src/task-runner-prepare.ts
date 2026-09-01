@@ -27,6 +27,7 @@ export function assertCompletedDependencyHasBranch(
   depLabel: string,
   dep: TaskState | undefined,
 ): void {
+  if (dep?.config.runnerKind === 'scratch') return;
   if (dep && dep.status === 'completed' && !dep.execution.branch) {
     throw new Error(
       `Task "${taskId}": ${depLabel} completed without branch metadata` +
@@ -105,6 +106,10 @@ export async function buildWorkRequest(
   const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
   const freshBase = task.config.workflowId ? host.freshBaseCommits.get(task.config.workflowId) : undefined;
   const baseCommit = freshBase && freshBase.branch === baseBranch ? freshBase.commit : undefined;
+  const loadAttempt = host.persistence.loadAttempt;
+  const specificationSnapshotCommit = typeof loadAttempt === 'function'
+    ? loadAttempt.call(host.persistence, attemptId)?.snapshotCommit
+    : undefined;
 
   // Persist the experiment branch as soon as the executor knows it — well
   // before `git worktree add` could leak a worktree without a recorded branch
@@ -149,6 +154,7 @@ export async function buildWorkRequest(
       prompt: task.config.prompt,
       executionAgent,
       executionModel,
+      maxTurns: task.config.maxTurns,
       repoUrl,
       branchRepoUrl,
       featureBranch: task.config.featureBranch,
@@ -159,6 +165,7 @@ export async function buildWorkRequest(
       lifecycleTag,
       baseBranch,
       baseCommit,
+      specificationSnapshotCommit,
       freshWorkspace: host.shouldUseFreshWorkspace(task),
       reusableWorktree: task.execution.branch && task.execution.workspacePath
         ? {

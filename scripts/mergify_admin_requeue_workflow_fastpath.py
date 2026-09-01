@@ -10,6 +10,7 @@ from pathlib import Path
 try:
     from .mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from .mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from .mergify_admin_requeue_model import DEFAULT_INVOKER_REPO
     from .mergify_admin_requeue_async_repair import (
         rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
@@ -19,6 +20,7 @@ try:
 except ImportError:
     from mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
     from mergify_admin_requeue_headless_shell import run_headless as _run_headless
+    from mergify_admin_requeue_model import DEFAULT_INVOKER_REPO
     from mergify_admin_requeue_async_repair import (
         rebase_onto_master_plan_name,
         repair_bot_thread_plan_name,
@@ -27,11 +29,18 @@ except ImportError:
     )
 
 
-def resolve_workflow_for_pr(pr_number: int) -> str | None:
+def resolve_workflow_for_pr(pr_number: int, repo: str = DEFAULT_INVOKER_REPO) -> str | None:
     # See cron-pr-lib.sh's resolve_workflow_for_pr comment: review-gate exits 0
     # with `{}` for a genuine miss (no local workflow mapping). A non-zero exit
     # means the lookup mechanism itself is broken, which must propagate as an
     # exception rather than silently falling back to ad-hoc repair.
+    #
+    # Invoker only ever owns a workflow for a PR on its own repo -- a foreign
+    # repo's PR number can collide with an unrelated Invoker PR number, so
+    # skip the lookup entirely for any other repo instead of risking the
+    # fast-path reusing the wrong repo's workflow.
+    if repo != DEFAULT_INVOKER_REPO:
+        return None
     review_gate_cmd = os.environ.get("INVOKER_PR_CRON_REVIEW_GATE_CMD")
     if review_gate_cmd:
         try:
@@ -281,24 +290,79 @@ def _repairer_plan_name(kind: str, pr: int, head: str, key: str) -> str:
 
 
 def settle_repairer_plan_rows(ledger, now: int) -> int:
-    """Write `<kind>-settled` rows for repairer.py's ad-hoc repair plans whose
-    workflow reached a terminal status but whose own safe-push task never ran
-    to write it. Returns how many rows were settled."""
-    pending = [row for row in ledger.rows if row.get("kind") in _REPAIRER_PLAN_SETTLE_KINDS]
-    if not pending:
-        return 0
-    workflows: list[dict] | None = None
-    settled = 0
-    for row in pending:
-        kind = str(row.get("kind"))
+    """Reconcile pending requests, then settle acknowledged repair workflows."""
+    pending_requests = [
+        row for row in ledger.rows
+        if str(row.get("kind") or "").endswith("-pending")
+        and str(row.get("kind") or "").removesuffix("-pending") in _REPAIRER_PLAN_SETTLE_KINDS
+    ]
+    acknowledged = []
+    for row in ledger.rows:
+        kind = row.get("kind")
+        if kind not in _REPAIRER_PLAN_SETTLE_KINDS:
+            continue
         pr = int(row.get("pr", -1))
         head = str(row.get("headSha") or "")
         key = str(row.get("key") or "")
         existing = ledger.latest(f"{kind}-settled", pr, head, key)
-        if existing is not None and int(existing.get("epoch", 0) or 0) >= int(row.get("epoch", 0) or 0):
+        if existing is None or int(existing.get("epoch", 0) or 0) < int(row.get("epoch", 0) or 0):
+            acknowledged.append(row)
+    if not pending_requests and not acknowledged:
+        return 0
+    workflows = list_workflows()
+    if workflows is None:
+        return 0
+    settled = 0
+    for row in pending_requests:
+        pending_kind = str(row.get("kind"))
+        kind = pending_kind.removesuffix("-pending")
+        pr = int(row.get("pr", -1))
+        head = str(row.get("headSha") or "")
+        key = str(row.get("key") or "")
+        pending_epoch = int(row.get("epoch", 0) or 0)
+        existing_ack = ledger.latest(kind, pr, head, key)
+        if existing_ack is not None and int(existing_ack.get("epoch", 0) or 0) >= pending_epoch:
             continue
-        if workflows is None:
-            workflows = list_workflows() or []
+        existing_settle = ledger.latest(f"{pending_kind}-settled", pr, head, key)
+        if existing_settle is not None and int(existing_settle.get("epoch", 0) or 0) >= pending_epoch:
+            continue
+        meta = row.get("meta") or {}
+        plan_name = str(meta.get("planName") or _repairer_plan_name(kind, pr, head, key))
+        match = next((workflow for workflow in workflows if workflow.get("name") == plan_name), None)
+        if match is not None:
+            ledger.record(
+                kind,
+                pr,
+                head,
+                key,
+                now,
+                meta={
+                    "dispatchState": "acknowledged",
+                    "acknowledgedBy": "pending-request-observer",
+                    "planName": plan_name,
+                    "workflowId": match.get("id"),
+                },
+            )
+        else:
+            ledger.record(
+                f"{pending_kind}-settled",
+                pr,
+                head,
+                key,
+                now,
+                meta={
+                    "dispatchState": "not-acknowledged",
+                    "failurePhase": "submission",
+                    "outcomeClass": "infra",
+                    "planName": plan_name,
+                },
+            )
+        settled += 1
+    for row in acknowledged:
+        kind = str(row.get("kind"))
+        pr = int(row.get("pr", -1))
+        head = str(row.get("headSha") or "")
+        key = str(row.get("key") or "")
         plan_name = _repairer_plan_name(kind, pr, head, key)
         match = next((w for w in workflows if w.get("name") == plan_name), None)
         if match is None:
@@ -399,5 +463,66 @@ def submit_close_pr(pr_number: int, repo: str, reason: str, expected_head_oid: s
     if completed.returncode != 0:
         raise RuntimeError(
             f"submit_close_pr failed for PR #{pr_number}: "
+            f"{completed.stderr.strip() or completed.stdout.strip()}"
+        )
+
+
+def _flag_probable_duplicate_command_script(
+    pr_number: int, repo: str, evidence: str, expected_head_oid: str, merged_pr_number: int,
+) -> str:
+    # Comment-only -- never closes. See plan_flag_probable_duplicates' own
+    # docstring for why a modify/modify conflict can't be auto-resolved.
+    lines = [
+        "set -euo pipefail",
+        f"num={pr_number}",
+        f"repo={shlex.quote(repo)}",
+        f"expected={shlex.quote(expected_head_oid)}",
+        'current_json="$(gh pr view "$num" --repo "$repo" --json state,headRefOid)"',
+        'current_state="$(printf \'%s\' "$current_json" | jq -r \'.state\')"',
+        'current_head="$(printf \'%s\' "$current_json" | jq -r \'.headRefOid\')"',
+        'if [ "$current_state" != "OPEN" ] || [ "$current_head" != "$expected" ]; then',
+        '  echo "stale-pr: #$num is $current_state at $current_head; expected OPEN at $expected" >&2',
+        "  exit 20",
+        "fi",
+        f"merged={merged_pr_number}",
+        f"evidence={shlex.quote(evidence)}",
+        'gh pr comment "$num" --repo "$repo" --body "Invoker probable-duplicate flag: this PR looks like a duplicate of already-merged #$merged. $evidence Needs a human or agent to confirm the conflicting content is equivalent, then close as duplicate."',
+        'echo "pr-duplicate-close: flagged #$num as probable duplicate of #$merged"',
+    ]
+    return "\n".join(lines)
+
+
+def _flag_probable_duplicate_plan_yaml(
+    pr_number: int, repo: str, evidence: str, expected_head_oid: str, merged_pr_number: int,
+) -> str:
+    command_script = _flag_probable_duplicate_command_script(pr_number, repo, evidence, expected_head_oid, merged_pr_number)
+    indented_command = "\n".join(f"      {line}" if line else "" for line in command_script.splitlines())
+    safe_evidence = evidence.replace('"', "'").replace("\n", " ")
+    return (
+        f"name: flag-duplicate-pr-{pr_number}-vs-{merged_pr_number}\n"
+        "onFinish: none\n"
+        "baseBranch: master\n"
+        "tasks:\n"
+        "  - id: flag\n"
+        f'    description: "Flag PR #{pr_number} as a probable duplicate of #{merged_pr_number}: {safe_evidence}"\n'
+        "    command: |\n"
+        f"{indented_command}\n"
+    )
+
+
+def submit_flag_probable_duplicate(pr_number: int, repo: str, evidence: str, expected_head_oid: str, merged_pr_number: int) -> None:
+    plan_yaml = _flag_probable_duplicate_plan_yaml(pr_number, repo, evidence, expected_head_oid, merged_pr_number)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=f"-flag-duplicate-pr-{pr_number}.yaml", delete=False, encoding="utf-8",
+    ) as handle:
+        handle.write(plan_yaml)
+        plan_path = handle.name
+    try:
+        completed = _run_headless('headless_mutation run "$2"', plan_path)
+    finally:
+        Path(plan_path).unlink(missing_ok=True)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"submit_flag_probable_duplicate failed for PR #{pr_number}: "
             f"{completed.stderr.strip() or completed.stdout.strip()}"
         )

@@ -1743,7 +1743,7 @@ describe('Invoker terminal (component)', () => {
     );
   });
 
-  it('submits a draft and starts ready work when the user types submit', async () => {
+  it('submits a draft without starting staged work', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
@@ -1766,11 +1766,11 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. No ready work to start.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review the graph, then Start ready work.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
@@ -1789,7 +1789,7 @@ describe('Invoker terminal (component)', () => {
         workflowCount: 2,
         steps: ['Workers Surface Contracts', 'Workers Surface UI'],
         taskGroups: [
-          { workflow: 'Workers Surface Contracts', tasks: ['Define contracts', 'Verify contracts'] },
+          { workflow: 'Workers Surface Contracts', tasks: ['Review claim: Define `contracts`\nReview lane: behavior\n\nFiles:\n- `src/a.ts`\n- `src/b.ts`', 'Verify contracts'] },
           { workflow: 'Workers Surface UI', tasks: ['Build UI', 'Verify UI'] },
         ],
       },
@@ -1810,17 +1810,22 @@ describe('Invoker terminal (component)', () => {
     await screen.findByTestId('planning-create-workflow');
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.getAllByTestId('draft-task-group')).toHaveLength(2);
+    const multilineDescription = screen.getAllByTestId('draft-step-summary')[0];
+    expect(within(multilineDescription).getByText('contracts', { selector: 'code' })).toBeVisible();
+    expect(within(multilineDescription).getByRole('list')).toBeVisible();
+    expect(within(multilineDescription).getAllByRole('listitem')).toHaveLength(2);
+    expect(multilineDescription).toHaveTextContent('Review claim: Define contracts Review lane: behavior Files: src/a.ts src/b.ts');
     fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. No ready work to start.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review the graph, then Start ready work.',
     );
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
@@ -1857,11 +1862,11 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(2);
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. No ready work to start.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review the graph, then Start ready work.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();

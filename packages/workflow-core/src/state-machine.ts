@@ -50,15 +50,6 @@ export class TaskStateMachine {
     const ready: string[] = [];
 
     for (const task of this.graph.getAllNodes()) {
-      // Log merge nodes specifically to trace why they're skipped/included
-      if (task.config?.isMergeNode) {
-        const depStatuses = task.dependencies.map(depId => {
-          const dep = this.graph.getNode(depId);
-          return `${depId}=${dep?.status ?? 'NOT_FOUND'}`;
-        });
-        console.log(`[state-machine] findNewlyReadyTasks(${completedTaskId}): merge node "${task.id}" status=${task.status} deps=[${depStatuses.join(', ')}] hasDep=${task.dependencies.includes(completedTaskId)}`);
-      }
-
       if (task.status !== 'pending' && task.status !== 'blocked') continue;
       if (!task.dependencies.includes(completedTaskId)) continue;
 

@@ -19,6 +19,14 @@ tasks:
     description: |
       Add renderer callback wiring, IPC bridge registration, owner delegation behavior,
       TaskPanel activation behavior, and all regressions in one large task.
+      Goal:
+      - Implement the entire GUI prompt-edit flow end to end in one task.
+      Motivation:
+      - Mirrors the oversized shape of wf-1777929074509-8 that should have been split.
+      Safety invariant:
+      - N/A: this fixture intentionally violates atomicity and has no scoped invariant.
+      Effectiveness measurement:
+      - `cd packages/app && pnpm test` exits 0.
       Files:
       - packages/app/src/main.ts
       - packages/app/src/preload.ts
@@ -27,7 +35,7 @@ tasks:
       Change types:
       - modify
       Acceptance criteria:
-      - cd packages/app && pnpm test exits 0.
+      - `cd packages/app && pnpm test` exits 0.
     prompt: |
       Modify packages/app/src/main.ts, packages/app/src/preload.ts,
       packages/ui/src/components/TaskPanel.tsx, and packages/app/e2e/prompt-edit.spec.ts.

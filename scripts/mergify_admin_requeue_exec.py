@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 import sys
@@ -11,7 +12,14 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
+    from .mergify_admin_requeue_model import (
+        Action,
+        DEFAULT_INVOKER_REPO,
+        Ledger,
+        PrSnapshot,
+        load_mergify_rules,
+        resolve_admin_bypass_rules_for_repo,
+    )
     from .mergify_admin_requeue_plan import (
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
@@ -36,7 +44,14 @@ except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
+    from mergify_admin_requeue_model import (
+        Action,
+        DEFAULT_INVOKER_REPO,
+        Ledger,
+        PrSnapshot,
+        load_mergify_rules,
+        resolve_admin_bypass_rules_for_repo,
+    )
     from mergify_admin_requeue_plan import (
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
@@ -66,14 +81,17 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
         print(json.dumps(action.__dict__, sort_keys=True))
         return
     prefix = "DRY-RUN " if dry_run else ""
+    repair_prefix = prefix if dry_run else "PENDING "
     if action.kind == "requeue":
         head = pr.head_ref_oid if pr else ""
         print(f"{prefix}requeue PR #{action.pr_number} head={head} reason={action.detail}")
     elif action.kind == "repair_check":
         key = action.key.split(":", 1)[-1]
-        print(f"{prefix}repair-check PR #{action.pr_number} check={json.dumps(key)}")
+        print(f"{repair_prefix}repair-check PR #{action.pr_number} check={json.dumps(key)}")
     elif action.kind == "comment_blocked":
         print(f"BLOCK PR #{action.pr_number} {action.detail}")
+    elif action.kind == "escalate_requeue_stuck":
+        print(f"{repair_prefix}escalate-requeue-stuck PR #{action.pr_number} {action.detail}")
     elif action.kind == "comment_admin_bypass_nudge":
         print(f"{prefix}comment-admin-bypass-nudge PR #{action.pr_number}")
     elif action.kind == "restore_admin_bypass_label":
@@ -81,14 +99,30 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
     elif action.kind == "retarget_base":
         from_base = pr.base_ref_name if pr else ""
         print(f"{prefix}retarget-base PR #{action.pr_number} from={from_base} to={action.key}")
+    elif action.kind == "squash_merge":
+        head = pr.head_ref_oid if pr else ""
+        print(f"{prefix}squash-merge PR #{action.pr_number} head={head} reason={action.detail}")
     elif action.kind == "rebase_onto_base":
-        print(f"{prefix}rebase-onto-base PR #{action.pr_number} onto={action.key}")
+        print(f"{repair_prefix}rebase-onto-base PR #{action.pr_number} onto={action.key}")
     elif action.kind == "rebase_onto_master":
-        print(f"{prefix}rebase-onto-master PR #{action.pr_number} {action.detail}")
+        print(f"{repair_prefix}rebase-onto-master PR #{action.pr_number} {action.detail}")
     elif action.kind == "remove_merge_hold":
         print(f"{prefix}remove-merge-hold PR #{action.pr_number}")
     elif action.kind == "resolve_bot_threads":
         print(f"{prefix}resolve-bot-threads PR #{action.pr_number} thread={action.key}")
+
+
+def print_repair_acknowledged(action: Action, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps({"event": "repair-dispatch-acknowledged", **action.__dict__}, sort_keys=True))
+        return
+    if action.kind == "repair_check":
+        key = action.key.split(":", 1)[-1]
+        print(f"ACKNOWLEDGED repair-check PR #{action.pr_number} check={json.dumps(key)}")
+    elif action.kind == "rebase_onto_master":
+        print(f"ACKNOWLEDGED rebase-onto-master PR #{action.pr_number} {action.detail}")
+    elif action.kind == "escalate_requeue_stuck":
+        print(f"ACKNOWLEDGED escalate-requeue-stuck PR #{action.pr_number} {action.detail}")
 
 
 def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClient, logger: AdminBypassLogger) -> dict[int, bool]:
@@ -117,17 +151,46 @@ def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClie
     return stale_base_by_pr
 
 
+def report_repair_dispatch_failure(
+    executor: AdminBypassGhExecutor,
+    logger: AdminBypassLogger,
+    pr: PrSnapshot,
+    action_kind: str,
+    now: int,
+) -> None:
+    try:
+        executor.comment_repair_dispatch_failed(pr, action_kind, now)
+    except Exception as exc:
+        logger.trace(
+            "admin-bypass-repair-dispatch-failure-comment-failed",
+            repo=executor.repo,
+            pr_number=pr.number,
+            action_kind=action_kind,
+            error=str(exc),
+        )
+
+
 def run_cycle(
     args: argparse.Namespace,
     claim_repair_filing: ClaimRepairFiling | None = None,
     release_repair_filing: ReleaseRepairFiling | None = None,
+    rules: tuple[str, frozenset[str], frozenset[str]] | None = None,
 ) -> bool:
-    rule_path = REPO_ROOT / ".mergify.yml"
-    try:
-        trunk, _labels, required_checks = load_mergify_rules(rule_path)
-    except ValueError as exc:
-        print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
-        raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
+    # `rules` lets a multi-repo caller (run_cron_target_repos) pass in a
+    # rule tuple it already resolved for a foreign repo via
+    # resolve_admin_bypass_rules_for_repo, instead of always loading
+    # Invoker's own local .mergify.yml regardless of args.repo. Every
+    # existing single-repo caller omits it and keeps this exact prior
+    # behavior.
+    if rules is not None:
+        trunk, _labels, required_checks = rules
+    else:
+        rule_path = REPO_ROOT / ".mergify.yml"
+        try:
+            trunk, _labels, required_checks = load_mergify_rules(rule_path)
+        except ValueError as exc:
+            print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
+            raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
 
     logger = AdminBypassLogger()
     logger.trace(
@@ -226,13 +289,14 @@ def run_cycle(
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                     else:
                         check_name = action.key
-                        workflow_id = resolve_workflow_for_pr(action.pr_number)
+                        workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                         if workflow_id:
                             submit_repair_review_gate_ci(action.pr_number)
                             ledger.record(
                                 "repair-check", action.pr_number, pr.head_ref_oid, check_name, now,
                                 meta={"workflowId": workflow_id, "via": "fastpath"},
                             )
+                            print_repair_acknowledged(action, args.json)
                             progressed = True
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
@@ -262,6 +326,8 @@ def run_cycle(
                                     pr_number=pr.number,
                                     check_name=check_name,
                                 )
+                            if outcome.status == "submitted":
+                                print_repair_acknowledged(action, args.json)
                             progressed = outcome.status in {"pushed", "prereq_created", "submitted", "queue_only_noop"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
@@ -297,6 +363,7 @@ def run_cycle(
                         release_repair_filing(kind, str(action.pr_number), pr.head_ref_oid)
                         if pr.latest_mergify is not None:
                             release_repair_filing(kind, str(action.pr_number), mergify_check_state_sha(pr, pr.latest_mergify))
+                    report_repair_dispatch_failure(executor, logger, pr, action.kind, now)
                     should_poll = True
                     continue
                 if progressed:
@@ -308,16 +375,19 @@ def run_cycle(
                 continue
             elif action.kind == "rebase_onto_master":
                 try:
-                    workflow_id = resolve_workflow_for_pr(action.pr_number)
+                    workflow_id = resolve_workflow_for_pr(action.pr_number, args.repo)
                     if workflow_id:
                         submit_rebase_recreate(workflow_id)
                         ledger.record(
                             REBASE_ONTO_MASTER_LEDGER_KIND, action.pr_number, pr.head_ref_oid, action.key, now,
                             meta={"workflowId": workflow_id, "via": "fastpath"},
                         )
+                        print_repair_acknowledged(action, args.json)
                         progressed = True
                     else:
                         outcome = repairer.rebase_onto_master(pr, action.detail, now)
+                        if outcome.status == "submitted":
+                            print_repair_acknowledged(action, args.json)
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
                     repair_dispatch_attempted += 1
@@ -333,6 +403,36 @@ def run_cycle(
                     )
                     if release_repair_filing is not None:
                         release_repair_filing(REBASE_ONTO_MASTER_FILING_KIND, str(action.pr_number), pr.head_ref_oid)
+                    report_repair_dispatch_failure(executor, logger, pr, action.kind, now)
+                    should_poll = True
+                    continue
+                if progressed:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_succeeded += 1
+                    any_progress = True
+                else:
+                    should_poll = True
+                continue
+            elif action.kind == "escalate_requeue_stuck":
+                try:
+                    attempts = ledger.count("requeue", action.pr_number, pr.head_ref_oid, action.key)
+                    outcome = repairer.escalate_stuck_requeue(pr, action.key, attempts, now)
+                    if outcome.status == "submitted":
+                        print_repair_acknowledged(action, args.json)
+                    progressed = outcome.status == "submitted"
+                except Exception as exc:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_failed += 1
+                    repair_dispatch_last_error = str(exc)
+                    logger.trace(
+                        "admin-bypass-repair-attempt-failed",
+                        repo=args.repo,
+                        pr_number=action.pr_number,
+                        action_kind=action.kind,
+                        key=action.key,
+                        error=str(exc),
+                    )
+                    report_repair_dispatch_failure(executor, logger, pr, action.kind, now)
                     should_poll = True
                     continue
                 if progressed:
@@ -434,6 +534,57 @@ def run_loop(
     return 0
 
 
+def resolve_rules_for_repo(repo: str, gh: GhClient) -> tuple[str, frozenset[str], frozenset[str]]:
+    # The Invoker repo itself always reads its own local checkout's
+    # .mergify.yml (matches load_mergify_rules' pre-existing single-repo
+    # behavior exactly, and avoids a needless network round trip for the
+    # repo cron already runs from). Every other target repo has no local
+    # checkout to read, so its rule (if any) and default branch come from
+    # the GitHub API instead.
+    if repo == DEFAULT_INVOKER_REPO:
+        try:
+            return load_mergify_rules(REPO_ROOT / ".mergify.yml")
+        except ValueError as exc:
+            raise RuntimeError(f"failed to load admin-bypass Mergify rule for {repo}") from exc
+    file_text = gh.file_text(repo, ".mergify.yml")
+    default_branch = gh.default_branch(repo)
+    try:
+        return resolve_admin_bypass_rules_for_repo(repo, file_text, default_branch)
+    except ValueError as exc:
+        raise RuntimeError(f"failed to resolve admin-bypass rules for {repo}") from exc
+
+
+def run_cron_target_repos(
+    args: argparse.Namespace,
+    target_repos: Sequence[str],
+    claim_repair_filing: ClaimRepairFiling | None = None,
+    release_repair_filing: ReleaseRepairFiling | None = None,
+    gh: GhClient | None = None,
+) -> int:
+    # Cron entry point for scanning more than one repo in a single tick.
+    # Each repo gets its own rule resolution (its own Mergify text/default
+    # branch, per resolve_rules_for_repo) and its own args.repo so every
+    # downstream call (ledger, executor, repairer, fastpath) stays scoped
+    # to that one repo. One repo's rule-resolution or scan failure is
+    # logged and skipped rather than aborting the whole cron tick.
+    gh = gh or GhClient()
+    had_failure = False
+    for repo in target_repos:
+        repo_args = copy.copy(args)
+        repo_args.repo = repo
+        try:
+            rules = resolve_rules_for_repo(repo, gh)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            had_failure = True
+            continue
+        try:
+            run_cycle(repo_args, claim_repair_filing, release_repair_filing, rules=rules)
+        except RuntimeError:
+            had_failure = True
+    return 2 if had_failure else 0
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Repair and queue open admin-bypass Mergify stacks.")
     mode = parser.add_mutually_exclusive_group()
@@ -442,6 +593,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--poll-seconds", type=float, default=60, help="Seconds to wait between loop scans. Default: 60.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions; perform no GitHub mutations.")
     parser.add_argument("--repo", default="Neko-Catpital-Labs/Invoker", help="Default: Neko-Catpital-Labs/Invoker.")
+    parser.add_argument(
+        "--target-repos",
+        default="",
+        help="Comma-separated repos to cron over in one tick (owner/name,owner/name,...). "
+        "Default: --repo alone. Any repo other than --repo's default is treated as foreign: "
+        "its own Mergify rule (or default branch) is resolved via the GitHub API, and its "
+        "repair plans never invoke Invoker-only repair helper scripts.",
+    )
     parser.add_argument("--author", help="Limit scan to one author. Default: all authors.")
     parser.add_argument("--state-file", default=str(Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"), help="Ledger JSONL path.")
     parser.add_argument("--pr", type=int, action="append", default=[], help="Limit to a PR; repeatable.")

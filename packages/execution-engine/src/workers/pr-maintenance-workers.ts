@@ -85,6 +85,7 @@ export interface PrMaintenanceWorkerConfig {
   repoRoot?: string;
   /** Environment overrides passed to the shell entrypoint. `undefined` removes a variable. */
   env?: EnvOverrides;
+  jailbreakLive?: boolean;
   /** Poll cadence for PR-maintenance workers. Defaults to five minutes. */
   intervalMs?: number;
   /**
@@ -212,6 +213,12 @@ export function registerPrJailbreakLandWorker(
       createPrJailbreakLandWorker({
         logger: deps.logger,
         ...deps.prMaintenance,
+        env: {
+          ...deps.prMaintenance?.env,
+          INVOKER_JAILBREAK_LIVE: deps.prMaintenance?.jailbreakLive
+            ? '1'
+            : deps.prMaintenance?.env?.INVOKER_JAILBREAK_LIVE,
+        },
         store: deps.store,
         startDelayMs: 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
@@ -270,6 +277,9 @@ export function probePrMaintenanceLock(options: PrMaintenanceLockProbeOptions): 
     timeout: 3_000,
     killSignal: 'SIGKILL',
   });
+  if (flockProbe.signal === 'SIGKILL' || (flockProbe.error && (flockProbe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')) {
+    return { held: false, reason: 'probe-timeout' };
+  }
   if (!flockProbe.error || (flockProbe.error as NodeJS.ErrnoException).code !== 'ENOENT') {
     return flockProbe.status === 0
       ? { held: false }

@@ -145,6 +145,9 @@ If the change is small and has no architectural impact, omit `## Architecture` r
 
 If the change is UI-impacting, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting means the user-visible experience changes, even when no file under `packages/ui/**` changes. This includes `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, app menu changes, task status changes, task error or output text shown in panels, approval/reject behavior, workflow state shown in the DAG or inspector, and web-surface output.
 
+For Invoker UI/live-path claims, also use `skills/verify/SKILL.md` to pick the prove command
+(`control-invoker prove <feature>` / `doctor` / `owner query`) before writing done/shipped claims.
+
 Use visible markdown sections for review metadata. Do not hide `Review Claim`, `Review Lane`, `Review Unit`, `Safety Invariant`, or `Slice Rationale` inside `<details>` or other HTML disclosure blocks. Review metadata must render directly in the PR body.
 
 Test Plan and Revert Plan are the opposite: keep their `## Test Plan` / `## Revert Plan` headings visible, but their content must sit inside a collapsed `<details>` block with `<summary>Test Plan</summary>` / `<summary>Revert Plan</summary>`. `scripts/validate-pr-body.mjs` rejects a plan section whose content is not collapsed, and rejects the `open` attribute.
@@ -181,6 +184,10 @@ Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. Th
 For Invoker stacked PRs, diff atomicity blockers are hard failures. Readability warnings like large file count stay warnings, but a stack slice that trips a diff-atomicity finding such as unrelated areas MUST be split before publication.
 
 If one branch mixes behavior, refactor, cleanup, or test-harness/proof work, split the work into separate PRs. Do not relabel the lane or weaken the checker to make a mixed branch pass.
+
+## Comment policy gate
+
+Before publishing, run `pnpm run check:comments` (`scripts/check-added-comments.mjs`). It covers `.cjs`/`.js`/`.jsx`/`.mjs`/`.py`/`.pyi`/`.sh`/`.ts`/`.tsx` and rejects any newly-added explanatory comment against this repo's Comment Policy (see root `CLAUDE.md`), including comments picked up from a cherry-picked or auto-generated commit. It also covers fenced code blocks (```js, ```ts, ```sh, ```py, and aliases) inside `skills/**/*.md`, so a skill's own example snippets follow the same policy — untagged or non-code fences (yaml, json, prose) are not scanned. It runs in CI as `quality / Added Comment Policy`, so a failure here after publishing still blocks the PR — check it locally first rather than discovering it from a red check.
 
 ## Command surface
 
@@ -294,6 +301,7 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - keep Test Plan and Revert Plan content inside their collapsed `<details><summary>Test Plan</summary>` / `<summary>Revert Plan</summary>` blocks
 - do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
 - validate the body against the current branch diff with `node scripts/validate-pr-body-local.mjs --body-file <file> --base <base-branch>`
+- run `pnpm run check:comments` and remove any newly-added comment it flags, including one carried in from a cherry-pick
 - for stacked PRs, treat diff-atomicity blockers as fatal, even when readability-only warnings still print
 - for stacked PRs, after any split or restack, re-audit the full rebuilt stack before publishing or updating PRs
 - for stacked PRs, auto-fold conflict-only, import-only, or other no-new-claim fixup slices into the previous slice before publication

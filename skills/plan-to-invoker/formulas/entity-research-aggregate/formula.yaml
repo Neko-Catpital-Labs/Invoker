@@ -18,11 +18,9 @@ vars:
     example: "main"
     description: >
       Base branch to pull records from (the shared trunk, never an upstream
-      feature branch). Must not be the literal string "master" — validate-plan.mjs's
-      stacked_basebranch_default check hard-fails any plan with concrete
-      externalDependencies whose baseBranch resolves to "master". See
-      references/entity-research-patterns.md's "known limitation" note. This
-      is not a stylistic choice.
+      feature branch). Multi-extDep fan-in on trunk is allowed by
+      stacked_basebranch_default; a single merge-gate dep with trunk base is
+      the stack-onto footgun and still fails validation.
   aggregate_slug:
     required: true
     example: "stock-quirk-check"

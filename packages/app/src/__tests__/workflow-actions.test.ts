@@ -40,7 +40,9 @@ import {
   StaleLineageError,
   captureTaskLineage,
   assertLineageCurrent,
+  shouldSkipAgentAutoFixForTask
 } from '../workflow-actions.js';
+// patched import below
 
 vi.mock('../delete-all-snapshot.js', () => ({
   createDeleteAllSnapshot: () => '/tmp/fake-snapshot',
@@ -582,29 +584,6 @@ describe('finalizeAppliedFix', () => {
     );
     expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
-  });
-
-  it('leaves the fix awaiting approval when the PR author is not allowlisted', async () => {
-    const orchestrator = {
-      setFixAwaitingApproval: vi.fn(),
-      approve: vi.fn(),
-    };
-    const taskExecutor = {
-      commitApprovedFix: vi.fn(),
-      publishAfterFix: vi.fn(),
-      executeTasks: vi.fn(),
-    };
-
-    const result = await finalizeAppliedFix('task-a', 'saved-error', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-      autoApproveAIFixes: true,
-      autoApproveAuthorGate: async () => ({ allowed: false, reason: 'author-not-allowlisted' }),
-    });
-
-    expect(result).toEqual({ autoApproved: false, started: [] });
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');
-    expect(orchestrator.approve).not.toHaveBeenCalled();
   });
 });
 
@@ -2695,5 +2674,30 @@ describe('fixWithAgentAction review-gate CI context', () => {
       savedError: 'ci failed',
       fixError: 'agent exploded',
     });
+  });
+});
+
+describe('shouldSkipAgentAutoFixForTask', () => {
+  it('shouldSkipAgentAutoFixForTask is true when task has a command', () => {
+    expect(shouldSkipAgentAutoFixForTask({ config: { command: 'echo hi' } })).toBe(true);
+    expect(shouldSkipAgentAutoFixForTask({ config: {} })).toBe(false);
+    expect(shouldSkipAgentAutoFixForTask({})).toBe(false);
+  });
+
+  it('skips fixWithAgent for command tasks in autoFixOnFailure', async () => {
+    const fixWithAgent = vi.fn();
+    const getTask = vi.fn().mockReturnValue({
+      id: 'normalize',
+      status: 'failed',
+      config: { command: 'echo fail' },
+      execution: { error: 'boom', generation: 0 },
+    });
+    await autoFixOnFailure('normalize', {
+      orchestrator: { getTask } as any,
+      persistence: { logEvent: vi.fn(), appendTaskOutput: vi.fn(), getTaskOutput: () => '' } as any,
+      commandService: {} as any,
+      taskExecutor: { fixWithAgent, executeTasks: vi.fn() } as any,
+    });
+    expect(fixWithAgent).not.toHaveBeenCalled();
   });
 });

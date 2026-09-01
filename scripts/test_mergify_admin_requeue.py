@@ -36,7 +36,7 @@ from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_
 from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
-from scripts.mergify_admin_requeue_plan import repair_in_flight
+from scripts.mergify_admin_requeue_plan import count_code_repair_attempts, plan_stack_execution, repair_in_flight
 from scripts.mergify_admin_requeue_repairer import AdminBypassRepairer
 
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
@@ -276,12 +276,21 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("requeue", 2605, "m1")])
 
-    def test_requeue_same_dequeue_event_hits_cap(self):
+    def test_requeue_same_dequeue_event_hits_cap_and_escalates_to_agent(self):
         ledger = self.ledger()
         ledger.record("requeue", 2605, HEAD, "m1", 1)
         ledger.record("requeue", 2605, HEAD, "m1", 2)
         stack = StackGroup("s", (pr(2605, latest=mergify(comment_id="m1")),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 3)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("escalate_requeue_stuck", 2605, "m1")])
+
+    def test_requeue_cap_falls_back_to_comment_once_already_escalated(self):
+        ledger = self.ledger()
+        ledger.record("requeue", 2605, HEAD, "m1", 1)
+        ledger.record("requeue", 2605, HEAD, "m1", 2)
+        ledger.record("requeue-escalation", 2605, HEAD, "m1", 3)
+        stack = StackGroup("s", (pr(2605, latest=mergify(comment_id="m1")),))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("comment_blocked", 2605, "capped")])
 
     def test_failed_check_repairs_before_requeue(self):
@@ -289,6 +298,23 @@ Failing checks
         stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
+
+    def test_catstack_failing_test_plans_repair_not_squash_or_queue(self):
+        checks = {"lint": check("lint"), "test": check("test", "failure")}
+        stack = StackGroup(
+            "catstack",
+            (pr(2606, base="main", labels={"admin-bypass"}, checks=checks),),
+        )
+        plan = plan_stack_execution(
+            stack,
+            required_checks=(),
+            ledger=self.ledger(),
+            now_epoch=1,
+            open_pr_numbers=(),
+            open_pr_numbers_by_head={},
+            trunk="main",
+        )
+        self.assertEqual([(action.kind, action.key) for action in plan.actions], [("repair_check", "test")])
 
     def test_failed_check_caps_after_max_repair_attempts(self):
         checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
@@ -412,13 +438,32 @@ Failing checks
             ledger.count("rebase-onto-master", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
             1,
         )
+        self.assertEqual(
+            ledger.count("rebase-onto-master-pending", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
+            1,
+        )
 
-    def test_rebase_onto_master_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
-        # The ledger row is written before submission (not after) so a broken
-        # ledger write can never leave a real, running repair uncounted. The
-        # cost is the mirror case here: if submission itself fails, the
-        # attempt is still counted -- an acceptable trade since submission
-        # failures are rare and non-silent, unlike a lost ledger write.
+    def test_repair_request_is_pending_until_submitter_acknowledges_it(self):
+        item = pr(2665, merge_state="DIRTY", latest=mergify())
+        ledger = self.ledger()
+        repairer = self.repairer(object(), ledger)
+        key = f"rebase-onto-master:{item.number}"
+
+        def acknowledge(plan):
+            self.assertEqual(ledger.count("rebase-onto-master-pending", item.number, item.head_ref_oid, key), 1)
+            self.assertEqual(ledger.count("rebase-onto-master", item.number, item.head_ref_oid, key), 0)
+            return None
+
+        with mock.patch(
+            "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+            side_effect=acknowledge,
+        ):
+            repairer.rebase_onto_master(item, "GitHub reports merge conflict", 1)
+
+        acknowledged = ledger.latest("rebase-onto-master", item.number, item.head_ref_oid, key)
+        self.assertEqual(acknowledged["meta"]["dispatchState"], "acknowledged")
+
+    def test_rebase_onto_master_submission_failure_is_infra_and_does_not_spend_code_retry(self):
         item = pr(2661, merge_state="DIRTY", latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
@@ -429,11 +474,15 @@ Failing checks
             with self.assertRaises(RuntimeError):
                 repairer.rebase_onto_master(item, "GitHub reports merge conflict", 1)
         self.assertEqual(
-            ledger.count("rebase-onto-master", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
-            1,
+            count_code_repair_attempts(ledger, "rebase-onto-master", item.number, f"rebase-onto-master:{item.number}"),
+            0,
         )
+        self.assertEqual(ledger.count("rebase-onto-master-pending", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"), 1)
+        self.assertEqual(ledger.count("rebase-onto-master-pending-settled", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"), 1)
+        actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 2)
+        self.assertEqual([(action.kind, action.pr_number) for action in actions], [("rebase_onto_master", item.number)])
 
-    def test_repair_check_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
+    def test_repair_check_submission_failure_is_infra_and_does_not_spend_code_retry(self):
         item = pr(2662, latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
@@ -444,7 +493,62 @@ Failing checks
             ):
                 with self.assertRaises(RuntimeError):
                     repairer.repair_check(item, "PR Body", 1)
-        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 1)
+        self.assertEqual(count_code_repair_attempts(ledger, "repair-check", item.number, "PR Body"), 0)
+
+    def test_bot_thread_submission_failure_is_infra_and_does_not_spend_code_retry(self):
+        item = pr(2663, threads=(ReviewThread("tbot", False, ("coderabbitai[bot]",)),), latest=mergify())
+        ledger = self.ledger()
+        repairer = self.repairer(object(), ledger)
+        with mock.patch(
+            "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+            side_effect=RuntimeError("submit failed"),
+        ):
+            with self.assertRaises(RuntimeError):
+                repairer.repair_bot_thread(item, "tbot", 1)
+        self.assertEqual(count_code_repair_attempts(ledger, "repair-bot-thread", item.number, "tbot"), 0)
+
+    def test_next_cycle_retries_prestart_failure_and_only_success_spends_budget(self):
+        ledger = self.ledger()
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)])
+        item = pr(2664, merge_state="DIRTY", latest=mergify())
+        stack = StackGroup("s", (item,))
+
+        class FakeGh:
+            def compare_status(self, repo, base, head):
+                return "ahead"
+
+            def comment(self, repo, pr_number, body):
+                pass
+
+            def issue_comments(self, repo, pr_number):
+                return []
+
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=FakeGh()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                        with mock.patch.object(exec_impl, "settle_workflow_fastpath_rows", return_value=0):
+                            with mock.patch.object(exec_impl, "settle_repairer_plan_rows", return_value=0):
+                                with mock.patch.object(exec_impl.time, "time", side_effect=[100, 101]):
+                                    with mock.patch(
+                                        "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+                                        side_effect=[RuntimeError("owner IPC failed"), None],
+                                    ) as submit:
+                                        first_should_poll = exec_impl.run_cycle(args)
+                                        second_should_poll = exec_impl.run_cycle(args)
+
+        self.assertTrue(first_should_poll)
+        self.assertTrue(second_should_poll)
+        self.assertEqual(submit.call_count, 2)
+        refreshed = Ledger(ledger.path)
+        self.assertEqual(
+            refreshed.count("rebase-onto-master-pending", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
+            2,
+        )
+        self.assertEqual(
+            count_code_repair_attempts(refreshed, "rebase-onto-master", item.number, f"rebase-onto-master:{item.number}"),
+            1,
+        )
 
     def test_candidate_stack_includes_unlabeled_upper_prs(self):
         def raw(number, base, head, labels):
@@ -633,6 +737,40 @@ Failing checks
         self.assertEqual(degraded[0]["failed"], 2)
         self.assertEqual(degraded[0]["last_error"], "second failure")
 
+    def test_rebase_dispatch_failure_says_request_was_not_acknowledged_and_no_retry_was_spent(self):
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        item = pr(7401, merge_state="DIRTY", latest=mergify())
+        stack = StackGroup("s", (item,))
+
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def issue_comments(self, repo, pr_number):
+                return []
+
+        fake_gh = FakeGh()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                        with mock.patch.object(AdminBypassRepairer, "rebase_onto_master", side_effect=RuntimeError("owner IPC failed")):
+                            with redirect_stdout(stdout):
+                                should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        self.assertIn("PENDING rebase-onto-master PR #7401", stdout.getvalue())
+        self.assertNotIn("ACKNOWLEDGED rebase-onto-master PR #7401", stdout.getvalue())
+        self.assertEqual(len(fake_gh.comments), 1)
+        body = fake_gh.comments[0][2]
+        self.assertIn("repair dispatch was not acknowledged", body)
+        self.assertIn("recorded as pending", body)
+        self.assertIn("without consuming the code-repair retry budget", body)
+        self.assertIn("automatic retry remains enabled", body)
+
     def test_run_cycle_does_not_log_degraded_when_any_repair_dispatch_succeeds(self):
         args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
@@ -750,7 +888,10 @@ Failing checks
                         with mock.patch.object(AdminBypassRepairer, "repair_check", side_effect=subprocess.CalledProcessError(1, ["claude"])) as repair_check:
                             should_poll = exec_impl.run_cycle(args)
         self.assertEqual(repair_check.call_count, 1)
-        self.assertEqual(fake_gh.comments, [("owner/repo", 6602, "@mergifyio queue")])
+        self.assertEqual(len(fake_gh.comments), 2)
+        self.assertEqual(fake_gh.comments[0][0:2], ("owner/repo", 6601))
+        self.assertIn("repair dispatch was not acknowledged", fake_gh.comments[0][2])
+        self.assertEqual(fake_gh.comments[1], ("owner/repo", 6602, "@mergifyio queue"))
         self.assertTrue(should_poll)
 
     def test_run_cycle_attempts_every_independent_stack_in_one_tick(self):
@@ -1166,6 +1307,132 @@ The merge conditions cannot be satisfied due to failing checks
         actions = plan_stack_actions(stack, REQUIRED | {"e2e-proof / aggregate"}, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 1814, "e2e-proof / aggregate")])
 
+    def test_squash_merge_lands_when_no_required_checks_and_all_observed_checks_green(self):
+        stack = StackGroup("s", (pr(9001, labels={"admin-bypass"}, checks={"CI": check("CI")}),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(
+            [(a.kind, a.pr_number, a.key, a.detail) for a in actions],
+            [("squash_merge", 9001, "squash", "MERGEABLE with all observed CI green")],
+        )
+
+    def test_squash_merge_waits_for_pending_check_instead_of_merging(self):
+        checks = {"CI": check("CI", "pending")}
+        stack = StackGroup("s", (pr(9002, labels={"admin-bypass"}, checks=checks),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(actions, ())
+
+    def test_squash_merge_waits_when_no_ci_signal_observed_yet(self):
+        stack = StackGroup("s", (pr(9003, labels={"admin-bypass"}, checks={}),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(actions, ())
+
+    def test_squash_merge_requires_mergeable_state(self):
+        stack = StackGroup("s", (pr(9004, labels={"admin-bypass"}, checks={"CI": check("CI")}, mergeable="UNKNOWN"),))
+        actions = plan_stack_actions(stack, frozenset(), self.ledger(), 1)
+        self.assertEqual(actions, ())
+
+    def test_squash_merge_caps_after_max_requeue_attempts(self):
+        ledger = self.ledger()
+        ledger.record("squash-merge", 9005, HEAD, "squash", 1)
+        ledger.record("squash-merge", 9005, HEAD, "squash", 2)
+        stack = StackGroup("s", (pr(9005, labels={"admin-bypass"}, checks={"CI": check("CI")}),))
+        actions = plan_stack_actions(stack, frozenset(), ledger, 3)
+        self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
+
+    def test_invoker_style_repo_with_required_checks_still_requeues_instead_of_squash_merging(self):
+        # Invoker's own .mergify.yml always resolves a non-empty required_checks
+        # set (see test_loads_admin_bypass_rule_from_mergify_yml), so it must
+        # keep landing through the Mergify queue, never squash_merge.
+        stack = StackGroup("s", (pr(9006, latest=mergify()),))
+        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("requeue", 9006)])
+
+    def test_squash_merge_executes_and_records_ledger(self):
+        class FakeGh:
+            def __init__(self):
+                self.merges = []
+
+            def merge_squash(self, repo, number):
+                self.merges.append((repo, number))
+
+        ledger = self.ledger()
+        item = pr(9007, labels={"admin-bypass"}, checks={"CI": check("CI")})
+        action = Action("squash_merge", 9007, "squash", "MERGEABLE with all observed CI green")
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "EdbertChan/catstack")
+        performed = executor.execute(action, item, 1)
+        self.assertTrue(performed)
+        self.assertEqual(fake.merges, [("EdbertChan/catstack", 9007)])
+        self.assertEqual(ledger.count("squash-merge", 9007, HEAD, "squash"), 1)
+
+    def test_squash_merge_skips_when_head_moved_since_snapshot(self):
+        class FakeGh:
+            def __init__(self):
+                self.merges = []
+
+            def pr_detail(self, repo, number):
+                return {"number": number, "state": "OPEN", "headRefOid": OLD}
+
+            def merge_squash(self, repo, number):
+                self.merges.append((repo, number))
+
+        ledger = self.ledger()
+        item = pr(9008, labels={"admin-bypass"}, checks={"CI": check("CI")})
+        action = Action("squash_merge", 9008, "squash", "MERGEABLE with all observed CI green")
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "EdbertChan/catstack")
+        performed = executor.execute(action, item, 1)
+        self.assertFalse(performed)
+        self.assertEqual(fake.merges, [])
+        self.assertEqual(ledger.count("squash-merge", 9008, HEAD, "squash"), 0)
+
+    def test_dry_run_squash_merge_never_calls_gh_merge(self):
+        class FakeGh:
+            def __init__(self):
+                self.merges = []
+
+            def list_candidate_prs(self, repo, author, pr_numbers):
+                return [self._raw]
+
+            def list_open_prs(self, repo):
+                return [self._raw]
+
+            def issue_comments(self, repo, number):
+                return []
+
+            def merge_squash(self, repo, number):
+                self.merges.append((repo, number))
+
+        raw = {
+            "number": 9009,
+            "title": "catstack green PR",
+            "body": "",
+            "url": "https://example.invalid/9009",
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefName": "master",
+            "headRefName": "feature/9009",
+            "headRefOid": HEAD,
+            "mergeStateStatus": "CLEAN",
+            "mergeable": "MERGEABLE",
+            "labels": {"nodes": [{"name": "admin-bypass"}]},
+            "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+            "statusCheckRollup": {"contexts": {"nodes": [
+                {"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS", "checkSuite": {"commit": {"oid": HEAD}}},
+            ]}},
+        }
+        fake = FakeGh()
+        fake._raw = raw
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = requeue.parse_args([
+            "--once", "--dry-run", "--repo", "EdbertChan/catstack",
+            "--state-file", str(Path(tmp.name) / "ledger.jsonl"),
+        ])
+        with mock.patch.object(exec_impl, "GhClient", return_value=fake):
+            exec_impl.run_cycle(args, None, None, rules=("master", frozenset({"admin-bypass"}), frozenset()))
+        self.assertEqual(fake.merges, [])
+
     def test_closed_pr_never_requeues_even_when_manually_requested(self):
         stack = StackGroup("s", (pr(2999, state="CLOSED", latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
@@ -1173,6 +1440,45 @@ The merge conditions cannot be satisfied due to failing checks
 
 
 class WorkflowFastpathTests(unittest.TestCase):
+    def test_headless_query_prefers_repo_ipc_client_over_invoker_ui_appimage(self):
+        repo_client = REPO_ROOT / "packages" / "app" / "dist" / "headless-client.js"
+        client_existed = repo_client.exists()
+        repo_client.parent.mkdir(parents=True, exist_ok=True)
+        if not client_existed:
+            repo_client.write_text("", encoding="utf-8")
+            self.addCleanup(repo_client.unlink, missing_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = Path(tmp)
+            invoker_ui = fake_bin / "invoker-ui"
+            node = fake_bin / "node"
+            invoker_ui.write_text("#!/bin/sh\necho appimage-client >&2\nexit 99\n", encoding="utf-8")
+            node.write_text("#!/bin/sh\necho repo-node-client\n", encoding="utf-8")
+            invoker_ui.chmod(0o755)
+            node.chmod(0o755)
+            env = dict(os.environ)
+            env.update({
+                "PATH": f"{fake_bin}:{env['PATH']}",
+                "INVOKER_HEADLESS_FORCE_OWNER_IPC": "1",
+                "INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS": "0",
+            })
+            env.pop("INVOKER_HEADLESS_CLIENT_BIN", None)
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'set -euo pipefail; source "$1"; headless_query query review-gate owner/repo#1 --output json',
+                    "bash",
+                    str(REPO_ROOT / "scripts" / "headless-lib.sh"),
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "repo-node-client\n")
+
     def test_resolve_workflow_for_pr_sources_headless_lib_and_parses_workflow_id(self):
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout='{"workflowId": "wf-1-1"}\n', stderr="")
         with mock.patch.object(headless_shell.subprocess, "run", return_value=completed) as run:

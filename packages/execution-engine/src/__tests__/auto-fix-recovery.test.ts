@@ -11,9 +11,10 @@ import {
   AUTO_FIX_WORKER_KIND,
   collectValidatedAutoFixRecoveryCandidates,
   createAutoFixRecoveryTick,
+  listAutoFixRecoveryScanCandidates,
   shouldRecreateMergeGateInsteadOfAutoFix,
 } from '../auto-fix-recovery.js';
-import { autoFixBareRetryExternalKey } from '../auto-fix-retry-cap.js';
+import { autoFixBareRetryExternalKey, autoFixRetryCapExternalKey } from '../auto-fix-retry-cap.js';
 import type {
   WorkerActionRecord,
   WorkerActionWrite,
@@ -70,7 +71,7 @@ function makeHarness(task = makeFailedTask()) {
   const actions = new Map<string, WorkerActionRecord>();
   const submit = vi.fn((_workflowId: string, _priority: WorkflowMutationPriority, _channel: string, _args: unknown[]) => 99);
   const store = {
-    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    listWorkflows: vi.fn(() => [{ id: 'wf-1', repoUrl: 'https://example.com/repo.git' }]),
     loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
     loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
     listWorkflowMutationIntents: vi.fn(() => []),
@@ -144,6 +145,125 @@ describe('collectValidatedAutoFixRecoveryCandidates', () => {
       const validated = collectValidatedAutoFixRecoveryCandidates(options, scanned);
       expect(validated, failureClass).toEqual([]);
     }
+  });
+
+  it('skips admin-bypass-* workflows so normalize gates are not rubber-stamped', () => {
+    const task = makeFailedTask({
+      id: 'wf-admin/normalize',
+      config: { workflowId: 'wf-admin', command: 'python3 scripts/mergify_admin_requeue_repair_normalize.py' },
+      execution: {
+        generation: 1,
+        selectedAttemptId: 'attempt-1',
+        error: 'blocked_invalid: Review Unit routing',
+        failureClass: undefined,
+      },
+    });
+    const store = {
+      listWorkflows: vi.fn(() => [{
+        id: 'wf-admin',
+        name: 'admin-bypass-repair-check-pr-10514-build-artifacts-d1f1cf5',
+      }]),
+      loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-admin' ? [task] : [])),
+      loadTask: vi.fn((taskId: string) => (taskId === task.id ? task : undefined)),
+      listWorkflowMutationIntents: vi.fn(() => []),
+      logEvent: vi.fn(),
+    };
+    const options = {
+      store,
+      submitter: { submit: vi.fn(() => 1) },
+      logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 3,
+    };
+
+    expect(collectValidatedAutoFixRecoveryCandidates(options)).toEqual([]);
+    expect(store.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'debug.auto-fix',
+      expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'admin-bypass-excluded' }),
+    );
+  });
+
+  it('skips a failed task in a repo-less workflow, since a fix can never be published as a branch', () => {
+    const task = makeFailedTask({
+      id: 'wf-scratch/investigate',
+      config: { workflowId: 'wf-scratch', prompt: 'Investigate a production finding.' },
+      execution: {
+        generation: 1,
+        selectedAttemptId: 'attempt-1',
+        branch: undefined,
+        error: 'Task wf-scratch/investigate has no branch for approved-fix publish',
+        failureClass: undefined,
+      },
+    });
+    const store = {
+      listWorkflows: vi.fn(() => [{ id: 'wf-scratch', name: 'Investigate a production finding', repoUrl: undefined }]),
+      loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-scratch' ? [task] : [])),
+      loadTask: vi.fn((taskId: string) => (taskId === task.id ? task : undefined)),
+      listWorkflowMutationIntents: vi.fn(() => []),
+      logEvent: vi.fn(),
+    };
+    const options = {
+      store,
+      submitter: { submit: vi.fn(() => 1) },
+      logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 3,
+    };
+
+    expect(collectValidatedAutoFixRecoveryCandidates(options)).toEqual([]);
+    expect(store.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'debug.auto-fix',
+      expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'no-repo-workflow' }),
+    );
+  });
+});
+
+describe('listAutoFixRecoveryScanCandidates', () => {
+  it('batches task loads across workflows in one call instead of one call per workflow', () => {
+    const workflowCount = 50;
+    const workflows = Array.from({ length: workflowCount }, (_, i) => ({ id: `wf-${i}` }));
+    const tasksByWorkflow = new Map(
+      workflows.map((wf) => [
+        wf.id,
+        [makeFailedTask({ id: `${wf.id}/build`, config: { workflowId: wf.id, command: 'pnpm build' } })],
+      ]),
+    );
+    let loadTasksCalls = 0;
+    let loadTasksForWorkflowsCalls = 0;
+    const store = {
+      listWorkflows: vi.fn(() => workflows),
+      loadTasks: vi.fn((workflowId: string) => {
+        loadTasksCalls += 1;
+        return tasksByWorkflow.get(workflowId) ?? [];
+      }),
+      loadTasksForWorkflows: vi.fn((workflowIds: string[]) => {
+        loadTasksForWorkflowsCalls += 1;
+        return workflowIds.flatMap((id) => tasksByWorkflow.get(id) ?? []);
+      }),
+      listWorkflowMutationIntents: vi.fn(() => []),
+    };
+
+    const candidates = listAutoFixRecoveryScanCandidates({ store });
+
+    expect(candidates).toHaveLength(workflowCount);
+    expect(loadTasksForWorkflowsCalls).toBe(1);
+    expect(loadTasksCalls).toBe(0);
+  });
+
+  it('falls back to per-workflow loadTasks when loadTasksForWorkflows is not implemented', () => {
+    const task = makeFailedTask();
+    const store = {
+      listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+      loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-1' ? [task] : [])),
+      listWorkflowMutationIntents: vi.fn(() => []),
+    };
+
+    const candidates = listAutoFixRecoveryScanCandidates({ store });
+
+    expect(candidates).toHaveLength(1);
+    expect(store.loadTasks).toHaveBeenCalledWith('wf-1');
   });
 });
 
@@ -268,5 +388,48 @@ describe('auto-fix recovery merge-gate recreate routing', () => {
     expect(channel).toBe(AUTO_FIX_RECREATE_CHANNEL);
     expect(args).toEqual([mergeTask.id]);
     expect(harness.attemptLedger.get(autoFixAttemptLedgerKeyFromTask(mergeTask))).toBe(0);
+  });
+});
+
+describe('auto-fix dispatch acknowledgement accounting', () => {
+  it('leaves both retry ledgers unspent when fix submission is not acknowledged', async () => {
+    const failedTask = makeFailedTask({
+      execution: {
+        generation: 2,
+        selectedAttemptId: 'attempt-1',
+        branch: 'feature/build',
+        error: 'TypeScript assertion failed',
+        failureClass: undefined,
+      },
+    });
+    const harness = makeHarness(failedTask);
+    harness.actions.set(`${AUTO_FIX_WORKER_KIND}:${autoFixBareRetryExternalKey(failedTask.id)}`, toRecord({
+      id: `${AUTO_FIX_WORKER_KIND}:${autoFixBareRetryExternalKey(failedTask.id)}`,
+      workerKind: AUTO_FIX_WORKER_KIND,
+      externalKey: autoFixBareRetryExternalKey(failedTask.id),
+      actionType: 'auto-retry',
+      subjectType: 'task',
+      subjectId: failedTask.id,
+      status: 'queued',
+      attemptCount: 1,
+      workflowId: 'wf-1',
+      taskId: failedTask.id,
+    }));
+    harness.submit.mockImplementation(() => { throw new Error('owner unavailable'); });
+    const tick = createAutoFixRecoveryTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 3,
+      getAutoFixAgent: () => 'codex',
+    });
+
+    await expect(tick({ reason: 'poll' } as never)).rejects.toThrow('owner unavailable');
+
+    expect(harness.attemptLedger.get(autoFixAttemptLedgerKeyFromTask(failedTask))).toBe(0);
+    const cap = harness.actions.get(`${AUTO_FIX_WORKER_KIND}:${autoFixRetryCapExternalKey(failedTask.id)}`);
+    expect(cap).toMatchObject({ status: 'failed', attemptCount: 0 });
+    expect(cap?.payload).toMatchObject({ dispatchState: 'not-acknowledged', failurePhase: 'submission' });
   });
 });

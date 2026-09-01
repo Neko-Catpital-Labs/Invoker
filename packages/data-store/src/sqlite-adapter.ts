@@ -47,6 +47,8 @@ import type {
   ReviewGateLookup,
   Workflow,
   WorkflowReadOptions,
+  WorkflowPagedOptions,
+  WorkflowPagedResult,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -105,7 +107,8 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
-// activity_log is capped to its most recent rows so the DB file stays bounded; 0 disables.
+export const GET_EVENTS_DEFAULT_LIMIT = 10_000;
+
 const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
 const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000; // prune at most once per N writes
 
@@ -684,6 +687,7 @@ function isInAppPlanningSessionStatus(value: unknown): value is InAppPlanningSes
   return value === 'still_discussing'
     || value === 'waiting_for_answer'
     || value === 'draft_ready'
+    || value === 'planner_error'
     || value === 'submitted';
 }
 
@@ -1220,6 +1224,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.listWorkflows(options);
   }
 
+  listWorkflowsPaged(options: WorkflowPagedOptions): WorkflowPagedResult {
+    return this.workflowRepo.listWorkflowsPaged(options);
+  }
+
   findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined {
     return this.workflowRepo.findReviewGateByPr(pr, repo);
   }
@@ -1723,6 +1731,51 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.taskAttemptRepo.loadAllHistoryTasks();
   }
 
+  pruneOldEvents(retentionDays: number): number {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+    const cutoff = `-${Math.floor(retentionDays)} days`;
+    this.db.run(
+      `DELETE FROM events
+        WHERE created_at < datetime('now', ?)
+          AND task_id IN (
+            SELECT id FROM tasks
+             WHERE status IN ('completed', 'failed', 'closed', 'review_ready', 'stale')
+          )`,
+      [cutoff],
+    );
+    return this.db.getRowsModified();
+  }
+
+  pruneOldSyncJournal(retentionDays: number): number {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+    const cutoff = `-${Math.floor(retentionDays)} days`;
+    this.db.run(
+      `DELETE FROM sync_journal
+        WHERE created_at < datetime('now', ?)
+          AND (
+            NOT EXISTS (SELECT 1 FROM sync_cursors)
+            OR seq <= (SELECT MIN(last_sent_seq) FROM sync_cursors)
+          )`,
+      [cutoff],
+    );
+    return this.db.getRowsModified();
+  }
+
+  getFreelistPageCount(): number {
+    const row = this.nativeDb.prepare('PRAGMA freelist_count').get() as { freelist_count?: number } | undefined;
+    return Number(row?.freelist_count ?? 0);
+  }
+
+  runIncrementalVacuum(maxPages: number): number {
+    if (!Number.isFinite(maxPages) || maxPages <= 0) return 0;
+    const autoVacuumRow = this.nativeDb.prepare('PRAGMA auto_vacuum').get() as { auto_vacuum?: number } | undefined;
+    if (Number(autoVacuumRow?.auto_vacuum ?? 0) === 0) return 0;
+    const before = this.getFreelistPageCount();
+    this.nativeDb.exec(`PRAGMA incremental_vacuum(${Math.floor(maxPages)})`);
+    const after = this.getFreelistPageCount();
+    return Math.max(0, before - after);
+  }
+
   deleteTask(taskId: string): void {
     this.runTransaction(() => {
       this.db.run('DELETE FROM task_launch_dispatch WHERE task_id = ?', [taskId]);
@@ -1901,15 +1954,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     beforeId?: number,
   ): TaskEvent[] {
     const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
-    if (limit === undefined) {
-      const rows = this.queryAll(
-        `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy}`,
-        [taskId],
-      );
-      return rows.map((row: any) => this.rowToTaskEvent(row));
-    }
-    if (limit <= 0) return [];
-    const pageLimit = Math.floor(limit);
+    const effectiveLimit = limit ?? GET_EVENTS_DEFAULT_LIMIT;
+    if (effectiveLimit <= 0) return [];
+    const pageLimit = Math.floor(effectiveLimit);
     if (beforeId !== undefined) {
       const rows = this.queryAll(
         `SELECT * FROM events WHERE task_id = ? AND id < ? ORDER BY id ${orderBy} LIMIT ?`,
@@ -1920,6 +1967,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const rows = this.queryAll(
       `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy} LIMIT ?`,
       [taskId, pageLimit],
+    );
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
+  getEventsSlim(
+    taskId: string,
+    sortBy: 'asc' | 'desc',
+    limit: number,
+    payloadMaxChars: number,
+  ): TaskEvent[] {
+    if (limit <= 0) return [];
+    const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
+    const pageLimit = Math.floor(limit);
+    const maxChars = Math.max(0, Math.floor(payloadMaxChars));
+    const rows = this.queryAll(
+      `SELECT id, task_id, event_type, created_at,
+              CASE WHEN LENGTH(payload) > ? THEN SUBSTR(payload, 1, ?) ELSE payload END AS payload
+       FROM events
+       WHERE task_id = ?
+       ORDER BY id ${orderBy}
+       LIMIT ?`,
+      [maxChars, maxChars, taskId, pageLimit],
+    );
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
+  getRecentEventsOfType(taskId: string, eventType: string, limit: number): TaskEvent[] {
+    if (limit <= 0) return [];
+    const rows = this.queryAll(
+      'SELECT * FROM events WHERE task_id = ? AND event_type = ? ORDER BY id DESC LIMIT ?',
+      [taskId, eventType, Math.floor(limit)],
     );
     return rows.map((row: any) => this.rowToTaskEvent(row));
   }

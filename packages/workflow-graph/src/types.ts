@@ -29,6 +29,7 @@ export type TaskStatus = typeof TASK_STATUSES[number];
 export interface BaseTaskConfig {
   readonly workflowId?: string;
   readonly parentTask?: string;
+  readonly variantLocalId?: string;
   readonly command?: string;
   readonly prompt?: string;
   readonly experimentPrompt?: string;

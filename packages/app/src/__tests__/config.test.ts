@@ -350,6 +350,52 @@ describe('loadConfig', () => {
     expect(config.diskHeadroom).toEqual({ cleanupEnabled: false });
   });
 
+  it('loads adminBypassE2eBabysit with positive numeric values', () => {
+    const adminBypassE2eBabysit = {
+      enabled: true,
+      intervalMinutes: 5,
+      watchedWorkerKinds: ['pr-admin-bypass-land', 'e2e-autofix'],
+      staleTtlMinutes: 30,
+    };
+    writeUserConfig({ adminBypassE2eBabysit });
+
+    expect(loadConfig().adminBypassE2eBabysit).toEqual(adminBypassE2eBabysit);
+  });
+
+  it.each([0, -1])('rejects adminBypassE2eBabysit.intervalMinutes of %s', (intervalMinutes) => {
+    writeUserConfig({ adminBypassE2eBabysit: { intervalMinutes } });
+
+    expect(() => loadConfig()).toThrow(
+      /adminBypassE2eBabysit.intervalMinutes must be an integer > 0/,
+    );
+  });
+
+  it.each([0, -1])('rejects adminBypassE2eBabysit.staleTtlMinutes of %s', (staleTtlMinutes) => {
+    writeUserConfig({ adminBypassE2eBabysit: { staleTtlMinutes } });
+
+    expect(() => loadConfig()).toThrow(
+      /adminBypassE2eBabysit.staleTtlMinutes must be an integer > 0/,
+    );
+  });
+
+  it.each([
+    { shape: 'null', value: null },
+    { shape: 'array', value: [] },
+    { shape: 'boolean', value: true },
+    { shape: 'number', value: 1 },
+    { shape: 'string', value: 'invalid' },
+  ])('rejects malformed adminBypassE2eBabysit shape: $shape', ({ value: adminBypassE2eBabysit }) => {
+    writeUserConfig({ adminBypassE2eBabysit });
+
+    expect(() => loadConfig()).toThrow(/adminBypassE2eBabysit must be an object/);
+  });
+
+  it('loads config when adminBypassE2eBabysit is omitted', () => {
+    writeUserConfig({ defaultBranch: 'main' });
+
+    expect(loadConfig().adminBypassE2eBabysit).toBeUndefined();
+  });
+
   it('defaults removed opt-in worker gates to undefined when absent', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
@@ -849,6 +895,53 @@ describe('catstackDeploy config', () => {
     expect(() => validateInvokerConfig({
       catstackDeploy: { intervalMinutes: 1.5 },
     })).toThrow(/catstackDeploy.intervalMinutes must be an integer > 0/);
+  });
+});
+
+describe('dbReaper config', () => {
+  it('accepts omitted dbReaper block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts valid intervalMinutes and retention days', () => {
+    const config = validateInvokerConfig({
+      dbReaper: { intervalMinutes: 60, eventsRetentionDays: 14, syncJournalRetentionDays: 14 },
+    });
+    expect(config.dbReaper?.intervalMinutes).toBe(60);
+    expect(config.dbReaper?.eventsRetentionDays).toBe(14);
+    expect(config.dbReaper?.syncJournalRetentionDays).toBe(14);
+  });
+
+  it('accepts a non-positive retention day value as a disable signal', () => {
+    const config = validateInvokerConfig({
+      dbReaper: { eventsRetentionDays: 0, syncJournalRetentionDays: -1 },
+    });
+    expect(config.dbReaper?.eventsRetentionDays).toBe(0);
+    expect(config.dbReaper?.syncJournalRetentionDays).toBe(-1);
+  });
+
+  it('rejects intervalMinutes of 0', () => {
+    expect(() => validateInvokerConfig({
+      dbReaper: { intervalMinutes: 0 },
+    })).toThrow(/dbReaper.intervalMinutes must be an integer > 0/);
+  });
+
+  it('rejects non-integer intervalMinutes', () => {
+    expect(() => validateInvokerConfig({
+      dbReaper: { intervalMinutes: 1.5 },
+    })).toThrow(/dbReaper.intervalMinutes must be an integer > 0/);
+  });
+
+  it('rejects a non-integer eventsRetentionDays', () => {
+    expect(() => validateInvokerConfig({
+      dbReaper: { eventsRetentionDays: 1.5 },
+    })).toThrow(/dbReaper.eventsRetentionDays must be an integer/);
+  });
+
+  it('rejects a non-integer syncJournalRetentionDays', () => {
+    expect(() => validateInvokerConfig({
+      dbReaper: { syncJournalRetentionDays: 1.5 },
+    })).toThrow(/dbReaper.syncJournalRetentionDays must be an integer/);
   });
 });
 

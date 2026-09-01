@@ -47,11 +47,41 @@ const { parse: parseYaml } = await importYaml(__dirname);
 const PLACEHOLDER_RE = /\bREPLACE_ME\b|\bTODO\b|\bTBD\b|\bFIXME\b/i;
 const MANUAL_VERIFY_RE = /\bmanually\s+check\b|\bcheck\s+manually\b|\bby\s+hand\b/i;
 const GIT_URL_RE = /^(?:git@|https?:\/\/|ssh:\/\/).+\..+/i;
+
+const HEADING_LABELS = [
+  'Goal',
+  'Motivation',
+  'Safety invariant',
+  'Effectiveness measurement',
+  'Review claim',
+  'Review lane',
+  'Slice rationale',
+  'Architectural effect',
+  'Alternative considerations',
+  'Alternatives',
+  'Implementation details',
+  'Implementation',
+  'Acceptance criteria',
+  'Non-goals',
+  'Layer',
+  'Feature state',
+  'Files',
+  'Change types',
+];
+
+function buildHeadingRegex(label) {
+  const stops = HEADING_LABELS.filter((candidate) => candidate !== label).join('|');
+  return new RegExp(`\\b${label}:\\s*(.+?)(?=\\s+(?:${stops}):|$)`, 'is');
+}
+
 const HEADING_RE = {
-  goal: /\bGoal:\s*(.+?)(?=\s+(?:Motivation|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Safety invariant|Slice rationale|Architectural effect|Files|Change types):|$)/is,
-  motivation: /\bMotivation:\s*(.+?)(?=\s+(?:Goal|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Safety invariant|Slice rationale|Architectural effect|Files|Change types):|$)/is,
-  safety: /\bSafety invariant:\s*(.+?)(?=\s+(?:Goal|Motivation|Alternative considerations|Alternatives|Implementation details|Implementation|Acceptance criteria|Non-goals|Layer|Feature state|Review claim|Review lane|Slice rationale|Architectural effect|Files|Change types):|$)/is,
+  goal: buildHeadingRegex('Goal'),
+  motivation: buildHeadingRegex('Motivation'),
+  safety: buildHeadingRegex('Safety invariant'),
+  effectiveness: buildHeadingRegex('Effectiveness measurement'),
 };
+
+const SAFETY_LABEL_PRESENT_RE = /\bSafety invariant:/i;
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -126,6 +156,21 @@ function checkPlan(plan) {
   }
 
   const tasks = collectTasks(plan);
+
+  for (const { task } of tasks) {
+    if (!isRecord(task)) continue;
+    const text = [task.description, task.prompt].filter((v) => typeof v === 'string').join('\n\n');
+    if (!SAFETY_LABEL_PRESENT_RE.test(text)) continue;
+    const id = typeof task.id === 'string' ? task.id : '(unnamed)';
+    const value = headingValue(text, 'effectiveness');
+    if (isPlaceholder(value)) {
+      gaps.push({
+        field: `${id}.Effectiveness measurement`,
+        message: `Task "${id}" is missing a real Effectiveness measurement: (empty or placeholder).`,
+      });
+    }
+  }
+
   const implementationTasks = tasks.filter(({ task }) => {
     if (!isRecord(task)) return false;
     const hasPrompt = typeof task.prompt === 'string' && task.prompt.trim();

@@ -266,6 +266,13 @@ export function buildMarkerComment(sha, jobName, failureId = JOB_LEVEL_FAILURE_I
   return `<!-- ${buildMarker(sha, jobName, failureId)} -->`;
 }
 
+function stripGitRefListingLines(text) {
+  return text
+    .split('\n')
+    .filter((line) => !/\[(?:new branch|new tag)\]|\s->\s+(?:origin\/|refs\/)/.test(line))
+    .join('\n');
+}
+
 /**
  * Derive stable per-test / per-repro identities from a CI job log.
  * Multiple distinct failures under one job must each get their own repair
@@ -273,7 +280,7 @@ export function buildMarkerComment(sha, jobName, failureId = JOB_LEVEL_FAILURE_I
  * repro after an earlier same-job repair had already been filed).
  */
 export function extractFailureIdentitiesFromLog(logText) {
-  const text = String(logText ?? '');
+  const text = stripGitRefListingLines(String(logText ?? ''));
   if (!text.trim()) return [];
 
   const found = new Map();
@@ -1294,7 +1301,7 @@ export function buildRepairFilingMetadata(failure) {
  * MUST call releaseRepairFilingClaim(failure) to undo the claim, or this key
  * would be permanently blocked from ever being retried.
  */
-export function claimRepairFiling(failure, insert = insertRepairFiling) {
+export function claimRepairFiling(failure, insert = insertRepairFiling, outcome = {}) {
   try {
     const result = insert({
       kind: repairFilingKind(failure),
@@ -1302,8 +1309,10 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
       stateSha: failure.firstBadSha,
       metadata: buildRepairFilingMetadata(failure),
     });
+    outcome.infraError = false;
     return !result.inserted;
   } catch (err) {
+    outcome.infraError = true;
     console.error(`ci-regression-watch: claimRepairFiling failed for kind="${repairFilingKind(failure)}" sha="${failure.firstBadSha}", assuming already claimed: ${err instanceof Error ? err.message : String(err)}`);
     return true;
   }
@@ -1311,15 +1320,18 @@ export function claimRepairFiling(failure, insert = insertRepairFiling) {
 
 /**
  * Returns true when this failure already has in-flight repair work or an open
- * repair PR, or when the attempt-scoped ledger claim is already held.
+ * repair PR, or when the attempt-scoped ledger claim is already held. When the
+ * skip came from the ledger claim itself, `outcome.infraError` distinguishes
+ * a genuine already-claimed conflict from the ledger call throwing (e.g. an
+ * unreachable owner) -- see claimRepairFiling.
  */
 export function shouldSkipFilingAlreadyAddressed(failure, {
   hasLiveWork = liveQueryHasNonTerminalWork,
   claim = claimRepairFiling,
   isRepairPrOpen,
-} = {}) {
+} = {}, outcome = {}) {
   if (hasLiveWork(failure, undefined, undefined, { isRepairPrOpen })) return true;
-  return claim(failure);
+  return claim(failure, undefined, outcome);
 }
 
 /**
@@ -1329,6 +1341,45 @@ export function shouldSkipFilingAlreadyAddressed(failure, {
  * must not crash the sweep; it just means this key stays claimed until a
  * human clears it or the sha changes.
  */
+/**
+ * Kind for the needs-human signal claimed once a failure exhausts
+ * shouldFileFailure's retry budget. Unlike repairFilingKind, this is NOT
+ * attempt-scoped: needs-human is a terminal state for a given firstBadSha,
+ * so ON CONFLICT DO NOTHING naturally suppresses duplicate claims across
+ * every sweep until the sha changes (the test is actually fixed). This is
+ * the row admin-bypass-e2e-babysit-worker.ts watches for and files a
+ * production investigation against (see E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX
+ * there).
+ */
+export function needsHumanRepairFilingKind(failure) {
+  const job = failure.markerJobName ?? failure.jobName;
+  const test = failure.failureId && failure.failureId !== JOB_LEVEL_FAILURE_ID
+    ? failure.failureId
+    : JOB_LEVEL_FAILURE_ID;
+  return `ci-regression-needs-human:${slugify(job)}:${slugify(test)}`;
+}
+
+/**
+ * Claims the needs-human signal for admin-bypass-e2e-babysit-worker.ts to
+ * pick up. Never throws -- a failed claim just means the worker's next
+ * periodic sweep of desired-enabled/stopped workers still runs; it only
+ * costs one missed cap-notification, not a crashed sweep.
+ */
+export function claimNeedsHumanRepairFiling(failure, insert = insertRepairFiling) {
+  try {
+    const result = insert({
+      kind: needsHumanRepairFilingKind(failure),
+      subject: resolveRepairFilingSubject(TARGET_REPO),
+      stateSha: failure.firstBadSha,
+      metadata: buildRepairFilingMetadata(failure),
+    });
+    return result.inserted;
+  } catch (err) {
+    console.error(`ci-regression-watch: claimNeedsHumanRepairFiling failed for kind="${needsHumanRepairFilingKind(failure)}" sha="${failure.firstBadSha}": ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
 export function releaseRepairFilingClaim(failure, release = releaseRepairFiling) {
   try {
     release({ kind: repairFilingKind(failure), subject: resolveRepairFilingSubject(TARGET_REPO), stateSha: failure.firstBadSha });
@@ -1357,6 +1408,9 @@ export function renderOptionalReflectTaskYaml(vars) {
       Safety invariant: This task never edits Invoker files and never merges
       a catstack PR on its own authority. If /reflect finds nothing durable,
       it makes no changes and exits 0.
+      Effectiveness measurement: The task summary names each Accepted
+      finding's catstack PR, or states "no durable finding"; either way
+      \`git diff --name-only\` in the Invoker checkout is empty.
       Slice rationale: Opt-in personal worker, downstream of verify, so
       default CI repair stays fix+verify only.
       Architectural effect: None to Invoker product code; accepted edits land
@@ -1429,7 +1483,19 @@ export function appendOptionalReflectTask(planPath, vars) {
       (match) => `${match.replace(/\n$/, '')}${waiver}`,
     );
   }
-  writeFileSync(planPath, `${next.trimEnd()}\n${renderOptionalReflectTaskYaml(vars)}`);
+  const reflectYaml = renderOptionalReflectTaskYaml(vars);
+  const scrubIdLine = '  - id: scrub-handoff-artifacts';
+  if (next.includes(scrubIdLine)) {
+    const reflectBlock = reflectYaml.replace(/^\n/, '').replace(/\n$/, '');
+    next = next.replace(scrubIdLine, `${reflectBlock}\n\n${scrubIdLine}`);
+    next = next.replace(
+      /(  - id: scrub-handoff-artifacts[\s\S]*?dependencies:\n)((?:      - .+\n?)*)/,
+      (match, head, deps) => `${head}${deps}      - reflect-ci-${vars.job_slug}\n`,
+    );
+    writeFileSync(planPath, `${next.trimEnd()}\n`);
+  } else {
+    writeFileSync(planPath, `${next.trimEnd()}\n${reflectYaml}`);
+  }
 }
 
 export function fileBugfixPlan(failure, opts = {}) {
@@ -1475,6 +1541,7 @@ export function processFailureFilingSweep(state, {
       groupsFound: failures.length,
       groupsFiled: 0,
       groupsSkippedAlreadyAddressed: 0,
+      groupsSkippedInfraError: 0,
       groupsDeferredByCap: 0,
       groupsNeedingHuman: 0,
       groupsInBackoff: 0,
@@ -1497,6 +1564,7 @@ export function processFailureFilingSweep(state, {
     groupsFound: failures.length,
     groupsFiled: 0,
     groupsSkippedAlreadyAddressed: 0,
+    groupsSkippedInfraError: 0,
     groupsDeferredByCap: 0,
     groupsNeedingHuman: prepared.groupsNeedingHuman ?? 0,
     groupsInBackoff: 0,
@@ -1543,8 +1611,13 @@ export function processFailureFilingSweep(state, {
       counts.groupsDeferredByCap += 1;
       continue;
     }
-    if (liveQuery(failure)) {
-      counts.groupsSkippedAlreadyAddressed += 1;
+    const filingOutcome = { infraError: false };
+    if (liveQuery(failure, undefined, filingOutcome)) {
+      if (filingOutcome.infraError) {
+        counts.groupsSkippedInfraError += 1;
+      } else {
+        counts.groupsSkippedAlreadyAddressed += 1;
+      }
       continue;
     }
 
@@ -1656,6 +1729,7 @@ export async function main() {
     save: saveState,
     onNeedsHuman: (failure, attemptGate) => {
       console.error(`ci-regression-watch: failure key "${buildMarker(failure.firstBadSha, failure.jobName, failure.failureId)}" reached attempt cap (${attemptGate.attempts}); needs human review`);
+      if (!dryRun) claimNeedsHumanRepairFiling(failure);
     },
     onRetired: (failure, reason) => {
       const detail = reason === 'stale-observation'

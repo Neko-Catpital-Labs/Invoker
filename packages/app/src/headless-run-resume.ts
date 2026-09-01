@@ -35,7 +35,6 @@ import {
   forkWorkflow as sharedForkWorkflow,
 } from './workflow-actions.js';
 import { parseHeadlessFixArgs } from './auto-fix-intents.js';
-import { buildPersistedAutoApproveAuthorGate } from './auto-approve-author-gate.js';
 import { resolveDefaultExecutionAgent, resolveConflictResolutionSettings } from './config.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
@@ -642,8 +641,6 @@ export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promis
       taskExecutor: te,
       mutationTiming: deps.mutationTiming,
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
-      autoApproveAuthorGate: deps.autoApproveAuthorGate
-        ?? buildPersistedAutoApproveAuthorGate(deps.persistence),
     }, {
       agentName: agent,
       recreateOutputLabel: 'Fix with AI',
@@ -703,8 +700,6 @@ export async function headlessResolveConflict(taskId: string, deps: HeadlessDeps
       ...deps,
       taskExecutor: te,
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
-      autoApproveAuthorGate: deps.autoApproveAuthorGate
-        ?? buildPersistedAutoApproveAuthorGate(deps.persistence),
     }, agentArg?.toLowerCase(), deps.signal, {
       pathDefaultAgent: resolveDefaultExecutionAgent(deps.invokerConfig),
     });

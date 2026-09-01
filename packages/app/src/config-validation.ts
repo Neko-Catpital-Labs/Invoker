@@ -1,7 +1,9 @@
 import { assertExecutionModelSupported, registerBuiltinAgents } from '@invoker/execution-engine';
 import {
   normalizeGithubOwnerRepo,
+  type AdminBypassE2eBabysitConfig,
   type CatstackDeployConfig,
+  type DbReaperConfig,
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
   type InvokerConfig,
@@ -255,6 +257,83 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateDbReaperConfig(config: InvokerConfig): void {
+  const dbReaper = config.dbReaper;
+  if (dbReaper === undefined) return;
+  if (typeof dbReaper !== 'object' || dbReaper === null || Array.isArray(dbReaper)) {
+    throw new Error('dbReaper must be an object');
+  }
+  const typed = dbReaper as DbReaperConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('dbReaper.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.eventsRetentionDays !== undefined) {
+    if (typeof typed.eventsRetentionDays !== 'number' || !Number.isInteger(typed.eventsRetentionDays)) {
+      throw new Error('dbReaper.eventsRetentionDays must be an integer');
+    }
+  }
+  if (typed.syncJournalRetentionDays !== undefined) {
+    if (typeof typed.syncJournalRetentionDays !== 'number' || !Number.isInteger(typed.syncJournalRetentionDays)) {
+      throw new Error('dbReaper.syncJournalRetentionDays must be an integer');
+    }
+  }
+  if (typed.vacuumFreelistThresholdPages !== undefined) {
+    if (
+      typeof typed.vacuumFreelistThresholdPages !== 'number'
+      || !Number.isInteger(typed.vacuumFreelistThresholdPages)
+      || typed.vacuumFreelistThresholdPages <= 0
+    ) {
+      throw new Error('dbReaper.vacuumFreelistThresholdPages must be an integer > 0');
+    }
+  }
+  if (typed.vacuumMaxPagesPerTick !== undefined) {
+    if (
+      typeof typed.vacuumMaxPagesPerTick !== 'number'
+      || !Number.isInteger(typed.vacuumMaxPagesPerTick)
+      || typed.vacuumMaxPagesPerTick <= 0
+    ) {
+      throw new Error('dbReaper.vacuumMaxPagesPerTick must be an integer > 0');
+    }
+  }
+}
+
+function validateAdminBypassE2eBabysitConfig(config: InvokerConfig): void {
+  const adminBypassE2eBabysit = config.adminBypassE2eBabysit;
+  if (adminBypassE2eBabysit === undefined) return;
+  if (
+    typeof adminBypassE2eBabysit !== 'object'
+    || adminBypassE2eBabysit === null
+    || Array.isArray(adminBypassE2eBabysit)
+  ) {
+    throw new Error('adminBypassE2eBabysit must be an object');
+  }
+  const typed = adminBypassE2eBabysit as AdminBypassE2eBabysitConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('adminBypassE2eBabysit.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.staleTtlMinutes !== undefined) {
+    if (
+      typeof typed.staleTtlMinutes !== 'number'
+      || !Number.isInteger(typed.staleTtlMinutes)
+      || typed.staleTtlMinutes <= 0
+    ) {
+      throw new Error('adminBypassE2eBabysit.staleTtlMinutes must be an integer > 0');
+    }
+  }
+}
+
 export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   const nestedExecutionAgent = config.defaultExecution?.executionAgent;
   const hasNestedExecutionAgent = typeof nestedExecutionAgent === 'string' && nestedExecutionAgent.trim().length > 0;
@@ -286,5 +365,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateDbReaperConfig(config);
+  validateAdminBypassE2eBabysitConfig(config);
   return config;
 }

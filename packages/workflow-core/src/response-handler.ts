@@ -23,6 +23,7 @@ function planLocalFromActionId(actionId: string): string {
 
 export interface ParsedVariantDef {
   id: string;
+  localId: string;
   description: string;
   prompt?: string;
   command?: string;
@@ -152,6 +153,7 @@ export class ResponseHandler {
         const variants: ParsedVariantDef[] =
           dagMutation.spawnExperiments.variants.map((v) => ({
             id: `${pivotLocal}-exp-${v.id}`,
+            localId: v.id,
             description: v.description ?? `Experiment: ${v.id}`,
             prompt: v.prompt,
             command: v.command,

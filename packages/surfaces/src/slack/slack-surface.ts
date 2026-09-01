@@ -140,6 +140,15 @@ export interface SlackSurfaceConfig {
   harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
 }
 
+
+/** Payload for {@link SlackSurface.injectMention} (localhost smoke inject). */
+export interface InjectMentionRequest {
+  channelId: string;
+  threadTs: string;
+  text: string;
+  userId: string;
+}
+
 export interface HarnessPreset {
   tool: string;
   model?: string;
@@ -174,7 +183,7 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
   claude: { tool: 'claude' },
 };
 
-export const DEFAULT_HARNESS_PRESET = 'cursor+claude';
+export const DEFAULT_HARNESS_PRESET = 'codex';
 
 interface PlanningContext {
   repoUrl?: string;
@@ -881,6 +890,39 @@ export class SlackSurface implements Surface {
     this.log('slack', 'info', 'Slack bot stopped');
   }
 
+
+  /**
+   * Drive the same mention path Socket Mode uses, posting replies into a real
+   * Slack thread via the bot client. Used by the localhost-only smoke inject
+   * because Slack bots do not receive their own app_mention events.
+   */
+  async injectMention(request: InjectMentionRequest): Promise<void> {
+    const channel = request.channelId;
+    const threadTs = request.threadTs;
+    const text = request.text.includes('<@')
+      ? request.text
+      : (this.botUserId ? `<@${this.botUserId}> ${request.text}` : request.text);
+    const event: SlackMentionEvent = {
+      text,
+      ts: threadTs,
+      thread_ts: threadTs,
+      user: request.userId,
+      channel,
+    };
+    const say: SayFn = async ({ text: replyText, thread_ts, blocks }) => {
+      const res = await this.app.client.chat.postMessage({
+        channel,
+        text: replyText,
+        thread_ts,
+        ...(blocks ? { blocks: blocks as never } : {}),
+      });
+      return { ts: res.ts as string };
+    };
+    this.log('slack', 'info', `[SMOKE_INJECT] channel=${channel} thread_ts=${threadTs} user=${request.userId}`);
+    const mapping = this.workflowChannelRepo?.getByChannelId(channel);
+    await this.handleMention(event, say, channel, mapping ?? undefined);
+  }
+
   // ── Slash Command ───────────────────────────────────────
 
   private registerSlashCommand(): void {
@@ -1579,8 +1621,21 @@ export class SlackSurface implements Surface {
     return parsed;
   }
 
+  private describeOutboundActions(blocks: unknown[] | undefined): string {
+    if (!blocks?.length) return 'none';
+    const pairs: string[] = [];
+    for (const block of blocks as Array<{ elements?: Array<{ action_id?: string; value?: string }> }>) {
+      for (const el of block.elements ?? []) {
+        if (el.action_id) pairs.push(`${el.action_id}=${el.value ?? ''}`);
+      }
+    }
+    return pairs.length > 0 ? pairs.join(',') : 'none';
+  }
+
   private async replacePlanDraftMessage(draft: SlackPlanDraft, text: string, blocks: unknown[]): Promise<void> {
     if (!draft.messageTs) return;
+    this.log('slack', 'info',
+      `[OUTBOUND_MESSAGE] chat.update channel=${draft.channelId} thread_ts=${draft.threadTs} ts=${draft.messageTs} draft=${draft.draftId}:${draft.version} textPreview="${text.slice(0, 100).replace(/\n/g, '\\n')}" actions=${this.describeOutboundActions(blocks)}`);
     await this.app.client.chat.update({
       channel: draft.channelId,
       ts: draft.messageTs,
@@ -1634,6 +1689,26 @@ export class SlackSurface implements Surface {
     }
   }
 
+  private logDraftActionUnavailable(
+    actionName: string,
+    value: string,
+    key: { draftId: string; version: number } | undefined,
+    context: { channel?: string; threadTs?: string; userId?: string },
+    draft: SlackPlanDraft | undefined,
+  ): void {
+    const reasons: string[] = [];
+    if (!key) reasons.push('unparseable_button_value');
+    if (key && !draft) reasons.push('draft_row_not_found');
+    if (!context.channel) reasons.push('missing_context_channel');
+    if (!context.threadTs) reasons.push('missing_context_threadTs');
+    if (!context.userId) reasons.push('missing_context_userId');
+    if (draft && context.channel && draft.channelId !== context.channel) reasons.push(`channel_mismatch(draft=${draft.channelId},click=${context.channel})`);
+    if (draft && context.threadTs && draft.threadTs !== context.threadTs) reasons.push(`threadTs_mismatch(draft=${draft.threadTs},click=${context.threadTs})`);
+    if (draft && context.userId && draft.requestedBy !== context.userId) reasons.push(`requestedBy_mismatch(draft=${draft.requestedBy},click=${context.userId})`);
+    this.log('slack', 'warn',
+      `[PLAN_DRAFT_ACTION_UNAVAILABLE] action=${actionName} value="${value}" draft=${draft ? `${draft.draftId}:${draft.version}(status=${draft.status})` : 'none'} click_channel=${context.channel ?? 'none'} click_threadTs=${context.threadTs ?? 'none'} click_userId=${context.userId ?? 'none'} reasons=${reasons.join('|') || 'unknown'}`);
+  }
+
   private async approveSlackPlanDraft(value: string, body: unknown, respond?: RespondFn): Promise<void> {
     const key = this.parseDraftAction(value);
     const context = this.draftActionContext(body);
@@ -1641,6 +1716,7 @@ export class SlackSurface implements Surface {
     if (!draft || !context.channel || !context.threadTs || !context.userId
       || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
       || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('approve', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1658,6 +1734,7 @@ export class SlackSurface implements Surface {
     if (!draft || !context.channel || !context.threadTs || !context.userId
       || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
       || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('cancel', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -1680,6 +1757,7 @@ export class SlackSurface implements Surface {
     if (!draft || !context.channel || !context.threadTs || !context.userId
       || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
       || draft.requestedBy !== context.userId) {
+      this.logDraftActionUnavailable('discard', value, key, context, draft);
       await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
       return;
     }
@@ -2521,6 +2599,7 @@ ${text}`;
     say: SayFn,
   ): Promise<void> {
     const threadTs = event.thread_ts ?? event.ts;
+    const channel = event.channel ?? mapping.channelId;
     const text = (event.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
     this.log('slack', 'info', `[WORKFLOW_MENTION] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} workflow=${mapping.workflowId}`);
     if (!text) {
@@ -2542,14 +2621,65 @@ ${text}`;
       return;
     }
 
+    if (this.enableImmediateAck) {
+      await this.sendImmediateAck(threadTs, say);
+    }
+
+    const heartbeatMs = (this.planningHeartbeatIntervalSeconds ?? 120) * 1_000;
+    let heartbeatTimer: NodeJS.Timeout | undefined;
+    const heartbeatTimestamps: string[] = [];
+    let heartbeatInFlight = false;
+    const cleanupHeartbeats = async (): Promise<void> => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+      for (const hbTs of heartbeatTimestamps) {
+        try {
+          await this.deleteMessage(channel, hbTs);
+        } catch (err) {
+          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
+        }
+      }
+    };
+    if (heartbeatMs > 0) {
+      heartbeatTimer = setInterval(async () => {
+        if (heartbeatInFlight) return;
+        heartbeatInFlight = true;
+        try {
+          const result = await this.sayWithRateLimitRetry(say, {
+            text: ':hourglass_flowing_sand: Still thinking...',
+            thread_ts: threadTs,
+          });
+          if (result?.ts) heartbeatTimestamps.push(result.ts);
+          this.log('slack', 'info', `[HEARTBEAT] Sent planning heartbeat (thread_ts=${threadTs})`);
+        } catch (err) {
+          this.log('slack', 'error', `[HEARTBEAT] Failed to send planning heartbeat: ${err}`);
+        } finally {
+          heartbeatInFlight = false;
+        }
+      }, heartbeatMs);
+    }
+
     try {
       const ctx = await this.gatherWorkflowContext(mapping.workflowId);
       const harness = this.resolveHarnessPreset(mapping.harnessPreset ?? this.defaultHarnessPreset);
       this.log('slack', 'info', `[WORKFLOW_PLANNER] instance=${this.instanceId} event_ts=${event.ts} tool=${harness.tool} model=${harness.model ?? 'default'}`);
       const reply = await this.runOneShotPlanner(harness, buildAssistantPrompt(text, ctx));
       const chunks = splitForSlack(sanitizeSlackOutbound(reply));
-      for (let i = 0; i < chunks.length; i++) {
-        if (i > 0) await this.sleep(this.messagePacingMs);
+      const ackTs = this.ackMessages.get(threadTs);
+      if (ackTs && chunks[0]) {
+        const updated = await this.updateMessage(channel, ackTs, { text: chunks[0], blocks: [] });
+        this.ackMessages.delete(threadTs);
+        if (!updated) {
+          await this.deleteMessage(channel, ackTs);
+          await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
+        }
+      } else if (chunks[0]) {
+        await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
+      }
+      for (let i = 1; i < chunks.length; i++) {
+        await this.sleep(this.messagePacingMs);
         await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
       }
     } catch (err) {
@@ -2558,6 +2688,9 @@ ${text}`;
         text: `Error: ${err instanceof Error ? err.message : String(err)}`,
         thread_ts: threadTs,
       });
+    } finally {
+      await cleanupHeartbeats();
+      await this.clearImmediateAck(channel, threadTs);
     }
   }
 
@@ -2675,33 +2808,47 @@ ${text}`;
       let stdout = '';
       let stderr = '';
       let timedOut = false;
+      let settled = false;
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
       child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       const timer = setTimeout(() => {
         timedOut = true;
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-      }, timeoutMs);
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (timedOut) {
+        settle(() => {
           reject(new Error(`Planner timed out after ${timeoutMs}ms`));
-          return;
-        }
-        if (code === 0) {
-          const trimmed = stdout.trim();
-          if (trimmed) {
-            const message = formatCodexPlannerStdout(trimmed).message;
-            resolve(message || 'The planner completed without a final user-facing reply.');
-          } else {
-            reject(new EmptyOutputAttemptError(stderr));
+        });
+      }, timeoutMs);
+      const onProcessEnd = (code: number | null): void => {
+        settle(() => {
+          if (timedOut) {
+            reject(new Error(`Planner timed out after ${timeoutMs}ms`));
+            return;
           }
-        } else {
-          reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
-        }
-      });
+          if (code === 0) {
+            const trimmed = stdout.trim();
+            if (trimmed) {
+              const message = formatCodexPlannerStdout(trimmed).message;
+              resolve(message || 'The planner completed without a final user-facing reply.');
+            } else {
+              reject(new EmptyOutputAttemptError(stderr));
+            }
+          } else {
+            reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
+          }
+        });
+      };
+      child.on('exit', (code) => { onProcessEnd(code); });
+      child.on('close', (code) => { onProcessEnd(code); });
       child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(new Error(`Failed to spawn planner CLI: ${err.message}`));
+        settle(() => {
+          reject(new Error(`Failed to spawn planner CLI: ${err.message}`));
+        });
       });
     });
   }
@@ -3142,15 +3289,25 @@ ${text}`;
     say: SayFn,
     msg: { text: string; thread_ts: string; blocks?: unknown[] },
   ): Promise<any> {
+    const textPreview = (msg.text ?? '').slice(0, 100).replace(/\n/g, '\\n');
+    const actions = this.describeOutboundActions(msg.blocks);
+    let result: any;
     try {
-      return await say(msg);
+      result = await say(msg);
     } catch (err) {
       const retryAfterMs = this.getRetryAfterMs(err);
-      if (retryAfterMs === null) throw err;
+      if (retryAfterMs === null) {
+        this.log('slack', 'error',
+          `[OUTBOUND_MESSAGE] say FAILED thread_ts=${msg.thread_ts} textPreview="${textPreview}" actions=${actions} error=${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
       this.log('slack', 'warn', `[RATE_LIMIT] Delaying retry for ${retryAfterMs}ms (thread_ts=${msg.thread_ts})`);
       await this.sleep(retryAfterMs + 100);
-      return await say(msg);
+      result = await say(msg);
     }
+    this.log('slack', 'info',
+      `[OUTBOUND_MESSAGE] say thread_ts=${msg.thread_ts} ts=${result?.ts ?? 'unknown'} textPreview="${textPreview}" actions=${actions}`);
+    return result;
   }
 
   private isCursorCliMissingError(err: unknown): boolean {

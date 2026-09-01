@@ -8,6 +8,7 @@ import {
   buildFailureKey,
   buildMarker,
   buildRepairFilingMetadata,
+  claimNeedsHumanRepairFiling,
   claimRepairFiling,
   CATSTACK_REPO_URL,
   DEFAULT_TARGET_REPO,
@@ -24,6 +25,7 @@ import {
   loadEmptyState,
   liveQueryHasNonTerminalWork,
   loadWatchConfigFile,
+  needsHumanRepairFilingKind,
   normalizeState,
   parseTargetRepoFlag,
   parseWatchConfigFlag,
@@ -56,7 +58,7 @@ function makeFailure(overrides = {}) {
     lastBadRunId: 100,
     lastJobDatabaseId: 200,
     lastJobUrl: 'https://example.test/job/200',
-    lastObservedAt: '2026-08-21T12:00:00Z',
+    lastObservedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     occurrences: 1,
     attempts: 0,
     lastFiledAt: null,
@@ -143,23 +145,24 @@ describe('liveQueryHasNonTerminalWork', () => {
   });
 });
 
+function makeFakeLedger() {
+  const rows = new Map();
+  return {
+    rows,
+    insert: ({ kind, subject, stateSha, metadata }) => {
+      const key = `${kind} ${subject} ${stateSha}`;
+      if (rows.has(key)) return { inserted: false, row: rows.get(key) };
+      const row = { kind, subject, stateSha, metadata };
+      rows.set(key, row);
+      return { inserted: true, row };
+    },
+    release: ({ kind, subject, stateSha }) => {
+      rows.delete(`${kind} ${subject} ${stateSha}`);
+    },
+  };
+}
+
 describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingClaim)', () => {
-  function makeFakeLedger() {
-    const rows = new Map();
-    return {
-      rows,
-      insert: ({ kind, subject, stateSha, metadata }) => {
-        const key = `${kind} ${subject} ${stateSha}`;
-        if (rows.has(key)) return { inserted: false, row: rows.get(key) };
-        const row = { kind, subject, stateSha, metadata };
-        rows.set(key, row);
-        return { inserted: true, row };
-      },
-      release: ({ kind, subject, stateSha }) => {
-        rows.delete(`${kind} ${subject} ${stateSha}`);
-      },
-    };
-  }
 
   it('kind is namespaced per CI job, failure identity, and attempt ordinal', () => {
     assert.equal(
@@ -228,6 +231,44 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
     assert.equal(claimRepairFiling(failure, throwingInsert), true);
   });
 
+  it('processFailureFilingSweep counts an unreachable ledger as an infra error, not an already-addressed conflict', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const state = stateWithFailure(failure);
+    const throwingInsert = () => { throw new Error('ECONNREFUSED'); };
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-21T12:00:01Z'),
+      liveQuery: (candidate, options, outcome) => shouldSkipFilingAlreadyAddressed(candidate, {
+        hasLiveWork: () => false,
+        claim: (inner, _insert, innerOutcome) => claimRepairFiling(inner, throwingInsert, innerOutcome),
+      }, outcome),
+      fileFailure: () => {},
+      isPaused: () => false,
+    });
+
+    assert.equal(counts.groupsSkippedInfraError, 1);
+    assert.equal(counts.groupsSkippedAlreadyAddressed, 0);
+  });
+
+  it('processFailureFilingSweep counts a genuine already-claimed ledger response as already-addressed, not an infra error', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const state = stateWithFailure(failure);
+    const alreadyClaimedInsert = () => ({ inserted: false, row: {} });
+
+    const counts = processFailureFilingSweep(state, {
+      now: new Date('2026-08-21T12:00:01Z'),
+      liveQuery: (candidate, options, outcome) => shouldSkipFilingAlreadyAddressed(candidate, {
+        hasLiveWork: () => false,
+        claim: (inner, _insert, innerOutcome) => claimRepairFiling(inner, alreadyClaimedInsert, innerOutcome),
+      }, outcome),
+      fileFailure: () => {},
+      isPaused: () => false,
+    });
+
+    assert.equal(counts.groupsSkippedAlreadyAddressed, 1);
+    assert.equal(counts.groupsSkippedInfraError, 0);
+  });
+
   it('puts the fleet member list in metadata, not the key', () => {
     const failure = makeFailure({
       jobName: 'fleet / abc123d',
@@ -266,6 +307,67 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
     });
 
     assert.equal(filedCount, 1, 'the second sweep must not file a duplicate for the identical key');
+    assert.equal(ledger.rows.size, 1);
+  });
+});
+
+describe('needs-human repair-filings claim (claimNeedsHumanRepairFiling)', () => {
+  it('kind is namespaced per CI job and failure identity, with no attempt ordinal (needs-human is terminal per sha)', () => {
+    assert.equal(
+      needsHumanRepairFilingKind(makeFailure({ jobName: 'required-fast / Guardrails' })),
+      'ci-regression-needs-human:required-fast-guardrails:job',
+    );
+    assert.equal(
+      needsHumanRepairFilingKind(makeFailure({
+        jobName: 'fleet / abc123d',
+        markerJobName: 'fleet',
+        failureId: 'job',
+        attempts: 5,
+      })),
+      'ci-regression-needs-human:fleet:job',
+    );
+  });
+
+  it('claims the key once; a second claim for the identical (kind, subject, stateSha) is rejected', () => {
+    const ledger = makeFakeLedger();
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+
+    assert.equal(claimNeedsHumanRepairFiling(failure, ledger.insert), true, 'first claim must succeed');
+    assert.equal(ledger.rows.size, 1);
+
+    assert.equal(claimNeedsHumanRepairFiling(failure, ledger.insert), false, 'second claim for the identical key must be rejected');
+    assert.equal(ledger.rows.size, 1, 'exactly one row must exist for this key, not two');
+  });
+
+  it('fails closed to false (no crash) when the ledger call throws', () => {
+    const failure = makeFailure({ firstBadSha: 'shaA' });
+    const throwingInsert = () => { throw new Error('headless_mutation timed out'); };
+    assert.equal(claimNeedsHumanRepairFiling(failure, throwingInsert), false);
+  });
+
+  it('processFailureFilingSweep end-to-end: reaching the attempt cap claims the needs-human key exactly once across repeated sweeps', () => {
+    const ledger = makeFakeLedger();
+    const state = stateWithFailure(makeFailure({ attempts: 3, firstBadSha: 'shaA' }));
+    let claims = 0;
+
+    const sweepOnce = (sweepState) => processFailureFilingSweep(sweepState, {
+      now: new Date('2026-08-12T01:00:00Z'),
+      maxAttempts: 3,
+      liveQuery: () => false,
+      fileFailure: () => {},
+      onNeedsHuman: (failure) => {
+        if (claimNeedsHumanRepairFiling(failure, ledger.insert)) claims += 1;
+      },
+    });
+
+    sweepOnce(state);
+    assert.equal(claims, 1);
+    assert.equal(ledger.rows.size, 1);
+
+    // A second sweep still under the same cap (same firstBadSha, still
+    // needsHuman) must not claim a duplicate key.
+    sweepOnce(state);
+    assert.equal(claims, 1, 'a repeat sweep for the identical (kind, subject, stateSha) must not re-claim');
     assert.equal(ledger.rows.size, 1);
   });
 });
@@ -1254,6 +1356,19 @@ describe('per-test failure identity under one CI job', () => {
     ].join('\n');
     const identities = extractFailureIdentitiesFromLog(log);
     assert.equal(identities.some((entry) => entry.failureId.includes('repro-babysit-pr-body-human-split')), true);
+  });
+
+  it('ignores git ref-sync listings while preserving genuine failure identities', () => {
+    const log = [
+      '* [new branch]  experiment/wf-98378590220/repro-event-loop-block/390bb7f -> origin/experiment/wf-98378590220/repro-event-loop-block/390bb7f',
+      '* [new tag]  repro-asar-enotdir-snapshot -> repro-asar-enotdir-snapshot',
+      'FAIL packages/some-package/src/__tests__/real-distinct-failure.test.ts',
+    ].join('\n');
+    const identities = extractFailureIdentitiesFromLog(log);
+
+    assert.equal(identities.some((entry) => entry.failureId.includes('repro-event-loop-block')), false);
+    assert.equal(identities.some((entry) => entry.failureId.includes('repro-asar-enotdir')), false);
+    assert.equal(identities.some((entry) => entry.failureId.includes('real-distinct-failure')), true);
   });
 
   it('reproduces the bug: two distinct repros under one job must each get their own repair lifecycle', () => {

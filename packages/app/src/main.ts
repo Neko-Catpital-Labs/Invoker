@@ -30,11 +30,10 @@ const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E
 const earlyHeadlessMode = process.argv.includes('--headless')
   || process.argv.includes('--install-skills')
   || process.argv.slice(2).includes('install-skills');
+const sourceDevelopmentProfile = process.env.INVOKER_DEVELOPMENT_PROFILE === '1';
 
 configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadlessMode });
 
-// Isolate userData (and with it the single-instance lock) for e2e runs so a
-// test instance can launch alongside a normally running Invoker.
 if (process.env.INVOKER_USER_DATA_DIR) {
   app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
 }
@@ -67,6 +66,7 @@ import type {
   InAppPlanningDiscardDraftRequest,
   InAppPlanningListSessionsResponse,
   InAppPlanningRebindRepoRequest,
+  InAppPlanningRepoBinding,
   InAppPlanningResetRequest,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
@@ -108,6 +108,7 @@ import {
   submitRepairWorkflowFromCiFailure,
   createPrMaintenanceGitHub,
   spawnPrMaintenanceCommand,
+  WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -127,7 +128,6 @@ import {
   resolveAutoApproveAIFixes,
   resolveAutoFixRetries,
 } from './autofix-defaults.js';
-import { buildPersistedAutoApproveAuthorGate } from './auto-approve-author-gate.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
@@ -156,6 +156,7 @@ import { assertAllWorkerMutationChannelsRegistered, buildWorkerMutationHandlers 
 import {
   runHeadless,
   isDelegated,
+  isTimeout,
   tryDelegateRun,
   tryDelegateResume,
   resolveDelegationTimeoutMs,
@@ -165,6 +166,7 @@ import {
   createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   type HeadlessDeps,
+  type DelegationOutcome,
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
@@ -196,7 +198,12 @@ import {
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
-import { isWriterLockHeldError, resolveOwnerServeLockFailure } from './owner-split-brain.js';
+import {
+  buildGuiLockConflictPrompt,
+  isWriterLockHeldError,
+  resolveOwnerServeLockFailure,
+  terminateAndAwaitExit,
+} from './owner-split-brain.js';
 import { createOwnerSocketSentinel, type OwnerSocketSentinel } from './owner-socket-sentinel.js';
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
@@ -367,6 +374,13 @@ function buildRegisteredOwnerWorkerDeps(
   checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
   planningCommandBuilder: PlanningCommandBuilder,
   executionAgentRegistry: AgentRegistry,
+  adminBypassE2eBabysitDeps: Pick<
+    WorkerRuntimeDependencies,
+    | 'adminBypassE2eBabysit'
+    | 'workerLifecycleStarter'
+    | 'repairFilingStore'
+    | 'investigativePlanSubmitter'
+  >,
 ): WorkerRuntimeDependencies {
   const remoteTargets = Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
     name,
@@ -428,9 +442,9 @@ function buildRegisteredOwnerWorkerDeps(
       ),
     },
     e2eAutoFix: resolveE2eAutoFixWorkerConfig(invokerConfig),
+    workerSessionMine: {},
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
-      authorGate: buildPersistedAutoApproveAuthorGate(persistence),
     },
     slackBugScan: buildSlackBugScanWorkerConfig(planningCommandBuilder, executionAgentRegistry),
     crossRepoResearch: {
@@ -449,6 +463,23 @@ function buildRegisteredOwnerWorkerDeps(
         INVOKER_LINEAR_TEAM_ID: invokerConfig.mergifyQueueResearch?.linearTeamId,
       },
     },
+    catstackDeploy: {
+      intervalMs: (invokerConfig.catstackDeploy?.intervalMinutes ?? 15) * 60_000,
+      repoUrl: invokerConfig.catstackDeploy?.repoUrl,
+      localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
+      remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+      remoteTargets: remoteTargets.map((target) => ({
+        name: target.name,
+        connection: target.connection,
+      })),
+    },
+    dbReaper: {
+      intervalMs: (invokerConfig.dbReaper?.intervalMinutes ?? 60) * 60_000,
+      eventsRetentionDays: invokerConfig.dbReaper?.eventsRetentionDays,
+      syncJournalRetentionDays: invokerConfig.dbReaper?.syncJournalRetentionDays,
+      vacuumFreelistThresholdPages: invokerConfig.dbReaper?.vacuumFreelistThresholdPages,
+      vacuumMaxPagesPerTick: invokerConfig.dbReaper?.vacuumMaxPagesPerTick,
+    },
     idleTaskCleanup: {
       github: createPrMaintenanceGitHub({
         run: spawnPrMaintenanceCommand,
@@ -458,8 +489,20 @@ function buildRegisteredOwnerWorkerDeps(
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       }),
     },
+    ...adminBypassE2eBabysitDeps,
   };
 }
+
+function toWorkerLifecycleSnapshots(workers: WorkerStatusSnapshot['workers']) {
+  return workers.map((worker) => ({
+    kind: worker.kind,
+    desiredEnabled: worker.desiredEnabled ?? worker.autoStarts,
+    lifecycle: worker.lifecycle,
+  }));
+}
+
+let startAdminBypassE2eBabysitWorker: ((kind: string) => unknown) | undefined;
+let submitAdminBypassE2eBabysitPlan: ((planText: string) => unknown) | undefined;
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
   const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
@@ -601,10 +644,9 @@ process.on('unhandledRejection', (reason) => {
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
 const planDoctorScriptPath = path.join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
 
-// Load secrets from ~/.invoker/.env (canonical) then the repo .env BEFORE any startup guard
-// reads process.env. dotenv never overrides vars already set in the real environment.
 function loadInvokerEnvFiles(): void {
-  for (const envPath of [path.join(homedir(), '.invoker', '.env'), path.resolve(repoRoot, '.env')]) {
+  const profileEnvPath = process.env.INVOKER_ENV_PATH ?? path.join(homedir(), '.invoker', '.env');
+  for (const envPath of [profileEnvPath, path.resolve(repoRoot, '.env')]) {
     if (existsSync(envPath)) loadDotenv({ path: envPath });
   }
 }
@@ -991,25 +1033,25 @@ async function tryDelegateHeadlessMutationToBus(
   args: string[],
   bus: MessageBus,
   command: string | undefined,
-): Promise<boolean> {
+): Promise<DelegationOutcome> {
   if (command === 'run') {
     const planPath = args[1];
     if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-    return isDelegated(await tryDelegateRun(planPath, bus, waitForApproval, noTrack));
+    return tryDelegateRun(planPath, bus, waitForApproval, noTrack);
   }
   if (command === 'resume') {
     const workflowId = args[1];
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-    return isDelegated(await tryDelegateResume(workflowId, bus, waitForApproval, noTrack));
+    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack);
   }
   const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(args);
-  return isDelegated(await tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs));
+  return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 
 async function tryDelegateHeadlessMutationToExistingOwner(
   args: string[],
   command: string | undefined,
-): Promise<'delegated' | 'no-compatible-owner' | 'failed'> {
+): Promise<'delegated' | 'no-compatible-owner' | 'timeout' | 'failed'> {
   let delegationBus = new IpcBus(undefined, { allowServe: false });
   try {
     await delegationBus.ready();
@@ -1019,9 +1061,10 @@ async function tryDelegateHeadlessMutationToExistingOwner(
         : EXISTING_HEADLESS_MUTATION_OWNER_REFRESH_TIMEOUT_MS;
       const owner = await discoverOwner(delegationBus, timeoutMs);
       if (isStandaloneCapable(owner)) {
-        return await tryDelegateHeadlessMutationToBus(args, delegationBus, command)
-          ? 'delegated'
-          : 'failed';
+        const outcome = await tryDelegateHeadlessMutationToBus(args, delegationBus, command);
+        if (isDelegated(outcome)) return 'delegated';
+        if (isTimeout(outcome)) return 'timeout';
+        return 'failed';
       }
       if (attempt === 0) {
         delegationBus.disconnect();
@@ -1118,26 +1161,31 @@ function startHeadlessMode(): void {
         try {
           await delegationBus.ready();
 
-          const delegated = await tryDelegateHeadlessMutationToBus(cliArgs, delegationBus, command);
-          if (delegated) {
-            // Successfully delegated to owner
+          const outcome = await tryDelegateHeadlessMutationToBus(cliArgs, delegationBus, command);
+          if (isDelegated(outcome)) {
             delegationBus.disconnect();
             await flushStdoutAndStderr();
             process.exit(process.exitCode ?? 0);
-            return; // Guard: process.exit() may not halt in Electron async context
+            return;
           }
 
-          // Delegation failed: no owner handler available.
           delegationBus.disconnect();
-          process.stderr.write(
-            `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
-            `\n${BOLD}Options:${RESET}\n` +
-            `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
-            `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
-            `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.\n`
-          );
+          if (isTimeout(outcome)) {
+            process.stderr.write(
+              `${RED}Error:${RESET} Mutation command "${command}" timed out waiting for the owner process.\n` +
+              `The owner may be busy processing another request. Try again in a moment.\n`,
+            );
+          } else {
+            process.stderr.write(
+              `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
+              `\n${BOLD}Options:${RESET}\n` +
+              `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
+              `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
+              `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.\n`,
+            );
+          }
           process.exit(1);
-          return; // Guard: process.exit() may not halt in Electron async context
+          return;
         } catch (err) {
           process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
           delegationBus.disconnect();
@@ -1331,14 +1379,16 @@ function startHeadlessMode(): void {
 
       const loadGeneratedPlan = async (
         planText: string,
+        repositoryBinding?: InAppPlanningRepoBinding,
       ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => (
         loadPlanSubmissionBundle(planText, {
           persistence,
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        })
+        }, { staged: true, repositoryBinding })
       );
+      submitAdminBypassE2eBabysitPlan = (planText) => loadGeneratedPlan(planText);
 
       // Web clients get planning-chat token streaming over SSE. The bridge does
       // not exist yet when these handlers are built, so route through a
@@ -1838,6 +1888,11 @@ function startHeadlessMode(): void {
             }),
             getTaskExecutor: createStandaloneTaskExecutor,
             getMutationTiming: () => activeMutationContext?.mutationTiming,
+            idleTaskCleanup: {
+              store: persistence,
+              now: () => Date.now(),
+              idleThresholdMs: WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS,
+            },
             contextLabel: 'standalone',
           });
           for (const [channel, handler] of standaloneWorkerHandlers) {
@@ -2072,12 +2127,57 @@ function startHeadlessMode(): void {
             },
             planningCommandBuilder,
             agentRegistry,
+            {
+              adminBypassE2eBabysit: {
+                enabled: invokerConfig.adminBypassE2eBabysit?.enabled ?? false,
+                intervalMs: invokerConfig.adminBypassE2eBabysit?.intervalMinutes === undefined
+                  ? undefined
+                  : invokerConfig.adminBypassE2eBabysit.intervalMinutes * 60_000,
+                watchedWorkerKinds: invokerConfig.adminBypassE2eBabysit?.watchedWorkerKinds,
+                staleTtlMs: invokerConfig.adminBypassE2eBabysit?.staleTtlMinutes === undefined
+                  ? undefined
+                  : invokerConfig.adminBypassE2eBabysit.staleTtlMinutes * 60_000,
+              },
+              workerLifecycleStarter: {
+                listWorkers: () => toWorkerLifecycleSnapshots((
+                  workerRuntimeController?.snapshot()
+                  ?? createLocalWorkerStatusSnapshot({
+                    registry: createRegisteredWorkerRegistry(),
+                    persistence,
+                    autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+                  })
+                ).workers),
+                start: (kind) => {
+                  if (!startAdminBypassE2eBabysitWorker) {
+                    throw new Error('admin-bypass-e2e-babysit worker lifecycle starter is not ready');
+                  }
+                  return startAdminBypassE2eBabysitWorker(kind);
+                },
+              },
+              repairFilingStore: {
+                listRepairFilings: () => persistence.listRepairFilings(),
+                deleteRepairFiling: (kind, subject, stateSha) => (
+                  persistence.deleteRepairFiling(kind, subject, stateSha)
+                ),
+                insertRepairFiling: (input) => persistence.insertRepairFiling(input),
+              },
+              investigativePlanSubmitter: {
+                submitPlan: (planText) => {
+                  if (!submitAdminBypassE2eBabysitPlan) {
+                    throw new Error('admin-bypass-e2e-babysit investigative plan submitter is not ready');
+                  }
+                  return submitAdminBypassE2eBabysitPlan(planText);
+                },
+              },
+            },
           ),
-          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+          autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
+        const activeWorkerRuntimeController = workerRuntimeController;
+        startAdminBypassE2eBabysitWorker = (kind) => activeWorkerRuntimeController.start(kind);
         if (!readOnlyMode) {
           const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
           if (reconciledWorkerActions > 0) {
@@ -2087,17 +2187,17 @@ function startHeadlessMode(): void {
             );
           }
         }
-        workerRuntimeController.startAutoStartedWorkers();
-        // Owner discovery and exec handlers must exist before dispatch polling starts.
-        if (!readOnlyMode) {
-          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
-            headlessDeps,
-            ownerId: workflowMutationOwnerId,
-            createTaskExecutor: createStandaloneTaskExecutor,
-            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
-            topUpReadyLaunchesEnabled: () => !invokerConfig.disableAutoRunOnStartup,
-          });
-        }
+        // Start the web surface BEFORE workers/dispatcher for owner-serve so HTTP
+        // bind is not blocked by any boot-time scheduler drains or worker init.
+        // This prevents the DO1 incident pattern where HTTP never binds because
+        // startAutoStartedWorkers or standaloneLaunchDispatcher.poll() triggers
+        // synchronous full-table task reloads before the server.listen callback.
+        //
+        // CRITICAL (F3 fix): Awaiting whenReady BEFORE any sync boot work ensures
+        // the listen callback fires and HTTP is bound before workers/dispatcher/recovery
+        // run. Just reordering the listen() call above workers in source order is NOT
+        // enough — the listen callback is async and will never fire if sync work
+        // blocks the event loop in the same turn.
         if (command === 'owner-serve') {
           const ownerServeTaskExecutor = createStandaloneTaskExecutor();
           const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
@@ -2122,6 +2222,22 @@ function startHeadlessMode(): void {
             headlessWebBridge?.broadcast('invoker:planning-chat-stream', event);
           };
           startOwnerSocketSentinelForBus(messageBus);
+          if (headlessWebBridge) {
+            await headlessWebBridge.whenReady;
+            logger.info('Web surface ready, proceeding with workers/dispatcher/recovery', { module: 'headless' });
+          }
+        }
+        if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
+        // Owner discovery and exec handlers must exist before dispatch polling starts.
+        if (!readOnlyMode) {
+          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
+            headlessDeps,
+            ownerId: workflowMutationOwnerId,
+            createTaskExecutor: createStandaloneTaskExecutor,
+            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
+            topUpReadyLaunchesEnabled: () => !sourceDevelopmentProfile && !invokerConfig.disableAutoRunOnStartup,
+            deferFirstPollUntil: headlessWebBridge?.whenReady,
+          });
         }
 
         void recoverWorkflowMutationsOnStartup({
@@ -2681,7 +2797,7 @@ startMainProcessBootstrap({
     recordStartupMark('deferred-startup.begin');
     if (ownerMode && workerRuntimeController) {
       setTimeout(() => {
-        workerRuntimeController?.startAutoStartedWorkers();
+        if (!sourceDevelopmentProfile) workerRuntimeController?.startAutoStartedWorkers();
         recordStartupMark('workers.auto-started');
       }, 0);
     }
@@ -2814,6 +2930,10 @@ startMainProcessBootstrap({
     }, 0);
   }
 
+  const showStartupErrorDialog = (title: string, message: string): void => {
+    dialog.showErrorBox(title, message);
+  };
+
   const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
     const guiOwnerPreference = resolveGuiOwnerPreference();
@@ -2855,6 +2975,7 @@ startMainProcessBootstrap({
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+        showStartupErrorDialog('Invoker failed to start', message);
         process.exitCode = 1;
         app.quit();
         return;
@@ -2871,6 +2992,7 @@ startMainProcessBootstrap({
         const message = err instanceof Error ? err.message : String(err);
         if (!message.includes('[db-writer-lock]')) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          showStartupErrorDialog('Invoker failed to start', message);
           process.exitCode = 1;
           app.quit();
           return;
@@ -2879,16 +3001,57 @@ startMainProcessBootstrap({
         if (!isStandaloneCapable(owner)) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
           process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
-          process.exitCode = 1;
-          app.quit();
-          return;
+          const prompt = buildGuiLockConflictPrompt(err);
+          const { response } = await dialog.showMessageBox({
+            type: 'warning',
+            title: prompt.title,
+            message: prompt.message,
+            buttons: prompt.buttons,
+            cancelId: prompt.cancelId,
+            defaultId: prompt.cancelId,
+          });
+          if (
+            prompt.killButtonIndex !== null
+            && response === prompt.killButtonIndex
+            && prompt.holderPid !== null
+            && prompt.holderPid > 0
+          ) {
+            const exited = await terminateAndAwaitExit(prompt.holderPid);
+            if (!exited) {
+              showStartupErrorDialog(
+                'Could not stop the other instance',
+                `PID ${prompt.holderPid} is still running. Quit it manually (Activity Monitor, or `
+                  + `kill -9 ${prompt.holderPid}), then relaunch Invoker.`,
+              );
+              process.exitCode = 1;
+              app.quit();
+              return;
+            }
+            try {
+              recordStartupMark('initServices.retryAfterKill.start', { holderPid: prompt.holderPid });
+              await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+              recordStartupMark('initServices.retryAfterKill.end', { ownerMode: true });
+            } catch (retryErr) {
+              const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+              process.stderr.write(`${RED}Error:${RESET} ${retryMessage}\n`);
+              showStartupErrorDialog('Invoker failed to start', retryMessage);
+              process.exitCode = 1;
+              app.quit();
+              return;
+            }
+          } else {
+            process.exitCode = 1;
+            app.quit();
+            return;
+          }
+        } else {
+          recordStartupMark('initServices.readOnly.start', { ownerId: owner.ownerId });
+          await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+          ownerMode = false;
+          guiUsingDaemonOwner = false;
+          daemonOwnerLoss.clearConnectionLost();
+          recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
         }
-        recordStartupMark('initServices.readOnly.start', { ownerId: owner.ownerId });
-        await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
-        ownerMode = false;
-        guiUsingDaemonOwner = false;
-        daemonOwnerLoss.clearConnectionLost();
-        recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
       }
     }
 
@@ -2945,6 +3108,12 @@ startMainProcessBootstrap({
       buildCommandServiceInvalidationDeps,
     });
     guiMutationTaskActions = mutationActions;
+    submitAdminBypassE2eBabysitPlan = (planText) => loadPlanSubmissionBundle(planText, {
+      persistence,
+      orchestrator,
+      allowGraphMutation: invokerConfig.allowGraphMutation,
+      logger,
+    }, { staged: true });
 
     const guiMutationRegistrationContext: GuiMutationRegistrationContext = {
       ipcMain,
@@ -3075,6 +3244,11 @@ startMainProcessBootstrap({
           runHeadlessCommand: (args) => mutationActions.executeHeadlessExec({ args, waitForApproval: false, noTrack: true }),
           getTaskExecutor: requireTaskExecutor,
           getMutationTiming: () => activeMutationContext?.mutationTiming,
+          idleTaskCleanup: {
+            store: persistence,
+            now: () => Date.now(),
+            idleThresholdMs: WORKFLOW_RETIREMENT_IDLE_THRESHOLD_MS,
+          },
           contextLabel: 'owner',
         });
         for (const [channel, handler] of ownerWorkerHandlers) {
@@ -3255,12 +3429,57 @@ startMainProcessBootstrap({
           },
           planningCommandBuilder,
           agentRegistry,
+          {
+            adminBypassE2eBabysit: {
+              enabled: invokerConfig.adminBypassE2eBabysit?.enabled ?? false,
+              intervalMs: invokerConfig.adminBypassE2eBabysit?.intervalMinutes === undefined
+                ? undefined
+                : invokerConfig.adminBypassE2eBabysit.intervalMinutes * 60_000,
+              watchedWorkerKinds: invokerConfig.adminBypassE2eBabysit?.watchedWorkerKinds,
+              staleTtlMs: invokerConfig.adminBypassE2eBabysit?.staleTtlMinutes === undefined
+                ? undefined
+                : invokerConfig.adminBypassE2eBabysit.staleTtlMinutes * 60_000,
+            },
+            workerLifecycleStarter: {
+              listWorkers: () => toWorkerLifecycleSnapshots((
+                workerRuntimeController?.snapshot()
+                ?? createLocalWorkerStatusSnapshot({
+                  registry: createRegisteredWorkerRegistry(),
+                  persistence,
+                  autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+                })
+              ).workers),
+              start: (kind) => {
+                if (!startAdminBypassE2eBabysitWorker) {
+                  throw new Error('admin-bypass-e2e-babysit worker lifecycle starter is not ready');
+                }
+                return startAdminBypassE2eBabysitWorker(kind);
+              },
+            },
+            repairFilingStore: {
+              listRepairFilings: () => persistence.listRepairFilings(),
+              deleteRepairFiling: (kind, subject, stateSha) => (
+                persistence.deleteRepairFiling(kind, subject, stateSha)
+              ),
+              insertRepairFiling: (input) => persistence.insertRepairFiling(input),
+            },
+            investigativePlanSubmitter: {
+              submitPlan: (planText) => {
+                if (!submitAdminBypassE2eBabysitPlan) {
+                  throw new Error('admin-bypass-e2e-babysit investigative plan submitter is not ready');
+                }
+                return submitAdminBypassE2eBabysitPlan(planText);
+              },
+            },
+          },
         ),
-        autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+        autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
       });
+      const activeWorkerRuntimeController = workerRuntimeController;
+      startAdminBypassE2eBabysitWorker = (kind) => activeWorkerRuntimeController.start(kind);
     }
 
     // Fail orphaned in-flight tasks left by a previous crash, then start ready work.
@@ -3288,7 +3507,7 @@ startMainProcessBootstrap({
               { module: 'init', taskIds: orphaned.map((task) => task.id) },
             );
           }
-          if (invokerConfig.disableAutoRunOnStartup) {
+          if (sourceDevelopmentProfile || invokerConfig.disableAutoRunOnStartup) {
             logger.info('auto-run on startup disabled by config', { module: 'init' });
           } else {
             orchestrator.startExecution();

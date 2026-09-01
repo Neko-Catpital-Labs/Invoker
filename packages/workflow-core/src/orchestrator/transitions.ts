@@ -72,10 +72,10 @@ export interface TransitionHost {
 
   // Scheduler-domain entrypoints (kept as Orchestrator methods that delegate
   // to scheduler-domain.ts); transitions trigger downstream work through them.
-  autoStartReadyTasks(taskIds: string[], priority?: number, opts?: LaunchReadinessOptions): TaskState[];
+  autoStartReadyTasks(taskIds: string[], priority?: number, opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean }): TaskState[];
   autoStartUnblockedTasks(): TaskState[];
   autoStartExternallyUnblockedReadyTasks(): TaskState[];
-  drainScheduler(): TaskState[];
+  drainScheduler(opts?: { alreadyRefreshed?: boolean }): TaskState[];
 }
 
 // ── Extracted Functions ─────────────────────────────────────
@@ -340,6 +340,49 @@ export function handleNeedsInputImpl(
   return [];
 }
 
+function resolveSpawnPivotSourceChanges(
+  parentTask: TaskState | undefined,
+  host: TransitionHost,
+  wf: { baseBranch?: string } | undefined,
+): { execution: { branch?: string; commit?: string } } | undefined {
+  const baseBranch =
+    wf && typeof wf.baseBranch === 'string' ? wf.baseBranch.trim() : '';
+
+  const parentBranch = parentTask?.execution?.branch?.trim() ?? '';
+  const parentCommit = parentTask?.execution?.commit?.trim() ?? '';
+  if (parentCommit) {
+    return {
+      execution: {
+        branch: parentBranch || baseBranch || undefined,
+        commit: parentCommit,
+      },
+    };
+  }
+
+  const depTips: Array<{ branch: string; commit: string }> = [];
+  for (const depId of parentTask?.dependencies ?? []) {
+    const dep = host.stateGetTask(depId);
+    if (dep?.status !== 'completed') continue;
+    const branch = dep.execution?.branch?.trim() ?? '';
+    const commit = dep.execution?.commit?.trim() ?? '';
+    if (branch && commit) depTips.push({ branch, commit });
+  }
+
+  if (depTips.length === 1) {
+    return { execution: depTips[0]! };
+  }
+
+  // depTips.length > 1: no single dependency tip can be inherited
+  // unambiguously, so fall through to the baseBranch fallback below rather
+  // than returning undefined — leaving execution unset here trips the
+  // completed-dependency branch guard in task-runner-prepare.ts and blocks
+  // every spawned variant from launching at all.
+  if (baseBranch) {
+    return { execution: { branch: baseBranch } };
+  }
+  return undefined;
+}
+
 export function handleSpawnExperimentsImpl(
   host: TransitionHost,
   taskId: string,
@@ -355,16 +398,33 @@ export function handleSpawnExperimentsImpl(
   }
   const scopeLocal = (local: string) => scopePlanTaskId(wfId, local);
 
+  const parentPoolId = parentTask?.config.poolId;
+  const parentRunnerKind = parentTask?.config.runnerKind;
+  const parentDockerImage =
+    parentTask?.config.runnerKind === 'docker' ? parentTask.config.dockerImage : undefined;
+  const parentExecutionAgent = parentTask?.config.executionAgent;
+  const parentExecutionModel = parentTask?.config.executionModel;
+  const parentMaxTurns = parentTask?.config.maxTurns;
+  const parentDepIds = (parentTask?.dependencies ?? []).filter(
+    (depId) => depId !== taskId && typeof depId === 'string' && depId.length > 0,
+  );
+
   const experimentTasks: GraphMutationNodeDef[] = parsed.variants.map((v) => ({
     id: scopeLocal(v.id),
     description: v.description ?? `Experiment: ${v.id}`,
-    dependencies: [taskId],
+    dependencies: [taskId, ...parentDepIds],
     workflowId: wfId,
     parentTask: taskId,
+    variantLocalId: v.localId,
     experimentPrompt: v.prompt,
     prompt: v.prompt,
     command: v.command,
-    runnerKind: parentTask?.config.runnerKind,
+    runnerKind: parentRunnerKind,
+    poolId: parentPoolId,
+    dockerImage: parentDockerImage,
+    executionAgent: parentExecutionAgent,
+    executionModel: parentExecutionModel,
+    maxTurns: parentMaxTurns,
   }));
 
   const reconciliationId = `${taskId}-reconciliation`;
@@ -378,6 +438,12 @@ export function handleSpawnExperimentsImpl(
       parentTask: taskId,
       isReconciliation: true,
       requiresManualApproval: true,
+      runnerKind: parentRunnerKind,
+      poolId: parentPoolId,
+      dockerImage: parentDockerImage,
+      executionAgent: parentExecutionAgent,
+      executionModel: parentExecutionModel,
+      maxTurns: parentMaxTurns,
     },
   ];
 
@@ -385,12 +451,7 @@ export function handleSpawnExperimentsImpl(
     wfId && typeof host.persistence.loadWorkflow === 'function'
       ? host.persistence.loadWorkflow(wfId)
       : undefined;
-  const pivotBranch =
-    wf && typeof (wf as { baseBranch?: string }).baseBranch === 'string'
-      ? (wf as { baseBranch: string }).baseBranch.trim()
-      : '';
-  const sourceChanges =
-    pivotBranch !== '' ? { execution: { branch: pivotBranch } } : undefined;
+  const sourceChanges = resolveSpawnPivotSourceChanges(parentTask, host, wf);
 
   host.applyGraphMutation({
     sourceNodeId: taskId,

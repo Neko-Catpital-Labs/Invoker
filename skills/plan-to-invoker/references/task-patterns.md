@@ -169,9 +169,29 @@ When writing `prompt` fields for LLM tasks:
 6. **Assume zero context**: include explicit phrasing such as "assume no prior context" or "zero-context execution".
 7. **Include deterministic pass/fail expectations**: require explicit outcomes like `exit code 0`, `exits 0`, or expected output text.
 
+## Inter-task file carry (hard)
+
+Invoker gives each task its own worktree from **committed** history. Uncommitted
+files on disk in task A's worktree are invisible to task B.
+
+**Rule:** Inter-task file carry across Invoker tasks MUST be via **git commit** on
+the task branch. Local/uncommitted paths under `work/`, `state/artifacts/`,
+caches, and similar do **not** flow to dependent tasks. Object-store / remote
+artifact APIs are OK when the plan explicitly uses them; silent "same machine
+path" handoff is not.
+
+**Prefer:**
+- One command task that both produces and consumes ephemeral local state, **or**
+- Commit a tracked path (for example under `docs/` / allowed `outputs/`) in the
+  producer before the dependent task runs.
+
+`scratch: true` plans are exempt from the footgun lint. Experiment briefs already
+require committing the artifact; this section is the general form of that rule.
+
 ## Experiment artifact handoff templates (required when experiments are planned)
 
-When a workflow includes experiment design/proof work, use a three-task handoff sequence:
+When a workflow includes experiment design/proof work, use a three-task handoff sequence
+(same commit-to-carry rule as § *Inter-task file carry*):
 
 1. **`experiment-write-*` prompt task**
    - Include deterministic artifact path in `description` and `prompt` (for example `docs/context/inv-123/experiment-brief.md`)

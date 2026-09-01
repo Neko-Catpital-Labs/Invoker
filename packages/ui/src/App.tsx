@@ -79,6 +79,7 @@ import {
 } from './lib/planning-session-view.js';
 import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } from './components/InvokerTerminal.js';
 import { WorkflowContextMenu, type ContextMenuCloseOptions } from './components/WorkflowContextMenu.js';
+import { MarkdownText } from './components/MarkdownText.js';
 import { Toaster, toast } from 'sonner';
 import { Trash2 } from 'lucide-react';
 import { Button } from './components/primitives/index.js';
@@ -120,7 +121,6 @@ type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar' 
 type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
-type SelectByIdOptions = { recenter?: boolean };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
@@ -1546,10 +1546,6 @@ export function App() {
     return command;
   }, []);
 
-  const recenterForSelection = useCallback((scope: GraphScope, target: string) => {
-    issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'selection' });
-  }, [issueCameraCommand]);
-
   const handleWorkflowGraphViewportSnapshot = useCallback((viewport: GraphCameraViewport) => {
     workflowGraphViewportRef.current = viewport;
   }, []);
@@ -1567,7 +1563,7 @@ export function App() {
     });
   }, []);
 
-  const selectWorkflowById = useCallback((workflowId: string, options: SelectByIdOptions = {}) => {
+  const selectWorkflowById = useCallback((workflowId: string) => {
     armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
@@ -1575,12 +1571,9 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('workflowGraph');
-    if (options.recenter ?? true) {
-      recenterForSelection('workflow', workflowId);
-    }
-  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion, recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion]);
 
-  const selectTaskById = useCallback((taskId: string, options: SelectByIdOptions = {}) => {
+  const selectTaskById = useCallback((taskId: string) => {
     const task = tasksRef.current.get(taskId);
     if (!task) return;
     setSelectedTaskId(task.id);
@@ -1593,10 +1586,7 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('taskGraph');
-    if (options.recenter ?? true) {
-      recenterForSelection('task', task.id);
-    }
-  }, [focusKeyboardRegion, recenterForSelection]);
+  }, [focusKeyboardRegion]);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
@@ -1605,7 +1595,7 @@ export function App() {
         setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
         const task = tasksRef.current.get(failedTaskId);
         if (task) {
-          selectTaskById(task.id, { recenter: false });
+          selectTaskById(task.id);
         }
         return;
       }
@@ -1744,7 +1734,7 @@ export function App() {
         const scope: GraphScope = inTaskGraph ? 'task' : 'workflow';
         const target = inTaskGraph ? selectedTaskId : (selectedWorkflow?.id ?? selectedWorkflowId);
         if (target) {
-          issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'f1-center' });
+          issueCameraCommand({ kind: 'centerTarget', scope, target, reason: 'f1-center' });
         }
         return;
       }
@@ -1959,8 +1949,7 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    recenterForSelection('workflow', workflowId);
-  }, [armSuppressDagSurfaceDismiss, recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
     event.preventDefault();
@@ -1987,7 +1976,7 @@ export function App() {
       if (activeWorkflowId !== null && !selectedWorkflowVanished) {
         return;
       }
-      selectWorkflowById(workflowEntries[0].workflow.id, { recenter: false });
+      selectWorkflowById(workflowEntries[0].workflow.id);
       return;
     }
 
@@ -2003,7 +1992,7 @@ export function App() {
       if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
-      selectTaskById(attentionEntries[0].task.id, { recenter: false });
+      selectTaskById(attentionEntries[0].task.id);
       return;
     }
 
@@ -2047,7 +2036,7 @@ export function App() {
         if (cancelled) return;
         requestAnimationFrame(() => {
           if (cancelled) return;
-          issueCameraCommand({ kind: 'centerSelection', scope: 'task', target: selectedTaskId, reason: 'browser-selection' });
+          issueCameraCommand({ kind: 'centerTarget', scope: 'task', target: selectedTaskId, reason: 'browser-entry-focus' });
         });
       });
     });
@@ -2773,16 +2762,10 @@ export function App() {
         }));
         await refreshTaskGraph();
         workflowGraphViewportRef.current = null;
-        const startResult = await handleStartReadyAction();
-        const startMessage = startResult
-          ? startResult.started.length > 0
-            ? ` Started ${startResult.started.length} ready task${startResult.started.length === 1 ? '' : 's'}.`
-            : ' No ready work to start.'
-          : ' Ready work could not be started.';
         appendTerminalLine(
           result.workflowCount && result.workflowCount > 1
-            ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows.${startMessage}`
-            : `Plan "${result.planName}" submitted to Invoker.${startMessage}`,
+            ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review the graph, then Start ready work.`
+            : `Plan "${result.planName}" submitted to Invoker. Review the graph, then Start ready work.`,
           'system',
           'success',
         );
@@ -2797,7 +2780,7 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [activePlanningReadOnly, appendTerminalLine, handleStartReadyAction, invoker, issueCameraCommand, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [activePlanningReadOnly, appendTerminalLine, invoker, issueCameraCommand, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
   const handlePlanningCancelReview = useCallback(() => {
     appendTerminalLine('Submission cancelled. Draft kept.', 'system');
     setKeptPlanningDraftSessionIds((prev) => new Set(prev).add(activePlanningSessionId));
@@ -4170,7 +4153,7 @@ export function App() {
         />
       ) : (
         <>
-          {sidebarSurface === 'planning' && (
+          {(sidebarSurface === 'planning' || ((sidebarSurface === 'workflows' || sidebarSurface === 'attention') && displayedSelectedWorkflowGraph === null)) && (
             <div data-testid="workflow-graph-content" className="relative z-0 h-full w-full">
               <WorkflowGraph
                 workflows={workflows}
@@ -4584,7 +4567,7 @@ export function App() {
                   <ul className={group.workflow ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
                     {group.tasks.map((task, taskIndex) => (
                       <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="text-xs leading-5 text-muted-foreground">
-                        {task}
+                        <MarkdownText text={task} />
                       </li>
                     ))}
                   </ul>

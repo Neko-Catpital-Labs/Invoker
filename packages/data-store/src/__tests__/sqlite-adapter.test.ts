@@ -517,6 +517,57 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('migrates the legacy planning status constraint and preserves existing sessions', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-status-migration-'));
+      const dbPath = join(dir, 'invoker.db');
+      const legacyStatuses = ['still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted'] as const;
+      try {
+        const legacy = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        for (const status of legacyStatuses) {
+          legacy.upsertInAppPlanningSession(makePlanningSession(`planning-${status}`, { status }));
+        }
+
+        const schema = (legacy as any).queryOne(
+          `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'in_app_planning_sessions'`,
+        ).sql as string;
+        const legacySchema = schema
+          .replace('CREATE TABLE in_app_planning_sessions', 'CREATE TABLE in_app_planning_sessions_legacy')
+          .replace(", 'planner_error'", '');
+        (legacy as any).db.run('PRAGMA foreign_keys = OFF');
+        (legacy as any).db.run(legacySchema);
+        (legacy as any).db.run(
+          'INSERT INTO in_app_planning_sessions_legacy SELECT * FROM in_app_planning_sessions',
+        );
+        (legacy as any).db.run('DROP TABLE in_app_planning_sessions');
+        (legacy as any).db.run(
+          'ALTER TABLE in_app_planning_sessions_legacy RENAME TO in_app_planning_sessions',
+        );
+        (legacy as any).db.run('PRAGMA foreign_keys = ON');
+        (legacy as any).dirty = true;
+        legacy.close();
+
+        const migrated = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(legacyStatuses.map((status) => migrated.loadInAppPlanningSession(`planning-${status}`)?.status))
+          .toEqual(legacyStatuses);
+        expect(migrated.loadInAppPlanningSession('planning-still_discussing')?.messages)
+          .toEqual(makePlanningSession('planning-still_discussing').messages);
+        expect(tableIndexes(migrated, 'in_app_planning_sessions'))
+          .toContain('idx_in_app_planning_sessions_updated');
+        expect(tableForeignKeys(migrated, 'in_app_planning_messages'))
+          .toContain('in_app_planning_sessions.session_id:NO ACTION');
+        migrated.upsertInAppPlanningSession(makePlanningSession('planning-error', {
+          status: 'planner_error',
+        }));
+        migrated.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadInAppPlanningSession('planning-error')?.status).toBe('planner_error');
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('round-trips planning tmux ownership across adapter reopen', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-tmux-sessions-'));
       const dbPath = join(dir, 'invoker.db');
@@ -2689,6 +2740,17 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('updateWorkflow', () => {
+    it('persists staged workflow activation with active as the default', () => {
+      adapter.saveWorkflow(testWorkflow);
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(false);
+
+      adapter.updateWorkflow('wf-1', { staged: true });
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(true);
+
+      adapter.updateWorkflow('wf-1', { staged: false });
+      expect(adapter.loadWorkflow('wf-1')?.staged).toBe(false);
+    });
+
     it('ignores workflow status mutations because status is derived from tasks', () => {
       adapter.saveWorkflow(testWorkflow);
       // @ts-expect-error workflow status is derived output, not a persistence input.
@@ -2967,6 +3029,41 @@ describe('SQLiteAdapter', () => {
       expect(second).toHaveLength(10);
       expect(second.every((event) => event.id < oldest.id)).toBe(true);
       expect(second[0]!.eventType).toBe(`event-${29 - 10}`);
+    });
+
+    it('getRecentEventsOfType returns only the matching type, newest first, bounded by limit', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.logEvent('t1', 'task.executor.selected', { poolMemberId: 'target-1' });
+      adapter.logEvent('t1', 'debug.noise', {});
+      adapter.logEvent('t1', 'task.executor.selected', { poolMemberId: 'target-2' });
+      adapter.logEvent('t1', 'debug.noise', {});
+      adapter.logEvent('t1', 'task.executor.selected', { poolMemberId: 'target-3' });
+
+      const latestTwo = adapter.getRecentEventsOfType('t1', 'task.executor.selected', 2);
+      expect(latestTwo.map((event) => JSON.parse(event.payload!).poolMemberId)).toEqual([
+        'target-3',
+        'target-2',
+      ]);
+
+      expect(adapter.getRecentEventsOfType('t1', 'task.executor.selected', 0)).toEqual([]);
+      expect(adapter.getRecentEventsOfType('t1', 'no-such-type', 5)).toEqual([]);
+    });
+
+    it('uses an index lookup for getRecentEventsOfType instead of a full task-history scan', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const planRows = (adapter as any).db
+        .prepare('EXPLAIN QUERY PLAN SELECT * FROM events WHERE task_id = ? AND event_type = ? ORDER BY id DESC LIMIT ?')
+        .all('t1', 'task.executor.selected', 20) as Array<{ detail: string }>;
+      const detail = planRows.map((row) => row.detail).join('\n');
+
+      // Either the (task_id, id) or (event_type, id) index keeps this bounded;
+      // the invariant under test is "indexed SEARCH", not a specific index name.
+      expect(detail).toContain('SEARCH events USING INDEX');
+      expect(detail).not.toContain('SCAN events');
+      expect(detail).not.toContain('USE TEMP B-TREE');
     });
 
     it('lists recent task events across tasks by event type', () => {
@@ -6220,6 +6317,229 @@ describe('SQLiteAdapter', () => {
 
     it('does not throw for a non-file-backed (ephemeral) database regardless of ownerCapability', () => {
       expect(() => assertOwnerCapabilityForWritableOpen(false, true, undefined)).not.toThrow();
+    });
+  });
+
+  describe('pruneOldEvents', () => {
+    function backdateEvent(eventId: number, daysAgo: number): void {
+      (adapter as any).db.run(
+        `UPDATE events SET created_at = datetime('now', ?) WHERE id = ?`,
+        [`-${daysAgo} days`, eventId],
+      );
+    }
+
+    function insertEvent(taskId: string): number {
+      adapter.logEvent(taskId, 'task.created');
+      const row = (adapter as any).queryOne(
+        'SELECT id FROM events WHERE task_id = ? ORDER BY id DESC LIMIT 1',
+        [taskId],
+      );
+      return Number(row.id);
+    }
+
+    it('prunes old events belonging to a terminal-status task', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 30);
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(1);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(0);
+    });
+
+    it('does not prune recent events even for a terminal-status task', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      insertEvent('wf-1/t1');
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+
+    it('does not prune old events for a task that is still running (not terminal)', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'running', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 30);
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+
+    it('does not prune old events for a task the user reopened back to a non-terminal status', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 30);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'running', config: { workflowId: 'wf-1' } }));
+
+      const pruned = adapter.pruneOldEvents(14);
+
+      expect(pruned).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+
+    it('is a no-op for a non-positive retention window', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      const eventId = insertEvent('wf-1/t1');
+      backdateEvent(eventId, 3650);
+
+      expect(adapter.pruneOldEvents(0)).toBe(0);
+      expect(adapter.pruneOldEvents(-1)).toBe(0);
+      expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
+    });
+  });
+
+  describe('pruneOldSyncJournal', () => {
+    function insertJournalRow(daysAgo: number, seq?: number): number {
+      (adapter as any).db.run(
+        `INSERT INTO sync_journal (entity_type, entity_id, op, payload, origin, created_at)
+         VALUES ('workflow', 'wf-x', 'upsert', '{}', 'home', datetime('now', ?))`,
+        [`-${daysAgo} days`],
+      );
+      const row = (adapter as any).queryOne(
+        'SELECT seq FROM sync_journal ORDER BY seq DESC LIMIT 1',
+      );
+      return Number(row.seq);
+    }
+
+    function insertCursor(peerId: string, lastSentSeq: number): void {
+      (adapter as any).db.run(
+        `INSERT INTO sync_cursors (peer_id, last_sent_seq, last_received_seq, updated_at)
+         VALUES (?, ?, 0, datetime('now'))`,
+        [peerId, lastSentSeq],
+      );
+    }
+
+    function journalRowCount(): number {
+      const row = (adapter as any).queryOne('SELECT COUNT(*) AS c FROM sync_journal');
+      return Number(row.c);
+    }
+
+    it('prunes an old row when no peer has ever registered a cursor', () => {
+      insertJournalRow(30);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(1);
+      expect(journalRowCount()).toBe(0);
+    });
+
+    it('does not prune a recent row even with no registered peer', () => {
+      insertJournalRow(1);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+
+    it('does not prune an old row a registered peer has not yet been sent', () => {
+      const seq = insertJournalRow(30);
+      insertCursor('peer-a', seq - 1);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+
+    it('prunes an old row once every registered peer has been sent past it', () => {
+      const seq = insertJournalRow(30);
+      insertCursor('peer-a', seq);
+      insertCursor('peer-b', seq + 5);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(1);
+      expect(journalRowCount()).toBe(0);
+    });
+
+    it('does not prune an old row when even one of several peers has not been sent past it', () => {
+      const seq = insertJournalRow(30);
+      insertCursor('peer-a', seq);
+      insertCursor('peer-b', seq - 1);
+
+      const pruned = adapter.pruneOldSyncJournal(14);
+
+      expect(pruned).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+
+    it('is a no-op for a non-positive retention window', () => {
+      insertJournalRow(3650);
+
+      expect(adapter.pruneOldSyncJournal(0)).toBe(0);
+      expect(adapter.pruneOldSyncJournal(-1)).toBe(0);
+      expect(journalRowCount()).toBe(1);
+    });
+  });
+
+  describe('getFreelistPageCount / runIncrementalVacuum', () => {
+    function induceFragmentation(): void {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      for (let i = 0; i < 2_000; i += 1) {
+        adapter.logEvent('wf-1/t1', 'task.created', { padding: 'x'.repeat(500) });
+      }
+      (adapter as any).db.run('DELETE FROM events WHERE task_id = ?', ['wf-1/t1']);
+    }
+
+    it('returns 0 on a fresh database with no dead pages', () => {
+      expect(adapter.getFreelistPageCount()).toBe(0);
+    });
+
+    it('is a safe no-op while auto_vacuum is still the default NONE, even with real fragmentation', () => {
+      induceFragmentation();
+      const freelistBefore = adapter.getFreelistPageCount();
+      expect(freelistBefore).toBeGreaterThan(0);
+
+      const reclaimed = adapter.runIncrementalVacuum(10_000);
+
+      expect(reclaimed).toBe(0);
+      expect(adapter.getFreelistPageCount()).toBe(freelistBefore);
+    });
+
+    it('reclaims real freelist pages once auto_vacuum is switched to INCREMENTAL', () => {
+      (adapter as any).nativeDb.exec('PRAGMA auto_vacuum = INCREMENTAL');
+      (adapter as any).nativeDb.exec('VACUUM');
+      induceFragmentation();
+      const freelistBefore = adapter.getFreelistPageCount();
+      expect(freelistBefore).toBeGreaterThan(0);
+
+      const reclaimed = adapter.runIncrementalVacuum(freelistBefore + 1_000);
+
+      expect(reclaimed).toBeGreaterThan(0);
+      expect(adapter.getFreelistPageCount()).toBeLessThan(freelistBefore);
+    });
+
+    it('caps reclaimed pages at the requested maxPages', () => {
+      (adapter as any).nativeDb.exec('PRAGMA auto_vacuum = INCREMENTAL');
+      (adapter as any).nativeDb.exec('VACUUM');
+      induceFragmentation();
+      const freelistBefore = adapter.getFreelistPageCount();
+      expect(freelistBefore).toBeGreaterThan(5);
+
+      const reclaimed = adapter.runIncrementalVacuum(5);
+
+      expect(reclaimed).toBeLessThanOrEqual(5);
+      expect(adapter.getFreelistPageCount()).toBe(freelistBefore - reclaimed);
+    });
+
+    it('is a no-op for a non-positive maxPages', () => {
+      (adapter as any).nativeDb.exec('PRAGMA auto_vacuum = INCREMENTAL');
+      (adapter as any).nativeDb.exec('VACUUM');
+      induceFragmentation();
+
+      expect(adapter.runIncrementalVacuum(0)).toBe(0);
+      expect(adapter.runIncrementalVacuum(-1)).toBe(0);
     });
   });
 });

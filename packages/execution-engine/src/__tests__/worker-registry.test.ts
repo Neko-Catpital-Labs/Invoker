@@ -23,13 +23,16 @@ import { DISK_HEADROOM_WORKER_KIND } from '../workers/disk-headroom-worker.js';
 import { CLAUDE_OAUTH_REFRESH_WORKER_KIND } from '../workers/claude-oauth-refresh-worker.js';
 import { INFRA_REPAIR_WORKER_KIND } from '../workers/infra-repair-worker.js';
 import { REAPER_WORKER_KIND } from '../workers/reaper-worker.js';
+import { DB_REAPER_WORKER_KIND } from '../workers/db-reaper-worker.js';
 import { REQUEUE_WORKER_KIND } from '../workers/requeue-worker.js';
 import { WORKFLOW_RESUME_WORKER_KIND } from '../workers/workflow-resume-worker.js';
 import { E2E_AUTOFIX_WORKER_KIND } from '../workers/e2e-autofix-worker.js';
+import { WORKER_SESSION_MINE_WORKER_KIND } from '../workers/worker-session-mine-worker.js';
 import { SLACK_BUG_SCAN_WORKER_KIND } from '../workers/slack-bug-scan-worker.js';
 import { IDLE_TASK_CLEANUP_WORKER_KIND } from '../workers/idle-task-cleanup-worker.js';
 import { CROSS_REPO_RESEARCH_WORKER_KIND } from '../workers/cross-repo-research-worker.js';
 import { CATSTACK_DEPLOY_WORKER_KIND } from '../workers/catstack-deploy-worker.js';
+import { ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND } from '../workers/admin-bypass-e2e-babysit-worker.js';
 import { MERGIFY_QUEUE_RESEARCH_WORKER_KIND } from '../workers/mergify-queue-research-worker.js';
 
 const silentLogger = {
@@ -85,6 +88,7 @@ describe('worker registry', () => {
       DISK_HEADROOM_WORKER_KIND,
       CLAUDE_OAUTH_REFRESH_WORKER_KIND,
       REAPER_WORKER_KIND,
+      DB_REAPER_WORKER_KIND,
       AUTO_APPROVE_WORKER_KIND,
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       PR_ORPHAN_REPAIR_WORKER_KIND,
@@ -92,10 +96,12 @@ describe('worker registry', () => {
       PR_JAILBREAK_LAND_WORKER_KIND,
       PR_AUTO_LABEL_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
+      WORKER_SESSION_MINE_WORKER_KIND,
       SLACK_BUG_SCAN_WORKER_KIND,
       IDLE_TASK_CLEANUP_WORKER_KIND,
       CROSS_REPO_RESEARCH_WORKER_KIND,
       CATSTACK_DEPLOY_WORKER_KIND,
+      ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
       MERGIFY_QUEUE_RESEARCH_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
@@ -113,10 +119,12 @@ describe('worker registry', () => {
     expect(registry.get(PR_JAILBREAK_LAND_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_AUTO_LABEL_WORKER_KIND)).toBeDefined();
     expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();
+    expect(registry.get(WORKER_SESSION_MINE_WORKER_KIND)).toBeDefined();
     expect(registry.get(SLACK_BUG_SCAN_WORKER_KIND)).toBeDefined();
     expect(registry.get(IDLE_TASK_CLEANUP_WORKER_KIND)).toBeDefined();
     expect(registry.get(CROSS_REPO_RESEARCH_WORKER_KIND)).toBeDefined();
     expect(registry.get(CATSTACK_DEPLOY_WORKER_KIND)).toBeDefined();
+    expect(registry.get(ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND)).toBeDefined();
     expect(registry.get(MERGIFY_QUEUE_RESEARCH_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {

@@ -324,7 +324,7 @@ export function handoffPrompt(request: string): string {
     planFilePath: 'plans/invoker-handoff.yaml',
     reviewInstruction: 'Call `invoker_prepare_plan_review` with exactly one of `planPath` or `sessionId`, then show the returned ordered steps and confirmation text to the user. Keep the returned `reviewToken`.',
     shortReplyInstruction: 'Then keep the chat reply focused on the review summary and approval state. Never paste the YAML into chat.',
-    submissionInstruction: 'If `invoker_prepare_plan_review` returns `confirmationMode: "require"`, wait for approval before `invoker_submit_plan`. If it returns `confirmationMode: "auto_submit"`, show the same review output and then call `invoker_submit_plan` immediately. Always pass the same source (`planPath` or `sessionId`) plus the `reviewToken`. Use mode `live` so the workflow appears in the running Invoker app. After submit, use `invoker_get_workflow`, `invoker_list_tasks`, or bounded `invoker_wait_for_workflow` to report status.',
+    submissionInstruction: 'If `invoker_prepare_plan_review` returns `confirmationMode: "require"`, wait for approval before `invoker_submit_plan`. If it returns `confirmationMode: "auto_submit"`, show the same review output and then call `invoker_submit_plan` immediately. Always pass the same source (`planPath` or `sessionId`) plus the `reviewToken`. Use mode `live` so the workflow appears in the running Invoker app. After submit, optionally confirm the workflow exists, then arm `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`, end the turn, and continue the parent job on wake.',
   });
   return [
     `User request: ${request}`,

@@ -217,6 +217,11 @@ def _parse_response(output: str, response_format: str) -> tuple[str, dict[str, A
     raise ValueError(f"Unsupported response format: {response_format}")
 
 
+def parse_response(output: str, response_format: str) -> tuple[str, dict[str, Any], float | None]:
+    """Public alias for spend benches that must reuse the same cost parser."""
+    return _parse_response(output, response_format)
+
+
 def run_evaluations(args: argparse.Namespace) -> int:
     cases = load_cases(args.cases)
     errors = validate_cases(cases)

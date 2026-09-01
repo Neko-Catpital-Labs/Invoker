@@ -537,6 +537,64 @@ function validateReviewGate(reviewGate, errors) {
   });
 }
 
+// Credentials in a repoUrl must never reach validator output — errors are printed to stderr and logged.
+function redactRepoUrlUserInfo(repoUrl) {
+  if (typeof repoUrl !== 'string') return repoUrl;
+  try {
+    const parsed = new URL(repoUrl);
+    if (parsed.username === '' && parsed.password === '') return repoUrl;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    // `new URL` rejects some URLs git still accepts (e.g. file://user:pass@/path).
+    return repoUrl.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@]*@/, '$1');
+  }
+}
+
+// A base ref may be remote-qualified (`origin/master`, `upstream/main`,
+// `refs/remotes/upstream/release`), and repoUrl is only one remote, so a leading segment
+// that could name a different remote yields a second candidate. Reporting `absent` only
+// when every candidate is missing keeps a documented remote-qualified base from being
+// rejected, while an ordinary `feature/foo` still needs its own literal ref.
+function baseBranchRefCandidates(baseBranch) {
+  const ref = baseBranch.trim();
+  const names = [];
+  const afterFirstSegment = (value) => {
+    const slash = value.indexOf('/');
+    return slash > 0 && slash < value.length - 1 ? value.slice(slash + 1) : undefined;
+  };
+
+  if (ref.startsWith('refs/heads/')) {
+    names.push(ref.slice('refs/heads/'.length));
+  } else if (ref.startsWith('refs/remotes/')) {
+    names.push(afterFirstSegment(ref.slice('refs/remotes/'.length)));
+  } else if (!ref.startsWith('refs/')) {
+    names.push(ref, afterFirstSegment(ref));
+  }
+
+  return [...new Set(names.filter(Boolean))].map((name) => `refs/heads/${name}`);
+}
+
+function checkBaseBranchOnRemote(repoUrl, baseBranch) {
+  const wantRefs = baseBranchRefCandidates(baseBranch);
+  if (wantRefs.length === 0) return 'unknown';
+  try {
+    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, '--', ...wantRefs], {
+      timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    });
+    const matched = out
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .some((parts) => wantRefs.includes(parts[1]));
+    return matched ? 'present' : 'absent';
+  } catch {
+    return 'unknown';
+  }
+}
+
 function validatePlan(yamlContent, repoRoot) {
   const errors = [];
 
@@ -579,7 +637,7 @@ function validatePlan(yamlContent, repoRoot) {
       errorType: 'conflicting_fields',
       field: 'repoUrl',
       message: 'Plan cannot set both "scratch: true" and "repoUrl" — scratch plans run with no git repo',
-      value: raw.repoUrl,
+      value: redactRepoUrlUserInfo(raw.repoUrl),
     });
   } else if (!isScratch && !hasRepoUrl) {
     errors.push({
@@ -697,17 +755,55 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
-  // Check for stacked baseBranch defaulting to master
-  const hasConcreteExtDep = allExtDeps.some(
-    (dep) => dep.workflowId && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
+  const TRUNK_BASE_BRANCHES = new Set(['master', 'main', 'trunk', 'develop']);
+  const concreteExtDeps = allExtDeps.filter(
+    (dep) => typeof dep.workflowId === 'string'
+      && dep.workflowId.trim() !== ''
+      && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
   );
+  const isMergeGateDep = (dep) =>
+    dep.taskId === undefined || dep.taskId === null || dep.taskId === '__merge__';
+  const concreteMergeGateDeps = concreteExtDeps.filter(isMergeGateDep);
   const baseBranch = raw.baseBranch ?? 'master';
-  if (hasConcreteExtDep && baseBranch === 'master') {
+  const isTrunkBase = TRUNK_BASE_BRANCHES.has(baseBranch);
+  const isIntentionalFanIn = concreteExtDeps.length >= 2;
+  if (
+    isTrunkBase
+    && !isIntentionalFanIn
+    && concreteExtDeps.length === 1
+    && concreteMergeGateDeps.length === 1
+  ) {
     errors.push({
       errorType: 'stacked_basebranch_default',
       field: 'baseBranch',
-      message: "Plan has externalDependencies but baseBranch is 'master'. For stacked workflows, set baseBranch to the upstream workflow's featureBranch, or use step-submit-stacked to auto-resolve.",
+      message: `Plan has a single concrete upstream merge-gate externalDependency but baseBranch is trunk '${baseBranch}'. Stacked-onto means externalDependencies on that workflow's __merge__ AND baseBranch == that workflow's featureBranch. Gate-only wait is not stacked-onto. Set baseBranch to the upstream featureBranch, or use submit-workflow-chain.sh --onto-workflow / step-submit-stacked.`,
+      value: baseBranch,
     });
+  }
+
+  const onFinishValue = raw.onFinish ?? 'pull_request';
+  const featureBranch = typeof raw.featureBranch === 'string' ? raw.featureBranch.trim() : '';
+  if (onFinishValue === 'none' && featureBranch !== '') {
+    errors.push({
+      errorType: 'onfinish_none_stack_base_risk',
+      field: 'onFinish',
+      message: `Plan sets onFinish: none with featureBranch '${featureBranch}'. A workflow that will be a stack base for dependents must publish that featureBranch to origin (use onFinish: pull_request or merge); otherwise downstream merge gates fail with base branch not found on remote.`,
+      value: onFinishValue,
+    });
+  }
+
+  // Check that an explicit baseBranch actually exists on the remote.
+  // Best-effort: network/auth failures are not validation errors.
+  if (typeof raw.baseBranch === 'string' && raw.baseBranch.trim() !== '' && raw.repoUrl) {
+    const remoteCheck = checkBaseBranchOnRemote(raw.repoUrl, raw.baseBranch);
+    if (remoteCheck === 'absent') {
+      errors.push({
+        errorType: 'basebranch_not_on_remote',
+        field: 'baseBranch',
+        message: `baseBranch '${raw.baseBranch}' was not found on ${redactRepoUrlUserInfo(raw.repoUrl)} (git ls-remote returned no matching ref). Invoker's merge gate fetches this branch from origin and will fail with "required by the merge/gate step was not found on the remote" if submitted as-is. Push the branch first, or point baseBranch at a branch that exists (often 'master').`,
+        value: raw.baseBranch,
+      });
+    }
   }
 
   // Collect task IDs for dependency validation

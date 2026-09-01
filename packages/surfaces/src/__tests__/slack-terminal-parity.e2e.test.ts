@@ -159,6 +159,10 @@ describe('Slack and planning-terminal parity for the same request (real surface,
       signingSecret: 'test-secret',
       channelId: 'C-test',
       cursorCommand: 'cursor',
+      // Pinned explicitly: this test exercises the cursor-fallback prompt
+      // path specifically (see cursorCommand above), independent of
+      // whatever the app-wide default harness preset is.
+      defaultHarnessPreset: 'cursor+claude',
       workingDir: slackDir,
       defaultRepoUrl: 'https://github.com/example/repo.git',
       conversationalPlanning: true,

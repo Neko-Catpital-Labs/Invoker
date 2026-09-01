@@ -1,10 +1,9 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
-import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
+import { CommandError, IpcChannels, makeEnvelope, resolveInvokerInstanceProfile } from '@invoker/contracts';
 import type {
   BundledSkillsInstallMode,
   InAppPlanRequest,
@@ -12,6 +11,7 @@ import type {
   InAppPlanningCreateSessionRequest,
   InAppPlanningDiscardDraftRequest,
   InAppPlanningRebindRepoRequest,
+  InAppPlanningRepoBinding,
   InAppPlanningResetRequest,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
@@ -49,7 +49,6 @@ import {
   type InvokerConfig,
 } from '../config.js';
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
-import { buildPersistedAutoApproveAuthorGate } from '../auto-approve-author-gate.js';
 import { backupPlan } from '../plan-backup.js';
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
@@ -530,7 +529,6 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         taskExecutor: requireTaskExecutor(),
         mutationTiming: activeMutationContext?.mutationTiming,
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
-        autoApproveAuthorGate: buildPersistedAutoApproveAuthorGate(persistence),
       },
       {
         agentName,
@@ -966,6 +964,9 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:planning-chat-send':
       case 'invoker:planning-chat-submit':
       case 'invoker:planning-chat-reset':
+      case 'invoker:planning-chat-discard-draft':
+      case 'invoker:planning-chat-set-terminal-mode':
+      case 'invoker:planning-chat-rebind-repo':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
@@ -1294,7 +1295,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
 
   async function loadGeneratedPlanPreview(
     planText: string,
-    options?: { preserveTaskHandles?: boolean; logLabel?: string },
+    options?: {
+      preserveTaskHandles?: boolean;
+      logLabel?: string;
+      repositoryBinding?: InAppPlanningRepoBinding;
+    },
   ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
     return loadPlanSubmissionBundle(planText, {
       persistence,
@@ -1304,7 +1309,9 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }, {
       logLabel: options?.logLabel ?? 'plan-from-goal',
       preserveTaskHandles: options?.preserveTaskHandles,
+      repositoryBinding: options?.repositoryBinding,
       taskHandles,
+      staged: true,
     });
   }
 
@@ -1413,9 +1420,10 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
     return submitPlanningChatDraft(request as InAppPlanningSubmitRequest, {
       sessions: planningChatSessions,
-      loadGeneratedPlan: (planText) => loadGeneratedPlanPreview(planText, {
+      loadGeneratedPlan: (planText, repositoryBinding) => loadGeneratedPlanPreview(planText, {
         preserveTaskHandles: true,
         logLabel: 'planning-chat-submit',
+        repositoryBinding,
       }),
       planningSessionStore: ownerMode ? persistence : undefined,
     });
@@ -2004,8 +2012,17 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   });
 
+  // An explicit INVOKER_DB_DIR is a synthetic override and always wins; otherwise the
+  // selected profile decides, so a source-development launch never traces into the
+  // production home directory.
+  const invokerHomeRoot = process.env.INVOKER_DB_DIR ?? resolveInvokerInstanceProfile({
+    kind: process.env.INVOKER_RUNTIME_KIND ?? 'packaged',
+    sourceRoot: process.env.INVOKER_SOURCE_ROOT,
+    env: process.env,
+  }).homeRoot;
+
   const traceRendererTaskGraphEvents = process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1';
-  const rendererTaskGraphTracePath = join(homedir(), '.invoker', 'ui-task-graph-events.jsonl');
+  const rendererTaskGraphTracePath = join(invokerHomeRoot, 'ui-task-graph-events.jsonl');
   let rendererTaskGraphTraceWriteFailed = false;
   ipcMain.handle('invoker:trace-renderer-task-graph-event', (_event, event: TaskGraphEvent) => {
     if (!traceRendererTaskGraphEvents) return;
@@ -2031,7 +2048,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   const traceRendererWorkflowEvents = process.env.INVOKER_TRACE_RENDERER_WORKFLOW_EVENTS === '1';
-  const rendererWorkflowTracePath = join(homedir(), '.invoker', 'ui-workflow-events.jsonl');
+  const rendererWorkflowTracePath = join(invokerHomeRoot, 'ui-workflow-events.jsonl');
   let rendererWorkflowTraceWriteFailed = false;
   ipcMain.handle('invoker:trace-renderer-workflow-event', (_event, workflows: unknown[]) => {
     if (!traceRendererWorkflowEvents) return;
@@ -2440,7 +2457,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         persistence,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
-        autoApproveAuthorGate: buildPersistedAutoApproveAuthorGate(persistence),
       }, agentName, activeMutationContext?.signal);
       await finalizeMutationWithGlobalTopup({
         orchestrator,

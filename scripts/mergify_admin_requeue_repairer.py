@@ -8,14 +8,14 @@ try:
     from . import mergify_admin_requeue_async_repair as async_repair
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
+    from .mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import is_queue_only_required_check
     from .mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
+    from mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import is_queue_only_required_check
     from mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
@@ -45,6 +45,66 @@ class AdminBypassRepairer:
         self.logger = logger
         self.ledger = ledger
         self.repo = repo
+        # A foreign repo's worktree never has Invoker's own repair helper
+        # scripts (mergify_admin_requeue_repair_normalize.py,
+        # pr_worker_safe_push.py), so its generated repair plans must never
+        # invoke them -- see async_repair.build_repair_check_plan's
+        # foreign= parameter.
+        self.is_foreign = repo != DEFAULT_INVOKER_REPO
+
+    def submit_repair_plan(
+        self,
+        plan: async_repair.AsyncRepairPlan,
+        submit_kind: str,
+        pr_number: int,
+        head_sha: str,
+        key: str,
+        now: int | None,
+    ) -> None:
+        pending_kind = f"{submit_kind}-pending"
+        self.ledger.record(
+            pending_kind,
+            pr_number,
+            head_sha,
+            key,
+            now,
+            meta={"planName": plan.plan_name, "dispatchState": "pending"},
+        )
+        try:
+            acknowledgement = async_repair.submit_async_repair_plan(plan)
+        except Exception as exc:
+            self.ledger.record(
+                f"{pending_kind}-settled",
+                pr_number,
+                head_sha,
+                key,
+                now,
+                meta={
+                    "outcomeClass": "infra",
+                    "failurePhase": "submission",
+                    "dispatchState": "not-acknowledged",
+                    "planName": plan.plan_name,
+                    "error": str(exc),
+                },
+            )
+            raise
+        self.ledger.record(
+            submit_kind,
+            pr_number,
+            head_sha,
+            key,
+            now,
+            meta={
+                "dispatchState": "acknowledged",
+                "planName": plan.plan_name,
+                **(
+                    {"workflowId": acknowledgement.workflow_id}
+                    if isinstance(acknowledgement, async_repair.RepairSubmissionAcknowledgement)
+                    and isinstance(acknowledgement.workflow_id, str)
+                    else {}
+                ),
+            },
+        )
 
     def blocked_outcome(
         self,
@@ -182,6 +242,7 @@ class AdminBypassRepairer:
             latest=latest,
             start_head=start_head,
             state_file=self.ledger.path,
+            foreign=self.is_foreign,
         )
         self.logger.trace(
             "admin-bypass-repair-check-start",
@@ -193,14 +254,30 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        # Record before submitting: once submitted, the workflow is real and
-        # running whether or not this process survives another instruction.
-        # Recording first means a broken ledger write (e.g. disk full) raises
-        # here and skips the submission entirely, instead of leaving a real,
-        # running repair permanently invisible to the retry-cap count.
-        self.ledger.record("repair-check", pr.number, start_head, check_name, now)
-        async_repair.submit_async_repair_plan(plan)
+        self.submit_repair_plan(plan, "repair-check", pr.number, start_head, check_name, now)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
+
+    def escalate_stuck_requeue(self, pr: PrSnapshot, requeue_key: str, attempts: int, now: int | None = None) -> RepairOutcome:
+        start_head = pr.head_ref_oid
+        plan = async_repair.build_requeue_stuck_plan(
+            pr,
+            attempts,
+            repo=self.repo,
+            start_head=start_head,
+            state_file=self.ledger.path,
+            foreign=self.is_foreign,
+        )
+        self.logger.trace(
+            "admin-bypass-requeue-stuck-escalation-start",
+            repo=self.repo,
+            pr_number=pr.number,
+            requeue_key=requeue_key,
+            attempts=attempts,
+            head_sha=start_head,
+            plan_name=plan.plan_name,
+        )
+        self.submit_repair_plan(plan, "requeue-escalation", pr.number, start_head, requeue_key, now)
+        return self.blocked_outcome("submitted", requeue_key, start_head, start_head)
 
     def rebase_onto_master(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
         check_name = "rebase-onto-master"
@@ -208,6 +285,7 @@ class AdminBypassRepairer:
         key = f"rebase-onto-master:{pr.number}"
         plan = async_repair.build_rebase_onto_master_plan(
             pr, reason, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
+            foreign=self.is_foreign,
         )
         self.logger.trace(
             "admin-bypass-rebase-onto-master-start",
@@ -219,16 +297,14 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        # See repair_check: record before submitting so a broken ledger write
-        # blocks the submission instead of orphaning a real, running repair.
-        self.ledger.record("rebase-onto-master", pr.number, start_head, key, now)
-        async_repair.submit_async_repair_plan(plan)
+        self.submit_repair_plan(plan, "rebase-onto-master", pr.number, start_head, key, now)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
     def repair_bot_thread(self, pr: PrSnapshot, thread_id: str, now: int | None = None) -> RepairOutcome:
         start_head = pr.head_ref_oid
         plan = async_repair.build_repair_bot_thread_plan(
             pr, thread_id, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
+            foreign=self.is_foreign,
         )
         self.logger.trace(
             "admin-bypass-repair-bot-thread-start",
@@ -238,8 +314,5 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        # See repair_check: record before submitting so a broken ledger write
-        # blocks the submission instead of orphaning a real, running repair.
-        self.ledger.record("repair-bot-thread", pr.number, start_head, thread_id, now)
-        async_repair.submit_async_repair_plan(plan)
+        self.submit_repair_plan(plan, "repair-bot-thread", pr.number, start_head, thread_id, now)
         return self.blocked_outcome("submitted", thread_id, start_head, start_head)

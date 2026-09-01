@@ -26,6 +26,7 @@ export type TaskStatus =
 export interface TaskConfig {
   readonly workflowId?: string;
   readonly parentTask?: string;
+  readonly variantLocalId?: string;
   readonly command?: string;
   readonly prompt?: string;
   readonly experimentPrompt?: string;

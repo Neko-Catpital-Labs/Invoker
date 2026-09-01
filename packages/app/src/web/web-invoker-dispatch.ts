@@ -17,6 +17,7 @@ import type {
   BundledSkillsStatus,
   Logger,
   SystemDiagnostics,
+  WorkerDecisionsRequest,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -30,6 +31,7 @@ import { buildReviewGateQueryResponse } from '../review-gate-query.js';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveAgentSession } from '../headless-query-list.js';
+import { listWorkerDecisions } from '../worker-control.js';
 import { buildTaskGraphSnapshot } from './task-graph-snapshot.js';
 import type { TaskTerminalAdapter } from '../task-terminal-adapter.js';
 
@@ -142,6 +144,11 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:get-worker-status':
       case 'invoker:get-workers':
         return deps.getWorkers?.() ?? { generatedAt: new Date().toISOString(), workers: [] };
+      case 'invoker:get-worker-decisions':
+        return listWorkerDecisions(
+          persistence,
+          (args[0] ?? {}) as WorkerDecisionsRequest,
+        );
       case 'invoker:get-action-graph':
         return buildCurrentActionGraphSnapshot({
           orchestrator,
@@ -320,6 +327,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       // ── Planning chat + planning terminals ──
       // Routed to the owner's shared GUI-mutation handlers / terminal adapter
       // when the host wires them; otherwise keep the historical downgrades.
+      case 'invoker:start-ready':
       case 'invoker:plan-from-goal':
       case 'invoker:planning-chat-create':
       case 'invoker:planning-chat-list':
@@ -354,6 +362,19 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         if (deps.planningTerminals) return deps.planningTerminals.close(String(args[0]));
         return { ok: false, reason: 'unsupported' };
 
+      case 'invoker:start-worker':
+      case 'invoker:stop-worker':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        throw new WebDispatchError(
+          'worker_control_unavailable',
+          channel,
+          'Worker control is not available on this web surface. Use the desktop app or CLI to manage workers.',
+        );
+
+      case 'invoker:load-plan':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        return unsupported(channel);
+
       // ── Mutations not exposed on the facade / global lifecycle ──
       case 'invoker:select-experiment':
       case 'invoker:set-merge-branch':
@@ -362,9 +383,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:spawn-review-gate-ci-repair':
       case 'invoker:edit-task-pool':
       case 'invoker:replace-task':
-      case 'invoker:load-plan':
       case 'invoker:start':
-      case 'invoker:start-ready':
       case 'invoker:stop':
       case 'invoker:clear':
       case 'invoker:resume-workflow':

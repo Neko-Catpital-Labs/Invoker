@@ -897,6 +897,250 @@ test_error_field_structure() {
   return 0
 }
  
+# Test: baseBranch must match the literal remote ref, not a git ls-remote glob tail
+# `git ls-remote --heads <repo> feature/foo` also matches refs/heads/release/feature/foo,
+# so a pattern match is not proof that refs/heads/feature/foo exists.
+test_basebranch_remote_ref_is_matched_literally() {
+  local remote_dir
+  remote_dir=$(mktemp -d)
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -rf $remote_dir $temp_plan" RETURN
+
+  git init -q --bare "$remote_dir/origin.git" || return 1
+  git init -q "$remote_dir/work" || return 1
+  (
+    cd "$remote_dir/work" &&
+    git config user.email test@example.com &&
+    git config user.name test &&
+    git commit -q --allow-empty -m init &&
+    git branch -M master &&
+    git checkout -q -b release/feature/foo &&
+    git remote add origin "$remote_dir/origin.git" &&
+    git push -q origin master release/feature/foo
+  ) || return 1
+
+  emit_plan() {
+    cat > "$temp_plan" <<EOF
+name: basebranch-remote-literal-match
+onFinish: none
+mergeMode: manual
+repoUrl: file://$remote_dir/origin.git
+baseBranch: $1
+tasks:
+  - id: t1
+    description: Smoke
+    command: "true"
+EOF
+  }
+
+  local output
+
+  # refs/heads/feature/foo does not exist; only refs/heads/release/feature/foo does.
+  emit_plan "feature/foo"
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  set -e
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "basebranch_not_on_remote")] | length > 0' &>/dev/null; then
+    echo "Expected basebranch_not_on_remote for a glob-only tail match" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  # The branch that really exists must still validate.
+  emit_plan "release/feature/foo"
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected an existing baseBranch to validate, got exit $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  # An unreachable remote must stay fail-open, not fail-closed.
+  cat > "$temp_plan" <<EOF
+name: basebranch-remote-unreachable
+onFinish: none
+mergeMode: manual
+repoUrl: file://$remote_dir/absent.git
+baseBranch: whatever
+tasks:
+  - id: t1
+    description: Smoke
+    command: "true"
+EOF
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  exit_code=$?
+  set -e
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected an unreachable remote to fail open, got exit $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: documented remote-qualified baseBranch values must not be rejected
+# `origin/master` and `upstream/main` are documented explicit base refs (docs/getting-started.md).
+# repoUrl is a single remote, so the branch half has to be considered before reporting absent.
+test_basebranch_remote_qualified_refs_are_accepted() {
+  local remote_dir
+  remote_dir=$(mktemp -d)
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -rf $remote_dir $temp_plan" RETURN
+
+  git init -q --bare "$remote_dir/origin.git" || return 1
+  git init -q "$remote_dir/work" || return 1
+  (
+    cd "$remote_dir/work" &&
+    git config user.email test@example.com &&
+    git config user.name test &&
+    git commit -q --allow-empty -m init &&
+    git branch -M master &&
+    git branch main &&
+    git remote add origin "$remote_dir/origin.git" &&
+    git push -q origin master main
+  ) || return 1
+
+  emit_remote_qualified_plan() {
+    cat > "$temp_plan" <<EOF
+name: basebranch-remote-qualified
+onFinish: none
+mergeMode: manual
+repoUrl: file://$remote_dir/origin.git
+baseBranch: $1
+tasks:
+  - id: t1
+    description: Smoke
+    command: "true"
+EOF
+  }
+
+  local output
+  local exit_code
+  local ref
+  for ref in "origin/master" "upstream/main" "refs/remotes/upstream/main" "refs/heads/master"; do
+    emit_remote_qualified_plan "$ref"
+    set +e
+    output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+    exit_code=$?
+    set -e
+    if [[ $exit_code -ne 0 ]]; then
+      echo "Expected remote-qualified baseBranch '$ref' to validate, got exit $exit_code" >&2
+      echo "Output: $output" >&2
+      return 1
+    fi
+  done
+
+  # A remote-qualified ref whose branch really is missing must still be reported.
+  emit_remote_qualified_plan "origin/never-pushed"
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  set -e
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "basebranch_not_on_remote")] | length > 0' &>/dev/null; then
+    echo "Expected basebranch_not_on_remote for a remote-qualified branch missing on the remote" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: repoUrl credentials must never be echoed back in validator output.
+# `git ls-remote` accepts file://user:pass@/path, so a credentialed URL can reach the
+# basebranch_not_on_remote path and leak userinfo into the JSON printed on stderr.
+test_repourl_credentials_are_redacted() {
+  local remote_dir
+  remote_dir=$(mktemp -d)
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -rf $remote_dir $temp_plan" RETURN
+
+  git init -q --bare "$remote_dir/origin.git" || return 1
+  git init -q "$remote_dir/work" || return 1
+  (
+    cd "$remote_dir/work" &&
+    git config user.email test@example.com &&
+    git config user.name test &&
+    git commit -q --allow-empty -m init &&
+    git branch -M master &&
+    git remote add origin "$remote_dir/origin.git" &&
+    git push -q origin master
+  ) || return 1
+
+  local output
+
+  cat > "$temp_plan" <<EOF
+name: basebranch-remote-credentials
+onFinish: none
+mergeMode: manual
+repoUrl: file://bot:s3cr3t-token@$remote_dir/origin.git
+baseBranch: never-pushed
+tasks:
+  - id: t1
+    description: Smoke
+    command: "true"
+EOF
+
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "basebranch_not_on_remote")] | length > 0' &>/dev/null; then
+    echo "Expected basebranch_not_on_remote for a credentialed remote missing the branch" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if echo "$output" | grep -q "s3cr3t-token"; then
+    echo "repoUrl credentials leaked into validator output" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "basebranch_not_on_remote") | select(.message | contains("never-pushed"))] | length > 0' &>/dev/null; then
+    echo "Redaction dropped the baseBranch remediation detail" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  # The same redaction must cover the scratch/repoUrl conflict error, which echoes repoUrl as its value.
+  cat > "$temp_plan" <<EOF
+name: scratch-and-repourl
+onFinish: none
+mergeMode: manual
+scratch: true
+repoUrl: https://bot:s3cr3t-token@example.com/org/repo.git
+tasks:
+  - id: t1
+    description: Smoke
+    command: "true"
+EOF
+
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "conflicting_fields")] | length > 0' &>/dev/null; then
+    echo "Expected conflicting_fields for scratch + repoUrl" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if echo "$output" | grep -q "s3cr3t-token"; then
+    echo "repoUrl credentials leaked into the conflicting_fields error value" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
@@ -939,6 +1183,9 @@ run_test "Upward relative paths should be rejected" test_upward_relative_path_fa
 run_test "Experiment variant missing command scripts should be rejected" test_experiment_variant_missing_command_script_fails
 run_test "Branched review gate artifacts should be rejected" test_branched_review_gate_rejected
 run_test "Error objects should have correct field structure" test_error_field_structure
+run_test "baseBranch must match the literal remote ref" test_basebranch_remote_ref_is_matched_literally
+run_test "Remote-qualified baseBranch refs must be accepted" test_basebranch_remote_qualified_refs_are_accepted
+run_test "repoUrl credentials must be redacted from validator output" test_repourl_credentials_are_redacted
 
 echo ""
 echo "========================================="

@@ -4,6 +4,13 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.15
+
+- Ship production-owner profile and IPC fixes for standalone UI, CLI, and Slack installs, including owner-service sandbox handling and relaunch recovery.
+- Add the built-in admin-bypass e2e babysit worker controls and make e2e-autofix ticks exit cleanly when a child close event never arrives.
+- Reduce queue-drain overhead by batching autofix task loads, removing redundant scheduler and start-ready refreshes, scoping lifecycle refreshes, and deferring launch polling until the HTTP server binds.
+- Add bounded database retention and incremental vacuum work plus scale benchmarks for large workflow stores.
+
 ## 0.0.14
 
 - Fix packaged desktop owner-serve: bundle `@invoker/surfaces` and `@slack/bolt` into the Electron main bundle so loading the in-app planner no longer depends on pnpm-nested asar deps (npm 0.0.13 died with `Cannot find module 'form-data'`).

@@ -55,6 +55,7 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
+import { detectDefaultBranchRemote } from '@invoker/workflow-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import { filterPlanningPresets, type InvokerConfig } from './config.js';
 import {
@@ -148,6 +149,22 @@ function isModuleResolutionError(error: unknown): boolean {
     || error.message.includes('Cannot find package')
     || error.message.includes('ERR_MODULE_NOT_FOUND')
     || error.message.includes('ERR_UNKNOWN_FILE_EXTENSION')
+  );
+}
+
+function isAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('oauth')
+    || message.includes('401')
+    || message.includes('unauthorized')
+    || message.includes('failed to authenticate')
+    || message.includes('authentication failed')
+    || message.includes('token has expired')
+    || message.includes('re-authenticate')
+    || message.includes('session expired')
+    || message.includes('api error: 401')
   );
 }
 
@@ -267,6 +284,8 @@ function planningStatusLabel(status: InAppPlanningSessionStatus): string {
       return 'draft ready';
     case 'submitted':
       return 'submitted';
+    case 'planner_error':
+      return 'error';
   }
 }
 
@@ -306,6 +325,8 @@ function planningNextActionLine(session: InAppPlanningChatSession): string {
       return 'Next: Review or submit the draft in chat; use this shell for manual context checks.';
     case 'submitted':
       return 'Next: Review the submitted workflow in Invoker; submitted planning sessions stay read-only.';
+    case 'planner_error':
+      return 'Next: Re-authenticate or fix the error, then retry the last message.';
   }
 }
 
@@ -787,7 +808,10 @@ async function createSession(
 export function resolvePlanningRepoBinding(config: InvokerConfig): InAppPlanningRepoBinding | undefined {
   const repoUrl = config.defaultRepoUrl?.trim();
   if (!repoUrl) return undefined;
-  return { repoUrl, baseBranch: config.defaultBranch ?? 'main' };
+  const baseBranch = config.defaultBranch?.trim()
+    || detectDefaultBranchRemote(repoUrl)
+    || 'main';
+  return { repoUrl, baseBranch };
 }
 
 async function activatePlanningSessionWorktree(
@@ -842,7 +866,12 @@ export async function listInAppPlanningPresets(config: InvokerConfig): Promise<P
     isDefault: key === defaultPresetKey,
     defaultConfirmationMode,
   }));
-  return filterPlanningPresets(options, config);
+  const filtered = filterPlanningPresets(options, config);
+  const hasDefault = filtered.some((opt) => opt.isDefault);
+  if (!hasDefault && filtered.length > 0) {
+    filtered[0] = { ...filtered[0], isDefault: true };
+  }
+  return filtered;
 }
 
 export function createPlanningCommandBuilderFromRegistry(
@@ -1203,6 +1232,15 @@ export async function sendPlanningChatMessage(
         const failureMessage = error instanceof Error ? error.message : String(error);
         activeSession.activeTurnStatus = 'failed';
         activeSession.activeTurnError = failureMessage;
+        if (isAuthenticationError(error)) {
+          activeSession.status = 'planner_error';
+          appendSessionMessage(
+            activeSession,
+            'system',
+            'Authentication failed. The planner could not complete this turn. Re-authenticate and try again.',
+            'error',
+          );
+        }
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
         deps.onRawPlannerOutput?.({
           sessionId: activeSession.id,
@@ -1233,7 +1271,10 @@ export async function submitPlanningChatDraft(
   request: InAppPlanningSubmitRequest,
   deps: {
     sessions: InAppPlanningChatSessions;
-    loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
+    loadGeneratedPlan: (
+      planText: string,
+      repositoryBinding?: InAppPlanningRepoBinding,
+    ) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
     planningSessionStore?: InAppPlanningSessionStore;
   },
 ): Promise<InAppPlanningSubmitResponse> {
@@ -1266,9 +1307,14 @@ export async function submitPlanningChatDraft(
         }
         planText = approvedDraft.planText;
       }
+      const repositoryBinding = session.repoUrl && session.baseBranch
+        ? { repoUrl: session.repoUrl, baseBranch: session.baseBranch }
+        : undefined;
       const approved = await submitPlanningReview({
         planText,
-        loadPlan: deps.loadGeneratedPlan,
+        loadPlan: repositoryBinding
+          ? (approvedPlanText) => deps.loadGeneratedPlan(approvedPlanText, repositoryBinding)
+          : deps.loadGeneratedPlan,
       });
       if (!approved.ok) {
         return approved;
@@ -1398,7 +1444,10 @@ export async function rebindPlanningChatRepo(
   if (!requestedRepoUrl) {
     return { ok: false, error: 'No repository specified.' };
   }
-  const requestedBaseBranch = rawRequest?.baseBranch?.trim() || deps.config.defaultBranch || 'main';
+  const requestedBaseBranch = rawRequest?.baseBranch?.trim()
+    || deps.config.defaultBranch?.trim()
+    || detectDefaultBranchRemote(requestedRepoUrl)
+    || 'main';
 
   try {
     await repoPool.ensureCloneThroughRepoQueue(requestedRepoUrl);
@@ -1650,7 +1699,7 @@ export async function restorePlanningChatSessions(
           'error',
         );
         shouldPersist = true;
-      } else if (!session.draftPlanSummary) {
+      } else {
         const restoredSummary = summarizePlanText(session.draftPlanText);
         if (!restoredSummary) {
           session.status = 'still_discussing';
@@ -1662,10 +1711,11 @@ export async function restorePlanningChatSessions(
             'The saved draft could not be restored. Ask the planner to draft it again.',
             'error',
           );
-        } else {
+          shouldPersist = true;
+        } else if (JSON.stringify(session.draftPlanSummary) !== JSON.stringify(restoredSummary)) {
           session.draftPlanSummary = restoredSummary;
+          shouldPersist = true;
         }
-        shouldPersist = true;
       }
     }
 

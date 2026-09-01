@@ -19,6 +19,7 @@ except ImportError:
 
 ADMIN_BYPASS_NUDGE_LEDGER_KIND = "comment-admin-bypass-nudge"
 RESTORE_ADMIN_BYPASS_LABEL_LEDGER_KIND = "restore-admin-bypass-label"
+REPAIR_DISPATCH_FAILURE_LEDGER_KIND = "comment-repair-dispatch-failed"
 
 
 def admin_bypass_nudge_body() -> str:
@@ -83,6 +84,10 @@ class AdminBypassGhExecutor:
         self.gh.retarget_base(self.repo, pr.number, new_base)
         self.ledger.record("retarget-base", pr.number, pr.head_ref_oid, f"{pr.base_ref_name}->{new_base}", now)
 
+    def squash_merge(self, pr: PrSnapshot, key: str, now: int) -> None:
+        self.gh.merge_squash(self.repo, pr.number)
+        self.ledger.record("squash-merge", pr.number, pr.head_ref_oid, key, now)
+
     def rebase_onto_base(self, pr: PrSnapshot, new_base: str, now: int) -> bool:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +147,17 @@ class AdminBypassGhExecutor:
                 meta={"detail": detail},
             )
 
+    def comment_repair_dispatch_failed(self, pr: PrSnapshot, action_kind: str, now: int) -> None:
+        if self.ledger.count(REPAIR_DISPATCH_FAILURE_LEDGER_KIND, pr.number, pr.head_ref_oid, action_kind) != 0:
+            return
+        body = (
+            "Invoker repair dispatch was not acknowledged. The request was recorded as pending, "
+            "then closed without consuming the code-repair retry budget; "
+            f"automatic retry remains enabled for current head {pr.head_ref_oid[:7]}."
+        )
+        self.gh.comment(self.repo, pr.number, body)
+        self.ledger.record(REPAIR_DISPATCH_FAILURE_LEDGER_KIND, pr.number, pr.head_ref_oid, action_kind, now)
+
     def execute(self, action: Action, pr: PrSnapshot, now: int) -> bool:
         self.logger.trace("admin-bypass-action-execute", action=self.logger.action_payload(action))
         if action.kind in {
@@ -153,6 +169,7 @@ class AdminBypassGhExecutor:
             "remove_merge_hold",
             "resolve_bot_threads",
             "comment_blocked",
+            "squash_merge",
         } and not self.pr_head_is_current(pr, action.kind, action.key):
             return False
         if action.kind == "requeue":
@@ -166,6 +183,9 @@ class AdminBypassGhExecutor:
             return True
         if action.kind == "retarget_base":
             self.retarget_base(pr, action.key, now)
+            return True
+        if action.kind == "squash_merge":
+            self.squash_merge(pr, action.key, now)
             return True
         if action.kind == "comment_admin_bypass_nudge":
             self.comment_admin_bypass_nudge(pr, action.key, now)

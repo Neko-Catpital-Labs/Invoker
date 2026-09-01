@@ -18,7 +18,7 @@ fail() {
 
 export HOME="$TMP/home"
 WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
-mkdir -p "$WORK_PARENT" "$TMP/state"
+mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
 export PATH="$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
 export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
@@ -117,6 +117,20 @@ state = {
 Path(os.environ["STATE_PATH"]).write_text(json.dumps(state, indent=2), encoding="utf-8")
 PY
 : > "$LEDGER_PATH"
+
+# Incident 2026-08-12: submit_async_repair_plan's default path shells out to a
+# live Invoker owner over IPC, which this hermetic repro never provides. Mock
+# it (same pattern as repro-babysit-pr-body-human-split.sh) -- this repro only
+# pins the routing decision (repair_check vs. rebase) and the resulting
+# ledger row, not what a real repair attempt does with the checked-out PR.
+cat > "$TMP/bin/submit-async.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="${1:?plan path required}"
+test -f "$plan_path"
+EOF
+chmod +x "$TMP/bin/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async.sh"
 
 run_worker() {
   python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 7727 2>&1

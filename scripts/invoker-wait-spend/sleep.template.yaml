@@ -1,0 +1,14 @@
+name: invoker-wait-spend-sleep
+onFinish: none
+mergeMode: no_op
+scratch: true
+
+tasks:
+  - id: sleep
+    description: |
+      Scratch sleep for wait-spend bench.
+      Goal: occupy the workflow for WAIT_SECONDS without an execution agent.
+      Motivation: measure parent-chat park vs poll spend only.
+      Safety invariant: command-only sleep; no prompt task; no PR publish.
+    command: "sleep WAIT_SECONDS"
+    dependencies: []

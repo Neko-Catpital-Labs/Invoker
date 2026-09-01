@@ -185,6 +185,35 @@ describe('buildWebInvokerDispatch', () => {
     expect(await dispatch('invoker:get-history-tasks', [])).toEqual(historyRows);
   });
 
+  it('get-worker-decisions mirrors the owner read handler', async () => {
+    const listWorkerActions = vi.fn(() => []);
+    const { dispatch } = makeDispatch({
+      persistence: {
+        listWorkflows: () => [],
+        listWorkerActions,
+      },
+    });
+
+    await expect(dispatch('invoker:get-worker-decisions', [{
+      workflowId: 'wf-1',
+      decision: 'act',
+      limit: 25,
+      offset: 0,
+    }])).resolves.toEqual({
+      workflowId: 'wf-1',
+      actions: [],
+      limit: 25,
+      offset: 0,
+      hasMore: false,
+    });
+    expect(listWorkerActions).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      decision: 'act',
+      limit: 26,
+      offset: 0,
+    });
+  });
+
   it('get-events returns a paginated page for a task', async () => {
     const events = [{ id: 1, taskId: 't1', eventType: 'task.running', createdAt: '2026-07-01T00:00:00Z' }];
     const getEvents = vi.fn(() => events);
@@ -295,6 +324,24 @@ describe('buildWebInvokerDispatch', () => {
   it('a global-lifecycle channel rejects as unsupported_on_web', async () => {
     const { dispatch } = makeDispatch();
     await expect(dispatch('invoker:start', [])).rejects.toMatchObject({ code: 'unsupported_on_web' });
+  });
+
+  it('start-ready forwards the dry-run request through guiMutations when wired', async () => {
+    const response = { ok: true, ready: ['wf-1/task-1'] };
+    const guiMutations = vi.fn(async () => response);
+    const { dispatch } = makeDispatch({ guiMutations });
+    const request = { dryRun: true };
+
+    await expect(dispatch('invoker:start-ready', [request])).resolves.toBe(response);
+    expect(guiMutations).toHaveBeenCalledExactlyOnceWith('invoker:start-ready', [request]);
+  });
+
+  it('start-ready fails closed when guiMutations is absent', async () => {
+    const { dispatch } = makeDispatch();
+
+    await expect(dispatch('invoker:start-ready', [{ dryRun: true }])).rejects.toMatchObject({
+      code: 'unsupported_on_web',
+    });
   });
 
   it('an unknown channel rejects with code unknown_channel', async () => {

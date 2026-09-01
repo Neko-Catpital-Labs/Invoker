@@ -78,6 +78,8 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
+          - name: Added Comment Policy
+            command: pnpm run check:comments
 
     name: quality / ${{ matrix.name }}
 
@@ -421,6 +423,7 @@ jobs:
               bash scripts/test-suites/required/08-build-artifact-surfaces-guard.sh
               bash scripts/test-suites/required/09-headless-cli-boots-smoke.sh
               bash scripts/test-suites/required/10-dag-background-click-noop-guard.sh
+              bash scripts/test-suites/required/14-verify-catalog-check.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
               bash scripts/test-suites/required/51-verify-scratch-execution.sh
@@ -793,6 +796,7 @@ jobs:
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
               e2e/planning-review-scroll.spec.ts
+              e2e/planning-submit-to-workflow-graph.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts

@@ -271,6 +271,17 @@ describe('listInAppPlanningPresets', () => {
       { key: 'custom+omp', label: 'custom + omp', tool: 'omp', model: 'fast', isDefault: false, defaultConfirmationMode: 'require' },
     ]));
   });
+
+  it('promotes the first allowed preset to default when the configured default is filtered out', async () => {
+    const presets = await listInAppPlanningPresets({
+      defaultSlackHarnessPreset: 'cursor+claude',
+      enabledExecutionAgents: ['codex'],
+    });
+    const defaultPreset = presets.find((p) => p.isDefault);
+    expect(defaultPreset).toBeDefined();
+    expect(defaultPreset?.tool === 'codex' || defaultPreset?.model === 'codex').toBe(true);
+    expect(presets.every((p) => p.tool === 'codex' || p.model === 'codex')).toBe(true);
+  });
 });
 
 
@@ -793,6 +804,34 @@ tasks:
       workflowCount: 1,
     });
     expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+  });
+
+  it('passes the bound repository to the submit loader', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'bound-repository-submit',
+      title: 'Bound repository submit',
+      status: 'draft_ready',
+      repoUrl: '/home/demo/demo-repo',
+      baseBranch: 'main',
+      draftPlanText: VALID_PLAN_TEXT,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+    });
+    sessions.set(session.id, session);
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    });
+
+    await expect(submitPlanningChatDraft({ sessionId: session.id }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toMatchObject({ ok: true, workflowId: 'wf-1' });
+
+    expect(loadGeneratedPlan).toHaveBeenCalledWith(
+      VALID_PLAN_TEXT,
+      { repoUrl: '/home/demo/demo-repo', baseBranch: 'main' },
+    );
   });
 
   it('submits a valid final draft plan without a closing YAML fence', async () => {
@@ -1615,6 +1654,54 @@ tasks:
     } finally {
       adapter.close();
     }
+  });
+
+  it('rebuilds stale compacted draft summaries from the canonical draft text on restore', async () => {
+    const multilinePlan = `name: Greeting fix
+onFinish: none
+mergeMode: manual
+repoUrl: /tmp/greeting
+tasks:
+  - id: fix-greeting
+    description: |
+      Review claim: Fix greeting punctuation.
+      Review lane: behavior
+      Safety invariant: Preserve existing inputs.
+    command: pnpm test
+    dependencies: []
+`;
+    const record: InAppPlanningSessionRecord = {
+      id: 'planning-stale-summary',
+      title: 'Greeting fix',
+      presetKey: 'codex',
+      status: 'draft_ready',
+      messages: [],
+      pendingResponse: false,
+      draftPlanText: multilinePlan,
+      draftPlanSummary: {
+        name: 'Greeting fix',
+        steps: ['Review claim: Fix greeting punctuation. Review lane: behavior Safety invariant: Preserve existing inputs.'],
+        taskCount: 1,
+        taskGroups: [{
+          workflow: null,
+          tasks: ['Review claim: Fix greeting punctuation. Review lane: behavior Safety invariant: Preserve existing inputs.'],
+        }],
+      },
+      createdAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:01.000Z',
+    };
+    const sessions = createInAppPlanningChatSessions();
+
+    await restorePlanningChatSessions([record], {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(sessions.get(record.id)?.draftPlanSummary?.taskGroups[0]?.tasks[0]).toBe(
+      'Review claim: Fix greeting punctuation.\nReview lane: behavior\nSafety invariant: Preserve existing inputs.',
+    );
   });
 
   it('clears submitted pending-response state during restore', async () => {

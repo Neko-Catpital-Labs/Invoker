@@ -10,11 +10,13 @@ Run:  python3 scripts/test_mergify_admin_requeue_plan.py
 
 from __future__ import annotations
 
+import io
 import shutil
 import sys
 import tempfile
 import unittest
 import unittest.mock
+from contextlib import redirect_stderr
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1033,14 +1035,38 @@ class PlanStackActions(PlannerTestCase):
         execution = p.plan_stack_execution(stack, REQUIRED, ledger, NOW, (), {}, trunk="master")
         self.assertEqual(execution.wait_reason, "repair-in-flight")
 
-    def test_requeue_is_capped_after_repeated_attempts(self):
+    def test_requeue_capped_first_time_escalates_to_agent(self):
         ledger = self._ledger()
         # Two prior requeue attempts on this head+key -> the third is capped.
         ledger.record("requeue", 1, HEAD, "cm1")
         ledger.record("requeue", 1, HEAD, "cm1")
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued", comment_id="cm1"))
         actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].key), ("escalate_requeue_stuck", "cm1"))
+
+    def test_requeue_capped_after_escalation_falls_back_to_comment(self):
+        ledger = self._ledger()
+        ledger.record("requeue", 1, HEAD, "cm1")
+        ledger.record("requeue", 1, HEAD, "cm1")
+        # Escalation already recorded for this exact head+key -> no duplicate
+        # agent submission; falls back to the existing capped-comment behavior.
+        ledger.record("requeue-escalation", 1, HEAD, "cm1")
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued", comment_id="cm1"))
+        actions = self._plan(snapshot, ledger)
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
+
+    def test_requeue_escalation_only_fires_once_per_head(self):
+        ledger = self._ledger()
+        ledger.record("requeue", 1, HEAD, "cm1")
+        ledger.record("requeue", 1, HEAD, "cm1")
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued", comment_id="cm1"))
+        first = self._plan(snapshot, ledger)
+        self.assertEqual((first[0].kind, first[0].key), ("escalate_requeue_stuck", "cm1"))
+        # Simulate the executor recording the escalation after dispatch, then
+        # replanning on the same state -> must not escalate a second time.
+        ledger.record("requeue-escalation", 1, HEAD, "cm1")
+        second = self._plan(snapshot, ledger)
+        self.assertEqual((second[0].kind, second[0].key), ("comment_blocked", "capped"))
 
     def test_queue_only_missing_head_check_repairs_from_mergify_failure(self):
         snapshot = pr(
@@ -1400,9 +1426,13 @@ class DefaultClaimAndReleaseRepairFiling(PlannerTestCase):
         self.assertTrue(already_claimed)
 
     def test_fails_closed_when_the_ledger_call_raises(self):
+        stderr = io.StringIO()
         with unittest.mock.patch.object(p.repair_filing_ledger, "insert_repair_filing", side_effect=RuntimeError("headless_mutation timed out")):
-            already_claimed = p.default_claim_repair_filing("k", "s", "sha")
+            with redirect_stderr(stderr):
+                already_claimed = p.default_claim_repair_filing("k", "s", "sha")
         self.assertTrue(already_claimed)
+        self.assertIn("skipping this filing tick without consuming code-repair retry budget", stderr.getvalue())
+        self.assertNotIn("assuming already claimed", stderr.getvalue())
 
     def test_release_calls_through(self):
         with unittest.mock.patch.object(p.repair_filing_ledger, "release_repair_filing", return_value={"released": True}) as release:

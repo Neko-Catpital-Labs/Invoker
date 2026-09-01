@@ -1,0 +1,21 @@
+# Edge case: Stacked plan with baseBranch still set to main (trunk)
+# Expected errors: stacked_basebranch_default
+#
+# Same footgun as edge-stacked-basebranch-master.yaml; repos on main must not slip through.
+
+name: "Stacked plan with baseBranch main"
+description: "Plan with single merge-gate externalDependency but baseBranch is main"
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: main
+
+externalDependencies:
+  - workflowId: "wf-1787985528105-14"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: task-1
+    description: "A task"
+    command: "echo test"
+    dependencies: []

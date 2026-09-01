@@ -120,6 +120,34 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No cross-repo-research runs recorded yet.',
     };
   }
+  if (kind === 'mergify-queue-research') {
+    return {
+      name: 'Mergify queue research',
+      idleText: 'Idle. Mines Mergify/admin-bypass ledger events and submits a research-swarm → Linear chain when turned on.',
+      noActionText: 'No mergify-queue-research runs recorded yet.',
+    };
+  }
+  if (kind === 'catstack-deploy') {
+    return {
+      name: 'Catstack deploy',
+      idleText: 'Idle. Clone/pulls catstack and runs ./install.sh on this machine and every remoteTargets host when turned on.',
+      noActionText: 'No catstack-deploy runs recorded yet.',
+    };
+  }
+  if (kind === 'db-reaper') {
+    return {
+      name: 'DB reaper',
+      idleText: 'Idle. Prunes old events for terminal-status tasks and fully-sent sync_journal rows on an interval.',
+      noActionText: 'No db-reaper runs recorded yet.',
+    };
+  }
+  if (kind === 'admin-bypass-e2e-babysit') {
+    return {
+      name: 'Admin-bypass/e2e babysit',
+      idleText: 'Idle. Restarts stopped admin-bypass/e2e workers and clears stale repair-filing claims when turned on.',
+      noActionText: 'No admin-bypass-e2e-babysit runs recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',

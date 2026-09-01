@@ -1,0 +1,26 @@
+# Anti-Pattern P: Inter-task ephemeral path carry without commit
+# Expected: lint-task-atomicity fails (commit-to-carry rule)
+#
+# WRONG: task A writes work/** or state/artifacts/**; task B depends on A and
+# reads the same paths, but A never git-adds/commits. Downstream Invoker
+# worktrees only see committed history → FileNotFoundError / fixing_with_ai.
+#
+# RIGHT: commit the path in A, combine produce+consume in one command, or use
+# an explicit object-store/remote artifact API. scratch:true plans are exempt.
+
+name: "Anti-pattern: inter-task ephemeral carry without commit"
+description: "Producer writes work/state artifacts; consumer reads them without a carry commit."
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: regenerate-citr-report
+    description: "Write CITR research report markdown under work/company-claims-dagster/state/artifacts/citr."
+    command: "mkdir -p work/company-claims-dagster/state/artifacts/citr && echo report > work/company-claims-dagster/state/artifacts/citr/research_report.md"
+    dependencies: []
+
+  - id: export-citr-pdf
+    description: "Export PDF from the CITR research report under work/company-claims-dagster/state/artifacts/citr."
+    command: "test -f work/company-claims-dagster/state/artifacts/citr/research_report.md"
+    dependencies: [regenerate-citr-report]

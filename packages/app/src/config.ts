@@ -227,11 +227,26 @@ export interface CatstackDeployConfig {
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
+export interface DbReaperConfig {
+  intervalMinutes?: number;
+  eventsRetentionDays?: number;
+  syncJournalRetentionDays?: number;
+  vacuumFreelistThresholdPages?: number;
+  vacuumMaxPagesPerTick?: number;
+}
+
 /** Default catstack clone URL. */
 export const DEFAULT_CATSTACK_DEPLOY_REPO_URL = 'https://github.com/EdbertChan/catstack.git';
 
 /** Default local/remote checkout path for catstack. */
 export const DEFAULT_CATSTACK_DEPLOY_REPO_PATH = '~/Documents/GitHub/catstack';
+
+export interface AdminBypassE2eBabysitConfig {
+  enabled?: boolean;
+  intervalMinutes?: number;
+  watchedWorkerKinds?: string[];
+  staleTtlMinutes?: number;
+}
 
 export interface InvokerConfig {
   defaultBranch?: string;
@@ -283,6 +298,8 @@ export interface InvokerConfig {
    * Cadence stays in the flat `e2eAutoFixIntervalMs` above.
    */
   e2eAutoFix?: E2eAutoFixConfig;
+  /** Cadence for the worker-session-mine worker in milliseconds. Default: 3_600_000 (1h). */
+  workerSessionMineIntervalMs?: number;
   stallRequeueRetries?: number;
   stallRequeueBackoffMs?: number;
   /**
@@ -587,6 +604,8 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
+  dbReaper?: DbReaperConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },

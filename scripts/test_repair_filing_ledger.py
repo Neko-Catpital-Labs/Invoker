@@ -30,7 +30,7 @@ class InsertRepairFiling(unittest.TestCase):
         calls = []
         result = rfl.insert_repair_filing(
             "ci-regression:fleet", "master", "sha-a",
-            run_headless_fn=lambda *a: calls.append(a) or completed(
+            run_headless_fn=lambda *a, **kw: calls.append(a) or completed(
                 stdout=json.dumps({"inserted": True, "row": {"id": 1}}),
             ),
         )
@@ -42,14 +42,14 @@ class InsertRepairFiling(unittest.TestCase):
     def test_rejects_a_duplicate_key(self):
         result = rfl.insert_repair_filing(
             "admin-requeue:rebase-conflict", "9425", "sha-b",
-            run_headless_fn=lambda *a: completed(stdout=json.dumps({"inserted": False, "row": {"id": 1}})),
+            run_headless_fn=lambda *a, **kw: completed(stdout=json.dumps({"inserted": False, "row": {"id": 1}})),
         )
         self.assertFalse(result["inserted"])
 
     def test_unwraps_the_ipc_delegated_envelope(self):
         result = rfl.insert_repair_filing(
             "k", "s", "sha",
-            run_headless_fn=lambda *a: completed(stdout=json.dumps({
+            run_headless_fn=lambda *a, **kw: completed(stdout=json.dumps({
                 "ok": True,
                 "response": {"inserted": True, "row": {"id": 2}},
             })),
@@ -60,7 +60,7 @@ class InsertRepairFiling(unittest.TestCase):
         calls = []
         rfl.insert_repair_filing(
             "k", "s", "sha", metadata={"memberJobs": ["a", "b"]},
-            run_headless_fn=lambda *a: calls.append(a) or completed(stdout=json.dumps({"inserted": True, "row": {}})),
+            run_headless_fn=lambda *a, **kw: calls.append(a) or completed(stdout=json.dumps({"inserted": True, "row": {}})),
         )
         command, kind, subject, sha, metadata_json = calls[0]
         self.assertIn("--metadata", command)
@@ -70,20 +70,36 @@ class InsertRepairFiling(unittest.TestCase):
         with self.assertRaises(rfl.RepairFilingLedgerError):
             rfl.insert_repair_filing(
                 "k", "s", "sha",
-                run_headless_fn=lambda *a: completed(returncode=1, stderr="owner unreachable"),
+                run_headless_fn=lambda *a, **kw: completed(returncode=1, stderr="owner unreachable"),
             )
 
     def test_raises_on_unparseable_output(self):
         with self.assertRaises(rfl.RepairFilingLedgerError):
-            rfl.insert_repair_filing("k", "s", "sha", run_headless_fn=lambda *a: completed(stdout="not json"))
+            rfl.insert_repair_filing("k", "s", "sha", run_headless_fn=lambda *a, **kw: completed(stdout="not json"))
 
     def test_requires_kind_subject_and_state_sha(self):
         with self.assertRaises(ValueError):
-            rfl.insert_repair_filing("", "s", "sha", run_headless_fn=lambda *a: completed())
+            rfl.insert_repair_filing("", "s", "sha", run_headless_fn=lambda *a, **kw: completed())
         with self.assertRaises(ValueError):
-            rfl.insert_repair_filing("k", "", "sha", run_headless_fn=lambda *a: completed())
+            rfl.insert_repair_filing("k", "", "sha", run_headless_fn=lambda *a, **kw: completed())
         with self.assertRaises(ValueError):
-            rfl.insert_repair_filing("k", "s", "", run_headless_fn=lambda *a: completed())
+            rfl.insert_repair_filing("k", "s", "", run_headless_fn=lambda *a, **kw: completed())
+
+    def test_uses_a_shorter_timeout_than_run_headless_default(self):
+        # Reproduces the production incident (2026-08-29): a real insert call
+        # against the live DO1 owner under task load took the full 30s
+        # run_headless default before timing out. Several such calls in one
+        # pr-admin-bypass-land tick exceeded that worker's 240s tick budget
+        # and got the whole tick killed. This call is a best-effort dedup
+        # claim whose caller already treats any failure as "retry next
+        # tick", so it must fail faster than run_headless's general default.
+        seen_kwargs = {}
+        rfl.insert_repair_filing(
+            "k", "s", "sha",
+            run_headless_fn=lambda *a, **kw: seen_kwargs.update(kw) or completed(stdout=json.dumps({"inserted": True, "row": {}})),
+        )
+        self.assertEqual(seen_kwargs.get("timeout_seconds"), rfl.REPAIR_FILING_LEDGER_TIMEOUT_SECONDS)
+        self.assertLess(rfl.REPAIR_FILING_LEDGER_TIMEOUT_SECONDS, 30)
 
 
 class ReleaseRepairFiling(unittest.TestCase):
@@ -91,7 +107,7 @@ class ReleaseRepairFiling(unittest.TestCase):
         calls = []
         result = rfl.release_repair_filing(
             "k", "s", "sha",
-            run_headless_fn=lambda *a: calls.append(a) or completed(stdout=json.dumps({"released": True})),
+            run_headless_fn=lambda *a, **kw: calls.append(a) or completed(stdout=json.dumps({"released": True})),
         )
         self.assertEqual(result, {"released": True})
         command = calls[0][0]
@@ -99,7 +115,15 @@ class ReleaseRepairFiling(unittest.TestCase):
 
     def test_raises_on_failure_instead_of_silently_succeeding(self):
         with self.assertRaises(rfl.RepairFilingLedgerError):
-            rfl.release_repair_filing("k", "s", "sha", run_headless_fn=lambda *a: completed(returncode=1))
+            rfl.release_repair_filing("k", "s", "sha", run_headless_fn=lambda *a, **kw: completed(returncode=1))
+
+    def test_uses_a_shorter_timeout_than_run_headless_default(self):
+        seen_kwargs = {}
+        rfl.release_repair_filing(
+            "k", "s", "sha",
+            run_headless_fn=lambda *a, **kw: seen_kwargs.update(kw) or completed(stdout=json.dumps({"released": True})),
+        )
+        self.assertEqual(seen_kwargs.get("timeout_seconds"), rfl.REPAIR_FILING_LEDGER_TIMEOUT_SECONDS)
 
 
 if __name__ == "__main__":

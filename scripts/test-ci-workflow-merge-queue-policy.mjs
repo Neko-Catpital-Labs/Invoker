@@ -163,10 +163,16 @@ assert(
   !vitestWorkspaceSuite.includes('pnpm test'),
   'Vitest Workspace must not inherit unrelated root test-chain checks through pnpm test',
 );
+const agenticContextScoreCheckIndex = vitestWorkspaceSuite.indexOf('node scripts/agentic-context-score.mjs --self-test');
 const planToInvokerCheckIndex = vitestWorkspaceSuite.indexOf('scripts/test-plan-to-invoker-skill.sh');
 const workspaceTestIndex = vitestWorkspaceSuite.indexOf('scripts/workspace-test.sh');
+assert(agenticContextScoreCheckIndex >= 0, 'Vitest Workspace must run the agentic-context-score self-test');
 assert(planToInvokerCheckIndex >= 0, 'Vitest Workspace must run the plan-to-invoker skill check');
 assert(workspaceTestIndex >= 0, 'Vitest Workspace must run workspace package tests');
+assert(
+  agenticContextScoreCheckIndex < workspaceTestIndex,
+  'Vitest Workspace must run the agentic-context-score self-test before workspace package tests',
+);
 assert(
   planToInvokerCheckIndex < workspaceTestIndex,
   'Vitest Workspace must run the plan-to-invoker check before workspace package tests',

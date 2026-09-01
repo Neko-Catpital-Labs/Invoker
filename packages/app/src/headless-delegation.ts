@@ -31,9 +31,16 @@ export type DelegationOutcome =
   | { kind: 'no-handler' }
   | { kind: 'protocol-error'; message: string };
 
-/** Type guard: returns true when the delegation was accepted by the owner. */
 export function isDelegated(outcome: DelegationOutcome): outcome is DelegationOutcome & { kind: 'delegated' } {
   return outcome.kind === 'delegated';
+}
+
+export function isTimeout(outcome: DelegationOutcome): outcome is DelegationOutcome & { kind: 'timeout' } {
+  return outcome.kind === 'timeout';
+}
+
+export function isNoHandler(outcome: DelegationOutcome): outcome is DelegationOutcome & { kind: 'no-handler' } {
+  return outcome.kind === 'no-handler';
 }
 
 function delegationLog(message: string): void {

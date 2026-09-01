@@ -11,7 +11,12 @@ import { FailureClassifier } from '@invoker/workflow-core';
 import type { SshInfraFailureClass, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 import { isLivenessFailureTask, normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
-import { checkAutoFixRetryCap, recordAutoFixRetryConsumed } from '../auto-fix-retry-cap.js';
+import {
+  checkAutoFixRetryCap,
+  recordAutoFixRetryConsumed,
+  recordAutoFixRetryPending,
+  recordAutoFixRetryUnacknowledged,
+} from '../auto-fix-retry-cap.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import {
   resolveRemoteBranchOwnerPath,
@@ -93,7 +98,8 @@ export interface InfraRepairWorkerStore {
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   updateTask?(taskId: string, changes: TaskStateChanges): void;
-  getEvents?(taskId: string): TaskEvent[];
+  /** Bounded, newest-first lookup — see SQLiteAdapter.getRecentEventsOfType. */
+  getRecentEventsOfType?(taskId: string, eventType: string, limit: number): TaskEvent[];
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -365,11 +371,11 @@ export function classifyGenericSshInfraFailure(errorText: unknown): InfraRepairR
 }
 
 function resolveRemoteTargetId(
-  store: Pick<InfraRepairWorkerStore, 'getEvents'>,
+  store: Pick<InfraRepairWorkerStore, 'getRecentEventsOfType'>,
   task: TaskState,
 ): string | undefined {
   return resolveSelectedRemoteTargetId(
-    { persistence: { getEvents: store.getEvents?.bind(store) } } as unknown as ConflictResolverHost,
+    { persistence: { getRecentEventsOfType: store.getRecentEventsOfType?.bind(store) } } as unknown as ConflictResolverHost,
     task.id,
     task,
   );
@@ -744,7 +750,16 @@ async function submitFollowUpMutation(
     return;
   }
 
-  const intentId = options.submitter.submit(candidate.workflowId, 'normal', channel, args);
+  recordAutoFixRetryPending(options.store, candidate.taskId, { workflowId: candidate.workflowId });
+  let intentId: number;
+  try {
+    intentId = options.submitter.submit(candidate.workflowId, 'normal', channel, args);
+  } catch (error) {
+    recordAutoFixRetryUnacknowledged(options.store, candidate.taskId, error, {
+      workflowId: candidate.workflowId,
+    });
+    throw error;
+  }
   recordTaskDecision(options, candidate, reason, 'completed', summary, {
     channel,
     ...payload,

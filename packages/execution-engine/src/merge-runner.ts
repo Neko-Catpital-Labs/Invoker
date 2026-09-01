@@ -1545,6 +1545,23 @@ export async function publishAfterFixImpl(
       ? await resolveReviewBaseRef(host, consolidateDir, baseBranch)
       : { branchName: normalizeBranchForGithubCli(baseBranch), gitRef: baseBranch };
 
+    let skipReviewForEmptyDiff = false;
+    if (shouldPublishReview && isInvokerRepoUrl(workflow?.repoUrl)) {
+      const changedFiles = await listReviewableChangedFiles(host, consolidateDir, reviewBase.gitRef, featureBranch);
+      if (changedFiles.length === 0) {
+        logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
+          baseBranch: reviewBase.branchName,
+          featureBranch,
+        });
+        mergeTrace('PUBLISH_AFTER_FIX_REVIEW_PUBLISH_NOOP', {
+          taskId: task.id,
+          baseBranch: reviewBase.branchName,
+          featureBranch,
+        });
+        skipReviewForEmptyDiff = true;
+      }
+    }
+
     let fullSummary = summary;
     if (visualProof && host.runVisualProofCapture) {
       const slug = featureBranch.replace(/\//g, '-');
@@ -1554,7 +1571,7 @@ export async function publishAfterFixImpl(
       }
     }
 
-    if (shouldPublishReview) {
+    if (shouldPublishReview && !skipReviewForEmptyDiff) {
       const published = await publishReviewArtifactsForMerge(host, {
         workflowId,
         mergeNodeTaskId: task.id,

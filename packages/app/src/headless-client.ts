@@ -361,7 +361,7 @@ async function delegateReadOnlyQuery(
   if (ownerResult.resolved) {
     messageBus = ownerResult.bus;
   } else if (
-    !isQueue ||
+    (!isQueue && !isActionGraph) ||
     !hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))
   ) {
     if (isQueue || isActionGraph) return false;
@@ -551,7 +551,14 @@ export async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promis
   try {
     if (bootstrapLock) {
       delegationClientLog('bootstrap spawning detached standalone owner');
-      spawnDetachedStandaloneOwner(repoRoot);
+      try {
+        spawnDetachedStandaloneOwner(repoRoot);
+      } catch (err) {
+        delegationClientLog(
+          `bootstrap refused to spawn detached standalone owner: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw err;
+      }
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
     let attempts = 0;
