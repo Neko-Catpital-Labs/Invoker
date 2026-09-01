@@ -831,6 +831,38 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].status).toBe('pending');
     });
 
+    it('round-trips task freshness through save, update, clear, and omission', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const freshness = {
+        watchPaths: ['packages/a.ts', 'packages/z.ts'],
+        pathPreconditions: [
+          { path: 'generated/output.json', expected: 'absent' as const },
+          { path: 'packages/a.ts', expected: 'present' as const },
+        ],
+        guardedBehaviorIds: ['a-guard', 'z_guard'],
+      };
+      adapter.saveTask('wf-1', makeTask('with-freshness', { config: { freshness } }));
+      adapter.saveTask('wf-1', makeTask('without-freshness'));
+
+      expect(adapter.loadTask('with-freshness')?.config.freshness).toEqual(freshness);
+      expect(adapter.loadTask('without-freshness')?.config).not.toHaveProperty('freshness');
+      const persisted = (adapter as any).db.exec(
+        `SELECT freshness FROM tasks WHERE id = 'with-freshness'`,
+      ) as Array<{ values: unknown[][] }>;
+      expect(persisted[0]?.values[0]?.[0]).toBe(JSON.stringify(freshness));
+
+      const updatedFreshness = {
+        watchPaths: ['src/index.ts'],
+        pathPreconditions: [{ path: 'src/index.ts', expected: 'present' as const }],
+        guardedBehaviorIds: [],
+      };
+      adapter.updateTask('with-freshness', { config: { freshness: updatedFreshness } });
+      expect(adapter.loadTask('with-freshness')?.config.freshness).toEqual(updatedFreshness);
+
+      adapter.updateTask('with-freshness', { config: { freshness: undefined } });
+      expect(adapter.loadTask('with-freshness')?.config).not.toHaveProperty('freshness');
+    });
+
     it('persists poolMemberId through updateTask and getPoolMemberId', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('ssh-task', {
@@ -941,6 +973,7 @@ describe('SQLiteAdapter', () => {
 
     it('creates execution_model and worker_actions schema objects', () => {
       expect(tableColumns(adapter, 'tasks')).toContain('execution_model');
+      expect(tableColumns(adapter, 'tasks')).toContain('freshness');
       expect(tableColumns(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
         'id',
         'worker_kind',
@@ -980,6 +1013,24 @@ describe('SQLiteAdapter', () => {
 
     it('does not create auto_fix_attempts on fresh task tables', () => {
       expect(tableColumns(adapter, 'tasks')).not.toContain('auto_fix_attempts');
+    });
+
+    it('adds the optional freshness column when reopening an older task table', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-task-freshness-migration-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const oldDb = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        (oldDb as any).db.run('ALTER TABLE tasks DROP COLUMN freshness');
+        expect(tableColumns(oldDb, 'tasks')).not.toContain('freshness');
+        oldDb.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(tableColumns(reopened, 'tasks')).toContain('freshness');
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('drops legacy auto_fix_attempts columns when reopening writable databases', async () => {
@@ -5316,6 +5367,64 @@ describe('SQLiteAdapter', () => {
   });
 
   // ── Output Spool Regression Tests ──────────────────────
+
+  it('isolates in-memory output files when INVOKER_DB_DIR is configured', async () => {
+    const originalDbDir = process.env.INVOKER_DB_DIR;
+    const configuredDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-configured-db-dir-'));
+    let first: SQLiteAdapter | undefined;
+    let second: SQLiteAdapter | undefined;
+
+    try {
+      process.env.INVOKER_DB_DIR = configuredDbDir;
+      first = await SQLiteAdapter.create(':memory:');
+      first.appendOutputChunk('shared-task-id', 'first adapter\n');
+      first.close();
+      first = undefined;
+
+      second = await SQLiteAdapter.create(':memory:');
+      expect(second.replayOutputFrom('shared-task-id', 0)).toEqual([]);
+    } finally {
+      first?.close();
+      second?.close();
+      if (originalDbDir === undefined) {
+        delete process.env.INVOKER_DB_DIR;
+      } else {
+        process.env.INVOKER_DB_DIR = originalDbDir;
+      }
+      rmSync(configuredDbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('colocates output files with each file-backed database', async () => {
+    const originalDbDir = process.env.INVOKER_DB_DIR;
+    const configuredDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-configured-db-dir-'));
+    const firstDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-first-db-'));
+    const secondDbDir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-second-db-'));
+    let first: SQLiteAdapter | undefined;
+    let second: SQLiteAdapter | undefined;
+
+    try {
+      process.env.INVOKER_DB_DIR = configuredDbDir;
+      first = await SQLiteAdapter.create(join(firstDbDir, 'invoker.db'), { ownerCapability: true });
+      first.appendOutputChunk('shared-task-id', 'first database\n');
+      first.close();
+      first = undefined;
+
+      second = await SQLiteAdapter.create(join(secondDbDir, 'invoker.db'), { ownerCapability: true });
+      expect(second.replayOutputFrom('shared-task-id', 0)).toEqual([]);
+    } finally {
+      first?.close();
+      second?.close();
+      if (originalDbDir === undefined) {
+        delete process.env.INVOKER_DB_DIR;
+      } else {
+        process.env.INVOKER_DB_DIR = originalDbDir;
+      }
+      rmSync(configuredDbDir, { recursive: true, force: true });
+      rmSync(firstDbDir, { recursive: true, force: true });
+      rmSync(secondDbDir, { recursive: true, force: true });
+    }
+  });
 
   describe('output spool: monotonic offsets', () => {
     it('appends chunks with strictly increasing offset values', () => {
