@@ -701,12 +701,42 @@ export function recordFailureFiled(state, failure, filedAt = new Date()) {
   return normalized;
 }
 
-function getVerifyCommandForFailure(failure, jobDefinitions) {
+function focusVerifyCommandForFailure(failure, command) {
+  const jobName = String(failure?.jobName ?? '');
+  if (!failure?.failureId || failure.failureId === JOB_LEVEL_FAILURE_ID) return command;
+
+  const evidence = [failure.failureLabel, failure.failureId, failure.failureEvidence]
+    .filter((value) => typeof value === 'string')
+    .join(' ');
+  const playwrightSpec = evidence.match(/(?:e2e|src)\/[^\s:`'"()]+\.(?:spec|test)\.[jt]sx?/i)?.[0];
+  if (/^playwright\s*\//i.test(jobName) && playwrightSpec) {
+    return command.replace(
+      /INVOKER_PLAYWRIGHT_FILES=(?:'[^']*'|"[^"]*"|[^\s]+)/,
+      `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(playwrightSpec)}`,
+    );
+  }
+
+  const packageTest = evidence.match(/packages\/([^/]+)\/((?:src|e2e)\/[^\s:`'"()]+\.(?:test|spec)\.[jt]sx?)/i);
+  if (/^required-fast\s*\/\s*Vitest Workspace$/i.test(jobName) && packageTest) {
+    const [, packageName, relativePath] = packageTest;
+    return `pnpm --filter ${shellSingleQuote(`./packages/${packageName}`)} test -- --run ${shellSingleQuote(relativePath)}`;
+  }
+
+  const repro = evidence.match(/(?:^|\s)((?:scripts\/repro\/|scripts\/test-)[^\s:`'"()]+\.(?:sh|mjs|py))/i)?.[1];
+  if (/^repro|^scheduled-repros/i.test(String(failure?.failureKind ?? '')) && repro) {
+    const runner = repro.endsWith('.py') ? 'python3' : repro.endsWith('.mjs') ? 'node' : 'bash';
+    return `${runner} ${shellSingleQuote(repro)}`;
+  }
+
+  return command;
+}
+
+export function getVerifyCommandForFailure(failure, jobDefinitions) {
   if (typeof failure?.verifyCommand === 'string' && failure.verifyCommand.trim()) {
-    return failure.verifyCommand.trim();
+    return focusVerifyCommandForFailure(failure, failure.verifyCommand.trim());
   }
   const definition = jobDefinitions?.get(failure?.jobName);
-  return definition?.verifyCommand?.trim() ?? '';
+  return focusVerifyCommandForFailure(failure, definition?.verifyCommand?.trim() ?? '');
 }
 
 function failureIsMapped(failure, jobDefinitions) {
