@@ -407,6 +407,11 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     if (scratch && (task.dockerImage || task.poolId)) {
       throw new PlanParseError(`Task "${task.id}" sets "dockerImage"/"poolId" but the plan has "scratch: true" — scratch tasks always run in a plain temp directory.`);
     }
+    if (task.dockerImage && (planPoolId !== undefined || task.poolId !== undefined)) {
+      throw new PlanParseError(
+        `Task "${task.id}" sets "dockerImage" but its plan/task also sets "poolId" — Docker tasks do not run in execution pools.`,
+      );
+    }
 
     if (task.externalDependencies !== undefined) {
       throw new PlanParseError(
