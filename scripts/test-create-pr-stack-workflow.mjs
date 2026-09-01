@@ -1429,6 +1429,30 @@ function testCreatePrDryRunMatchesCiBodyValidation() {
   }
 }
 
+function testSummaryOnlyAndMissingBodiesBlockPublication() {
+  for (const body of [
+    '## Summary\n\nCursor-generated summary only.\n',
+    '',
+  ]) {
+    const harness = createHarness();
+    try {
+      const { work } = createRepo(harness);
+      createTrackedBranch(work, 'feature/invalid-body');
+      commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+      writeFileSync(join(work, 'pr-body.md'), body);
+
+      const result = runCreatePr(work, harness, [...baseArgs(), '--dry-run']);
+
+      assert(result.status === 1, `invalid PR body should block publication\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      assert(result.stderr.includes('PR body does not match the canonical review-compression schema.'), 'invalid body should report schema rejection');
+      expectNoPush(harness, 'invalid PR body');
+      expectNoGhCalls(harness, 'invalid PR body');
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  }
+}
+
 function testDiffComputationFailureBlocksPrCreation() {
   const harness = createHarness();
   try {
@@ -1491,6 +1515,7 @@ const tests = [
   testNonMergifyPrAllowsPlanBase,
   testDiffAtomicityBlocksMixedDiff,
   testCreatePrDryRunMatchesCiBodyValidation,
+  testSummaryOnlyAndMissingBodiesBlockPublication,
   testDiffComputationFailureBlocksPrCreation,
   testHelpMentionsStackUpdateFlow,
 ];
