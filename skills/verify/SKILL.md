@@ -70,6 +70,15 @@ Under `tests/`:
 
 Run: `bash scripts/test-verify-skill.sh`
 
+## Efficacy rubric
+
+See [references/efficacy-rubric.md](references/efficacy-rubric.md) for the
+Tier A–D evidence ladder, the separation between the verify skill,
+`evals/verify/`, and feature-map index maintenance, and the v1 CI matrix.
+
+Skill efficacy cases belong under `evals/verify/` and should reuse
+`scripts/run_skill_evals.py`.
+
 ## Non-goals
 
 - Do not rewrite Playwright specs or `scripts/repro/*`.
