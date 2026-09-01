@@ -12,7 +12,7 @@ When Invoker MCP (\`invoker_prepare_plan_review\` / \`invoker_submit_plan\`) or 
 - If MCP and CLI are both missing: stay local.
 
 Slash commands \`/invoker-plan-to-invoker\` and \`/plan-to-invoker\` always enter the skill.
-Plain approval authorizes workflow handoff only; do not publish PRs unless the user asks.
+Approval authorizes the reviewed plan's declared \`onFinish\` outcome. Implementation plans default to \`onFinish: pull_request\`, so approval includes GitHub branch and PR/stack publication; \`onFinish: none\` publishes nothing. Follow the installed make-pr skill for publication procedure without asking for a second authorization.
 After submit, arm \`invoker-cli wait <workflowId>\` with \`notify_on_output\` on \`^INVOKER_WAKE\`, end the turn, and continue the parent job on wake.
 `;
 
@@ -35,7 +35,7 @@ When Invoker MCP (\`invoker_prepare_plan_review\` / \`invoker_submit_plan\`) or 
 - If MCP and CLI are both missing: stay local.
 
 Slash commands \`/invoker-plan-to-invoker\` and \`/plan-to-invoker\` always enter the skill.
-Plain approval authorizes workflow handoff only; do not publish PRs unless the user asks.
+Approval authorizes the reviewed plan's declared \`onFinish\` outcome. Implementation plans default to \`onFinish: pull_request\`, so approval includes GitHub branch and PR/stack publication; \`onFinish: none\` publishes nothing. Follow the installed make-pr skill for publication procedure without asking for a second authorization.
 After submit, arm \`invoker-cli wait <workflowId>\` with \`notify_on_output\` on \`^INVOKER_WAKE\`, end the turn, and continue the parent job on wake.
 `;
 
