@@ -28,4 +28,14 @@ describe('plan-to-invoker skill contract', () => {
       '"/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into',
     );
   });
+
+  it('treats reviewed implementation approval as GitHub publication authority', () => {
+    const skill = readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), 'utf8');
+
+    expect(skill).toContain('Generated implementation plans default to `onFinish: pull_request`');
+    expect(skill).toContain('approval includes pushing the prepared branch and creating or updating the GitHub PR/stack');
+    expect(skill).toContain('This is the publication procedure, not a second authorization gate.');
+    expect(skill).not.toContain('Do **not** publish PRs unless the original ask included that.');
+    expect(skill).not.toContain('PR publication still requires a separate explicit request');
+  });
 });
