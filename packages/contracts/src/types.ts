@@ -5,7 +5,7 @@
  * Orchestrator writes a WorkRequest; executor runs the action;
  * executor returns a WorkResponse (via callback or IPC).
  */
-import type { FailureClass, ReviewGateArtifact, ReviewGateState, TaskStatus } from '@invoker/workflow-graph';
+import type { FailureClass, ReviewGateArtifact, ReviewGateState, TaskFreshnessSpec, TaskStatus } from '@invoker/workflow-graph';
 
 // ── Action Types ────────────────────────────────────────────
 
@@ -68,6 +68,7 @@ export interface WorkRequestInputs {
   executionModel?: string;
   /** Finite agent turn budget (Claude `--max-turns`) when set. */
   maxTurns?: number;
+  freshness?: TaskFreshnessSpec;
   /** When true, executors must not reuse existing task worktrees for this run. */
   freshWorkspace?: boolean;
   /**
