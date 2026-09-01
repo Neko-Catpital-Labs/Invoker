@@ -19,7 +19,12 @@ const __dirname = dirname(__filename);
 async function importYaml(scriptDir) {
   try {
     return await import('yaml');
-  } catch {}
+  } catch (error) {
+    const errorCode = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (errorCode !== 'ERR_MODULE_NOT_FOUND') {
+      throw error;
+    }
+  }
   const candidates = [
     process.env.INVOKER_REPO_ROOT,
     resolve(scriptDir, '../../..'),
