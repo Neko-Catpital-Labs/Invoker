@@ -18,7 +18,13 @@ node skills/verify/control-invoker.mjs catalog --check --json
 node skills/verify/control-invoker.mjs catalog --list
 ```
 
-`--check` is the CI / `pnpm test` gate (via `scripts/test-verify-skill.sh`).
+`catalog --check` is the cheap CI / `pnpm test` consistency gate (via
+`scripts/test-verify-skill.sh`). It validates the feature-map index; it is not
+an efficacy evaluation.
+
+See [`skills/verify/references/efficacy-rubric.md`](../verify/references/efficacy-rubric.md)
+for the Tier A–D rubric and the separate verify-skill, skill-efficacy, and
+feature-map-index tracks.
 
 ## When to run
 
@@ -39,6 +45,11 @@ node skills/verify/control-invoker.mjs catalog --list
 5. Update `references/features/README.md` sweep order when adding a file.
 6. Re-run `catalog --check` until exit 0.
 7. Re-run `bash scripts/test-verify-skill.sh`.
+
+The periodic maintain pass is the map-only repair/reindex loop: update entries
+under `skills/verify/references/features/` and related index documentation,
+then rerun the cheap checks. It must never edit `packages/` or use the
+feature-map job as a reason to change product code.
 
 ## Non-goals
 
