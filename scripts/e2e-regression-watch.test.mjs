@@ -15,6 +15,7 @@ import {
   extractFailureIdentitiesFromLog,
   failureStorageKey,
   fileBugfixPlan,
+  getVerifyCommandForFailure,
   isCiRegressionReflectEnabled,
   getActionableFailures,
   groupFailuresBySha,
@@ -1044,6 +1045,38 @@ describe('retired CI job filing gate', () => {
     assert.equal(counts.groupsNeedingHuman, 1);
     assert.equal(state.activeFailures[key].retired, false);
     assert.equal(state.activeFailures[key].needsHuman, true);
+  });
+});
+
+describe('failure-focused verification', () => {
+  it('narrows Playwright repair to the failing spec', () => {
+    const command = "env INVOKER_PLAYWRIGHT_FILES='e2e/a.spec.ts e2e/b.spec.ts' bash scripts/test-suites/optional/40-playwright-app.sh";
+    const focused = getVerifyCommandForFailure({
+      jobName: 'playwright / 1-of-9',
+      failureId: 'e2e-headless-thundering-herd-spec-ts',
+      failureLabel: 'e2e/headless-thundering-herd.spec.ts',
+      verifyCommand: command,
+    }, new Map());
+    assert.match(focused, /INVOKER_PLAYWRIGHT_FILES='e2e\/headless-thundering-herd\.spec\.ts'/);
+    assert.doesNotMatch(focused, /e2e\/a\.spec\.ts e2e\/b\.spec\.ts/);
+  });
+
+  it('narrows required-fast to the failing package test file', () => {
+    const focused = getVerifyCommandForFailure({
+      jobName: 'required-fast / Vitest Workspace',
+      failureId: 'packages-app-src-tests-start-ready-test-ts',
+      failureLabel: 'packages/app/src/__tests__/start-ready.test.ts',
+      verifyCommand: 'bash scripts/test-suites/required/10-vitest-workspace.sh',
+    }, new Map());
+    assert.equal(focused, "pnpm --filter './packages/app' test -- --run 'src/__tests__/start-ready.test.ts'");
+  });
+
+  it('preserves the original command when no safe adapter exists', () => {
+    const command = 'bash scripts/test-suites/dangerous/10-docker-comprehensive.sh';
+    assert.equal(
+      getVerifyCommandForFailure({ jobName: 'docker / comprehensive', failureId: 'docker-failure', failureLabel: 'docker failure', verifyCommand: command }, new Map()),
+      command,
+    );
   });
 });
 
