@@ -165,12 +165,33 @@ async function importYaml(scriptDir) {
     if (existsSync(repoYamlPath)) return import(repoYamlPath);
   }
 
+  // Skill-only installs may intentionally have no Node dependency tree. Ruby's
+  // stdlib ships Psych, which is sufficient to preserve the validator's
+  // structural parsing contract without changing the caller or fixtures.
+  try {
+    execFileSync('ruby', ['-e', "require 'yaml'"], { stdio: 'ignore' });
+    const rubyParseScript = [
+      "require 'json'",
+      "require 'yaml'",
+      "puts JSON.generate(YAML.safe_load(STDIN.read, aliases: true))",
+    ].join(';');
+    return {
+      parse(yamlContent) {
+        const output = execFileSync('ruby', ['-e', rubyParseScript], { input: yamlContent, encoding: 'utf8' });
+        return JSON.parse(output);
+      },
+    };
+  } catch {
+    // Fall through to the explicit error at the call site.
+  }
+
   throw new Error(
     "Unable to resolve yaml runtime. Checked a plain 'yaml' import (present if this script is "
     + 'running from inside the invoker-cli npm install, which declares it as a real dependency) '
     + 'and packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout '
-    + '(INVOKER_REPO_ROOT, a live git checkout, or ~/.invoker/bundled-skills.json). Set '
-    + 'INVOKER_REPO_ROOT to an Invoker checkout if neither applies.',
+    + 'and the Ruby stdlib YAML parser. Set '
+    + 'INVOKER_REPO_ROOT to a live git checkout, or install the yaml dependency. '
+    + 'No YAML runtime was available.',
   );
 }
 
