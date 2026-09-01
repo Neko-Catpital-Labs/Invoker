@@ -163,7 +163,7 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
     const mapWindow = (): void => {
       if (mainWindow.isDestroyed() || windowMapped) return;
       windowMapped = true;
-      if (keepE2eWindowHidden && deps.enableTestCompositor) {
+      if (deps.hideE2eWindow && deps.enableTestCompositor && !showVisualProofWindow) {
         mainWindow.showInactive();
       } else if (!keepE2eWindowHidden) {
         mainWindow.show();
