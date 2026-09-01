@@ -19,12 +19,7 @@ const __dirname = dirname(__filename);
 async function importYaml(scriptDir) {
   try {
     return await import('yaml');
-  } catch (error) {
-    const errorCode = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-    if (errorCode !== 'ERR_MODULE_NOT_FOUND') {
-      throw error;
-    }
-  }
+  } catch {}
   const candidates = [
     process.env.INVOKER_REPO_ROOT,
     resolve(scriptDir, '../../..'),
@@ -155,7 +150,10 @@ function receiptCandidates(plan) {
   return plan.verificationEvidence
     .map((record) => {
       if (!isRecord(record)) return null;
-      return isRecord(record.receipt) ? record.receipt : record;
+      if (record.version !== 2 || record.trust !== 'trusted' || !isRecord(record.attestation)) {
+        return null;
+      }
+      return isRecord(record.receipt) ? record.receipt : null;
     })
     .filter(Boolean);
 }

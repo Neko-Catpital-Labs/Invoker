@@ -39,3 +39,6 @@ sed 's/The existing test baseline is green, and we will verify it with `pnpm tes
   "$TMP_DIR/mixed-present-future.yaml" > "$TMP_DIR/future-only.yaml"
 bash "$CHECKER" "$TMP_DIR/future-only.yaml" >/dev/null
 echo "PASS: future-only post-change intent remained accepted"
+
+bash "$ROOT/scripts/repro/repro-planner-only-receipt.sh"
+echo "PASS: planner-only receipt provenance regression passed"
