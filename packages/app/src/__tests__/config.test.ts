@@ -260,27 +260,56 @@ describe('loadConfig', () => {
     expect(resolveDefaultExecutionAgent(config)).toBe('claude');
   });
 
+  it.each([
+    ['canonical-only', { defaultExecutionHarness: 'claude' }, 'claude'],
+    ['legacy-only', { defaultExecutionAgent: 'claude' }, 'claude'],
+    ['both keys prefer canonical', { defaultExecutionHarness: 'omp', defaultExecutionAgent: 'claude' }, 'omp'],
+  ])('resolves %s flat execution harness', (_label, values, expected) => {
+    writeUserConfig(values);
+    expect(resolveDefaultExecutionAgent(loadConfig())).toBe(expected);
+  });
+
+  it('uses the canonical harness for the flat default model when both keys exist', () => {
+    writeUserConfig({
+      defaultExecutionHarness: 'omp',
+      defaultExecutionAgent: 'codex',
+      defaultExecutionModel: 'chatgpt-5.4',
+    });
+    expect(resolveDefaultTaskExecutionSettings(loadConfig())).toEqual({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
+    });
+  });
+
+  it('preserves the legacy harness alias and its model', () => {
+    writeUserConfig({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' });
+    expect(resolveDefaultTaskExecutionSettings(loadConfig())).toEqual({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
+    });
+  });
+
   it('falls back to the built-in default execution agent', () => {
     expect(resolveDefaultExecutionAgent({})).toBe('codex');
-    expect(resolveDefaultExecutionAgent({ defaultExecutionAgent: '   ' })).toBe('codex');
+    expect(resolveDefaultExecutionAgent({ defaultExecutionHarness: '   ' })).toBe('codex');
   });
 
 
   it('reads default execution settings from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' }),
+      JSON.stringify({ defaultExecutionHarness: 'omp', defaultExecutionModel: 'chatgpt-5.4' }),
     );
     const config = loadConfig();
-    expect(config.defaultExecutionAgent).toBe('omp');
+    expect(config.defaultExecutionHarness).toBe('omp');
     expect(config.defaultExecutionModel).toBe('chatgpt-5.4');
   });
 
   it('resolves built-in task execution defaults when config values are blank', () => {
-    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionAgent: '  ', defaultExecutionModel: '   ' })).toEqual({
+    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionHarness: '  ', defaultExecutionModel: '   ' })).toEqual({
       executionAgent: 'codex',
     });
-    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' })).toEqual({
+    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionHarness: 'omp', defaultExecutionModel: 'chatgpt-5.4' })).toEqual({
       executionAgent: 'omp',
       executionModel: 'chatgpt-5.4',
     });
@@ -288,16 +317,16 @@ describe('loadConfig', () => {
   it('only reuses the default model when auto-fix stays on the default agent', () => {
     expect(resolveAutoFixExecutionModel({
       autoFixAgent: 'omp',
-      defaultExecutionAgent: 'omp',
+      defaultExecutionHarness: 'omp',
       defaultExecutionModel: 'chatgpt-5.4',
     })).toBe('chatgpt-5.4');
     expect(resolveAutoFixExecutionModel({
       autoFixAgent: 'codex',
-      defaultExecutionAgent: 'omp',
+      defaultExecutionHarness: 'omp',
       defaultExecutionModel: 'chatgpt-5.4',
     })).toBeUndefined();
     expect(resolveAutoFixExecutionModel({
-      defaultExecutionAgent: 'omp',
+      defaultExecutionHarness: 'omp',
       defaultExecutionModel: 'chatgpt-5.4',
     })).toBeUndefined();
   });
@@ -305,12 +334,12 @@ describe('loadConfig', () => {
     expect(resolveAutoFixExecutionModel({
       autoFixAgent: 'cursor',
       autoFixExecutionModel: 'grok-4.5',
-      defaultExecutionAgent: 'codex',
+      defaultExecutionHarness: 'codex',
       defaultExecutionModel: 'gpt-5.5',
     })).toBe('grok-4.5');
     // Fleet defaults are untouched — a task without autoFixAgent still resolves to codex/gpt-5.5.
     expect(resolveDefaultTaskExecutionSettings({
-      defaultExecutionAgent: 'codex',
+      defaultExecutionHarness: 'codex',
       defaultExecutionModel: 'gpt-5.5',
     })).toEqual({ executionAgent: 'codex', executionModel: 'gpt-5.5' });
   });
