@@ -31,7 +31,7 @@ const REPO_PATH_PATTERN = /(?:^|[\s`'"(])((?:\.github|corpus|docs|engine|package
 const BACKTICK_TOKEN_PATTERN = /`([^`]+)`/g;
 const ANCHOR_CLAUSE_PATTERN = /\b(?:already exists?|existing|do not create|must not create|without creating)\b/i;
 const CREATE_PATH_PATTERN = /\b(?:create|creating)\b/i;
-const PATH_INTENT_BOUNDARY_PATTERN = /\s*;\s*|(?:,\s*|\s+)\b(?:but|and)\s+(?=(?:do not create|must not create|without creating|create|creating|existing)\b)|,\s*(?=(?:do not create|must not create|without creating|create|creating|existing)\b)/i;
+const PATH_INTENT_MARKER_PATTERN = /\b(?:do not create|must not create|without creating|create|creating|existing)\b/gi;
 const GUARDED_MARKER_PATTERN = /guarded-behavior:\s*([A-Za-z0-9][\w-]*)/gi;
 const GUARDED_PROSE_PATTERN = /guarded behavior(?:\s+(?:id|marker))?\s*(?:`|"|')?([A-Za-z0-9][\w-]*)/gi;
 const REMOTE_REPORT_MARKER = '__INVOKER_TASK_FRESHNESS_STALE__';
@@ -62,11 +62,31 @@ function pathIntent(text: string): PathIntent {
 }
 
 function pathIntentRegions(clause: string): Array<{ text: string; intent: PathIntent }> {
-  return clause
-    .split(PATH_INTENT_BOUNDARY_PATTERN)
-    .map(text => text.trim())
-    .filter(Boolean)
-    .map(text => ({ text, intent: pathIntent(text) }));
+  const boundaries = new Set<number>([0, clause.length]);
+  for (let index = 0; index < clause.length; index += 1) {
+    if (clause[index] === ';') boundaries.add(index + 1);
+  }
+  for (const match of clause.matchAll(PATH_INTENT_MARKER_PATTERN)) {
+    const markerIndex = match.index;
+    if (markerIndex === 0) continue;
+    let cursor = markerIndex - 1;
+    while (cursor >= 0 && /\s/.test(clause[cursor]!)) cursor -= 1;
+    if (clause[cursor] === ',') {
+      boundaries.add(markerIndex);
+      continue;
+    }
+    const precedingWordEnd = cursor + 1;
+    while (cursor >= 0 && /[A-Za-z]/.test(clause[cursor]!)) cursor -= 1;
+    const precedingWord = clause.slice(cursor + 1, precedingWordEnd).toLowerCase();
+    if (precedingWord === 'and' || precedingWord === 'but') boundaries.add(markerIndex);
+  }
+  const sortedBoundaries = [...boundaries].sort((left, right) => left - right);
+  const regions: Array<{ text: string; intent: PathIntent }> = [];
+  for (let index = 1; index < sortedBoundaries.length; index += 1) {
+    const text = clause.slice(sortedBoundaries[index - 1], sortedBoundaries[index]).trim();
+    if (text) regions.push({ text, intent: pathIntent(text) });
+  }
+  return regions;
 }
 
 export function parseTaskFreshnessSpecification(text: string): TaskFreshnessSpecification {
