@@ -32,7 +32,12 @@ const earlyHeadlessMode = process.argv.includes('--headless')
   || process.argv.slice(2).includes('install-skills');
 const sourceDevelopmentProfile = process.env.INVOKER_DEVELOPMENT_PROFILE === '1';
 
-configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadlessMode });
+configureEarlyElectronApp({
+  app,
+  enableTestCompositor,
+  isHeadless: earlyHeadlessMode,
+  hideE2eWindow,
+});
 
 if (process.env.INVOKER_USER_DATA_DIR) {
   app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
