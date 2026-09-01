@@ -20,6 +20,7 @@ import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 import { killOwnedProcessGroup } from './process-group.js';
 import { cleanupStandaloneOwnersForTestDir } from './headless-client.js';
+import { resolveOwnerChildProfileEnv } from '../../src/headless-owner-bootstrap.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -36,6 +37,29 @@ export type ElectronFixtures = {
 
 const repoRoot = resolveRepoRoot(__dirname);
 type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
+
+function e2eDevelopmentProfileEnv(
+  testDir: string,
+  electronUserDataDir: string,
+  configPath: string,
+  ipcSocketPath: string,
+): Record<string, string> {
+  return resolveOwnerChildProfileEnv({
+    INVOKER_RUNTIME_KIND: 'source-development',
+    INVOKER_DEVELOPMENT_PROFILE: '1',
+    INVOKER_DEVELOPMENT_PROFILE_ACTIVE: '1',
+    INVOKER_SOURCE_ROOT: repoRoot,
+    INVOKER_PROFILE_ID: path.basename(testDir),
+    INVOKER_DB_DIR: testDir,
+    INVOKER_USER_DATA_DIR: electronUserDataDir,
+    INVOKER_IPC_SOCKET: ipcSocketPath,
+    INVOKER_REPO_CONFIG_PATH: configPath,
+    INVOKER_ENV_PATH: path.join(testDir, '.env'),
+    INVOKER_LOG_PATH: path.join(testDir, 'invoker.log'),
+    INVOKER_API_PORT: '0',
+    INVOKER_WEB_PORT: '0',
+  });
+}
 
 async function removeTestDir(dir: string): Promise<void> {
   let lastError: unknown;
@@ -231,6 +255,7 @@ exit 64
       ],
       env: {
         ...process.env,
+        ...e2eDevelopmentProfileEnv(testDir, electronUserDataDir, configPath, ipcSocketPath),
         NODE_ENV: 'test',
         INVOKER_TEST_WORKFLOW_IDS: '1',
         INVOKER_DISABLE_SLACK: '1',

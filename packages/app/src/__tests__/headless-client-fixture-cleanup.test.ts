@@ -24,6 +24,7 @@ import { spawn } from 'node:child_process';
 import { cleanupStandaloneOwnersForTestDir } from '../../e2e/fixtures/headless-client.js';
 import {
   OwnerChildProfileError,
+  resolveDetachedOwnerCommand,
   resolveOwnerChildProfileEnv,
   spawnDetachedStandaloneOwner,
 } from '../headless-owner-bootstrap.js';
@@ -116,6 +117,39 @@ describe('detached owner child profile identity', () => {
     const childEnv = resolveOwnerChildProfileEnv({});
 
     expect(childEnv).toEqual({ INVOKER_RUNTIME_KIND: 'packaged' });
+  });
+
+  it('launches main.js directly when the parent process is Electron', () => {
+    expect(resolveDetachedOwnerCommand('/repo/checkout', {
+      executablePath: '/electron',
+      isElectron: true,
+      platform: 'linux',
+    })).toEqual({
+      command: '/electron',
+      args: [
+        '--no-sandbox',
+        '/repo/checkout/packages/app/dist/main.js',
+        '--headless',
+        'owner-serve',
+      ],
+    });
+  });
+
+  it('keeps the launcher wrapper when the parent process is Node', () => {
+    expect(resolveDetachedOwnerCommand('/repo/checkout', {
+      executablePath: '/node',
+      isElectron: false,
+      platform: 'linux',
+    })).toEqual({
+      command: '/node',
+      args: [
+        '/repo/checkout/scripts/electron.cjs',
+        '--no-sandbox',
+        '/repo/checkout/packages/app/dist/main.js',
+        '--headless',
+        'owner-serve',
+      ],
+    });
   });
 
   it('passes the same source profile and disjoint locations from a source-development parent to the child', () => {
