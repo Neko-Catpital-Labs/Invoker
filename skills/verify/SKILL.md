@@ -70,6 +70,18 @@ Under `tests/`:
 
 Run: `bash scripts/test-verify-skill.sh`
 
+## Efficacy rubric and evaluation tracks
+
+See [`references/efficacy-rubric.md`](references/efficacy-rubric.md) for the
+Tier A–D rubric, CI matrix, and ownership boundaries. Keep the three tracks
+separate: this verify skill and its mechanical fixtures, skill-efficacy
+stated-decision evaluations under [`evals/verify/`](../../evals/verify/), and
+the feature-map index maintained by `catalog --check`.
+
+The eval harness reuses `scripts/run_skill_evals.py`; its LLM runs are
+advisory in v1 and are not merge-queue-required. A hermetic case-catalog check
+may be included in `test-verify-skill.sh`.
+
 ## Non-goals
 
 - Do not rewrite Playwright specs or `scripts/repro/*`.
