@@ -184,7 +184,7 @@ Minimal example:
 ```json
 {
   "maxConcurrency": 6,
-  "defaultExecutionAgent": "codex",
+  "defaultExecutionHarness": "codex",
   "autoFixRetries": 3,
   "autoFixAgent": "claude",
   "autoFixCi": false,
