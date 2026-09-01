@@ -8,7 +8,7 @@ import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { getCurrentRequiredReviewArtifacts } from '../task-runner-review-gate.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SshExecutor } from '../ssh-executor.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
@@ -24,15 +24,18 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
+  const inputConfig = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+    ? { ...overrides.config, poolId: 'ssh-fixture' }
+    : overrides.config;
   return {
     id: overrides.id ?? 'test',
     description: overrides.description ?? 'Test task',
     status: overrides.status ?? 'pending',
     dependencies: overrides.dependencies ?? [],
     createdAt: overrides.createdAt ?? new Date(),
-    config: { ...overrides.config },
+    config: resolveTaskConfig(inputConfig ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskRunner {
@@ -58,6 +61,14 @@ function createMockLogger(): Logger {
   };
   (logger.child as any).mockReturnValue(logger);
   return logger;
+}
+
+function sshFixturePool(...memberIds: string[]) {
+  return () => ({
+    'ssh-fixture': {
+      members: memberIds.map((id) => ({ type: 'ssh' as const, id })),
+    },
+  });
 }
 
 const tempWorkspaces: string[] = [];
@@ -743,6 +754,7 @@ describe('TaskRunner', () => {
             sshKeyPath: '/tmp/test-key',
           },
         }),
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await runner.publishApprovedFix(task);
@@ -803,6 +815,7 @@ describe('TaskRunner', () => {
             sshKeyPath: '/tmp/test-key',
           },
         }),
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
       const selectExecutorSpy = vi.spyOn(runner, 'selectExecutor');
       const originalSelectExecutor = TaskRunner.prototype.selectExecutor.bind(runner);
@@ -2702,6 +2715,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
+        executionPoolsProvider: sshFixturePool('do-droplet'),
       });
 
       const task = makeTask({
@@ -2747,6 +2761,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
+        executionPoolsProvider: sshFixturePool('do-droplet'),
       });
 
       const task = makeTask({
@@ -2876,6 +2891,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
+        executionPoolsProvider: sshFixturePool('missing-target'),
       });
 
       const task = makeTask({
@@ -3481,6 +3497,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
+        executionPoolsProvider: sshFixturePool('remote-a', 'remote-b'),
       });
 
       const task1 = makeTask({
@@ -3596,6 +3613,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
+        executionPoolsProvider: sshFixturePool('remote-a'),
       });
 
       const task1 = makeTask({
@@ -3615,13 +3633,14 @@ describe('TaskRunner', () => {
       expect(executor1.executor).not.toBe(executor2.executor);
     });
 
-    it('throws when SSH task has no poolMemberId', () => {
+    it('throws when an SSH pool has no selectable member', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => ({}),
+        executionPoolsProvider: sshFixturePool(),
       });
 
       const task = makeTask({
@@ -3629,7 +3648,7 @@ describe('TaskRunner', () => {
         config: { runnerKind: 'ssh' },
       });
 
-      expect(() => executor.selectExecutor(task)).toThrow('has runnerKind=ssh but no poolMemberId');
+      expect(() => executor.selectExecutor(task)).toThrow('has no member capacity available');
     });
 
     it('throws when poolMemberId does not exist in config', () => {
@@ -3647,6 +3666,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
+        executionPoolsProvider: sshFixturePool('remote-unknown'),
       });
 
       const task = makeTask({
@@ -3828,7 +3848,7 @@ describe('TaskRunner', () => {
       expect(handleWorkerResponse).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
     });
 
-    it('logs explicit SSH executor selection as explicitPoolMemberId', async () => {
+    it('logs explicit SSH member selection through its concrete pool', async () => {
       const sshExecutor = createCompletingExecutor('ssh', {
         workspacePath: '/remote/worktrees/task-explicit',
         branch: 'experiment/task-explicit',
@@ -3852,13 +3872,19 @@ describe('TaskRunner', () => {
         remoteTargetsProvider: () => ({
           'remote-b': { host: 'dev.example.com', user: 'dev', sshKeyPath: '/secret/dev-key' },
         }),
+        executionPoolsProvider: sshFixturePool('remote-b'),
       });
 
       await runner.executeTask(task);
 
       expect(logEvent).toHaveBeenCalledWith('task-explicit', 'task.executor.selected', expect.objectContaining({
         runnerKind: 'ssh',
-        reason: { type: 'explicitPoolMemberId' },
+        reason: {
+          type: 'poolId',
+          poolId: 'ssh-fixture',
+          selectionStrategy: 'roundRobin',
+          poolMemberId: 'remote-b',
+        },
         poolMemberId: 'remote-b',
         remoteHost: 'dev.example.com',
         remoteUser: 'dev',
@@ -3892,13 +3918,13 @@ describe('TaskRunner', () => {
 
       expect(logEvent).toHaveBeenCalledWith('task-local', 'task.executor.selected', expect.objectContaining({
         runnerKind: 'worktree',
-        reason: { type: 'configuredWorktree' },
+        reason: { type: 'poolId', poolId: 'local-worktree' },
         workspacePath: '/tmp/worktree/task-local',
         branch: 'experiment/task-local',
       }));
     });
 
-    it('logs SSH pool fallback to worktree when no pool member or remote target exists', async () => {
+    it('rejects a missing SSH pool without falling back to worktree', async () => {
       const worktreeExecutor = createCompletingExecutor('worktree', {
         workspacePath: '/tmp/worktree/task-fallback',
         branch: 'experiment/task-fallback',
@@ -3925,12 +3951,11 @@ describe('TaskRunner', () => {
 
       await runner.executeTask(task);
 
-      expect(logEvent).toHaveBeenCalledWith('task-fallback', 'task.executor.selected', expect.objectContaining({
-        runnerKind: 'worktree',
-        reason: { type: 'sshPoolFallbackToWorktree', poolId: 'missing-pool' },
-        workspacePath: '/tmp/worktree/task-fallback',
-        branch: 'experiment/task-fallback',
-      }));
+      expect(logEvent).not.toHaveBeenCalledWith(
+        'task-fallback',
+        'task.executor.selected',
+        expect.anything(),
+      );
     });
 
     it('fails fast when executor returns handle without workspacePath', async () => {
@@ -3973,6 +3998,7 @@ describe('TaskRunner', () => {
           getAll: () => [badExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
@@ -4040,6 +4066,7 @@ describe('TaskRunner', () => {
           getAll: () => [managedSshExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
@@ -4101,13 +4128,14 @@ describe('TaskRunner', () => {
           getAll: () => [failingExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
 
       // Check that metadata was persisted despite error
       expect(updateSpy).toHaveBeenCalledWith('task-failed', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '~/.invoker/worktrees/abc123/task-failed-xyz',
           branch: 'experiment/task-failed-xyz',
@@ -4293,13 +4321,14 @@ describe('TaskRunner', () => {
           getAll: () => [byoExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
 
       // Check that metadata was persisted with workspacePath and branch=undefined
       expect(updateSpy).toHaveBeenCalledWith('byo-task-1', {
-        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined },
+        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined, poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '/remote/user-provided/workspace',
           branch: undefined,
@@ -5620,6 +5649,7 @@ describe('TaskRunner', () => {
         } as any,
         cwd: '/tmp',
         callbacks: { onHeartbeat },
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       const pending = runner.executeTask(runningTask);
