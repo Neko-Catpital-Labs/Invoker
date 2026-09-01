@@ -4,6 +4,7 @@ import type { MessageBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationAcceptedResult } from '@invoker/contracts';
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
+import type { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 
 export interface GuiMutationPayload {
   channel: string;
@@ -21,7 +22,7 @@ export interface GuiMutationRegistrationContext {
   refreshOwnerRoute?: () => Promise<void>;
   onMutationOwnerUnavailable?: (reason: string) => void;
   translateGuiMutationToHeadless: (payload: GuiMutationPayload) => TranslatedGuiMutation;
-  guiMutationHandlers?: Map<string, (...args: unknown[]) => Promise<unknown>>;
+  ownerCapabilities: OwnerCapabilityRegistry;
 }
 
 function throwMutationOwnerUnavailable(
@@ -37,10 +38,10 @@ export function registerGuiMutationHandler<TResult = unknown>(
   channel: string,
   handler: (...args: unknown[]) => Promise<TResult>,
 ): void {
-  context.guiMutationHandlers?.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
+  context.ownerCapabilities.register(channel, handler);
   context.ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
     if (context.getOwnerMode()) {
-      return handler(...args);
+      return context.ownerCapabilities.invoke<TResult>(channel, args);
     }
     const translated = context.translateGuiMutationToHeadless({ channel, args });
     if (!translated) {
