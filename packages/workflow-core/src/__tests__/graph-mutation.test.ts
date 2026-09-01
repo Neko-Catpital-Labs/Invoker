@@ -357,4 +357,37 @@ describe('applyGraphMutation', () => {
       }),
     ).toThrow(/runnerKind=ssh but no poolId/);
   });
+
+  it.each([
+    { label: 'isMergeNode=true with runnerKind omitted', isMergeNode: true },
+    { label: 'runnerKind=merge with isMergeNode=false', runnerKind: 'merge' as const, isMergeNode: false },
+  ])('repro: normalizes merge fields for $label', ({ runnerKind, isMergeNode }) => {
+    orchestrator.loadPlan({
+      name: `merge-invariant-${String(isMergeNode)}-${runnerKind ?? 'omitted'}`,
+      tasks: [{ id: 'A', description: 'A', command: 'echo A' }],
+    });
+    orchestrator.startExecution();
+
+    const sourceId = orchestrator.getAllTasks().find((task) => !task.config.isMergeNode)!.id;
+    const workflowId = orchestrator.getTask(sourceId)!.config.workflowId!;
+    const createdId = `${sourceId}-merge-mismatch`;
+
+    applyMutation(orchestrator, {
+      sourceNodeId: sourceId,
+      sourceDisposition: 'complete',
+      newNodes: [{
+        id: createdId,
+        description: 'Mismatched merge fields',
+        dependencies: [sourceId],
+        workflowId,
+        runnerKind,
+        isMergeNode,
+      }],
+      outputNodeId: createdId,
+    });
+
+    const created = orchestrator.getTask(createdId)!;
+    expect(created.config.isMergeNode).toBe(true);
+    expect(created.config.runnerKind).toBe('merge');
+  });
 });
