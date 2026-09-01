@@ -405,21 +405,20 @@ tasks:
     dependencies: []
   - id: scrub-handoff-artifacts
     description: |
-      Remove ephemeral inter-task handoff files (candidates.json, research-*.json,
-      lens-*.json) from the git worktree before merge.
-      Goal: Leave no worktree-leaked handoff JSON tracked or untracked after filing.
-      Motivation: Steal-candidate handoff files must never ship in a PR diff.
-      Safety invariant: Only touches worktree handoff paths; never alters the home
-        invoker runDir or ~/.invoker/cross-repo-research/ledger.json.
+      Check for ephemeral inter-task handoff files (candidates.json, research-*.json,
+      lens-*.json) in the git worktree before merge.
+      Goal: Report any worktree-leaked handoff JSON after filing.
+      Motivation: Handoff state stays in the external run directory and must never ship in a PR diff.
+      Safety invariant: Changes no repository or home Invoker state.
       Review claim: Worktree has no candidates.json/research-*.json/lens-*.json left.
-      Review lane: cleanup
+      Review lane: proof
       Slice rationale: Required leaf after file-linear-tickets, before merge.
-      Architectural effect: None; deletion only.
-      Alternative considerations: Shipping handoff JSON in the PR was rejected.
-      Implementation details: Run scripts/scrub-handoff-artifacts.sh.
-      Non-goals: No feature edits; no ledger.json changes.
-      Files: (handoff paths only)
-      Change types: delete
+      Architectural effect: None; read-only check only.
+      Alternative considerations: Mutating cleanup at the terminal gate was rejected.
+      Implementation details: Run scripts/scrub-handoff-artifacts.sh without --apply.
+      Non-goals: No feature edits, repository mutations, or ledger.json changes.
+      Files: (none)
+      Change types: none
       Acceptance criteria:
       - \`bash scripts/scrub-handoff-artifacts.sh\` exits 0 with no handoff paths remaining
       Layer: e2e_regression
