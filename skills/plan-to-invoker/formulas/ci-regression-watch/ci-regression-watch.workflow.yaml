@@ -92,18 +92,18 @@ tasks:
 
   - id: scrub-handoff-artifacts
     description: |
-      Purge ephemeral inter-task handoff files from the worktree before the merge gate.
-      Review claim: Only ephemeral handoff files are removed; no product or test file is touched.
-      Review lane: cleanup
-      Safety invariant: The scrub script only removes known ephemeral handoff paths and never touches the home Invoker ledger.
-      Effectiveness measurement: The scrub command exits zero and no handoff path remains afterward.
-      Slice rationale: One cleanup slice required on every implementation plan that opens a pull request, kept separate from behavior and proof work.
+      Check that ephemeral inter-task handoff files are absent before the merge gate.
+      Review claim: The terminal check reports leaked handoff files without changing repository state.
+      Review lane: proof
+      Safety invariant: The check cannot modify files, index state, HEAD, or unrelated untracked content.
+      Effectiveness measurement: The check exits zero only when no handoff path remains.
+      Slice rationale: One terminal proof required on every implementation plan that opens a pull request.
       Architectural effect: None.
       Goal: Leave a clean worktree for the pull request.
-      Motivation: Ephemeral inter-task files must not leak into the reviewed diff.
-      Alternative considerations: Skipping this step was rejected; it is a hard requirement for every plan that opens a pull request.
-      Implementation details: Run the repository's existing handoff-scrub script.
-      Non-goals: No product edits in this task.
+      Motivation: Ephemeral state must not leak into the reviewed diff.
+      Alternative considerations: Mutating cleanup at the terminal gate was rejected because it can alter caller work.
+      Implementation details: Run the repository's handoff-artifact script in its default read-only mode.
+      Non-goals: No product edits or repository mutations in this task.
       Layer: e2e_regression
       Feature state: active
     command: bash scripts/scrub-handoff-artifacts.sh
