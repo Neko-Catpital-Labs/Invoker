@@ -526,6 +526,9 @@ jobs:
           - name: Launch Dispatch Queue Repro
             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
             runner_label: Runner_2_4_core
+          - name: Workflow Drain Queue Eval
+            command: bash scripts/test-suites/required/29-workflow-drain-queue-eval.sh
+            runner_label: Runner_2_4_core
           - name: PR Babysit Harness
             command: bash scripts/test-suites/required/28-pr-babysit-harness.sh
             runner_label: Runner_2_4_core
