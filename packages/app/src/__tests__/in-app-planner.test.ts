@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
-import { PlanConversation } from '../../../surfaces/src/index.ts';
+import { PlanConversation, buildPlanSystemPrompt } from '../../../surfaces/src/index.ts';
 import {
   PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
   buildPlanningTerminalSummaryBridge,
@@ -198,6 +198,21 @@ describe('buildPlanningTerminalSummaryBridge', () => {
 });
 
 describe('planFromGoal', () => {
+  it('uses the shared in-app planning prompt for typed freshness semantics', () => {
+    const prompt = buildPlanSystemPrompt('main', undefined, {
+      conversationalPlanning: true,
+      draftingAuthorized: true,
+      planningSurface: 'in_app',
+    });
+
+    expect(prompt).toContain('freshness:');
+    expect(prompt).toContain('watch changes to X” and “invalidate if X changes”');
+    expect(prompt).toContain('“X must exist” becomes `pathPreconditions: [{ path: X, expected: present }]`');
+    expect(prompt).toContain('“X must be gone” becomes `expected: absent`');
+    expect(prompt).toContain('Reorder fields or entries as needed, while preserving the same structured meaning.');
+    expect(prompt).toContain('If the user makes no explicit assumption');
+  });
+
   it('asks for a goal before planning', async () => {
     const loadGeneratedPlan = vi.fn();
 
