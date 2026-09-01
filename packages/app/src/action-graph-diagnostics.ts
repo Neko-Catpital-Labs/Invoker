@@ -96,6 +96,7 @@ function attemptStatusToActionStatus(status: Attempt['status']): ActionGraphNode
       return 'pending';
     case 'needs_input':
       return 'waiting';
+    case 'stale':
     case 'superseded':
       return 'cancelled';
   }

@@ -367,6 +367,7 @@ export type AttemptStatus =
   | 'completed'
   | 'failed'
   | 'needs_input'
+  | 'stale'
   | 'superseded';
 
 // ── Attempt (immutable execution record) ────────────────────
