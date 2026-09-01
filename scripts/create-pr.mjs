@@ -1075,8 +1075,6 @@ async function main() {
     console.error(`UI-impacting files changed; requiring visual proof: ${uiImpactingFiles.join(', ')}`);
   }
 
-  await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles, diffText });
-  printPrBodyWarnings(body, changedFiles, diffText);
   body = await injectImages(body, args.dryRun);
 
   const requestedUpdatePath = Boolean(args.update || args.updateExisting);
@@ -1100,6 +1098,11 @@ async function main() {
   if (isStackedPrContext(args.base, mergifyState)) {
     assertValidStackPrTitle(args.title, reviewLane);
   }
+
+  // Validate the final body after stack-specific publication gates and image
+  // injection, immediately before any push or GitHub PR mutation.
+  await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles, diffText });
+  printPrBodyWarnings(body, changedFiles, diffText);
 
   if (!nwo) {
     nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
