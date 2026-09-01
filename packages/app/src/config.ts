@@ -607,6 +607,58 @@ export interface InvokerConfig {
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
   dbReaper?: DbReaperConfig;
 }
+
+export const BUILT_IN_LOCAL_WORKTREE_TARGET_ID = 'local-worktree';
+
+export const BUILT_IN_LOCAL_EXECUTION_POOL_ID = 'local-worktree';
+
+function isBuiltInLocalWorktreeTarget(
+  target: NonNullable<InvokerConfig['worktreeTargets']>[string],
+): boolean {
+  return Object.keys(target).length === 0;
+}
+
+function isBuiltInLocalExecutionPool(
+  pool: NonNullable<InvokerConfig['executionPools']>[string],
+): boolean {
+  if (Object.keys(pool).length !== 1 || pool.members.length !== 1) return false;
+  const [member] = pool.members;
+  return member.type === 'worktree'
+    && member.id === BUILT_IN_LOCAL_WORKTREE_TARGET_ID
+    && Object.keys(member).length === 2;
+}
+
+export function materializeResolvedConfig(config: InvokerConfig): InvokerConfig {
+  const reservedTarget = config.worktreeTargets?.[BUILT_IN_LOCAL_WORKTREE_TARGET_ID];
+  if (reservedTarget !== undefined && !isBuiltInLocalWorktreeTarget(reservedTarget)) {
+    throw new Error(
+      `worktreeTargets.${BUILT_IN_LOCAL_WORKTREE_TARGET_ID} is reserved for Invoker's built-in local worktree target`,
+    );
+  }
+
+  const reservedPool = config.executionPools?.[BUILT_IN_LOCAL_EXECUTION_POOL_ID];
+  if (reservedPool !== undefined && !isBuiltInLocalExecutionPool(reservedPool)) {
+    throw new Error(
+      `executionPools.${BUILT_IN_LOCAL_EXECUTION_POOL_ID} is reserved for Invoker's built-in local execution pool`,
+    );
+  }
+
+  return {
+    ...config,
+    worktreeTargets: {
+      ...config.worktreeTargets,
+      [BUILT_IN_LOCAL_WORKTREE_TARGET_ID]: {},
+    },
+    executionPools: {
+      ...config.executionPools,
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {
+        members: [{ type: 'worktree', id: BUILT_IN_LOCAL_WORKTREE_TARGET_ID }],
+      },
+    },
+    defaultPoolId: config.defaultPoolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+  };
+}
+
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
   'cursor+codex': { tool: 'cursor', model: 'codex' },
@@ -648,7 +700,7 @@ export function resolveConfigFileState(): { path: string; exists: boolean } {
 }
 export function loadConfig(): InvokerConfig {
   const config = readJsonSafe(resolveConfigFilePath());
-  return validateInvokerConfig(config);
+  return materializeResolvedConfig(validateInvokerConfig(config));
 }
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = config.defaultExecutionAgent?.trim();
