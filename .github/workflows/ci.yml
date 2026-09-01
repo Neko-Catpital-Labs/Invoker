@@ -78,6 +78,8 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
+          - name: Added Comment Policy
+            command: pnpm run check:comments
 
     name: quality / ${{ matrix.name }}
 
@@ -421,6 +423,7 @@ jobs:
               bash scripts/test-suites/required/08-build-artifact-surfaces-guard.sh
               bash scripts/test-suites/required/09-headless-cli-boots-smoke.sh
               bash scripts/test-suites/required/10-dag-background-click-noop-guard.sh
+              bash scripts/test-suites/required/14-verify-catalog-check.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
               bash scripts/test-suites/required/51-verify-scratch-execution.sh
@@ -522,6 +525,9 @@ jobs:
             runner_label: Runner_2_4_core
           - name: Launch Dispatch Queue Repro
             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
+            runner_label: Runner_2_4_core
+          - name: Workflow Drain Queue Eval
+            command: bash scripts/test-suites/required/29-workflow-drain-queue-eval.sh
             runner_label: Runner_2_4_core
           - name: PR Babysit Harness
             command: bash scripts/test-suites/required/28-pr-babysit-harness.sh
