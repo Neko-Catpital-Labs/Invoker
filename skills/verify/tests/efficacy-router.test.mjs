@@ -15,6 +15,11 @@ function assert(cond, msg) {
 
 const FIRE_CASES = [
   {
+    id: 'attention',
+    promptIncludes: ['attention surface'],
+    proveMustInclude: 'attention-click-hitch-responsiveness.spec.ts',
+  },
+  {
     id: 'command-palette',
     promptIncludes: ['Cmd+K', 'command palette'],
     proveMustInclude: 'command-palette-open.spec.ts',
@@ -28,6 +33,51 @@ const FIRE_CASES = [
     id: 'terminal-drawer',
     promptIncludes: ['terminal drawer', 'embedded terminal'],
     proveMustInclude: 'embedded-terminal-pty.spec.ts',
+  },
+  {
+    id: 'history-timeline',
+    promptIncludes: ['history timeline'],
+    proveMustInclude: 'ui-delta-timeline.spec.ts',
+  },
+  {
+    id: 'home',
+    promptIncludes: ['home surface'],
+    proveMustInclude: 'keyboard-navigation.spec.ts',
+  },
+  {
+    id: 'merge-gate',
+    promptIncludes: ['merge gate'],
+    proveMustInclude: 'pending-review-gate-target-repo.proof.spec.ts',
+  },
+  {
+    id: 'modals',
+    promptIncludes: ['modal flow'],
+    proveMustInclude: 'fix-with-agent-transition.spec.ts',
+  },
+  {
+    id: 'multi-surface-journeys',
+    promptIncludes: ['multi-surface journey'],
+    proveMustInclude: 'keyboard-navigation.spec.ts',
+  },
+  {
+    id: 'plan-graph',
+    promptIncludes: ['plan graph'],
+    proveMustInclude: 'visual-proof.spec.ts',
+  },
+  {
+    id: 'queue-task-panel',
+    promptIncludes: ['queue task panel'],
+    proveMustInclude: 'queue-running-vs-queued.spec.ts',
+  },
+  {
+    id: 'system-setup',
+    promptIncludes: ['system setup'],
+    proveMustInclude: 'system-setup-visual-proof.spec.ts',
+  },
+  {
+    id: 'workflows',
+    promptIncludes: ['workflow surface'],
+    proveMustInclude: 'workflow-lifecycle.spec.ts',
   },
   {
     id: 'visual-proof-pr-path',
