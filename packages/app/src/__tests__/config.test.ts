@@ -3,9 +3,12 @@ import type * as NodeOs from 'node:os';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import {
+  BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+  BUILT_IN_LOCAL_WORKTREE_TARGET_ID,
   filterExecutionHarnesses,
   filterPlanningPresets,
   loadConfig,
+  materializeResolvedConfig,
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
   resolveConfigFilePath,
@@ -51,9 +54,93 @@ function writeUserConfig(value: unknown): void {
 }
 
 describe('loadConfig', () => {
-  it('returns empty config when no files exist', () => {
+  it.each([
+    ['missing config file', false],
+    ['empty config object', true],
+  ])('materializes the built-in local worktree pool for %s', (_label, writeEmptyConfig) => {
+    if (writeEmptyConfig) writeUserConfig({});
+
     const config = loadConfig();
-    expect(config).toEqual({});
+    expect(config.worktreeTargets).toEqual({
+      [BUILT_IN_LOCAL_WORKTREE_TARGET_ID]: {},
+    });
+    expect(config.executionPools).toEqual({
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {
+        members: [{ type: 'worktree', id: BUILT_IN_LOCAL_WORKTREE_TARGET_ID }],
+      },
+    });
+    expect(config.defaultPoolId).toBe(BUILT_IN_LOCAL_EXECUTION_POOL_ID);
+  });
+
+  it('preserves explicit pools and explicit defaultPoolId while adding the built-in pool', () => {
+    writeUserConfig({
+      worktreeTargets: {
+        custom: { maxConcurrentTasks: 3 },
+      },
+      executionPools: {
+        custom: {
+          members: [{ type: 'worktree', id: 'custom' }],
+        },
+      },
+      defaultPoolId: 'custom',
+    });
+
+    const config = loadConfig();
+    expect(config.worktreeTargets?.custom).toEqual({ maxConcurrentTasks: 3 });
+    expect(config.executionPools?.custom).toEqual({
+      members: [{ type: 'worktree', id: 'custom' }],
+    });
+    expect(config.executionPools?.[BUILT_IN_LOCAL_EXECUTION_POOL_ID]).toEqual({
+      members: [{ type: 'worktree', id: BUILT_IN_LOCAL_WORKTREE_TARGET_ID }],
+    });
+    expect(config.defaultPoolId).toBe('custom');
+  });
+
+  it('accepts structurally identical reserved entries and materializes idempotently', () => {
+    const source = {
+      worktreeTargets: {
+        [BUILT_IN_LOCAL_WORKTREE_TARGET_ID]: {},
+      },
+      executionPools: {
+        [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {
+          members: [{ type: 'worktree' as const, id: BUILT_IN_LOCAL_WORKTREE_TARGET_ID }],
+        },
+      },
+    };
+
+    const resolved = materializeResolvedConfig(source);
+    expect(materializeResolvedConfig(resolved)).toEqual(resolved);
+    expect(source).toEqual({
+      worktreeTargets: { [BUILT_IN_LOCAL_WORKTREE_TARGET_ID]: {} },
+      executionPools: {
+        [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {
+          members: [{ type: 'worktree', id: BUILT_IN_LOCAL_WORKTREE_TARGET_ID }],
+        },
+      },
+    });
+  });
+
+  it.each([
+    [
+      'worktree target',
+      {
+        worktreeTargets: {
+          [BUILT_IN_LOCAL_WORKTREE_TARGET_ID]: { maxConcurrentTasks: 2 },
+        },
+      },
+    ],
+    [
+      'execution pool',
+      {
+        executionPools: {
+          [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {
+            members: [{ type: 'worktree' as const, id: 'custom' }],
+          },
+        },
+      },
+    ],
+  ])('fails closed for a conflicting reserved built-in %s', (_label, config) => {
+    expect(() => materializeResolvedConfig(config)).toThrow(/is reserved for Invoker's built-in local/);
   });
 
   it('reads user-level ~/.invoker/config.json', () => {
@@ -494,6 +581,7 @@ describe('loadConfig', () => {
         provisionCommand: 'pnpm install --frozen-lockfile',
         maxConcurrentTasks: 2,
       },
+      [BUILT_IN_LOCAL_WORKTREE_TARGET_ID]: {},
     });
   });
   it('reads defaultExecution from user config', () => {
