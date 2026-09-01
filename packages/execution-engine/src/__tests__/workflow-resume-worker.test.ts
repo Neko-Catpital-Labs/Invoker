@@ -125,6 +125,24 @@ describe('workflow resume worker tick', () => {
     expect(args).toEqual([{}]);
   });
 
+  it('defers draining each independent workflow intent during a batch scan', async () => {
+    const h = harness({
+      workflows: [
+        { id: 'wf-1', tasks: [makeTask({ id: 'wf-1/task', status: 'pending' as TaskState['status'] })] },
+        { id: 'wf-2', tasks: [makeTask({ id: 'wf-2/task', status: 'pending' as TaskState['status'] })] },
+      ],
+    });
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).toHaveBeenCalledTimes(2);
+    expect(h.submit.mock.calls.map((call) => call[0])).toEqual(['wf-1', 'wf-2']);
+    expect(h.submit.mock.calls.map((call) => call[4])).toEqual([
+      { deferDrain: true },
+      { deferDrain: true },
+    ]);
+  });
+
   it('skips pending work whose local dependencies are not completed', async () => {
     const h = harness({
       workflows: [
