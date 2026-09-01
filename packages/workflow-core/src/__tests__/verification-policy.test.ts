@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   IndependentJudgmentReceipt,
+  VerificationEvidenceRecord,
   VerificationReceipt,
 } from '@invoker/contracts';
 
@@ -60,11 +61,58 @@ function decision(receipts: VerificationReceipt[]) {
     targetCommitSha: commitSha,
     builderActorId: 'builder-1',
     changeClasses: ['bug_fix'],
-    receipts,
+    receipts: receipts.map((receipt) => trustedEvidence(receipt)),
   });
 }
 
+function trustedEvidence(receipt: VerificationReceipt): VerificationEvidenceRecord {
+  return {
+    version: 2,
+    trust: 'trusted',
+    receipt,
+    attestation: {
+      repository: 'Neko-Catpital-Labs/Invoker',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      generation: 1,
+      commitSha: receipt.commitSha,
+      canonicalPayloadDigest: 'sha256:digest',
+      signatureAlgorithm: 'Ed25519',
+      signature: 'signature',
+      trustedKeyId: 'key-1',
+      provider: { kind: receipt.kind === 'independent_judgment' ? 'judge' : 'executor', providerId: 'provider-1' },
+      actorId: receipt.actor.id,
+      issuedAt: receipt.recordedAt,
+      recordedAt: receipt.recordedAt,
+    },
+  };
+}
+
 describe('evaluateAutomaticVerificationReadiness', () => {
+  it('does not accept a planner-only receipt copied from untrusted evidence', () => {
+    const legacyPlannerReceipts = [
+      deterministicReceipt({ actor: { id: 'planner-only', role: 'builder' } }),
+      bugReproReceipt({ actor: { id: 'planner-only', role: 'builder' } }),
+      judgmentReceipt({ actor: { id: 'planner-only', role: 'judge' } }),
+    ];
+    const decisionResult = evaluateAutomaticVerificationReadiness({
+      target: 'review_ready',
+      targetCommitSha: commitSha,
+      builderActorId: 'planner-only',
+      changeClasses: ['bug_fix'],
+      // The planner-only handoff strips the evidence envelope.
+      receipts: legacyPlannerReceipts as unknown as VerificationEvidenceRecord[],
+    });
+
+    expect(decisionResult.ready).toBe(false);
+    expect(decisionResult.refusals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'untrusted_receipt',
+        receiptId: 'command-1',
+      }),
+    ]));
+  });
+
   it('accepts commit-bound evidence with an independent approving judge', () => {
     expect(decision([
       deterministicReceipt(),
@@ -168,7 +216,7 @@ describe('evaluateAutomaticVerificationReadiness', () => {
       targetCommitSha: commitSha,
       builderActorId: 'builder-1',
       changeClasses: ['code'],
-      receipts: [deterministicReceipt()],
+      receipts: [trustedEvidence(deterministicReceipt())],
     });
 
     expect(result).toMatchObject({
@@ -227,20 +275,27 @@ describe('evaluateAutomaticVerificationReadiness', () => {
       changeClasses: ['visual_ui', 'external_effect', 'deployment'] as const,
     };
 
-    expect(evaluateAutomaticVerificationReadiness({ ...input, receipts }).ready).toBe(true);
     expect(evaluateAutomaticVerificationReadiness({
       ...input,
-      receipts: receipts.map((receipt) => receipt.kind === 'external_effect_reconciliation'
-        ? { ...receipt, reconciled: false }
-        : receipt),
+      receipts: receipts.map((receipt) => trustedEvidence(receipt)),
+    }).ready).toBe(true);
+    expect(evaluateAutomaticVerificationReadiness({
+      ...input,
+      receipts: receipts.map((receipt) => trustedEvidence(
+        receipt.kind === 'external_effect_reconciliation'
+          ? { ...receipt, reconciled: false }
+          : receipt,
+      )),
     }).refusals).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'failed_receipt', receiptId: 'external-1' }),
     ]));
     expect(evaluateAutomaticVerificationReadiness({
       ...input,
-      receipts: receipts.map((receipt) => receipt.kind === 'deployed_version'
-        ? { ...receipt, deployedCommitSha: 'old123' }
-        : receipt),
+      receipts: receipts.map((receipt) => trustedEvidence(
+        receipt.kind === 'deployed_version'
+          ? { ...receipt, deployedCommitSha: 'old123' }
+          : receipt,
+      )),
     }).refusals).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'failed_receipt', receiptId: 'deployment-1' }),
     ]));

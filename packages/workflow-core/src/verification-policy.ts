@@ -1,6 +1,7 @@
 import {
   compileVerificationRequirements,
   type VerificationChangeClass,
+  type VerificationEvidenceRecord,
   type VerificationReceipt,
   type VerificationRequirementKind,
 } from '@invoker/contracts';
@@ -14,6 +15,11 @@ export type VerificationRefusal =
   }
   | {
     code: 'failed_receipt' | 'stale_receipt';
+    requirement: VerificationRequirementKind;
+    receiptId: string;
+  }
+  | {
+    code: 'untrusted_receipt';
     requirement: VerificationRequirementKind;
     receiptId: string;
   }
@@ -32,7 +38,7 @@ export interface AutomaticVerificationReadinessInput {
   targetCommitSha: string;
   builderActorId: string;
   changeClasses: readonly VerificationChangeClass[];
-  receipts: readonly VerificationReceipt[];
+  receipts: readonly VerificationEvidenceRecord[];
 }
 
 export interface AutomaticVerificationReadinessDecision {
@@ -102,9 +108,25 @@ export function evaluateAutomaticVerificationReadiness(
   const targetCommitSha = normalizedSha(input.targetCommitSha);
   const requirements = compileVerificationRequirements(input.changeClasses);
   const refusals: VerificationRefusal[] = [];
+  const trustedReceipts: VerificationReceipt[] = [];
+
+  for (const record of input.receipts) {
+    if (record.version !== 2) {
+      const receipt = record.version === 1
+        ? record.receipt
+        : record as unknown as VerificationReceipt;
+      refusals.push({
+        code: 'untrusted_receipt',
+        requirement: receipt.kind,
+        receiptId: receipt.id,
+      });
+      continue;
+    }
+    trustedReceipts.push(record.receipt);
+  }
 
   for (const requirement of requirements) {
-    const receipts = receiptsForRequirement(input.receipts, requirement);
+    const receipts = receiptsForRequirement(trustedReceipts, requirement);
     if (receipts.length === 0) {
       refusals.push({ code: 'missing_receipt', requirement });
       continue;
