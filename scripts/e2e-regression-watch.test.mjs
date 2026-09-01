@@ -34,6 +34,7 @@ import {
   releaseRepairFilingClaim,
   repairFilingKind,
   resolveRepairFilingSubject,
+  resolveJobFailureIdentities,
   resolveStateDir,
   resolveTargetRepo,
   RECOVERY_COOLDOWN_MS,
@@ -1048,6 +1049,24 @@ describe('retired CI job filing gate', () => {
 });
 
 describe('repair verification scope', () => {
+  it('keeps a real failed CI log at job scope', () => {
+    const artifact = JSON.parse(readFileSync(
+      'scripts/fixtures/real-ci/required-fast-vitest-workspace-99777174547.json',
+      'utf8',
+    ));
+    const identities = resolveJobFailureIdentities({
+      name: artifact.jobName,
+      conclusion: artifact.conclusion,
+      logText: artifact.logExcerpt.join('\n'),
+    });
+    assert.deepEqual(identities, [{
+      failureId: 'job',
+      kind: 'job',
+      label: artifact.jobName,
+      evidence: '',
+    }]);
+  });
+
   it('does not infer a Playwright spec from failure prose', () => {
     const command = "env INVOKER_PLAYWRIGHT_FILES='e2e/a.spec.ts e2e/b.spec.ts' bash scripts/test-suites/optional/40-playwright-app.sh";
     const focused = getVerifyCommandForFailure({

@@ -1,0 +1,15 @@
+{
+  "source": "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/33482988343/job/99777174547",
+  "runId": 33482988343,
+  "jobId": 99777174547,
+  "jobName": "required-fast / Vitest Workspace",
+  "conclusion": "failure",
+  "capturedAt": "2026-09-01T07:41:57Z",
+  "logBytes": 5348748,
+  "logExcerpt": [
+    "2026-09-01T07:39:38.2108462Z Complete job name: required-fast / Vitest Workspace",
+    "2026-09-01T07:40:26.2682255Z Run bash scripts/test-suites/required/10-vitest-workspace.sh",
+    "2026-09-01T07:40:26.5950797Z FAIL: SKILL dogfooding rule must document the later PR publication command — missing in /home/runner/work/Invoker/Invoker/skills/plan-to-invoker/SKILL.md",
+    "2026-09-01T07:40:26.5965634Z ##[error]Process completed with exit code 1."
+  ]
+}
