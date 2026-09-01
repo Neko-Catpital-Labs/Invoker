@@ -255,6 +255,7 @@ import {
 import { acknowledgeNoTrackHeadlessExec, createGuiMutationTaskActions, logHeadlessExecReceived, registerGuiMutationIpcHandlers } from './ipc/gui-mutation-handlers.js';
 import type { GuiMutationTaskActions, HeadlessExecMutationContext, HeadlessRunMutationPayload, HeadlessResumeMutationPayload } from './ipc/gui-mutation-handlers.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
+import { OwnerCapabilityRegistry } from './owner-capability-registry.js';
 import {
   createTerminalUiPerfCounters,
   createTerminalUiPerfReporter,
@@ -1424,319 +1425,356 @@ function startHeadlessMode(): void {
         | { replyOnly: string }
         | null = null;
 
-      const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
-        switch (payload.channel) {
-          case 'invoker:set-test-planning-chat-response': {
-            if (process.env.NODE_ENV === 'test') {
-              testPlanningChatResponse = payload.args[0] as typeof testPlanningChatResponse;
-            }
-            return undefined;
-          }
-          case 'invoker:clear': {
-            logger.info('clear — stopping all tasks and resetting daemon DAG', { module: 'ipc-delegate' });
-            await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: undefined });
-            await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
-            orchestrator = new Orchestrator({
-              persistence,
-              messageBus,
-              taskRepository: new SqliteTaskRepository(persistence),
-              maxConcurrency: effectiveMaxConcurrency,
-              defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
-              executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
-              defaultPoolId: invokerConfig.defaultPoolId,
-              availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
-              deferRunningUntilLaunch: true,
-            });
-            commandService = new CommandService(
-              orchestrator,
-              buildCommandServiceInvalidationDeps(),
-            );
-            return undefined;
-          }
-          case 'invoker:plan-from-goal': {
-            return planFromGoalInApp(payload.args[0] as InAppPlanRequest, {
-              config: invokerConfig,
-              workingDir: repoRoot,
-              planDoctorScriptPath,
-              loadGeneratedPlan,
-              planningCommandBuilder,
-              conversationRepo: planningConversationRepo,
-            });
-          }
-          case 'invoker:planning-chat-create': {
-            return createPlanningChatSession(payload.args[0] as InAppPlanningCreateSessionRequest | undefined, {
-              config: invokerConfig,
-              workingDir: repoRoot,
-              planDoctorScriptPath,
-              sessions: planningChatSessions,
-              planningCommandBuilder,
-              executionAgentRegistry: agentRegistry,
-              loadGeneratedPlan,
-              conversationRepo: planningConversationRepo,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-              logger,
-              onRawPlannerOutput: emitPlanningChatStreamToWeb,
-              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
-            });
-          }
-          case 'invoker:planning-chat-list': {
-            return listPlanningChatSessions({ sessions: planningChatSessions });
-          }
-          case 'invoker:planning-chat-send': {
-            const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
-            const plannerReplyOverride = planningChatResponseOverride
-              ? async (): Promise<string> => {
-                if ('throwError' in planningChatResponseOverride) {
-                  throw new Error(planningChatResponseOverride.throwError);
-                }
-                if ('replyOnly' in planningChatResponseOverride) {
-                  return planningChatResponseOverride.replyOnly;
-                }
-                if (planningChatResponseOverride.delayMs) {
-                  await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
-                }
-                return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
-              }
-              : undefined;
-            return sendPlanningChatMessage(payload.args[0] as InAppPlanningChatRequest, {
-              config: invokerConfig,
-              workingDir: repoRoot,
-              planDoctorScriptPath,
-              sessions: planningChatSessions,
-              planningCommandBuilder,
-              executionAgentRegistry: agentRegistry,
-              loadGeneratedPlan,
-              conversationRepo: planningConversationRepo,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-              logger,
-              plannerReplyOverride,
-              onRawPlannerOutput: emitPlanningChatStreamToWeb,
-              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
-            });
-          }
-          case 'invoker:planning-chat-submit': {
-            return submitPlanningChatDraft(payload.args[0] as InAppPlanningSubmitRequest, {
-              sessions: planningChatSessions,
-              loadGeneratedPlan,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-            });
-          }
-          case 'invoker:planning-chat-discard-draft': {
-            return discardPlanningChatDraft(payload.args[0] as InAppPlanningDiscardDraftRequest, {
-              sessions: planningChatSessions,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-            });
-          }
-          case 'invoker:planning-chat-reset': {
-            return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, {
-              sessions: planningChatSessions,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-            });
-          }
-          case 'invoker:planning-chat-set-terminal-mode': {
-            return setPlanningChatTerminalMode(payload.args[0] as InAppPlanningSetTerminalModeRequest, {
-              sessions: planningChatSessions,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-            });
-          }
-          case 'invoker:planning-chat-rebind-repo': {
-            return rebindPlanningChatRepo(payload.args[0] as InAppPlanningRebindRepoRequest, {
-              config: invokerConfig,
-              sessions: planningChatSessions,
-              planningCommandBuilder,
-              executionAgentRegistry: agentRegistry,
-              conversationRepo: planningConversationRepo,
-              logger,
-              onRawPlannerOutput: emitPlanningChatStreamToWeb,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
-              workingDir: repoRoot,
-              planDoctorScriptPath,
-            });
-          }
-          case 'invoker:planning-chat-delete': {
-            return deletePlanningChat(payload.args[0] as InAppPlanningDeleteRequest, {
-              sessions: planningChatSessions,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-              conversationRepo: planningConversationRepo,
-              logger,
-            });
-          }
-          case 'invoker:planning-chat-delete-submitted': {
-            return deleteSubmittedPlanningChats({
-              sessions: planningChatSessions,
-              planningSessionStore: readOnlyMode ? undefined : persistence,
-              conversationRepo: planningConversationRepo,
-              logger,
-            });
-          }
-          case 'invoker:load-plan': {
-            const planText = String(payload.args[0] ?? '');
-            await loadGeneratedPlan(planText);
-            return undefined;
-          }
-          case 'invoker:start': {
-            const started = orchestrator.startExecution();
-            logger.info(`standalone startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc-delegate' });
-            return started;
-          }
-          case 'invoker:start-ready': {
-            const handler = workflowMutationDispatcher.get('invoker:start-ready');
-            if (!handler) {
-              throw new Error('No workflow mutation dispatcher registered for invoker:start-ready');
-            }
-            return handler(payload.args[0] as StartReadyRequest | undefined);
-          }
-          case 'invoker:stop': {
-            logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
-            const failInFlightTasks = (): void => {
-              const allTasks = orchestrator.getAllTasks();
-              for (const task of allTasks) {
-                if (isTaskInFlightForForcedStop(task)) {
-                  logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
-                  persistShutdownDiagnostic(task, persistence, { forcedStopReason: 'Stopped by user' });
-                  orchestrator.handleWorkerResponse({
-                    requestId: `stop-${task.id}`,
-                    actionId: task.id,
-                    attemptId: task.execution.selectedAttemptId,
-                    executionGeneration: task.execution.generation ?? 0,
-                    status: 'failed',
-                    outputs: { exitCode: 1, error: 'Stopped by user' },
-                  });
-                }
-              }
-            };
-            failInFlightTasks();
-            await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
-            failInFlightTasks();
-            return undefined;
-          }
-          case 'invoker:start-worker': {
-            if (!workerRuntimeController) {
-              throw new Error('Worker runtime controller is unavailable');
-            }
-            return workerRuntimeController.start(String(payload.args[0]));
-          }
-          case 'invoker:stop-worker': {
-            if (!workerRuntimeController) {
-              throw new Error('Worker runtime controller is unavailable');
-            }
-            return workerRuntimeController.stop(String(payload.args[0]));
-          }
-          case 'invoker:inject-task-states': {
-            if (process.env.NODE_ENV !== 'test') {
-              throw new Error('inject-task-states is only available in tests');
-            }
-            const updates = payload.args[0] as Array<{ taskId: string; changes: TaskStateChanges }>;
-            for (const { taskId, changes } of updates) {
-              persistence.updateTask(taskId, changes);
-            }
-            orchestrator.syncAllFromDb();
-            return undefined;
-          }
-          case 'invoker:seed-main-process-hitch-fixture': {
-            if (process.env.NODE_ENV !== 'test') {
-              throw new Error('seed-main-process-hitch-fixture is only available in tests');
-            }
-            const seeded = seedMainProcessHitchFixture(persistence);
-            orchestrator.syncAllFromDb();
-            return seeded;
-          }
-          case 'invoker:seed-stress-fixture': {
-            if (process.env.NODE_ENV !== 'test') {
-              throw new Error('seed-stress-fixture is only available in tests');
-            }
-            const options = payload.args[0] as StressFixtureOptions | undefined;
-            const seeded = seedStressFixture(persistence, options);
-            orchestrator.syncAllFromDb();
-            return seeded;
-          }
-          case 'invoker:set-merge-branch': {
-            const workflowId = String(payload.args[0]);
-            const baseBranch = normalizeWorkflowBaseBranch(String(payload.args[1]));
-            persistence.updateWorkflow(workflowId, { baseBranch });
-            const tasks = persistence.loadTasks(workflowId);
-            const mergeTask = tasks.find((task) => task.config.isMergeNode);
-            if (!mergeTask) return undefined;
-            const executor = createStandaloneTaskExecutor();
-            const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
-            const result = await commandService.retryTask(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            const started = result.data;
-            await dispatchStartedTasksWithGlobalTopup({
-              orchestrator,
-              taskExecutor: executor,
-              logger,
-              context: 'standalone.set-merge-branch',
-              started,
-              scopedTaskIds: [mergeTask.id],
-            });
-            return undefined;
-          }
-          case 'invoker:replace-task': {
-            const taskId = String(payload.args[0]);
-            const replacementTasks = payload.args[1] as TaskReplacementDef[];
-            const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId, replacementTasks });
-            const result = await commandService.replaceTask(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            return result.data;
-          }
-          case 'invoker:check-pr-statuses': {
-            const executor = createStandaloneTaskExecutor();
-            await executor.checkMergeGateStatuses();
-            return undefined;
-          }
-          case 'invoker:check-pr-status': {
-            const executor = createStandaloneTaskExecutor();
-            const tasks = orchestrator.getAllTasks();
-            const awaitingMergeGates = tasks.filter(
-              (task) => task.config.isMergeNode && (task.status === 'review_ready' || task.status === 'awaiting_approval'),
-            );
-            await Promise.all(awaitingMergeGates.map((task) => executor.checkPrApprovalNow(task.id)));
-            return undefined;
-          }
-          case 'invoker:select-experiment': {
-            const taskId = String(payload.args[0]);
-            const experimentId = payload.args[1] as string | string[];
-            const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
-            const executor = createStandaloneTaskExecutor();
-            if (ids.length === 1) {
-              const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
-              const result = await commandService.selectExperiment(envelope);
-              if (!result.ok) throw new Error(result.error.message);
-              return undefined;
-            }
-            await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: executor });
-            return undefined;
-          }
-          case 'invoker:set-task-external-gate-policies': {
-            const taskId = String(payload.args[0]);
-            const updates = payload.args[1] as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' | 'ci_failed' }>;
-            const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
-            const result = await commandService.setTaskExternalGatePolicies(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            return undefined;
-          }
-          case 'invoker:edit-task-pool': {
-            const taskId = String(payload.args[0]);
-            const poolId = String(payload.args[1]);
-            const executor = createStandaloneTaskExecutor();
-            const envelope = makeEnvelope('edit-task-pool', 'ui', 'task', { taskId, poolId });
-            const result = await commandService.editTaskPool(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            await dispatchStartedTasksWithGlobalTopup({
-              orchestrator,
-              taskExecutor: executor,
-              logger,
-              context: 'standalone.edit-task-pool',
-              started: result.data,
-              scopedTaskIds: [taskId],
-            });
-            return undefined;
-          }
-          default:
-            throw new Error(`Unsupported internal mutation for standalone owner: ${payload.channel}`);
+      const standaloneOwnerCapabilities = new OwnerCapabilityRegistry();
+      const registerStandaloneOwnerCapability = (
+        channel: string,
+        handler: (payload: GuiMutationPayload) => Promise<unknown>,
+      ): void => {
+        standaloneOwnerCapabilities.register(channel, (...args) => handler({ channel, args }));
+      };
+
+      registerStandaloneOwnerCapability('invoker:set-test-planning-chat-response', async (payload) => {
+        if (process.env.NODE_ENV === 'test') {
+          testPlanningChatResponse = payload.args[0] as typeof testPlanningChatResponse;
         }
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:clear', async (payload) => {
+        logger.info('clear — stopping all tasks and resetting daemon DAG', { module: 'ipc-delegate' });
+        await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: undefined });
+        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
+        orchestrator = new Orchestrator({
+          persistence,
+          messageBus,
+          taskRepository: new SqliteTaskRepository(persistence),
+          maxConcurrency: effectiveMaxConcurrency,
+          defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+          executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
+          defaultPoolId: invokerConfig.defaultPoolId,
+          availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
+          deferRunningUntilLaunch: true,
+        });
+        commandService = new CommandService(
+          orchestrator,
+          buildCommandServiceInvalidationDeps(),
+        );
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:plan-from-goal', async (payload) => {
+        return planFromGoalInApp(payload.args[0] as InAppPlanRequest, {
+          config: invokerConfig,
+          workingDir: repoRoot,
+          planDoctorScriptPath,
+          loadGeneratedPlan,
+          planningCommandBuilder,
+          conversationRepo: planningConversationRepo,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-create', async (payload) => {
+        return createPlanningChatSession(payload.args[0] as InAppPlanningCreateSessionRequest | undefined, {
+          config: invokerConfig,
+          workingDir: repoRoot,
+          planDoctorScriptPath,
+          sessions: planningChatSessions,
+          planningCommandBuilder,
+          executionAgentRegistry: agentRegistry,
+          loadGeneratedPlan,
+          conversationRepo: planningConversationRepo,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+          logger,
+          onRawPlannerOutput: emitPlanningChatStreamToWeb,
+          repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-list', async (payload) => {
+        return listPlanningChatSessions({ sessions: planningChatSessions });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-send', async (payload) => {
+        const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
+        const plannerReplyOverride = planningChatResponseOverride
+          ? async (): Promise<string> => {
+            if ('throwError' in planningChatResponseOverride) {
+              throw new Error(planningChatResponseOverride.throwError);
+            }
+            if ('replyOnly' in planningChatResponseOverride) {
+              return planningChatResponseOverride.replyOnly;
+            }
+            if (planningChatResponseOverride.delayMs) {
+              await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
+            }
+            return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
+          }
+          : undefined;
+        return sendPlanningChatMessage(payload.args[0] as InAppPlanningChatRequest, {
+          config: invokerConfig,
+          workingDir: repoRoot,
+          planDoctorScriptPath,
+          sessions: planningChatSessions,
+          planningCommandBuilder,
+          executionAgentRegistry: agentRegistry,
+          loadGeneratedPlan,
+          conversationRepo: planningConversationRepo,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+          logger,
+          plannerReplyOverride,
+          onRawPlannerOutput: emitPlanningChatStreamToWeb,
+          repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-submit', async (payload) => {
+        return submitPlanningChatDraft(payload.args[0] as InAppPlanningSubmitRequest, {
+          sessions: planningChatSessions,
+          loadGeneratedPlan,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-discard-draft', async (payload) => {
+        return discardPlanningChatDraft(payload.args[0] as InAppPlanningDiscardDraftRequest, {
+          sessions: planningChatSessions,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-reset', async (payload) => {
+        return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, {
+          sessions: planningChatSessions,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-set-terminal-mode', async (payload) => {
+        return setPlanningChatTerminalMode(payload.args[0] as InAppPlanningSetTerminalModeRequest, {
+          sessions: planningChatSessions,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-rebind-repo', async (payload) => {
+        return rebindPlanningChatRepo(payload.args[0] as InAppPlanningRebindRepoRequest, {
+          config: invokerConfig,
+          sessions: planningChatSessions,
+          planningCommandBuilder,
+          executionAgentRegistry: agentRegistry,
+          conversationRepo: planningConversationRepo,
+          logger,
+          onRawPlannerOutput: emitPlanningChatStreamToWeb,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+          repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+          workingDir: repoRoot,
+          planDoctorScriptPath,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-delete', async (payload) => {
+        return deletePlanningChat(payload.args[0] as InAppPlanningDeleteRequest, {
+          sessions: planningChatSessions,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+          conversationRepo: planningConversationRepo,
+          logger,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-delete-submitted', async (payload) => {
+        return deleteSubmittedPlanningChats({
+          sessions: planningChatSessions,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+          conversationRepo: planningConversationRepo,
+          logger,
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:load-plan', async (payload) => {
+        const planText = String(payload.args[0] ?? '');
+        await loadGeneratedPlan(planText);
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:start', async (payload) => {
+        const started = orchestrator.startExecution();
+        logger.info(`standalone startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc-delegate' });
+        return started;
+      });
+
+      registerStandaloneOwnerCapability('invoker:start-ready', async (payload) => {
+        const handler = workflowMutationDispatcher.get('invoker:start-ready');
+        if (!handler) {
+          throw new Error('No workflow mutation dispatcher registered for invoker:start-ready');
+        }
+        return handler(payload.args[0] as StartReadyRequest | undefined);
+      });
+
+      registerStandaloneOwnerCapability('invoker:stop', async (payload) => {
+        logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
+        const failInFlightTasks = (): void => {
+          const allTasks = orchestrator.getAllTasks();
+          for (const task of allTasks) {
+            if (isTaskInFlightForForcedStop(task)) {
+              logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
+              persistShutdownDiagnostic(task, persistence, { forcedStopReason: 'Stopped by user' });
+              orchestrator.handleWorkerResponse({
+                requestId: `stop-${task.id}`,
+                actionId: task.id,
+                attemptId: task.execution.selectedAttemptId,
+                executionGeneration: task.execution.generation ?? 0,
+                status: 'failed',
+                outputs: { exitCode: 1, error: 'Stopped by user' },
+              });
+            }
+          }
+        };
+        failInFlightTasks();
+        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
+        failInFlightTasks();
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:start-worker', async (payload) => {
+        if (!workerRuntimeController) {
+          throw new Error('Worker runtime controller is unavailable');
+        }
+        return workerRuntimeController.start(String(payload.args[0]));
+      });
+
+      registerStandaloneOwnerCapability('invoker:stop-worker', async (payload) => {
+        if (!workerRuntimeController) {
+          throw new Error('Worker runtime controller is unavailable');
+        }
+        return workerRuntimeController.stop(String(payload.args[0]));
+      });
+
+      registerStandaloneOwnerCapability('invoker:inject-task-states', async (payload) => {
+        if (process.env.NODE_ENV !== 'test') {
+          throw new Error('inject-task-states is only available in tests');
+        }
+        const updates = payload.args[0] as Array<{ taskId: string; changes: TaskStateChanges }>;
+        for (const { taskId, changes } of updates) {
+          persistence.updateTask(taskId, changes);
+        }
+        orchestrator.syncAllFromDb();
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:seed-main-process-hitch-fixture', async (payload) => {
+        if (process.env.NODE_ENV !== 'test') {
+          throw new Error('seed-main-process-hitch-fixture is only available in tests');
+        }
+        const seeded = seedMainProcessHitchFixture(persistence);
+        orchestrator.syncAllFromDb();
+        return seeded;
+      });
+
+      registerStandaloneOwnerCapability('invoker:seed-stress-fixture', async (payload) => {
+        if (process.env.NODE_ENV !== 'test') {
+          throw new Error('seed-stress-fixture is only available in tests');
+        }
+        const options = payload.args[0] as StressFixtureOptions | undefined;
+        const seeded = seedStressFixture(persistence, options);
+        orchestrator.syncAllFromDb();
+        return seeded;
+      });
+
+      registerStandaloneOwnerCapability('invoker:set-merge-branch', async (payload) => {
+        const workflowId = String(payload.args[0]);
+        const baseBranch = normalizeWorkflowBaseBranch(String(payload.args[1]));
+        persistence.updateWorkflow(workflowId, { baseBranch });
+        const tasks = persistence.loadTasks(workflowId);
+        const mergeTask = tasks.find((task) => task.config.isMergeNode);
+        if (!mergeTask) return undefined;
+        const executor = createStandaloneTaskExecutor();
+        const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
+        const result = await commandService.retryTask(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const started = result.data;
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: executor,
+          logger,
+          context: 'standalone.set-merge-branch',
+          started,
+          scopedTaskIds: [mergeTask.id],
+        });
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:replace-task', async (payload) => {
+        const taskId = String(payload.args[0]);
+        const replacementTasks = payload.args[1] as TaskReplacementDef[];
+        const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId, replacementTasks });
+        const result = await commandService.replaceTask(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        return result.data;
+      });
+
+      registerStandaloneOwnerCapability('invoker:check-pr-statuses', async (payload) => {
+        const executor = createStandaloneTaskExecutor();
+        await executor.checkMergeGateStatuses();
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:check-pr-status', async (payload) => {
+        const executor = createStandaloneTaskExecutor();
+        const tasks = orchestrator.getAllTasks();
+        const awaitingMergeGates = tasks.filter(
+          (task) => task.config.isMergeNode && (task.status === 'review_ready' || task.status === 'awaiting_approval'),
+        );
+        await Promise.all(awaitingMergeGates.map((task) => executor.checkPrApprovalNow(task.id)));
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:select-experiment', async (payload) => {
+        const taskId = String(payload.args[0]);
+        const experimentId = payload.args[1] as string | string[];
+        const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
+        const executor = createStandaloneTaskExecutor();
+        if (ids.length === 1) {
+          const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
+          const result = await commandService.selectExperiment(envelope);
+          if (!result.ok) throw new Error(result.error.message);
+          return undefined;
+        }
+        await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: executor });
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:set-task-external-gate-policies', async (payload) => {
+        const taskId = String(payload.args[0]);
+        const updates = payload.args[1] as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' | 'ci_failed' }>;
+        const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
+        const result = await commandService.setTaskExternalGatePolicies(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        return undefined;
+      });
+
+      registerStandaloneOwnerCapability('invoker:edit-task-pool', async (payload) => {
+        const taskId = String(payload.args[0]);
+        const poolId = String(payload.args[1]);
+        const executor = createStandaloneTaskExecutor();
+        const envelope = makeEnvelope('edit-task-pool', 'ui', 'task', { taskId, poolId });
+        const result = await commandService.editTaskPool(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: executor,
+          logger,
+          context: 'standalone.edit-task-pool',
+          started: result.data,
+          scopedTaskIds: [taskId],
+        });
+        return undefined;
+      });
+
+      const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
+        if (!standaloneOwnerCapabilities.has(payload.channel)) {
+          throw new Error(`Unsupported internal mutation for standalone owner: ${payload.channel}`);
+        }
+        return standaloneOwnerCapabilities.invoke(payload.channel, payload.args);
       };
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
@@ -2352,7 +2390,7 @@ startMainProcessBootstrap({
     getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
     repoRoot,
   });
-  const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  const ownerCapabilities = new OwnerCapabilityRegistry();
   let dbPollInterval: { stop(): void } | null = null;
   let uiPerfLogInterval: { stop(): void } | null = null;
   let rendererTaskFeed: RendererTaskFeed | null = null;
@@ -2880,11 +2918,10 @@ startMainProcessBootstrap({
           }),
           taskTerminals,
           guiMutations: async (channel, args) => {
-            const handler = guiMutationHandlers.get(channel);
-            if (!handler) {
+            if (!ownerCapabilities.has(channel)) {
               throw new Error(`No GUI mutation handler registered for ${channel}`);
             }
-            return handler(...args);
+            return ownerCapabilities.invoke(channel, args);
           },
           planningTerminals: webPlanningTerminals,
           getSystemDiagnostics: () => collectSystemDiagnostics({
@@ -3130,7 +3167,7 @@ startMainProcessBootstrap({
         }
         return mutationActions.translateGuiMutationToHeadless(payload);
       },
-      guiMutationHandlers,
+      guiMutationHandlers: ownerCapabilities,
     };
 
     const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
@@ -3377,13 +3414,12 @@ startMainProcessBootstrap({
       });
       messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
         const payload = req as GuiMutationPayload;
-        const handler = guiMutationHandlers.get(payload.channel);
-        if (!handler) {
+        if (!ownerCapabilities.has(payload.channel)) {
           throw new Error(`No GUI mutation handler registered for channel: ${payload.channel}`);
         }
         const mutationArgs = Array.isArray(payload.args) ? payload.args : [];
         logger.info(`headless.gui-mutation received channel=${payload.channel} mode=gui`, { module: 'ipc-delegate' });
-        return handler(...mutationArgs);
+        return ownerCapabilities.invoke(payload.channel, mutationArgs);
       });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');
