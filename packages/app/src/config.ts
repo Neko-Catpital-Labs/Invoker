@@ -12,6 +12,9 @@ import { resolveInvokerConfigPath } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
 import type { E2eAutoFixWorkerConfig, PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
+
+export { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
 
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
@@ -609,8 +612,6 @@ export interface InvokerConfig {
 }
 
 export const BUILT_IN_LOCAL_WORKTREE_TARGET_ID = 'local-worktree';
-
-export const BUILT_IN_LOCAL_EXECUTION_POOL_ID = 'local-worktree';
 
 function isBuiltInLocalWorktreeTarget(
   target: NonNullable<InvokerConfig['worktreeTargets']>[string],
