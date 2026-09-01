@@ -155,6 +155,7 @@ export async function buildWorkRequest(
       executionAgent,
       executionModel,
       maxTurns: task.config.maxTurns,
+      ...(task.config.freshness !== undefined ? { freshness: task.config.freshness } : {}),
       repoUrl,
       branchRepoUrl,
       featureBranch: task.config.featureBranch,
