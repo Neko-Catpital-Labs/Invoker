@@ -72,6 +72,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
     expect(workflows).toHaveLength(workflowCount);
     expect(memoryDelta).toBeLessThan(1_000_000);
+    expect(workflows.length).toBeLessThan(1000);
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
