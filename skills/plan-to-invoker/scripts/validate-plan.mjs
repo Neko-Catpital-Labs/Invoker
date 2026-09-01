@@ -686,6 +686,15 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
+  if (raw.onFinish === 'none' && raw.mergeMode === 'external_review') {
+    errors.push({
+      errorType: 'conflicting_fields',
+      field: 'mergeMode',
+      message: '"mergeMode: external_review" cannot be combined with "onFinish: none". External review publishes a pull request, while onFinish: none authorizes no publication.',
+      value: raw.mergeMode,
+    });
+  }
+
   if (raw.runnerKind !== undefined) {
     errors.push({
       errorType: 'unsupported_field',
