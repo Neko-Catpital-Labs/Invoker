@@ -51,6 +51,7 @@ import type {
   WorkflowPagedResult,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
+  TaskFilterQueryOptions,
   TaskEvent,
   TaskEventListFilters,
   ActivityLogEntry,
@@ -70,6 +71,7 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from './adapter.js';
+import type { TaskFilterNode } from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
 import {
@@ -91,6 +93,8 @@ import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
 import { appendJournalEntry } from './sync-journal.js';
+import { compileTaskFilter } from './task-filter-sql.js';
+import { mapRowToTask } from './sqlite-row-mappers.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -1238,6 +1242,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadWorkflowTaskSnapshot(options?: WorkflowReadOptions): WorkflowTaskSnapshot {
     return this.workflowRepo.loadWorkflowTaskSnapshot(options);
+  }
+
+  queryTasksByFilter(filter: TaskFilterNode, opts?: TaskFilterQueryOptions): TaskState[] {
+    const compiled = compileTaskFilter(filter);
+    const limit = Math.min(Math.max(Math.trunc(opts?.limit ?? 100), 0), 500);
+    const offset = Math.max(Math.trunc(opts?.offset ?? 0), 0);
+    const rows = this.queryAll(
+      `SELECT t.*
+       FROM tasks t
+       JOIN workflows w ON w.id = t.workflow_id
+       WHERE w.deleted_at IS NULL AND (${compiled.where})
+       ORDER BY t.created_at ASC
+       LIMIT ? OFFSET ?`,
+      [...compiled.params, limit, offset],
+    );
+    return rows.map((row) => this.taskAttemptRepo.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
   }
 
   getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {

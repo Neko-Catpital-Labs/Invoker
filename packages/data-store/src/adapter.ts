@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions, TaskFilterNode } from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
@@ -225,6 +225,11 @@ export interface WorkflowTaskSnapshot {
   tasksByWorkflowId: Map<string, TaskState[]>;
 }
 
+export interface TaskFilterQueryOptions {
+  limit?: number;
+  offset?: number;
+}
+
 export interface LaunchDispatchInvalidationRow {
   id: number;
   taskId: string;
@@ -428,6 +433,7 @@ export interface PersistenceAdapter {
     opts?: { skipWorkflowStatusSync?: boolean },
   ): void;
   loadTasks(workflowId: string): TaskState[];
+  queryTasksByFilter(filter: TaskFilterNode, opts?: TaskFilterQueryOptions): TaskState[];
   loadWorkflowTaskSnapshot?(options?: WorkflowReadOptions): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
   loadTask(taskId: string): TaskState | undefined;
