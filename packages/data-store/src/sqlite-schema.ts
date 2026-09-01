@@ -48,6 +48,7 @@ export const SCHEMA_DDL = `
         protocol_error_message TEXT,
         input_prompt TEXT,
         external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        freshness TEXT CHECK (freshness IS NULL OR json_valid(freshness)),
 
         -- Context
         summary TEXT,
@@ -646,6 +647,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_prompt TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_context TEXT',
+  'ALTER TABLE tasks ADD COLUMN freshness TEXT CHECK (freshness IS NULL OR json_valid(freshness))',
   'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
