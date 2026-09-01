@@ -18,7 +18,10 @@ node skills/verify/control-invoker.mjs catalog --check --json
 node skills/verify/control-invoker.mjs catalog --list
 ```
 
-`--check` is the CI / `pnpm test` gate (via `scripts/test-verify-skill.sh`).
+`--check` is the cheap, hermetic consistency gate and the CI / `pnpm test`
+gate (via `scripts/test-verify-skill.sh`). See
+[the efficacy rubric](../verify/references/efficacy-rubric.md) for the full
+evidence ladder and CI matrix.
 
 ## When to run
 
@@ -26,6 +29,10 @@ node skills/verify/control-invoker.mjs catalog --list
 - After adding a Playwright e2e under `packages/app/e2e/`
 - Daily / whenever verify prove commands feel stale
 - When `catalog --check` fails
+
+Periodic maintain is the map-only repair/reindex loop: update entries under
+`skills/verify/references/features/`, keep the catalog consistent, and never
+edit `packages/` to satisfy the map.
 
 ## Flow
 
