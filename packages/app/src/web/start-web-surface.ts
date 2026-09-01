@@ -13,7 +13,11 @@
  */
 
 import type {
+  BundledSkillsInstallMode,
   BundledSkillsStatus,
+  CliInstallResult,
+  InvokerSetupRequest,
+  InvokerSetupResult,
   Logger,
 } from '@invoker/contracts';
 import { Channels, type MessageBus } from '@invoker/transport';
@@ -52,6 +56,7 @@ import {
   type TerminalSessionPersistenceHandle,
 } from '../terminal-session-ipc.js';
 import type { InAppPlanningChatSessions } from '../in-app-planner.js';
+import type { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 import { WorkflowRollupProjection } from '../workflow-rollup-projection.js';
 import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot } from '../worker-control.js';
 import { buildWebInvokerDispatch } from './web-invoker-dispatch.js';
@@ -98,8 +103,11 @@ export interface StartHeadlessWebSurfaceDeps {
   /** Main process dist directory (`__dirname` of main.js) used to locate the built UI. */
   appRootDir: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
-  /** Routes planning-chat channels to the owner's shared GUI-mutation handlers. */
-  guiMutations?: (channel: string, args: unknown[]) => Promise<unknown>;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  updateInvokerCli?: () => CliInstallResult;
+  runInvokerCliSetup?: (request: InvokerSetupRequest) => Promise<InvokerSetupResult>;
+  /** Shared owner capability provider for transport-neutral HTTP dispatch. */
+  ownerCapabilities?: OwnerCapabilityRegistry;
   /** Enables planning terminals over the web when present (with repoRoot + executorRegistry + taskHandles). */
   planningChatSessions?: InAppPlanningChatSessions;
 }
@@ -220,6 +228,9 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     deleteWorkflow: deps.deleteWorkflow,
     detachWorkflow: deps.detachWorkflow,
     getBundledSkillsStatus: deps.getBundledSkillsStatus,
+    installBundledSkills: deps.installBundledSkills,
+    updateInvokerCli: deps.updateInvokerCli,
+    runInvokerCliSetup: deps.runInvokerCliSetup,
     getWorkers: () => createLocalWorkerStatusSnapshot({
       registry: registerExternalWorkersFromConfig(
         deps.config.externalWorkers,
@@ -229,7 +240,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(deps.config),
     }),
     taskTerminals,
-    guiMutations: deps.guiMutations,
+    ownerCapabilities: deps.ownerCapabilities,
     planningTerminals,
     logger: deps.logger,
   });
@@ -295,7 +306,10 @@ export interface HeadlessWebSurfaceHost {
   taskHandles?: TaskHandleMap;
   appRootDir?: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
-  guiMutations?: (channel: string, args: unknown[]) => Promise<unknown>;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  updateInvokerCli?: () => CliInstallResult;
+  runInvokerCliSetup?: (request: InvokerSetupRequest) => Promise<InvokerSetupResult>;
+  ownerCapabilities?: OwnerCapabilityRegistry;
   planningChatSessions?: InAppPlanningChatSessions;
 }
 
@@ -328,7 +342,10 @@ export function startWebSurfaceForHeadless(
     taskHandles: host.taskHandles,
     appRootDir: host.appRootDir ?? __dirname,
     getBundledSkillsStatus: host.getBundledSkillsStatus,
-    guiMutations: host.guiMutations,
+    installBundledSkills: host.installBundledSkills,
+    updateInvokerCli: host.updateInvokerCli,
+    runInvokerCliSetup: host.runInvokerCliSetup,
+    ownerCapabilities: host.ownerCapabilities,
     planningChatSessions: host.planningChatSessions,
   });
 }

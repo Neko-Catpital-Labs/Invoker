@@ -59,6 +59,7 @@ import {
 } from '@invoker/contracts';
 import type {
   BundledSkillsInstallMode,
+  InvokerSetupRequest,
   InAppPlanRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
@@ -196,6 +197,7 @@ import {
   type CliInstallerContext,
 } from './cli-installer.js';
 import { resolveBundledCliPath } from './cli-helper.js';
+import { runInvokerCliSetup } from './invoker-cli-setup.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import {
@@ -2251,7 +2253,15 @@ function startHeadlessMode(): void {
               executorRegistry,
               taskHandles: standaloneTaskHandles,
               appRootDir: __dirname,
-              guiMutations: (channel, args) => executeStandaloneGuiMutation({ channel, args } as GuiMutationPayload),
+              getBundledSkillsStatus,
+              installBundledSkills: installPackagedSkills,
+              updateInvokerCli: () => updateInvokerCli(buildCliInstallerContext()),
+              runInvokerCliSetup: (request: InvokerSetupRequest) => runInvokerCliSetup(request, {
+                cliPath: resolveSetupCliPath(),
+                updateCli: () => updateInvokerCli(buildCliInstallerContext()),
+                installBundledSkills: installPackagedSkills,
+              }),
+              ownerCapabilities: standaloneOwnerCapabilities,
               planningChatSessions,
             },
             apiServerDeps,
@@ -2911,18 +2921,20 @@ startMainProcessBootstrap({
           detachWorkflow: (workflowId, upstreamWorkflowId) =>
             requireGuiMutationTaskActions().performDetachWorkflow(workflowId, upstreamWorkflowId),
           getBundledSkillsStatus,
+          installBundledSkills: installPackagedSkills,
+          updateInvokerCli: () => updateInvokerCli(buildCliInstallerContext()),
+          runInvokerCliSetup: (request) => runInvokerCliSetup(request, {
+            cliPath: resolveSetupCliPath(),
+            updateCli: () => updateInvokerCli(buildCliInstallerContext()),
+            installBundledSkills: installPackagedSkills,
+          }),
           getWorkers: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
             registry: createRegisteredWorkerRegistry(),
             persistence,
             autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           }),
           taskTerminals,
-          guiMutations: async (channel, args) => {
-            if (!ownerCapabilities.has(channel)) {
-              throw new Error(`No GUI mutation handler registered for ${channel}`);
-            }
-            return ownerCapabilities.invoke(channel, args);
-          },
+          ownerCapabilities,
           planningTerminals: webPlanningTerminals,
           getSystemDiagnostics: () => collectSystemDiagnostics({
             appVersion: app.getVersion(),
