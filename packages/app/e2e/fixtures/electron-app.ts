@@ -19,7 +19,7 @@ import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 import { killOwnedProcessGroup } from './process-group.js';
-import { cleanupStandaloneOwnersForTestDir } from './headless-client.js';
+import { cleanupStandaloneOwnersForTestDir, e2eDevelopmentProfileEnv } from './headless-client.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -231,6 +231,7 @@ exit 64
       ],
       env: {
         ...process.env,
+        ...e2eDevelopmentProfileEnv(testDir, electronUserDataDir, configPath, ipcSocketPath),
         NODE_ENV: 'test',
         INVOKER_TEST_WORKFLOW_IDS: '1',
         INVOKER_DISABLE_SLACK: '1',
