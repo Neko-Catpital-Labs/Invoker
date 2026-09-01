@@ -337,7 +337,7 @@ export interface InvokerConfig {
   /**
    * Preferred execution agent for resolve-conflict (git merge conflicts).
    * When unset, resolve-conflict uses the entry-point path default
-   * (explicit CLI/UI agent, then defaultExecutionAgent / autoFixAgent).
+   * (explicit CLI/UI agent, then defaultExecutionHarness / autoFixAgent).
    */
   conflictResolutionAgent?: string;
   /**
@@ -346,7 +346,7 @@ export interface InvokerConfig {
    * so conflict resolution can use a cheaper model than normal task work.
    */
   conflictResolutionModel?: string;
-  /** Default execution harness for prompt-backed tasks when the task does not override it. */
+  defaultExecutionHarness?: string;
   defaultExecutionAgent?: string;
   /** Default execution model for prompt-backed tasks when the task does not override it. */
   defaultExecutionModel?: string;
@@ -703,7 +703,7 @@ export function loadConfig(): InvokerConfig {
   return materializeResolvedConfig(validateInvokerConfig(config));
 }
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
-  const configured = config.defaultExecutionAgent?.trim();
+  const configured = (config.defaultExecutionHarness ?? config.defaultExecutionAgent)?.trim();
   return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
 }
 
@@ -760,7 +760,7 @@ export interface DefaultTaskExecutionSettings {
 }
 
 export function resolveDefaultTaskExecutionSettings(config: InvokerConfig): DefaultTaskExecutionSettings {
-  const configuredAgent = config.defaultExecutionAgent?.trim();
+  const configuredAgent = (config.defaultExecutionHarness ?? config.defaultExecutionAgent)?.trim();
   const configuredModel = config.defaultExecutionModel?.trim();
   return {
     executionAgent: configuredAgent && configuredAgent.length > 0 ? configuredAgent : BUILT_IN_DEFAULT_EXECUTION_AGENT,

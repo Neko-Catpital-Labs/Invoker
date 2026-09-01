@@ -341,9 +341,9 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
     throw new Error('defaultExecution.executionModel requires defaultExecution.executionAgent');
   }
 
-  const flatExecutionAgent = config.defaultExecutionAgent;
-  const hasFlatExecutionAgent = typeof flatExecutionAgent === 'string' && flatExecutionAgent.trim().length > 0;
-  if (config.defaultExecutionModel !== undefined && !hasFlatExecutionAgent) {
+  const flatExecutionHarness = config.defaultExecutionHarness ?? config.defaultExecutionAgent;
+  const hasFlatExecutionHarness = typeof flatExecutionHarness === 'string' && flatExecutionHarness.trim().length > 0;
+  if (config.defaultExecutionModel !== undefined && !hasFlatExecutionHarness) {
     throw new Error('defaultExecutionModel requires defaultExecutionAgent');
   }
 
@@ -359,7 +359,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   }
 
   validateConfiguredModel(config.defaultExecution?.executionAgent, config.defaultExecution?.executionModel);
-  validateConfiguredModel(config.defaultExecutionAgent, config.defaultExecutionModel);
+  validateConfiguredModel(flatExecutionHarness, config.defaultExecutionModel);
   validatePrMaintenanceTargetRepos(config);
   validateE2eAutoFixTargetRepos(config);
   validateCrossRepoResearchConfig(config);
