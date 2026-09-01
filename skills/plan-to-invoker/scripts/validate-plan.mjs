@@ -704,6 +704,15 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    errors.push({
+      errorType: 'invalid_field_type',
+      field: 'poolId',
+      message: 'Plan poolId must be a non-empty string when provided',
+      value: raw.poolId,
+    });
+  }
+
   for (const field of ['autoFix', 'autoFixRetries']) {
     if (Object.prototype.hasOwnProperty.call(raw, field)) {
       errors.push({
@@ -927,6 +936,15 @@ function validatePlan(yamlContent, repoRoot) {
         taskId,
         message: `Task "${taskId}" poolId must be a string when provided`,
         value: task.poolId,
+      });
+    }
+
+    if (task.dockerImage && (raw.poolId !== undefined || task.poolId !== undefined)) {
+      errors.push({
+        errorType: 'conflicting_fields',
+        field: 'dockerImage|poolId',
+        taskId,
+        message: `Task "${taskId}" sets "dockerImage" but its plan/task also sets "poolId" — Docker tasks do not run in execution pools.`,
       });
     }
 
