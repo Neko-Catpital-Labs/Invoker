@@ -1,6 +1,6 @@
 {
   "name": "@neko-catpital-labs/invoker-watcher",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "Invoker standalone owner-restart watcher installer",
   "type": "module",
   "repository": {
