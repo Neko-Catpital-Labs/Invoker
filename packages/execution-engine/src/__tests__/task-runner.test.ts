@@ -8,7 +8,7 @@ import { assertCompletedDependencyHasBranch } from '../task-runner-prepare.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import { WorktreeExecutor } from '../worktree-executor.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
@@ -25,15 +25,18 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
+  const inputConfig = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+    ? { ...overrides.config, poolId: 'ssh-fixture' }
+    : overrides.config;
   return {
     id: overrides.id ?? 'test',
     description: overrides.description ?? 'Test task',
     status: overrides.status ?? 'pending',
     dependencies: overrides.dependencies ?? [],
     createdAt: overrides.createdAt ?? new Date(),
-    config: { ...overrides.config },
+    config: resolveTaskConfig(inputConfig ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskRunner {
@@ -1211,6 +1214,9 @@ describe('TaskRunner', () => {
         persistence: { updateTask: vi.fn() } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
         callbacks: { onComplete },
       });
 
@@ -1390,17 +1396,20 @@ describe('TaskRunner', () => {
         persistence: { updateTask } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       const task = makeTask({
         id: 'failing-start',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
       });
       await executor.executeTask(task);
 
       expect(updateTask).toHaveBeenCalledWith('failing-start', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '~/.invoker/worktrees/repo/task-1',
           branch: 'experiment/task-1-abc12345',
@@ -1453,13 +1462,16 @@ describe('TaskRunner', () => {
         executorRegistry: registry as any,
         cwd: '/tmp',
         callbacks: { onLaunchFailed },
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       // Task was launched with attempt-1 but orchestrator now shows attempt-2
       const task = makeTask({
         id: 'stale-1',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { selectedAttemptId: 'attempt-1', generation: 0 },
       });
       await runner.executeTask(task);
@@ -1515,7 +1527,7 @@ describe('TaskRunner', () => {
       const task = makeTask({
         id: 'stale-gen',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { generation: 1 },
       });
       await runner.executeTask(task);
@@ -1565,19 +1577,22 @@ describe('TaskRunner', () => {
         executorRegistry: registry as any,
         cwd: '/tmp',
         callbacks: { onLaunchFailed },
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       const task = makeTask({
         id: 'current-1',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { selectedAttemptId: 'attempt-1', generation: 0 },
       });
       await runner.executeTask(task);
 
       // Metadata SHOULD be persisted when lineage is current
       expect(updateTask).toHaveBeenCalledWith('current-1', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '/tmp/current-worktree',
           branch: 'experiment/current-branch',
@@ -1636,7 +1651,7 @@ describe('TaskRunner', () => {
       const task = makeTask({
         id: 'inner-stale',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { selectedAttemptId: 'attempt-old', generation: 0 },
       });
       await runner.executeTask(task);
@@ -3150,7 +3165,7 @@ describe('TaskRunner', () => {
 
       // Default mergeMode is 'manual', so setTaskReviewReady is called with metadata
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ runnerKind: 'worktree' }),
+        config: expect.objectContaining({ runnerKind: 'merge' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
       }), expect.objectContaining({ generation: 0 }));
     });
@@ -3554,7 +3569,7 @@ describe('TaskRunner', () => {
 
       // Should call setTaskReviewReady with metadata instead of handleWorkerResponse
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ runnerKind: 'worktree' }),
+        config: expect.objectContaining({ runnerKind: 'merge' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
       }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -3741,7 +3756,7 @@ describe('TaskRunner', () => {
 
       // Should set task review-ready with PR metadata (not handleWorkerResponse)
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ runnerKind: 'worktree' }),
+        config: expect.objectContaining({ runnerKind: 'merge' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
           reviewUrl: 'https://github.com/owner/repo/pull/42',
@@ -4041,7 +4056,7 @@ console.log(JSON.stringify(out));
 
       // No featureBranch set → gateWorkspacePath is undefined
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ runnerKind: 'worktree' }),
+        config: expect.objectContaining({ runnerKind: 'merge' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
       }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -4168,7 +4183,7 @@ console.log(JSON.stringify(out));
 
       // Should pass PR metadata through setTaskReviewReady
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ runnerKind: 'worktree' }),
+        config: expect.objectContaining({ runnerKind: 'merge' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
           reviewUrl: 'https://github.com/owner/repo/pull/55',
@@ -4590,7 +4605,7 @@ console.log(JSON.stringify(out));
 
       // No featureBranch set → gateWorkspacePath is undefined
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ runnerKind: 'worktree' }),
+        config: expect.objectContaining({ runnerKind: 'merge' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
       }), expect.objectContaining({ generation: 0 }));
     });

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter, isLaunchDispatchCandidateStale, runWithFreedStatement, assertOwnerCapabilityForWritableOpen } from '../sqlite-adapter.js';
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
-import { createAttempt, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, createAttempt, resolveTaskConfig, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
@@ -27,16 +27,17 @@ describe('SQLiteAdapter', () => {
   };
 
   function makeTask(id: string, overrides: Partial<TaskState> = {}): TaskState {
+    const { config, ...taskOverrides } = overrides;
     return {
       id,
       description: `Task ${id}`,
       status: 'pending',
       dependencies: [],
       createdAt: new Date(),
-      config: {},
+      config: resolveTaskConfig(config ?? {}),
       execution: {},
       taskStateVersion: 1,
-      ...overrides,
+      ...taskOverrides,
     };
   }
 
@@ -834,7 +835,7 @@ describe('SQLiteAdapter', () => {
     it('persists poolMemberId through updateTask and getPoolMemberId', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('ssh-task', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolId: 'ssh-pool' },
       }));
 
       adapter.updateTask('ssh-task', {
@@ -980,6 +981,72 @@ describe('SQLiteAdapter', () => {
 
     it('does not create auto_fix_attempts on fresh task tables', () => {
       expect(tableColumns(adapter, 'tasks')).not.toContain('auto_fix_attempts');
+    });
+
+    it('rejects direct SQL writes that violate resolved executor routing', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const db = (adapter as any).db;
+
+      expect(() => db.run(
+        `INSERT INTO tasks (id, workflow_id, description, runner_kind, pool_id)
+         VALUES ('bad-pooled-insert', 'wf-1', 'missing pool', 'worktree', NULL)`,
+      )).toThrow('tasks executor routing invariant violated');
+      expect(() => db.run(
+        `INSERT INTO tasks (id, workflow_id, description, runner_kind, pool_id)
+         VALUES ('bad-docker-insert', 'wf-1', 'docker with pool', 'docker', 'local-worktree')`,
+      )).toThrow('tasks executor routing invariant violated');
+
+      adapter.saveTask('wf-1', makeTask('valid-task'));
+      expect(() => db.run(
+        `UPDATE tasks SET pool_id = NULL WHERE id = 'valid-task'`,
+      )).toThrow('tasks executor routing invariant violated');
+    });
+
+    it('backfills compatible legacy ordinary rows without changing lifecycle data', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-pool-invariant-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const legacy = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        legacy.saveWorkflow(testWorkflow);
+        (legacy as any).db.run('DROP TRIGGER trg_tasks_executor_routing_insert');
+        (legacy as any).db.run('DROP TRIGGER trg_tasks_executor_routing_update');
+        (legacy as any).db.run(
+          `INSERT INTO tasks (
+             id, workflow_id, description, status, blocked_by, dependencies,
+             command, runner_kind, pool_id, started_at, last_heartbeat_at,
+             execution_generation, task_state_version
+           ) VALUES (
+             'legacy-task', 'wf-1', 'Legacy ordinary task', 'running', 'upstream', '["dep-a"]',
+             'echo legacy', 'worktree', NULL, '2026-08-01T01:02:03.000Z',
+             '2026-08-01T01:02:04.000Z', 7, 11
+           )`,
+        );
+        (legacy as any).dirty = true;
+        legacy.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const task = reopened.loadTask('legacy-task');
+        expect(task).toMatchObject({
+          status: 'running',
+          dependencies: ['dep-a'],
+          config: {
+            runnerKind: 'worktree',
+            poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+            command: 'echo legacy',
+          },
+          execution: {
+            blockedBy: 'upstream',
+            generation: 7,
+            startedAt: new Date('2026-08-01T01:02:03.000Z'),
+            lastHeartbeatAt: new Date('2026-08-01T01:02:04.000Z'),
+          },
+          taskStateVersion: 11,
+        });
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('drops legacy auto_fix_attempts columns when reopening writable databases', async () => {
@@ -3382,14 +3449,17 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('saveTask null defaults', () => {
-    it('stores SQL NULL (not string literals) for missing optional fields', () => {
+    it('stores the resolved built-in pool while leaving runtime fields SQL NULL', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
       const task = loaded[0];
 
-      expect(task.config.runnerKind).toBeUndefined();
+      expect(task.config).toMatchObject({
+        runnerKind: 'worktree',
+        poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+      });
       expect(task.execution.agentSessionId).toBeUndefined();
       expect(task.execution.workspacePath).toBeUndefined();
       expect(task.execution.containerId).toBeUndefined();
@@ -4836,7 +4906,7 @@ describe('SQLiteAdapter', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('ssh-old', {
         status: 'completed',
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolId: 'ssh-pool' },
         execution: { workspacePath: '~/.invoker/worktrees/ssh-old', branch: 'experiment/ssh-old' },
       }));
       adapter.logEvent('ssh-old', 'task.executor.selected', { runnerKind: 'ssh', poolMemberId: 'remote-old' });
@@ -4852,9 +4922,9 @@ describe('SQLiteAdapter', () => {
 
     it('does not repair missing SSH pool member ids from malformed or empty event payloads', () => {
       adapter.saveWorkflow(testWorkflow);
-      adapter.saveTask('wf-1', makeTask('ssh-empty', { config: { runnerKind: 'ssh' } }));
+      adapter.saveTask('wf-1', makeTask('ssh-empty', { config: { runnerKind: 'ssh', poolId: 'ssh-pool' } }));
       adapter.logEvent('ssh-empty', 'task.executor.selected', { runnerKind: 'ssh', poolMemberId: '  ' });
-      adapter.saveTask('wf-1', makeTask('ssh-bad', { config: { runnerKind: 'ssh' } }));
+      adapter.saveTask('wf-1', makeTask('ssh-bad', { config: { runnerKind: 'ssh', poolId: 'ssh-pool' } }));
       (adapter as any).db.run(
         `INSERT INTO events (task_id, event_type, payload) VALUES ('ssh-bad', 'task.executor.selected', '{')`,
       );
