@@ -422,6 +422,25 @@ describe('Orchestrator', () => {
   });
 
   describe('review_ready worker responses', () => {
+    it('transitions a deterministic stale response to stale status', () => {
+      orchestrator.loadPlan({
+        name: 'Stale response workflow',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = `${workflowId}/task-a`;
+      persistence.updateTask(taskId, { status: 'running', execution: { generation: 0 } });
+
+      orchestrator.handleWorkerResponse(makeResponse({
+        actionId: taskId,
+        status: 'stale',
+        outputs: { exitCode: 1, error: 'watch path changed', summary: 'replan required' },
+      }));
+
+      expect(orchestrator.getTask(taskId)!.status).toBe('stale');
+      expect(persistence.events.some(event => event.taskId === taskId && event.eventType === 'task.stale')).toBe(true);
+    });
+
     it('transition a running merge gate through handleWorkerResponse', () => {
       orchestrator.loadPlan({
         name: 'Review ready workflow',
