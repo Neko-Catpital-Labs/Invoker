@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ExternalGatePolicy, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ExternalGatePolicy, TaskStatus, TaskHeartbeatSource, TaskFreshnessSpec } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass, computeWorkflowRollup } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -459,6 +459,7 @@ export interface PlanDefinition {
     executionAgent?: string;
     executionModel?: string;
     maxTurns?: number;
+    freshness?: TaskFreshnessSpec;
   }>;
 }
 
@@ -1544,6 +1545,7 @@ export class Orchestrator {
         executionAgent: taskDef.executionAgent,
         executionModel: taskDef.executionModel,
         maxTurns: taskDef.maxTurns,
+        ...(taskDef.freshness !== undefined ? { freshness: taskDef.freshness } : {}),
         poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
