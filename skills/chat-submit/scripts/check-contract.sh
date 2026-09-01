@@ -32,5 +32,10 @@ must_contain '## Local vs remote owner' 'chat-submit must document local vs remo
 must_contain 'invoker-cli mcp' 'chat-submit must default to local invoker-cli mcp'
 must_contain 'references/local-vs-remote-mcp.md' 'chat-submit must point at the remote MCP reference'
 must_contain 'Never invent HTTP/SSE MCP' 'chat-submit must forbid inventing HTTP/SSE MCP'
+must_contain 'Implementation plans default to `onFinish: pull_request`' 'chat-submit must default approved implementation work to GitHub publication'
+must_contain '`pull_request` includes GitHub branch/PR/stack publication' 'chat-submit must bind publication authority to reviewed onFinish'
+if grep -qF -- 'Do **not** publish PRs unless the original ask included that.' "$SKILL"; then
+  fail 'chat-submit must not require a redundant PR-publication request after reviewed plan approval'
+fi
 
 echo "OK: chat-submit skill contract"
