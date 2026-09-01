@@ -19,9 +19,7 @@ const __dirname = dirname(__filename);
 async function importYaml(scriptDir) {
   try {
     return await import('yaml');
-  } catch {
-    // Fall through.
-  }
+  } catch {}
   const candidates = [
     process.env.INVOKER_REPO_ROOT,
     resolve(scriptDir, '../../..'),
@@ -47,6 +45,8 @@ const { parse: parseYaml } = await importYaml(__dirname);
 const PLACEHOLDER_RE = /\bREPLACE_ME\b|\bTODO\b|\bTBD\b|\bFIXME\b/i;
 const MANUAL_VERIFY_RE = /\bmanually\s+check\b|\bcheck\s+manually\b|\bby\s+hand\b/i;
 const GIT_URL_RE = /^(?:git@|https?:\/\/|ssh:\/\/).+\..+/i;
+const GREEN_BASELINE_RE = /\b(?:existing\s+)?(?:green\s+)?(?:baseline|suite|tests?|checks?)\b[^.\n]*(?:\bis\b|\bare\b|\bremains?\b)[^.\n]*\bgreen\b/i;
+const RECEIPT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const HEADING_LABELS = [
   'Goal',
@@ -133,6 +133,52 @@ function extractVerifyCandidates(plan, tasks) {
   return candidates;
 }
 
+function planTextWithoutUnverifiedClaims(plan, tasks) {
+  const parts = [typeof plan.description === 'string' ? plan.description : ''];
+  for (const { task } of tasks) {
+    if (!isRecord(task)) continue;
+    parts.push(task.description, task.prompt);
+  }
+  return parts
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.split(/\r?\n/).filter((line) => !new RegExp('\\bUNVERIFIED:\\s*', 'i').test(line)).join('\n'))
+    .join('\n');
+}
+
+function receiptCandidates(plan) {
+  if (!Array.isArray(plan.verificationEvidence)) return [];
+  return plan.verificationEvidence
+    .map((record) => {
+      if (!isRecord(record)) return null;
+      return isRecord(record.receipt) ? record.receipt : record;
+    })
+    .filter(Boolean);
+}
+
+function hasFreshGreenBaselineReceipt(plan) {
+  const targetCommit = typeof plan.baseCommitSha === 'string'
+    ? plan.baseCommitSha.trim().toLowerCase()
+    : typeof plan.commitSha === 'string' ? plan.commitSha.trim().toLowerCase() : '';
+  if (!targetCommit) return false;
+  const now = Date.now();
+  return receiptCandidates(plan).some((receipt) => {
+    if (receipt.kind !== 'deterministic_command' || receipt.status !== 'passed') return false;
+    if (typeof receipt.commitSha !== 'string' || receipt.commitSha.trim().toLowerCase() !== targetCommit) return false;
+    if (typeof receipt.recordedAt !== 'string') return false;
+    const recordedAt = Date.parse(receipt.recordedAt);
+    if (!Number.isFinite(recordedAt) || now - recordedAt < 0 || now - recordedAt > RECEIPT_MAX_AGE_MS) return false;
+    return typeof receipt.command === 'string' && receipt.command.trim()
+      && receipt.exitCode === 0
+      && typeof receipt.output === 'string' && receipt.output.trim();
+  });
+}
+
+function hasUnsupportedGreenBaselineClaim(plan, tasks) {
+  return planTextWithoutUnverifiedClaims(plan, tasks)
+    .split(/[.!?\n]+/)
+    .some((sentence) => GREEN_BASELINE_RE.test(sentence));
+}
+
 function checkPlan(plan) {
   const gaps = [];
 
@@ -156,6 +202,13 @@ function checkPlan(plan) {
   }
 
   const tasks = collectTasks(plan);
+
+  if (hasUnsupportedGreenBaselineClaim(plan, tasks) && !hasFreshGreenBaselineReceipt(plan)) {
+    gaps.push({
+      field: 'baselineEvidence',
+      message: 'Present-tense green-baseline claims require a fresh, commit-bound passed deterministic_command receipt with non-empty output, or must be prefixed with UNVERIFIED:.',
+    });
+  }
 
   for (const { task } of tasks) {
     if (!isRecord(task)) continue;
