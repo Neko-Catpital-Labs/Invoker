@@ -179,6 +179,22 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(/mergeMode: "no_op"/);
   });
 
+  it('rejects the incident plan that pairs onFinish none with external review', () => {
+    const yaml = `
+name: Hidden Publication Incident
+repoUrl: git@github.com:test/repo.git
+baseBranch: master
+onFinish: none
+mergeMode: external_review
+tasks:
+  - id: reflect
+    description: Apply one accepted reflection item
+    command: echo "reflect"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/external_review.*onFinish: none/);
+  });
+
   it('rejects a scratch plan task that sets dockerImage', () => {
     const yaml = `
 name: Bad Scratch Docker Plan
