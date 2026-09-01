@@ -117,6 +117,18 @@ tasks:
     execFileSyncSpy.mockRestore();
   });
 
+  it('allows a remote clone probe the same 30-second network budget as remote doctor', () => {
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockReturnValue(Buffer.from(''));
+
+    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).not.toThrow();
+    expect(execFileSyncSpy).toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', '--exit-code', '--', 'https://github.com/example/repo.git', 'HEAD'],
+      expect.objectContaining({ timeout: 30_000 }),
+    );
+    execFileSyncSpy.mockRestore();
+  });
+
   it('surfaces the real git error after all retry attempts are exhausted', () => {
     const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
       const err = new Error('git ls-remote failed');
