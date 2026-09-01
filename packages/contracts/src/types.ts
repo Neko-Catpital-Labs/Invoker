@@ -114,6 +114,7 @@ export type ResponseStatus =
   | 'review_ready'
   | 'failed'
   | 'needs_input'
+  | 'stale'
   | 'spawn_experiments'
   | 'select_experiment';
 
