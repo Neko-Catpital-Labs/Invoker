@@ -131,8 +131,31 @@ describe('requeue worker tick', () => {
     expect(parsed.prompt).toMatch(/stalled/i);
   });
 
+  it('requeues a transient SSH transport failure under budget then escalates at budget', async () => {
+    const h = harness(makeTask({
+      execution: {
+        failureClass: 'ssh-transport-transient',
+        error: 'SSH transport failed (exit 255): connection timed out.',
+        generation: 2,
+      },
+    }), { budget: 1, backoffMs: 120_000 });
+
+    await h.tick(POLL_CTX);
+    expect(h.submit.mock.calls.filter((c) => c[2] === REQUEUE_COMMAND_CHANNEL)).toHaveLength(1);
+
+    h.setNow(120_000);
+    await h.tick(POLL_CTX);
+    expect(h.submit.mock.calls.filter((c) => c[2] === REQUEUE_ESCALATE_CHANNEL)).toHaveLength(1);
+  });
+
   it('ignores a failed task that is not a liveness stall', async () => {
     const h = harness(makeTask({ execution: { failureClass: undefined, error: 'real bug', generation: 2 } }));
+    await h.tick(POLL_CTX);
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
+  it('ignores a failed SSH disk-full task', async () => {
+    const h = harness(makeTask({ execution: { failureClass: 'ssh-disk-full', error: 'No space left on device', generation: 2 } }));
     await h.tick(POLL_CTX);
     expect(h.submit).not.toHaveBeenCalled();
   });
