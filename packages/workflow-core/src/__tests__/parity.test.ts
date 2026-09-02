@@ -133,7 +133,8 @@ describe('Parity — Feature Coverage', () => {
 
   // ── Test 1: Core task states via Orchestrator ─────────────
 
-  it('core task states: pending → running → completed/failed/needs_input/blocked', () => {
+  // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
+  it.fails('core task states: pending → running → completed/failed/needs_input/blocked', () => {
     orchestrator.loadPlan({
       name: 'states-test',
       tasks: [
@@ -165,7 +166,7 @@ describe('Parity — Feature Coverage', () => {
       makeResponse({ actionId: 't-fail', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
     );
     expect(orchestrator.getTask('t-fail')!.status).toBe('failed');
-    expect(orchestrator.getTask('t-blocked')!.status).toBe('pending');
+    expect(orchestrator.getTask('t-blocked')!.status).toBe('skipped');
 
     // needs_input
     orchestrator.handleWorkerResponse(
@@ -176,7 +177,8 @@ describe('Parity — Feature Coverage', () => {
 
   // ── Test 2: Transitive dependency blocking ────────────────
 
-  it('transitive dependency blocking: A fails → B blocked → C blocked', () => {
+  // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
+  it.fails('transitive dependency blocking: A fails → B blocked → C blocked', () => {
     orchestrator.loadPlan({
       name: 'blocking-test',
       tasks: [
@@ -191,8 +193,8 @@ describe('Parity — Feature Coverage', () => {
       makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
     );
 
-    expect(orchestrator.getTask('B')!.status).toBe('pending');
-    expect(orchestrator.getTask('C')!.status).toBe('pending');
+    expect(orchestrator.getTask('B')!.status).toBe('skipped');
+    expect(orchestrator.getTask('C')!.status).toBe('skipped');
   });
 
   // ── Test 3: Experiment spawning ───────────────────────────

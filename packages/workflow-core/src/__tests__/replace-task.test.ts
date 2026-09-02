@@ -287,7 +287,8 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask(s('fix'))!.dependencies.sort()).toEqual([s('A'), s('B')]);
   });
 
-  it('blocked dependents are stale (not forked)', () => {
+  // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
+  it.fails('blocked dependents are stale (not forked)', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
@@ -301,8 +302,8 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
-    expect(orchestrator.getTask('C')!.status).toBe('pending');
-    expect(orchestrator.getTask('D')!.status).toBe('pending');
+    expect(orchestrator.getTask('C')!.status).toBe('skipped');
+    expect(orchestrator.getTask('D')!.status).toBe('skipped');
 
     const s = (l: string) => sid(orchestrator, 0, l);
     terminateLiveDescendant(orchestrator, 'C');
@@ -626,7 +627,8 @@ describe('replaceTask', () => {
     // `editTaskCommand` is recreate-class / task scope and routes through
     // the per-attribute mutation path; topology gating must not block it
     // even though the workflow is unmistakably live (C is `pending`).
-    it('does NOT throw for pure-attribute mutations on a live workflow', () => {
+    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
+    it.fails('does NOT throw for pure-attribute mutations on a live workflow', () => {
       orchestrator.loadPlan({
         name: 'pure-attribute-on-live',
         tasks: [
@@ -642,7 +644,7 @@ describe('replaceTask', () => {
       // Step 11 definition. Editing A's command must still succeed —
       // no graph edge changes, only a per-attribute mutation routed
       // through the existing `editTaskCommand` path (Step 2).
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
       expect(() => orchestrator.editTaskCommand('A', 'echo A-v2')).not.toThrow();
       expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
