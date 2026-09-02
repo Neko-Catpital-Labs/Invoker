@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 
 function makeTask(overrides: {
   id?: string;
@@ -29,9 +29,9 @@ function makeTask(overrides: {
     status: overrides.status ?? 'pending',
     dependencies: [],
     createdAt: new Date(),
-    config: { ...overrides.config },
+    config: resolveTaskConfig(overrides.config ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 function makeRunner() {
