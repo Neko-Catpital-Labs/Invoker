@@ -241,6 +241,7 @@ branch refs/heads/${branch}
       config: {
         command: 'pnpm test',
         runnerKind: 'ssh' as const,
+        poolId: 'remote-fix-pool',
         poolMemberId: 'remote-1',
       },
     };
@@ -260,6 +261,9 @@ branch refs/heads/${branch}
           remoteInvokerHome: '/home/invoker/.invoker',
           managedWorkspaces: true,
         },
+      }),
+      executionPoolsProvider: () => ({
+        'remote-fix-pool': { members: [{ type: 'ssh' as const, id: 'remote-1' }] },
       }),
     });
     const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
