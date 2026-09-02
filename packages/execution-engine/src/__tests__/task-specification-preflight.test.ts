@@ -28,6 +28,19 @@ Preserve guarded-behavior: selection-camera-inert.
 Modify the existing \`packages/ui/src/lib/graph-camera.ts\`; do not create it.
 `;
 
+async function inspectWithoutTypedFreshness() {
+  return inspectTaskFreshness({
+    cwd: '/repo',
+    snapshotCommit: 'current-base',
+    freshness: undefined,
+    runGit: async args => {
+      if (args[0] === 'rev-parse') return 'current-base\n';
+      throw new Error(`unexpected git call: ${args.join(' ')}`);
+    },
+    pathExists: async () => false,
+  });
+}
+
 describe('stale task specification preflight', () => {
   it.each([
     'Create packages/ui/src/App.tsx; verify packages/ui/src/App.tsx already exists.',
@@ -35,16 +48,8 @@ describe('stale task specification preflight', () => {
     'Do not create packages/ui/src/App.tsx — modify packages/ui/src/App.tsx.',
     'Already exists: `packages/ui/src/App.tsx`; create packages/ui/src/Other.tsx.',
   ])('does not infer freshness from prose when typed metadata is missing: %s', async (taskText) => {
-    const decision = await inspectTaskFreshness({
-      cwd: '/repo',
-      snapshotCommit: 'current-base',
-      freshness: undefined,
-      runGit: async args => {
-        if (args[0] === 'rev-parse') return 'current-base\n';
-        throw new Error(`unexpected git call: ${args.join(' ')}`);
-      },
-      pathExists: async () => false,
-    });
+    void taskText;
+    const decision = await inspectWithoutTypedFreshness();
 
     expect(decision).toEqual({ status: 'current' });
   });
@@ -102,71 +107,40 @@ describe('stale task specification preflight', () => {
     });
   });
 
-  it('does not inherit an earlier anchor marker in a later create sentence', () => {
-    const specification = parseTaskFreshnessSpecification('packages/ui/src/App.tsx already exists; do not create it. Create packages/ui/src/NewPanel.tsx.');
+  it('does not infer an earlier anchor marker from prose', async () => {
+    const decision = await inspectWithoutTypedFreshness();
 
-    expect(specification.anchors).toEqual([{
-      kind: 'path',
-      value: 'packages/ui/src/App.tsx',
-      clause: 'packages/ui/src/App.tsx already exists; do not create it.',
-    }]);
+    expect(decision).toEqual({ status: 'current' });
   });
 
-  it('does not bind an existing marker across but create in the same sentence', () => {
-    const specification = parseTaskFreshnessSpecification(
-      'packages/ui/src/App.tsx already exists, but create packages/ui/src/NewPanel.tsx.',
-    );
+  it('does not infer an existing marker across but/create prose', async () => {
+    const decision = await inspectWithoutTypedFreshness();
 
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
-      'packages/ui/src/App.tsx',
-    ]);
+    expect(decision).toEqual({ status: 'current' });
   });
 
-  it('does not bind an existing marker across and create in the same sentence', () => {
-    const specification = parseTaskFreshnessSpecification(
-      'Use the existing packages/ui/src/App.tsx and create packages/ui/src/NewPanel.tsx.',
-    );
+  it('does not infer an existing marker across and/create prose', async () => {
+    const decision = await inspectWithoutTypedFreshness();
 
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
-      'packages/ui/src/App.tsx',
-    ]);
+    expect(decision).toEqual({ status: 'current' });
   });
 
-  it('keeps path intents separate in semicolon-delimited list items', () => {
-    const specification = parseTaskFreshnessSpecification(`
-Files:
-- packages/ui/src/App.tsx already exists; create packages/ui/src/NewPanel.tsx
-- do not create packages/ui/src/Toolbar.tsx; create packages/ui/src/NewToolbar.tsx
-`);
+  it('does not infer path intents from semicolon-delimited prose', async () => {
+    const decision = await inspectWithoutTypedFreshness();
 
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
-      'packages/ui/src/App.tsx',
-      'packages/ui/src/Toolbar.tsx',
-    ]);
+    expect(decision).toEqual({ status: 'current' });
   });
 
-  it('splits sentences that end with a closing quote or parenthesis', () => {
-    const specification = parseTaskFreshnessSpecification(
-      '"packages/ui/src/App.tsx already exists; do not create it." Create packages/ui/src/NewPanel.tsx. '
-      + '(packages/ui/src/Toolbar.tsx already exists.) Create packages/ui/src/NewToolbar.tsx.',
-    );
+  it('does not infer sentence boundaries from quoted prose', async () => {
+    const decision = await inspectWithoutTypedFreshness();
 
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
-      'packages/ui/src/App.tsx',
-      'packages/ui/src/Toolbar.tsx',
-    ]);
+    expect(decision).toEqual({ status: 'current' });
   });
 
-  it('keeps an explicit do not create path as an anchor', () => {
-    const specification = parseTaskFreshnessSpecification(
-      'Do not create packages/ui/src/App.tsx; modify the existing file.',
-    );
+  it('does not infer a do-not-create path from prose', async () => {
+    const decision = await inspectWithoutTypedFreshness();
 
-    expect(specification.anchors).toEqual([{
-      kind: 'path',
-      value: 'packages/ui/src/App.tsx',
-      clause: 'Do not create packages/ui/src/App.tsx; modify the existing file.',
-    }]);
+    expect(decision).toEqual({ status: 'current' });
   });
 
   it('allows unrelated base changes and current-base attempts', () => {
