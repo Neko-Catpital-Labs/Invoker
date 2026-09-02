@@ -1008,11 +1008,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private resolveOutputDir(dbPath: string | null): string {
-    const invokerHome = process.env.INVOKER_DB_DIR ?? (dbPath ? dirname(dbPath) : join(homedir(), '.invoker'));
-    if (!dbPath && !process.env.INVOKER_DB_DIR) {
+    const isEphemeral = dbPath === null || dbPath === SQLITE_EPHEMERAL_DATABASE;
+    if (isEphemeral) {
       return join(tmpdir(), `invoker-output-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     }
-    return join(invokerHome, 'task-output');
+    return join(dirname(dbPath), 'task-output');
   }
 
   private configureConnection(fileBacked: boolean): void {
