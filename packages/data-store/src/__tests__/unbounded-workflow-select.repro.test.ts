@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -65,13 +65,11 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
       });
     }
 
-    const before = process.memoryUsage().heapUsed;
+    const rowToWorkflow = vi.spyOn((adapter as any).workflowRepo, 'rowToWorkflow');
     const workflows = adapter.listWorkflows();
-    const after = process.memoryUsage().heapUsed;
-    const memoryDelta = after - before;
 
     expect(workflows).toHaveLength(workflowCount);
-    expect(memoryDelta).toBeLessThan(1_000_000);
+    expect(rowToWorkflow.mock.calls.length).toBeLessThan(workflowCount);
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
