@@ -15,15 +15,25 @@
 
 import type {
   BundledSkillsStatus,
+  BundledSkillsInstallMode,
+  CliInstallResult,
+  InvokerSetupRequest,
+  InvokerSetupResult,
   Logger,
   SystemDiagnostics,
   WorkerDecisionsRequest,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
+import { IpcChannels } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
-import { filterExecutionHarnesses, resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
+import {
+  DEFAULT_SLACK_HARNESS_PRESETS,
+  filterExecutionHarnesses,
+  resolveDefaultTaskExecutionSettings,
+  type InvokerConfig,
+} from '../config.js';
 import { listInAppPlanningPresets } from '../in-app-planner.js';
 import type { ApiMutationFacade } from '../api-server.js';
 import { getEventsPage } from '../get-events-page.js';
@@ -31,9 +41,11 @@ import { buildReviewGateQueryResponse } from '../review-gate-query.js';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveAgentSession } from '../headless-query-list.js';
-import { listWorkerDecisions } from '../worker-control.js';
+import { listWorkerActionHistory, listWorkerDecisions } from '../worker-control.js';
 import { buildTaskGraphSnapshot } from './task-graph-snapshot.js';
 import type { TaskTerminalAdapter } from '../task-terminal-adapter.js';
+import { checkInvokerSurfaceAccess } from '../invoker-surface-access.js';
+import type { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 
 
 /**
@@ -66,9 +78,13 @@ export interface WebInvokerDispatchDeps {
   /** Optional richer reads available in the GUI owner; safe fallbacks otherwise. */
   getSystemDiagnostics?: () => SystemDiagnostics;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  updateInvokerCli?: () => CliInstallResult;
+  runInvokerCliSetup?: (request: InvokerSetupRequest) => Promise<InvokerSetupResult>;
   checkPrStatuses?: () => void | Promise<void>;
   getWorkers?: () => WorkerStatusSnapshot;
   taskTerminals?: TaskTerminalAdapter;
+  ownerCapabilities?: Pick<OwnerCapabilityRegistry, 'has' | 'invoke'>;
   /**
    * Routes planning-chat channels (and plan-from-goal) to the owner's shared
    * GUI-mutation handlers. Wired by both the desktop-owned and headless web
@@ -92,12 +108,79 @@ class WebDispatchError extends Error {
   }
 }
 
-function unsupported(channel: string): never {
+function providerMissing(channel: string): never {
   throw new WebDispatchError(
-    'unsupported_on_web',
+    'capability_provider_missing',
     channel,
-    `Channel "${channel}" is not supported on the web surface`,
+    `No capability provider is available for "${channel}"`,
   );
+}
+
+function planningAgentForPreset(config: InvokerConfig, presetKey: unknown): string | undefined {
+  const key = typeof presetKey === 'string' && presetKey.trim()
+    ? presetKey.trim()
+    : config.defaultSlackHarnessPreset ?? 'cursor+claude';
+  const preset = config.slackHarnessPresets?.[key] ?? DEFAULT_SLACK_HARNESS_PRESETS[key];
+  if (!preset) return undefined;
+  const tool = preset.tool.trim().toLowerCase();
+  if ((tool === 'cursor' || tool === 'omp') && preset.model?.trim()) {
+    return preset.model.trim();
+  }
+  return tool;
+}
+
+function requestedExecutionAgents(
+  channel: string,
+  args: unknown[],
+  config: InvokerConfig,
+): readonly (string | undefined)[] {
+  switch (channel) {
+    case 'invoker:fix-with-agent':
+      return [typeof args[1] === 'string' ? args[1] : config.autoFixAgent];
+    case 'invoker:resolve-conflict':
+      return [typeof args[1] === 'string' ? args[1] : config.conflictResolutionAgent];
+    case 'invoker:edit-task-agent':
+      return [typeof args[1] === 'string' ? args[1] : undefined];
+    case 'invoker:replace-task':
+      return Array.isArray(args[1])
+        ? args[1].map((replacement) => (
+            replacement && typeof replacement === 'object'
+              ? (replacement as { executionAgent?: unknown }).executionAgent
+              : undefined
+          )).map((agent) => typeof agent === 'string' ? agent : undefined)
+        : [];
+    case 'invoker:plan-from-goal':
+    case 'invoker:planning-chat-create': {
+      const request = args[0] && typeof args[0] === 'object'
+        ? args[0] as { presetKey?: unknown }
+        : undefined;
+      return [planningAgentForPreset(config, request?.presetKey)];
+    }
+    case 'invoker:planning-chat-send': {
+      const request = args[0] && typeof args[0] === 'object'
+        ? args[0] as { presetKey?: unknown }
+        : undefined;
+      return request?.presetKey === undefined
+        ? []
+        : [planningAgentForPreset(config, request.presetKey)];
+    }
+    default:
+      return [];
+  }
+}
+
+function assertOwnerCapabilityAccess(
+  deps: WebInvokerDispatchDeps,
+  channel: string,
+  args: unknown[],
+): void {
+  const config = deps.loadConfig();
+  for (const executionAgent of requestedExecutionAgents(channel, args, config)) {
+    const decision = checkInvokerSurfaceAccess(config, executionAgent);
+    if (!decision.allowed) {
+      throw new WebDispatchError(decision.code, channel, decision.message);
+    }
+  }
 }
 
 export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvokerDispatch {
@@ -111,6 +194,11 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
   };
 
   return async function dispatch(channel: string, args: unknown[]): Promise<unknown> {
+    if (deps.ownerCapabilities?.has(channel)) {
+      assertOwnerCapabilityAccess(deps, channel, args);
+      return deps.ownerCapabilities.invoke(channel, args);
+    }
+
     switch (channel) {
       // ── Reads ─────────────────────────────────────────────
       case 'invoker:get-tasks':
@@ -148,6 +236,11 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return listWorkerDecisions(
           persistence,
           (args[0] ?? {}) as WorkerDecisionsRequest,
+        );
+      case 'invoker:get-worker-action-history':
+        return listWorkerActionHistory(
+          persistence,
+          (args[0] ?? {}) as Parameters<typeof listWorkerActionHistory>[1],
         );
       case 'invoker:get-action-graph':
         return buildCurrentActionGraphSnapshot({
@@ -197,7 +290,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           })
         );
       case 'invoker:get-bundled-skills-status':
-        if (!deps.getBundledSkillsStatus) return unsupported(channel);
+        if (!deps.getBundledSkillsStatus) return providerMissing(channel);
         return deps.getBundledSkillsStatus();
       case 'invoker:get-activity-logs':
         return persistence.getActivityLogs(
@@ -231,11 +324,21 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return undefined;
       }
       case 'invoker:trace-renderer-task-graph-event':
+      case 'invoker:trace-renderer-workflow-event':
         return undefined;
       case 'invoker:check-pr-statuses':
       case 'invoker:check-pr-status':
         await deps.checkPrStatuses?.();
         return undefined;
+      case 'invoker:install-bundled-skills':
+        if (!deps.installBundledSkills) return providerMissing(channel);
+        return deps.installBundledSkills(args[0] as BundledSkillsInstallMode | undefined);
+      case 'invoker:update-invoker-cli':
+        if (!deps.updateInvokerCli) return providerMissing(channel);
+        return deps.updateInvokerCli();
+      case 'invoker:run-invoker-cli-setup':
+        if (!deps.runInvokerCliSetup) return providerMissing(channel);
+        return deps.runInvokerCliSetup(args[0] as InvokerSetupRequest);
 
       // ── Mutations (route to the facade exactly as api-server.ts) ──
       case 'invoker:approve':
@@ -271,6 +374,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:edit-task-prompt':
         return mutations.editTaskPrompt(String(args[0]), String(args[1]));
       case 'invoker:edit-task-agent':
+        assertOwnerCapabilityAccess(deps, channel, args);
         return mutations.editTaskAgent(String(args[0]), String(args[1]));
       case 'invoker:edit-task-model':
         return mutations.editTaskModel(String(args[0]), args[1] === undefined || args[1] === null ? null : String(args[1]));
@@ -286,6 +390,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           (args[1] as ExternalGatePolicyUpdate[]) ?? [],
         );
       case 'invoker:resolve-conflict':
+        assertOwnerCapabilityAccess(deps, channel, args);
         return mutations.resolveConflict(String(args[0]), args[1] === undefined ? undefined : String(args[1]));
       case 'invoker:set-workflow-merge-mode':
         return mutations.setWorkflowMergeMode(String(args[0]), String(args[1]));
@@ -324,25 +429,6 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           return { ok: false, reason: 'unsupported' };
         }
         return deps.taskTerminals.close(String(args[0]));
-      // ── Planning chat + planning terminals ──
-      // Routed to the owner's shared GUI-mutation handlers / terminal adapter
-      // when the host wires them; otherwise keep the historical downgrades.
-      case 'invoker:start-ready':
-      case 'invoker:plan-from-goal':
-      case 'invoker:planning-chat-create':
-      case 'invoker:planning-chat-list':
-      case 'invoker:planning-chat-send':
-      case 'invoker:planning-chat-submit':
-      case 'invoker:planning-chat-discard-draft':
-      case 'invoker:planning-chat-reset':
-      case 'invoker:planning-chat-delete':
-      case 'invoker:planning-chat-delete-submitted':
-      case 'invoker:planning-chat-rebind-repo':
-        if (deps.guiMutations) return deps.guiMutations(channel, args);
-        return unsupported(channel);
-      case 'invoker:planning-chat-set-terminal-mode':
-        if (deps.guiMutations) return deps.guiMutations(channel, args);
-        return { ok: false, error: 'Planning tmux is not available in the web UI' };
       case 'invoker:planning-terminal-open':
         if (deps.planningTerminals) return deps.planningTerminals.open(String(args[0]));
         return { opened: false, reason: 'Planning terminals are not available in the web UI' };
@@ -361,40 +447,14 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:planning-terminal-close':
         if (deps.planningTerminals) return deps.planningTerminals.close(String(args[0]));
         return { ok: false, reason: 'unsupported' };
-
-      case 'invoker:start-worker':
-      case 'invoker:stop-worker':
-        if (deps.guiMutations) return deps.guiMutations(channel, args);
-        throw new WebDispatchError(
-          'worker_control_unavailable',
-          channel,
-          'Worker control is not available on this web surface. Use the desktop app or CLI to manage workers.',
-        );
-
-      case 'invoker:load-plan':
-        if (deps.guiMutations) return deps.guiMutations(channel, args);
-        return unsupported(channel);
-
-      // ── Mutations not exposed on the facade / global lifecycle ──
-      case 'invoker:select-experiment':
-      case 'invoker:set-merge-branch':
-      case 'invoker:approve-merge':
-      case 'invoker:fix-with-agent':
-      case 'invoker:spawn-review-gate-ci-repair':
-      case 'invoker:edit-task-pool':
-      case 'invoker:replace-task':
-      case 'invoker:start':
-      case 'invoker:stop':
-      case 'invoker:clear':
-      case 'invoker:resume-workflow':
-      case 'invoker:delete-all-workflows':
-      case 'invoker:delete-all-workflows-bulk':
-      case 'invoker:cleanup-worktrees':
-      case 'invoker:install-bundled-skills':
-      case 'invoker:update-invoker-cli':
-        return unsupported(channel);
-
       default:
+        if (Object.hasOwn(IpcChannels, channel)) {
+          if (deps.guiMutations) {
+            assertOwnerCapabilityAccess(deps, channel, args);
+            return deps.guiMutations(channel, args);
+          }
+          return providerMissing(channel);
+        }
         throw new WebDispatchError('unknown_channel', channel, `Unknown channel "${channel}"`);
     }
   };
