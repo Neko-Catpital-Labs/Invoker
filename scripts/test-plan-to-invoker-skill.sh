@@ -494,3 +494,67 @@ if [[ -f "$POLICY_TEST_SCRIPT" ]]; then
 else
   fail "Policy coverage test script not found: $POLICY_TEST_SCRIPT"
 fi
+
+# Pre-submit trap checks: freshness-check reproduces the owner's prose
+# freshness gate; unit-triggers names the line behind a review-unit lint hit.
+FRESHNESS_CHECK="$SKILL_DIR/scripts/freshness-check.mjs"
+UNIT_TRIGGERS="$SKILL_DIR/scripts/unit-triggers.mjs"
+[[ -f "$FRESHNESS_CHECK" ]] || fail "expected $FRESHNESS_CHECK"
+[[ -f "$UNIT_TRIGGERS" ]] || fail "expected $UNIT_TRIGGERS"
+TRAP_FIXTURE_DIR="$(mktemp -d)"
+trap 'rm -rf "$TRAP_FIXTURE_DIR"' EXIT
+TRAP_MISSING_SYMBOL="missingSymbol_$(date +%s)_$$"
+cat > "$TRAP_FIXTURE_DIR/stale.yaml" <<'YAML'
+name: stale-anchor-fixture
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+tasks:
+  - id: implement-stale-anchor
+    description: |
+      Review claim: Add a helper.
+      Implementation details:
+      - Extend the existing `__TRAP_MISSING_SYMBOL__` and validate the routing.
+    prompt: |
+      Create packages/nope/src/missing.ts; the existing packages/execution-engine/src/task-runner.ts stays.
+    dependencies: []
+YAML
+sed -i.bak "s/__TRAP_MISSING_SYMBOL__/$TRAP_MISSING_SYMBOL/" "$TRAP_FIXTURE_DIR/stale.yaml" && rm -f "$TRAP_FIXTURE_DIR/stale.yaml.bak"
+FRESHNESS_OUTPUT="$(node "$FRESHNESS_CHECK" "$REPO_ROOT" "$TRAP_FIXTURE_DIR/stale.yaml" 2>&1 || true)"
+must_output_contain "$FRESHNESS_OUTPUT" "STALE -> needs_input  stale.yaml :: implement-stale-anchor" "freshness-check must predict the owner's needs_input stop for an anchor clause naming a missing path"
+must_output_contain "$FRESHNESS_OUTPUT" "missing path:packages/nope/src/missing.ts" "freshness-check must name the missing path anchor"
+must_output_contain "$FRESHNESS_OUTPUT" "missing symbol:$TRAP_MISSING_SYMBOL" "freshness-check must name the missing symbol anchor"
+if node "$FRESHNESS_CHECK" "$REPO_ROOT" "$TRAP_FIXTURE_DIR/stale.yaml" >/dev/null 2>&1; then
+  fail "freshness-check must exit non-zero when any anchor is missing"
+fi
+cat > "$TRAP_FIXTURE_DIR/current.yaml" <<'YAML'
+name: current-anchor-fixture
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+tasks:
+  - id: implement-current-anchor
+    description: |
+      Review claim: Add a helper.
+      Implementation details:
+      - Reuse the existing `detectReviewUnits` export in scripts/review-unit-rules.mjs.
+    prompt: |
+      Create packages/nope/src/new-helper.ts.
+      Import from the existing scripts/review-unit-rules.mjs.
+    dependencies: []
+YAML
+FRESHNESS_CURRENT_OUTPUT="$(node "$FRESHNESS_CHECK" "$REPO_ROOT" "$TRAP_FIXTURE_DIR/current.yaml" 2>&1)" \
+  || fail "freshness-check must exit 0 for a plan whose anchors all exist: $FRESHNESS_CURRENT_OUTPUT"
+must_output_contain "$FRESHNESS_CURRENT_OUTPUT" "current  current.yaml :: implement-current-anchor" "freshness-check must print current for a plan whose anchors all exist"
+UNIT_TRIGGERS_OUTPUT="$(node "$UNIT_TRIGGERS" "$TRAP_FIXTURE_DIR/stale.yaml" 2>&1 || true)"
+must_output_contain "$UNIT_TRIGGERS_OUTPUT" "description mentions multiple review units (validation-policy, routing)" "unit-triggers must report the same verdict as lint-review-units"
+must_output_contain "$UNIT_TRIGGERS_OUTPUT" "Implementation details: - Extend the existing \`$TRAP_MISSING_SYMBOL\` and validate the routing." "unit-triggers must print the scanned line that tripped each review unit"
+must_output_contain "$UNIT_TRIGGERS_OUTPUT" "[routing]" "unit-triggers must label the tripped unit"
+if node "$UNIT_TRIGGERS" "$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml" >/dev/null 2>&1; then
+  :
+else
+  fail "unit-triggers must exit 0 when no task mixes review units"
+fi
+rm -rf "$TRAP_FIXTURE_DIR"
+trap - EXIT
+echo "OK: freshness-check and unit-triggers pre-submit trap checks behave"
