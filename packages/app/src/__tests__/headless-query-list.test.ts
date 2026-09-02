@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { WorkerActionRecord } from '@invoker/data-store';
 import {
   runReadOnlyHeadlessQueryToString,
@@ -199,6 +199,42 @@ function makeTaskQueryDeps(overrides: {
     resetUiPerfStats: () => {},
   };
 }
+
+describe('headless query task filters', () => {
+  it('validates and delegates a filter while composing legacy task flags', async () => {
+    const task = {
+      id: 'wf-1/task-1', description: 'filtered task', status: 'failed', dependencies: [],
+      createdAt: new Date('2026-01-01T00:00:00.000Z'), config: { workflowId: 'wf-1', isMergeNode: false },
+      execution: {}, taskStateVersion: 1,
+    } as any;
+    const queryTasksByFilter = vi.fn(() => [task]);
+    const deps = {
+      ...makeTaskQueryDeps({}),
+      persistence: { queryTasksByFilter } as any,
+      orchestrator: { getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 1, running: 0, pending: 0 }) } as any,
+    };
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'tasks', '--filter', JSON.stringify({ op: 'eq', key: 'description', value: 'filtered task' }), '--workflow', 'wf-1', '--status', 'failed', '--no-merge', '--output', 'json'],
+      deps,
+    );
+    expect(JSON.parse(output)).toEqual([expect.objectContaining({ id: task.id })]);
+    expect(queryTasksByFilter).toHaveBeenCalledWith({ op: 'and', filters: [
+      { op: 'eq', key: 'description', value: 'filtered task' },
+      { op: 'eq', key: 'workflow_id', value: 'wf-1' },
+      { op: 'eq', key: 'status', value: 'failed' },
+      { op: 'eq', key: 'is_merge_node', value: false },
+    ] });
+  });
+
+  it('rejects an invalid filter before reading persistence', async () => {
+    const queryTasksByFilter = vi.fn();
+    const deps = { ...makeTaskQueryDeps({}), persistence: { queryTasksByFilter } as any };
+    await expect(runReadOnlyHeadlessQueryToString(
+      ['query', 'tasks', '--filter', JSON.stringify({ op: 'eq', key: 'not_a_column', value: 'x' })], deps,
+    )).rejects.toThrow('taskFilter.key');
+    expect(queryTasksByFilter).not.toHaveBeenCalled();
+  });
+});
 
 describe('headless query task-output', () => {
   it('prints the task output for a short task id', async () => {

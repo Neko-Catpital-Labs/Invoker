@@ -17,6 +17,8 @@ import {
   type NormalizedCostEvent,
   type WorkerActionSummary,
   type WorkerStatusSnapshot,
+  type TaskFilterNode,
+  validateTaskFilter,
 } from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, createWorkerRegistry, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import type { CostAttributionAttempt, WorkerActionRecord } from '@invoker/data-store';
@@ -139,6 +141,40 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
     }
     case 'tasks': {
       const { orchestrator, persistence } = deps;
+      let filteredTasks: TaskState[] | undefined;
+      if (flags.filter !== undefined) {
+        let parsedFilter: unknown;
+        try {
+          parsedFilter = JSON.parse(flags.filter);
+        } catch (error) {
+          throw new Error(`Invalid --filter JSON: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        const validation = validateTaskFilter(parsedFilter);
+        if (!validation.valid) throw new Error(validation.error);
+        const filters: TaskFilterNode[] = [parsedFilter as TaskFilterNode];
+        if (flags.workflow) filters.push({ op: 'eq', key: 'workflow_id', value: flags.workflow });
+        if (flags.status) filters.push({ op: 'eq', key: 'status', value: flags.status });
+        if (flags.noMerge) filters.push({ op: 'eq', key: 'is_merge_node', value: false });
+        const filter: TaskFilterNode = filters.length === 1 ? filters[0] : { op: 'and', filters };
+        filteredTasks = persistence.queryTasksByFilter(filter);
+      }
+
+      if (filteredTasks) {
+        const allTasks = filteredTasks;
+        switch (flags.output) {
+          case 'label': writeOut(formatAsLabel(allTasks) + '\n'); break;
+          case 'json':  writeOut(formatAsJson(allTasks.map(serializeTask)) + '\n'); break;
+          case 'jsonl': writeOut(formatAsJsonl(allTasks.map(serializeTask)) + '\n'); break;
+          default: {
+            for (const task of allTasks) writeOut(formatTaskStatus(task) + '\n');
+            const status = orchestrator.getWorkflowStatus();
+            writeOut(`\n${formatWorkflowStatus(status)}\n`);
+            break;
+          }
+        }
+        break;
+      }
+
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
         writeOut('No workflows found. Run a plan first.\n');
