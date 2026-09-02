@@ -81,6 +81,73 @@ describe('stale task specification preflight', () => {
     });
   });
 
+  it('does not inherit an earlier anchor marker in a later create sentence', () => {
+    const specification = parseTaskFreshnessSpecification('packages/ui/src/App.tsx already exists; do not create it. Create packages/ui/src/NewPanel.tsx.');
+
+    expect(specification.anchors).toEqual([{
+      kind: 'path',
+      value: 'packages/ui/src/App.tsx',
+      clause: 'packages/ui/src/App.tsx already exists; do not create it.',
+    }]);
+  });
+
+  it('does not bind an existing marker across but create in the same sentence', () => {
+    const specification = parseTaskFreshnessSpecification(
+      'packages/ui/src/App.tsx already exists, but create packages/ui/src/NewPanel.tsx.',
+    );
+
+    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+      'packages/ui/src/App.tsx',
+    ]);
+  });
+
+  it('does not bind an existing marker across and create in the same sentence', () => {
+    const specification = parseTaskFreshnessSpecification(
+      'Use the existing packages/ui/src/App.tsx and create packages/ui/src/NewPanel.tsx.',
+    );
+
+    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+      'packages/ui/src/App.tsx',
+    ]);
+  });
+
+  it('keeps path intents separate in semicolon-delimited list items', () => {
+    const specification = parseTaskFreshnessSpecification(`
+Files:
+- packages/ui/src/App.tsx already exists; create packages/ui/src/NewPanel.tsx
+- do not create packages/ui/src/Toolbar.tsx; create packages/ui/src/NewToolbar.tsx
+`);
+
+    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+      'packages/ui/src/App.tsx',
+      'packages/ui/src/Toolbar.tsx',
+    ]);
+  });
+
+  it('splits sentences that end with a closing quote or parenthesis', () => {
+    const specification = parseTaskFreshnessSpecification(
+      '"packages/ui/src/App.tsx already exists; do not create it." Create packages/ui/src/NewPanel.tsx. '
+      + '(packages/ui/src/Toolbar.tsx already exists.) Create packages/ui/src/NewToolbar.tsx.',
+    );
+
+    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+      'packages/ui/src/App.tsx',
+      'packages/ui/src/Toolbar.tsx',
+    ]);
+  });
+
+  it('keeps an explicit do not create path as an anchor', () => {
+    const specification = parseTaskFreshnessSpecification(
+      'Do not create packages/ui/src/App.tsx; modify the existing file.',
+    );
+
+    expect(specification.anchors).toEqual([{
+      kind: 'path',
+      value: 'packages/ui/src/App.tsx',
+      clause: 'Do not create packages/ui/src/App.tsx; modify the existing file.',
+    }]);
+  });
+
   it('allows unrelated base changes and current-base attempts', () => {
     const specification = parseTaskFreshnessSpecification(CAMERA_TASK);
 

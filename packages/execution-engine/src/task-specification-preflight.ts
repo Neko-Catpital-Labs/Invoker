@@ -30,9 +30,14 @@ export type TaskFreshnessDecision =
 const REPO_PATH_PATTERN = /(?:^|[\s`'"(])((?:\.github|corpus|docs|engine|packages|scripts|tests)\/[A-Za-z0-9_@./-]+)/g;
 const BACKTICK_TOKEN_PATTERN = /`([^`]+)`/g;
 const ANCHOR_CLAUSE_PATTERN = /\b(?:already exists?|existing|do not create|must not create|without creating)\b/i;
+const CREATE_PATH_PATTERN = /\b(?:create|creating)\b/i;
+const PATH_INTENT_MARKER_PATTERN = /\b(?:do not create|must not create|without creating|create|creating|existing)\b/gi;
 const GUARDED_MARKER_PATTERN = /guarded-behavior:\s*([A-Za-z0-9][\w-]*)/gi;
 const GUARDED_PROSE_PATTERN = /guarded behavior(?:\s+(?:id|marker))?\s*(?:`|"|')?([A-Za-z0-9][\w-]*)/gi;
 const REMOTE_REPORT_MARKER = '__INVOKER_TASK_FRESHNESS_STALE__';
+const SENTENCE_BOUNDARY_PATTERN = /\r?\n|(?<=[.!?]["')\]]*)\s+/;
+
+type PathIntent = 'existing' | 'create' | 'reference';
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -51,6 +56,40 @@ function normalizedRepoPaths(text: string): string[] {
   return uniqueSorted(paths);
 }
 
+function pathIntent(text: string): PathIntent {
+  if (ANCHOR_CLAUSE_PATTERN.test(text)) return 'existing';
+  if (CREATE_PATH_PATTERN.test(text)) return 'create';
+  return 'reference';
+}
+
+function pathIntentRegions(clause: string): Array<{ text: string; intent: PathIntent }> {
+  const boundaries = new Set<number>([0, clause.length]);
+  for (let index = 0; index < clause.length; index += 1) {
+    if (clause[index] === ';') boundaries.add(index + 1);
+  }
+  for (const match of clause.matchAll(PATH_INTENT_MARKER_PATTERN)) {
+    const markerIndex = match.index;
+    if (markerIndex === 0) continue;
+    let cursor = markerIndex - 1;
+    while (cursor >= 0 && /\s/.test(clause[cursor]!)) cursor -= 1;
+    if (clause[cursor] === ',') {
+      boundaries.add(markerIndex);
+      continue;
+    }
+    const precedingWordEnd = cursor + 1;
+    while (cursor >= 0 && /[A-Za-z]/.test(clause[cursor]!)) cursor -= 1;
+    const precedingWord = clause.slice(cursor + 1, precedingWordEnd).toLowerCase();
+    if (precedingWord === 'and' || precedingWord === 'but') boundaries.add(markerIndex);
+  }
+  const sortedBoundaries = [...boundaries].sort((left, right) => left - right);
+  const regions: Array<{ text: string; intent: PathIntent }> = [];
+  for (let index = 1; index < sortedBoundaries.length; index += 1) {
+    const text = clause.slice(sortedBoundaries[index - 1], sortedBoundaries[index]).trim();
+    if (text) regions.push({ text, intent: pathIntent(text) });
+  }
+  return regions;
+}
+
 export function parseTaskFreshnessSpecification(text: string): TaskFreshnessSpecification {
   const referencedPaths = normalizedRepoPaths(text);
   const guardedBehaviorIds = uniqueSorted([
@@ -59,11 +98,17 @@ export function parseTaskFreshnessSpecification(text: string): TaskFreshnessSpec
   ]);
   const anchors: TaskFreshnessAnchor[] = [];
 
-  for (const rawClause of text.split(/\r?\n/)) {
+  for (const rawClause of text.split(SENTENCE_BOUNDARY_PATTERN)) {
     const clause = rawClause.trim();
-    if (!clause || !ANCHOR_CLAUSE_PATTERN.test(clause)) continue;
+    if (!clause) continue;
     const paths = normalizedRepoPaths(clause);
-    for (const value of paths) anchors.push({ kind: 'path', value, clause });
+    for (const region of pathIntentRegions(clause)) {
+      if (region.intent !== 'existing') continue;
+      for (const value of normalizedRepoPaths(region.text)) {
+        anchors.push({ kind: 'path', value, clause });
+      }
+    }
+    if (!ANCHOR_CLAUSE_PATTERN.test(clause)) continue;
     for (const tokenMatch of clause.matchAll(BACKTICK_TOKEN_PATTERN)) {
       const value = tokenMatch[1]?.trim();
       if (!value || paths.includes(value) || !/^[A-Za-z_$][\w$]*$/.test(value)) continue;
