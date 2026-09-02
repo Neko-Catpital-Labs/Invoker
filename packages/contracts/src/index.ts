@@ -19,4 +19,5 @@ export * from './prerequisites.ts';
 export * from './headless-owner-launch.ts';
 export * from './planning-surface.ts';
 export * from './verification-contract.ts';
+export * from './task-filter.ts';
 export { EXTERNAL_DEPENDENCIES, DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.ts';
