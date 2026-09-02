@@ -685,6 +685,30 @@ export const COLUMN_MIGRATIONS = [
  * dispatch index. Order preserved from the original `migrate()` body.
  */
 export const POST_MIGRATION_STATEMENTS = [
+  'DROP TRIGGER IF EXISTS trg_tasks_executor_routing_insert',
+  'DROP TRIGGER IF EXISTS trg_tasks_executor_routing_update',
+  `CREATE TRIGGER trg_tasks_executor_routing_insert
+    BEFORE INSERT ON tasks
+    WHEN COALESCE((
+      (NEW.runner_kind IN ('worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
+      OR (NEW.runner_kind = 'docker' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'merge' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'scratch' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+    ), 0) = 0
+    BEGIN
+      SELECT RAISE(ABORT, 'tasks executor routing invariant violated');
+    END`,
+  `CREATE TRIGGER trg_tasks_executor_routing_update
+    BEFORE UPDATE OF runner_kind, pool_id, pool_member_id, docker_image ON tasks
+    WHEN COALESCE((
+      (NEW.runner_kind IN ('worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
+      OR (NEW.runner_kind = 'docker' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'merge' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'scratch' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+    ), 0) = 0
+    BEGIN
+      SELECT RAISE(ABORT, 'tasks executor routing invariant violated');
+    END`,
   'DROP INDEX IF EXISTS idx_attempts_node',
   'CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)',
