@@ -2703,8 +2703,8 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'X', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      // C is `pending` → workflow is live by the Step 11 definition.
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      // C is `skipped` → workflow is live by the Step 11 definition.
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
       // Pure-attribute edit must succeed without raising the topology gate.
       expect(() => orchestrator.editTaskCommand('A', 'echo A-v2')).not.toThrow();
