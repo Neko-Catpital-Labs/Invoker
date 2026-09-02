@@ -2,9 +2,10 @@ import type { BrowserWindow } from 'electron';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import type { Workflow } from '@invoker/data-store';
 import { Channels, type MessageBus } from '@invoker/transport';
-import type { TaskDelta, TaskState } from '@invoker/workflow-core';
+import { FailureClassifier, type TaskDelta, type TaskState } from '@invoker/workflow-core';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from '../delta-merge.js';
 import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from '../executing-stall.js';
+import { deriveOrphanReason } from '../reconcile-orphaned-running-tasks.js';
 import { persistShutdownDiagnostic, type ShutdownDiagnosticDb } from '../shutdown-diagnostic.js';
 import type { TaskGraphEventPublisher } from '../task-graph-event-publisher.js';
 import type { TaskOutputData } from '../types.js';
@@ -279,6 +280,10 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
                 const executingError =
                   `Execution stalled: task remained in running/executing for ${Math.floor(executingAgeMs / 1000)}s ` +
                   `without a live execution handle and no completion signal from executor (${staleReason}).`;
+                const effectiveError = deriveOrphanReason(task.id, deps.persistence, executingError);
+                const failureClass = effectiveError === executingError
+                  ? 'liveness_stall'
+                  : FailureClassifier.classifyError(effectiveError);
                 deps.logger.info(
                   `[executing-stall] detected task="${task.id}" phase=${task.execution.phase} executingAgeMs=${executingAgeMs} ` +
                     `handlePresent=${deps.taskHandles.has(task.id)} leaseExpired=${leaseExpired} heartbeatStale=${heartbeatStale} ` +
@@ -298,8 +303,8 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
                   status: 'failed',
                   outputs: {
                     exitCode: 1,
-                    error: executingError,
-                    failureClass: 'liveness_stall',
+                    error: effectiveError,
+                    failureClass,
                   },
                 };
                 deps.logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
