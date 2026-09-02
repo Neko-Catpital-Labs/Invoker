@@ -1302,6 +1302,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       preserveTaskHandles?: boolean;
       logLabel?: string;
       repositoryBinding?: InAppPlanningRepoBinding;
+      staged?: boolean;
     },
   ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
     return loadPlanSubmissionBundle(planText, {
@@ -1314,7 +1315,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       preserveTaskHandles: options?.preserveTaskHandles,
       repositoryBinding: options?.repositoryBinding,
       taskHandles,
-      staged: true,
+      staged: options?.staged ?? true,
     });
   }
 
@@ -1466,7 +1467,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
   registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
     const planText = String(planTextArg);
-    await loadGeneratedPlanPreview(planText, { logLabel: 'load-plan' });
+    await loadGeneratedPlanPreview(planText, { logLabel: 'load-plan', staged: false });
     publishOrchestratorSnapshotToRenderer();
   });
 
