@@ -475,6 +475,17 @@ assert_canonical_artifact_full_suite_is_rejection_only "$CANONICAL_COMMAND"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
+echo ""
+echo "Running baseline evidence gate regression tests..."
+BASELINE_EVIDENCE_TEST_SCRIPT="$REPO_ROOT/scripts/test-plan-baseline-evidence-gate.sh"
+if [[ -f "$BASELINE_EVIDENCE_TEST_SCRIPT" ]]; then
+  if ! bash "$BASELINE_EVIDENCE_TEST_SCRIPT"; then
+    fail "Baseline evidence gate regression tests failed"
+  fi
+else
+  fail "Baseline evidence gate test script not found: $BASELINE_EVIDENCE_TEST_SCRIPT"
+fi
+
 # Run validator regression tests
 echo ""
 echo "Running plan validator regression tests..."
