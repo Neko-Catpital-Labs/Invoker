@@ -11,7 +11,7 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
-import { scopePlanTaskId } from '@invoker/workflow-core';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, Attempt } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
@@ -374,9 +374,19 @@ export class TaskRunner {
     this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
     this.reviewGateMergeConflictPublisher = config.reviewGateMergeConflictPublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
-    this.getWorktreeTargets = config.worktreeTargetsProvider ?? (() => ({}));
+    const configuredWorktreeTargets = config.worktreeTargetsProvider ?? (() => ({}));
+    this.getWorktreeTargets = () => ({
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {},
+      ...configuredWorktreeTargets(),
+    });
     this.getRepoProvisionCommands = config.repoProvisionCommandsProvider ?? (() => ({}));
-    this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
+    const configuredExecutionPools = config.executionPoolsProvider ?? (() => ({}));
+    this.getExecutionPools = () => ({
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {
+        members: [{ type: 'worktree', id: BUILT_IN_LOCAL_EXECUTION_POOL_ID }],
+      },
+      ...configuredExecutionPools(),
+    });
     this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
