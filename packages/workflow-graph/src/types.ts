@@ -218,10 +218,16 @@ export type SshInfraFailureClass =
   | 'ssh-oauth-session-expired'
   | 'ssh-disk-full';
 
-export type FailureClass = 'liveness_stall' | SshInfraFailureClass;
+export type TransientFailureClass = 'ssh-transport-transient';
+
+export type FailureClass = 'liveness_stall' | SshInfraFailureClass | TransientFailureClass;
 
 export function isLivenessFailureClass(failureClass: FailureClass | undefined): boolean {
   return failureClass === 'liveness_stall';
+}
+
+export function isTransientFailureClass(failureClass: FailureClass | undefined): boolean {
+  return failureClass === 'ssh-transport-transient';
 }
 
 export interface TaskExecution {

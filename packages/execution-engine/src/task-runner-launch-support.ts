@@ -7,7 +7,7 @@
  */
 
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
-import type { TaskState } from '@invoker/workflow-core';
+import { FailureClassifier, type TaskState } from '@invoker/workflow-core';
 
 /** Keeps launch metadata fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). */
 export const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -83,14 +83,5 @@ export function computePoolMemberCooldownMs(consecutiveFailures: number): number
 
 export function isRetryableSshStartupTransportError(err: unknown): boolean {
   const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-  const lower = message.toLowerCase();
-  return lower.includes('exit=255')
-    || lower.includes('ssh transport failed')
-    || lower.includes('connection timed out')
-    || lower.includes('operation timed out')
-    || lower.includes('connection reset')
-    || lower.includes('broken pipe')
-    || lower.includes('banner exchange')
-    || lower.includes('kex_exchange_identification')
-    || lower.includes('remote session terminated unexpectedly');
+  return FailureClassifier.isTransientTransportError(message);
 }

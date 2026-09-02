@@ -367,7 +367,8 @@ export function listInfraRepairScanCandidates(
 }
 
 export function classifyGenericSshInfraFailure(errorText: unknown): InfraRepairReason | undefined {
-  return FailureClassifier.classifyError(typeof errorText === 'string' ? errorText : undefined);
+  const failureClass = FailureClassifier.classifyError(typeof errorText === 'string' ? errorText : undefined);
+  return FailureClassifier.isSshInfra(failureClass) ? failureClass : undefined;
 }
 
 function resolveRemoteTargetId(
