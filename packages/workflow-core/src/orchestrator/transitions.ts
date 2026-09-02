@@ -13,7 +13,7 @@
  * downstream auto-start / deferred re-enqueue sequence are preserved exactly.
  */
 
-import { FailureClassifier, type FailureClass, type TaskState, type TaskDelta, type TaskStateChanges } from '@invoker/workflow-graph';
+import { FailureClassifier, getTransitiveDependents, type FailureClass, type TaskState, type TaskDelta, type TaskStateChanges } from '@invoker/workflow-graph';
 import type { Logger } from '@invoker/contracts';
 import type { ParsedResponse } from '../response-handler.js';
 import { scopePlanTaskId } from '../task-id-scope.js';
@@ -51,6 +51,7 @@ export interface TransitionHost {
   readonly activeWorkflowIds: Set<string>;
 
   stateGetTask(taskId: string): TaskState | undefined;
+  clearQueuedSchedulerEntries(taskId: string, attemptId?: string): void;
   writeAndSync(
     taskId: string,
     changes: TaskStateChanges,
@@ -245,6 +246,39 @@ export function finalizeFailedTaskImpl(
   host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
   checkExperimentCompletionImpl(host, taskId);
+
+  const allTasks = host.stateMachine.getAllTasks();
+  const taskMap = new Map(allTasks.map((task) => [task.id, task]));
+  const upstreamLabel = taskId.includes('/') && !taskId.startsWith('__merge__')
+    ? taskId.slice(taskId.indexOf('/') + 1)
+    : taskId;
+  const descendantIds = getTransitiveDependents(
+    taskId,
+    taskMap,
+    (task) =>
+      task.status === 'completed' ||
+      task.status === 'stale' ||
+      task.config.isReconciliation === true,
+  );
+  for (const descendantId of descendantIds) {
+    const dependent = host.stateGetTask(descendantId);
+    if (!dependent || dependent.config.isReconciliation) continue;
+    const neverStarted =
+      !dependent.execution.startedAt &&
+      (dependent.status === 'pending' || dependent.status === 'queued' || dependent.status === 'blocked');
+    if (!neverStarted) continue;
+
+    host.deferredTaskIds.delete(descendantId);
+    host.clearQueuedSchedulerEntries(descendantId, dependent.execution.selectedAttemptId);
+    const skippedChanges: TaskStateChanges = {
+      status: 'skipped',
+      execution: { blockedBy: `upstream task "${upstreamLabel}" failed` },
+    };
+    const skippedUpdated = host.writeAndSync(descendantId, skippedChanges);
+    const skippedDelta = host.buildUpdateDelta(dependent, skippedUpdated, skippedChanges);
+    host.persistence.logEvent?.(descendantId, 'task.skipped', skippedChanges);
+    host.messageBus.publish(TASK_DELTA_CHANNEL, skippedDelta);
+  }
 
   const readyTaskIds = host.stateMachine.findNewlyReadyTasks(taskId);
   host.logger.info('[orchestrator] finalizeFailedTask', {
