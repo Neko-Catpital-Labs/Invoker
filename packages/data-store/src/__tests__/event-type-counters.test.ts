@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { resolveTaskConfig } from '@invoker/workflow-core';
 import type { Workflow } from '../adapter.js';
 
 // event_type_counters makes countEventsByTypes O(types) instead of a linear
@@ -27,7 +28,7 @@ function makeTask(id: string) {
     status: 'pending' as const,
     dependencies: [],
     createdAt: new Date(),
-    config: { workflowId: 'wf', command: 'echo test' },
+    config: resolveTaskConfig({ workflowId: 'wf', command: 'echo test' }),
     execution: {},
   };
 }

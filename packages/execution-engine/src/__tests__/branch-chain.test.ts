@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/contracts';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import { TaskRunner, ExecutorRegistry, WorktreeExecutor } from '../index.js';
 
 function createTempRepo(): string {
@@ -163,9 +163,9 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       status: overrides.status ?? 'pending',
       dependencies: overrides.dependencies ?? [],
       createdAt: new Date(),
-      config: { ...overrides.config },
+      config: resolveTaskConfig(overrides.config ?? {}),
       execution: { ...overrides.execution },
-    } as TaskState;
+    };
   }
 
   function buildChain(config: ChainConfig): {
