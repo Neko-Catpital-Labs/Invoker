@@ -340,6 +340,22 @@ export function handleNeedsInputImpl(
   return [];
 }
 
+export function handleStaleImpl(
+  host: TransitionHost,
+  taskId: string,
+  parsed: Extract<ParsedResponse, { type: 'stale' }>,
+): TaskState[] {
+  const changes: TaskStateChanges = { status: 'stale', execution: { exitCode: parsed.exitCode, error: parsed.error } };
+  const before = host.stateGetTask(taskId)!;
+  const updated = host.writeAndSync(taskId, changes);
+  const attemptId = updated.execution.selectedAttemptId;
+  if (attemptId) host.taskRepository.updateAttempt(attemptId, { status: 'stale', error: parsed.error });
+  const delta = host.buildUpdateDelta(before, updated, changes);
+  host.persistence.logEvent?.(taskId, 'task.stale', changes);
+  host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  return host.autoStartUnblockedTasks();
+}
+
 function resolveSpawnPivotSourceChanges(
   parentTask: TaskState | undefined,
   host: TransitionHost,
