@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 export type UiPerfPayload = Record<string, unknown>;
 
@@ -38,4 +38,15 @@ export async function uiPerfPayloadsSince(page: Page, sinceId: number): Promise<
     .filter((row) => row.source === 'ui-perf')
     .map((row) => parseActivityPayload(row.message))
     .filter((payload): payload is UiPerfPayload => payload !== null);
+}
+
+export async function waitForUiPerfPayload(
+  page: Page,
+  predicate: (payload: UiPerfPayload) => boolean,
+  timeoutMs = 5000,
+): Promise<void> {
+  await expect.poll(async () => {
+    const payloads = await uiPerfPayloadsSince(page, 0);
+    return payloads.some(predicate);
+  }, { timeout: timeoutMs }).toBe(true);
 }
