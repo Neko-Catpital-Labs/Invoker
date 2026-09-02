@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter, GET_EVENTS_DEFAULT_LIMIT } from '../sqlite-adapter.js';
+import { resolveTaskConfig } from '@invoker/workflow-core';
 
 describe('getEvents default limit (ui-read-scale)', () => {
   let tmpDir: string;
@@ -24,7 +25,7 @@ describe('getEvents default limit (ui-read-scale)', () => {
       status: 'running',
       dependencies: [],
       createdAt: new Date(),
-      config: { workflowId: 'wf-1' },
+      config: resolveTaskConfig({ workflowId: 'wf-1' }),
       execution: {},
       taskStateVersion: 1,
     });
