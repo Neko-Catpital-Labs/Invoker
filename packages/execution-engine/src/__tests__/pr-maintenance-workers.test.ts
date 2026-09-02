@@ -22,7 +22,7 @@ import {
   PR_JAILBREAK_LAND_WORKER_KIND,
   PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
   PR_ORPHAN_REPAIR_WORKER_KIND,
-  buildPrMaintenanceEnv,
+  buildPrMaintenanceChildEnv,
   createPrAdminBypassLandWorker,
   createPrAutoLabelWorker,
   createPrDuplicateCloseWorker,
@@ -220,22 +220,70 @@ describe('PR maintenance workers', () => {
     );
   });
 
-  it('forces admin-bypass queue children into existing-owner submitter mode', () => {
+  it('builds an explicit production IPC contract without development-profile identity', () => {
     const repoRoot = makeRepoRoot();
-    const originalStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
-    process.env.INVOKER_HEADLESS_STANDALONE = '1';
-    try {
-      const env = buildPrMaintenanceEnv(repoRoot, undefined);
+    const productionSocket = '/home/operator/.invoker/ipc-transport.sock';
+    const env = buildPrMaintenanceChildEnv({
+      repoRoot,
+      ownerEnv: {
+        HOME: '/home/operator',
+        PATH: '/usr/bin:/bin',
+        INVOKER_RUNTIME_KIND: 'packaged',
+        INVOKER_PRODUCTION_OWNER_SERVICE: '1',
+      },
+      overrides: {
+        INVOKER_DEVELOPMENT_PROFILE: '1',
+        INVOKER_DEVELOPMENT_PROFILE_ACTIVE: '1',
+        INVOKER_SOURCE_ROOT: '/repo/development-checkout',
+        INVOKER_PROFILE_ID: 'development-profile',
+        INVOKER_DB_DIR: '/home/operator/.invoker/dev/development-profile',
+        INVOKER_USER_DATA_DIR: '/home/operator/.invoker/dev/development-profile/electron',
+        INVOKER_IPC_SOCKET: '/home/operator/.invoker/dev/development-profile/ipc-transport.sock',
+        INVOKER_REPO_CONFIG_PATH: '/home/operator/.invoker/dev/development-profile/config.json',
+        INVOKER_ENV_PATH: '/home/operator/.invoker/dev/development-profile/.env',
+        INVOKER_LOG_PATH: '/home/operator/.invoker/dev/development-profile/invoker.log',
+        INVOKER_API_PORT: '41123',
+        INVOKER_WEB_PORT: '42123',
+        INVOKER_DISABLE_AUTONOMOUS_WORKERS: '1',
+        INVOKER_DISABLE_AUTO_RUN_ON_STARTUP: '1',
+        INVOKER_HEADLESS_STANDALONE: '1',
+        INVOKER_PR_CRON_LOCK: '/tmp/pr-crons.lock',
+        INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: '/tmp/admin-requeue.jsonl',
+        INVOKER_PR_ORPHAN_STATE_FILE: '/tmp/orphan-repair.tsv',
+        INVOKER_PR_DUP_STATE_FILE: '/tmp/duplicate-close.jsonl',
+      },
+    });
 
-      expect(env.INVOKER_HEADLESS_STANDALONE).toBeUndefined();
-      expect(env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER).toBe('1');
-      expect(env.INVOKER_REPO_ROOT).toBe(repoRoot);
-    } finally {
-      if (originalStandalone === undefined) {
-        delete process.env.INVOKER_HEADLESS_STANDALONE;
-      } else {
-        process.env.INVOKER_HEADLESS_STANDALONE = originalStandalone;
-      }
+    expect(env).toMatchObject({
+      HOME: '/home/operator',
+      PATH: '/usr/bin:/bin',
+      INVOKER_IPC_SOCKET: productionSocket,
+      INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER: '1',
+      INVOKER_REPO_ROOT: repoRoot,
+      INVOKER_PR_CRON_LOCK: '/tmp/pr-crons.lock',
+      INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: '/tmp/admin-requeue.jsonl',
+      INVOKER_PR_ORPHAN_STATE_FILE: '/tmp/orphan-repair.tsv',
+      INVOKER_PR_DUP_STATE_FILE: '/tmp/duplicate-close.jsonl',
+    });
+    expect(env.INVOKER_HEADLESS_STANDALONE).toBeUndefined();
+    for (const profileKey of [
+      'INVOKER_RUNTIME_KIND',
+      'INVOKER_PRODUCTION_OWNER_SERVICE',
+      'INVOKER_DEVELOPMENT_PROFILE',
+      'INVOKER_DEVELOPMENT_PROFILE_ACTIVE',
+      'INVOKER_SOURCE_ROOT',
+      'INVOKER_PROFILE_ID',
+      'INVOKER_DB_DIR',
+      'INVOKER_USER_DATA_DIR',
+      'INVOKER_REPO_CONFIG_PATH',
+      'INVOKER_ENV_PATH',
+      'INVOKER_LOG_PATH',
+      'INVOKER_API_PORT',
+      'INVOKER_WEB_PORT',
+      'INVOKER_DISABLE_AUTONOMOUS_WORKERS',
+      'INVOKER_DISABLE_AUTO_RUN_ON_STARTUP',
+    ]) {
+      expect(env[profileKey]).toBeUndefined();
     }
   });
 

@@ -6,9 +6,9 @@
  * Transport policy lives in @invoker/transport (IpcBus) — this script
  * only creates a client-only bus and delegates exec requests through it.
  *
- * Standalone mode: when no IPC server is reachable the script falls back
- * to spawning the headless-client process directly, so a shared socket is
- * not required.
+ * Standalone mode: when the shared transport build is unavailable the script
+ * can spawn the headless-client process directly, unless an existing owner is
+ * explicitly required.
  */
 const { execFileSync } = require('node:child_process');
 const { existsSync } = require('node:fs');
@@ -173,8 +173,22 @@ async function resolveActiveProfileSocketPath() {
   return contracts.resolveInvokerIpcSocketPath(mergedEnv);
 }
 
+function resolveRequiredExistingOwnerSocketPath() {
+  if (process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER !== '1') {
+    return undefined;
+  }
+  const socketPath = process.env.INVOKER_IPC_SOCKET?.trim();
+  if (!socketPath) {
+    throw new Error(
+      'INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER=1 requires an explicit INVOKER_IPC_SOCKET endpoint.',
+    );
+  }
+  return socketPath;
+}
+
 async function createBus(transport, timeoutMs) {
-  const socketPath = await resolveActiveProfileSocketPath();
+  const socketPath = resolveRequiredExistingOwnerSocketPath()
+    ?? await resolveActiveProfileSocketPath();
   const bus = new transport.IpcBus(socketPath, { allowServe: false });
   try {
     await withTimeout(bus.ready(), timeoutMs);
@@ -321,7 +335,11 @@ async function main() {
   // Try to load the shared transport module.
   const transport = await loadTransport();
   if (!transport) {
-    // No built transport — fall back to standalone mode for exec.
+    if (process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER === '1') {
+      throw new Error(
+        'Existing-owner mode requires the built shared transport; standalone bootstrap is disabled.',
+      );
+    }
     if (options.mode === 'exec') {
       const cliArgs = [];
       if (options.noTrack) cliArgs.push('--no-track');

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 
-import { resolveRepoRoot, type Logger } from '@invoker/contracts';
+import { resolveInvokerIpcSocketPath, resolveRepoRoot, type Logger } from '@invoker/contracts';
 import type { WorkerActionStatus } from '@invoker/data-store';
 
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
@@ -341,7 +341,10 @@ async function runPrMaintenanceEntrypoint(
   const repoRoot = resolvePrMaintenanceRepoRoot(options.repoRoot);
   const startedAt = new Date().toISOString();
   const runExternalKey = `${options.entrypoint.kind}:${repoRoot}:${startedAt}`;
-  const env = buildPrMaintenanceEnv(repoRoot, options.env);
+  const env = buildPrMaintenanceChildEnv({
+    repoRoot,
+    overrides: options.env,
+  });
   const lockPath = options.lockPath ?? env.INVOKER_PR_CRON_LOCK ?? defaultPrCronLockPath(env);
   env.INVOKER_PR_CRON_LOCK = lockPath;
   const lockProbe = options.lockProbe ?? probePrMaintenanceLock;
@@ -768,8 +771,39 @@ function resolvePrMaintenanceRepoRoot(repoRoot: string | undefined): string {
   return repoRoot ? resolve(repoRoot) : resolveRepoRoot(process.cwd());
 }
 
-export function buildPrMaintenanceEnv(repoRoot: string, overrides: EnvOverrides | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+const PR_MAINTENANCE_CHILD_PROFILE_KEYS = [
+  'INVOKER_DEVELOPMENT_PROFILE',
+  'INVOKER_DEVELOPMENT_PROFILE_ACTIVE',
+  'INVOKER_RUNTIME_KIND',
+  'INVOKER_PRODUCTION_OWNER_SERVICE',
+  'INVOKER_SOURCE_ROOT',
+  'INVOKER_PROFILE_ID',
+  'INVOKER_DB_DIR',
+  'INVOKER_USER_DATA_DIR',
+  'INVOKER_IPC_SOCKET',
+  'INVOKER_REPO_CONFIG_PATH',
+  'INVOKER_ENV_PATH',
+  'INVOKER_LOG_PATH',
+  'INVOKER_API_PORT',
+  'INVOKER_WEB_PORT',
+  'INVOKER_DISABLE_AUTONOMOUS_WORKERS',
+  'INVOKER_DISABLE_AUTO_RUN_ON_STARTUP',
+] as const;
+
+export interface PrMaintenanceChildEnvOptions {
+  repoRoot: string;
+  overrides?: EnvOverrides;
+  ownerEnv?: NodeJS.ProcessEnv;
+}
+
+export function buildPrMaintenanceChildEnv({
+  repoRoot,
+  overrides,
+  ownerEnv = process.env,
+}: PrMaintenanceChildEnvOptions): NodeJS.ProcessEnv {
+  const ownerHomeDir = ownerEnv.HOME?.trim() || homedir();
+  const ownerIpcSocketPath = resolveInvokerIpcSocketPath(ownerEnv, ownerHomeDir);
+  const env: NodeJS.ProcessEnv = { ...ownerEnv };
   for (const [key, value] of Object.entries(overrides ?? {})) {
     if (value === undefined) {
       delete env[key];
@@ -777,7 +811,9 @@ export function buildPrMaintenanceEnv(repoRoot: string, overrides: EnvOverrides 
       env[key] = value;
     }
   }
+  for (const key of PR_MAINTENANCE_CHILD_PROFILE_KEYS) delete env[key];
   delete env.INVOKER_HEADLESS_STANDALONE;
+  env.INVOKER_IPC_SOCKET = ownerIpcSocketPath;
   env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER = '1';
   env.INVOKER_REPO_ROOT = repoRoot;
   return env;
