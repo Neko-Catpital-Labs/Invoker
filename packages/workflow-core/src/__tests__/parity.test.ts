@@ -133,8 +133,7 @@ describe('Parity — Feature Coverage', () => {
 
   // ── Test 1: Core task states via Orchestrator ─────────────
 
-  // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-  it.fails('core task states: pending → running → completed/failed/needs_input/blocked', () => {
+  it('core task states: pending → running → completed/failed/needs_input/blocked', () => {
     orchestrator.loadPlan({
       name: 'states-test',
       tasks: [
@@ -177,8 +176,7 @@ describe('Parity — Feature Coverage', () => {
 
   // ── Test 2: Transitive dependency blocking ────────────────
 
-  // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-  it.fails('transitive dependency blocking: A fails → B blocked → C blocked', () => {
+  it('transitive dependency blocking: A fails → B blocked → C blocked', () => {
     orchestrator.loadPlan({
       name: 'blocking-test',
       tasks: [
