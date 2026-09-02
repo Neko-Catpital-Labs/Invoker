@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import {
   buildWorktreeCorruptRepairScript,
   deriveCorruptWorktreeAdminPathFromWorkspace,
@@ -25,7 +25,7 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
-  const config = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+  const inputConfig = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
     ? { ...overrides.config, poolId: 'ssh-fixture' }
     : overrides.config;
   return {
@@ -34,9 +34,9 @@ function makeTask(overrides: {
     status: overrides.status ?? 'pending',
     dependencies: [],
     createdAt: new Date(),
-    config: { ...config },
+    config: resolveTaskConfig(inputConfig ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 describe('SSH worktree metadata repro', () => {
@@ -81,8 +81,7 @@ describe('SSH worktree metadata repro', () => {
     }).toThrow(/already (used by worktree|checked out) at '.*experiment-wf-1-test-execution-engine-bc7a0b71'/);
   });
 
-  // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-  it.fails('proves TaskRunner should persist the owning worktree path on SSH startup failure', async () => {
+  it('proves TaskRunner should persist the owning worktree path on SSH startup failure', async () => {
     const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-bc7a0b71';
     const branch = 'experiment/wf-1/test-execution-engine-b68b146f';
 
@@ -138,7 +137,7 @@ describe('SSH worktree metadata repro', () => {
     await runner.executeTask(task);
 
     expect(updateSpy).toHaveBeenCalledWith('wf-1/test-execution-engine', {
-      config: { runnerKind: 'ssh' },
+      config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
       execution: {
         workspacePath: ownerPath,
         branch,

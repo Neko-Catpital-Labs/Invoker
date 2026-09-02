@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTaskState, createAttempt } from '../types.js';
+import { applyTaskConfigPatch, assertResolvedTaskConfig, createAttempt, createTaskState, resolveTaskConfig } from '../types.js';
 import type { TaskConfig } from '../types.js';
 
 describe('createTaskState', () => {
@@ -19,12 +19,27 @@ describe('createTaskState', () => {
     expect(task.execution).toEqual({ generation: 0 });
   });
 
-  // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-  it.fails('defaults to the built-in local pool config and empty execution', () => {
+  it('defaults to the built-in local pool config and empty execution', () => {
     const task = createTaskState('t2', 'plain task', []);
 
     expect(task.config).toEqual({ runnerKind: 'worktree', poolId: 'local-worktree' });
     expect(task.execution).toEqual({ generation: 0 });
+  });
+
+  it('rejects a config patch that pairs runnerKind and isMergeNode inconsistently', () => {
+    const merge: TaskConfig = { runnerKind: 'merge' };
+    expect(() => applyTaskConfigPatch(merge, { executionAgent: 'codex' }))
+      .not.toThrow();
+    expect(() => applyTaskConfigPatch(merge, { isMergeNode: false }))
+      .toThrow('must pair with isMergeNode=true');
+    const worktree = resolveTaskConfig({ runnerKind: 'worktree' });
+    expect(() => applyTaskConfigPatch(worktree, { isMergeNode: true }))
+      .toThrow('must pair with isMergeNode=false');
+  });
+
+  it('tolerates a stale isMergeNode/runnerKind mismatch when reading an already-persisted config', () => {
+    expect(() => assertResolvedTaskConfig({ runnerKind: 'worktree', poolId: 'local-worktree', isMergeNode: true }))
+      .not.toThrow();
   });
 
   it('copies dependencies without shared reference', () => {
