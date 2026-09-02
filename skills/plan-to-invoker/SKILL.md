@@ -121,6 +121,18 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Delegated task hints (hard requirement for implementation plans):** For plans with `onFinish != none`, every prompt task must include `Files:`, `Change types:`, and `Acceptance criteria:` sections in `description`. Prompt text must be zero-context executable: assume no prior chat knowledge, include deterministic pass/fail expectations, and keep instructions self-contained. Verify-only plans (`onFinish: none`) keep delegation hints advisory.
 
+**Optional structured freshness:** Freshness metadata is optional. When explicit freshness data is available, add it under the task's `freshness` object with `watchPaths`, `pathPreconditions`, and/or `guardedBehaviorIds`; omit it otherwise. Keep task descriptions as authored prose: structured metadata supplements the prose and does not replace or rewrite it. Do not derive freshness from task prose through post-generation extraction or a semantic regex.
+
+```yaml
+tasks:
+  - id: implement
+    description: Preserve this task prose.
+    freshness:
+      watchPaths: [packages/app/src]
+      pathPreconditions: [{path: packages/app/src, expected: present}]
+      guardedBehaviorIds: [plan-authoring]
+```
+
 **File-count sizing guidance (soft):** Treat any "about 10 files" guidance as a reviewability heuristic, not a hard constraint. Prefer smaller slices when practical, but allow broader edits when correctness, shared wiring, or coupled refactors require it.
 
 **Dependency-first layered decomposition (required for implementation plans):** For plans whose `onFinish` is not `none`, every implementation task must include `Layer:` and `Feature state:` headings in `description`. Use normalized layer names (`persistence`, `domain`, `transport`, `api`, `contact_surface`, `app_bridge`, `owner_delegation`, `ui_activation`, `app_regression`, `e2e_regression`, `ui`, `docs`) and feature state values (`active` or `dormant`). `dormant` tasks must still include `Acceptance criteria:` in `description`. Verify-only plans (`onFinish: none`) are exempt from this hard requirement.
@@ -137,7 +149,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Stateful bug lifecycle matrix:** When a bug involves conversation, session, file, cache, or workflow state, Phase 1a must enumerate the transitions that can lose or reuse state. The implementation plan must verify at least one non-happy-path sequence, such as plan creation → intervening message → summary-only reply → authorization/submit. If the state type is shared by multiple surfaces, include a verification case for each affected surface or record why it is unaffected.
 
-**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), approved implementation plans use **Mergify Stacks** for their declared GitHub publication outcome: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push` after the work is ready without asking again. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
+**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), approved implementation plans use **Mergify Stacks** for their declared GitHub publication outcome: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push`. Do not ask again after the work is ready. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
 
 **Review-gate artifact intent:** Plans may include optional top-level `reviewGate.artifacts` metadata to describe an ordered review PR stack. Each artifact needs a unique `id`; `required` defaults to `true` when omitted; the first artifact has no dependency; every later artifact must depend on exactly the immediately previous artifact. Do not use fixed PR-count fields or Mergify-specific fields in the plan YAML. This metadata does not affect scheduler readiness, task dependencies, or workflow `externalDependencies`.
 
