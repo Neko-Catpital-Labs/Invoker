@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { resolveTaskConfig } from '@invoker/workflow-core';
 import { SQLITE_MAX_VARIABLE_NUMBER } from '../sqlite-workflow-repository.js';
 
 const WORKFLOW_COUNT_ABOVE_LIMIT = SQLITE_MAX_VARIABLE_NUMBER + 100;
@@ -38,7 +39,7 @@ describe('SQL variables limit (ui-read-scale)', () => {
           status: 'pending',
           dependencies: [],
           createdAt: new Date(),
-          config: { workflowId: `wf-${i}` },
+          config: resolveTaskConfig({ workflowId: `wf-${i}` }),
           execution: {},
           taskStateVersion: 1,
         });
