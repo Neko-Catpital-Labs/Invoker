@@ -17,6 +17,8 @@ import {
   type NormalizedCostEvent,
   type WorkerActionSummary,
   type WorkerStatusSnapshot,
+  type TaskFilterNode,
+  validateTaskFilter,
 } from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, createWorkerRegistry, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import type { CostAttributionAttempt, WorkerActionRecord } from '@invoker/data-store';
@@ -76,6 +78,23 @@ function hasStringProp(value: unknown, key: string): boolean {
   return Boolean(value && typeof value === 'object' && typeof (value as Record<string, unknown>)[key] === 'string');
 }
 
+const TASK_FILTER_PAGE_SIZE = 500;
+
+function queryAllTasksByFilter(
+  persistence: Pick<HeadlessQueryDeps['persistence'], 'queryTasksByFilter'>,
+  filter: TaskFilterNode,
+): TaskState[] {
+  const all: TaskState[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = persistence.queryTasksByFilter(filter, { limit: TASK_FILTER_PAGE_SIZE, offset });
+    all.push(...page);
+    if (page.length < TASK_FILTER_PAGE_SIZE) break;
+    offset += TASK_FILTER_PAGE_SIZE;
+  }
+  return all;
+}
+
 function isAlertWorkerAction(action: WorkerActionRecord): boolean {
   const searchable = [
     action.actionType,
@@ -102,6 +121,9 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
     throw new Error(`Missing query sub-command. Usage: --headless query <${QUERY_SUBCOMMAND_USAGE}>`);
   }
   const flags = parseQueryFlags(args.slice(1));
+  if (flags.filter !== undefined && subCommand !== 'tasks') {
+    throw new Error('--filter is only supported for `query tasks`');
+  }
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
@@ -139,6 +161,41 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
     }
     case 'tasks': {
       const { orchestrator, persistence } = deps;
+      let filteredTasks: TaskState[] | undefined;
+      if (flags.filter !== undefined) {
+        let parsedFilter: unknown;
+        try {
+          parsedFilter = JSON.parse(flags.filter);
+        } catch (error) {
+          throw new Error(`Invalid --filter JSON: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        const validation = validateTaskFilter(parsedFilter);
+        if (!validation.valid) throw new Error(validation.error);
+        const filters: TaskFilterNode[] = [parsedFilter as TaskFilterNode];
+        const workflowFilterId = flags.workflow ?? flags.positional[0];
+        if (workflowFilterId) filters.push({ op: 'eq', key: 'workflow_id', value: workflowFilterId });
+        if (flags.status) filters.push({ op: 'eq', key: 'status', value: flags.status });
+        if (flags.noMerge) filters.push({ op: 'eq', key: 'is_merge_node', value: false });
+        const filter: TaskFilterNode = filters.length === 1 ? filters[0] : { op: 'and', filters };
+        filteredTasks = queryAllTasksByFilter(persistence, filter);
+      }
+
+      if (filteredTasks) {
+        const allTasks = filteredTasks;
+        switch (flags.output) {
+          case 'label': writeOut(formatAsLabel(allTasks) + '\n'); break;
+          case 'json':  writeOut(formatAsJson(allTasks.map(serializeTask)) + '\n'); break;
+          case 'jsonl': writeOut(formatAsJsonl(allTasks.map(serializeTask)) + '\n'); break;
+          default: {
+            for (const task of allTasks) writeOut(formatTaskStatus(task) + '\n');
+            const status = orchestrator.getWorkflowStatus();
+            writeOut(`\n${formatWorkflowStatus(status)}\n`);
+            break;
+          }
+        }
+        break;
+      }
+
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
         writeOut('No workflows found. Run a plan first.\n');
