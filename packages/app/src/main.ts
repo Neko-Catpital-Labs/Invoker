@@ -1388,13 +1388,14 @@ function startHeadlessMode(): void {
       const loadGeneratedPlan = async (
         planText: string,
         repositoryBinding?: InAppPlanningRepoBinding,
+        staged = true,
       ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => (
         loadPlanSubmissionBundle(planText, {
           persistence,
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        }, { staged: true, repositoryBinding })
+        }, { staged, repositoryBinding })
       );
       submitAdminBypassE2eBabysitPlan = (planText) => loadGeneratedPlan(planText);
 
@@ -1599,7 +1600,7 @@ function startHeadlessMode(): void {
 
       registerStandaloneOwnerCapability('invoker:load-plan', async (payload) => {
         const planText = String(payload.args[0] ?? '');
-        await loadGeneratedPlan(planText);
+        await loadGeneratedPlan(planText, undefined, false);
         return undefined;
       });
 
