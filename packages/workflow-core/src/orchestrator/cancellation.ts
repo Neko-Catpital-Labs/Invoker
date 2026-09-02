@@ -352,9 +352,10 @@ export function closeIdleTaskImpl(host: CancellationHost, taskId: string): TaskS
 export function cancelWorkflowImpl(
   host: CancellationHost,
   workflowId: string,
-  opts?: { deferInvalidation?: boolean },
+  opts?: { deferInvalidation?: boolean; reason?: string },
 ): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
   host.refreshWorkflowFromDb(workflowId);
+  const reason = opts?.reason ?? 'Cancelled by user (workflow)';
 
   const allTasks = host.stateMachine.getAllTasks().filter(
     (t) => t.config.workflowId === workflowId,
@@ -396,14 +397,14 @@ export function cancelWorkflowImpl(
     const changes: TaskStateChanges = {
       status: 'failed',
       execution: {
-        error: 'Cancelled by user (workflow)',
+        error: reason,
         completedAt: new Date(),
       },
     };
     const wfCancelUpdated = host.writeAndSync(id, changes);
     host.updateSelectedAttempt(id, {
       status: 'failed',
-      error: 'Cancelled by user (workflow)',
+      error: reason,
       completedAt: changes.execution?.completedAt,
     });
     host.persistence.logEvent?.(id, 'task.cancelled', changes);

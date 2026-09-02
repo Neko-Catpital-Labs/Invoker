@@ -454,7 +454,7 @@ export class CommandService {
   ): Promise<CommandResult<CancelResult>> {
     return this.executeCommand<CancelResult>(
       'PREEMPT_WORKFLOW_FAILED',
-      () => this.orchestrator.cancelWorkflow(envelope.payload.workflowId, { detachDependents: false }),
+      () => this.orchestrator.cancelWorkflow(envelope.payload.workflowId, { cascadeDependents: false }),
       envelope.payload.workflowId,
     );
   }
