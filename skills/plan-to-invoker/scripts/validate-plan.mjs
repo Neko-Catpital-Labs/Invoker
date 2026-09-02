@@ -16,6 +16,83 @@ import { dirname, join, normalize, resolve } from 'node:path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+const FRESHNESS_KEYS = new Set(['watchPaths', 'pathPreconditions', 'guardedBehaviorIds']);
+const PATH_PRECONDITION_KEYS = new Set(['path', 'expected']);
+const GUARDED_BEHAVIOR_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNormalizedFreshnessPath(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  if (normalized === '' || normalized.length > 4096 || normalized.startsWith('/') || normalized.includes('\\')) return false;
+  for (let index = 0; index < normalized.length; index += 1) {
+    const code = normalized.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return normalized.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+function validateTaskFreshness(errors, taskId, freshness) {
+  const field = 'freshness';
+  const invalid = (nestedField, value, message) => {
+    errors.push({ errorType: 'invalid_freshness_value', field: nestedField ? `${field}.${nestedField}` : field, taskId, message, value });
+  };
+
+  if (!isRecord(freshness)) {
+    invalid('', freshness, `Task "${taskId}" freshness must be an object when provided`);
+    return;
+  }
+  const unknownKey = Object.keys(freshness).find((key) => !FRESHNESS_KEYS.has(key));
+  if (unknownKey) {
+    invalid(unknownKey, freshness[unknownKey], `Task "${taskId}" freshness has unsupported field "${unknownKey}"`);
+    return;
+  }
+
+  for (const key of ['watchPaths', 'guardedBehaviorIds']) {
+    if (freshness[key] === undefined) continue;
+    if (!Array.isArray(freshness[key])) {
+      invalid(key, freshness[key], `Task "${taskId}" freshness.${key} must be an array`);
+      continue;
+    }
+    freshness[key].forEach((entry, index) => {
+      const valid = key === 'watchPaths'
+        ? isNormalizedFreshnessPath(entry)
+        : typeof entry === 'string' && GUARDED_BEHAVIOR_ID_PATTERN.test(entry.trim());
+      if (!valid) invalid(`${key}[${index}]`, entry, `Task "${taskId}" freshness.${key}[${index}] has an invalid value`);
+    });
+  }
+
+  if (freshness.pathPreconditions === undefined) return;
+  if (!Array.isArray(freshness.pathPreconditions)) {
+    invalid('pathPreconditions', freshness.pathPreconditions, `Task "${taskId}" freshness.pathPreconditions must be an array`);
+    return;
+  }
+  const expectations = new Map();
+  freshness.pathPreconditions.forEach((entry, index) => {
+    const entryField = `pathPreconditions[${index}]`;
+    if (!isRecord(entry)) {
+      invalid(entryField, entry, `Task "${taskId}" ${entryField} must be an object`);
+      return;
+    }
+    const unknownEntryKey = Object.keys(entry).find((key) => !PATH_PRECONDITION_KEYS.has(key));
+    if (unknownEntryKey) {
+      invalid(`${entryField}.${unknownEntryKey}`, entry[unknownEntryKey], `Task "${taskId}" ${entryField} has unsupported field "${unknownEntryKey}"`);
+      return;
+    }
+    if (!isNormalizedFreshnessPath(entry.path)) invalid(`${entryField}.path`, entry.path, `Task "${taskId}" ${entryField}.path must be a normalized repo-relative path`);
+    if (entry.expected !== 'present' && entry.expected !== 'absent') invalid(`${entryField}.expected`, entry.expected, `Task "${taskId}" ${entryField}.expected must be "present" or "absent"`);
+    if (isNormalizedFreshnessPath(entry.path) && (entry.expected === 'present' || entry.expected === 'absent')) {
+      const path = entry.path.trim();
+      const previous = expectations.get(path);
+      if (previous !== undefined && previous !== entry.expected) invalid('pathPreconditions', entry, `Task "${taskId}" freshness.pathPreconditions has conflicting expectations for path "${path}"`);
+      expectations.set(path, entry.expected);
+    }
+  });
+}
+
 /**
  * Locate the Invoker checkout that owns this doctor script, for `yaml` when
  * it isn't resolvable as a real installed dependency. Dev-convenience/other-
@@ -841,6 +918,10 @@ function validatePlan(yamlContent, repoRoot) {
 
     const taskId = task.id;
     taskIds.add(taskId);
+
+    if (task.freshness !== undefined) {
+      validateTaskFreshness(errors, taskId, task.freshness);
+    }
 
     if (!task.description || typeof task.description !== 'string' || task.description.trim() === '') {
       errors.push({
