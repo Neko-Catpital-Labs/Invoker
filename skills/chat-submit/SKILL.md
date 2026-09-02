@@ -40,11 +40,11 @@ Do **not** use this skill for one-slice same-repo feature iteration, one-file fi
 3. Call `invoker_prepare_plan_review` with **exactly one** of:
    - `planPath` pointing at the YAML file, or
    - `sessionId` for an in-app planning session
-4. Show the ordered steps and confirmation text. Keep the returned `reviewToken`. Never paste the full YAML into chat.
+4. Show the ordered steps and confirmation text, plus `plans/invoker-handoff.md` (or a one-line-per-workflow step list) before asking for approval. Keep the returned `reviewToken`. Never paste the full YAML into chat. Never label more than one `AskUserQuestion` option "(Recommended)".
 5. Confirmation:
    - Self-triggered multi-layer delegation: use `confirmationMode: "auto_submit"` and call `invoker_submit_plan` once prepare reports that mode **and** completeness passed.
    - Human-triggered handoff: wait for one explicit user approval unless prepare already returned `auto_submit`.
-6. Call `invoker_submit_plan` with the same source (`planPath` or `sessionId`) plus `reviewToken` and `mode: "live"`.
+6. Call `invoker_submit_plan` with the same source (`planPath` or `sessionId`) plus `reviewToken` and `mode: "live"`. When the approval covers more than one workflow built from one template or chain, submit ONE head first, confirm via `invoker_list_tasks` / `invoker-cli query tasks --workflow <id>` that its implement task is `running` with an agent session, then fan out the rest. A template defect replicates into every workflow submitted from it.
 7. After submit, park — do not poll in-turn:
    - Optionally confirm the workflow exists with a short `invoker_get_workflow` / `invoker_wait_for_workflow` (~5s).
    - Arm a background shell: `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`.
@@ -59,6 +59,7 @@ Do **not** use this skill for one-slice same-repo feature iteration, one-file fi
 
 - Completeness gate before submit. Missing Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, blocks submit.
 - One approval before submit by default for human-triggered work; self-triggered large work may `auto_submit` after completeness.
+- One head first for N>1 template-derived workflows; fan out only after its implement task is `running` with an agent session.
 - Never invent SQLite reads or recovery paths — Invoker owns persistence.
 - Never submit without the review token from the matching prepare call.
 - If plan content changed after review, prepare again and re-approve.
