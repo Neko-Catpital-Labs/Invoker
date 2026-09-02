@@ -74,5 +74,13 @@ must_contain "Single-machine absence as proof:" \
   "prove-it skill must include the single-machine-absence-as-proof example (never-pushed incident)"
 must_contain "rejects a \`## Visual Proof\` section that has" \
   "prove-it skill must document the mechanical validate-pr-body.mjs gate"
+must_contain "state which ref it was read at" \
+  "prove-it skill must require every file:line citation to name the ref it was read at"
+must_contain "counts as name-matched, not read-confirmed" \
+  "prove-it skill must downgrade a working-tree read under untracked or modified paths to name-matched"
+must_contain "must also ask for the ref" \
+  "prove-it skill must require subagent read-confirmed prompts to ask for the ref"
+must_contain "Wrong-ref citation:" \
+  "prove-it skill must include the wrong-ref-citation example (stale-branch and untracked-copy incident)"
 
 echo "OK: prove-it skill contract checks passed"
