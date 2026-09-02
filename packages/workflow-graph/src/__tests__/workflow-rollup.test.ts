@@ -25,6 +25,7 @@ describe('workflow rollup', () => {
     { name: 'failed with unrelated pending work by counts only', statuses: ['failed', 'pending'], expected: 'failed' },
     { name: 'terminal failed', statuses: ['failed', 'completed'], expected: 'failed' },
     { name: 'closed gate', statuses: ['completed', 'closed'], expected: 'closed' },
+    { name: 'skipped gate', statuses: ['completed', 'skipped'], expected: 'closed' },
     { name: 'running outranks closed', statuses: ['closed', 'running'], expected: 'running' },
     { name: 'awaiting approval outranks closed', statuses: ['closed', 'awaiting_approval'], expected: 'awaiting_approval' },
     { name: 'review ready outranks closed', statuses: ['closed', 'review_ready'], expected: 'review_ready' },
