@@ -124,6 +124,18 @@ Files:
     ]);
   });
 
+  it('splits sentences that end with a closing quote or parenthesis', () => {
+    const specification = parseTaskFreshnessSpecification(
+      '"packages/ui/src/App.tsx already exists; do not create it." Create packages/ui/src/NewPanel.tsx. '
+      + '(packages/ui/src/Toolbar.tsx already exists.) Create packages/ui/src/NewToolbar.tsx.',
+    );
+
+    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+      'packages/ui/src/App.tsx',
+      'packages/ui/src/Toolbar.tsx',
+    ]);
+  });
+
   it('keeps an explicit do not create path as an anchor', () => {
     const specification = parseTaskFreshnessSpecification(
       'Do not create packages/ui/src/App.tsx; modify the existing file.',

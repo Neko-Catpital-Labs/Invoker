@@ -35,6 +35,7 @@ const PATH_INTENT_MARKER_PATTERN = /\b(?:do not create|must not create|without c
 const GUARDED_MARKER_PATTERN = /guarded-behavior:\s*([A-Za-z0-9][\w-]*)/gi;
 const GUARDED_PROSE_PATTERN = /guarded behavior(?:\s+(?:id|marker))?\s*(?:`|"|')?([A-Za-z0-9][\w-]*)/gi;
 const REMOTE_REPORT_MARKER = '__INVOKER_TASK_FRESHNESS_STALE__';
+const SENTENCE_BOUNDARY_PATTERN = /\r?\n|(?<=[.!?]["')\]]*)\s+/;
 
 type PathIntent = 'existing' | 'create' | 'reference';
 
@@ -97,7 +98,7 @@ export function parseTaskFreshnessSpecification(text: string): TaskFreshnessSpec
   ]);
   const anchors: TaskFreshnessAnchor[] = [];
 
-  for (const rawClause of text.split(/\r?\n|(?<=[.!?])\s+/)) {
+  for (const rawClause of text.split(SENTENCE_BOUNDARY_PATTERN)) {
     const clause = rawClause.trim();
     if (!clause) continue;
     const paths = normalizedRepoPaths(clause);
