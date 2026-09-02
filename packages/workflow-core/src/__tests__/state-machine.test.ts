@@ -92,6 +92,13 @@ describe('TaskStateMachine', () => {
   // ── getReadyTasks ──────────────────────────────────────
 
   describe('getReadyTasks', () => {
+    it('does not return skipped tasks', () => {
+      sm.restoreTask(makeTask('a', [], 'completed'));
+      sm.restoreTask(makeTask('b', ['a'], 'skipped'));
+
+      expect(sm.getReadyTasks()).toEqual([]);
+    });
+
     it('returns pending tasks with all deps completed', () => {
       sm.restoreTask(makeTask('a', [], 'completed'));
       sm.restoreTask(makeTask('b', ['a'], 'pending'));
@@ -120,6 +127,13 @@ describe('TaskStateMachine', () => {
   // ── findNewlyReadyTasks ────────────────────────────────
 
   describe('findNewlyReadyTasks', () => {
+    it('does not return skipped dependents', () => {
+      sm.restoreTask(makeTask('a', [], 'completed'));
+      sm.restoreTask(makeTask('b', ['a'], 'skipped'));
+
+      expect(sm.findNewlyReadyTasks('a')).toEqual([]);
+    });
+
     it('returns dependents of completed task whose all deps are completed', () => {
       sm.restoreTask(makeTask('a', [], 'completed'));
       sm.restoreTask(makeTask('b', [], 'completed'));
