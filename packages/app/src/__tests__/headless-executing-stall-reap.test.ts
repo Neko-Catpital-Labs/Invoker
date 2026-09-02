@@ -16,7 +16,7 @@ describe('headless db-poll executing stall', () => {
     vi.setSystemTime(now);
 
     const staleTask = {
-      id: 'wf-headless/impl-06',
+      id: 'wf-headless/disk-full-tail',
       status: 'running',
       config: {
         workflowId: 'wf-headless',
@@ -29,6 +29,10 @@ describe('headless db-poll executing stall', () => {
         startedAt: new Date(now.getTime() - 30 * 60_000).toISOString(),
         lastHeartbeatAt: new Date(now.getTime() - 20 * 60_000).toISOString(),
       },
+    } as unknown as TaskState;
+    const plainTask = {
+      ...staleTask,
+      id: 'wf-headless/plain-stall',
     } as unknown as TaskState;
 
     const handleWorkerResponse = vi.fn();
@@ -45,8 +49,8 @@ describe('headless db-poll executing stall', () => {
       } as never,
       persistence: {
         listWorkflows: () => [{ id: 'wf-headless', status: 'running' } as never],
-        loadTasks: () => [staleTask],
-        loadTasksForWorkflows: () => [staleTask],
+        loadTasks: () => [staleTask, plainTask],
+        loadTasksForWorkflows: () => [staleTask, plainTask],
         loadTask: () => staleTask,
         loadAttempt: () => ({
           status: 'running',
@@ -55,12 +59,14 @@ describe('headless db-poll executing stall', () => {
         }),
         writeActivityLog: vi.fn(),
         appendOutputChunk: vi.fn(),
-        getOutputTail: () => [],
+        getOutputTail: (taskId: string) => taskId === staleTask.id
+          ? [{ data: 'write failed: No space left on device\n' }]
+          : [],
         appendTaskOutput: vi.fn(),
       },
       messageBus: { publish: vi.fn() },
       getOrchestrator: () => ({
-        getAllTasks: () => [staleTask],
+        getAllTasks: () => [staleTask, plainTask],
         getMergeNode: () => undefined,
         syncAllFromDb: vi.fn(),
         handleWorkerResponse,
@@ -90,16 +96,23 @@ describe('headless db-poll executing stall', () => {
     const handle = feed.startDbPolling();
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(handleWorkerResponse).toHaveBeenCalledTimes(1);
-    const response = handleWorkerResponse.mock.calls[0]?.[0];
-    expect(response).toMatchObject({
-      actionId: 'wf-headless/impl-06',
+    expect(handleWorkerResponse).toHaveBeenCalledTimes(2);
+    const diskFullResponse = handleWorkerResponse.mock.calls[0]?.[0];
+    expect(diskFullResponse).toMatchObject({
+      actionId: 'wf-headless/disk-full-tail',
       status: 'failed',
       outputs: {
-        failureClass: 'liveness_stall',
+        error: 'write failed: No space left on device',
+        failureClass: 'ssh-disk-full',
       },
     });
-    expect(String(response.outputs.error)).toContain('attempt lease expired');
+    const plainResponse = handleWorkerResponse.mock.calls[1]?.[0];
+    expect(plainResponse).toMatchObject({
+      actionId: 'wf-headless/plain-stall',
+      status: 'failed',
+      outputs: { failureClass: 'liveness_stall' },
+    });
+    expect(String(plainResponse.outputs.error)).toContain('attempt lease expired');
     expect(publishDelta).not.toHaveBeenCalled();
     expect(requestWorkflowMetadataPublish).not.toHaveBeenCalled();
     expect(pollLaunchDispatcher).toHaveBeenCalled();
