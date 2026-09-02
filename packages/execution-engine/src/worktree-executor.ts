@@ -435,13 +435,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
 
     if (request.actionType === 'ai_task') {
-      const taskText = [request.inputs.description, request.inputs.prompt]
-        .filter((value): value is string => Boolean(value?.trim()))
-        .join('\n');
       const freshness = await inspectTaskFreshness({
         cwd: acquired.worktreePath,
         snapshotCommit: request.inputs.specificationSnapshotCommit,
-        taskText,
+        freshness: request.inputs.freshness,
         runGit: args => this.execGitSimple(args, acquired.worktreePath),
       });
       if (freshness.status === 'stale') {
@@ -475,7 +472,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
             requestId: request.requestId,
             actionId: request.actionId,
             executionGeneration: request.executionGeneration,
-            status: 'needs_input',
+            status: 'stale',
             outputs: {
               exitCode: 1,
               error: freshness.message,
