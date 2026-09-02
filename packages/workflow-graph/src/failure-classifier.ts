@@ -92,6 +92,11 @@ export class FailureClassifier {
     return failureClass === 'liveness_stall';
   }
 
+  static isRequeueableFailureTask(task: { execution: { failureClass?: FailureClass } }): boolean {
+    return task.execution.failureClass === 'liveness_stall'
+      || task.execution.failureClass === 'ssh-transport-transient';
+  }
+
   /** True when the failure is a machine-owned SSH infra bucket (owned by infra-repair). */
   static isSshInfra(failureClass: FailureClass | undefined): failureClass is SshInfraFailureClass {
     return failureClass !== undefined
