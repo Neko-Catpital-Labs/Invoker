@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTaskState, createAttempt } from '../types.js';
+import { assertResolvedTaskConfig, createAttempt, createTaskState, resolveTaskConfig } from '../types.js';
 import type { TaskConfig } from '../types.js';
 
 describe('createTaskState', () => {
@@ -19,12 +19,17 @@ describe('createTaskState', () => {
     expect(task.execution).toEqual({ generation: 0 });
   });
 
-  // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-  it.fails('defaults to the built-in local pool config and empty execution', () => {
+  it('defaults to the built-in local pool config and empty execution', () => {
     const task = createTaskState('t2', 'plain task', []);
 
     expect(task.config).toEqual({ runnerKind: 'worktree', poolId: 'local-worktree' });
     expect(task.execution).toEqual({ generation: 0 });
+  });
+
+  it('rejects a merge runner kind that is not flagged as a merge node', () => {
+    expect(() => resolveTaskConfig({ runnerKind: 'merge' })).toThrow('must pair with isMergeNode=true');
+    expect(() => assertResolvedTaskConfig({ runnerKind: 'worktree', poolId: 'local-worktree', isMergeNode: true }))
+      .toThrow('must pair with isMergeNode=false');
   });
 
   it('copies dependencies without shared reference', () => {
