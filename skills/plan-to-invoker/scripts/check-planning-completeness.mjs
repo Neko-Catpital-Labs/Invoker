@@ -46,6 +46,7 @@ const PLACEHOLDER_RE = /\bREPLACE_ME\b|\bTODO\b|\bTBD\b|\bFIXME\b/i;
 const MANUAL_VERIFY_RE = /\bmanually\s+check\b|\bcheck\s+manually\b|\bby\s+hand\b/i;
 const GIT_URL_RE = /^(?:git@|https?:\/\/|ssh:\/\/).+\..+/i;
 const GREEN_BASELINE_RE = /\b(?:existing\s+)?(?:green\s+)?(?:baseline|suite|tests?|checks?)\b[^.\n]*(?:\bis\b|\bare\b|\bremains?\b)[^.\n]*\bgreen\b/i;
+const UNVERIFIED_RE = new RegExp('^\\s*UNVERIFIED:\\s*', 'i');
 const RECEIPT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const HEADING_LABELS = [
@@ -141,7 +142,7 @@ function planTextWithoutUnverifiedClaims(plan, tasks) {
   }
   return parts
     .filter((value) => typeof value === 'string')
-    .map((value) => value.split(/\r?\n/).filter((line) => !new RegExp('\\bUNVERIFIED:\\s*', 'i').test(line)).join('\n'))
+    .map((value) => value.split(/\r?\n/).filter((line) => !UNVERIFIED_RE.test(line)).join('\n'))
     .join('\n');
 }
 
