@@ -20,10 +20,10 @@ invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.4-cross-exec-fai
 STA=$(invoker_e2e_task_status e2e-g334-taskA)
 STB=$(invoker_e2e_task_status e2e-g334-taskB)
 STC=$(invoker_e2e_task_status e2e-g334-taskC)
-if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || [ "$STC" != "pending" ]; then
-  echo "FAIL case 3.4: expected A=completed B=failed C=pending, got A='$STA' B='$STB' C='$STC'"
+if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || [ "$STC" != "skipped" ]; then
+  echo "FAIL case 3.4: expected A=completed B=failed C=skipped, got A='$STA' B='$STB' C='$STC'"
   invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 
-echo "PASS case 3.4 (cross-executor fail: A=completed, B[ssh]=failed, C=pending)"
+echo "PASS case 3.4 (cross-executor fail: A=completed, B[ssh]=failed, C=skipped)"

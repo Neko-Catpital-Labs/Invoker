@@ -1,7 +1,7 @@
 # E2E SSH Group 3.6 — merge gate with mixed executors (worktree + SSH).
 name: "e2e-ssh group3 3.6 ssh-merge-gate"
 repoUrl: git@github.com:example-org/acme-repo.git
-onFinish: none
+onFinish: pull_request
 mergeMode: external_review
 featureBranch: experiment/e2e-g336-ssh-pr
 baseBranch: HEAD
