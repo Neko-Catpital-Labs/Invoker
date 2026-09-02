@@ -468,11 +468,45 @@ function planningRepositoryContext(session: InAppPlanningChatSession): string {
   ].join('\n');
 }
 
+function canonicalGitRepositoryIdentity(repoUrl: string): string {
+  const trimmed = repoUrl.trim();
+  const scpLike = /^git@([^:]+):(.+)$/i.exec(trimmed);
+  if (scpLike) {
+    return canonicalRemoteRepositoryIdentity(scpLike[1], scpLike[2]);
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!['http:', 'https:', 'ssh:'].includes(parsed.protocol)
+      || !parsed.host
+      || parsed.search
+      || parsed.hash) {
+      return trimmed;
+    }
+    return canonicalRemoteRepositoryIdentity(parsed.host, parsed.pathname);
+  } catch {
+    return trimmed;
+  }
+}
+
+function canonicalRemoteRepositoryIdentity(host: string, path: string): string {
+  const canonicalHost = host.toLowerCase();
+  const withoutGitSuffix = path
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\.git$/i, '');
+  const canonicalPath = canonicalHost === 'github.com'
+    ? withoutGitSuffix.toLowerCase()
+    : withoutGitSuffix;
+  return `${canonicalHost}/${canonicalPath}`;
+}
+
 async function silentRepoMismatch(
   session: InAppPlanningChatSession,
   planText: string,
 ): Promise<string | undefined> {
-  if (!session.repoUrl) return undefined;
+  const sessionRepoUrl = session.repoUrl;
+  if (!sessionRepoUrl) return undefined;
+  const sessionRepoIdentity = canonicalGitRepositoryIdentity(sessionRepoUrl);
   const { parsePlanSubmissionBundle } = await import('./plan-parser.js');
   const submission = parsePlanSubmissionBundle(planText);
   const userText = session.messages
@@ -483,7 +517,7 @@ async function silentRepoMismatch(
     .map((plan) => plan.repoUrl)
     .find((repoUrl): repoUrl is string => Boolean(
       repoUrl
-      && repoUrl !== session.repoUrl
+      && canonicalGitRepositoryIdentity(repoUrl) !== sessionRepoIdentity
       && !userText.includes(repoUrl),
     ));
 }
