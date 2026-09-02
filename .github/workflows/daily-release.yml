@@ -56,13 +56,13 @@ jobs:
       - name: Bump nightly patch version
         if: steps.decide.outputs.should_run == 'true'
         env:
-          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
         run: |
           node scripts/bump-release-version.mjs --type patch
           git checkout -b "daily-version-bump-${{ steps.decide.outputs.tag }}"
           git config user.name "invoker-release-bot"
           git config user.email "invoker-release-bot@users.noreply.github.com"
+          git config --global "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" "https://github.com/"
           git commit -am "chore(release): bump patch version for ${{ steps.decide.outputs.tag }}"
           bash scripts/open-daily-release-bump-pr.sh --tag "${{ steps.decide.outputs.tag }}"
 
