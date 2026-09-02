@@ -213,7 +213,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
         requestId: request.requestId,
         actionId: request.actionId,
         executionGeneration: request.executionGeneration,
-        status: 'needs_input',
+        status: 'stale',
         outputs: {
           exitCode: 1,
           error: message,
@@ -231,13 +231,10 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     workspacePath: string,
   ): Promise<string | undefined> {
     if (request.actionType !== 'ai_task') return undefined;
-    const taskText = [request.inputs.description, request.inputs.prompt]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .join('\n');
     const output = await this.execRemoteCapture(buildRemoteTaskFreshnessScript({
       cwd: workspacePath,
       snapshotCommit: request.inputs.specificationSnapshotCommit,
-      taskText,
+      freshness: request.inputs.freshness,
     }), 'task_freshness_preflight');
     const report = parseRemoteTaskFreshnessReport(output);
     return report

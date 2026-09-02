@@ -107,6 +107,7 @@ export function deriveNodeStatus(
     case 'completed': return 'completed';
     case 'failed': return 'failed';
     case 'needs_input': return 'needs_input';
+    case 'stale': return 'stale';
     case 'superseded': return 'stale';
     default: return node.status;
   }
