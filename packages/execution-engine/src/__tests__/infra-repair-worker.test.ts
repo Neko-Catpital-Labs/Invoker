@@ -10,6 +10,7 @@ import type { TaskState } from '@invoker/workflow-core';
 import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from './fixtures/pr-6976-oauth-session-expired.js';
 import {
   buildRepoMirrorRepairScript,
+  classifyGenericSshInfraFailure,
   createInfraRepairTick,
   deriveCorruptWorktreeAdminPathFromWorkspace,
   extractCorruptMirrorPath,
@@ -747,6 +748,14 @@ describe('infra-repair worker', () => {
         }),
       }),
     ]));
+  });
+});
+
+describe('classifyGenericSshInfraFailure', () => {
+  it('returns infra classes and ignores the transient transport class', () => {
+    expect(classifyGenericSshInfraFailure('No space left on device')).toBe('ssh-disk-full');
+    expect(classifyGenericSshInfraFailure('ssh transport failed exit=255')).toBeUndefined();
+    expect(classifyGenericSshInfraFailure(undefined)).toBeUndefined();
   });
 });
 
