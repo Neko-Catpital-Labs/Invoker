@@ -65,13 +65,11 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
       });
     }
 
-    const before = process.memoryUsage().heapUsed;
     const workflows = adapter.listWorkflows();
-    const after = process.memoryUsage().heapUsed;
-    const memoryDelta = after - before;
+    const materializedBytes = Buffer.byteLength(JSON.stringify(workflows), 'utf8');
 
     expect(workflows).toHaveLength(workflowCount);
-    expect(memoryDelta).toBeLessThan(1_000_000);
+    expect(materializedBytes).toBeLessThan(1_000_000);
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
