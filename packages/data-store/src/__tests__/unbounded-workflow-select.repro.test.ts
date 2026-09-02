@@ -52,7 +52,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     expect(snapshot.workflows.length).toBeLessThan(1000);
   });
 
-  it.fails('listWorkflows materializes every row into JS objects', () => {
+  it.fails('listWorkflows materializes more than 1 MB of workflow data', () => {
     const workflowCount = 5_000;
     for (let i = 0; i < workflowCount; i++) {
       adapter.saveWorkflow({
@@ -69,8 +69,10 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     const workflows = adapter.listWorkflows();
     const after = process.memoryUsage().heapUsed;
     const memoryDelta = after - before;
+    const materializedBytes = Buffer.byteLength(JSON.stringify(workflows), 'utf8');
 
     expect(workflows).toHaveLength(workflowCount);
+    expect(materializedBytes).toBeLessThan(1_000_000);
     expect(memoryDelta).toBeLessThan(1_000_000);
   });
 
