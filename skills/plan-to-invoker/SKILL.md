@@ -190,6 +190,11 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
   Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so stack slices are validated with stack context. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings directly in prompt text, cross-layer dependency-direction violations, and (unless `scratch: true`) a missing `scrub-handoff-artifacts` terminal task per the Handoff absence gate above.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
+5a. `step-presubmit-traps` (required before any submit; not yet part of `skill-doctor`)
+   `node skills/plan-to-invoker/scripts/freshness-check.mjs --ref origin/<baseBranch> . <plan-file>` must print `current` for every prompt task; a `STALE -> needs_input` line is the owner's launch-time verdict, fix the clause before submitting.
+   `node skills/plan-to-invoker/scripts/unit-triggers.mjs <plan-file>` must exit 0; on a hit it prints the section line that trips each review unit.
+   `grep -n "test -- --run" <plan-file>` must print nothing.
+   See `references/task-patterns.md` § *Traps that cost a resubmit*.
 
 ### Workflow steps after validation
 
