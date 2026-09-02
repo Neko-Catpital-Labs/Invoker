@@ -18,6 +18,7 @@ import {
   loadPlan,
   selectFirstWorkflow,
   injectTaskStates,
+  waitForTaskStatus,
   captureScreenshot,
   assertPageScreenshot,
   getTasks,
@@ -236,6 +237,24 @@ const TASK_STATUS_PROOF_PLAN = {
     { id: 'proof-task-review-ready', description: 'Review ready', command: 'echo review', dependencies: ['proof-task-closed', 'proof-task-stale'] },
     { id: 'proof-task-awaiting-approval', description: 'Await approval', command: 'echo approval', dependencies: ['proof-task-needs-input'] },
   ],
+};
+
+/** Plan-specific fixture for proving a typed freshness mismatch is terminal stale. */
+const TYPED_FRESHNESS_STALE_PLAN = {
+  ...TEST_PLAN,
+  name: 'Typed freshness stale visual proof',
+  tasks: TEST_PLAN.tasks.map((task, index) => index === 0
+    ? {
+        ...task,
+        description: 'Typed freshness mismatch',
+        prompt: 'Apply the planned change only when the repository is fresh.',
+        freshness: {
+          watchPaths: ['src/changed-file.ts'],
+          pathPreconditions: [{ path: 'src/changed-file.ts', expected: 'present' as const }],
+          guardedBehaviorIds: ['typed-freshness-check'],
+        },
+      }
+    : task),
 };
 
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
@@ -1830,6 +1849,55 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'task-complete');
     await assertPageScreenshot(page, 'task-complete');
   });
+
+  test('typed task freshness mismatch — stale, not needs input', async ({ page }) => {
+    await loadPlan(page, TYPED_FRESHNESS_STALE_PLAN);
+
+    const startedAt = new Date();
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'running',
+          execution: { startedAt, lastHeartbeatAt: startedAt },
+        },
+      },
+    ]);
+    await waitForTaskStatus(page, 'task-alpha', 'running');
+    await page.waitForTimeout(500);
+
+    const completedAt = new Date();
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'stale',
+          execution: {
+            startedAt,
+            completedAt,
+            exitCode: 1,
+            error: 'Task freshness mismatch: src/changed-file.ts changed after planning.',
+          },
+        },
+      },
+    ]);
+    await waitForTaskStatus(page, 'task-alpha', 'stale');
+
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible();
+    const staleNode = miniDag.locator('.react-flow__node[data-testid$="task-alpha"]');
+    await expect(staleNode).toBeVisible();
+    await staleNode.click();
+    const panel = page.locator('aside');
+    await expect(panel.getByText('Task Status')).toBeVisible();
+    await expect(panel.getByText('stale', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Task freshness mismatch: src/changed-file.ts changed after planning.')).toBeVisible();
+    await expect(panel.getByText('Input Required', { exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: 'Provide Input' })).toHaveCount(0);
+
+    await captureScreenshot(page, 'typed-freshness-stale-status');
+  });
+
   test.describe('timeline worker proof', () => {
     test.use({ guiOwnerMode: 'local' });
 
