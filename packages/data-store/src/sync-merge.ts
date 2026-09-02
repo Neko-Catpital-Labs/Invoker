@@ -227,6 +227,7 @@ const ATTEMPT_STATUS_RANK: Record<string, number> = {
   claimed: 1,
   running: 2,
   needs_input: 3,
+  stale: 4,
   superseded: 4,
   failed: 4,
   cancelled: 4,
