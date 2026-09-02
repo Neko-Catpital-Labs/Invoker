@@ -415,6 +415,19 @@ must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker
 must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"
 must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-context prompt framing for implementation tasks"
 
+# Submit — pilot one head before fan-out, show the plan, one Recommended option
+CHAT_SUBMIT_SKILL="$REPO_ROOT/skills/chat-submit/SKILL.md"
+must_contain "$SKILL_MD" "Pilot one head before fan-out" "SKILL handoff mode must pilot one head before submitting the rest of a chain"
+must_contain "$SKILL_MD" 'submit ONE head workflow first' "SKILL handoff mode must submit one head first for N>1 template-derived workflows"
+must_contain "$SKILL_MD" 'reaches `running` with an agent session' "SKILL handoff mode must gate fan-out on a running implement task with an agent session"
+must_contain "$SKILL_MD" 'Show `plans/invoker-handoff.md` (or the ordered step list, one line per workflow) in chat before the approval question' "SKILL handoff mode must show the plan before the approval question"
+must_contain "$SKILL_MD" 'Never label more than one `AskUserQuestion` option "(Recommended)"' "SKILL handoff mode must forbid two Recommended approval options"
+must_contain "$SKILL_MD" "Submit the chain head alone first" "SKILL chain submit step must pilot the head"
+must_contain "$CHAT_SUBMIT_SKILL" "submit ONE head first" "chat-submit must submit one head first for N>1 template-derived workflows"
+must_contain "$CHAT_SUBMIT_SKILL" 'Never label more than one `AskUserQuestion` option "(Recommended)"' "chat-submit must forbid two Recommended approval options"
+must_contain "$CHAT_SUBMIT_SKILL" 'plus `plans/invoker-handoff.md` (or a one-line-per-workflow step list) before asking for approval' "chat-submit must show the plan before the approval question"
+must_contain "$CHAT_SUBMIT_SKILL" "One head first for N>1 template-derived workflows" "chat-submit hard rules must include the pilot-one-head rule"
+
 # Class-search — open plan-intake PRs must be reported regardless of relevance
 must_contain "$SKILL_MD" "**Open PRs touching plan intake / validation / freshness / preflight**" "SKILL class-search must require the open plan-intake PR heading"
 must_contain "$SKILL_MD" 'gh pr list --search "<freshness|preflight|validate-plan|plan-parser>" --state open' "SKILL class-search must name the open plan-intake PR query"
