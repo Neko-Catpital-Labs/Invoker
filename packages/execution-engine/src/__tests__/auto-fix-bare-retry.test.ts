@@ -63,7 +63,7 @@ function makeHarness(task = makeFailedTask()) {
   const actions = new Map<string, WorkerActionRecord>();
   const submit = vi.fn((_workflowId: string, _priority: WorkflowMutationPriority, _channel: string, _args: unknown[]) => 99);
   const store = {
-    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    listWorkflows: vi.fn(() => [{ id: 'wf-1', repoUrl: 'https://example.test/repo.git' }]),
     loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
     loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
     listWorkflowMutationIntents: vi.fn(() => []),

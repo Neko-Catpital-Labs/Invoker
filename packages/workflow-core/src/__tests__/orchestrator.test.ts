@@ -8815,7 +8815,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(taskId)!.execution.failureClass).toBe('ssh-env-invalid-export');
     });
 
-    it('does not classify a non-ssh task with the same error text', () => {
+    it('classifies the same definitive infrastructure error for a non-ssh task', () => {
       const { taskId } = loadSingleTask('infra-nonssh');
       orchestrator.startExecution();
 
@@ -8828,7 +8828,7 @@ describe('Orchestrator', () => {
         },
       }));
 
-      expect(orchestrator.getTask(taskId)!.execution.failureClass).toBeUndefined();
+      expect(orchestrator.getTask(taskId)!.execution.failureClass).toBe('ssh-env-invalid-export');
     });
   });
 

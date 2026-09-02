@@ -133,7 +133,7 @@ function makeAutoFixHarness(options: {
   const scanTask = options.scanTask ?? makeFailedTask();
   const latestTask = 'latestTask' in options ? options.latestTask : scanTask;
   const store = {
-    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    listWorkflows: vi.fn(() => [{ id: 'wf-1', repoUrl: 'https://example.test/repo.git' }]),
     loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-1' ? [scanTask] : [])),
     loadTask: vi.fn(() => latestTask),
     listWorkflowMutationIntents: vi.fn(() => []),

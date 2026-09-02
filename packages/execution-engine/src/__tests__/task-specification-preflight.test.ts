@@ -19,6 +19,17 @@ const CAMERA_SPEC = {
 };
 const CAMERA_WATCH_SPEC = { watchPaths: ['packages/ui/src/App.tsx'] };
 
+function expectUntypedTaskToStayCurrent(changedPaths: string[]) {
+  expect(evaluateTaskFreshness({
+    snapshotCommit: 'old-base',
+    currentCommit: 'current-base',
+    specification: undefined,
+    changedPaths,
+    changedGuardedBehaviorIds: [],
+    missingPathPreconditions: [],
+  })).toEqual({ status: 'current' });
+}
+
 const CAMERA_TASK = `
 Files:
 - packages/ui/src/App.tsx
@@ -102,71 +113,47 @@ describe('stale task specification preflight', () => {
     });
   });
 
-  it('does not inherit an earlier anchor marker in a later create sentence', () => {
-    const specification = parseTaskFreshnessSpecification('packages/ui/src/App.tsx already exists; do not create it. Create packages/ui/src/NewPanel.tsx.');
-
-    expect(specification.anchors).toEqual([{
-      kind: 'path',
-      value: 'packages/ui/src/App.tsx',
-      clause: 'packages/ui/src/App.tsx already exists; do not create it.',
-    }]);
-  });
-
-  it('does not bind an existing marker across but create in the same sentence', () => {
-    const specification = parseTaskFreshnessSpecification(
-      'packages/ui/src/App.tsx already exists, but create packages/ui/src/NewPanel.tsx.',
-    );
-
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+  it('does not infer freshness from an earlier prose marker and later create sentence', () => {
+    expectUntypedTaskToStayCurrent([
       'packages/ui/src/App.tsx',
+      'packages/ui/src/NewPanel.tsx',
     ]);
   });
 
-  it('does not bind an existing marker across and create in the same sentence', () => {
-    const specification = parseTaskFreshnessSpecification(
-      'Use the existing packages/ui/src/App.tsx and create packages/ui/src/NewPanel.tsx.',
-    );
-
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+  it('does not infer freshness across but/create prose', () => {
+    expectUntypedTaskToStayCurrent([
       'packages/ui/src/App.tsx',
+      'packages/ui/src/NewPanel.tsx',
     ]);
   });
 
-  it('keeps path intents separate in semicolon-delimited list items', () => {
-    const specification = parseTaskFreshnessSpecification(`
-Files:
-- packages/ui/src/App.tsx already exists; create packages/ui/src/NewPanel.tsx
-- do not create packages/ui/src/Toolbar.tsx; create packages/ui/src/NewToolbar.tsx
-`);
-
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+  it('does not infer freshness across existing/create prose', () => {
+    expectUntypedTaskToStayCurrent([
       'packages/ui/src/App.tsx',
+      'packages/ui/src/NewPanel.tsx',
+    ]);
+  });
+
+  it('does not infer freshness from semicolon-delimited path prose', () => {
+    expectUntypedTaskToStayCurrent([
+      'packages/ui/src/App.tsx',
+      'packages/ui/src/NewPanel.tsx',
       'packages/ui/src/Toolbar.tsx',
+      'packages/ui/src/NewToolbar.tsx',
     ]);
   });
 
-  it('splits sentences that end with a closing quote or parenthesis', () => {
-    const specification = parseTaskFreshnessSpecification(
-      '"packages/ui/src/App.tsx already exists; do not create it." Create packages/ui/src/NewPanel.tsx. '
-      + '(packages/ui/src/Toolbar.tsx already exists.) Create packages/ui/src/NewToolbar.tsx.',
-    );
-
-    expect(specification.anchors.map(anchor => anchor.value)).toEqual([
+  it('does not infer freshness from quoted or parenthesized prose', () => {
+    expectUntypedTaskToStayCurrent([
       'packages/ui/src/App.tsx',
+      'packages/ui/src/NewPanel.tsx',
       'packages/ui/src/Toolbar.tsx',
+      'packages/ui/src/NewToolbar.tsx',
     ]);
   });
 
-  it('keeps an explicit do not create path as an anchor', () => {
-    const specification = parseTaskFreshnessSpecification(
-      'Do not create packages/ui/src/App.tsx; modify the existing file.',
-    );
-
-    expect(specification.anchors).toEqual([{
-      kind: 'path',
-      value: 'packages/ui/src/App.tsx',
-      clause: 'Do not create packages/ui/src/App.tsx; modify the existing file.',
-    }]);
+  it('does not infer freshness from explicit do-not-create prose', () => {
+    expectUntypedTaskToStayCurrent(['packages/ui/src/App.tsx']);
   });
 
   it('allows unrelated base changes and current-base attempts', () => {

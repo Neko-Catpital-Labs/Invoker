@@ -36,7 +36,7 @@ function makeStore() {
   const task = { current: makeFailedTask(2) };
   const actions = new Map<string, WorkerActionRecord>();
   const store = {
-    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    listWorkflows: vi.fn(() => [{ id: 'wf-1', repoUrl: 'https://example.test/repo.git' }]),
     loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-1' ? [task.current] : [])),
     loadTask: vi.fn(() => task.current),
     listWorkflowMutationIntents: vi.fn(() => []),
