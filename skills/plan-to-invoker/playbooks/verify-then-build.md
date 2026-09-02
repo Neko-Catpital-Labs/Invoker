@@ -18,6 +18,21 @@ Also use this playbook when the source is an architecture or policy document wit
 
 Fast checks: paths exist, `rg`/`grep` for patterns, read source. **Not sufficient alone** if the plan asserts runtime behavior (UI state, orchestrator output, persistence, headless CLI).
 
+#### 0. Class-search and open plan-intake PRs
+
+Before extracting assumptions, run the class-search from the repo `CLAUDE.md` (`git log --grep`, `git log -S`, `gh pr list --search <symptom> --state all`). Then report, under its own heading and regardless of relevance to the bug:
+
+**Open PRs touching plan intake / validation / freshness / preflight**
+
+```bash
+gh pr list --search "freshness" --state open
+gh pr list --search "preflight" --state open
+gh pr list --search "validate-plan" --state open
+gh pr list --search "plan-parser" --state open
+```
+
+List every hit with one line on what it means for this submission (for example "replaces the prose anchor gate the owner still runs; until it lands, `existing` on a create line blocks the task"). Do not collapse this list to "zero relevant".
+
 #### 1. Extract assumptions
 
 ```bash
