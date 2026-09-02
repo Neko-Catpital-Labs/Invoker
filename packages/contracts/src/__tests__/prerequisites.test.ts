@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
@@ -101,8 +103,9 @@ describe('checkDefaultPresetTool', () => {
   it('errors when the default preset tool is not on PATH', () => {
     const c = checkDefaultPresetTool(presets, 'cursor+claude', installed('omp'));
     expect(c.status).toBe('error');
-    expect(c.detail).toContain('cursor');
-    expect(c.remediation).toContain('defaultSlackHarnessPreset');
+    expect(c.detail).toBe('Default preset "cursor+claude" needs "cursor", which is not on Invoker\'s PATH');
+    expect(c.remediation).toBe("Make cursor available on Invoker's PATH (restart Invoker if it already works in a terminal), or set defaultSlackHarnessPreset to a preset whose tool is available");
+    expect(c.remediation).not.toMatch(/^Install /);
   });
 
   it('errors and lists valid keys when the default preset is undefined', () => {
@@ -114,13 +117,27 @@ describe('checkDefaultPresetTool', () => {
 
 describe('checkPlanningToolsPresent', () => {
   it('passes when any preset tool is installed', () => {
-    expect(checkPlanningToolsPresent(presets, installed('codex')).status).toBe('ok');
+    const c = checkPlanningToolsPresent(presets, installed('codex'));
+    expect(c.status).toBe('ok');
+    expect(c.detail).toBe("Available on Invoker's PATH: codex");
   });
 
-  it('errors when no planning tool is installed', () => {
+  it("reports PATH availability without claiming configured planning tools are uninstalled", () => {
     const c = checkPlanningToolsPresent(presets, installed('git'));
     expect(c.status).toBe('error');
-    expect(c.remediation).toContain('cursor');
+    expect(c.detail).toBe("Planning unavailable: none of the configured planner commands are on Invoker's PATH (cursor, omp, codex)");
+    expect(c.remediation).toBe("Make one of these commands available on Invoker's PATH: cursor, omp, codex. If it already works in a terminal, restart Invoker to refresh its shell environment; otherwise install it or configure another planning preset.");
+    expect(c.detail).not.toContain('installed');
+    expect(c.remediation).not.toMatch(/^Install /);
+  });
+});
+
+describe('invoker-setup planning availability guidance', () => {
+  it('distinguishes PATH visibility from installation state', () => {
+    const skill = readFileSync(new URL('../../../../skills/invoker-setup/SKILL.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+    expect(skill).toContain("not available on Invoker's own `PATH`");
+    expect(skill).toContain('Do not report that command as uninstalled based on this probe alone');
+    expect(skill).toContain('restart Invoker to refresh its shell environment');
   });
 });
 
@@ -143,7 +160,8 @@ describe('buildReport / formatReport', () => {
   it('emits machine-readable JSON and shows remediation in text mode', () => {
     const report = buildReport([checkPlanningToolsPresent(presets, installed())]);
     expect(JSON.parse(formatReport(report, { json: true }))).toEqual(report);
-    expect(formatReport(report)).toContain('-> Install at least one');
+    const text = formatReport(report);
+    expect(text).toContain("-> Make one of these commands available on Invoker's PATH");
   });
 });
 
