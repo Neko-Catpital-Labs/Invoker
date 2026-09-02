@@ -2514,8 +2514,8 @@ describe('Orchestrator', () => {
       );
 
       expect(orchestrator.getTask('t1')!.status).toBe('failed');
-      expect(orchestrator.getTask('t2')!.status).toBe('pending');
-      expect(orchestrator.getTask('t3')!.status).toBe('pending');
+      expect(orchestrator.getTask('t2')!.status).toBe('skipped');
+      expect(orchestrator.getTask('t3')!.status).toBe('skipped');
     });
 
     it('needs_input: pauses task with prompt', () => {
@@ -2547,7 +2547,7 @@ describe('Orchestrator', () => {
       );
 
       const persisted = persistence.getTaskEntry('t2');
-      expect(persisted!.task.status).toBe('pending');
+      expect(persisted!.task.status).toBe('skipped');
     });
 
     it('preserves execution.agentSessionId when worker completion omits outputs.agentSessionId', () => {
@@ -2760,7 +2760,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'a1', status: 'failed', outputs: { exitCode: 1, error: 'some error' } }),
       );
-      expect(orchestrator.getTask('a2')!.status).toBe('pending');
+      expect(orchestrator.getTask('a2')!.status).toBe('skipped');
 
       // Fix with Claude → awaiting_approval
       orchestrator.beginFixSession('a1');
@@ -2770,8 +2770,8 @@ describe('Orchestrator', () => {
       // Approve → a2 becomes ready and starts
       const started = await orchestrator.approve('a1');
       expect(orchestrator.getTask('a1')!.status).toBe('completed');
-      expect(orchestrator.getTask('a2')!.status).toBe('running');
-      expect(started.some((t) => t.id === sid(orchestrator, 0, 'a2'))).toBe(true);
+      expect(orchestrator.getTask('a2')!.status).toBe('skipped');
+      expect(started.some((t) => t.id === sid(orchestrator, 0, 'a2'))).toBe(false);
     });
   });
 
@@ -3728,7 +3728,7 @@ describe('Orchestrator', () => {
       );
 
       expect(orchestrator.getTask('t1')!.status).toBe('failed');
-      expect(orchestrator.getTask('t2')!.status).toBe('pending');
+      expect(orchestrator.getTask('t2')!.status).toBe('skipped');
     });
 
   });
@@ -5038,13 +5038,13 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
-      // Fail B — C still pending
+      // Fail B — C still skipped
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
     });
 
     it('invalidates completed downstream tasks on restart without warning', () => {
@@ -5082,14 +5082,14 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Fail A, then B — C stays pending
+      // Fail A, then B — C stays skipped
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
       orchestrator.retryTask('B');
 
@@ -5114,9 +5114,9 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
-      // Restart A — C stays pending because B is still failed
+      // Restart A — C stays skipped because B is still failed
       orchestrator.retryTask('A');
       expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
@@ -5165,17 +5165,17 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'a' } }),
       );
-      expect(orchestrator.getTask('D')!.status).toBe('pending');
+      expect(orchestrator.getTask('D')!.status).toBe('skipped');
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'b' } }),
       );
-      expect(orchestrator.getTask('D')!.status).toBe('pending');
+      expect(orchestrator.getTask('D')!.status).toBe('skipped');
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'C', status: 'failed', outputs: { exitCode: 1, error: 'c' } }),
       );
-      expect(orchestrator.getTask('D')!.status).toBe('pending');
+      expect(orchestrator.getTask('D')!.status).toBe('skipped');
 
       // Phase 2: Restart all three roots
       orchestrator.retryTask('A');
@@ -5239,7 +5239,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('B')!.status).toBe('pending');
+      expect(orchestrator.getTask('B')!.status).toBe('skipped');
 
       // Restart A, then complete it → B starts
       orchestrator.retryTask('A');
@@ -5257,7 +5257,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('B')!.status).toBe('running');
     });
 
-    it('handleCompleted starts B after A fails then completes; C stays pending', () => {
+    it('handleCompleted starts B after A fails then completes; C stays skipped', () => {
       orchestrator.loadPlan({
         name: 'multi-level-unblock-test',
         tasks: [
@@ -5268,14 +5268,14 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // A fails → B, C stay pending
+      // A fails → B is skipped; C remains pending until B runs
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('B')!.status).toBe('pending');
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('B')!.status).toBe('skipped');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
-      // Restart A, then complete it → B starts; C still pending (B not completed yet)
+      // Restart A, then complete it → B starts; C still skipped (B not completed yet)
       orchestrator.retryTask('A');
       orchestrator.handleWorkerResponse(
         makeResponse({
@@ -5559,7 +5559,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('B')!.status).toBe('pending');
+      expect(orchestrator.getTask('B')!.status).toBe('skipped');
 
       const result = orchestrator.retryTask('B');
 
@@ -5694,7 +5694,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'b' } }),
       );
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
       // Restart only A — C stays pending because B is still failed
       orchestrator.retryTask('A');

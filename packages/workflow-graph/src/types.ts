@@ -20,6 +20,7 @@ export const TASK_STATUSES = [
   'review_ready',
   'awaiting_approval',
   'stale',
+  'skipped',
 ] as const;
 
 export type TaskStatus = typeof TASK_STATUSES[number];
