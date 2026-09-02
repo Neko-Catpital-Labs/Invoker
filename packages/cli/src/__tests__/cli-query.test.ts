@@ -117,6 +117,28 @@ describe('invoker-cli query', () => {
     output.restore();
   });
 
+  it('forwards --filter to a live owner', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const filter = JSON.stringify({ op: 'eq', key: 'status', value: 'failed' });
+    const queryHandler = vi.fn(async (request: unknown) => {
+      expect(request).toEqual({ kind: 'cli-query', args: ['query', 'tasks', '--filter', filter] });
+      return { output: '[]\n' };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', queryHandler);
+    expect(await main(['query', 'tasks', '--filter', filter], { createMessageBus: () => bus })).toBe(0);
+    expect(queryHandler).toHaveBeenCalledTimes(1);
+    output.restore();
+  });
+
+  it('rejects a bare --filter', async () => {
+    const output = captureProcessOutput();
+    expect(await main(['query', 'tasks', '--filter'], { createMessageBus: () => new LocalBus() })).toBe(1);
+    expect(output.stderr).toContain('Missing value for --filter');
+    output.restore();
+  });
+
   it('uses INVOKER_DB_DIR for standalone read-only workflow queries', async () => {
     const dbDir = makeTempDir('invoker-cli-query-env-');
     await seedDb(dbDir);

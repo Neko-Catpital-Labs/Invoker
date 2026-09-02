@@ -137,6 +137,7 @@ function createMocks() {
       logEvent: vi.fn(),
       getEvents: vi.fn(() => [{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]),
       getTaskOutput: vi.fn(() => 'hello world output'),
+      queryTasksByFilter: vi.fn(() => [makeTask()]),
     },
     executorRegistry: {},
     commandService: {
@@ -377,6 +378,48 @@ describe('GET /api/workflows', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0].id).toBe('wf-1');
     expect(mocks.persistence.listWorkflows).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/search task filters', () => {
+  it('returns filtered task summaries with pagination', async () => {
+    const filter = encodeURIComponent(JSON.stringify({ op: 'eq', key: 'status', value: 'running' }));
+    const res = await request(port, 'GET', `/api/search?type=tasks&filter=${filter}&limit=7&offset=2`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([expect.objectContaining({ kind: 'task', id: 'task-1', title: 'test task' })]);
+    expect(mocks.persistence.queryTasksByFilter).toHaveBeenCalledWith({ op: 'eq', key: 'status', value: 'running' }, { limit: 7, offset: 2 });
+  });
+
+  it('rejects an invalid filter before reading tasks', async () => {
+    const filter = encodeURIComponent(JSON.stringify({ op: 'eq', key: 'nope', value: 'x' }));
+    const res = await request(port, 'GET', `/api/search?type=tasks&filter=${filter}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('filter');
+    expect(mocks.persistence.queryTasksByFilter).not.toHaveBeenCalled();
+  });
+
+  it('keeps plain q search on the existing path', async () => {
+    mocks.persistence.searchWorkflowsAndTasks = vi.fn(() => []);
+    const res = await request(port, 'GET', '/api/search?type=tasks&q=test');
+    expect(res.status).toBe(200);
+    expect(mocks.persistence.searchWorkflowsAndTasks).toHaveBeenCalledWith('test', { type: 'tasks', limit: 20, offset: 0 });
+    expect(mocks.persistence.queryTasksByFilter).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-numeric limit before reading tasks', async () => {
+    const filter = encodeURIComponent(JSON.stringify({ op: 'eq', key: 'status', value: 'running' }));
+    const res = await request(port, 'GET', `/api/search?type=tasks&filter=${filter}&limit=abc`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('limit');
+    expect(mocks.persistence.queryTasksByFilter).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-numeric offset before reading tasks', async () => {
+    const filter = encodeURIComponent(JSON.stringify({ op: 'eq', key: 'status', value: 'running' }));
+    const res = await request(port, 'GET', `/api/search?type=tasks&filter=${filter}&offset=abc`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('offset');
+    expect(mocks.persistence.queryTasksByFilter).not.toHaveBeenCalled();
   });
 });
 
