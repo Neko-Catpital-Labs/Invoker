@@ -75,7 +75,7 @@ The desktop planner does not currently have a repository picker. Set the generat
 
 Restart Invoker after changing backend configuration. If you are developing Invoker itself, `pnpm dev:hot` hot reloads renderer changes, but backend and configuration changes still require restarting the command.
 
-Create a new planning chat after restarting. Existing chats retain their original repository binding.
+Create a new planning chat after restarting. Existing chats retain their original repository binding. Equivalent Git URL spellings retain that binding: a trailing slash, an optional `.git` suffix, and GitHub SSH or HTTPS forms for the same owner and repository. A genuinely different owner or repository still triggers correction.
 
 Checkpoint: the right sidebar's **Repo** section should show `invoker-first-agent-workflow`, not Invoker's own repository.
 
