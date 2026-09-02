@@ -436,6 +436,10 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const limit = query.limit ? Math.min(parseInt(query.limit, 10), 50) : 20;
         const offset = query.offset ? parseInt(query.offset, 10) : 0;
         if (type === 'tasks' && query.filter !== undefined) {
+          if (!Number.isFinite(limit) || limit < 0 || !Number.isFinite(offset) || offset < 0) {
+            json(res, 400, { error: 'limit and offset must be non-negative integers' });
+            return;
+          }
           let parsedFilter: unknown;
           try {
             parsedFilter = JSON.parse(query.filter);

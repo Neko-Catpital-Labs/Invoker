@@ -405,6 +405,22 @@ describe('GET /api/search task filters', () => {
     expect(mocks.persistence.searchWorkflowsAndTasks).toHaveBeenCalledWith('test', { type: 'tasks', limit: 20, offset: 0 });
     expect(mocks.persistence.queryTasksByFilter).not.toHaveBeenCalled();
   });
+
+  it('rejects a non-numeric limit before reading tasks', async () => {
+    const filter = encodeURIComponent(JSON.stringify({ op: 'eq', key: 'status', value: 'running' }));
+    const res = await request(port, 'GET', `/api/search?type=tasks&filter=${filter}&limit=abc`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('limit');
+    expect(mocks.persistence.queryTasksByFilter).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-numeric offset before reading tasks', async () => {
+    const filter = encodeURIComponent(JSON.stringify({ op: 'eq', key: 'status', value: 'running' }));
+    const res = await request(port, 'GET', `/api/search?type=tasks&filter=${filter}&offset=abc`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('offset');
+    expect(mocks.persistence.queryTasksByFilter).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/workflows/:id/review-gate', () => {

@@ -223,7 +223,55 @@ describe('headless query task filters', () => {
       { op: 'eq', key: 'workflow_id', value: 'wf-1' },
       { op: 'eq', key: 'status', value: 'failed' },
       { op: 'eq', key: 'is_merge_node', value: false },
-    ] });
+    ] }, { limit: 500, offset: 0 });
+  });
+
+  it('prefers the positional workflow id over the flag default when composing a filter', async () => {
+    const task = {
+      id: 'wf-1/task-1', description: 'filtered task', status: 'failed', dependencies: [],
+      createdAt: new Date('2026-01-01T00:00:00.000Z'), config: { workflowId: 'wf-1', isMergeNode: false },
+      execution: {}, taskStateVersion: 1,
+    } as any;
+    const queryTasksByFilter = vi.fn(() => [task]);
+    const deps = {
+      ...makeTaskQueryDeps({}),
+      persistence: { queryTasksByFilter } as any,
+      orchestrator: { getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 1, running: 0, pending: 0 }) } as any,
+    };
+    await runReadOnlyHeadlessQueryToString(
+      ['query', 'tasks', 'wf-1', '--filter', JSON.stringify({ op: 'eq', key: 'description', value: 'filtered task' })],
+      deps,
+    );
+    expect(queryTasksByFilter).toHaveBeenCalledWith({ op: 'and', filters: [
+      { op: 'eq', key: 'description', value: 'filtered task' },
+      { op: 'eq', key: 'workflow_id', value: 'wf-1' },
+    ] }, { limit: 500, offset: 0 });
+  });
+
+  it('pages through filtered results past the persistence default page size', async () => {
+    const makeTask = (id: string) => ({
+      id: `wf-1/${id}`, description: id, status: 'failed', dependencies: [],
+      createdAt: new Date('2026-01-01T00:00:00.000Z'), config: { workflowId: 'wf-1', isMergeNode: false },
+      execution: {}, taskStateVersion: 1,
+    } as any);
+    const firstPage = Array.from({ length: 500 }, (_, i) => makeTask(`task-${i}`));
+    const secondPage = [makeTask('task-500')];
+    const queryTasksByFilter = vi.fn()
+      .mockReturnValueOnce(firstPage)
+      .mockReturnValueOnce(secondPage);
+    const deps = {
+      ...makeTaskQueryDeps({}),
+      persistence: { queryTasksByFilter } as any,
+      orchestrator: { getWorkflowStatus: () => ({ total: 501, completed: 0, failed: 501, running: 0, pending: 0 }) } as any,
+    };
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'tasks', '--filter', JSON.stringify({ op: 'eq', key: 'status', value: 'failed' }), '--output', 'json'],
+      deps,
+    );
+    expect(JSON.parse(output)).toHaveLength(501);
+    expect(queryTasksByFilter).toHaveBeenCalledTimes(2);
+    expect(queryTasksByFilter).toHaveBeenNthCalledWith(1, { op: 'eq', key: 'status', value: 'failed' }, { limit: 500, offset: 0 });
+    expect(queryTasksByFilter).toHaveBeenNthCalledWith(2, { op: 'eq', key: 'status', value: 'failed' }, { limit: 500, offset: 500 });
   });
 
   it('rejects an invalid filter before reading persistence', async () => {
@@ -232,6 +280,15 @@ describe('headless query task filters', () => {
     await expect(runReadOnlyHeadlessQueryToString(
       ['query', 'tasks', '--filter', JSON.stringify({ op: 'eq', key: 'not_a_column', value: 'x' })], deps,
     )).rejects.toThrow('taskFilter.key');
+    expect(queryTasksByFilter).not.toHaveBeenCalled();
+  });
+
+  it('rejects --filter on a non-task query subcommand', async () => {
+    const queryTasksByFilter = vi.fn();
+    const deps = { ...makeTaskQueryDeps({}), persistence: { queryTasksByFilter } as any };
+    await expect(runReadOnlyHeadlessQueryToString(
+      ['query', 'workflows', '--filter', JSON.stringify({ op: 'eq', key: 'status', value: 'x' })], deps,
+    )).rejects.toThrow('--filter is only supported for `query tasks`');
     expect(queryTasksByFilter).not.toHaveBeenCalled();
   });
 });

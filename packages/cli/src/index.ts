@@ -488,6 +488,23 @@ function renderWorkflowText(workflows: Workflow[]): string {
   )).join('\n')}\n`;
 }
 
+const TASK_FILTER_PAGE_SIZE = 500;
+
+function queryAllTasksByFilter(
+  persistence: Pick<SQLiteAdapter, 'queryTasksByFilter'>,
+  filter: import('@invoker/contracts').TaskFilterNode,
+): TaskState[] {
+  const all: TaskState[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = persistence.queryTasksByFilter(filter, { limit: TASK_FILTER_PAGE_SIZE, offset });
+    all.push(...page);
+    if (page.length < TASK_FILTER_PAGE_SIZE) break;
+    offset += TASK_FILTER_PAGE_SIZE;
+  }
+  return all;
+}
+
 function renderTaskText(tasks: TaskState[]): string {
   if (tasks.length === 0) return 'No tasks found.\n';
   return `${tasks.map((task) => (
@@ -532,7 +549,7 @@ async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
 
     let tasks = snapshot.tasks;
     if (parsedFilter) {
-      tasks = persistence.queryTasksByFilter(parsedFilter);
+      tasks = queryAllTasksByFilter(persistence, parsedFilter);
     }
     if (options.workflowId) {
       tasks = tasks.filter((task) => task.config.workflowId === options.workflowId);

@@ -78,6 +78,23 @@ function hasStringProp(value: unknown, key: string): boolean {
   return Boolean(value && typeof value === 'object' && typeof (value as Record<string, unknown>)[key] === 'string');
 }
 
+const TASK_FILTER_PAGE_SIZE = 500;
+
+function queryAllTasksByFilter(
+  persistence: Pick<HeadlessQueryDeps['persistence'], 'queryTasksByFilter'>,
+  filter: TaskFilterNode,
+): TaskState[] {
+  const all: TaskState[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = persistence.queryTasksByFilter(filter, { limit: TASK_FILTER_PAGE_SIZE, offset });
+    all.push(...page);
+    if (page.length < TASK_FILTER_PAGE_SIZE) break;
+    offset += TASK_FILTER_PAGE_SIZE;
+  }
+  return all;
+}
+
 function isAlertWorkerAction(action: WorkerActionRecord): boolean {
   const searchable = [
     action.actionType,
@@ -104,6 +121,9 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
     throw new Error(`Missing query sub-command. Usage: --headless query <${QUERY_SUBCOMMAND_USAGE}>`);
   }
   const flags = parseQueryFlags(args.slice(1));
+  if (flags.filter !== undefined && subCommand !== 'tasks') {
+    throw new Error('--filter is only supported for `query tasks`');
+  }
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
@@ -152,11 +172,12 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         const validation = validateTaskFilter(parsedFilter);
         if (!validation.valid) throw new Error(validation.error);
         const filters: TaskFilterNode[] = [parsedFilter as TaskFilterNode];
-        if (flags.workflow) filters.push({ op: 'eq', key: 'workflow_id', value: flags.workflow });
+        const workflowFilterId = flags.workflow ?? flags.positional[0];
+        if (workflowFilterId) filters.push({ op: 'eq', key: 'workflow_id', value: workflowFilterId });
         if (flags.status) filters.push({ op: 'eq', key: 'status', value: flags.status });
         if (flags.noMerge) filters.push({ op: 'eq', key: 'is_merge_node', value: false });
         const filter: TaskFilterNode = filters.length === 1 ? filters[0] : { op: 'and', filters };
-        filteredTasks = persistence.queryTasksByFilter(filter);
+        filteredTasks = queryAllTasksByFilter(persistence, filter);
       }
 
       if (filteredTasks) {
