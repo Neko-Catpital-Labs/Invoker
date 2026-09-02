@@ -71,6 +71,13 @@ export type ParsedResponse =
       prompt: string;
     }
   | {
+      type: 'stale';
+      taskId: string;
+      exitCode: number;
+      error?: string;
+      summary?: string;
+    }
+  | {
       type: 'spawn_experiments';
       taskId: string;
       variants: ParsedVariantDef[];
@@ -143,6 +150,15 @@ export class ResponseHandler {
           type: 'needs_input',
           taskId: actionId,
           prompt: outputs.summary ?? 'Task requires input',
+        };
+
+      case 'stale':
+        return {
+          type: 'stale',
+          taskId: actionId,
+          exitCode: outputs.exitCode ?? 1,
+          error: outputs.error,
+          summary: outputs.summary,
         };
 
       case 'spawn_experiments': {
