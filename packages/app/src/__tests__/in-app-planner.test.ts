@@ -466,7 +466,7 @@ describe('planning chat', () => {
     expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(REDACTED_VALID_PLAN_REPLY);
   });
 
-  it.fails.each([
+  it.each([
     {
       name: 'trailing slash and optional .git',
       selectedRepo: 'https://github.com/acme/widgets/',
@@ -507,7 +507,7 @@ describe('planning chat', () => {
     expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
   });
 
-  it.fails('keeps the correction path for a genuinely different repository', async () => {
+  it('keeps the correction path for a genuinely different repository', async () => {
     const selectedRepo = 'https://github.com/acme/widgets/';
     const draftedRepo = 'git@github.com:other/widgets.git';
     const sessions = createInAppPlanningChatSessions();
