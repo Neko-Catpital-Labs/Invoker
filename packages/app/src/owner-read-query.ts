@@ -2,12 +2,14 @@ import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import type {
   GetEventsOptions,
+  OwnerInvestigationEvidenceSnapshot,
   WorkerActionHistoryRequest,
   WorkerActionHistoryResponse,
   WorkerDecisionsRequest,
   WorkerDecisionsResponse,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
+import { OWNER_INVESTIGATION_EVIDENCE_ITEM_LIMIT } from '@invoker/contracts';
 import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
@@ -42,6 +44,7 @@ export interface OwnerReadQueryHandlers {
   getAlertHistory?: () => WorkerActionRecord[];
   getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkers: () => WorkerStatusSnapshot;
+  getInvestigationEvidence: () => OwnerInvestigationEvidenceSnapshot;
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
   getTasksSnapshot: () => Record<string, unknown>;
   getActionGraphSnapshot: () => Record<string, unknown>;
@@ -119,6 +122,8 @@ export function answerOwnerReadQuery(
       return { workerStatus: handlers.getWorkerStatus() };
     case 'workers':
       return handlers.getWorkers() as unknown as Record<string, unknown>;
+    case 'investigation-evidence':
+      return { ownerEvidence: handlers.getInvestigationEvidence() };
     case 'worker-action-history':
       return { workerActionHistory: handlers.listWorkerActionHistory(workerActionHistoryRequest()) };
     case 'worker-decisions':
@@ -212,6 +217,7 @@ type ReadPersistence = Pick<
   | 'loadAllCompletedTasks'
   | 'loadAllHistoryTasks'
   | 'listWorkerActions'
+  | 'listRepairFilings'
 >;
 
 export interface OwnerReadQueryDeps {
@@ -230,6 +236,15 @@ export interface OwnerReadQueryDeps {
   getPlanningChatSession: (sessionId: string) => unknown;
 }
 
+const OWNER_EVIDENCE_TEXT_LIMIT = 512;
+
+function boundedEvidenceText(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return value.length <= OWNER_EVIDENCE_TEXT_LIMIT
+    ? value
+    : `${value.slice(0, OWNER_EVIDENCE_TEXT_LIMIT)}...[truncated]`;
+}
+
 /** Build the handler set both owners pass to {@link answerOwnerReadQuery}. */
 export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerReadQueryHandlers {
   const { orchestrator, persistence } = deps;
@@ -241,6 +256,83 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     getQueueStatus: () => orchestrator.getQueueStatus({ refresh: false }) as unknown as Record<string, unknown>,
     getWorkerStatus: deps.getWorkerStatus,
     getWorkers: deps.getWorkers,
+    getInvestigationEvidence: () => {
+      orchestrator.syncAllFromDb();
+      const queue = orchestrator.getQueueStatus({ refresh: false });
+      const workerSnapshot = deps.getWorkers();
+      const workflows = persistence.listWorkflows();
+      const tasks = [...orchestrator.getAllTasks()].sort(
+        (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
+      );
+      const repairFilings = persistence.listRepairFilings();
+      const limit = OWNER_INVESTIGATION_EVIDENCE_ITEM_LIMIT;
+
+      return {
+        schemaVersion: 1,
+        capturedAt: new Date().toISOString(),
+        queue: {
+          maxConcurrency: queue.maxConcurrency,
+          runningCount: queue.runningCount,
+          ...(queue.activeExecutionCount === undefined ? {} : { activeExecutionCount: queue.activeExecutionCount }),
+          ...(queue.launchingCount === undefined ? {} : { launchingCount: queue.launchingCount }),
+          running: queue.running.slice(0, limit).map((entry) => ({
+            taskId: boundedEvidenceText(entry.taskId) ?? '',
+            description: boundedEvidenceText(entry.description) ?? '',
+          })),
+          queued: queue.queued.slice(0, limit).map((entry) => ({
+            taskId: boundedEvidenceText(entry.taskId) ?? '',
+            priority: entry.priority,
+            description: boundedEvidenceText(entry.description) ?? '',
+          })),
+        },
+        workers: workerSnapshot.workers.slice(0, limit).map((worker) => ({
+          kind: boundedEvidenceText(worker.kind) ?? '',
+          lifecycle: worker.lifecycle,
+          policy: worker.policy,
+          ...(worker.desiredEnabled === undefined ? {} : { desiredEnabled: worker.desiredEnabled }),
+          ...(worker.startedAt === undefined ? {} : { startedAt: worker.startedAt }),
+          ...(worker.stoppedAt === undefined ? {} : { stoppedAt: worker.stoppedAt }),
+          ...(worker.lastError === undefined ? {} : { lastError: boundedEvidenceText(worker.lastError) }),
+        })),
+        workflows: workflows.slice(0, limit).map((workflow) => ({
+          id: boundedEvidenceText(workflow.id) ?? '',
+          name: boundedEvidenceText(workflow.name) ?? '',
+          status: workflow.status,
+          createdAt: workflow.createdAt,
+          updatedAt: workflow.updatedAt,
+        })),
+        tasks: tasks.slice(0, limit).map((task) => ({
+          id: boundedEvidenceText(task.id) ?? '',
+          ...(task.config.workflowId === undefined
+            ? {}
+            : { workflowId: boundedEvidenceText(task.config.workflowId) }),
+          description: boundedEvidenceText(task.description) ?? '',
+          status: task.status,
+          createdAt: task.createdAt.toISOString(),
+          ...(task.execution.startedAt === undefined
+            ? {}
+            : { startedAt: task.execution.startedAt.toISOString() }),
+          ...(task.execution.completedAt === undefined
+            ? {}
+            : { completedAt: task.execution.completedAt.toISOString() }),
+          ...(task.execution.error === undefined
+            ? {}
+            : { error: boundedEvidenceText(task.execution.error) }),
+        })),
+        repairFilings: repairFilings.slice(0, limit).map((filing) => ({
+          kind: boundedEvidenceText(filing.kind) ?? '',
+          subject: boundedEvidenceText(filing.subject) ?? '',
+          stateSha: boundedEvidenceText(filing.stateSha) ?? '',
+          createdAt: filing.createdAt,
+        })),
+        totals: {
+          workers: workerSnapshot.workers.length,
+          workflows: workflows.length,
+          tasks: tasks.length,
+          repairFilings: repairFilings.length,
+        },
+      };
+    },
     listWorkerActionHistory: (request: WorkerActionHistoryRequest) => listWorkerActionHistory(persistence, request),
     listWorkerDecisions: (request: WorkerDecisionsRequest) => listWorkerDecisions(persistence, request),
     getAlertHistory: () => listAlertHistoryRows(persistence),

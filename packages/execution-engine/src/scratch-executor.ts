@@ -2,10 +2,22 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import {
+  OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER,
+  type WorkRequest,
+  type WorkResponse,
+} from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
-import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import {
+  boundedJsonStringify,
+  killProcessGroup,
+  cleanElectronEnv,
+  queryOwnerInvestigationEvidence,
+  resolveExecutableOnCurrentPath,
+  SIGKILL_TIMEOUT_MS,
+  type OwnerInvestigationEvidenceQuery,
+} from './process-utils.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { traceExecution } from './exec-trace.js';
 
@@ -18,7 +30,11 @@ export interface ScratchExecutorConfig {
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
   maxDurationMs?: number;
+  /** Read-only live-owner query. Injectable for focused executor tests. */
+  ownerEvidenceQuery?: OwnerInvestigationEvidenceQuery;
 }
+
+export const OWNER_EVIDENCE_PROMPT_CHAR_LIMIT = 24_000;
 
 interface ScratchEntry extends BaseEntry {
   process: ChildProcess | null;
@@ -36,6 +52,49 @@ function getDisplayOnlyBridgeSpec(
     : { displayOnlyBridgeText: source.displayOnlyBridgeText };
 }
 
+function structuredQueryError(error: unknown): Record<string, string> {
+  const detail: Record<string, string> = {
+    name: error instanceof Error ? error.name : 'Error',
+    message: error instanceof Error ? error.message : String(error),
+  };
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' || typeof code === 'number') detail.code = String(code);
+  }
+  return detail;
+}
+
+async function investigativePromptWithOwnerEvidence(
+  prompt: string,
+  query: OwnerInvestigationEvidenceQuery,
+): Promise<string> {
+  let evidence: unknown;
+  try {
+    const response = await query({ kind: 'investigation-evidence' });
+    if (
+      typeof response !== 'object'
+      || response === null
+      || typeof response.ownerEvidence !== 'object'
+      || response.ownerEvidence === null
+      || response.ownerEvidence.schemaVersion !== 1
+    ) {
+      throw new Error('Owner returned an invalid investigation-evidence response');
+    }
+    evidence = { status: 'available', snapshot: response.ownerEvidence };
+  } catch (error) {
+    evidence = { status: 'query_error', error: structuredQueryError(error) };
+  }
+
+  const serialized = boundedJsonStringify(evidence, OWNER_EVIDENCE_PROMPT_CHAR_LIMIT);
+  const truncationNote = serialized.truncated
+    ? '\nThe owner response exceeded the prompt evidence limit; the valid JSON below contains a bounded preview.'
+    : '';
+  return `${prompt}\n\n## Live Invoker owner evidence\n`
+    + 'Invoker collected this read-only snapshot in the host process before starting the scratch agent. '
+    + 'Do not invoke `invoker-ui` from this scratch workspace; it is not required or assumed to be on PATH.'
+    + `${truncationNote}\n\n${serialized.json}`;
+}
+
 /**
  * Executor for plans declaring `scratch: true`: runs each task in a plain OS
  * temp directory with no git clone/worktree/branch involved. Reuses
@@ -47,6 +106,7 @@ export class ScratchExecutor extends BaseExecutor<ScratchEntry> {
 
   private readonly claudeCommand: string;
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  private readonly ownerEvidenceQuery: OwnerInvestigationEvidenceQuery;
   /**
    * Every temp dir this executor has ever created, independent of `entries`
    * (which drops completed tasks shortly after completion). destroyAll()
@@ -58,6 +118,7 @@ export class ScratchExecutor extends BaseExecutor<ScratchEntry> {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
+    this.ownerEvidenceQuery = config.ownerEvidenceQuery ?? queryOwnerInvestigationEvidence;
   }
 
   async start(request: WorkRequest): Promise<ExecutorHandle> {
@@ -82,7 +143,23 @@ export class ScratchExecutor extends BaseExecutor<ScratchEntry> {
     this.registerEntry(handle, entry);
     handle.workspacePath = tmpDir;
 
-    const { cmd, args, agentSessionId } = this.buildCommandAndArgs(request, {
+    const needsOwnerEvidence = request.actionType === 'ai_task'
+      && request.inputs.prompt?.includes(OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER) === true;
+    const executionRequest = needsOwnerEvidence
+      ? {
+          ...request,
+          inputs: {
+            ...request.inputs,
+            prompt: await investigativePromptWithOwnerEvidence(
+              (request.inputs.prompt ?? '')
+                .replaceAll(OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER, '')
+                .trimEnd(),
+              this.ownerEvidenceQuery,
+            ),
+          },
+        }
+      : request;
+    const { cmd, args, agentSessionId } = this.buildCommandAndArgs(executionRequest, {
       claudeCommand: this.claudeCommand,
       agentRegistry: this.agentRegistry,
     });

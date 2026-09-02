@@ -314,6 +314,74 @@ export interface WorkerStatusSnapshot {
   unavailableReason?: string;
 }
 
+/**
+ * Hard row cap for each collection in the live-owner evidence handed to a
+ * scratch investigation. The owner projects records before returning them so
+ * prompts never receive unbounded task output, config, or ledger payloads.
+ */
+export const OWNER_INVESTIGATION_EVIDENCE_ITEM_LIMIT = 12;
+/** Opt-in marker removed from a scratch prompt after its owner snapshot is attached. */
+export const OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER = '[invoker:attach-live-owner-evidence]';
+
+export interface OwnerInvestigationEvidenceRequest {
+  kind: 'investigation-evidence';
+}
+
+export interface OwnerInvestigationEvidenceSnapshot {
+  schemaVersion: 1;
+  capturedAt: string;
+  queue: {
+    maxConcurrency: number;
+    runningCount: number;
+    activeExecutionCount?: number;
+    launchingCount?: number;
+    running: Array<{ taskId: string; description: string }>;
+    queued: Array<{ taskId: string; priority: number; description: string }>;
+  };
+  workers: Array<{
+    kind: string;
+    lifecycle: WorkerLifecycleStatus;
+    policy: WorkerPolicyStatus;
+    desiredEnabled?: boolean;
+    startedAt?: string;
+    stoppedAt?: string;
+    lastError?: string;
+  }>;
+  workflows: Array<{
+    id: string;
+    name: string;
+    status: WorkflowDerivedStatus;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  tasks: Array<{
+    id: string;
+    workflowId?: string;
+    description: string;
+    status: TaskState['status'];
+    createdAt: string;
+    startedAt?: string;
+    completedAt?: string;
+    error?: string;
+  }>;
+  repairFilings: Array<{
+    kind: string;
+    subject: string;
+    stateSha: string;
+    createdAt: string;
+  }>;
+  totals: {
+    workers: number;
+    workflows: number;
+    tasks: number;
+    repairFilings: number;
+  };
+}
+
+export interface OwnerInvestigationEvidenceResponse {
+  ownerEvidence: OwnerInvestigationEvidenceSnapshot;
+}
+
 export interface WorkerActionHistoryRequest {
   workerKind: string;
   limit?: number;

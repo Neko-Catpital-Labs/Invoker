@@ -1,4 +1,4 @@
-import type { Logger } from '@invoker/contracts';
+import { OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER, type Logger } from '@invoker/contracts';
 
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -148,7 +148,7 @@ function investigativePrompt(action: AdminBypassE2eBabysitAction): string {
 
 export function buildInvestigativePlanYaml(actions: readonly AdminBypassE2eBabysitAction[]): string {
   const taskLines = actions.flatMap((action, index) => {
-    const prompt = investigativePrompt(action);
+    const prompt = `${investigativePrompt(action)}\n\n${OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER}`;
     return [
       `  - id: investigate-finding-${index + 1}`,
       `    description: ${yamlString(prompt)}`,

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER } from '@invoker/contracts';
 
 import {
   DEFAULT_WATCHED_WORKER_KINDS,
@@ -124,6 +125,7 @@ describe('runAdminBypassE2eBabysitTick', () => {
     expect(planSubmitter.submittedPlans).toHaveLength(1);
     expect(planSubmitter.submittedPlans[0]).toContain('scratch: true');
     expect(planSubmitter.submittedPlans[0]).toContain(DEFAULT_WATCHED_WORKER_KINDS[0]);
+    expect(planSubmitter.submittedPlans[0]).toContain(OWNER_INVESTIGATION_EVIDENCE_PROMPT_MARKER);
   });
 
   it('deletes only a repair filing older than the stale TTL, then files one investigation', async () => {

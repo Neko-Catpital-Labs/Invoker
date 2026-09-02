@@ -1,12 +1,69 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
+import type {
+  OwnerInvestigationEvidenceRequest,
+  OwnerInvestigationEvidenceResponse,
+} from '@invoker/contracts';
+import { IpcBus } from '@invoker/transport';
 
 export const SIGKILL_TIMEOUT_MS = 5_000;
 const SHELL_ENV_RESOLUTION_TIMEOUT_MS = 10_000;
 const SHELL_ENV_MARKER_START = '__INVOKER_EFFECTIVE_PATH_START__';
 const SHELL_ENV_MARKER_END = '__INVOKER_EFFECTIVE_PATH_END__';
 export const INVOKER_RESOLVING_ENVIRONMENT = 'INVOKER_RESOLVING_ENVIRONMENT';
+export const OWNER_INVESTIGATION_QUERY_TIMEOUT_MS = 5_000;
+
+export type OwnerInvestigationEvidenceQuery = (
+  request: OwnerInvestigationEvidenceRequest,
+) => Promise<OwnerInvestigationEvidenceResponse>;
+
+/**
+ * Query the writable owner over the existing read-only request channel.
+ * This deliberately opens the socket from the host process instead of
+ * launching an Invoker CLI inside the scratch workspace.
+ */
+export const queryOwnerInvestigationEvidence: OwnerInvestigationEvidenceQuery = async (request) => {
+  const bus = new IpcBus(undefined, {
+    allowServe: false,
+    requestDeadlineMs: OWNER_INVESTIGATION_QUERY_TIMEOUT_MS,
+  });
+  try {
+    await bus.ready();
+    return await bus.request<OwnerInvestigationEvidenceRequest, OwnerInvestigationEvidenceResponse>(
+      'headless.query',
+      request,
+    );
+  } finally {
+    bus.disconnect();
+  }
+};
+
+export interface BoundedJsonResult {
+  json: string;
+  truncated: boolean;
+}
+
+/** Keep JSON embedded in an agent prompt valid even when an unexpected owner response is large. */
+export function boundedJsonStringify(value: unknown, maxChars: number): BoundedJsonResult {
+  if (!Number.isInteger(maxChars) || maxChars < 128) {
+    throw new Error('boundedJsonStringify maxChars must be an integer >= 128');
+  }
+  const json = JSON.stringify(value, null, 2) ?? 'null';
+  if (json.length <= maxChars) return { json, truncated: false };
+
+  const marker = '\n...[truncated by Invoker]';
+  let previewLength = Math.max(0, maxChars - marker.length - 80);
+  while (previewLength >= 0) {
+    const bounded = JSON.stringify({
+      truncated: true,
+      preview: `${json.slice(0, previewLength)}${marker}`,
+    }, null, 2);
+    if (bounded.length <= maxChars) return { json: bounded, truncated: true };
+    previewLength -= 16;
+  }
+  return { json: '{"truncated":true}', truncated: true };
+}
 
 const MACOS_PATH_FALLBACK_PREFIXES = [
   '/opt/homebrew/bin',

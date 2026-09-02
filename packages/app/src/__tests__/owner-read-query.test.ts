@@ -26,6 +26,16 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     listWorkerDecisions: vi.fn((request) => ({ decision: request.decision, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
     getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
     getWorkers: vi.fn(() => ({ generatedAt: 'workers-now', workers: [] })),
+    getInvestigationEvidence: vi.fn(() => ({
+      schemaVersion: 1,
+      capturedAt: 'now',
+      queue: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      workers: [],
+      workflows: [],
+      tasks: [],
+      repairFilings: [],
+      totals: { workers: 0, workflows: 0, tasks: 0, repairFilings: 0 },
+    })),
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
     getTasksSnapshot: vi.fn(() => ({ tasks: [], workflows: [] })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
@@ -70,6 +80,9 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'queue' }, h)).toEqual({ runningCount: 2 });
     expect(answerOwnerReadQuery({ kind: 'worker-status' }, h)).toEqual({ workerStatus: { generatedAt: 'now', workers: [] } });
     expect(answerOwnerReadQuery({ kind: 'workers' }, h)).toEqual({ generatedAt: 'workers-now', workers: [] });
+    expect(answerOwnerReadQuery({ kind: 'investigation-evidence' }, h)).toEqual({
+      ownerEvidence: expect.objectContaining({ schemaVersion: 1, capturedAt: 'now' }),
+    });
     expect(answerOwnerReadQuery({ kind: 'worker-action-history', workerKind: 'autofix', limit: 2, offset: 4 }, h)).toEqual({
       workerActionHistory: { workerKind: 'autofix', actions: [], limit: 2, offset: 4, hasMore: false },
     });
@@ -176,6 +189,7 @@ describe('buildOwnerReadQueryHandlers', () => {
         loadAllCompletedTasks: () => [{ id: 'done' }],
         loadAllHistoryTasks: () => [{ id: 'hist-1', workflowName: 'Plan', lastEventAt: null, eventCount: 0 }],
         listWorkerActions: vi.fn(() => []),
+        listRepairFilings: vi.fn(() => []),
       },
     };
   }
@@ -264,5 +278,41 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(listWorkflows.mock.invocationCallOrder[0]);
     expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(getAllTasks.mock.invocationCallOrder[1]);
     expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(listWorkflows.mock.invocationCallOrder[1]);
+  });
+
+  it('projects bounded live-owner evidence without task prompts or ledger metadata', () => {
+    const longText = 'x'.repeat(2_000);
+    const tasks = Array.from({ length: 20 }, (_, index) => ({
+      id: `task-${index}`,
+      description: longText,
+      status: 'failed',
+      dependencies: [],
+      createdAt: new Date(`2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`),
+      config: { workflowId: 'wf-1', prompt: 'must-not-leak' },
+      execution: { error: longText },
+      taskStateVersion: 1,
+    }));
+    const repairFilings = Array.from({ length: 20 }, (_, index) => ({
+      id: index,
+      kind: `kind-${index}`,
+      subject: `subject-${index}`,
+      stateSha: `sha-${index}`,
+      metadata: { secret: 'must-not-leak' },
+      createdAt: '2026-08-01T00:00:00.000Z',
+    }));
+    const handlers = build({
+      getQueueStatus: () => ({ maxConcurrency: 2, runningCount: 0, running: [], queued: [] }),
+      getAllTasks: () => tasks,
+    }, {
+      listRepairFilings: () => repairFilings,
+    });
+
+    const evidence = handlers.getInvestigationEvidence();
+
+    expect(evidence.tasks).toHaveLength(12);
+    expect(evidence.repairFilings).toHaveLength(12);
+    expect(evidence.totals).toMatchObject({ tasks: 20, repairFilings: 20 });
+    expect(evidence.tasks[0]?.description.length).toBeLessThan(550);
+    expect(JSON.stringify(evidence)).not.toContain('must-not-leak');
   });
 });
