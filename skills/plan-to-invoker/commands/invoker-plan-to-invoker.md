@@ -4,7 +4,7 @@ argument-hint: "help me plan <change>"
 ---
 
 Use this host's native planning mode when the host supports entering it from this command. If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved.
-Approval authorizes the reviewed plan's declared `onFinish` outcome. Generated implementation plans default to `onFinish: pull_request`, so approval includes pushing the prepared branch and creating or updating the GitHub PR/stack. `onFinish: none` publishes nothing; never exceed the reviewed outcome.
+Approval authorizes the reviewed plan's declared `onFinish` outcome. Generated implementation plans default to `onFinish: pull_request`, so approval includes pushing the prepared branch and creating or updating the GitHub PR/stack. Implementation workflows default to `onFinish: pull_request` with the target repository's normal merge mode. Verification-only workflows use `onFinish: none` and publish nothing. Never silently downgrade an implementation plan to no PR; never exceed the reviewed outcome.
 After submit, arm `invoker-cli wait <workflowId>` with notify_on_output on `^INVOKER_WAKE`, end the turn, and continue the parent job on wake (do not abandon the session).
 Before branch or PR/stack publication implied by the reviewed `onFinish`, read and follow `skill://make-pr/SKILL.md`. This is the publication procedure, not a second authorization gate. If the plan involves multiple review slices, first read and follow `skill://review-compression/SKILL.md` before writing workflow YAML.
 
