@@ -37,7 +37,7 @@ function makeFailedTask(overrides: Partial<TaskState> = {}): TaskState {
 function makeStore(tasks: TaskState[]) {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   return {
-    listWorkflows: () => [{ id: 'wf-1' }],
+    listWorkflows: () => [{ id: 'wf-1', repoUrl: 'https://example.com/repo.git' }],
     loadTasks: () => tasks,
     loadTask: (taskId: string) => byId.get(taskId),
     listWorkflowMutationIntents: () => [],

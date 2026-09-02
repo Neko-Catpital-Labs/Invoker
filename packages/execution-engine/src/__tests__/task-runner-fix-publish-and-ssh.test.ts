@@ -1376,7 +1376,7 @@ describe('TaskRunner', () => {
       expect(result.artifacts).toHaveLength(1);
     });
 
-    it('publishReviewStackWithMakePrSkill uses preferred agent then falls back to another make-pr agent', async () => {
+    it('publishReviewStackWithMakePrSkill uses Codex even when the preferred task agent is Claude', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
       process.env.HOME = tempHome;
@@ -1441,7 +1441,7 @@ describe('TaskRunner', () => {
           expectedGeneration: 26,
         });
 
-        expect(attempts).toEqual(['claude', 'codex']);
+        expect(attempts).toEqual(['codex']);
         expect(result.agentName).toBe('codex');
         expect(result.artifacts[1].dependsOn).toEqual(['contracts']);
         expect(result.artifacts.map((a: any) => a.generation)).toEqual([26, 26]);
@@ -1451,10 +1451,10 @@ describe('TaskRunner', () => {
           expect.objectContaining({
             level: 'info',
             message: 'Preparing make-pr review stack publisher',
-            agentCount: 2,
+            agentCount: 1,
           }),
         );
-        expect(logEvent).toHaveBeenCalledWith(
+        expect(logEvent).not.toHaveBeenCalledWith(
           '__merge__wf-1',
           'task.log',
           expect.objectContaining({

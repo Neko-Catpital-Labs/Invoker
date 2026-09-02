@@ -386,6 +386,7 @@ INVOKER_HEARTBEAT_INTERVAL_SECONDS=${heartbeatIntervalSeconds}
 start_bootstrap_heartbeat() {
   printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
   (
+    trap - EXIT HUP INT TERM
     while true; do
       sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
       printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
