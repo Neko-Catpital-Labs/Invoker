@@ -1843,6 +1843,38 @@ describe('Orchestrator', () => {
         expect(task!.config.poolId).toBe('mixed-local-ssh');
       });
 
+      it('does not apply defaultPoolId to Docker tasks', () => {
+        const persistence = new InMemoryPersistence();
+        const routedOrchestrator = new Orchestrator({
+          persistence,
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'local-worktree',
+          availablePoolIds: ['local-worktree'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'docker-default-pool-isolation',
+          tasks: [{
+            id: 'docker-no-image',
+            description: 'Run in Docker',
+            command: 'echo should-never-run',
+            dockerImage: 'invoker-nonexistent-image:v999',
+          }],
+        });
+
+        const task = routedOrchestrator.getTask('docker-no-image');
+        expect(task!.config.runnerKind).toBe('docker');
+        expect(task!.config.poolId).toBeUndefined();
+        const routedEvent = persistence.events.find((event) =>
+          event.taskId.endsWith('/docker-no-image') && event.eventType === 'task.executor.routed'
+        );
+        expect(routedEvent?.payload).toEqual({
+          runnerKind: 'docker',
+          reason: { type: 'dockerImage' },
+        });
+      });
+
       it('lets route strategy override defaultPoolId', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
@@ -8815,7 +8847,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(taskId)!.execution.failureClass).toBe('ssh-env-invalid-export');
     });
 
-    it('does not classify a non-ssh task with the same error text', () => {
+    it('classifies the same machine-owned failure regardless of runner kind', () => {
       const { taskId } = loadSingleTask('infra-nonssh');
       orchestrator.startExecution();
 
@@ -8828,7 +8860,7 @@ describe('Orchestrator', () => {
         },
       }));
 
-      expect(orchestrator.getTask(taskId)!.execution.failureClass).toBeUndefined();
+      expect(orchestrator.getTask(taskId)!.execution.failureClass).toBe('ssh-env-invalid-export');
     });
   });
 

@@ -1510,10 +1510,12 @@ export class Orchestrator {
     const validatedTasks: TaskState[] = [];
     const resolvedRoutingByTaskId = new Map<string, ExecutorRoutingReason>();
     for (const taskDef of plan.tasks) {
-      // Scratch plans never resolve a pool: no clone, no config-level default
-      // pool, no routing rule can ever hijack a scratch task's runnerKind.
+      // Direct executors never resolve a pool: no config-level default or
+      // routing rule can override the executor selected by the plan.
       const resolvedRouting: ReturnType<typeof resolveExecutorRouting> = plan.scratch
         ? { poolId: undefined, reason: { type: 'scratch' } }
+        : taskDef.dockerImage
+          ? { poolId: undefined, reason: { type: 'dockerImage' } }
         : resolveExecutorRouting(
             taskDef.id,
             taskDef.command,
@@ -1527,7 +1529,7 @@ export class Orchestrator {
       const scopedId = localToScoped.get(taskDef.id)!;
       resolvedRoutingByTaskId.set(
         scopedId,
-        taskDef.dockerImage ? { type: 'dockerImage' } : resolvedRouting.reason,
+        resolvedRouting.reason,
       );
       const scopedDeps = (taskDef.dependencies ?? []).map((dep) => {
         const s = localToScoped.get(dep);
@@ -1548,7 +1550,6 @@ export class Orchestrator {
         executionModel: taskDef.executionModel,
         maxTurns: taskDef.maxTurns,
         ...(taskDef.freshness !== undefined ? { freshness: taskDef.freshness } : {}),
-        poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
       if (plan.scratch) {
@@ -1556,7 +1557,7 @@ export class Orchestrator {
       } else if (taskDef.dockerImage) {
         taskConfig = { ...baseConfig, runnerKind: 'docker' as const, dockerImage: taskDef.dockerImage };
       } else if (effectivePoolId) {
-        taskConfig = { ...baseConfig, runnerKind: 'ssh' as const };
+        taskConfig = { ...baseConfig, runnerKind: 'ssh' as const, poolId: effectivePoolId };
       } else {
         taskConfig = { ...baseConfig, runnerKind: 'worktree' as const };
       }
