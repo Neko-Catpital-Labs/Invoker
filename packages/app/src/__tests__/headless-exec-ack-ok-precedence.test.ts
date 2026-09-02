@@ -115,3 +115,23 @@ describe('executeHeadlessExec no-workflow acknowledgment', () => {
     });
   });
 });
+
+describe('executeHeadlessExec delete acknowledgment', () => {
+  it('acknowledges a workflow delete without a tasks array to track', async () => {
+    vi.mocked(runHeadless).mockResolvedValue(undefined);
+    const actions = createGuiMutationTaskActions(makeContext());
+
+    const result = await actions.executeHeadlessExec({ args: ['delete', 'wf-123'], noTrack: false } as never);
+
+    expect(result).toEqual({ ok: true, workflowId: 'wf-123' });
+  });
+
+  it('acknowledges a delete-workflow alias without a tasks array to track', async () => {
+    vi.mocked(runHeadless).mockResolvedValue(undefined);
+    const actions = createGuiMutationTaskActions(makeContext());
+
+    const result = await actions.executeHeadlessExec({ args: ['delete-workflow', 'wf-456'], noTrack: false } as never);
+
+    expect(result).toEqual({ ok: true, workflowId: 'wf-456' });
+  });
+});
