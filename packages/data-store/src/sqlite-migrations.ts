@@ -1,4 +1,4 @@
-import type { ExternalDependency } from '@invoker/workflow-core';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, type ExternalDependency } from '@invoker/workflow-core';
 import {
   COLUMN_MIGRATIONS,
   POST_MIGRATION_STATEMENTS,
@@ -73,6 +73,9 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
   dropTaskAutoFixAttemptsColumn(exec);
 
   if (!exec.readOnly) {
+    exec.run('DROP TRIGGER IF EXISTS trg_tasks_executor_routing_insert');
+    exec.run('DROP TRIGGER IF EXISTS trg_tasks_executor_routing_update');
+    migrateTaskExecutorPoolInvariant(exec);
     reconcileTerminalSessionInvariants();
   }
 
@@ -87,6 +90,51 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
     migrateTaskExternalDependenciesToWorkflows(exec);
     runCompatibilityMigration(exec);
   }
+}
+
+export function migrateTaskExecutorPoolInvariant(exec: SqliteExecutor): void {
+  exec.runTransaction(() => {
+    exec.run(
+      `UPDATE tasks
+          SET runner_kind = 'merge', pool_id = NULL, pool_member_id = NULL
+        WHERE is_merge_node = 1`,
+    );
+    exec.run(
+      `UPDATE tasks
+          SET runner_kind = 'docker', pool_id = NULL, pool_member_id = NULL
+        WHERE COALESCE(is_merge_node, 0) = 0
+          AND (runner_kind = 'docker' OR docker_image IS NOT NULL)`,
+    );
+    exec.run(
+      `UPDATE tasks
+          SET pool_id = NULL, pool_member_id = NULL
+        WHERE runner_kind = 'scratch'`,
+    );
+    exec.run(
+      `UPDATE tasks
+          SET runner_kind = CASE
+                WHEN COALESCE(TRIM(pool_id), '') = '' THEN 'worktree'
+                WHEN TRIM(pool_id) = ? THEN 'worktree'
+                ELSE 'ssh'
+              END,
+              pool_id = CASE
+                WHEN COALESCE(TRIM(pool_id), '') = '' THEN ?
+                ELSE TRIM(pool_id)
+              END
+        WHERE COALESCE(is_merge_node, 0) = 0
+          AND docker_image IS NULL
+          AND (runner_kind IS NULL OR TRIM(runner_kind) = '')`,
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID, BUILT_IN_LOCAL_EXECUTION_POOL_ID],
+    );
+    exec.run(
+      `UPDATE tasks
+          SET pool_id = ?
+        WHERE runner_kind = 'worktree'
+          AND docker_image IS NULL
+          AND COALESCE(TRIM(pool_id), '') = ''`,
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID],
+    );
+  });
 }
 
 /**
