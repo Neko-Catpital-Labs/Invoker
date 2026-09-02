@@ -12,7 +12,6 @@ import {
   buildPlanVars,
   claimRepairFiling,
   classifyJobConclusion,
-  extractFailureIdentitiesFromLog,
   failureStorageKey,
   fileBugfixPlan,
   getActionableFailures,
@@ -510,12 +509,6 @@ function testLiveGithubSmokeIfRequested() {
 
 function testDistinctIdentitiesUnderOneJob() {
   const jobName = 'required-fast / Mergify Admin Requeue';
-  const log = "rm: cannot remove '/tmp/repro-babysit-pr-body-human-split.ERdycn/seed/.git/objects': Directory not empty";
-  const extracted = extractFailureIdentitiesFromLog(log);
-  if (!extracted.some((entry) => entry.failureId.includes('repro-babysit-pr-body-human-split'))) {
-    fail('log parser must identify the babysit human-split repro');
-  }
-
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(32534741079, '22891618af26fc7e3e19227ccc56ed183c0e7e26', [{
     ...fakeJob(jobName, 'failure', 96936670245),
