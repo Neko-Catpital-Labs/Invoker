@@ -2687,8 +2687,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('fix')).toBeDefined();
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('does not gate pure-attribute mutations even when the workflow is live', () => {
+    it('does not gate pure-attribute mutations even when the workflow is live', () => {
       orchestrator.loadPlan({
         name: 'topology-gate-attr',
         tasks: [
