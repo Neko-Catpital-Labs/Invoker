@@ -108,3 +108,28 @@ Report the missing command surface and add/fix the command if the user asked for
 ## State claims must be fresh
 
 Never report a workflow/task count, CI status, merge status, or "it's running"/"it's fixed"/"autofix kicked in" from memory of an earlier check in this conversation. Run the query command again in the same turn and report what it actually returns now. State drifts between when you last checked and when you answer — a count from five minutes ago is not current state. See `skills/prove-it/SKILL.md`.
+
+## `needs_input` with empty task output is a read-the-reason problem
+
+A task that goes `needs_input` seconds after submit, with empty task output and no agent session, was stopped by the owner before launch. The stop reason is stored in `execution.inputPrompt`, and no headless query projection emits that field (`query task`, `query tasks`, `invoker_list_tasks`, and `/api/tasks` all go through the same serializer).
+
+Do this, in order, before any `retry-task`, agent switch (`set agent`), or resubmit:
+
+1. Print the returned key set of the task record, not just truthy values. If `inputPrompt` is not among the keys, say "not projected", not "empty". Absence of a field is not absence of state.
+2. Read the emitter in the running owner. The installed app bundle is greppable: `grep -n "ANCHOR_CLAUSE_PATTERN\|inputPrompt" /Applications/Invoker.app/Contents/Resources/app.asar`. Read the owner's copy, not the checkout's — a checkout can carry an untracked or unmerged rewrite of the same file.
+3. On macOS, `invoker-ui --headless ...` goes through `open -a` and discards stdout and the exit code, so an empty result proves nothing. Call the binary directly: `/Applications/Invoker.app/Contents/MacOS/Invoker --headless query task <taskId> --output json`.
+4. Only after the reason is in hand, reword the task or choose the operator action. A retry against the same task text reproduces the same stop.
+
+Do not hand the lookup back to the user ("open the task in the app and paste the text") until steps 1-3 have been tried and shown.
+
+## Waiting on a workflow
+
+Once a background `invoker-cli wait <workflowId>` is armed on a workflow, do not also poll it with foreground `sleep`/`seq` loops around `invoker-cli query`. One waiter per workflow; the wake-up is the signal.
+
+When the session context is already large and a workflow is stuck, delegate the digging (owner log reads, bundle greps, key-set dumps) to a subagent and keep only its conclusion in the main context.
+
+## Cancelling a chain
+
+Cancelling a chain head releases its chained downstream workflows: their merge-gate dependency detaches and their implement tasks launch on plain master seconds later. Cancel downstream workflows first, then the head.
+
+After each cancel, re-query with `query tasks --workflow <workflowId>` until every task shows `failed`. A cancel of a still-pending workflow may not stick on the first call, and the app-binary cancel exit code is unreliable, so the query result is the only proof that the cancel took.
