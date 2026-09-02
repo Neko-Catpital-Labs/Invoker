@@ -13,7 +13,7 @@
 
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, RunnerKind } from '@invoker/workflow-graph';
 import type { GraphMutation, GraphMutationNodeDef, OrchestratorPersistence, OrchestratorMessageBus } from './orchestrator.js';
-import { createTaskState } from '@invoker/workflow-graph';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, createTaskState } from '@invoker/workflow-graph';
 import { findLeafTaskIds } from '@invoker/workflow-graph';
 
 const TASK_DELTA_CHANNEL = 'task.delta';
@@ -178,14 +178,14 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
   const baseChanges: TaskStateChanges = mutation.sourceDisposition === 'complete'
     ? { status: 'completed' as const, execution: { completedAt: new Date() } }
     : { status: 'stale' as const };
-  // Spreading two Partial<TaskConfig> values widens beyond what TS can assign
-  // back to the discriminated union, but the runtime value is correct.
-  const sourceChanges = {
+  const sourceChanges: TaskStateChanges = {
     ...baseChanges,
     ...mutation.sourceChanges,
-    config: { ...baseChanges.config, ...mutation.sourceChanges?.config },
+    ...(mutation.sourceChanges?.config
+      ? { config: { ...mutation.sourceChanges.config } }
+      : {}),
     execution: { ...baseChanges.execution, ...mutation.sourceChanges?.execution },
-  } as TaskStateChanges;
+  };
   const updatedSource = host.writeAndSync(mutation.sourceNodeId, sourceChanges);
   const sourceDelta: TaskDelta = {
     type: 'updated',
@@ -216,7 +216,6 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       isReconciliation: nodeDef.isReconciliation,
       requiresManualApproval: nodeDef.requiresManualApproval,
       isMergeNode,
-      ...(nodeDef.poolId ? { poolId: nodeDef.poolId } : {}),
       ...(nodeDef.executionAgent ? { executionAgent: nodeDef.executionAgent } : {}),
       ...(nodeDef.executionModel ? { executionModel: nodeDef.executionModel } : {}),
       ...(nodeDef.maxTurns !== undefined ? { maxTurns: nodeDef.maxTurns } : {}),
@@ -224,9 +223,11 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     let nodeConfig: TaskConfig;
     switch (isMergeNode ? 'merge' : nodeDef.runnerKind) {
       case 'merge':
+        if (nodeDef.poolId !== undefined) throw new Error(`Graph mutation merge node "${nodeDef.id}" cannot declare poolId`);
         nodeConfig = { ...nodeBase, runnerKind: 'merge' };
         break;
       case 'docker':
+        if (nodeDef.poolId !== undefined) throw new Error(`Graph mutation Docker node "${nodeDef.id}" cannot declare poolId`);
         nodeConfig = {
           ...nodeBase,
           runnerKind: 'docker',
@@ -234,10 +235,21 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
         };
         break;
       case 'ssh':
-        nodeConfig = { ...nodeBase, runnerKind: 'ssh' };
+        if (!nodeDef.poolId?.trim()) {
+          throw new Error(`Graph mutation node "${nodeDef.id}" has runnerKind=ssh but no poolId`);
+        }
+        nodeConfig = { ...nodeBase, runnerKind: 'ssh', poolId: nodeDef.poolId };
+        break;
+      case 'scratch':
+        if (nodeDef.poolId !== undefined) throw new Error(`Graph mutation scratch node "${nodeDef.id}" cannot declare poolId`);
+        nodeConfig = { ...nodeBase, runnerKind: 'scratch' };
         break;
       default:
-        nodeConfig = { ...nodeBase, runnerKind: nodeDef.runnerKind };
+        nodeConfig = {
+          ...nodeBase,
+          runnerKind: nodeDef.poolId && nodeDef.poolId !== BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'ssh' : 'worktree',
+          poolId: nodeDef.poolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+        };
         break;
     }
     const task = createTaskState(nodeDef.id, nodeDef.description, nodeDef.dependencies, nodeConfig);
