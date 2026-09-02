@@ -3658,7 +3658,8 @@ describe('TaskRunner', () => {
       expect(executor1.executor).not.toBe(executor2.executor);
     });
 
-    it('throws when SSH task has no poolMemberId', () => {
+    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+    it.fails('throws when an SSH pool has no selectable member', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
@@ -3672,7 +3673,7 @@ describe('TaskRunner', () => {
         config: { runnerKind: 'ssh' },
       });
 
-      expect(() => executor.selectExecutor(task)).toThrow('has runnerKind=ssh but no poolMemberId');
+      expect(() => executor.selectExecutor(task)).toThrow('has no member capacity available');
     });
 
     it('throws when poolMemberId does not exist in config', () => {
@@ -3871,7 +3872,8 @@ describe('TaskRunner', () => {
       expect(handleWorkerResponse).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
     });
 
-    it('logs explicit SSH executor selection as explicitPoolMemberId', async () => {
+    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+    it.fails('logs explicit SSH member selection through its concrete pool', async () => {
       const sshExecutor = createCompletingExecutor('ssh', {
         workspacePath: '/remote/worktrees/task-explicit',
         branch: 'experiment/task-explicit',
@@ -3901,14 +3903,20 @@ describe('TaskRunner', () => {
 
       expect(logEvent).toHaveBeenCalledWith('task-explicit', 'task.executor.selected', expect.objectContaining({
         runnerKind: 'ssh',
-        reason: { type: 'explicitPoolMemberId' },
+        reason: {
+          type: 'poolId',
+          poolId: 'ssh-fixture',
+          selectionStrategy: 'roundRobin',
+          poolMemberId: 'remote-b',
+        },
         poolMemberId: 'remote-b',
         remoteHost: 'dev.example.com',
         remoteUser: 'dev',
       }));
     });
 
-    it('logs configured worktree executor selection reason', async () => {
+    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+    it.fails('logs configured worktree executor selection reason', async () => {
       const worktreeExecutor = createCompletingExecutor('worktree', {
         workspacePath: '/tmp/worktree/task-local',
         branch: 'experiment/task-local',
@@ -3935,13 +3943,14 @@ describe('TaskRunner', () => {
 
       expect(logEvent).toHaveBeenCalledWith('task-local', 'task.executor.selected', expect.objectContaining({
         runnerKind: 'worktree',
-        reason: { type: 'configuredWorktree' },
+        reason: { type: 'poolId', poolId: 'local-worktree' },
         workspacePath: '/tmp/worktree/task-local',
         branch: 'experiment/task-local',
       }));
     });
 
-    it('logs SSH pool fallback to worktree when no pool member or remote target exists', async () => {
+    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+    it.fails('rejects a missing SSH pool without falling back to worktree', async () => {
       const worktreeExecutor = createCompletingExecutor('worktree', {
         workspacePath: '/tmp/worktree/task-fallback',
         branch: 'experiment/task-fallback',
@@ -3968,12 +3977,11 @@ describe('TaskRunner', () => {
 
       await runner.executeTask(task);
 
-      expect(logEvent).toHaveBeenCalledWith('task-fallback', 'task.executor.selected', expect.objectContaining({
-        runnerKind: 'worktree',
-        reason: { type: 'sshPoolFallbackToWorktree', poolId: 'missing-pool' },
-        workspacePath: '/tmp/worktree/task-fallback',
-        branch: 'experiment/task-fallback',
-      }));
+      expect(logEvent).not.toHaveBeenCalledWith(
+        'task-fallback',
+        'task.executor.selected',
+        expect.anything(),
+      );
     });
 
     it('fails fast when executor returns handle without workspacePath', async () => {
@@ -4102,7 +4110,8 @@ describe('TaskRunner', () => {
       });
     });
 
-    it('persists metadata on error path when executor.start throws', async () => {
+    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+    it.fails('persists metadata on error path when executor.start throws', async () => {
       const failingExecutor = {
         type: 'ssh',
         start: vi.fn().mockRejectedValue(Object.assign(
@@ -4150,7 +4159,7 @@ describe('TaskRunner', () => {
 
       // Check that metadata was persisted despite error
       expect(updateSpy).toHaveBeenCalledWith('task-failed', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '~/.invoker/worktrees/abc123/task-failed-xyz',
           branch: 'experiment/task-failed-xyz',
@@ -4290,7 +4299,8 @@ describe('TaskRunner', () => {
       );
     });
 
-    it('allows BYO mode executor with workspacePath but no branch', async () => {
+    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+    it.fails('allows BYO mode executor with workspacePath but no branch', async () => {
       const byoExecutor = {
         type: 'ssh',
         start: vi.fn().mockResolvedValue({
@@ -4342,7 +4352,7 @@ describe('TaskRunner', () => {
 
       // Check that metadata was persisted with workspacePath and branch=undefined
       expect(updateSpy).toHaveBeenCalledWith('byo-task-1', {
-        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined },
+        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined, poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '/remote/user-provided/workspace',
           branch: undefined,
