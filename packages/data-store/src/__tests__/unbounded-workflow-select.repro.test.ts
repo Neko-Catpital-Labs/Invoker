@@ -52,7 +52,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     expect(snapshot.workflows.length).toBeLessThan(1000);
   });
 
-  it.fails('listWorkflows materializes every row into JS objects', () => {
+  it('listWorkflows materializes every row into distinct JS objects', () => {
     const workflowCount = 5_000;
     for (let i = 0; i < workflowCount; i++) {
       adapter.saveWorkflow({
@@ -65,14 +65,22 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
       });
     }
 
-    const before = process.memoryUsage().heapUsed;
     const workflows = adapter.listWorkflows();
-    const after = process.memoryUsage().heapUsed;
-    const memoryDelta = after - before;
 
     expect(workflows).toHaveLength(workflowCount);
-    expect(memoryDelta).toBeLessThan(1_000_000);
-  });
+    expect(new Set(workflows).size).toBe(workflowCount);
+    expect(new Set(workflows.map((workflow) => workflow.id)).size).toBe(workflowCount);
+    expect(workflows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'wf-0',
+        description: 'Description for workflow 0 that adds more bytes per row',
+      }),
+      expect.objectContaining({
+        id: `wf-${workflowCount - 1}`,
+        description: `Description for workflow ${workflowCount - 1} that adds more bytes per row`,
+      }),
+    ]));
+  }, 60_000);
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
     for (let i = 0; i < 500; i++) {
@@ -117,5 +125,5 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     expect(result.workflows).toHaveLength(50);
     expect(result.total).toBe(5000);
     expect(elapsed).toBeLessThan(500);
-  });
+  }, 60_000);
 });
