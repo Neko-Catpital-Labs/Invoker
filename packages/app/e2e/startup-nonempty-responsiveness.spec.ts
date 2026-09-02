@@ -18,6 +18,7 @@ import {
   numberOrZero,
   parseActivityPayload,
   uiPerfPayloadsSince,
+  waitForUiPerfPayload,
 } from './fixtures/ui-perf.js';
 
 const repoRoot = resolveRepoRoot(__dirname);
@@ -194,6 +195,14 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10_000 });
       await waitForWorkflowGraphVisible(page, 5000);
       await dragGraphAndAssertViewportMoves(page);
+      await waitForUiPerfPayload(
+        page,
+        (payload) => payload.metric === 'startup_workflow_graph_visible' && payload.nodeCount === workflowCount,
+      );
+      await waitForUiPerfPayload(
+        page,
+        (payload) => payload.metric === 'startup_graph_visible' && payload.nodeCount === tasksPerWorkflow,
+      );
 
       const result = await page.evaluate(async () => {
         const tasksResult = await window.invoker.getTasks();
