@@ -247,8 +247,7 @@ describe('State × Topology Matrix', () => {
   // ── Diamond: A→{B,C}→D ─────────────────────────────────
 
   describe('diamond topology: A→{B,C}→D', () => {
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('B fails → D stays pending, C unaffected', () => {
+    it('B fails → D stays pending, C unaffected', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -260,8 +259,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('C')!.status).toBe('completed');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('B fails and restarts → after B and C complete, D starts', () => {
+    it('B fails and restarts → after B and C complete, D starts', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -277,8 +275,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('D')!.status).toBe('running');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('B and C both fail → D stays pending', () => {
+    it('B and C both fail → D stays pending', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -383,8 +380,7 @@ describe('State × Topology Matrix', () => {
   // ── Fork: A→{B,C} ──────────────────────────────────────
 
   describe('fork topology: A→{B,C}', () => {
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('root A fails → both B and C stay pending', () => {
+    it('root A fails → both B and C stay pending', () => {
       orchestrator.loadPlan(forkPlan());
       orchestrator.startExecution();
 
@@ -394,8 +390,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('C')!.status).toBe('skipped');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('root A fails, restart A, complete A → B and C both start', () => {
+    it('root A fails, restart A, complete A → B and C both start', () => {
       orchestrator.loadPlan(forkPlan());
       orchestrator.startExecution();
 
@@ -413,8 +408,7 @@ describe('State × Topology Matrix', () => {
   // ── Join: {A,B}→C ──────────────────────────────────────
 
   describe('join topology: {A,B}→C', () => {
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('A completes, B fails → C stays pending → restart B, complete B → C starts', () => {
+    it('A completes, B fails → C stays pending → restart B, complete B → C starts', () => {
       orchestrator.loadPlan(joinPlan());
       orchestrator.startExecution();
 
@@ -428,8 +422,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('C')!.status).toBe('running');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('A and B both fail → C stays pending → restart both → C starts', () => {
+    it('A and B both fail → C stays pending → restart both → C starts', () => {
       orchestrator.loadPlan(joinPlan());
       orchestrator.startExecution();
 
@@ -480,8 +473,7 @@ describe('State × Topology Matrix', () => {
       }
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('B fails → D,E,F,G stay pending → restart B → cascade unblocks', () => {
+    it('B fails → D,E,F,G stay pending → restart B → cascade unblocks', () => {
       orchestrator.loadPlan(butterflyPlan());
       orchestrator.startExecution();
 
@@ -503,8 +495,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('F')!.status).toBe('running');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('D fails → E,F,G stay pending but B,C unaffected', () => {
+    it('D fails → E,F,G stay pending but B,C unaffected', () => {
       orchestrator.loadPlan(butterflyPlan());
       orchestrator.startExecution();
 
@@ -525,8 +516,7 @@ describe('State × Topology Matrix', () => {
   // ── Mesh: {A,B}→{C,D} ─────────────────────────────────
 
   describe('mesh topology: {A,B}→{C,D}', () => {
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('A fails → C and D stay pending', () => {
+    it('A fails → C and D stay pending', () => {
       orchestrator.loadPlan(meshPlan());
       orchestrator.startExecution();
 
