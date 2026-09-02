@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 env:
   CI: true
@@ -34,14 +35,36 @@ jobs:
         id: decide
         run: bash scripts/daily-release-decide.sh --tip HEAD --out "$GITHUB_OUTPUT"
 
+      - name: Install pnpm
+        if: steps.decide.outputs.should_run == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        if: steps.decide.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies for the bump PR helper
+        if: steps.decide.outputs.should_run == 'true'
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
       - name: Bump nightly patch version
         if: steps.decide.outputs.should_run == 'true'
+        env:
+          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           node scripts/bump-release-version.mjs --type patch
+          git checkout -b "daily-version-bump-${{ steps.decide.outputs.tag }}"
           git config user.name "invoker-release-bot"
           git config user.email "invoker-release-bot@users.noreply.github.com"
           git commit -am "chore(release): bump patch version for ${{ steps.decide.outputs.tag }}"
-          git push origin HEAD:master
+          bash scripts/open-daily-release-bump-pr.sh --tag "${{ steps.decide.outputs.tag }}"
 
       - name: Resolve build sha
         id: bump
