@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TASK_FILTER_KEYS, validateTaskFilter } from '../task-filter.js';
+import { TASK_FILTER_KEYS, TASK_FILTER_TIME_KEYS, validateTaskFilter } from '../task-filter.js';
 
 const validLeaf = { op: 'eq', key: 'status', value: 'failed' } as const;
 
@@ -18,6 +18,11 @@ describe('validateTaskFilter', () => {
     ]);
   });
 
+  it('exports only timestamp columns as time range keys', () => {
+    expect(TASK_FILTER_TIME_KEYS).toEqual(['created_at', 'started_at', 'completed_at', 'last_heartbeat_at']);
+    for (const key of TASK_FILTER_TIME_KEYS) expect(TASK_FILTER_KEYS).toContain(key);
+  });
+
   it.each([
     ['and', { op: 'and', filters: [validLeaf] }],
     ['or', { op: 'or', filters: [validLeaf] }],
@@ -29,6 +34,7 @@ describe('validateTaskFilter', () => {
     ['time_range with start', { op: 'time_range', key: 'created_at', start: '2026-01-01T00:00:00Z' }],
     ['time_range with end', { op: 'time_range', key: 'created_at', end: '2026-01-02T00:00:00+00:00' }],
     ['time_range with both bounds', { op: 'time_range', key: 'created_at', start: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00Z' }],
+    ...TASK_FILTER_TIME_KEYS.map((key) => [`time_range on ${key}`, { op: 'time_range', key, start: '2026-01-01T00:00:00Z' }] as const),
   ])('accepts %s', (_, input) => {
     expect(validateTaskFilter(input).valid).toBe(true);
   });
@@ -52,6 +58,7 @@ describe('validateTaskFilter', () => {
   it('rejects empty logical lists', () => expectReject({ op: 'and', filters: [] }, 'taskFilter.filters'));
   it('rejects empty in lists', () => expectReject({ op: 'in', key: 'status', values: [] }, 'taskFilter.values'));
   it('rejects non-string contains values', () => expectReject({ op: 'contains', key: 'description', value: 1 }, 'taskFilter.value'));
+  it('rejects time ranges on non-timestamp keys', () => expectReject({ op: 'time_range', key: 'status', start: '2026-01-01T00:00:00Z' }, 'taskFilter.key'));
   it('rejects time ranges with no bound', () => expectReject({ op: 'time_range', key: 'created_at' }, 'taskFilter.start'));
   it('rejects naive timestamps', () => expectReject({ op: 'time_range', key: 'created_at', start: '2026-01-01T00:00:00' }, 'taskFilter.start'));
   it('rejects invalid timestamps', () => expectReject({ op: 'time_range', key: 'created_at', start: 'not-a-date' }, 'taskFilter.start'));

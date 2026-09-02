@@ -19,7 +19,10 @@ export const TASK_FILTER_KEYS = [
   'last_heartbeat_at',
 ] as const;
 
+export const TASK_FILTER_TIME_KEYS = ['created_at', 'started_at', 'completed_at', 'last_heartbeat_at'] as const;
+
 export type TaskFilterKey = (typeof TASK_FILTER_KEYS)[number];
+export type TaskFilterTimeKey = (typeof TASK_FILTER_TIME_KEYS)[number];
 export type TaskFilterValue = string | number | boolean | null;
 
 export type TaskFilterNode =
@@ -30,9 +33,10 @@ export type TaskFilterNode =
   | { op: 'eq'; key: TaskFilterKey; value: TaskFilterValue }
   | { op: 'in'; key: TaskFilterKey; values: TaskFilterValue[] }
   | { op: 'contains'; key: TaskFilterKey; value: string }
-  | { op: 'time_range'; key: TaskFilterKey; start?: string; end?: string };
+  | { op: 'time_range'; key: TaskFilterTimeKey; start?: string; end?: string };
 
 const taskFilterKeySet = new Set<string>(TASK_FILTER_KEYS);
+const taskFilterTimeKeySet = new Set<string>(TASK_FILTER_TIME_KEYS);
 const filterOps = new Set(['and', 'or', 'not', 'exists', 'eq', 'in', 'contains', 'time_range']);
 const isoTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -57,6 +61,13 @@ function hasOnlyFields(record: Record<string, unknown>, fields: readonly string[
 function validateKey(value: unknown, path: string): ValidationResult {
   if (typeof value !== 'string' || !taskFilterKeySet.has(value)) {
     return { valid: false, error: `${path} must be a valid task filter key` };
+  }
+  return { valid: true };
+}
+
+function validateTimeKey(value: unknown, path: string): ValidationResult {
+  if (typeof value !== 'string' || !taskFilterTimeKeySet.has(value)) {
+    return { valid: false, error: `${path} must be a task timestamp column` };
   }
   return { valid: true };
 }
@@ -105,7 +116,7 @@ function validateNode(input: unknown, depth: number, path: string): ValidationRe
     path,
   );
   if (!fields.valid) return fields;
-  const keyResult = validateKey(input.key, `${path}.key`);
+  const keyResult = op === 'time_range' ? validateTimeKey(input.key, `${path}.key`) : validateKey(input.key, `${path}.key`);
   if (!keyResult.valid) return keyResult;
 
   if (op === 'exists') return { valid: true };
