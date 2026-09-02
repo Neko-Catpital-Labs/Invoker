@@ -746,6 +746,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     return { workflowId, tasks };
   }
 
+  const HEADLESS_COMMANDS_WITHOUT_TASK_TRACKING = new Set(['delete', 'delete-workflow']);
+
   async function executeHeadlessExec(payload: HeadlessExecMutationPayload): Promise<unknown> {
     logger.info(`executeHeadlessExec begin args="${payload.args.join(' ')}" noTrack=${payload.noTrack ? 'true' : 'false'}`, {
       module: 'ipc-delegate',
@@ -802,10 +804,11 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     logger.info(`executeHeadlessExec end args="${payload.args.join(' ')}" workflow="${workflowId ?? 'unknown'}"`, {
       module: 'ipc-delegate',
     });
-    if (!workflowId) {
+    if (!workflowId || HEADLESS_COMMANDS_WITHOUT_TASK_TRACKING.has(headlessCommand)) {
       return {
         ...(commandResult && typeof commandResult === 'object' ? commandResult as Record<string, unknown> : {}),
         ok: true,
+        ...(workflowId ? { workflowId } : {}),
       };
     }
     orchestrator.syncFromDb(workflowId);
