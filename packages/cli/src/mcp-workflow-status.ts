@@ -10,6 +10,7 @@ export type WorkflowStatusSummary = {
   completed: number;
   failed: number;
   closed: number;
+  skipped?: number;
   running: number;
   pending: number;
   awaitingApproval: number;
@@ -33,6 +34,7 @@ export function summarizeTaskStatuses(tasks: WorkflowTaskSnapshot[]): WorkflowSt
     completed: tasks.filter((task) => task.status === 'completed').length,
     failed: tasks.filter((task) => task.status === 'failed').length,
     closed: tasks.filter((task) => task.status === 'closed').length,
+    skipped: tasks.filter((task) => task.status === 'skipped').length,
     running: tasks.filter((task) => task.status === 'running' || task.status === 'fixing_with_ai').length,
     pending: tasks.filter((task) => task.status === 'pending').length,
     awaitingApproval: tasks.filter((task) => task.status === 'awaiting_approval' || task.status === 'review_ready').length,
@@ -46,6 +48,7 @@ export function workflowTasksSettled(tasks: WorkflowTaskSnapshot[]): boolean {
     'completed',
     'failed',
     'closed',
+    'skipped',
     'needs_input',
     'awaiting_approval',
     'review_ready',
