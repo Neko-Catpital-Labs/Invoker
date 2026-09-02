@@ -3,7 +3,7 @@ import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-inp
 import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode, isWorkerResponseGenerationValid } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import { computeWorkflowRollup } from '../task-types.js';
+import { applyTaskConfigPatch, BUILT_IN_LOCAL_EXECUTION_POOL_ID, computeWorkflowRollup, resolveTaskConfig } from '../task-types.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 
@@ -128,7 +128,10 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   saveTask(workflowId: string, task: TaskState): void {
-    this.tasks.set(task.id, { workflowId, task });
+    this.tasks.set(task.id, {
+      workflowId,
+      task: { ...task, config: resolveTaskConfig(task.config) },
+    });
   }
 
   /** Resolve bare plan-local id to the single matching persisted key when unambiguous (test helper). */
@@ -167,10 +170,10 @@ class InMemoryPersistence implements OrchestratorPersistence {
         ...entry.task,
         ...(changes.status !== undefined ? { status: changes.status } : {}),
         ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
-        config: { ...entry.task.config, ...changes.config },
+        config: applyTaskConfigPatch(entry.task.config, changes.config),
         execution: { ...entry.task.execution, ...changes.execution },
         taskStateVersion: (entry.task.taskStateVersion ?? 1) + 1,
-      } as TaskState;
+      };
     }
   }
 
@@ -1301,6 +1304,28 @@ describe('Orchestrator', () => {
       expect(persistence.tasks.has(sid(orchestrator, 0, 't2'))).toBe(true);
     });
 
+    it('persists a concrete built-in pool through save and reload when plan input omits poolId', () => {
+      orchestrator.loadPlan({
+        name: 'persisted-pool-default',
+        repoUrl: 'git@github.com:test/repo.git',
+        tasks: [{ id: 't1', description: 'Repository task', command: 'echo hello' }],
+      });
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+
+      const reloaded = new Orchestrator({
+        persistence,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 3,
+        resolveRepoDefaultBranch: () => repoDefaultBranch,
+      });
+      reloaded.syncFromDb(workflowId);
+
+      expect(reloaded.getTask('t1')?.config).toMatchObject({
+        runnerKind: 'worktree',
+        poolId: 'local-worktree',
+      });
+    });
+
     it('allows two workflows to reuse the same YAML task ids (scoped runtime ids differ)', () => {
       orchestrator.loadPlan({
         name: 'plan-A',
@@ -1418,7 +1443,7 @@ describe('Orchestrator', () => {
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.runnerKind).toBe('worktree');
-        expect(task!.config.poolId).toBeUndefined();
+        expect(task!.config.poolId).toBe(BUILT_IN_LOCAL_EXECUTION_POOL_ID);
       });
 
       it('validates regex rule matching pnpm test', () => {
@@ -1653,8 +1678,7 @@ describe('Orchestrator', () => {
         });
       });
 
-      // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-      it.fails('logs default worktree routing when no pool or docker rule applies', () => {
+      it('logs default worktree routing when no pool or docker rule applies', () => {
         const persistence = new InMemoryPersistence();
         const routedOrchestrator = new Orchestrator({
           persistence,
@@ -1721,8 +1745,7 @@ describe('Orchestrator', () => {
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
-      // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-      it.fails('throws when route strategy target pool is not configured', () => {
+      it('throws when route strategy target pool is not configured', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -1759,7 +1782,7 @@ describe('Orchestrator', () => {
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.runnerKind).toBe('worktree');
-        expect(task!.config.poolId).toBeUndefined();
+        expect(task!.config.poolId).toBe(BUILT_IN_LOCAL_EXECUTION_POOL_ID);
       });
 
       it('keeps heavyweightCommandRouting as compatibility alias to route strategy', () => {
@@ -4354,7 +4377,7 @@ describe('Orchestrator', () => {
 
       const task = orchestrator.getTask('t1');
       expect(task?.config.poolId).toBe('mixed-local-ssh');
-      expect(task?.config.runnerKind).toBeUndefined();
+      expect(task?.config.runnerKind).toBe('ssh');
       expect(task?.config.poolMemberId).toBeUndefined();
       expect(persistence.getTaskEntry('t1')?.task.config.poolId).toBe('mixed-local-ssh');
     });

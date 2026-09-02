@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ExternalGatePolicy, TaskStatus, TaskHeartbeatSource, TaskFreshnessSpec } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass, computeWorkflowRollup } from '@invoker/workflow-graph';
+import { applyTaskConfigPatch, BUILT_IN_LOCAL_EXECUTION_POOL_ID, createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass, computeWorkflowRollup } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -844,8 +844,11 @@ export class Orchestrator {
       ...(config.executorRoutingRules ?? []),
       ...buildHeavyweightRoutingRules('config', config.heavyweightCommandRouting),
     ];
-    this.availablePoolIds = new Set(config.availablePoolIds ?? []);
-    this.defaultPoolId = config.defaultPoolId;
+    this.availablePoolIds = new Set([
+      BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+      ...(config.availablePoolIds ?? []),
+    ]);
+    this.defaultPoolId = config.defaultPoolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID;
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
     this.launchDeferralBackoffMs = config.launchDeferralBackoffMs;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
@@ -915,9 +918,7 @@ export class Orchestrator {
       ...existing,
       ...(changes.status !== undefined ? { status: changes.status } : {}),
       ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
-      // Type assertion: spread widens the discriminated union but the runtime
-      // value preserves the correct runnerKind discriminant from existing.config.
-      config: { ...existing.config, ...changes.config } as TaskConfig,
+      config: applyTaskConfigPatch(existing.config, changes.config),
       execution: { ...existing.execution, ...changes.execution },
       taskStateVersion: existing.taskStateVersion + 1,
     };
@@ -1508,25 +1509,7 @@ export class Orchestrator {
     const validatedTasks: TaskState[] = [];
     const resolvedRoutingByTaskId = new Map<string, ExecutorRoutingReason>();
     for (const taskDef of plan.tasks) {
-      // Scratch plans never resolve a pool: no clone, no config-level default
-      // pool, no routing rule can ever hijack a scratch task's runnerKind.
-      const resolvedRouting: ReturnType<typeof resolveExecutorRouting> = plan.scratch
-        ? { poolId: undefined, reason: { type: 'scratch' } }
-        : resolveExecutorRouting(
-            taskDef.id,
-            taskDef.command,
-            taskDef.poolId ?? plan.poolId,
-            this.defaultPoolId,
-            this.executorRoutingRules,
-            this.availablePoolIds,
-          );
-      const effectivePoolId = resolvedRouting.poolId;
-
       const scopedId = localToScoped.get(taskDef.id)!;
-      resolvedRoutingByTaskId.set(
-        scopedId,
-        taskDef.dockerImage ? { type: 'dockerImage' } : resolvedRouting.reason,
-      );
       const scopedDeps = (taskDef.dependencies ?? []).map((dep) => {
         const s = localToScoped.get(dep);
         if (!s) {
@@ -1546,17 +1529,33 @@ export class Orchestrator {
         executionModel: taskDef.executionModel,
         maxTurns: taskDef.maxTurns,
         ...(taskDef.freshness !== undefined ? { freshness: taskDef.freshness } : {}),
-        poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
       if (plan.scratch) {
+        if (taskDef.poolId !== undefined || plan.poolId !== undefined) {
+          throw new Error(`Scratch task "${taskDef.id}" cannot declare poolId`);
+        }
         taskConfig = { ...baseConfig, runnerKind: 'scratch' as const };
+        resolvedRoutingByTaskId.set(scopedId, { type: 'scratch' });
       } else if (taskDef.dockerImage) {
+        if (taskDef.poolId !== undefined || plan.poolId !== undefined) {
+          throw new Error(`Docker task "${taskDef.id}" cannot declare poolId`);
+        }
         taskConfig = { ...baseConfig, runnerKind: 'docker' as const, dockerImage: taskDef.dockerImage };
-      } else if (effectivePoolId) {
-        taskConfig = { ...baseConfig, runnerKind: 'ssh' as const };
+        resolvedRoutingByTaskId.set(scopedId, { type: 'dockerImage' });
       } else {
-        taskConfig = { ...baseConfig, runnerKind: 'worktree' as const };
+        const resolvedRouting = resolveExecutorRouting(
+          taskDef.id,
+          taskDef.command,
+          taskDef.poolId ?? plan.poolId,
+          this.defaultPoolId,
+          this.executorRoutingRules,
+          this.availablePoolIds,
+        );
+        taskConfig = resolvedRouting.poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID
+          ? { ...baseConfig, runnerKind: 'worktree' as const, poolId: resolvedRouting.poolId }
+          : { ...baseConfig, runnerKind: 'ssh' as const, poolId: resolvedRouting.poolId };
+        resolvedRoutingByTaskId.set(scopedId, resolvedRouting.reason);
       }
       const task = createTaskState(
         scopedId,
@@ -1621,10 +1620,14 @@ export class Orchestrator {
     for (const task of validatedTasks) {
       this.createAndSync(task);
       this.persistence.logEvent?.(task.id, 'task.created');
+      const routingReason = resolvedRoutingByTaskId.get(task.id);
+      if (!routingReason) {
+        throw new Error(`Task "${task.id}" is missing resolved executor routing`);
+      }
       this.persistence.logEvent?.(task.id, 'task.executor.routed', buildExecutorRoutedPayload(
-        task.config.runnerKind ?? 'worktree',
+        task.config.runnerKind,
         task.config.poolId,
-        task.config.dockerImage ? { type: 'dockerImage' } : resolvedRoutingByTaskId.get(task.id) ?? { type: 'defaultWorktree' },
+        routingReason,
       ));
       deltas.push({ type: 'created', task });
     }
@@ -2847,7 +2850,7 @@ export class Orchestrator {
       const deps = hasInternalDeps
         ? rt.dependencies!.map((d) => scopeLocal(d))
         : [...task.dependencies];
-      const rtRunnerKind = normalizeRunnerKind(rt.runnerKind) ?? task.config.runnerKind ?? 'worktree';
+      const rtRunnerKind = normalizeRunnerKind(rt.runnerKind) ?? task.config.runnerKind;
       const rtBase = {
         workflowId: wfId,
         command: rt.command,
@@ -2855,8 +2858,10 @@ export class Orchestrator {
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
         executionModel: rt.executionModel ?? task.config.executionModel,
         maxTurns: rt.maxTurns ?? task.config.maxTurns,
-        poolId: task.config.poolId,
       } as const;
+      const inheritedPoolId = task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh'
+        ? task.config.poolId
+        : BUILT_IN_LOCAL_EXECUTION_POOL_ID;
       // Replacement tasks inherit executor config from the parent task.
       // The switch narrows the config so TS accepts the correct variant.
       let rtConfig: TaskConfig;
@@ -2868,16 +2873,25 @@ export class Orchestrator {
           };
           break;
         case 'ssh':
-          rtConfig = ({
-            ...rtBase, runnerKind: 'ssh',
-            poolMemberId: task.config.runnerKind === 'ssh' ? (task.config as { poolMemberId?: string }).poolMemberId : undefined,
-          } as unknown) as TaskConfig;
+          rtConfig = {
+            ...rtBase,
+            runnerKind: 'ssh',
+            poolId: inheritedPoolId,
+            poolMemberId: task.config.runnerKind === 'ssh' ? task.config.poolMemberId : undefined,
+          };
           break;
         case 'scratch':
           rtConfig = { ...rtBase, runnerKind: 'scratch' as const };
           break;
+        case 'merge':
+          throw new Error(`Replacement task "${rt.id}" cannot use runnerKind=merge`);
         default:
-          rtConfig = { ...rtBase, runnerKind: 'worktree' as const };
+          rtConfig = {
+            ...rtBase,
+            runnerKind: 'worktree' as const,
+            poolId: inheritedPoolId,
+            poolMemberId: task.config.runnerKind === 'worktree' ? task.config.poolMemberId : undefined,
+          };
           break;
       }
       const newTask = createTaskState(scopedId, rt.description, deps, rtConfig);

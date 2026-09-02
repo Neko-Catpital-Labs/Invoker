@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Attempt, TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type Attempt, type TaskState } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { WorkflowSaveInput } from '../adapter.js';
 import type { SqliteExecutor } from '../sqlite-executor.js';
@@ -31,7 +31,7 @@ function makeTask(id = 'task-1', status: TaskState['status'] = 'pending'): TaskS
     status,
     dependencies: [],
     createdAt: new Date(T0),
-    config: {},
+    config: resolveTaskConfig(),
     execution: { generation: 0 },
     taskStateVersion: 1,
   };
