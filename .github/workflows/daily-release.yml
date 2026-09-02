@@ -53,16 +53,22 @@ jobs:
         if: steps.decide.outputs.should_run == 'true'
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Install mergify CLI
+        if: steps.decide.outputs.should_run == 'true'
+        run: |
+          pipx install mergify-cli==2026.8.31.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Bump nightly patch version
         if: steps.decide.outputs.should_run == 'true'
         env:
-          GH_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           node scripts/bump-release-version.mjs --type patch
           git checkout -b "daily-version-bump-${{ steps.decide.outputs.tag }}"
           git config user.name "invoker-release-bot"
           git config user.email "invoker-release-bot@users.noreply.github.com"
-          git config --global "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" "https://github.com/"
           git commit -am "chore(release): bump patch version for ${{ steps.decide.outputs.tag }}"
           bash scripts/open-daily-release-bump-pr.sh --tag "${{ steps.decide.outputs.tag }}"
 
