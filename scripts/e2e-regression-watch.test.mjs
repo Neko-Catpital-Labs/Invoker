@@ -352,6 +352,7 @@ describe('needs-human repair-filings claim (claimNeedsHumanRepairFiling)', () =>
     let claims = 0;
 
     const sweepOnce = (sweepState) => processFailureFilingSweep(sweepState, {
+      isPaused: () => false,
       now: new Date('2026-08-12T01:00:00Z'),
       maxAttempts: 3,
       liveQuery: () => false,
@@ -405,6 +406,7 @@ describe('fleet SHA correlation', () => {
     const liveMarkers = [];
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       jobDefinitions: jobDefinitionsFor(jobs),
       liveQuery: (failure) => {
         liveMarkers.push(buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName));
@@ -438,6 +440,7 @@ describe('fleet SHA correlation', () => {
     const filed = [];
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       jobDefinitions: jobDefinitionsFor(jobs),
       liveQuery: () => false,
       fileFailure: (failure) => filed.push(failure.jobName),
@@ -461,6 +464,7 @@ describe('fleet SHA correlation', () => {
     let filed = 0;
 
     const dedupCounts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       jobDefinitions,
       liveQuery: (failure) => buildMarker(failure.firstBadSha, failure.markerJobName ?? failure.jobName) === buildMarker(sha, 'fleet'),
       fileFailure: () => {
@@ -473,6 +477,7 @@ describe('fleet SHA correlation', () => {
     assert.equal(state.activeFailures[jobs[0]].memberOfFleetEvent, sha);
 
     const filedCounts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-12T01:00:00Z'),
       maxAttempts: 1,
       jobDefinitions,
@@ -487,6 +492,7 @@ describe('fleet SHA correlation', () => {
     let liveQueryCalled = false;
     const liveQueried = [];
     const cappedCounts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-12T03:00:00Z'),
       maxAttempts: 1,
       jobDefinitions,
@@ -539,6 +545,7 @@ describe('fleet SHA correlation', () => {
     const filed = [];
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-12T04:00:00Z'),
       maxAttempts: 3,
       jobDefinitions: jobDefinitionsFor(jobs),
@@ -616,6 +623,7 @@ describe('fleet SHA correlation', () => {
     const jobDefinitions = jobDefinitionsFor(jobs);
 
     processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-12T01:00:00Z'),
       jobDefinitions,
       liveQuery: () => false,
@@ -626,6 +634,7 @@ describe('fleet SHA correlation', () => {
     const filed = [];
     const liveMarkers = [];
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-12T02:00:00Z'),
       jobDefinitions,
       liveQuery: (failure) => {
@@ -671,12 +680,14 @@ describe('fleet SHA correlation', () => {
     const fleetFilings = [];
 
     processFailureFilingSweep(historicalState, {
+      isPaused: () => false,
       fleetEventThreshold: 99,
       jobDefinitions,
       liveQuery: () => false,
       fileFailure: (failure) => historicalFilings.push(failure.jobName),
     });
     const counts = processFailureFilingSweep(correlatedState, {
+      isPaused: () => false,
       jobDefinitions,
       liveQuery: () => false,
       fileFailure: (failure) => fleetFilings.push(failure),
@@ -710,6 +721,7 @@ describe('fleet SHA correlation', () => {
     // Sweep 1: correlates jobA + jobB into one fleet entry under sha1. This
     // is the pre-existing fleet-level entry the bug later orphans.
     processFailureFilingSweep(state, {
+      isPaused: () => false,
       jobDefinitions: jobDefinitionsFor([jobA, jobB]),
       fleetEventThreshold: 2,
       now: new Date('2026-08-12T00:00:00Z'),
@@ -744,6 +756,7 @@ describe('fleet SHA correlation', () => {
     // sweep where the bug fires.
     const filed = [];
     processFailureFilingSweep(state, {
+      isPaused: () => false,
       jobDefinitions: jobDefinitionsFor([jobB]),
       fleetEventThreshold: 2,
       now: new Date('2026-08-12T03:00:00Z'),
@@ -765,6 +778,7 @@ describe('attempt ledger filing gate', () => {
     let liveQueryCalled = false;
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-12T01:00:00Z'),
       maxAttempts: 3,
       liveQuery: () => {
@@ -790,6 +804,7 @@ describe('attempt ledger filing gate', () => {
     let filed = 0;
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-12T00:59:59Z'),
       maxAttempts: 3,
       liveQuery: () => false,
@@ -812,6 +827,7 @@ describe('attempt ledger filing gate', () => {
     const now = new Date('2026-08-12T01:00:00Z');
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now,
       maxAttempts: 3,
       liveQuery: () => false,
@@ -863,6 +879,7 @@ describe('attempt ledger filing gate', () => {
 
     for (let sweep = 0; sweep < 64; sweep += 1) {
       const counts = processFailureFilingSweep(state, {
+        isPaused: () => false,
         now: new Date(startMs + (sweep * 15 * 60 * 1000)),
         maxAttempts: 3,
         liveQuery: () => false,
@@ -893,6 +910,7 @@ describe('retired CI job filing gate', () => {
     const retired = [];
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       jobDefinitions,
       liveQuery: () => {
         liveQueryCalled = true;
@@ -1003,6 +1021,7 @@ describe('retired CI job filing gate', () => {
     const now = new Date('2026-08-12T01:00:00Z');
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now,
       jobDefinitions,
       liveQuery: () => false,
@@ -1030,6 +1049,7 @@ describe('retired CI job filing gate', () => {
     let filed = 0;
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-13T00:00:00Z'),
       jobDefinitions,
       liveQuery: () => false,
@@ -1232,6 +1252,7 @@ describe('stale-observation retirement', () => {
     const filed = [];
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-14T01:00:00.000Z'),
       jobDefinitions,
       liveQuery: () => false,
@@ -1255,6 +1276,7 @@ describe('stale-observation retirement', () => {
     const filed = [];
 
     const counts = processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-14T01:00:00.000Z'),
       jobDefinitions,
       liveQuery: () => false,
@@ -1434,6 +1456,7 @@ describe('per-test failure identity under one CI job', () => {
     const filed = [];
     const ledger = new Map();
     processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-21T23:30:00Z'),
       jobDefinitions: jobDefinitionsFor([jobName]),
       liveQuery: (failure) => claimRepairFiling(failure, ({ kind, subject, stateSha, metadata }) => {
@@ -1499,6 +1522,7 @@ describe('per-test failure identity under one CI job', () => {
     const filed = [];
     // attempts=1 => backoff = 30m * 2^1 = 60m; file only after that window.
     processFailureFilingSweep(state, {
+      isPaused: () => false,
       now: new Date('2026-08-21T23:00:01Z'),
       jobDefinitions: jobDefinitionsFor([jobName]),
       liveQuery: (candidate) => shouldSkipFilingAlreadyAddressed(candidate, {
