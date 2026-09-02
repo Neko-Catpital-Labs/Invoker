@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildWebInvokerDispatch } from '../web/web-invoker-dispatch.js';
 import type { InvokerConfig } from '../config.js';
+import { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 
 function makeTask(id: string) {
   return {
@@ -321,58 +322,127 @@ describe('buildWebInvokerDispatch', () => {
     });
   });
 
-  it('a global-lifecycle channel rejects as unsupported_on_web', async () => {
-    const { dispatch } = makeDispatch();
-    await expect(dispatch('invoker:start', [])).rejects.toMatchObject({ code: 'unsupported_on_web' });
+  it('routes a registered global-lifecycle capability through the owner registry', async () => {
+    const ownerCapabilities = new OwnerCapabilityRegistry();
+    const start = vi.fn(async () => ['started']);
+    ownerCapabilities.register('invoker:start', start);
+    const { dispatch } = makeDispatch({ ownerCapabilities });
+
+    await expect(dispatch('invoker:start', [])).resolves.toEqual(['started']);
+    expect(start).toHaveBeenCalledOnce();
   });
 
-  it('start-ready forwards the dry-run request through guiMutations when wired', async () => {
+  it('start-ready forwards the dry-run request through the owner registry when wired', async () => {
     const response = { ok: true, ready: ['wf-1/task-1'] };
-    const guiMutations = vi.fn(async () => response);
-    const { dispatch } = makeDispatch({ guiMutations });
+    const ownerCapabilities = new OwnerCapabilityRegistry();
+    const startReady = vi.fn(async () => response);
+    ownerCapabilities.register('invoker:start-ready', startReady);
+    const { dispatch } = makeDispatch({ ownerCapabilities });
     const request = { dryRun: true };
 
     await expect(dispatch('invoker:start-ready', [request])).resolves.toBe(response);
-    expect(guiMutations).toHaveBeenCalledExactlyOnceWith('invoker:start-ready', [request]);
+    expect(startReady).toHaveBeenCalledExactlyOnceWith(request);
   });
 
-  it('start-ready fails closed when guiMutations is absent', async () => {
+  it('distinguishes a known channel with no owner provider from an unknown channel', async () => {
     const { dispatch } = makeDispatch();
+    const missingOwner = dispatch('invoker:start-ready', [{ dryRun: true }]);
 
-    await expect(dispatch('invoker:start-ready', [{ dryRun: true }])).rejects.toMatchObject({
-      code: 'unsupported_on_web',
+    await expect(missingOwner).rejects.toMatchObject({
+      code: 'capability_provider_missing',
     });
-  });
-
-  it('an unknown channel rejects with code unknown_channel', async () => {
-    const { dispatch } = makeDispatch();
     await expect(dispatch('invoker:does-not-exist', [])).rejects.toMatchObject({ code: 'unknown_channel' });
   });
 
+  it('bridges a known channel through the legacy guiMutations callback when no owner registry is wired', async () => {
+    const guiMutations = vi.fn(async (channel: string) => ({ ok: true, channel }));
+    const { dispatch } = makeDispatch({ guiMutations });
+    await expect(dispatch('invoker:planning-chat-list', [])).resolves.toEqual({
+      ok: true,
+      channel: 'invoker:planning-chat-list',
+    });
+    expect(guiMutations).toHaveBeenCalledExactlyOnceWith('invoker:planning-chat-list', []);
+  });
+
+  it('allows Codex and forbids Claude by deployment policy without restricting HTTP itself', async () => {
+    const ownerCapabilities = new OwnerCapabilityRegistry();
+    const fixWithAgent = vi.fn(async (_taskId: unknown, agentName: unknown) => ({ agentName }));
+    ownerCapabilities.register('invoker:fix-with-agent', fixWithAgent);
+    const { dispatch } = makeDispatch({
+      ownerCapabilities,
+      loadConfig: () => ({ enabledExecutionAgents: ['codex'] } as InvokerConfig),
+    });
+
+    await expect(dispatch('invoker:fix-with-agent', ['task-1', 'codex'])).resolves.toEqual({
+      agentName: 'codex',
+    });
+    await expect(dispatch('invoker:fix-with-agent', ['task-1', 'claude'])).rejects.toMatchObject({
+      code: 'execution_agent_disabled',
+    });
+    expect(fixWithAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a registered agent-bearing capability with no provider as unavailable before policy', async () => {
+    const { dispatch } = makeDispatch({
+      loadConfig: () => ({ enabledExecutionAgents: ['codex'] } as InvokerConfig),
+    });
+
+    await expect(dispatch('invoker:fix-with-agent', ['task-1', 'claude'])).rejects.toMatchObject({
+      code: 'capability_provider_missing',
+    });
+  });
+
   describe('planning routes', () => {
-    it('routes planning-chat channels through guiMutations when wired', async () => {
-      const guiMutations = vi.fn(async (channel: string) => ({ ok: true, channel }));
-      const { dispatch } = makeDispatch({ guiMutations });
+    it('routes planning-chat channels through owner capabilities when wired', async () => {
+      const ownerCapabilities = new OwnerCapabilityRegistry();
+      const create = vi.fn(async () => ({ ok: true, channel: 'invoker:planning-chat-create' }));
+      const list = vi.fn(async () => ({ ok: true, sessions: [] }));
+      const setTerminalMode = vi.fn(async () => ({ ok: true }));
+      ownerCapabilities.register('invoker:planning-chat-create', create);
+      ownerCapabilities.register('invoker:planning-chat-list', list);
+      ownerCapabilities.register('invoker:planning-chat-set-terminal-mode', setTerminalMode);
+      const { dispatch } = makeDispatch({ ownerCapabilities });
       const request = { title: 'demo' };
       expect(await dispatch('invoker:planning-chat-create', [request])).toEqual({
         ok: true,
         channel: 'invoker:planning-chat-create',
       });
-      expect(guiMutations).toHaveBeenCalledWith('invoker:planning-chat-create', [request]);
+      expect(create).toHaveBeenCalledWith(request);
       await dispatch('invoker:planning-chat-list', []);
       await dispatch('invoker:planning-chat-set-terminal-mode', [{ sessionId: 's1', mode: 'tmux' }]);
-      expect(guiMutations).toHaveBeenCalledTimes(3);
+      expect(list).toHaveBeenCalledOnce();
+      expect(setTerminalMode).toHaveBeenCalledOnce();
     });
 
-    it('keeps the historical downgrades when guiMutations is absent', async () => {
+    it('reports missing owner providers instead of transport restrictions', async () => {
       const { dispatch } = makeDispatch();
-      await expect(dispatch('invoker:planning-chat-create', [{}])).rejects.toMatchObject({
-        code: 'unsupported_on_web',
+      const missingCreateOwner = dispatch('invoker:planning-chat-create', [{}]);
+      const missingTerminalModeOwner = dispatch('invoker:planning-chat-set-terminal-mode', [{}]);
+
+      await expect(missingCreateOwner).rejects.toMatchObject({
+        code: 'capability_provider_missing',
       });
-      expect(await dispatch('invoker:planning-chat-set-terminal-mode', [{}])).toEqual({
-        ok: false,
-        error: 'Planning tmux is not available in the web UI',
+      await expect(missingTerminalModeOwner).rejects.toMatchObject({
+        code: 'capability_provider_missing',
       });
+    });
+
+    it('applies deployment policy to the planning preset before invoking the owner', async () => {
+      const ownerCapabilities = new OwnerCapabilityRegistry();
+      const create = vi.fn(async (request: unknown) => request);
+      ownerCapabilities.register('invoker:planning-chat-create', create);
+      const { dispatch } = makeDispatch({
+        ownerCapabilities,
+        loadConfig: () => ({ enabledExecutionAgents: ['codex'] } as InvokerConfig),
+      });
+
+      await expect(dispatch('invoker:planning-chat-create', [{ presetKey: 'codex' }])).resolves.toEqual({
+        presetKey: 'codex',
+      });
+      await expect(dispatch('invoker:planning-chat-create', [{ presetKey: 'claude' }])).rejects.toMatchObject({
+        code: 'execution_agent_disabled',
+      });
+      expect(create).toHaveBeenCalledTimes(1);
     });
 
     it('routes planning-terminal channels through the adapter when wired', async () => {
