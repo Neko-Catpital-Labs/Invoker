@@ -99,13 +99,17 @@ In both paths, the delegating agent chooses `poolId` best-effort per `references
    acknowledgment: confirm with the user whether the plan should use
    `scratch: true` (tasks run in a plain temp directory, no git involved,
    `onFinish: none` + `mergeMode: no_op` required) or a real `repoUrl`.
-2. Phase 1a static analysis.
+2. Phase 1a static analysis, including the class-search below.
 3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts — prefer rendering a matching formula (`skills/plan-to-invoker/formulas/`) and specializing its slots over authoring the shape from scratch.
 5. Validate with deterministic scripts.
 6. Present plan and submit on confirmation. That confirmation authorizes the reviewed `onFinish` outcome; implementation plans default to GitHub publication through `onFinish: pull_request` without a second approval prompt.
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
+
+**Class-search (Phase 1a, required before any root-cause claim or premise):** run `git log --oneline --all --grep=<symptom>`, `git log --all -S <token>`, and `gh pr list --search <symptom> --state all` per the repo `CLAUDE.md` rule. Then, regardless of whether anything above looked relevant, report a separate heading:
+
+**Open PRs touching plan intake / validation / freshness / preflight** — the output of `gh pr list --search "<freshness|preflight|validate-plan|plan-parser>" --state open`, listed in full with one line each on what it means for this submission. These PRs change how the owner will process the plan, not whether the bug exists, so "zero relevant" is never a valid summary of them. Reflect session 4db2ca74 binned #11489 and the typed-freshness stack (#11557-#11561, #11579, #11594, #11631) as "zero relevant" and then spent 41 minutes rediscovering the prose freshness gate those PRs were replacing.
 
 **Deterministic validation gate:** Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface, backed by `bash scripts/test-plan-to-invoker-skill.sh` for regression coverage. Schema-only validation or ad hoc individual script checks are not sufficient as the review gate, because they can miss strict atomicity, zero-context prompt, policy coverage, and final-gate failures. Individual validator scripts remain fallback diagnostics only; they are not submission proof unless `skill-doctor.sh` has already passed or a waiver is explicitly recorded.
 

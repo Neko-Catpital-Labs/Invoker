@@ -415,6 +415,14 @@ must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker
 must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"
 must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-context prompt framing for implementation tasks"
 
+# Class-search — open plan-intake PRs must be reported regardless of relevance
+must_contain "$SKILL_MD" "**Open PRs touching plan intake / validation / freshness / preflight**" "SKILL class-search must require the open plan-intake PR heading"
+must_contain "$SKILL_MD" 'gh pr list --search "<freshness|preflight|validate-plan|plan-parser>" --state open' "SKILL class-search must name the open plan-intake PR query"
+must_contain "$SKILL_MD" '"zero relevant" is never a valid summary of them' "SKILL class-search must forbid collapsing plan-intake PRs to zero relevant"
+must_contain "$PLAYBOOK" "#### 0. Class-search and open plan-intake PRs" "Playbook Phase 1a must start with the class-search step"
+must_contain "$PLAYBOOK" "**Open PRs touching plan intake / validation / freshness / preflight**" "Playbook Phase 1a must require the open plan-intake PR heading"
+must_contain "$PLAYBOOK" 'Do not collapse this list to "zero relevant"' "Playbook Phase 1a must forbid collapsing plan-intake PRs to zero relevant"
+
 # Task patterns — traps that cost a resubmit (reflect session 4db2ca74)
 must_contain "$TASK_PATTERNS" "## Traps that cost a resubmit" "Task patterns must document the resubmit traps"
 must_contain "$TASK_PATTERNS" 'runs the whole package' "Task patterns must warn that test -- --run drops the vitest file filter"
