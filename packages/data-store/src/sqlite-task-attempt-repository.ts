@@ -11,6 +11,7 @@
 import type { TaskState, TaskStateChanges, Attempt, TaskExecution, WorkflowDerivedStatus, WorkflowRollupTaskSummary } from '@invoker/workflow-core';
 import {
   assertTaskConsistent,
+  applyTaskConfigPatch,
   computeWorkflowRollupFromSummaries,
   isDiscardedAttempt,
   normalizeRunnerKind,
@@ -328,7 +329,7 @@ export class SqliteTaskAttemptRepository {
       exec.isFixingWithAI ? 1 : 0,
       exec.generation ?? 0,
       exec.selectedAttemptId ?? null,
-      (cfg as { poolMemberId?: string }).poolMemberId ?? null,
+      cfg.poolMemberId ?? null,
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
       cfg.executionModel ?? null,
@@ -382,6 +383,8 @@ export class SqliteTaskAttemptRepository {
   ): void {
     const taskId = beforeTask.id;
 
+    applyTaskConfigPatch(beforeTask.config, changes.config);
+
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -399,7 +402,7 @@ export class SqliteTaskAttemptRepository {
     }
 
     if (changes.config) {
-      const config = changes.config as Record<string, unknown>;
+      const config = changes.config;
       const configMap: Record<string, string> = {
         workflowId: 'workflow_id',
         parentTask: 'parent_task',
@@ -431,13 +434,13 @@ export class SqliteTaskAttemptRepository {
       for (const [key, col] of Object.entries(configMap)) {
         if (key in config) {
           setClauses.push(`${col} = ?`);
-          values.push(config[key] ?? null);
+          values.push(Reflect.get(config, key) ?? null);
         }
       }
       for (const [key, col] of Object.entries(configBoolMap)) {
         if (key in config) {
           setClauses.push(`${col} = ?`);
-          values.push(config[key] ? 1 : 0);
+          values.push(Reflect.get(config, key) ? 1 : 0);
         }
       }
       if ('experimentVariants' in changes.config) {

@@ -8,7 +8,7 @@ import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { getCurrentRequiredReviewArtifacts } from '../task-runner-review-gate.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SshExecutor } from '../ssh-executor.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
@@ -24,15 +24,18 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
+  const inputConfig = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+    ? { ...overrides.config, poolId: 'ssh-fixture' }
+    : overrides.config;
   return {
     id: overrides.id ?? 'test',
     description: overrides.description ?? 'Test task',
     status: overrides.status ?? 'pending',
     dependencies: overrides.dependencies ?? [],
     createdAt: overrides.createdAt ?? new Date(),
-    config: { ...overrides.config },
+    config: resolveTaskConfig(inputConfig ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskRunner {
@@ -58,6 +61,14 @@ function createMockLogger(): Logger {
   };
   (logger.child as any).mockReturnValue(logger);
   return logger;
+}
+
+function sshFixturePool(...memberIds: string[]) {
+  return () => ({
+    'ssh-fixture': {
+      members: memberIds.map((id) => ({ type: 'ssh' as const, id })),
+    },
+  });
 }
 
 const tempWorkspaces: string[] = [];
@@ -743,6 +754,7 @@ describe('TaskRunner', () => {
             sshKeyPath: '/tmp/test-key',
           },
         }),
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await runner.publishApprovedFix(task);
@@ -803,6 +815,7 @@ describe('TaskRunner', () => {
             sshKeyPath: '/tmp/test-key',
           },
         }),
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
       const selectExecutorSpy = vi.spyOn(runner, 'selectExecutor');
       const originalSelectExecutor = TaskRunner.prototype.selectExecutor.bind(runner);
@@ -2745,6 +2758,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
+        executionPoolsProvider: sshFixturePool('do-droplet'),
       });
 
       const task = makeTask({
@@ -2790,6 +2804,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
+        executionPoolsProvider: sshFixturePool('do-droplet'),
       });
 
       const task = makeTask({
@@ -2919,6 +2934,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
+        executionPoolsProvider: sshFixturePool('missing-target'),
       });
 
       const task = makeTask({
@@ -3524,6 +3540,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
+        executionPoolsProvider: sshFixturePool('remote-a', 'remote-b'),
       });
 
       const task1 = makeTask({
@@ -3639,6 +3656,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
+        executionPoolsProvider: sshFixturePool('remote-a'),
       });
 
       const task1 = makeTask({
@@ -3658,14 +3676,14 @@ describe('TaskRunner', () => {
       expect(executor1.executor).not.toBe(executor2.executor);
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('throws when an SSH pool has no selectable member', () => {
+    it('throws when an SSH pool has no selectable member', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => ({}),
+        executionPoolsProvider: sshFixturePool(),
       });
 
       const task = makeTask({
@@ -3691,6 +3709,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
+        executionPoolsProvider: sshFixturePool('remote-unknown'),
       });
 
       const task = makeTask({
@@ -3872,8 +3891,7 @@ describe('TaskRunner', () => {
       expect(handleWorkerResponse).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('logs explicit SSH member selection through its concrete pool', async () => {
+    it('logs explicit SSH member selection through its concrete pool', async () => {
       const sshExecutor = createCompletingExecutor('ssh', {
         workspacePath: '/remote/worktrees/task-explicit',
         branch: 'experiment/task-explicit',
@@ -3897,6 +3915,7 @@ describe('TaskRunner', () => {
         remoteTargetsProvider: () => ({
           'remote-b': { host: 'dev.example.com', user: 'dev', sshKeyPath: '/secret/dev-key' },
         }),
+        executionPoolsProvider: sshFixturePool('remote-b'),
       });
 
       await runner.executeTask(task);
@@ -3915,8 +3934,7 @@ describe('TaskRunner', () => {
       }));
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('logs configured worktree executor selection reason', async () => {
+    it('logs configured worktree executor selection reason', async () => {
       const worktreeExecutor = createCompletingExecutor('worktree', {
         workspacePath: '/tmp/worktree/task-local',
         branch: 'experiment/task-local',
@@ -3949,8 +3967,7 @@ describe('TaskRunner', () => {
       }));
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('rejects a missing SSH pool without falling back to worktree', async () => {
+    it('rejects a missing SSH pool without falling back to worktree', async () => {
       const worktreeExecutor = createCompletingExecutor('worktree', {
         workspacePath: '/tmp/worktree/task-fallback',
         branch: 'experiment/task-fallback',
@@ -4024,6 +4041,7 @@ describe('TaskRunner', () => {
           getAll: () => [badExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
@@ -4091,6 +4109,7 @@ describe('TaskRunner', () => {
           getAll: () => [managedSshExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
@@ -4110,8 +4129,7 @@ describe('TaskRunner', () => {
       });
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('persists metadata on error path when executor.start throws', async () => {
+    it('persists metadata on error path when executor.start throws', async () => {
       const failingExecutor = {
         type: 'ssh',
         start: vi.fn().mockRejectedValue(Object.assign(
@@ -4153,6 +4171,7 @@ describe('TaskRunner', () => {
           getAll: () => [failingExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
@@ -4299,8 +4318,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('allows BYO mode executor with workspacePath but no branch', async () => {
+    it('allows BYO mode executor with workspacePath but no branch', async () => {
       const byoExecutor = {
         type: 'ssh',
         start: vi.fn().mockResolvedValue({
@@ -4346,6 +4364,7 @@ describe('TaskRunner', () => {
           getAll: () => [byoExecutor],
         } as any,
         cwd: '/tmp',
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       await executor.executeTask(task);
@@ -5673,6 +5692,7 @@ describe('TaskRunner', () => {
         } as any,
         cwd: '/tmp',
         callbacks: { onHeartbeat },
+        executionPoolsProvider: sshFixturePool('remote-1'),
       });
 
       const pending = runner.executeTask(runningTask);
