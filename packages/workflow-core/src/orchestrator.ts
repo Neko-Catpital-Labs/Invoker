@@ -102,6 +102,7 @@ import {
   handleReviewReadyImpl,
   handleFailedImpl,
   handleNeedsInputImpl,
+  handleStaleImpl,
   handleSpawnExperimentsImpl,
   handleSelectExperimentImpl,
   checkExperimentCompletionImpl,
@@ -1809,6 +1810,8 @@ export class Orchestrator {
         return this.handleFailed(canonicalTaskId, parsed);
       case 'needs_input':
         return this.handleNeedsInput(canonicalTaskId, parsed);
+      case 'stale':
+        return this.handleStale(canonicalTaskId, parsed);
       case 'spawn_experiments':
         return this.handleSpawnExperiments(canonicalTaskId, parsed);
       case 'select_experiment':
@@ -3901,6 +3904,13 @@ export class Orchestrator {
     parsed: Extract<ParsedResponse, { type: 'needs_input' }>,
   ): TaskState[] {
     return handleNeedsInputImpl(this as unknown as TransitionHost, taskId, parsed);
+  }
+
+  private handleStale(
+    taskId: string,
+    parsed: Extract<ParsedResponse, { type: 'stale' }>,
+  ): TaskState[] {
+    return handleStaleImpl(this as unknown as TransitionHost, taskId, parsed);
   }
 
   private handleSpawnExperiments(
