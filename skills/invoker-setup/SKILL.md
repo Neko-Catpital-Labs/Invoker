@@ -24,9 +24,12 @@ the config check, planning tools, and the default preset check.
 
 - `error` blocks "good to go" — surface the `remediation` verbatim.
 - `warn` is advisory (an optional tool / preset not installed) — mention it, don't block.
-- The `default-preset` and `planning-tools` checks are config-aware: an `error` there means the
-  configured `defaultSlackHarnessPreset` points at a CLI that is not installed. This is the most
-  common Slack failure ("spawn cursor ENOENT") — fix it before going further.
+- The `default-preset` and `planning-tools` checks are config-aware and PATH-based: an `error`
+  means the configured planner command is not available on Invoker's own `PATH`. Do not report
+  that command as uninstalled based on this probe alone. If it already works in a terminal,
+  restart Invoker to refresh its shell environment; otherwise install it or configure a preset
+  whose command is available. This is the most common Slack failure ("spawn cursor ENOENT") —
+  fix it before going further.
 
 Offer to auto-install missing installable tools:
 
