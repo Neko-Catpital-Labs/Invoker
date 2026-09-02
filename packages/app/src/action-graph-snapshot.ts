@@ -20,6 +20,7 @@ function needsActionGraphDetail(status: string): boolean {
     case 'awaiting_approval':
     case 'review_ready':
     case 'stale':
+    case 'skipped':
       return true;
     default:
       return false;

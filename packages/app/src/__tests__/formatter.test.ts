@@ -72,6 +72,14 @@ describe('formatTaskStatus', () => {
     expect(output).not.toContain('[failed]');
   });
 
+  it('shows correct label, icon, and color for skipped status', () => {
+    const task = makeTask({ status: 'skipped' });
+    const output = formatTaskStatus(task);
+    expect(output).toContain(DIM);
+    expect(output).toContain('⏭');
+    expect(output).toContain('[skipped]');
+  });
+
   it('shows correct color for running status', () => {
     const task = makeTask({ status: 'running' });
     const output = formatTaskStatus(task);
