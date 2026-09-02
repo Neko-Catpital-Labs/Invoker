@@ -5,6 +5,22 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 
+function saveWorkflows(adapter: SQLiteAdapter, workflowCount: number, verbose = false): void {
+  const timestamp = new Date().toISOString();
+  adapter.runInTransaction(() => {
+    for (let i = 0; i < workflowCount; i++) {
+      adapter.saveWorkflow({
+        id: `wf-${i}`,
+        name: verbose ? `Workflow ${i} with a longer name to increase memory footprint` : `Workflow ${i}`,
+        description: verbose ? `Description for workflow ${i} that adds more bytes per row` : undefined,
+        status: 'pending',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    }
+  });
+}
+
 describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   let tmpDir: string;
   let adapter: SQLiteAdapter;
@@ -21,15 +37,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('listWorkflows has no LIMIT and returns all workflows regardless of count', () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    saveWorkflows(adapter, workflowCount);
 
     const workflows = adapter.listWorkflows();
     expect(workflows).toHaveLength(workflowCount);
@@ -38,15 +46,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('loadWorkflowTaskSnapshot has no LIMIT and returns all workflows regardless of count', () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    saveWorkflows(adapter, workflowCount);
 
     const snapshot = adapter.loadWorkflowTaskSnapshot();
     expect(snapshot.workflows).toHaveLength(workflowCount);
@@ -55,16 +55,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('listWorkflows materializes every row into JS objects', () => {
     const workflowCount = 5_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i} with a longer name to increase memory footprint`,
-        description: `Description for workflow ${i} that adds more bytes per row`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    saveWorkflows(adapter, workflowCount, true);
 
     const workflows = adapter.listWorkflows();
     const serializedWorkflowBytes = Buffer.byteLength(JSON.stringify(workflows), 'utf8');
@@ -74,15 +65,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
-    for (let i = 0; i < 500; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    saveWorkflows(adapter, 500);
 
     const page1 = adapter.listWorkflowsPaged({ limit: 100 });
     expect(page1.workflows).toHaveLength(100);
@@ -99,15 +82,7 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   });
 
   it('listWorkflowsPaged respects limit at scale without loading all rows', () => {
-    for (let i = 0; i < 5000; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    saveWorkflows(adapter, 5000);
 
     const started = performance.now();
     const result = adapter.listWorkflowsPaged({ limit: 50 });
