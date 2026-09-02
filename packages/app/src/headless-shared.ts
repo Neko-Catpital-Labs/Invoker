@@ -262,6 +262,7 @@ export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): voi
 
 export interface QueryFlags {
   output: 'text' | 'label' | 'json' | 'jsonl';
+  filter?: string;
   status?: string;
   workflow?: string;
   noMerge?: boolean;
@@ -286,6 +287,10 @@ export function parseQueryFlags(args: string[]): QueryFlags {
       i += 2;
     } else if (arg === '--status' && i + 1 < args.length) {
       flags.status = args[i + 1];
+      i += 2;
+    } else if (arg === '--filter') {
+      if (i + 1 >= args.length) throw new Error('Missing value for --filter');
+      flags.filter = args[i + 1];
       i += 2;
     } else if (arg === '--workflow' && i + 1 < args.length) {
       flags.workflow = args[i + 1];
