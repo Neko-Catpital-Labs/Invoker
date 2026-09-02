@@ -892,6 +892,21 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('Every implementation task MUST have a corresponding test task');
   });
 
+  it('describes optional typed freshness and preserves meaning across wording and ordering', () => {
+    const prompt = buildPlanSystemPrompt('main');
+
+    expect(prompt).toContain('freshness:');
+    expect(prompt).toContain('watchPaths: [packages/example/src/index.ts]');
+    expect(prompt).toContain('expected: present # or absent; only explicit assumptions');
+    expect(prompt).toContain('guardedBehaviorIds: [example-behavior-id]');
+    expect(prompt).toContain('watch changes to X” and “invalidate if X changes”');
+    expect(prompt).toContain('“X must exist” becomes `pathPreconditions: [{ path: X, expected: present }]`');
+    expect(prompt).toContain('“X must be gone” becomes `expected: absent`');
+    expect(prompt).toContain('omit `freshness` entirely');
+    expect(prompt).toContain('exact normalized repo-relative paths');
+    expect(prompt).toContain('do not invent a precondition');
+  });
+
   it('buildPlanSystemPrompt direct mode is unchanged when explicitly non-conversational', () => {
     const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: false });
     expect(prompt).toContain('Generate a YAML task plan');
