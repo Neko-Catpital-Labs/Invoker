@@ -23,7 +23,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
@@ -1008,11 +1008,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private resolveOutputDir(dbPath: string | null): string {
-    const invokerHome = process.env.INVOKER_DB_DIR ?? (dbPath ? dirname(dbPath) : join(homedir(), '.invoker'));
-    if (!dbPath && !process.env.INVOKER_DB_DIR) {
+    if (!dbPath) {
       return join(tmpdir(), `invoker-output-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     }
-    return join(invokerHome, 'task-output');
+    return join(dirname(dbPath), 'task-output');
   }
 
   private configureConnection(fileBacked: boolean): void {
