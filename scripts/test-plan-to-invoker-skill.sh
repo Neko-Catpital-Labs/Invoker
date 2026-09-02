@@ -415,6 +415,21 @@ must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker
 must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"
 must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-context prompt framing for implementation tasks"
 
+# Task patterns — traps that cost a resubmit (reflect session 4db2ca74)
+must_contain "$TASK_PATTERNS" "## Traps that cost a resubmit" "Task patterns must document the resubmit traps"
+must_contain "$TASK_PATTERNS" 'runs the whole package' "Task patterns must warn that test -- --run drops the vitest file filter"
+must_contain "$TASK_PATTERNS" 'Use `pnpm --filter <pkg> test --run <file>`' "Task patterns must give the working focused-test form"
+must_contain "$TASK_PATTERNS" "No test files found, exiting with code 1" "Task patterns must show the -- --run repro"
+must_contain "$TASK_PATTERNS" "must include every test that asserts the old value" "Task patterns must widen the fence for contract reversals"
+must_contain "$TASK_PATTERNS" "must not carry a hedged verb in the prompt" "Task patterns must forbid extend-or-create on a create path"
+must_contain "$TASK_PATTERNS" "Never put an anchor word on a task line that names a path or backticked symbol the task creates" "Task patterns must document the owner freshness anchor trap"
+must_contain "$TASK_PATTERNS" "ANCHOR_CLAUSE_PATTERN" "Task patterns must name the owner preflight pattern"
+must_contain "$TASK_PATTERNS" "skills/plan-to-invoker/scripts/freshness-check.mjs" "Task patterns must reference the freshness pre-submit check"
+must_contain "$TASK_PATTERNS" "skills/plan-to-invoker/scripts/unit-triggers.mjs" "Task patterns must reference the unit-triggers pre-submit check"
+must_contain "$SKILL_MD" "step-presubmit-traps" "SKILL step map must include the pre-submit trap step"
+must_contain "$SKILL_MD" "scripts/freshness-check.mjs --ref origin/<baseBranch>" "SKILL step map must run freshness-check against the plan's base ref"
+must_contain "$SKILL_MD" "scripts/unit-triggers.mjs <plan-file>" "SKILL step map must run unit-triggers"
+
 # Task patterns — strict prompt handoff requirements
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
