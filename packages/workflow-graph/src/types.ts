@@ -35,6 +35,8 @@ export interface TaskFreshnessSpec {
   readonly guardedBehaviorIds?: readonly string[];
 }
 
+export const BUILT_IN_LOCAL_EXECUTION_POOL_ID = 'local-worktree';
+
 export interface BaseTaskConfig {
   readonly workflowId?: string;
   readonly parentTask?: string;
