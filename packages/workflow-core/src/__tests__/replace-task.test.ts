@@ -287,8 +287,7 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask(s('fix'))!.dependencies.sort()).toEqual([s('A'), s('B')]);
   });
 
-  // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-  it.fails('blocked dependents are stale (not forked)', () => {
+  it('blocked dependents are stale (not forked)', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
@@ -627,8 +626,7 @@ describe('replaceTask', () => {
     // `editTaskCommand` is recreate-class / task scope and routes through
     // the per-attribute mutation path; topology gating must not block it
     // even though the workflow is unmistakably live (C is `pending`).
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('does NOT throw for pure-attribute mutations on a live workflow', () => {
+    it('does NOT throw for pure-attribute mutations on a live workflow', () => {
       orchestrator.loadPlan({
         name: 'pure-attribute-on-live',
         tasks: [
