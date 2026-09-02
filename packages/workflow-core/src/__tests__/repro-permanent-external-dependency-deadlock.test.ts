@@ -20,7 +20,7 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
           orchestrator.cancelTask(id);
           return;
         }
-        orchestrator.cancelWorkflow(id, { detachDependents: false });
+        orchestrator.cancelWorkflow(id, { cascadeDependents: false });
       } catch (e) {
         const code = (e as { code?: string })?.code;
         if (code === 'TASK_ALREADY_TERMINAL' || code === 'WORKFLOW_ALREADY_TERMINAL') return;
@@ -55,7 +55,7 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
 // externalDependencies gate. The only thing that ever unblocked them was an
 // unrelated manual `detachWorkflow` call two days later.
 describe('REPRO: an invalidated-and-abandoned upstream permanently deadlocks its downstream', () => {
-  it.fails('cancels the downstream chain when an invalidated upstream is cancelled and abandoned, keeping its gate intact', async () => {
+  it('cancels the downstream chain when an invalidated upstream is cancelled and abandoned, keeping its gate intact', async () => {
     const persistence = new InMemoryPersistence();
     const orchestrator = makeOrchestrator(persistence);
     const deps = buildOrchestratorDeps(orchestrator);

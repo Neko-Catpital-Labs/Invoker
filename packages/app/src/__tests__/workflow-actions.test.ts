@@ -1758,7 +1758,7 @@ describe('buildCancelInFlight', () => {
     expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
   });
 
-  it.fails('cancels workflow before awaiting killActiveExecution per runningCancelled id', async () => {
+  it('cancels workflow before awaiting killActiveExecution per runningCancelled id', async () => {
     const orchestrator = {
       cancelTask: vi.fn(),
       cancelWorkflow: vi.fn(() => ({

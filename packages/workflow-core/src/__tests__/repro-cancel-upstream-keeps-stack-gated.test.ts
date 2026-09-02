@@ -66,7 +66,7 @@ function workflowTaskStatuses(orchestrator: Orchestrator, wfId: string): Record<
 }
 
 describe('REPRO 2026-09-01: cancelling slice 1 of a chained stack rewrote slices 2-4 onto master and launched them', () => {
-  it.fails('keeps downstream base branch and external dependency intact after upstream cancel', () => {
+  it('keeps downstream base branch and external dependency intact after upstream cancel', () => {
     const persistence = new InMemoryPersistence();
     const orchestrator = makeOrchestrator(persistence);
     const { a, b, c } = setupStack(orchestrator);
@@ -93,7 +93,7 @@ describe('REPRO 2026-09-01: cancelling slice 1 of a chained stack rewrote slices
     expect(ready).not.toContain(c.rootId);
   });
 
-  it.fails('cancels every never-started downstream task instead of leaving it pending forever', () => {
+  it('cancels every never-started downstream task instead of leaving it pending forever', () => {
     const persistence = new InMemoryPersistence();
     const orchestrator = makeOrchestrator(persistence);
     const { a, b, c } = setupStack(orchestrator);
@@ -109,7 +109,7 @@ describe('REPRO 2026-09-01: cancelling slice 1 of a chained stack rewrote slices
     expect(orchestrator.getTask(c.rootId)!.execution.error).toContain(a.wfId);
   });
 
-  it.fails('does not resurrect a downstream slice that was already cancelled tail-first', () => {
+  it('does not resurrect a downstream slice that was already cancelled tail-first', () => {
     const persistence = new InMemoryPersistence();
     const orchestrator = makeOrchestrator(persistence);
     const { a, b, c } = setupStack(orchestrator);

@@ -52,7 +52,7 @@ describe('REPRO: recreate preemption detaches a live downstream dependency', () 
     ]);
   });
 
-  it.fails('CommandService.cancelWorkflow (the real standalone abandon action) cancels downstream but keeps its gate', async () => {
+  it('CommandService.cancelWorkflow (the real standalone abandon action) cancels downstream but keeps its gate', async () => {
     const persistence = new InMemoryPersistence();
     const orchestrator = makeOrchestrator(persistence);
     const commandService = new CommandService(orchestrator);
