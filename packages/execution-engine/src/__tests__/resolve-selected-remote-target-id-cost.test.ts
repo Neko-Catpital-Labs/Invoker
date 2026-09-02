@@ -49,7 +49,7 @@ describe('resolveSelectedRemoteTargetId bounded event lookup', () => {
       status: 'failed',
       dependencies: [],
       createdAt: new Date(),
-      config: { runnerKind: 'ssh' },
+      config: { runnerKind: 'ssh', poolId: 'ssh-fixture' },
       execution: {},
       taskStateVersion: 1,
     };

@@ -8,7 +8,7 @@
  * Or: bash scripts/repro-task-db-state.sh
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { Orchestrator } from '@invoker/workflow-core';
+import { Orchestrator, resolveTaskConfig } from '@invoker/workflow-core';
 import type { OrchestratorMessageBus, TaskState } from '@invoker/workflow-core';
 import type { WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
@@ -51,7 +51,7 @@ describe('Orchestrator + SQLite worker response persistence', () => {
       status: 'pending',
       dependencies: [],
       createdAt: new Date(),
-      config: { workflowId: wf.id, command: 'true' },
+      config: resolveTaskConfig({ workflowId: wf.id, command: 'true' }),
       execution: {},
     };
   }
@@ -225,7 +225,7 @@ describe('Protocol failure persistence (SQLite roundtrip)', () => {
       status: 'pending',
       dependencies: [],
       createdAt: new Date(),
-      config: { workflowId: wf.id, command: 'true' },
+      config: resolveTaskConfig({ workflowId: wf.id, command: 'true' }),
       execution: {},
     };
   }
