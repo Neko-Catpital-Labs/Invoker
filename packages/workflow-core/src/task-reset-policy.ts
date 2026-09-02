@@ -52,7 +52,7 @@ const detachOnly = ['detach'] as const;
 
 export const TASK_EXECUTION_RESET_RULES = {
   generation: preserve,
-  blockedBy: clearFor(['detach', 'externalUnblock']),
+  blockedBy: clearFor(['detach', 'externalUnblock', 'retryTask', 'retryWorkflow']),
   inputPrompt: clearFor(['detach', 'newAttempt']),
   exitCode: clearFor(retryRecreateDetachNewAttempt),
   error: clearFor(retryRecreateDetachNewAttempt),
