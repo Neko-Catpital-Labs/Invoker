@@ -38,4 +38,25 @@ describe('plan-to-invoker skill contract', () => {
     expect(skill).not.toContain('Do **not** publish PRs unless the original ask included that.');
     expect(skill).not.toContain('PR publication still requires a separate explicit request');
   });
+
+  it('documents optional structured freshness authoring without rewriting task prose', () => {
+    const instructions = [
+      readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), 'utf8'),
+      readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'commands', 'invoker-plan-to-invoker.md'), 'utf8'),
+    ];
+
+    for (const instruction of instructions) {
+      expect(instruction).toContain('Freshness metadata is optional');
+      expect(instruction).toContain('Keep task descriptions as authored prose');
+      expect(instruction).toContain('freshness');
+      expect(instruction).toContain('watchPaths');
+      expect(instruction).toContain('pathPreconditions');
+      expect(instruction).toContain('guardedBehaviorIds');
+      expect(instruction).toContain('Do not derive freshness from task prose');
+      expect(instruction).toContain('post-generation extraction');
+      expect(instruction).toContain('semantic regex');
+      expect(instruction).toContain('tasks:');
+      expect(instruction).toContain('freshness:');
+    }
+  });
 });
