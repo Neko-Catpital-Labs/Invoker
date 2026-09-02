@@ -44,7 +44,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Logger } from '@invoker/contracts';
-import { resolveInvokerInstanceProfile } from '@invoker/contracts';
+import { resolveInvokerInstanceProfile, validateTaskFilter, type TaskFilterNode } from '@invoker/contracts';
 import {
   OrchestratorError,
   OrchestratorErrorCode,
@@ -435,6 +435,41 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const type = query.type === 'workflows' || query.type === 'tasks' ? query.type : 'all';
         const limit = query.limit ? Math.min(parseInt(query.limit, 10), 50) : 20;
         const offset = query.offset ? parseInt(query.offset, 10) : 0;
+        if (type === 'tasks' && query.filter !== undefined) {
+          if (!Number.isFinite(limit) || limit < 0 || !Number.isFinite(offset) || offset < 0) {
+            json(res, 400, { error: 'limit and offset must be non-negative integers' });
+            return;
+          }
+          let parsedFilter: unknown;
+          try {
+            parsedFilter = JSON.parse(query.filter);
+          } catch (error) {
+            json(res, 400, { error: `filter: invalid JSON (${error instanceof Error ? error.message : String(error)})` });
+            return;
+          }
+          const validation = validateTaskFilter(parsedFilter);
+          if (!validation.valid) {
+            json(res, 400, { error: `filter: ${validation.error}` });
+            return;
+          }
+          const tasks = persistence.queryTasksByFilter(parsedFilter as TaskFilterNode, { limit, offset });
+          const results = tasks.map((task) => {
+            const workflowId = task.config.workflowId;
+            const workflow = workflowId ? persistence.loadWorkflow(workflowId) : undefined;
+            const workflowName = workflow?.name || 'Unnamed workflow';
+            return {
+              kind: 'task' as const,
+              id: task.id,
+              workflowId: workflowId || undefined,
+              title: task.description || 'Unnamed task',
+              subtitle: `Task · ${workflowName}`,
+              status: task.status,
+              createdAt: task.createdAt instanceof Date ? task.createdAt.toISOString() : task.createdAt,
+            };
+          });
+          json(res, 200, results);
+          return;
+        }
         const results = persistence.searchWorkflowsAndTasks(q, { type, limit, offset });
         json(res, 200, results);
         return;
