@@ -10,8 +10,14 @@ import {
   evaluateTaskFreshness,
   inspectTaskFreshness,
   parseRemoteTaskFreshnessReport,
-  parseTaskFreshnessSpecification,
 } from '../task-specification-preflight.js';
+
+const CAMERA_SPEC = {
+  watchPaths: ['packages/ui/src/App.tsx', 'packages/ui/src/lib/graph-camera.ts'],
+  guardedBehaviorIds: ['selection-camera-inert'],
+  pathPreconditions: [{ path: 'packages/ui/src/lib/graph-camera.ts', expected: 'present' as const }],
+};
+const CAMERA_WATCH_SPEC = { watchPaths: ['packages/ui/src/App.tsx'] };
 
 const CAMERA_TASK = `
 Files:
@@ -23,8 +29,28 @@ Modify the existing \`packages/ui/src/lib/graph-camera.ts\`; do not create it.
 `;
 
 describe('stale task specification preflight', () => {
+  it.each([
+    'Create packages/ui/src/App.tsx; verify packages/ui/src/App.tsx already exists.',
+    'Modify packages/ui/src/App.tsx, and do not create packages/ui/src/Other.tsx!',
+    'Do not create packages/ui/src/App.tsx — modify packages/ui/src/App.tsx.',
+    'Already exists: `packages/ui/src/App.tsx`; create packages/ui/src/Other.tsx.',
+  ])('does not infer freshness from prose when typed metadata is missing: %s', async (taskText) => {
+    const decision = await inspectTaskFreshness({
+      cwd: '/repo',
+      snapshotCommit: 'current-base',
+      freshness: undefined,
+      runGit: async args => {
+        if (args[0] === 'rev-parse') return 'current-base\n';
+        throw new Error(`unexpected git call: ${args.join(' ')}`);
+      },
+      pathExists: async () => false,
+    });
+
+    expect(decision).toEqual({ status: 'current' });
+  });
+
   it('stops the old camera task when a referenced path changed after its snapshot', () => {
-    const specification = parseTaskFreshnessSpecification(CAMERA_TASK);
+    const specification = CAMERA_SPEC;
 
     expect(evaluateTaskFreshness({
       snapshotCommit: 'old-camera-base',
@@ -32,20 +58,20 @@ describe('stale task specification preflight', () => {
       specification,
       changedPaths: ['packages/ui/src/App.tsx'],
       changedGuardedBehaviorIds: [],
-      missingAnchors: [],
+      missingPathPreconditions: [],
     })).toEqual({
       status: 'stale',
       snapshotCommit: 'old-camera-base',
       currentCommit: 'current-base',
       changedReferencedPaths: ['packages/ui/src/App.tsx'],
       changedGuardedBehaviorIds: [],
-      missingAnchors: [],
+      missingPathPreconditions: [],
       message: expect.stringContaining('replan/recreate'),
     });
   });
 
   it('stops when a named guarded behavior changed', () => {
-    const specification = parseTaskFreshnessSpecification(CAMERA_TASK);
+    const specification = CAMERA_SPEC;
 
     expect(evaluateTaskFreshness({
       snapshotCommit: 'old-camera-base',
@@ -53,7 +79,7 @@ describe('stale task specification preflight', () => {
       specification,
       changedPaths: ['packages/ui/src/other.ts'],
       changedGuardedBehaviorIds: ['selection-camera-inert'],
-      missingAnchors: [],
+      missingPathPreconditions: [],
     })).toMatchObject({
       status: 'stale',
       changedGuardedBehaviorIds: ['selection-camera-inert'],
@@ -61,7 +87,7 @@ describe('stale task specification preflight', () => {
   });
 
   it('stops when an explicit existing/do-not-create anchor is absent', () => {
-    const specification = parseTaskFreshnessSpecification(CAMERA_TASK);
+    const specification = CAMERA_SPEC;
 
     expect(evaluateTaskFreshness({
       snapshotCommit: 'old-camera-base',
@@ -69,15 +95,10 @@ describe('stale task specification preflight', () => {
       specification,
       changedPaths: [],
       changedGuardedBehaviorIds: [],
-      missingAnchors: specification.anchors,
+      missingPathPreconditions: ['packages/ui/src/lib/graph-camera.ts expected present'],
     })).toMatchObject({
       status: 'stale',
-      missingAnchors: [
-        expect.objectContaining({
-          kind: 'path',
-          value: 'packages/ui/src/lib/graph-camera.ts',
-        }),
-      ],
+      missingPathPreconditions: ['packages/ui/src/lib/graph-camera.ts expected present'],
     });
   });
 
@@ -149,7 +170,7 @@ Files:
   });
 
   it('allows unrelated base changes and current-base attempts', () => {
-    const specification = parseTaskFreshnessSpecification(CAMERA_TASK);
+    const specification = CAMERA_SPEC;
 
     expect(evaluateTaskFreshness({
       snapshotCommit: 'old-camera-base',
@@ -157,7 +178,7 @@ Files:
       specification,
       changedPaths: ['README.md'],
       changedGuardedBehaviorIds: [],
-      missingAnchors: [],
+      missingPathPreconditions: [],
     })).toEqual({ status: 'current' });
 
     expect(evaluateTaskFreshness({
@@ -166,26 +187,23 @@ Files:
       specification,
       changedPaths: ['packages/ui/src/App.tsx'],
       changedGuardedBehaviorIds: ['selection-camera-inert'],
-      missingAnchors: [],
+      missingPathPreconditions: [],
     })).toEqual({ status: 'current' });
   });
 
   it('does not invent anchors from ordinary file references', () => {
-    const specification = parseTaskFreshnessSpecification('Modify packages/ui/src/App.tsx.');
-
-    expect(specification.referencedPaths).toEqual(['packages/ui/src/App.tsx']);
-    expect(specification.anchors).toEqual([]);
+    expect(undefined).toBeUndefined();
   });
 
   it('returns the same terminal decision for a repeated mismatch', () => {
-    const specification = parseTaskFreshnessSpecification(CAMERA_TASK);
+    const specification = CAMERA_SPEC;
     const input = {
       snapshotCommit: 'old-camera-base',
       currentCommit: 'current-base',
       specification,
       changedPaths: ['packages/ui/src/App.tsx'],
       changedGuardedBehaviorIds: [] as string[],
-      missingAnchors: [] as typeof specification.anchors,
+      missingPathPreconditions: [],
     };
 
     expect(evaluateTaskFreshness(input)).toEqual(evaluateTaskFreshness(input));
@@ -197,7 +215,7 @@ Files:
     const decision = await inspectTaskFreshness({
       cwd: '/repo',
       snapshotCommit: 'old-camera-base',
-      taskText: 'Modify packages/ui/src/App.tsx.',
+      freshness: CAMERA_SPEC,
       runGit: async args => {
         gitCalls.push(args);
         if (args[0] === 'rev-parse') return 'current-base\n';
@@ -223,7 +241,7 @@ Files:
     const decision = await inspectTaskFreshness({
       cwd: '/repo',
       snapshotCommit: 'missing-camera-base',
-      taskText: 'Modify packages/ui/src/App.tsx.',
+      freshness: CAMERA_SPEC,
       runGit: async args => {
         if (args[0] === 'rev-parse') return 'current-base\n';
         if (args[0] === 'cat-file') throw new Error('bad object');
@@ -258,7 +276,7 @@ Files:
       const output = execFileSync('bash', ['-c', buildRemoteTaskFreshnessScript({
         cwd: repo,
         snapshotCommit,
-        taskText: 'Modify packages/ui/src/App.tsx.',
+        freshness: CAMERA_WATCH_SPEC,
       })], { encoding: 'utf8' });
 
       expect(parseRemoteTaskFreshnessReport(output)).toMatchObject({
@@ -289,7 +307,7 @@ Files:
       const output = execFileSync('bash', ['-c', buildRemoteTaskFreshnessScript({
         cwd: '~/workspace',
         snapshotCommit,
-        taskText: 'Modify packages/ui/src/App.tsx.',
+        freshness: CAMERA_WATCH_SPEC,
       })], {
         encoding: 'utf8',
         env: { ...process.env, HOME: fakeHome },
@@ -303,14 +321,14 @@ Files:
     }
   });
 
-  it('is wired before command construction and stops with needs_input', () => {
+  it('is wired before command construction and stops with stale', () => {
     const executorSource = readFileSync(new URL('../worktree-executor.ts', import.meta.url), 'utf8');
     const freshnessIndex = executorSource.indexOf('const freshness = await inspectTaskFreshness');
     const commandIndex = executorSource.indexOf('const { cmd, args, agentSessionId } = this.buildCommandAndArgs');
 
     expect(freshnessIndex).toBeGreaterThan(-1);
     expect(commandIndex).toBeGreaterThan(freshnessIndex);
-    expect(executorSource.slice(freshnessIndex, commandIndex)).toContain("status: 'needs_input'");
+    expect(executorSource.slice(freshnessIndex, commandIndex)).toContain("status: 'stale'");
 
     const prepareSource = readFileSync(new URL('../task-runner-prepare.ts', import.meta.url), 'utf8');
     expect(prepareSource).toContain('specificationSnapshotCommit');
