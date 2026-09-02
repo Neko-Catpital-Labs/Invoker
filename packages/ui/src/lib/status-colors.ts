@@ -179,6 +179,16 @@ export const STATUS_VISUALS: Record<StatusVisualKey, StatusVisual> = {
     active: false,
     pulse: false,
   },
+  skipped: {
+    bg: NEUTRAL_SURFACE,
+    border: 'border-border',
+    text: 'text-neutral-500',
+    dot: 'bg-neutral-600',
+    rail: 'bg-neutral-600',
+    inline: { bg: NEUTRAL_INLINE_BG, border: NEUTRAL_INLINE_BORDER, text: '#737373' },
+    active: false,
+    pulse: false,
+  },
 };
 
 export const DEFAULT_STATUS_VISUAL = STATUS_VISUALS.pending;

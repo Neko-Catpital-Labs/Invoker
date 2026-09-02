@@ -13,6 +13,7 @@ const RAW_TO_FRIENDLY: Record<string, string> = {
   'task.cancelled': 'Cancelled',
   'task.blocked': 'Blocked',
   'task.stale': 'Marked stale',
+  'task.skipped': 'Skipped',
   'task.deferred': 'Deferred',
   'task.needs_input': 'Needs input',
   'task.awaiting_approval': 'Awaiting approval',
@@ -44,6 +45,7 @@ const TERMINAL_STATUS_LIKE = new Set<string>([
   'task.failed',
   'task.cancelled',
   'task.stale',
+  'task.skipped',
   'completed',
 ]);
 
@@ -76,6 +78,7 @@ export type EventCategory = 'terminal-success' | 'terminal-failure' | 'running' 
 export function categorizeEvent(eventType: string): EventCategory {
   if (eventType === 'task.completed' || eventType === 'completed') return 'terminal-success';
   if (eventType === 'task.failed' || eventType === 'task.cancelled' || eventType === 'task.stale') return 'terminal-failure';
+  if (eventType === 'task.skipped') return 'terminal-success';
   if (RUNNING_STATUS_LIKE.has(eventType)) return 'running';
   if (AUTOFIX_LIKE.has(eventType)) return 'autofix';
   if (ATTENTION_LIKE.has(eventType)) return 'attention';

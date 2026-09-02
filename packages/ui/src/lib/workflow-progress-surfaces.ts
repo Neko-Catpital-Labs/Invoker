@@ -26,7 +26,7 @@ const WORKFLOW_STATUS_PRIORITY: Record<WorkflowStatus, number> = {
   closed: 9,
 };
 
-const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
+export const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
   failed: 0,
   awaiting_approval: 1,
   review_ready: 2,
@@ -34,13 +34,17 @@ const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
   needs_input: 4,
 };
 
-const RUNNING_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
+export const TASK_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
+  skipped: 99,
+};
+
+export const RUNNING_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
   queued: true,
   running: true,
   fixing_with_ai: true,
 };
 
-const ATTENTION_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
+export const ATTENTION_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
   failed: true,
   blocked: true,
   needs_input: true,
@@ -112,7 +116,8 @@ export function getAttentionTaskEntries(
   const baseEntries = [...tasks.values()]
     .filter(isAttentionTask)
     .sort((a, b) => {
-      const priority = (ATTENTION_STATUS_PRIORITY[a.status] ?? 99) - (ATTENTION_STATUS_PRIORITY[b.status] ?? 99);
+      const priority = (ATTENTION_STATUS_PRIORITY[a.status] ?? TASK_STATUS_PRIORITY[a.status] ?? 99) -
+        (ATTENTION_STATUS_PRIORITY[b.status] ?? TASK_STATUS_PRIORITY[b.status] ?? 99);
       if (priority !== 0) return priority;
       const workflowA = a.config.workflowId ? workflows.get(a.config.workflowId)?.name ?? a.config.workflowId : '';
       const workflowB = b.config.workflowId ? workflows.get(b.config.workflowId)?.name ?? b.config.workflowId : '';

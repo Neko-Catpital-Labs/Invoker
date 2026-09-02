@@ -41,10 +41,11 @@ const STATUS_OPTIONS: readonly TaskStatus[] = [
   'queued',
   'review_ready',
   'stale',
+  'skipped',
   'closed',
 ] as const;
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
+export const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: 'Pending',
   queued: 'Queued',
   running: 'Running',
@@ -57,9 +58,10 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   review_ready: 'Review ready',
   awaiting_approval: 'Awaiting approval',
   stale: 'Stale',
+  skipped: 'Skipped',
 };
 
-const STATUS_STYLE: Record<TaskStatus, string> = {
+export const STATUS_STYLE: Record<TaskStatus, string> = {
   pending: 'bg-gray-700 text-gray-200',
   queued: 'bg-cyan-800 text-cyan-100',
   running: 'bg-blue-700 text-blue-100',
@@ -72,6 +74,7 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
   review_ready: 'bg-teal-700 text-teal-100',
   awaiting_approval: 'bg-purple-700 text-purple-100',
   stale: 'bg-gray-700 text-gray-300',
+  skipped: 'bg-gray-700 text-gray-300',
 };
 
 const CATEGORY_DOT: Record<EventCategory, string> = {
