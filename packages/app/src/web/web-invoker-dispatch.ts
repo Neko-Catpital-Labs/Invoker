@@ -85,12 +85,6 @@ export interface WebInvokerDispatchDeps {
   getWorkers?: () => WorkerStatusSnapshot;
   taskTerminals?: TaskTerminalAdapter;
   ownerCapabilities?: Pick<OwnerCapabilityRegistry, 'has' | 'invoke'>;
-  /**
-   * Routes planning-chat channels (and plan-from-goal) to the owner's shared
-   * GUI-mutation handlers. Wired by both the desktop-owned and headless web
-   * surfaces; absent means the historical web downgrades stay in effect.
-   */
-  guiMutations?: (channel: string, args: unknown[]) => Promise<unknown>;
   planningTerminals?: WebPlanningTerminals;
   logger?: Logger;
 }
@@ -448,13 +442,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         if (deps.planningTerminals) return deps.planningTerminals.close(String(args[0]));
         return { ok: false, reason: 'unsupported' };
       default:
-        if (Object.hasOwn(IpcChannels, channel)) {
-          if (deps.guiMutations) {
-            assertOwnerCapabilityAccess(deps, channel, args);
-            return deps.guiMutations(channel, args);
-          }
-          return providerMissing(channel);
-        }
+        if (Object.hasOwn(IpcChannels, channel)) return providerMissing(channel);
         throw new WebDispatchError('unknown_channel', channel, `Unknown channel "${channel}"`);
     }
   };
