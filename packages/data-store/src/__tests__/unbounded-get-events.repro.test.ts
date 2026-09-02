@@ -37,9 +37,11 @@ describe('getEvents default limit (ui-read-scale)', () => {
 
   it('1-arg getEvents overload applies GET_EVENTS_DEFAULT_LIMIT', () => {
     const eventCount = GET_EVENTS_DEFAULT_LIMIT + 5000;
-    for (let i = 0; i < eventCount; i++) {
-      adapter.logEvent('wf-1/t1', 'task.progress', { i });
-    }
+    adapter.runInTransaction(() => {
+      for (let i = 0; i < eventCount; i++) {
+        adapter.logEvent('wf-1/t1', 'task.progress', { i });
+      }
+    });
 
     const events = adapter.getEvents('wf-1/t1');
     expect(events).toHaveLength(GET_EVENTS_DEFAULT_LIMIT);
@@ -47,9 +49,11 @@ describe('getEvents default limit (ui-read-scale)', () => {
 
   it('bounded getEvents with explicit limit works correctly', () => {
     const eventCount = 1000;
-    for (let i = 0; i < eventCount; i++) {
-      adapter.logEvent('wf-1/t1', 'task.progress', { i });
-    }
+    adapter.runInTransaction(() => {
+      for (let i = 0; i < eventCount; i++) {
+        adapter.logEvent('wf-1/t1', 'task.progress', { i });
+      }
+    });
 
     const events = adapter.getEvents('wf-1/t1', 'desc', 100);
     expect(events).toHaveLength(100);

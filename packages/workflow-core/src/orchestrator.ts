@@ -1510,10 +1510,10 @@ export class Orchestrator {
     const validatedTasks: TaskState[] = [];
     const resolvedRoutingByTaskId = new Map<string, ExecutorRoutingReason>();
     for (const taskDef of plan.tasks) {
-      // Scratch plans never resolve a pool: no clone, no config-level default
-      // pool, no routing rule can ever hijack a scratch task's runnerKind.
       const resolvedRouting: ReturnType<typeof resolveExecutorRouting> = plan.scratch
         ? { poolId: undefined, reason: { type: 'scratch' } }
+        : taskDef.dockerImage
+          ? { poolId: undefined, reason: { type: 'dockerImage' } }
         : resolveExecutorRouting(
             taskDef.id,
             taskDef.command,

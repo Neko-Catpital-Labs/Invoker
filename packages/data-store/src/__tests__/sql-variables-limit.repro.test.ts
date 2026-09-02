@@ -6,6 +6,37 @@ import { SQLiteAdapter } from '../sqlite-adapter.js';
 import { SQLITE_MAX_VARIABLE_NUMBER } from '../sqlite-workflow-repository.js';
 
 const WORKFLOW_COUNT_ABOVE_LIMIT = SQLITE_MAX_VARIABLE_NUMBER + 100;
+const INSERT_BATCH_SIZE = 1000;
+
+async function seedWorkflows(adapter: SQLiteAdapter, includeTasks = false): Promise<void> {
+  for (let start = 0; start < WORKFLOW_COUNT_ABOVE_LIMIT; start += INSERT_BATCH_SIZE) {
+    const end = Math.min(start + INSERT_BATCH_SIZE, WORKFLOW_COUNT_ABOVE_LIMIT);
+    adapter.runInTransaction(() => {
+      for (let i = start; i < end; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        if (includeTasks) {
+          adapter.saveTask(`wf-${i}`, {
+            id: `wf-${i}/t0`,
+            description: `Task ${i}`,
+            status: 'pending',
+            dependencies: [],
+            createdAt: new Date(),
+            config: { workflowId: `wf-${i}` },
+            execution: {},
+            taskStateVersion: 1,
+          });
+        }
+      }
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
 
 describe('SQL variables limit (ui-read-scale)', () => {
   let tmpDir: string;
@@ -24,25 +55,7 @@ describe('SQL variables limit (ui-read-scale)', () => {
   it(
     'loadWorkflowTaskSnapshot handles >32k workflows via chunked queries',
     async () => {
-      for (let i = 0; i < WORKFLOW_COUNT_ABOVE_LIMIT; i++) {
-        adapter.saveWorkflow({
-          id: `wf-${i}`,
-          name: `Workflow ${i}`,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
-        adapter.saveTask(`wf-${i}`, {
-          id: `wf-${i}/t0`,
-          description: `Task ${i}`,
-          status: 'pending',
-          dependencies: [],
-          createdAt: new Date(),
-          config: { workflowId: `wf-${i}` },
-          execution: {},
-          taskStateVersion: 1,
-        });
-      }
+      await seedWorkflows(adapter, true);
 
       const snapshot = adapter.loadWorkflowTaskSnapshot();
       expect(snapshot.workflows).toHaveLength(WORKFLOW_COUNT_ABOVE_LIMIT);
@@ -52,30 +65,14 @@ describe('SQL variables limit (ui-read-scale)', () => {
   );
 
   it('listWorkflows handles >32k workflows via chunked rollup queries', async () => {
-    for (let i = 0; i < WORKFLOW_COUNT_ABOVE_LIMIT; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    await seedWorkflows(adapter);
 
     const workflows = adapter.listWorkflows();
     expect(workflows).toHaveLength(WORKFLOW_COUNT_ABOVE_LIMIT);
   });
 
   it('loadTasksForWorkflows handles >32k workflow IDs via chunked queries', async () => {
-    for (let i = 0; i < WORKFLOW_COUNT_ABOVE_LIMIT; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    await seedWorkflows(adapter);
 
     const workflowIds = Array.from({ length: WORKFLOW_COUNT_ABOVE_LIMIT }, (_, i) => `wf-${i}`);
     const tasks = adapter.loadTasksForWorkflows(workflowIds);

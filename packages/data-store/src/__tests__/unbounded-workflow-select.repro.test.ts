@@ -4,6 +4,26 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 
+const INSERT_BATCH_SIZE = 1000;
+
+async function seedWorkflows(adapter: SQLiteAdapter, count: number): Promise<void> {
+  for (let start = 0; start < count; start += INSERT_BATCH_SIZE) {
+    const end = Math.min(start + INSERT_BATCH_SIZE, count);
+    adapter.runInTransaction(() => {
+      for (let i = start; i < end; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
 describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   let tmpDir: string;
   let adapter: SQLiteAdapter;
@@ -18,41 +38,25 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it.fails('listWorkflows has no LIMIT and returns all workflows regardless of count', () => {
+  it.fails('listWorkflows has no LIMIT and returns all workflows regardless of count', async () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    await seedWorkflows(adapter, workflowCount);
 
     const workflows = adapter.listWorkflows();
     expect(workflows).toHaveLength(workflowCount);
     expect(workflows.length).toBeLessThan(1000);
   });
 
-  it.fails('loadWorkflowTaskSnapshot has no LIMIT and returns all workflows regardless of count', () => {
+  it.fails('loadWorkflowTaskSnapshot has no LIMIT and returns all workflows regardless of count', async () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    await seedWorkflows(adapter, workflowCount);
 
     const snapshot = adapter.loadWorkflowTaskSnapshot();
     expect(snapshot.workflows).toHaveLength(workflowCount);
     expect(snapshot.workflows.length).toBeLessThan(1000);
   });
 
-  it.fails('listWorkflows materializes every row into JS objects', () => {
+  it.fails('listWorkflows materializes every row into JS objects', async () => {
     const workflowCount = 5_000;
     for (let i = 0; i < workflowCount; i++) {
       adapter.saveWorkflow({
@@ -74,16 +78,8 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     expect(memoryDelta).toBeLessThan(1_000_000);
   });
 
-  it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
-    for (let i = 0; i < 500; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+  it('listWorkflowsPaged returns bounded results with pagination metadata', async () => {
+    await seedWorkflows(adapter, 500);
 
     const page1 = adapter.listWorkflowsPaged({ limit: 100 });
     expect(page1.workflows).toHaveLength(100);
@@ -99,16 +95,8 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     expect(lastPage.hasMore).toBe(false);
   });
 
-  it('listWorkflowsPaged respects limit at scale without loading all rows', () => {
-    for (let i = 0; i < 5000; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+  it('listWorkflowsPaged respects limit at scale without loading all rows', async () => {
+    await seedWorkflows(adapter, 5000);
 
     const started = performance.now();
     const result = adapter.listWorkflowsPaged({ limit: 50 });
