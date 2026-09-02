@@ -1,10 +1,9 @@
 import type { Logger } from '@invoker/contracts';
 import type { WorkflowMutationPriority } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
-import type { TaskState } from '@invoker/workflow-core';
+import { FailureClassifier, type TaskState } from '@invoker/workflow-core';
 
 import type { AutoFixRecoveryStore } from '../auto-fix-recovery.js';
-import { isLivenessFailureTask } from '../auto-fix-gating.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
 import {
   createRequeueAttemptLedger,
@@ -114,7 +113,7 @@ export function listRequeueScanCandidates(store: AutoFixRecoveryStore): RequeueC
   const candidates: RequeueCandidate[] = [];
   for (const workflow of store.listWorkflows()) {
     for (const task of store.loadTasks(workflow.id)) {
-      if (task.status !== 'failed' || !isLivenessFailureTask(task)) continue;
+      if (task.status !== 'failed' || !FailureClassifier.isRequeueableFailureTask(task)) continue;
       const workflowId = workflowIdForTask(task);
       if (workflowId) candidates.push({ taskId: task.id, workflowId });
     }
@@ -148,10 +147,7 @@ export function createRequeueRecoveryTick(options: RequeueWorkerPolicyOptions): 
     for (const candidate of candidates) {
       if (handled.has(candidate.taskId)) continue;
       const latest = loadLatestTask(candidate, options.store);
-      // Re-check authoritative state: only a task still parked as a liveness
-      // stall is actionable (a requeue/escalation already applied would have
-      // cleared the class or moved it out of `failed`).
-      if (!latest || latest.status !== 'failed' || !isLivenessFailureTask(latest)) continue;
+      if (!latest || latest.status !== 'failed' || !FailureClassifier.isRequeueableFailureTask(latest)) continue;
       const workflowId = workflowIdForTask(latest);
       if (!workflowId) continue;
       handled.add(candidate.taskId);
