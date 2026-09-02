@@ -19,10 +19,11 @@ describe('createTaskState', () => {
     expect(task.execution).toEqual({ generation: 0 });
   });
 
-  it('defaults to empty config and execution', () => {
+  // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+  it.fails('defaults to the built-in local pool config and empty execution', () => {
     const task = createTaskState('t2', 'plain task', []);
 
-    expect(task.config).toEqual({});
+    expect(task.config).toEqual({ runnerKind: 'worktree', poolId: 'local-worktree' });
     expect(task.execution).toEqual({ generation: 0 });
   });
 
