@@ -1264,7 +1264,7 @@ describe('headless delegation enforcement', () => {
           return { preemptWorkflowExecution, preparePoolSpy };
         }
 
-        it.fails('headless `rebase-retry <taskId>` routes to orchestrator.retryWorkflow after fresh-base prep', async () => {
+        it('headless `rebase-retry <taskId>` routes to orchestrator.retryWorkflow after fresh-base prep', async () => {
           const { preemptWorkflowExecution, preparePoolSpy } = seedRebaseHappyPath();
 
           const depsWithNoTrack: HeadlessDeps = {

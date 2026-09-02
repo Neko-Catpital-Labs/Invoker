@@ -2629,7 +2629,7 @@ export class Orchestrator {
       throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `forkWorkflow: workflow ${workflowId} not found (no tasks)`);
     }
 
-    this.cancelWorkflow(workflowId, { detachDependents: false });
+    this.cancelWorkflow(workflowId, { cascadeDependents: false });
 
     this.refreshWorkflowFromDb(workflowId);
     const settledSourceTasks = this.stateMachine
@@ -3545,38 +3545,40 @@ export class Orchestrator {
   }
 
   /**
-   * Cancel all active tasks in a workflow.
-   * Terminal tasks (completed/stale) are preserved as-is.
+   * Cancel all active tasks in a workflow and, unless `cascadeDependents` is
+   * false, in every workflow gated on it via `externalDependencies`.
+   * Downstream gates and base branches are left untouched so a retry of the
+   * upstream can revive the chain. Terminal tasks (completed/stale) are
+   * preserved as-is.
    */
   cancelWorkflow(
     workflowId: string,
-    opts: { detachDependents?: boolean } = {},
+    opts: { cascadeDependents?: boolean } = {},
   ): { cancelled: string[]; runningCancelled: string[] } {
-    const detachDependents = opts.detachDependents ?? true;
-    if (!detachDependents) {
-      return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
+    const { cancelled, runningCancelled } = this.cancelWorkflowWithDependents(workflowId, opts);
+    return { cancelled, runningCancelled };
+  }
+
+  private cancelWorkflowWithDependents(
+    workflowId: string,
+    opts: { cascadeDependents?: boolean; deferInvalidation?: boolean },
+  ): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
+    const cancelOpts = { deferInvalidation: opts.deferInvalidation };
+    if (opts.cascadeDependents === false) {
+      return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId, cancelOpts);
     }
 
     this.syncAllFromDb();
-    const directDependents = this.collectDirectDependentWorkflowIds(workflowId);
-    const workflowMetadata = this.persistence.listWorkflows();
-    const directDependentBaseBranches = new Map<string, string>();
-    for (const dependentWorkflowId of directDependents) {
-      const dependentWorkflow = this.persistence.loadWorkflow?.(dependentWorkflowId)
-        ?? workflowMetadata.find((candidate) => candidate.id === dependentWorkflowId);
-      directDependentBaseBranches.set(
-        dependentWorkflowId,
-        this.resolveDetachDefaultBranch(dependentWorkflowId, dependentWorkflow),
-      );
-    }
-
-    const result = cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
-    for (const dependentWorkflowId of directDependents) {
-      this.detachWorkflowInternal(
-        dependentWorkflowId,
-        workflowId,
-        directDependentBaseBranches.get(dependentWorkflowId)!,
-      );
+    const downstreamWorkflowIds = this.collectDownstreamWorkflowIds(workflowId);
+    const result = cancelWorkflowImpl(this as unknown as CancellationHost, workflowId, cancelOpts);
+    for (const downstreamWorkflowId of downstreamWorkflowIds) {
+      const downstream = cancelWorkflowImpl(this as unknown as CancellationHost, downstreamWorkflowId, {
+        ...cancelOpts,
+        reason: `Cancelled: upstream workflow ${workflowId} was cancelled`,
+      });
+      result.cancelled.push(...downstream.cancelled);
+      result.runningCancelled.push(...downstream.runningCancelled);
+      result.toCancelIds.push(...downstream.toCancelIds);
     }
     return result;
   }
@@ -3595,10 +3597,9 @@ export class Orchestrator {
   /** Deferred-invalidation counterpart to `cancelWorkflow` -- see `cancelTaskAwaitingKill`. */
   cancelWorkflowAwaitingKill(
     workflowId: string,
-    opts: { detachDependents?: boolean } = {},
+    opts: { cascadeDependents?: boolean } = {},
   ): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
-    void opts;
-    return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId, { deferInvalidation: true });
+    return this.cancelWorkflowWithDependents(workflowId, { ...opts, deferInvalidation: true });
   }
 
   /**
