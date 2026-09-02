@@ -232,8 +232,8 @@ const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.me
 
 {
   const diff = [
-    'diff --git a/skills/admin-bypass-sweep/SKILL.md b/skills/admin-bypass-sweep/SKILL.md',
-    '+++ b/skills/admin-bypass-sweep/SKILL.md',
+    'diff --git a/skills/reflect-ci/SKILL.md b/skills/reflect-ci/SKILL.md',
+    '+++ b/skills/reflect-ci/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```js',
     '+const value = true; // grandfathered file stays exempt',
