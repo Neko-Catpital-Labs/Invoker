@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import {
   buildWorktreeCorruptRepairScript,
   deriveCorruptWorktreeAdminPathFromWorkspace,
@@ -25,7 +25,7 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
-  const config = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+  const inputConfig = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
     ? { ...overrides.config, poolId: 'ssh-fixture' }
     : overrides.config;
   return {
@@ -34,9 +34,9 @@ function makeTask(overrides: {
     status: overrides.status ?? 'pending',
     dependencies: [],
     createdAt: new Date(),
-    config: { ...config },
+    config: resolveTaskConfig(inputConfig ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 describe('SSH worktree metadata repro', () => {
