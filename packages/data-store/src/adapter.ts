@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTurnStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions, TaskFilterNode } from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
@@ -419,6 +419,7 @@ export interface PersistenceAdapter {
   findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined;
 
   // Tasks
+  queryTasksByFilter(filter: TaskFilterNode, opts?: { limit?: number; offset?: number }): TaskState[];
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges, opts?: { skipWorkflowStatusSync?: boolean }): void;
   updateTaskFromKnownState?(
