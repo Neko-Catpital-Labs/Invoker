@@ -52,7 +52,7 @@ describe('REPRO: recreate preemption detaches a live downstream dependency', () 
     ]);
   });
 
-  it('CommandService.cancelWorkflow (the real standalone abandon action) must still detach downstream', async () => {
+  it.fails('CommandService.cancelWorkflow (the real standalone abandon action) cancels downstream but keeps its gate', async () => {
     const persistence = new InMemoryPersistence();
     const orchestrator = makeOrchestrator(persistence);
     const commandService = new CommandService(orchestrator);
@@ -69,7 +69,17 @@ describe('REPRO: recreate preemption detaches a live downstream dependency', () 
 
     expect(
       persistence.loadWorkflow(ctx.downstreamWfId)!.externalDependencies,
-      'a genuinely abandoned upstream must still detach its downstream dependents',
-    ).toBeUndefined();
+      'a cancelled upstream must not detach its downstream dependents onto the default branch',
+    ).toEqual([
+      {
+        workflowId: ctx.upstreamWfId,
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'completed',
+      },
+    ]);
+    expect(persistence.loadWorkflow(ctx.downstreamWfId)!.baseBranch).toBe('feature/upstream');
+    expect(orchestrator.getTask(ctx.downstreamLastId)!.status).toBe('failed');
+    expect(orchestrator.getTask(ctx.downstreamLastId)!.execution.error).toContain(ctx.upstreamWfId);
   });
 });

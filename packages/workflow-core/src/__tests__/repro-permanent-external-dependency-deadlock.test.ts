@@ -55,7 +55,7 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
 // externalDependencies gate. The only thing that ever unblocked them was an
 // unrelated manual `detachWorkflow` call two days later.
 describe('REPRO: an invalidated-and-abandoned upstream permanently deadlocks its downstream', () => {
-  it('detaches downstream from an invalidated upstream when that upstream is cancelled and abandoned', async () => {
+  it.fails('cancels the downstream chain when an invalidated upstream is cancelled and abandoned, keeping its gate intact', async () => {
     const persistence = new InMemoryPersistence();
     const orchestrator = makeOrchestrator(persistence);
     const deps = buildOrchestratorDeps(orchestrator);
@@ -79,9 +79,23 @@ describe('REPRO: an invalidated-and-abandoned upstream permanently deadlocks its
     // going to be retried to completion again).
     orchestrator.cancelWorkflow(ctx.upstreamWfId);
 
-    expect(persistence.loadWorkflow(ctx.downstreamWfId)!.externalDependencies).toBeUndefined();
+    const downstream = persistence.loadWorkflow(ctx.downstreamWfId)!;
+    expect(downstream.externalDependencies).toEqual([
+      {
+        workflowId: ctx.upstreamWfId,
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'completed',
+      },
+    ]);
+    expect(downstream.baseBranch).toBe('feature/upstream');
+    expect(downstream.detachedExternalDependencies).toBeUndefined();
+    for (const taskId of [ctx.downstreamRootId, ctx.downstreamMidId, ctx.downstreamLastId, ctx.downstreamMergeId]) {
+      expect(orchestrator.getTask(taskId)!.status, `${taskId} must not sit pending forever`).toBe('failed');
+      expect(orchestrator.getTask(taskId)!.execution.error).toContain(ctx.upstreamWfId);
+    }
     expect(orchestrator.getExecutableReadyTasks().map((t) => t.id))
-      .toContain(ctx.downstreamRootId);
+      .not.toContain(ctx.downstreamRootId);
   });
 
   it('keeps a genuinely-still-invalid upstream gate blocking its downstream', async () => {

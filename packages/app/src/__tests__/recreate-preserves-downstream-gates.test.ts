@@ -275,7 +275,7 @@ describe('restart-class workflow mutations preserve downstream gates', () => {
     expect(fixture.killActiveExecution).toHaveBeenCalledWith(fixture.upstreamTaskId);
   });
 
-  it('still detaches dependents for explicit Cancel Workflow', async () => {
+  it.fails('cancels dependents for explicit Cancel Workflow without detaching their gate', async () => {
     const fixture = createGatedWorkflowFixture();
 
     const result = await fixture.commandService.cancelWorkflow({
@@ -287,6 +287,14 @@ describe('restart-class workflow mutations preserve downstream gates', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(fixture.persistence.loadWorkflow(fixture.downstreamWorkflowId)?.externalDependencies).toBeUndefined();
+    expect(fixture.orchestrator.getTask(fixture.downstreamTaskId)?.status).toBe('failed');
+    expect(
+      fixture.persistence.loadWorkflow(fixture.downstreamWorkflowId)?.externalDependencies,
+    ).toContainEqual({
+      workflowId: fixture.upstreamWorkflowId,
+      taskId: '__merge__',
+      requiredStatus: 'completed',
+      gatePolicy: 'completed',
+    });
   });
 });
