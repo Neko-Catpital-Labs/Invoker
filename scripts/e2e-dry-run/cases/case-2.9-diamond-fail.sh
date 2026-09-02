@@ -42,8 +42,8 @@ STA=$(invoker_e2e_task_status e2e-g229-taskA)
 STB=$(invoker_e2e_task_status e2e-g229-taskB)
 STC=$(invoker_e2e_task_status e2e-g229-taskC)
 STD=$(invoker_e2e_task_status e2e-g229-taskD)
-if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || { [ "$STC" != "pending" ] && [ "$STC" != "completed" ]; } || [ "$STD" != "pending" ] || [ "$WF_STATUS" != "failed" ]; then
-  echo "FAIL case 2.9: expected workflow=failed A=completed B=failed C=pending|completed D=pending, got workflow='$WF_STATUS' A='$STA' B='$STB' C='$STC' D='$STD'"
+if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || { [ "$STC" != "pending" ] && [ "$STC" != "completed" ]; } || [ "$STD" != "skipped" ] || [ "$WF_STATUS" != "failed" ]; then
+  echo "FAIL case 2.9: expected workflow=failed A=completed B=failed C=pending|completed D=skipped, got workflow='$WF_STATUS' A='$STA' B='$STB' C='$STC' D='$STD'"
   invoker_e2e_dump_tasks
   exit 1
 fi

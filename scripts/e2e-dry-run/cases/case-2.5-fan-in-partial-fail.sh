@@ -20,10 +20,10 @@ invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-t
 STA=$(invoker_e2e_task_status e2e-g225-taskA)
 STB=$(invoker_e2e_task_status e2e-g225-taskB)
 STC=$(invoker_e2e_task_status e2e-g225-taskC)
-if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || [ "$STC" != "pending" ]; then
-  echo "FAIL case 2.5: expected A=completed B=failed C=pending, got A='$STA' B='$STB' C='$STC'"
+if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || [ "$STC" != "skipped" ]; then
+  echo "FAIL case 2.5: expected A=completed B=failed C=skipped, got A='$STA' B='$STB' C='$STC'"
   invoker_e2e_dump_tasks
   exit 1
 fi
 
-echo "PASS case 2.5 (fan-in partial fail: A=completed, B=failed, C=pending)"
+echo "PASS case 2.5 (fan-in partial fail: A=completed, B=failed, C=skipped)"

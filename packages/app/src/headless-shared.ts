@@ -38,6 +38,7 @@ import type { RuntimeServices } from '@invoker/runtime-service';
 import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
 import type { WorkerRuntimeController } from './worker-control.js';
 import type { TaskHandleMap } from './execution/task-runner-wiring.js';
+import { LaunchDispatcher } from './launch-dispatcher.js';
 
 
 export interface HeadlessDeps {
@@ -322,6 +323,48 @@ export function parseQueryFlags(args: string[]): QueryFlags {
     }
   }
   return flags;
+}
+
+export async function dispatchHeadlessRunnableTasks(
+  deps: HeadlessDeps,
+  taskExecutor: TaskRunner,
+  runnable: TaskState[],
+  context: string,
+): Promise<void> {
+  if (runnable.length === 0) return;
+
+  const dispatcher = new LaunchDispatcher({
+    persistence: deps.persistence,
+    orchestrator: {
+      prepareTaskForNewAttempt: (taskId, reason) =>
+        deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
+      failTask: (taskId, reason) => deps.orchestrator.failTask(taskId, reason),
+      syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
+      getTask: (taskId) => deps.orchestrator.getTask(taskId),
+      getTaskLaunchReadiness: (taskId) => deps.orchestrator.getTaskLaunchReadiness(taskId),
+    },
+    taskRunnerProvider: () => taskExecutor,
+    ownerId: `headless-${process.pid}`,
+    logger: deps.logger,
+  });
+  deps.logger?.debug?.(
+    `[headless] ${context}: polling local launch dispatcher for ${runnable.length} runnable task(s)`,
+    { module: 'headless' },
+  );
+  const poll = (): void => {
+    try {
+      dispatcher.poll();
+    } catch (err) {
+      deps.logger?.warn?.(
+        `[headless] ${context}: local launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'headless' },
+      );
+    }
+  };
+  poll();
+  const timer = setInterval(poll, 250);
+  timer.unref?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 export async function trackHeadlessWorkflow(

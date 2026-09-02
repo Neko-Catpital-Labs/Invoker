@@ -19,12 +19,12 @@ invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-t
 
 STA=$(invoker_e2e_task_status e2e-g2211-taskA)
 STB=$(invoker_e2e_task_status e2e-g2211-taskB)
-if [ "$STA" != "failed" ] || [ "$STB" != "pending" ]; then
-  echo "FAIL case 2.11: expected A=failed B=pending, got A='$STA' B='$STB'"
+if [ "$STA" != "failed" ] || [ "$STB" != "skipped" ]; then
+  echo "FAIL case 2.11: expected A=failed B=skipped, got A='$STA' B='$STB'"
   invoker_e2e_dump_tasks
   exit 1
 fi
-echo "==> case 2.11: confirmed A=failed, B=pending"
+echo "==> case 2.11: confirmed A=failed, B=skipped"
 
 echo "==> case 2.11: set A command + restart"
 invoker_e2e_run_headless set command e2e-g2211-taskA echo ok

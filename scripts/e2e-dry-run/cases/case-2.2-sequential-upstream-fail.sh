@@ -19,10 +19,10 @@ invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-t
 
 STA=$(invoker_e2e_task_status e2e-g222-taskA)
 STB=$(invoker_e2e_task_status e2e-g222-taskB)
-if [ "$STA" != "failed" ] || [ "$STB" != "pending" ]; then
-  echo "FAIL case 2.2: expected taskA=failed taskB=pending, got A='$STA' B='$STB'"
+if [ "$STA" != "failed" ] || [ "$STB" != "skipped" ]; then
+  echo "FAIL case 2.2: expected taskA=failed taskB=skipped, got A='$STA' B='$STB'"
   invoker_e2e_dump_tasks
   exit 1
 fi
 
-echo "PASS case 2.2 (sequential upstream fail: A=failed, B=pending)"
+echo "PASS case 2.2 (sequential upstream fail: A=failed, B=skipped)"

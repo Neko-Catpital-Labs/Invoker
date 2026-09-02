@@ -41,7 +41,6 @@ import { resolveAutoFixRetries } from './autofix-defaults.js';
 import {
   isDispatchableLaunch,
 } from './global-topup.js';
-import { LaunchDispatcher } from './launch-dispatcher.js';
 import {
   formatHeadlessSetSubcommands,
   isHeadlessHelpCommand,
@@ -77,6 +76,7 @@ import {
   restoreWorkflowForTask,
   restoreWorkflowForTaskUnlessDeleteAllWon,
   withRestoredTaskUnlessDeleteAllWon,
+  dispatchHeadlessRunnableTasks,
 } from './headless-shared.js';
 
 export { createHeadlessExecutor, createTrackedHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
@@ -114,48 +114,6 @@ import {
   headlessAttachWorkflow,
   headlessOpenTerminal,
 } from './headless-approve-delete.js';
-
-async function dispatchHeadlessRunnableTasks(
-  deps: HeadlessDeps,
-  taskExecutor: TaskRunner,
-  runnable: TaskState[],
-  context: string,
-): Promise<void> {
-  if (runnable.length === 0) return;
-
-  const dispatcher = new LaunchDispatcher({
-    persistence: deps.persistence,
-    orchestrator: {
-      prepareTaskForNewAttempt: (taskId, reason) =>
-        deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
-      failTask: (taskId, reason) => deps.orchestrator.failTask(taskId, reason),
-      syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
-      getTask: (taskId) => deps.orchestrator.getTask(taskId),
-      getTaskLaunchReadiness: (taskId) => deps.orchestrator.getTaskLaunchReadiness(taskId),
-    },
-    taskRunnerProvider: () => taskExecutor,
-    ownerId: `headless-${process.pid}`,
-    logger: deps.logger,
-  });
-  deps.logger?.debug?.(
-    `[headless] ${context}: polling local launch dispatcher for ${runnable.length} runnable task(s)`,
-    { module: 'headless' },
-  );
-  const poll = (): void => {
-    try {
-      dispatcher.poll();
-    } catch (err) {
-      deps.logger?.warn?.(
-        `[headless] ${context}: local launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
-        { module: 'headless' },
-      );
-    }
-  };
-  poll();
-  const timer = setInterval(poll, 250);
-  timer.unref?.();
-  await new Promise<void>((resolve) => setImmediate(resolve));
-}
 
 // ── Set Router ──────────────────────────────────────────────
 

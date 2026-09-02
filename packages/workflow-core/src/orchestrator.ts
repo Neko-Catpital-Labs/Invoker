@@ -2099,6 +2099,8 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     mergeTrace('APPROVE_DONE', { taskId });
 
+    this.unskipDescendants(taskId);
+
     const workflowId = task.config.workflowId;
     if (workflowId) {
       const mergeNode = this.getMergeNode(workflowId);
@@ -2123,6 +2125,29 @@ export class Orchestrator {
     mergeTrace('APPROVE_STARTED', { taskId: task.id, startedIds: started.map(t => t.id), startedStatuses: started.map(t => t.status) });
     this.checkWorkflowCompletion(task.config.workflowId);
     return started;
+  }
+
+  private unskipDescendants(taskId: string): void {
+    const allTasks = this.stateMachine.getAllTasks();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const descendantIds = getTransitiveDependents(
+      taskId,
+      taskMap,
+      (t) => t.status === 'completed' || t.status === 'stale' || t.config.isReconciliation === true,
+    );
+    for (const descendantId of descendantIds) {
+      const dependent = this.stateGetTask(descendantId);
+      if (!dependent || dependent.status !== 'skipped') continue;
+      const changes: TaskStateChanges = {
+        status: 'pending',
+        execution: { blockedBy: undefined },
+      };
+      const updated = this.writeAndSync(descendantId, changes);
+      const delta: TaskDelta = this.buildUpdateDelta(dependent, updated, changes);
+      this.persistence.logEvent?.(descendantId, 'task.pending', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+      this.replaceSelectedAttempt(dependent);
+    }
   }
 
   async resumeTaskAfterFixApproval(taskId: string): Promise<TaskState[]> {

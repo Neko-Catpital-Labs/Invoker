@@ -24,6 +24,7 @@ import {
   withRestoredTaskUnlessDeleteAllWon,
   preemptWorkflowExecution,
   isRaceLostForeignKeyConstraintFailure,
+  dispatchHeadlessRunnableTasks,
 } from './headless-shared.js';
 
 function buildHeadlessApproveAction(
@@ -60,7 +61,7 @@ export async function headlessApprove(taskId: string, deps: HeadlessDeps): Promi
     const approveTaskAction = buildHeadlessApproveAction(deps, te);
     const beforeStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
     const { started } = await approveTaskAction(taskId);
-    await finalizeMutationWithGlobalTopup({
+    const { topup } = await finalizeMutationWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
       logger: deps.logger,
@@ -69,6 +70,7 @@ export async function headlessApprove(taskId: string, deps: HeadlessDeps): Promi
       mutationTiming: deps.mutationTiming,
       scopedTaskIds: [taskId],
     });
+    await dispatchHeadlessRunnableTasks(deps, te, topup, 'headless.approve');
     process.stdout.write(`Approved task: ${taskId}\n`);
     if (deps.noTrack) {
       process.stdout.write('[headless] --no-track enabled: approve accepted; exiting without tracking.\n');
@@ -93,11 +95,13 @@ export async function headlessApprove(taskId: string, deps: HeadlessDeps): Promi
     const hasRunningWork = workflowTasks.some(
       (task) => task.status === 'running' || task.status === 'fixing_with_ai',
     );
+    const hasQueuedTopup = topup.some((task) => task.status !== 'running');
     const resumedWork =
       hasRunningWork
       || afterStatus.running > beforeStatus.running
       || afterStatus.pending < beforeStatus.pending
-      || readyTasks.length > 0;
+      || readyTasks.length > 0
+      || hasQueuedTopup;
     if (!resumedWork) {
       return;
     }
