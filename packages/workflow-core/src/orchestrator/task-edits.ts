@@ -16,7 +16,7 @@
  */
 
 import type { TaskState, TaskDelta, TaskStateChanges, TaskStatus } from '@invoker/workflow-graph';
-import { normalizeRunnerKind } from '@invoker/workflow-graph';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, normalizeRunnerKind } from '@invoker/workflow-graph';
 import {
   OrchestratorError,
   OrchestratorErrorCode,
@@ -116,6 +116,9 @@ export function editTaskTypeImpl(
   if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
 
   const effectiveType = normalizeRunnerKind(runnerKind) ?? runnerKind;
+  if (effectiveType === 'merge') {
+    throw new Error(`Cannot change task "${taskId}" to merge executor type`);
+  }
 
   // SSH requires repoUrl on the workflow to clone onto the remote host
   if (effectiveType === 'ssh' && task.config.workflowId && host.persistence.loadWorkflow) {
@@ -129,8 +132,7 @@ export function editTaskTypeImpl(
   }
 
   const oldRunnerKind = task.config.runnerKind;
-  const oldPoolMemberId =
-    oldRunnerKind === 'ssh' ? (task.config as { poolMemberId?: string }).poolMemberId : undefined;
+  const oldPoolMemberId = oldRunnerKind === 'ssh' ? task.config.poolMemberId : undefined;
   const newPoolMemberId = effectiveType === 'ssh' ? poolMemberId : undefined;
   const hostKey = (et: string | undefined, rid: string | undefined): string =>
     et === 'ssh' ? `ssh:${rid ?? ''}` : 'local';
@@ -142,12 +144,16 @@ export function editTaskTypeImpl(
     host.cancelTask(taskId);
   }
 
-  const configPatch: Record<string, unknown> = { runnerKind: effectiveType };
-  if (effectiveType === 'ssh') {
-    configPatch.poolMemberId = poolMemberId;
-  } else {
-    configPatch.poolMemberId = undefined;
-  }
+  const inheritedPoolId = task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh'
+    ? task.config.poolId
+    : BUILT_IN_LOCAL_EXECUTION_POOL_ID;
+  const configPatch: NonNullable<TaskStateChanges['config']> = effectiveType === 'ssh'
+    ? { runnerKind: 'ssh', poolId: inheritedPoolId, poolMemberId, dockerImage: undefined }
+    : effectiveType === 'worktree'
+      ? { runnerKind: 'worktree', poolId: inheritedPoolId, poolMemberId: undefined, dockerImage: undefined }
+      : effectiveType === 'docker'
+        ? { runnerKind: 'docker', poolId: undefined, poolMemberId: undefined }
+        : { runnerKind: 'scratch', poolId: undefined, poolMemberId: undefined, dockerImage: undefined };
   const typeChanges: TaskStateChanges = { config: configPatch };
   const typeBefore = host.stateGetTask(taskId)!;
   const typeUpdated = host.writeAndSync(taskId, typeChanges);
@@ -166,6 +172,9 @@ export function editTaskPoolImpl(host: TaskEditHost, taskId: string, poolId: str
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
   if (task.config.isMergeNode) throw new Error(`Cannot change executor pool of merge node ${taskId}`);
+  if (task.config.runnerKind === 'docker' || task.config.runnerKind === 'scratch') {
+    throw new Error(`Cannot change executor pool of ${task.config.runnerKind} task ${taskId}`);
+  }
   if (!poolId || !host.availablePoolIds.has(poolId)) {
     throw new Error(
       `Cannot switch task "${taskId}" to poolId="${poolId}": pool is not defined in executionPools. ` +
@@ -180,9 +189,9 @@ export function editTaskPoolImpl(host: TaskEditHost, taskId: string, poolId: str
   const poolChanges: TaskStateChanges = {
     config: {
       poolId,
-      runnerKind: undefined,
+      runnerKind: poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh',
       poolMemberId: undefined,
-    } as TaskStateChanges['config'],
+    },
   };
   const poolBefore = host.stateGetTask(taskId)!;
   const poolUpdated = host.writeAndSync(taskId, poolChanges);

@@ -13,7 +13,11 @@
 import { resolve } from 'node:path';
 
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
-import type { TaskState } from '@invoker/workflow-core';
+import {
+  assertResolvedTaskConfig,
+  BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+  type TaskState,
+} from '@invoker/workflow-core';
 import type { Executor, ExecutorHandle } from './executor.js';
 import { ResourceLimitError } from './repo-pool.js';
 import { traceExecution } from './exec-trace.js';
@@ -134,18 +138,18 @@ function memoryPoolMemberLoad(host: TaskRunnerPoolHost, poolId: string, memberKe
 }
 
 export function sshHostLeaseLoad(host: TaskRunnerPoolHost, member: Extract<ExecutionPoolMember, { type: 'ssh' }>): number | undefined {
+  const countFn = host.persistence.countExecutionResourceLeases?.bind(host.persistence);
+  const listFn = host.persistence.listExecutionResourceLeases?.bind(host.persistence);
+  if (!countFn && !listFn) return undefined;
   const target = host.getRemoteTargets()[member.id];
   if (!target) return undefined;
   const resourceKey = sshResourceKey(target);
-  const countFn = host.persistence.countExecutionResourceLeases?.bind(host.persistence);
   if (countFn) return countFn(resourceKey);
-  const listFn = host.persistence.listExecutionResourceLeases?.bind(host.persistence);
-  if (!listFn) return undefined;
   const nowIso = new Date().toISOString();
-  return listFn().filter((lease) => (
+  return listFn?.().filter((lease) => (
     lease.resourceKey === resourceKey
     && (!lease.leaseExpiresAt || lease.leaseExpiresAt > nowIso)
-  )).length;
+  )).length ?? 0;
 }
 
 function poolMemberLoad(host: TaskRunnerPoolHost, poolId: string, member: ExecutionPoolMember): number {
@@ -357,13 +361,15 @@ export function acquirePoolSelectionLease(host: TaskRunnerPoolHost, task: TaskSt
     host.persistence.renewExecutionResourceLease?.(selection.leaseResourceKey, selection.leaseHolderId);
     return true;
   }
+  const claimLease = host.persistence.claimExecutionResourceLease?.bind(host.persistence);
+  if (!claimLease) return true;
   const target = host.getRemoteTargets()[selection.member.id];
   if (!target) return true;
   const pool = host.getExecutionPools()[selection.poolId];
   const maxHolders = pool ? poolMemberLimit(pool, selection.member) : undefined;
   const resourceKey = sshResourceKey(target);
   const holderId = leaseHolderId(host, task.id, attemptId);
-  const acquired = host.persistence.claimExecutionResourceLease?.({
+  const acquired = claimLease({
     resourceKey,
     resourceType: 'ssh',
     holderId,
@@ -375,7 +381,7 @@ export function acquirePoolSelectionLease(host: TaskRunnerPoolHost, task: TaskSt
       runnerInstanceId: host.runnerInstanceId,
       pid: process.pid,
     },
-  }) ?? true;
+  });
   if (!acquired) {
     host.persistence.logEvent?.(task.id, 'task.executor.deferred', {
       reason: 'ssh-resource-lease-held',
@@ -448,7 +454,7 @@ function executorSelectionReason(
         poolMemberId: poolSelection.member.id,
       };
     }
-    if ((task.config as { poolMemberId?: string }).poolMemberId) {
+    if (task.config.poolMemberId) {
       return { type: 'explicitPoolMemberId' };
     }
     if (task.config.poolId) {
@@ -457,13 +463,7 @@ function executorSelectionReason(
   }
 
   if (executor.type === 'worktree') {
-    if (task.config.runnerKind === 'ssh' && task.config.poolId) {
-      return { type: 'sshPoolFallbackToWorktree', poolId: task.config.poolId };
-    }
-    if (task.config.runnerKind === 'worktree') {
-      return { type: 'configuredWorktree' };
-    }
-    return { type: 'defaultWorktree' };
+    return { type: 'poolId', poolId: task.config.poolId };
   }
 
   if (executor.type === 'docker') {
@@ -475,8 +475,7 @@ function executorSelectionReason(
 
 export function selectedRemoteTargetId(host: TaskRunnerPoolHost, task: TaskState, poolSelection: PoolSelection | undefined): string | undefined {
   if (poolSelection?.member.type === 'ssh') return poolSelection.member.id;
-  return (task.config as { poolMemberId?: string }).poolMemberId
-    ?? (task.config.poolId && host.getRemoteTargets()[task.config.poolId] ? task.config.poolId : undefined);
+  return task.config.poolMemberId;
 }
 
 // ── Executor selection ───────────────────────────────────
@@ -604,12 +603,13 @@ export function selectExecutor(
   task: TaskState,
   excludedPoolMemberKeys: Set<string> = new Set(),
 ): SelectedExecutor {
+  assertResolvedTaskConfig(task.config);
   let effectiveType = task.config.isMergeNode
     ? 'merge'
     : task.config.runnerKind;
   let selectedPoolMemberId: string | undefined;
   let selectedWorktreeTargetId: string | undefined;
-  const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+  const explicitPoolMemberId = task.config.poolMemberId;
   let resolvedExecution: ResolvedExecutionSelection = {
     executionAgent: host.resolveExecutionAgent(task),
     executionModel: host.resolveExecutionModel(task),
@@ -636,51 +636,51 @@ export function selectExecutor(
     return { executor: scratch, resolvedExecution, selectedPoolMemberId: undefined };
   }
 
-  if (task.config.poolId && explicitPoolMemberId) {
+  if ((task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh') && explicitPoolMemberId) {
     const pool = host.getExecutionPools()[task.config.poolId];
+    if (!pool) {
+      throw new Error(`Task ${task.id} references missing execution pool "${task.config.poolId}"`);
+    }
     const member = pool?.members.find((candidate) => candidate.id === explicitPoolMemberId);
-    if (pool && member) {
-      if (
-        excludedPoolMemberKeys.has(poolMemberKey(member))
-        || !poolMemberHasCapacity(host, task.config.poolId, pool, member)
-        || !reservePoolMemberSelection(host, task, task.config.poolId, pool, member, resolvedExecution)
-      ) {
-        throw poolCapacityError(host, task, task.config.poolId, pool, excludedPoolMemberKeys);
-      }
-      effectiveType = member.type;
-      selectedPoolMemberId = member.id;
-      selectedWorktreeTargetId = member.type === 'worktree' ? member.id : undefined;
+    if (!member) {
+      throw new Error(`Task ${task.id} references poolMemberId="${explicitPoolMemberId}" outside execution pool "${task.config.poolId}"`);
     }
-  } else if (task.config.poolId) {
+    if (
+      excludedPoolMemberKeys.has(poolMemberKey(member))
+      || !poolMemberHasCapacity(host, task.config.poolId, pool, member)
+      || !reservePoolMemberSelection(host, task, task.config.poolId, pool, member, resolvedExecution)
+    ) {
+      throw poolCapacityError(host, task, task.config.poolId, pool, excludedPoolMemberKeys);
+    }
+    effectiveType = member.type;
+    selectedPoolMemberId = member.id;
+    selectedWorktreeTargetId = member.type === 'worktree' && member.id !== BUILT_IN_LOCAL_EXECUTION_POOL_ID
+      ? member.id
+      : undefined;
+  } else if (task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh') {
     const pool = host.getExecutionPools()[task.config.poolId];
-    if (pool) {
-      const attempted = new Set(excludedPoolMemberKeys);
-      let reserved: PoolSelection | undefined;
-      while (true) {
-        const member = selectPoolMember(host, task.config.poolId, pool, attempted);
-        if (!member) break;
-        reserved = reservePoolMemberSelection(host, task, task.config.poolId, pool, member, resolvedExecution);
-        if (reserved) {
-          effectiveType = member.type;
-          selectedPoolMemberId = member.id;
-          selectedWorktreeTargetId = member.type === 'worktree' ? member.id : undefined;
-          break;
-        }
-        attempted.add(poolMemberKey(member));
-      }
-      if (!reserved) {
-        throw poolCapacityError(host, task, task.config.poolId, pool, attempted);
-      }
+    if (!pool) {
+      throw new Error(`Task ${task.id} references missing execution pool "${task.config.poolId}"`);
     }
-  }
-  if (
-    effectiveType === 'ssh'
-    && task.config.poolId
-    && !selectedPoolMemberId
-    && !explicitPoolMemberId
-    && !host.getRemoteTargets()[task.config.poolId]
-  ) {
-    effectiveType = 'worktree';
+    const attempted = new Set(excludedPoolMemberKeys);
+    let reserved: PoolSelection | undefined;
+    while (true) {
+      const member = selectPoolMember(host, task.config.poolId, pool, attempted);
+      if (!member) break;
+      reserved = reservePoolMemberSelection(host, task, task.config.poolId, pool, member, resolvedExecution);
+      if (reserved) {
+        effectiveType = member.type;
+        selectedPoolMemberId = member.id;
+        selectedWorktreeTargetId = member.type === 'worktree' && member.id !== BUILT_IN_LOCAL_EXECUTION_POOL_ID
+          ? member.id
+          : undefined;
+        break;
+      }
+      attempted.add(poolMemberKey(member));
+    }
+    if (!reserved) {
+      throw poolCapacityError(host, task, task.config.poolId, pool, attempted);
+    }
   }
 
   if (effectiveType) {
@@ -759,8 +759,7 @@ export function selectExecutor(
       const remoteTargets = host.getRemoteTargets();
       const targetId =
         selectedPoolMemberId
-        ?? (task.config as { poolMemberId?: string }).poolMemberId
-        ?? (task.config.poolId && remoteTargets[task.config.poolId] ? task.config.poolId : undefined);
+        ?? task.config.poolMemberId;
       if (!targetId) {
         throw new Error(`Task ${task.id} has runnerKind=ssh but no poolMemberId`);
       }
