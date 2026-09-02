@@ -132,8 +132,7 @@ describe('task reset policy', () => {
     expect(patchKeys).not.toContain('fixedIntegrationSha');
   });
 
-  // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-  it.fails('keeps retryWorkflow work context while clearing workflow retry failure state', () => {
+  it('keeps retryWorkflow work context while clearing workflow retry failure state', () => {
     const patch = buildTaskResetExecutionPatch('retryWorkflow');
     const patchKeys = Object.keys(patch);
 
