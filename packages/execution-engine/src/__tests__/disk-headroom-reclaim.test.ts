@@ -379,6 +379,7 @@ describe('computeProtectedLocalPaths', () => {
           makeTask({ id: 'wf-1/running', status: 'running', execution: { workspacePath: '/home/u/.invoker/worktrees/running' } }),
           makeTask({ id: 'wf-1/completed', status: 'completed', execution: { workspacePath: '/home/u/.invoker/worktrees/completed' } }),
           makeTask({ id: 'wf-1/closed', status: 'closed', execution: { workspacePath: '/home/u/.invoker/worktrees/closed' } }),
+          makeTask({ id: 'wf-1/skipped', status: 'skipped', execution: { workspacePath: '/home/u/.invoker/worktrees/skipped' } }),
           makeTask({ id: 'wf-1/stale', status: 'stale', execution: { workspacePath: '/home/u/.invoker/worktrees/stale' } }),
           makeTask({ id: 'wf-1/no-path', status: 'pending', execution: {} }),
         ],
@@ -389,6 +390,7 @@ describe('computeProtectedLocalPaths', () => {
     expect(protectedPaths.has('/home/u/.invoker/worktrees/running')).toBe(true);
     expect(protectedPaths.has('/home/u/.invoker/worktrees/completed')).toBe(false);
     expect(protectedPaths.has('/home/u/.invoker/worktrees/closed')).toBe(false);
+    expect(protectedPaths.has('/home/u/.invoker/worktrees/skipped')).toBe(false);
     expect(protectedPaths.has('/home/u/.invoker/worktrees/stale')).toBe(false);
     expect(protectedPaths.size).toBe(1);
   });

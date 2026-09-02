@@ -319,7 +319,7 @@ export interface DiskHeadroomWorkerStore {
   loadTasks(workflowId: string): TaskState[];
 }
 
-export const DISK_HEADROOM_TERMINAL_TASK_STATUSES = ['completed', 'closed', 'stale'] as const;
+export const DISK_HEADROOM_TERMINAL_TASK_STATUSES = ['completed', 'closed', 'skipped', 'stale'] as const;
 
 const TERMINAL_TASK_STATUS_SET = new Set<string>(DISK_HEADROOM_TERMINAL_TASK_STATUSES);
 
