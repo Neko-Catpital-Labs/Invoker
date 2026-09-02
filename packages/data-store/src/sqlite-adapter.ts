@@ -36,7 +36,7 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions, TaskFilterNode } from '@invoker/contracts';
 import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
@@ -73,11 +73,13 @@ import type {
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
 import {
+  mapRowToTask,
   mapRowToTaskLaunchDispatch,
   mapRowToWorkflowMutationIntent,
   mapRowToWorkflowMutationLease,
   mapRowToWorkerAction,
 } from './sqlite-row-mappers.js';
+import { compileTaskFilter } from './task-filter-sql.js';
 import {
   taskOutputFilePath,
   taskSpoolFilePath,
@@ -1245,6 +1247,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   // ── Tasks ─────────────────────────────────────────────
+
+  queryTasksByFilter(filter: TaskFilterNode, opts: { limit?: number; offset?: number } = {}): TaskState[] {
+    const compiled = compileTaskFilter(filter);
+    const limit = Math.min(500, Math.max(0, Math.floor(opts.limit ?? 100)));
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    const rows = this.queryAll(
+      `SELECT t.* FROM tasks t
+       JOIN workflows w ON w.id = t.workflow_id
+       WHERE w.deleted_at IS NULL AND (${compiled.where})
+       ORDER BY t.created_at ASC
+       LIMIT ? OFFSET ?`,
+      [...compiled.params, limit, offset],
+    );
+    return rows.map(mapRowToTask);
+  }
 
   saveTask(workflowId: string, task: TaskState): void {
     this.taskAttemptRepo.saveTask(workflowId, task);
