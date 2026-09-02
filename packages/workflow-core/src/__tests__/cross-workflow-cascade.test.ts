@@ -21,7 +21,7 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
           orchestrator.cancelTask(id);
           return;
         }
-        orchestrator.cancelWorkflow(id, { detachDependents: false });
+        orchestrator.cancelWorkflow(id, { cascadeDependents: false });
       } catch (e) {
         // Already-terminal targets have nothing to cancel; the rest
         // of the pipeline still runs.
