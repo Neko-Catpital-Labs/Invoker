@@ -54,6 +54,20 @@ tasks:
     dependencies: [first]
     command: echo second`;
 
+function validPlanForRepo(repoUrl: string): string {
+  return `Here is the plan.
+
+\`\`\`yaml
+name: Repository-bound plan
+repoUrl: ${repoUrl}
+onFinish: none
+tasks:
+  - id: preserve-binding
+    description: Preserve the selected repository binding
+    command: pnpm test
+\`\`\``;
+}
+
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 const PLAN_DRAFT_PLACEHOLDER = '_(Plan drafted — see the review card for the full plan.)_';
 const REDACTED_VALID_PLAN_REPLY = `Here is the plan.\n\n${PLAN_DRAFT_PLACEHOLDER}`;
@@ -450,6 +464,84 @@ describe('planning chat', () => {
     });
     expect(result.ok && result.reply).not.toContain('```yaml');
     expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(REDACTED_VALID_PLAN_REPLY);
+  });
+
+  it.fails.each([
+    {
+      name: 'trailing slash and optional .git',
+      selectedRepo: 'https://github.com/acme/widgets/',
+      draftedRepo: 'https://github.com/acme/widgets.git',
+    },
+    {
+      name: 'GitHub SSH and HTTPS spellings',
+      selectedRepo: 'git@github.com:acme/widgets.git',
+      draftedRepo: 'https://github.com/acme/widgets',
+    },
+  ])('preserves the selected repository across $name', async ({ selectedRepo, draftedRepo }) => {
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: `equivalent-repo-${sessions.size}`,
+      title: 'Equivalent repository spelling',
+      repoUrl: selectedRepo,
+      baseBranch: 'main',
+    });
+    sessions.set(session.id, session);
+    const plannerReplyOverride = vi.fn().mockResolvedValue(validPlanForRepo(draftedRepo));
+
+    const result = await sendPlanningChatMessage({
+      sessionId: session.id,
+      message: 'draft the full plan',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      draftPlanAvailable: true,
+      draftPlanText: expect.stringContaining(`repoUrl: ${draftedRepo}`),
+    });
+    expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
+  });
+
+  it.fails('keeps the correction path for a genuinely different repository', async () => {
+    const selectedRepo = 'https://github.com/acme/widgets/';
+    const draftedRepo = 'git@github.com:other/widgets.git';
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'different-repository',
+      title: 'Different repository',
+      repoUrl: selectedRepo,
+      baseBranch: 'main',
+    });
+    sessions.set(session.id, session);
+    const plannerReplyOverride = vi.fn()
+      .mockResolvedValueOnce(validPlanForRepo(draftedRepo))
+      .mockResolvedValueOnce(validPlanForRepo('https://github.com/acme/widgets.git'));
+
+    const result = await sendPlanningChatMessage({
+      sessionId: session.id,
+      message: 'draft the full plan',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride,
+    });
+
+    expect(plannerReplyOverride).toHaveBeenCalledTimes(2);
+    expect(plannerReplyOverride.mock.calls[1]?.[0]).toContain(
+      `Draft rejected because it silently changed repositories to ${draftedRepo}.`,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      draftPlanAvailable: true,
+      draftPlanText: expect.stringContaining('repoUrl: https://github.com/acme/widgets.git'),
+    });
   });
 
   it('keeps unauthorized YAML from becoming draft-ready and refuses submit', async () => {
