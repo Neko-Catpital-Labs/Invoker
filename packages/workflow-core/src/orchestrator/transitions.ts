@@ -210,10 +210,7 @@ export function finalizeFailedTaskImpl(
     throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `finalizeFailedTask: task ${taskId} not found in graph`);
   }
 
-  const failureClass = executionFields.failureClass
-    ?? (existing.config.runnerKind === 'ssh'
-      ? FailureClassifier.classifyError(executionFields.error)
-      : undefined);
+  const failureClass = executionFields.failureClass ?? FailureClassifier.classifyError(executionFields.error);
 
   const changes: TaskStateChanges = {
     status: 'failed',
