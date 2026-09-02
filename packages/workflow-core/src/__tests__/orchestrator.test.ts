@@ -2504,8 +2504,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t3')!.status).toBe('running');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('failed: marks task failed, dependents stay pending', () => {
+    it('failed: marks task failed, dependents stay pending', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 't1',
@@ -2542,8 +2541,7 @@ describe('Orchestrator', () => {
       expect(persisted!.task.status).toBe('completed');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('dependents remain pending in DB after failure', () => {
+    it('dependents remain pending in DB after failure', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
@@ -2748,7 +2746,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('a2')!.status).toBe('running');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
+    // TODO(skipped-status): approve() does not yet resurrect skipped dependents the way retryTask() does.
     it.fails('starts dependents after approve following a prior failure', async () => {
       orchestrator.loadPlan({
         name: 'approve-unblock-test',
@@ -3716,8 +3714,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(`${expCon}-exp-fix-alternative`)).toBeUndefined();
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('non-autoFix failed task still fails normally', () => {
+    it('non-autoFix failed task still fails normally', () => {
       orchestrator.loadPlan({
         name: 'normal-fail-test',
         tasks: [
@@ -5027,8 +5024,7 @@ describe('Orchestrator', () => {
       logSpy.mockRestore();
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('fan-in dependents stay pending when multiple roots fail', () => {
+    it('fan-in dependents stay pending when multiple roots fail', () => {
       orchestrator.loadPlan({
         name: 'overwrite-test',
         tasks: [
@@ -5076,8 +5072,7 @@ describe('Orchestrator', () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('restarting one failed root leaves fan-in pending when other root still failed', () => {
+    it('restarting one failed root leaves fan-in pending when other root still failed', () => {
       orchestrator.loadPlan({
         name: 'premature-unblock-test',
         tasks: [
@@ -5103,8 +5098,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('restarting one failed root in fan-in does not affect pending dependent', () => {
+    it('restarting one failed root in fan-in does not affect pending dependent', () => {
       orchestrator.loadPlan({
         name: 'mismatch-test',
         tasks: [
@@ -5156,8 +5150,7 @@ describe('Orchestrator', () => {
 
     // ── Integration: full fan-in multi-failure restart cycle ──
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('integration: three-root fan-in — all fail, restart all, complete all → D starts', () => {
+    it('integration: three-root fan-in — all fail, restart all, complete all → D starts', () => {
       orchestrator.loadPlan({
         name: 'fan-in-integration',
         tasks: [
@@ -5233,8 +5226,7 @@ describe('Orchestrator', () => {
       warnSpy.mockRestore();
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('handleCompleted starts pending dependents after A fails then completes', () => {
+    it('handleCompleted starts pending dependents after A fails then completes', () => {
       orchestrator.loadPlan({
         name: 'unblock-on-complete-test',
         tasks: [
@@ -5266,8 +5258,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('B')!.status).toBe('running');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('handleCompleted starts B after A fails then completes; C stays skipped', () => {
+    it('handleCompleted starts B after A fails then completes; C stays skipped', () => {
       orchestrator.loadPlan({
         name: 'multi-level-unblock-test',
         tasks: [
@@ -5555,8 +5546,7 @@ describe('Orchestrator', () => {
       warnSpy.mockRestore();
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('restartTask from pending status stays pending when deps not met', () => {
+    it('restartTask from pending status stays pending when deps not met', () => {
       orchestrator.loadPlan({
         name: 'pending-restart-test',
         tasks: [
@@ -5688,8 +5678,7 @@ describe('Orchestrator', () => {
       expect(task.execution.workspacePath).toBe('/tmp/workspace');
     });
 
-    // TODO(skipped-status): expects the failed-task cascade from the next slice; drop `.fails` there.
-    it.fails('fan-in C stays pending when only one failed root is restarted', () => {
+    it('fan-in C stays pending when only one failed root is restarted', () => {
       orchestrator.loadPlan({
         name: 'pending-fan-in-test',
         tasks: [
