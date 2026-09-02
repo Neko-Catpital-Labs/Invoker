@@ -31,6 +31,7 @@ const earlyHeadlessMode = process.argv.includes('--headless')
   || process.argv.includes('--install-skills')
   || process.argv.slice(2).includes('install-skills');
 const sourceDevelopmentProfile = process.env.INVOKER_DEVELOPMENT_PROFILE === '1';
+const suppressWorkerAutoStart = sourceDevelopmentProfile && process.env.NODE_ENV !== 'test';
 
 configureEarlyElectronApp({
   app,
@@ -2216,7 +2217,7 @@ function startHeadlessMode(): void {
               },
             },
           ),
-          autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+          autoStartKinds: suppressWorkerAutoStart ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
@@ -2280,7 +2281,7 @@ function startHeadlessMode(): void {
             logger.info('Web surface ready, proceeding with workers/dispatcher/recovery', { module: 'headless' });
           }
         }
-        if (!sourceDevelopmentProfile) workerRuntimeController.startAutoStartedWorkers();
+        if (!suppressWorkerAutoStart) workerRuntimeController.startAutoStartedWorkers();
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
           standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
@@ -2850,7 +2851,7 @@ startMainProcessBootstrap({
     recordStartupMark('deferred-startup.begin');
     if (ownerMode && workerRuntimeController) {
       setTimeout(() => {
-        if (!sourceDevelopmentProfile) workerRuntimeController?.startAutoStartedWorkers();
+        if (!suppressWorkerAutoStart) workerRuntimeController?.startAutoStartedWorkers();
         recordStartupMark('workers.auto-started');
       }, 0);
     }
@@ -3526,7 +3527,7 @@ startMainProcessBootstrap({
             },
           },
         ),
-        autoStartKinds: sourceDevelopmentProfile ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
+        autoStartKinds: suppressWorkerAutoStart ? [] : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
