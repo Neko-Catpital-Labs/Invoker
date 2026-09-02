@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import {
   buildWorktreeCorruptRepairScript,
   deriveCorruptWorktreeAdminPathFromWorkspace,
@@ -25,15 +25,18 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
+  const inputConfig = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+    ? { ...overrides.config, poolId: 'ssh-fixture' }
+    : overrides.config;
   return {
     id: overrides.id ?? 'wf-1/test-execution-engine',
     description: 'repro task',
     status: overrides.status ?? 'pending',
     dependencies: [],
     createdAt: new Date(),
-    config: { ...overrides.config },
+    config: resolveTaskConfig(inputConfig ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 describe('SSH worktree metadata repro', () => {
@@ -126,12 +129,15 @@ describe('SSH worktree metadata repro', () => {
         getAll: () => [failingExecutor],
       } as any,
       cwd: '/tmp',
+      executionPoolsProvider: () => ({
+        'ssh-fixture': { members: [{ type: 'ssh' as const, id: 'remote-1' }] },
+      }),
     });
 
     await runner.executeTask(task);
 
     expect(updateSpy).toHaveBeenCalledWith('wf-1/test-execution-engine', {
-      config: { runnerKind: 'ssh' },
+      config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
       execution: {
         workspacePath: ownerPath,
         branch,
@@ -216,6 +222,9 @@ describe('SSH worktree metadata repro', () => {
       } as any,
       cwd: '/tmp',
       callbacks: { onLaunchFailed },
+      executionPoolsProvider: () => ({
+        'ssh-fixture': { members: [{ type: 'ssh' as const, id: 'remote-1' }] },
+      }),
     });
 
     await runner.executeTask(staleLaunchTask);

@@ -1185,21 +1185,23 @@ export async function executeMergeNodeImpl(
 ): Promise<void> {
   const result = await runMergeGateActionImpl(host, task);
   const { response } = result;
-  const legacyConfig = {
+  const mergeConfig: TaskStateChanges['config'] = {
     ...(result.taskChanges.config ?? {}),
-    runnerKind: 'worktree',
-  } as TaskStateChanges['config'];
-  const legacyChanges: TaskStateChanges = {
+    runnerKind: 'merge',
+    poolId: undefined,
+    poolMemberId: undefined,
+  };
+  const mergeChanges: TaskStateChanges = {
     status: result.taskChanges.status,
     dependencies: result.taskChanges.dependencies,
     execution: result.taskChanges.execution,
-    config: legacyConfig,
+    config: mergeConfig,
   };
 
-  updateMergeGateMetadataIfCurrent(host, task.id, legacyChanges, captureMergeGateLineage(task));
+  updateMergeGateMetadataIfCurrent(host, task.id, mergeChanges, captureMergeGateLineage(task));
 
   if (response.status === 'review_ready') {
-    setMergeGateReviewReady(host, task.id, legacyChanges, {
+    setMergeGateReviewReady(host, task.id, mergeChanges, {
       selectedAttemptId: task.execution.selectedAttemptId,
       generation: task.execution.generation ?? 0,
     });
