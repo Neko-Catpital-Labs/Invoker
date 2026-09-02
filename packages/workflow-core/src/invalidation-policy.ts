@@ -205,6 +205,7 @@ function defaultRetryStatuses(): ReadonlySet<TaskState['status']> {
     'fixing_with_ai',
     'awaiting_approval',
     'review_ready',
+    'skipped',
   ]);
 }
 
