@@ -9,7 +9,13 @@ const localPath = process.env.INVOKER_REPO_CONFIG_PATH?.trim() || join(homedir()
 const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 const backupSuffix = `.bak.default-execution-harness-${timestamp}`;
 
-function migrateJson(text, label) {
+export function migrateJson(text, label, { consumerSupportsHarness = false } = {}) {
+  if (!consumerSupportsHarness) {
+    throw new Error(
+      'Refusing defaultExecutionHarness migration: installed consumer capability was not proven. ' +
+      'Re-run after deploying a consumer that supports defaultExecutionHarness with --consumer-supports-harness.',
+    );
+  }
   const config = JSON.parse(text);
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error(`${label} must contain a JSON object`);
@@ -21,13 +27,13 @@ function migrateJson(text, label) {
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
-function migrateLocal() {
+function migrateLocal(consumerSupportsHarness) {
   if (!existsSync(localPath)) {
     console.log(`LOCAL skipped missing ${localPath}`);
     return null;
   }
   const original = readFileSync(localPath, 'utf8');
-  const migrated = migrateJson(original, localPath);
+  const migrated = migrateJson(original, localPath, { consumerSupportsHarness });
   if (migrated === original) {
     console.log(`LOCAL unchanged ${localPath}`);
     return null;
@@ -63,28 +69,36 @@ NODE
 `;
 }
 
-const local = migrateLocal();
-if (process.argv.includes('--local-only')) process.exit(0);
+export function runMigration(argv = process.argv.slice(2)) {
+  const consumerSupportsHarness = argv.includes('--consumer-supports-harness');
+  if (argv.includes('--local-only')) {
+    migrateLocal(consumerSupportsHarness);
+    return;
+  }
 
-const localConfig = JSON.parse(readFileSync(localPath, 'utf8'));
-for (const [id, target] of Object.entries(localConfig.remoteTargets ?? {})) {
-  if (!id.includes('digital_ocean') || !target?.host || !target?.user || !target?.sshKeyPath) continue;
-  const remoteConfigPath = `${target.remoteInvokerHome || '~/.invoker'}/config.json`;
-  const expandedPath = remoteConfigPath.startsWith('~/') ? `$HOME/${remoteConfigPath.slice(2)}` : remoteConfigPath;
-  const command = remoteScript(expandedPath, backupSuffix);
-  try {
-    const output = execFileSync('ssh', [
-      '-i', target.sshKeyPath,
-      '-p', String(target.port || 22),
-      '-o', 'ConnectTimeout=15',
-      '-o', 'BatchMode=yes',
-      `${target.user}@${target.host}`,
-      'bash', '-s', '--', expandedPath,
-    ], { input: command, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-    process.stdout.write(`${id} ${output}`);
-  } catch (error) {
-    const detail = error.stderr?.toString().trim() || error.message;
-    console.error(`${id} FAILED ${detail}`);
-    process.exitCode = 1;
+  migrateLocal(consumerSupportsHarness);
+  const localConfig = JSON.parse(readFileSync(localPath, 'utf8'));
+  for (const [id, target] of Object.entries(localConfig.remoteTargets ?? {})) {
+    if (!id.includes('digital_ocean') || !target?.host || !target?.user || !target?.sshKeyPath) continue;
+    const remoteConfigPath = `${target.remoteInvokerHome || '~/.invoker'}/config.json`;
+    const expandedPath = remoteConfigPath.startsWith('~/') ? `$HOME/${remoteConfigPath.slice(2)}` : remoteConfigPath;
+    const command = remoteScript(expandedPath, backupSuffix);
+    try {
+      const output = execFileSync('ssh', [
+        '-i', target.sshKeyPath,
+        '-p', String(target.port || 22),
+        '-o', 'ConnectTimeout=15',
+        '-o', 'BatchMode=yes',
+        `${target.user}@${target.host}`,
+        'bash', '-s', '--', expandedPath,
+      ], { input: command, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+      process.stdout.write(`${id} ${output}`);
+    } catch (error) {
+      const detail = error.stderr?.toString().trim() || error.message;
+      console.error(`${id} FAILED ${detail}`);
+      process.exitCode = 1;
+    }
   }
 }
+
+if (import.meta.url === `file://${process.argv[1]}`) runMigration();
