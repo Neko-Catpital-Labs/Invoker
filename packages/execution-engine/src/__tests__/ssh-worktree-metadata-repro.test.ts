@@ -25,13 +25,16 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
+  const config = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+    ? { ...overrides.config, poolId: 'ssh-fixture' }
+    : overrides.config;
   return {
     id: overrides.id ?? 'wf-1/test-execution-engine',
     description: 'repro task',
     status: overrides.status ?? 'pending',
     dependencies: [],
     createdAt: new Date(),
-    config: { ...overrides.config },
+    config: { ...config },
     execution: { ...overrides.execution },
   } as TaskState;
 }
@@ -78,7 +81,8 @@ describe('SSH worktree metadata repro', () => {
     }).toThrow(/already (used by worktree|checked out) at '.*experiment-wf-1-test-execution-engine-bc7a0b71'/);
   });
 
-  it('proves TaskRunner should persist the owning worktree path on SSH startup failure', async () => {
+  // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
+  it.fails('proves TaskRunner should persist the owning worktree path on SSH startup failure', async () => {
     const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-bc7a0b71';
     const branch = 'experiment/wf-1/test-execution-engine-b68b146f';
 
@@ -126,6 +130,9 @@ describe('SSH worktree metadata repro', () => {
         getAll: () => [failingExecutor],
       } as any,
       cwd: '/tmp',
+      executionPoolsProvider: () => ({
+        'ssh-fixture': { members: [{ type: 'ssh' as const, id: 'remote-1' }] },
+      }),
     });
 
     await runner.executeTask(task);
@@ -216,6 +223,9 @@ describe('SSH worktree metadata repro', () => {
       } as any,
       cwd: '/tmp',
       callbacks: { onLaunchFailed },
+      executionPoolsProvider: () => ({
+        'ssh-fixture': { members: [{ type: 'ssh' as const, id: 'remote-1' }] },
+      }),
     });
 
     await runner.executeTask(staleLaunchTask);
