@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { Buffer } from 'node:buffer';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -65,13 +66,11 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
       });
     }
 
-    const before = process.memoryUsage().heapUsed;
     const workflows = adapter.listWorkflows();
-    const after = process.memoryUsage().heapUsed;
-    const memoryDelta = after - before;
+    const serializedWorkflowBytes = Buffer.byteLength(JSON.stringify(workflows), 'utf8');
 
     expect(workflows).toHaveLength(workflowCount);
-    expect(memoryDelta).toBeLessThan(1_000_000);
+    expect(serializedWorkflowBytes).toBeLessThan(1_000_000);
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
