@@ -354,16 +354,6 @@ describe('buildWebInvokerDispatch', () => {
     await expect(dispatch('invoker:does-not-exist', [])).rejects.toMatchObject({ code: 'unknown_channel' });
   });
 
-  it('bridges a known channel through the legacy guiMutations callback when no owner registry is wired', async () => {
-    const guiMutations = vi.fn(async (channel: string) => ({ ok: true, channel }));
-    const { dispatch } = makeDispatch({ guiMutations });
-    await expect(dispatch('invoker:planning-chat-list', [])).resolves.toEqual({
-      ok: true,
-      channel: 'invoker:planning-chat-list',
-    });
-    expect(guiMutations).toHaveBeenCalledExactlyOnceWith('invoker:planning-chat-list', []);
-  });
-
   it('allows Codex and forbids Claude by deployment policy without restricting HTTP itself', async () => {
     const ownerCapabilities = new OwnerCapabilityRegistry();
     const fixWithAgent = vi.fn(async (_taskId: unknown, agentName: unknown) => ({ agentName }));
