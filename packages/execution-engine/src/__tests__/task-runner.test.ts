@@ -8,7 +8,7 @@ import { assertCompletedDependencyHasBranch } from '../task-runner-prepare.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import { WorktreeExecutor } from '../worktree-executor.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
@@ -25,15 +25,18 @@ function makeTask(overrides: {
   config?: Partial<TaskState['config']>;
   execution?: Partial<TaskState['execution']>;
 } = {}): TaskState {
+  const inputConfig = overrides.config?.runnerKind === 'ssh' && !overrides.config.poolId
+    ? { ...overrides.config, poolId: 'ssh-fixture' }
+    : overrides.config;
   return {
     id: overrides.id ?? 'test',
     description: overrides.description ?? 'Test task',
     status: overrides.status ?? 'pending',
     dependencies: overrides.dependencies ?? [],
     createdAt: overrides.createdAt ?? new Date(),
-    config: { ...overrides.config },
+    config: resolveTaskConfig(inputConfig ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskRunner {
@@ -1211,6 +1214,9 @@ describe('TaskRunner', () => {
         persistence: { updateTask: vi.fn() } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
         callbacks: { onComplete },
       });
 
@@ -1362,8 +1368,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('persists startup metadata from executor errors before failing task', async () => {
+    it('persists startup metadata from executor errors before failing task', async () => {
       const handleWorkerResponse = vi.fn();
       const updateTask = vi.fn();
       const orchestrator = {
@@ -1391,12 +1396,15 @@ describe('TaskRunner', () => {
         persistence: { updateTask } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       const task = makeTask({
         id: 'failing-start',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
       });
       await executor.executeTask(task);
 
@@ -1454,13 +1462,16 @@ describe('TaskRunner', () => {
         executorRegistry: registry as any,
         cwd: '/tmp',
         callbacks: { onLaunchFailed },
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       // Task was launched with attempt-1 but orchestrator now shows attempt-2
       const task = makeTask({
         id: 'stale-1',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { selectedAttemptId: 'attempt-1', generation: 0 },
       });
       await runner.executeTask(task);
@@ -1516,7 +1527,7 @@ describe('TaskRunner', () => {
       const task = makeTask({
         id: 'stale-gen',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { generation: 1 },
       });
       await runner.executeTask(task);
@@ -1532,8 +1543,7 @@ describe('TaskRunner', () => {
       expect(onLaunchFailed).not.toHaveBeenCalled();
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('still persists metadata and emits response when lineage is current', async () => {
+    it('still persists metadata and emits response when lineage is current', async () => {
       const handleWorkerResponse = vi.fn();
       const updateTask = vi.fn();
       // Orchestrator returns a task with matching lineage
@@ -1567,12 +1577,15 @@ describe('TaskRunner', () => {
         executorRegistry: registry as any,
         cwd: '/tmp',
         callbacks: { onLaunchFailed },
+        executionPoolsProvider: () => ({
+          'ssh-fixture': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       const task = makeTask({
         id: 'current-1',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { selectedAttemptId: 'attempt-1', generation: 0 },
       });
       await runner.executeTask(task);
@@ -1638,7 +1651,7 @@ describe('TaskRunner', () => {
       const task = makeTask({
         id: 'inner-stale',
         status: 'running',
-        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        config: { command: 'echo hi', runnerKind: 'ssh' },
         execution: { selectedAttemptId: 'attempt-old', generation: 0 },
       });
       await runner.executeTask(task);
@@ -3071,8 +3084,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('recreates feature branch on retry after previous failed attempt', async () => {
+    it('recreates feature branch on retry after previous failed attempt', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -3490,8 +3502,7 @@ describe('TaskRunner', () => {
   });
 
   describe('manual merge mode', () => {
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('executeMergeNode skips final merge when mergeMode=manual', async () => {
+    it('executeMergeNode skips final merge when mergeMode=manual', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -3647,8 +3658,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('executeMergeNode skips squash-merge and creates PR when mergeMode=external_review', async () => {
+    it('executeMergeNode skips squash-merge and creates PR when mergeMode=external_review', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -4007,8 +4017,7 @@ console.log(JSON.stringify(out));
       expect(providerBody).toContain('![after](https://img.example.test/after--merge-gate-no-inline-approve.png)');
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('executeMergeNode goes to review_ready when mergeMode=manual and onFinish=none', async () => {
+    it('executeMergeNode goes to review_ready when mergeMode=manual and onFinish=none', async () => {
       const orchestrator = {
         getTask: () => null,
         getAllTasks: () => [],
@@ -4096,8 +4105,7 @@ console.log(JSON.stringify(out));
       expect(orchestrator.setTaskAwaitingApproval).not.toHaveBeenCalled();
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('executeMergeNode creates PR when mergeMode=external_review and onFinish=none', async () => {
+    it('executeMergeNode creates PR when mergeMode=external_review and onFinish=none', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -4558,8 +4566,7 @@ console.log(JSON.stringify(out));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    // TODO(#11576): drop .fails once the persisted executor-pool invariant lands.
-    it.fails('executeMergeNode goes to review_ready when mergeMode=manual and no featureBranch', async () => {
+    it('executeMergeNode goes to review_ready when mergeMode=manual and no featureBranch', async () => {
       const orchestrator = {
         getTask: () => null,
         getAllTasks: () => [],

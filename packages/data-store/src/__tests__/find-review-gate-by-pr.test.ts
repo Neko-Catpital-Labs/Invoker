@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow } from '../adapter.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 
 /**
  * findReviewGateByPr maps a published GitHub PR back to its Invoker workflow via
@@ -43,7 +43,7 @@ describe('SQLiteAdapter.findReviewGateByPr', () => {
       status: overrides.status ?? 'completed',
       dependencies: [],
       createdAt: new Date(),
-      config: { workflowId, isMergeNode: true },
+      config: resolveTaskConfig({ workflowId, isMergeNode: true }),
       execution: {
         reviewId: overrides.reviewId,
         reviewUrl: overrides.reviewUrl,
@@ -96,7 +96,7 @@ describe('SQLiteAdapter.findReviewGateByPr', () => {
     adapter.saveWorkflow(makeWorkflow('wf-nonmerge'));
     const task = makeMergeTask('wf-nonmerge', { reviewId: '555' });
     task.id = 'task-regular';
-    task.config = { workflowId: 'wf-nonmerge', isMergeNode: false };
+    task.config = resolveTaskConfig({ workflowId: 'wf-nonmerge', isMergeNode: false });
     adapter.saveTask('wf-nonmerge', task);
 
     expect(adapter.findReviewGateByPr('555')).toBeUndefined();
