@@ -254,8 +254,7 @@ export function finalizeFailedTaskImpl(
     taskMap,
     (task) =>
       task.status === 'completed' ||
-      task.status === 'stale' ||
-      task.config.isReconciliation === true,
+      task.status === 'stale',
   );
   for (const descendantId of descendantIds) {
     const dependent = host.stateGetTask(descendantId);

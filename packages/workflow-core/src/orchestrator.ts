@@ -502,7 +502,6 @@ const LIVE_TASK_STATUSES = new Set<string>([
   'awaiting_approval',
   'review_ready',
   'blocked',
-  'skipped',
 ]);
 
 /**

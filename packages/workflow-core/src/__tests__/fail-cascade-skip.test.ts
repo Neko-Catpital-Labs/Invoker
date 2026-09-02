@@ -19,6 +19,8 @@ describe('failed task cascade', () => {
         { id: 'b', description: 'B', dependencies: ['a'] },
         { id: 'c', description: 'C', dependencies: ['b'] },
         { id: 'd', description: 'D', dependencies: ['a'] },
+        { id: 'completed-child', description: 'completed child', dependencies: ['b'] },
+        { id: 'stale-child', description: 'stale child', dependencies: ['c'] },
       ],
     });
 
@@ -26,6 +28,11 @@ describe('failed task cascade', () => {
     const b = orchestrator.getTask(`${a.config.workflowId}/b`)!;
     const c = orchestrator.getTask(`${a.config.workflowId}/c`)!;
     const d = orchestrator.getTask(`${a.config.workflowId}/d`)!;
+    const completedChild = orchestrator.getTask(`${a.config.workflowId}/completed-child`)!;
+    const staleChild = orchestrator.getTask(`${a.config.workflowId}/stale-child`)!;
+    persistence.updateTask(completedChild.id, { status: 'completed' });
+    persistence.updateTask(staleChild.id, { status: 'stale' });
+    orchestrator.refreshFromDb();
     orchestrator.startExecution();
     Object.assign(d.config, { isReconciliation: true });
 
@@ -45,6 +52,8 @@ describe('failed task cascade', () => {
     expect(orchestrator.getTask(b.id)!.execution.blockedBy).toContain('task "a" failed');
     expect(orchestrator.getTask(c.id)!.execution.blockedBy).toContain('task "a" failed');
     expect(orchestrator.getTask(d.id)!.status).not.toBe('skipped');
+    expect(orchestrator.getTask(completedChild.id)!.status).toBe('completed');
+    expect(orchestrator.getTask(staleChild.id)!.status).toBe('stale');
     expect([b.id, c.id].map((id) => orchestrator.getTask(id)!.status).filter((status) =>
       status === 'running' || status === 'queued',
     )).toEqual([]);

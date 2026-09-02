@@ -117,6 +117,7 @@ describe('task reset policy', () => {
     const patchKeys = Object.keys(patch);
 
     expect(patch).toMatchObject({
+      blockedBy: undefined,
       commit: undefined,
       pendingFixError: undefined,
       launchStartedAt: undefined,
