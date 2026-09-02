@@ -77,6 +77,13 @@ describe('FailureClassifier.classifyError', () => {
     )).toBeUndefined();
   });
 
+  it('classifies transport failures after definitive infrastructure checks miss', () => {
+    expect(FailureClassifier.classifyError('SSH transport failed (exit 255): connection reset by peer.'))
+      .toBe('ssh-transport-transient');
+    expect(FailureClassifier.classifyError('SSH remote script failed (exit=1, phase=run_task)'))
+      .toBeUndefined();
+  });
+
   it('returns undefined for ordinary code failures and non-strings', () => {
     expect(FailureClassifier.classifyError('AssertionError: expected 1 to be 2')).toBeUndefined();
     expect(FailureClassifier.classifyError(undefined)).toBeUndefined();
