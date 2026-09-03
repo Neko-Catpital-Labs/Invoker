@@ -90,9 +90,9 @@ def summarize_session(path):
                     model = e.get("payload", {}).get("model", model)
                 if t == "event_msg" and e.get("payload", {}).get("type") == "token_count":
                     info = e["payload"]
-                    tu = info.get("info", {}).get("total_token_usage", {})
+                    tu = (info.get("info") or {}).get("total_token_usage") or {}
                     total_tokens = tu.get("total_tokens")
-                    rl = info.get("rate_limits", {})
+                    rl = info.get("rate_limits") or {}
                     primary = rl.get("primary") or {}
                     used_percent = primary.get("used_percent")
                     resets_at = primary.get("resets_at")
