@@ -11,6 +11,7 @@
  */
 
 import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@invoker/contracts';
+import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
 import { makeEnvelope } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Orchestrator, CommandService, TaskState } from '@invoker/workflow-core';
@@ -70,7 +71,7 @@ export interface HeadlessDeps {
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
-  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode, category?: BundledSkillCategory) => BundledSkillsStatus;
   repairReviewGateCi?: (prArg: string) => Promise<ReviewGateCiRepairCommandResult>;
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
