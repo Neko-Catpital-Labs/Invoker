@@ -1542,6 +1542,85 @@ describe('TaskRunner', () => {
     });
 
 
+    it('publishReviewStackWithMakePrSkill prefers the merge node\'s own declared agent over its upstream tasks\'', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const attempts: string[] = [];
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attempts.push('claude');
+            return {
+              cmd: 'node',
+              args: ['-e', 'var b=["## Summary","","x","","## Review Claim","","x","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","x","","## Slice Rationale","","x","","## Non-goals","- none","","## Test Plan","- [x] x","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))'],
+              sessionId: 'sess-claude',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attempts.push('codex');
+            throw new Error('codex must not be invoked when the merge node itself declares claude');
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const mergeTaskId = '__merge__wf-own-agent';
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [
+              makeTask({ id: 't1', config: { workflowId: 'wf-own-agent', executionAgent: 'codex' } }),
+              makeTask({
+                id: mergeTaskId,
+                config: { workflowId: 'wf-own-agent', isMergeNode: true, executionAgent: 'claude' },
+              }),
+            ],
+          } as any,
+          persistence: { logEvent: vi.fn() } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => (name === 'claude' ? claudeAgent : name === 'codex' ? codexAgent : undefined),
+            getOrThrow: vi.fn(),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
+          } as any,
+          cwd: '/tmp',
+        });
+
+        const result = await (executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-own-agent',
+          title: 'Stack',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: 'summary',
+          cwd: '/tmp',
+          mergeNodeTaskId: mergeTaskId,
+          expectedGeneration: 1,
+        });
+
+        expect(attempts).toEqual(['claude']);
+        expect(result.agentName).toBe('claude');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
     it('publishReviewStackWithMakePrSkill writes skill=invoker-make-pr onto merge task output', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
