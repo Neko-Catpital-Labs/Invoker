@@ -56,6 +56,7 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['check-pr-status'])).toBe(true);
     expect(isHeadlessMutatingCommand(['cancel-workflow'])).toBe(true);
     expect(isHeadlessMutatingCommand(['close-task'])).toBe(true);
+    expect(isHeadlessMutatingCommand(['reset-autofix-budget'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'prompt'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'agent'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'fix-context'])).toBe(true);

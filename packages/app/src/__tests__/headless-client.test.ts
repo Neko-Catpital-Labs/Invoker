@@ -434,6 +434,30 @@ describe('headless-client', () => {
     }));
   });
 
+  it('delegates reset-autofix-budget as a mutating command through headless.exec, honoring --no-track', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-rab', mode: 'standalone' }));
+
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['reset-autofix-budget', '--exhausted', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['reset-autofix-budget', '--exhausted'],
+      noTrack: true,
+      waitForApproval: false,
+    }));
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
   it('accepts a stale-owner FK failure for no-track recreate-task of an explicitly scoped task', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => {
