@@ -197,6 +197,7 @@ import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
 import { createEmbeddedTerminalBackend } from './embedded-terminal-backend.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from '@invoker/shell/bundled-skills';
+import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
 import {
   maybeAutoInstallCli,
   updateInvokerCli,
@@ -819,8 +820,8 @@ function getBundledSkillsStatus() {
   return resolveBundledSkillsStatus(buildBundledSkillsContext());
 }
 
-function installPackagedSkills(mode: BundledSkillsInstallMode = 'install') {
-  return installBundledSkills(buildBundledSkillsContext(), mode);
+function installPackagedSkills(mode: BundledSkillsInstallMode = 'install', category: BundledSkillCategory = 'all') {
+  return installBundledSkills(buildBundledSkillsContext(), mode, category);
 }
 
 function buildCliInstallerContext(): CliInstallerContext {
