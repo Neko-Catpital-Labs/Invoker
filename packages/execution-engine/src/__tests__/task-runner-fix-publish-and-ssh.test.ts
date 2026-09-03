@@ -1557,6 +1557,31 @@ describe('TaskRunner', () => {
       }
     });
 
+    it('resolvePrAuthoringAgentName prefers the merge node own executionAgent over an upstream task', () => {
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        dependencies: ['t1'],
+        config: { workflowId: 'wf-1', isMergeNode: true, executionAgent: 'codex' },
+      });
+      const upstreamTask = makeTask({
+        id: 't1',
+        config: { workflowId: 'wf-1', executionAgent: 'claude' },
+      });
+      const tasks = [mergeTask, upstreamTask];
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => tasks.find((task) => task.id === id),
+          getAllTasks: () => tasks,
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      expect((executor as any).resolvePrAuthoringAgentName('wf-1', '__merge__wf-1')).toBe('codex');
+      expect((executor as any).resolvePrAuthoringAgentName('wf-1')).toBe('claude');
+    });
+
     it('publishReviewStackWithMakePrSkill throws when make-pr agents cannot publish valid JSON', async () => {
       const badAgent = {
         name: 'claude',

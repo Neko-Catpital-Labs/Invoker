@@ -4418,7 +4418,7 @@ describe('Orchestrator', () => {
       expect(() => orchestrator.editTaskPool('t1', 'missing-pool')).toThrow('pool is not defined');
     });
 
-    it('rejects pool edits for merge nodes', () => {
+    it('allows pool, agent, and model edits on merge nodes', () => {
       orchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
@@ -4432,7 +4432,18 @@ describe('Orchestrator', () => {
       });
       const mergeTask = orchestrator.getAllTasks().find((candidate) => candidate.config.isMergeNode)!;
 
-      expect(() => orchestrator.editTaskPool(mergeTask.id, 'mixed-local-ssh')).toThrow('Cannot change executor pool');
+      expect(() => orchestrator.editTaskPool(mergeTask.id, 'mixed-local-ssh')).not.toThrow();
+      expect(() => orchestrator.editTaskAgent(mergeTask.id, 'codex')).not.toThrow();
+      expect(() => orchestrator.editTaskModel(mergeTask.id, 'openai/gpt-5.2')).not.toThrow();
+
+      const edited = orchestrator.getTask(mergeTask.id)!;
+      expect(edited.config.poolId).toBe('mixed-local-ssh');
+      expect(edited.config.executionAgent).toBe('codex');
+      expect(edited.config.executionModel).toBe('openai/gpt-5.2');
+      const persisted = persistence.getTaskEntry(mergeTask.id)!.task.config;
+      expect(persisted.poolId).toBe('mixed-local-ssh');
+      expect(persisted.executionAgent).toBe('codex');
+      expect(persisted.executionModel).toBe('openai/gpt-5.2');
     });
 
     it('cancels active work before retrying for a pool edit', () => {

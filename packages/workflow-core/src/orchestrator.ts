@@ -2507,7 +2507,6 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) throw new Error(`Cannot change execution model of merge node ${taskId}`);
 
     if (isActiveForInvalidation(task.status)) {
       this.cancelTask(taskId);

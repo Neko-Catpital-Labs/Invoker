@@ -146,7 +146,7 @@ export function assertResolvedTaskConfig(config: unknown): asserts config is Tas
   }
 
   if (runnerKind === 'docker' || runnerKind === 'merge' || runnerKind === 'scratch') {
-    if (poolId !== undefined || candidate.poolMemberId !== undefined) {
+    if ((poolId !== undefined && runnerKind !== 'merge') || candidate.poolMemberId !== undefined) {
       throw new Error(`Task config runnerKind=${runnerKind} cannot declare poolId or poolMemberId`);
     }
     if (runnerKind !== 'docker' && candidate.dockerImage !== undefined) {

@@ -171,7 +171,6 @@ export function editTaskPoolImpl(host: TaskEditHost, taskId: string, poolId: str
   host.refreshFromDb();
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-  if (task.config.isMergeNode) throw new Error(`Cannot change executor pool of merge node ${taskId}`);
   if (task.config.runnerKind === 'docker' || task.config.runnerKind === 'scratch') {
     throw new Error(`Cannot change executor pool of ${task.config.runnerKind} task ${taskId}`);
   }
@@ -187,11 +186,13 @@ export function editTaskPoolImpl(host: TaskEditHost, taskId: string, poolId: str
   }
 
   const poolChanges: TaskStateChanges = {
-    config: {
-      poolId,
-      runnerKind: poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh',
-      poolMemberId: undefined,
-    },
+    config: task.config.isMergeNode
+      ? { poolId, poolMemberId: undefined }
+      : {
+        poolId,
+        runnerKind: poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh',
+        poolMemberId: undefined,
+      },
   };
   const poolBefore = host.stateGetTask(taskId)!;
   const poolUpdated = host.writeAndSync(taskId, poolChanges);
@@ -206,7 +207,6 @@ export function editTaskAgentImpl(host: TaskEditHost, taskId: string, agentName:
   host.refreshFromDb();
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-  if (task.config.isMergeNode) throw new Error(`Cannot change execution agent of merge node ${taskId}`);
 
   if (isActiveForInvalidation(task.status)) {
     host.cancelTask(taskId);
