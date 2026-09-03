@@ -57,6 +57,18 @@ pnpm --filter @invoker/ui build
 pnpm --filter @invoker/app build
 pnpm --filter @invoker/slack-manager build
 
+PACKAGE_LOG="$(mktemp)"
+if ! pnpm run dist:desktop:linux >"$PACKAGE_LOG" 2>&1 </dev/null; then
+  cat "$PACKAGE_LOG" >&2
+  rm -f "$PACKAGE_LOG"
+  exit 1
+fi
+cat "$PACKAGE_LOG"
+rm -f "$PACKAGE_LOG"
+APP_VERSION="$(node -p "require('./packages/app/package.json').version")"
+APPIMAGE_SRC="release/Invoker-${APP_VERSION}-x86_64.AppImage"
+test -s "$APPIMAGE_SRC"
+
 SURFACES_MTIME_AFTER="$(stat -c %Y packages/surfaces/dist/index.js)"
 [ "$SURFACES_MTIME_AFTER" -gt "$SURFACES_MTIME_BEFORE" ] || {
   echo "surfaces dist was not rebuilt" >&2
@@ -74,43 +86,42 @@ grep -qF "[MENTION_ROUTE]" packages/surfaces/dist/index.js
 
 systemctl --user unmask slack-manager.service 2>/dev/null || true
 
-# From here on we stop slack-manager, kill the owner, and restart
-# slack-manager -- and if this deploy is itself running as an Invoker task
-# on this same host (a self-targeted redeploy triggered from Slack), the
-# owner kill below tears down the very process tree running this script:
-# the owner's graceful-shutdown path (packages/app/src/main.ts
-# handleHeadlessTerminationSignal -> runHeadlessShutdownCleanup) calls
-# executorRegistry.destroyAll(), which SIGTERMs every still-running task's
-# process group (packages/execution-engine/src/worktree-executor.ts
-# destroyAll -> killProcessGroup), including this one. Without protection,
-# that abandons the sequence mid-flight -- possibly right after
-# `stop slack-manager.service` and before `restart` -- leaving Slack dark
-# until someone SSHes in by hand. Run the tail in its own process group via
-# setsid, detached from this shell, so killing *this* task's group cannot
-# take the restart sequence down with it.
 LOG_FILE="$(mktemp)"
 setsid bash -c '
   set -euo pipefail
   cd "'"$REPO_ROOT"'"
+  APPIMAGE_DEST="packages/npm-ui/vendor/Invoker.AppImage"
+
+  owner_is_up() {
+    python3 - <<PY
+import os
+import sys
+
+own_pgid = os.getpgid(os.getpid())
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    pid = int(name)
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as proc:
+            command = proc.read().replace(b"\0", b" ").decode(errors="replace")
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        continue
+    if "--headless owner-serve" not in command:
+        continue
+    if os.getpgid(pid) == own_pgid:
+        continue
+    sys.exit(0)
+sys.exit(1)
+PY
+  }
 
   systemctl --user stop slack-manager.service 2>/dev/null || true
 
-  # Find and SIGTERM the old owner process group, if any.
-  #
-  # This must exclude its OWN process group from the kill candidates. This
-  # restart sequence itself runs as `setsid bash -c "<this literal script
-  # text>"`, so its own /proc/<pid>/cwd is also repo_root and its own
-  # /proc/<pid>/cmdline is the literal source below -- which necessarily
-  # contains the same match string, since that string is written right here.
-  # Without the own_pgid exclusion, this step matches and kills its own
-  # ancestor, aborting the sequence before `systemctl restart` ever runs
-  # (see scripts/repro/repro-deploy-do1-kill-script-self-match.sh).
-  python3 - "'"$REPO_ROOT"'" <<PY
+  python3 - <<PY
 import os
 import signal
-import sys
 
-repo_root = os.path.realpath(sys.argv[1])
 own_pgid = os.getpgid(os.getpid())
 process_groups = set()
 for name in os.listdir("/proc"):
@@ -118,8 +129,6 @@ for name in os.listdir("/proc"):
         continue
     pid = int(name)
     try:
-        if os.path.realpath(f"/proc/{pid}/cwd") != repo_root:
-            continue
         with open(f"/proc/{pid}/cmdline", "rb") as proc:
             command = proc.read().replace(b"\0", b" ").decode(errors="replace")
     except (FileNotFoundError, PermissionError, ProcessLookupError):
@@ -138,44 +147,33 @@ for process_group in process_groups:
         pass
 PY
 
-  # Same matcher as above (own_pgid excluded for the same self-match reason),
-  # reused here to detect that a NEW owner process has come up post-restart.
-  owner_is_up() {
-    python3 - "'"$REPO_ROOT"'" <<PY
-import os
-import sys
+  for pid in $(lsof -t "$APPIMAGE_DEST" 2>/dev/null || true); do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 10); do
+    [ -z "$(lsof -t "$APPIMAGE_DEST" 2>/dev/null || true)" ] && break
+    sleep 1
+  done
+  if [ -n "$(lsof -t "$APPIMAGE_DEST" 2>/dev/null || true)" ]; then
+    lsof "$APPIMAGE_DEST" 2>/dev/null || true
+    exit 1
+  fi
 
-repo_root = os.path.realpath(sys.argv[1])
-own_pgid = os.getpgid(os.getpid())
-for name in os.listdir("/proc"):
-    if not name.isdigit():
-        continue
-    pid = int(name)
-    try:
-        if os.path.realpath(f"/proc/{pid}/cwd") != repo_root:
-            continue
-        with open(f"/proc/{pid}/cmdline", "rb") as proc:
-            command = proc.read().replace(b"\0", b" ").decode(errors="replace")
-    except (FileNotFoundError, PermissionError, ProcessLookupError):
-        continue
-    if "--headless owner-serve" not in command:
-        continue
-    if os.getpgid(pid) == own_pgid:
-        continue
-    sys.exit(0)
-sys.exit(1)
-PY
-  }
+  cp "'"$REPO_ROOT"'/'"$APPIMAGE_SRC"'" "$APPIMAGE_DEST"
+  chmod +x "$APPIMAGE_DEST"
 
-  # Install/refresh the user unit when missing (e.g. after local cutover removed it).
   if ! systemctl --user cat slack-manager.service >/dev/null 2>&1; then
     bash "'"$REPO_ROOT"'/packages/slack-manager/deploy/install.sh"
   else
     systemctl --user daemon-reload
     systemctl --user enable --now slack-manager.service
-    systemctl --user restart slack-manager.service
+    systemctl --user start slack-manager.service
   fi
   systemctl --user is-active --quiet slack-manager.service
+
+  if ! owner_is_up; then
+    setsid nohup "'"$REPO_ROOT"'/$APPIMAGE_DEST" --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox --disable-software-rasterizer --headless owner-serve </dev/null >/tmp/deploy-do1-owner-launch.log 2>&1 &
+  fi
 
   for _ in $(seq 1 45); do
     if owner_is_up; then
