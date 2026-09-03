@@ -17,6 +17,7 @@ import { registerSlackBugScanWorker } from './workers/slack-bug-scan-worker.js';
 import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
 import { registerCrossRepoResearchWorker } from './workers/cross-repo-research-worker.js';
 import { registerCatstackDeployWorker } from './workers/catstack-deploy-worker.js';
+import { registerSelfDeployWorker } from './workers/self-deploy-worker.js';
 import { registerAdminBypassE2eBabysitWorker } from './workers/admin-bypass-e2e-babysit-worker.js';
 import { registerMergifyQueueResearchWorker } from './workers/mergify-queue-research-worker.js';
 
@@ -41,6 +42,7 @@ export function registerBuiltinWorkers(
   registerIdleTaskCleanupWorker(registry);
   registerCrossRepoResearchWorker(registry);
   registerCatstackDeployWorker(registry);
+  registerSelfDeployWorker(registry);
   registerAdminBypassE2eBabysitWorker(registry);
   registerMergifyQueueResearchWorker(registry);
   return registry;
