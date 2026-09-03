@@ -1563,8 +1563,12 @@ export class TaskRunner {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
     }
 
-    const codex = this.executionAgentRegistry.get('codex');
-    const orderedAgents = codex ? [codex] : [];
+    // Publish through the one agent the workflow's tasks declared (fleet default when
+    // none did). Never widen to a fallback chain: PR #11629 removed it because retrying
+    // later agents turned one malformed response into a 20-minute merge-gate timeout.
+    const preferredAgentName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
+    const preferredAgent = this.executionAgentRegistry.get(preferredAgentName);
+    const orderedAgents = preferredAgent ? [preferredAgent] : [];
     const logProgress = (
       level: 'debug' | 'info' | 'warn' | 'error',
       message: string,
