@@ -55,6 +55,7 @@ import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
 import { publishForcedRefreshTaskGraphSnapshot, resolveRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
 import { resolveHeadlessTarget, resolveHeadlessTargetWorkflowId } from '../headless-command-classification.js';
+import { findHeadlessSetSubcommandScope } from '../headless-command-registry.js';
 import {
   fixWithAgentAction,
   rebaseRecreate,
@@ -869,25 +870,14 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     switch (command) {
       case 'set': {
         const [, subCommand, targetArg] = payload.args;
-        switch (subCommand) {
-          case 'workflow':
-          case 'merge-mode':
-            return { workflowId: targetArg === undefined ? undefined : String(targetArg), priority: 'high' };
-          case 'command':
-          case 'prompt':
-          case 'pool':
-          case 'task-pool':
-          case 'executor':
-          case 'agent':
-          case 'model':
-          case 'fix-prompt':
-          case 'fix-context':
-          case 'gate-policy':
-          case 'task':
-            return { workflowId: workflowIdForTaskArg(targetArg), priority: 'high' };
-          default:
-            return { priority: 'normal' };
+        const scope = findHeadlessSetSubcommandScope(subCommand);
+        if (scope === 'workflow') {
+          return { workflowId: targetArg === undefined ? undefined : String(targetArg), priority: 'high' };
         }
+        if (scope === 'task') {
+          return { workflowId: workflowIdForTaskArg(targetArg), priority: 'high' };
+        }
+        return { priority: 'normal' };
       }
       case 'resume':
       case 'retry':
