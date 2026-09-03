@@ -1389,7 +1389,7 @@ describe('TaskRunner', () => {
       expect(result.artifacts).toHaveLength(1);
     });
 
-    it.fails('publishReviewStackWithMakePrSkill uses the workflow declared agent, not a fallback chain (documents pre-fix codex-only behavior)', async () => {
+    it('publishReviewStackWithMakePrSkill uses the workflow declared agent, not a fallback chain', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
       process.env.HOME = tempHome;
