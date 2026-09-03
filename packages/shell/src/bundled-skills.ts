@@ -77,11 +77,29 @@ function resolveBundledSkillsSourceRoot(context: BundledSkillsContext): string |
   return existsSync(repoSkills) ? repoSkills : null;
 }
 
-function listBundledSkillNames(sourceRoot: string): string[] {
-  return readdirSync(sourceRoot, { withFileTypes: true })
+export type BundledSkillCategory = 'all' | 'core' | 'optimization';
+
+function readBundledSkillCategory(sourceDir: string): string | null {
+  const lines = readFileSync(path.join(sourceDir, 'SKILL.md'), 'utf8').split('\n');
+  if (lines[0]?.trim() !== '---') return null;
+  for (const line of lines.slice(1)) {
+    const trimmed = line.trim();
+    if (trimmed === '---') return null;
+    const match = /^category:\s*(.*)$/.exec(trimmed);
+    if (!match) continue;
+    const value = match[1].trim().replace(/^['"]|['"]$/g, '').trim();
+    return value.length > 0 ? value : null;
+  }
+  return null;
+}
+
+export function listBundledSkillNames(sourceRoot: string, category: BundledSkillCategory = 'all'): string[] {
+  const names = readdirSync(sourceRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && existsSync(path.join(sourceRoot, entry.name, 'SKILL.md')))
     .map((entry) => entry.name)
     .sort();
+  if (category === 'all') return names;
+  return names.filter((name) => readBundledSkillCategory(path.join(sourceRoot, name)) === category);
 }
 
 /** A SKILL.md must open with a YAML frontmatter block (`---` … `---`); the agent
@@ -951,18 +969,19 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
 export function installBundledSkills(
   context: BundledSkillsContext,
   mode: BundledSkillsInstallMode = 'install',
+  category: BundledSkillCategory = 'all',
 ): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
   const isInstalled = context.isInstalled ?? commandExists;
   if (mode === 'uninstall') {
-    return uninstallBundledSkills(context);
+    return uninstallBundledSkills(context, category);
   }
   const sourceRoot = resolveBundledSkillsSourceRoot(context);
   if (!sourceRoot) {
     throw new Error('Bundled skills are not available in this app build.');
   }
 
-  const bundledSkillNames = listBundledSkillNames(sourceRoot);
+  const bundledSkillNames = listBundledSkillNames(sourceRoot, category);
   for (const skillName of bundledSkillNames) {
     assertSkillSourceValid(path.join(sourceRoot, skillName), skillName);
   }
@@ -1065,12 +1084,15 @@ function managedCommandFilesFromManifestOrPrefix(manifest: BundledSkillsManifest
   return readdirSync(targetPath).filter((name) => name.startsWith(MANAGED_PREFIX) && name.endsWith('.md'));
 }
 
-function uninstallBundledSkills(context: BundledSkillsContext): BundledSkillsStatus {
+function uninstallBundledSkills(
+  context: BundledSkillsContext,
+  category: BundledSkillCategory = 'all',
+): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
   const isInstalled = context.isInstalled ?? commandExists;
   const manifest = readManifest(invokerHomeRoot);
   const sourceRoot = resolveBundledSkillsSourceRoot(context);
-  const expectedNames = sourceRoot ? prefixedSkillNames(listBundledSkillNames(sourceRoot)) : [];
+  const expectedNames = sourceRoot ? prefixedSkillNames(listBundledSkillNames(sourceRoot, category)) : [];
   const commandFiles = sourceRoot ? listCommandNames(sourceRoot) : [];
 
   for (const target of resolveManagedTargets()) {
