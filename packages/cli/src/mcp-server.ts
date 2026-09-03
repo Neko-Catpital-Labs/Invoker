@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { isSea } from 'node:sea';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -173,7 +174,9 @@ export function resolveCliInvocation(
   return { command: execPath, args: [cliPath, ...args] };
 }
 
-export function createProcessRunner(cliPath = process.argv[1] ?? ''): McpCliRunner {
+export function createProcessRunner(
+  cliPath = isSea() ? process.execPath : process.argv[1] ?? '',
+): McpCliRunner {
   return {
     run(args, options) {
       const complete = Promise.withResolvers<{ exitCode: number; stdout: string; stderr: string }>();
