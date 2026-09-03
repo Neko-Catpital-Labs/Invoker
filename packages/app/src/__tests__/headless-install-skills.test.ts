@@ -66,6 +66,40 @@ describe('headless install-skills', () => {
     );
   });
 
+  it('forwards a named category value to the dependency call', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const installBundledSkills = vi.fn(() => makeStatus());
+
+    await runHeadless(['install-skills', 'install', 'core'], {
+      installBundledSkills,
+    } as unknown as HeadlessDeps);
+
+    expect(installBundledSkills).toHaveBeenCalledWith('install', 'core');
+  });
+
+  it('forwards the other named category value to the dependency call', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const installBundledSkills = vi.fn(() => makeStatus());
+
+    await runHeadless(['install-skills', 'reinstall', 'optimization'], {
+      installBundledSkills,
+    } as unknown as HeadlessDeps);
+
+    expect(installBundledSkills).toHaveBeenCalledWith('reinstall', 'optimization');
+  });
+
+  it('omits the category argument when none is supplied, keeping prior call shape', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const installBundledSkills = vi.fn(() => makeStatus());
+
+    await runHeadless(['install-skills', 'install'], {
+      installBundledSkills,
+    } as unknown as HeadlessDeps);
+
+    expect(installBundledSkills).toHaveBeenCalledWith('install');
+    expect(installBundledSkills.mock.calls[0]).toHaveLength(1);
+  });
+
   it('documents helper installation and OMP agent selection in help output', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
