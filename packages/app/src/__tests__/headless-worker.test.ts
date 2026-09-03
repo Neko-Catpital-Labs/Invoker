@@ -4,6 +4,7 @@ import {
   resolveHeadlessDiskHeadroomConfig,
   resolveHeadlessInfraRepairConfig,
   resolveHeadlessCatstackDeployConfig,
+  resolveHeadlessSelfDeployConfig,
   runHeadless,
 } from '../headless.js';
 
@@ -145,6 +146,31 @@ describe('headless worker registry', () => {
     const config = resolveHeadlessCatstackDeployConfig({});
     expect(config.intervalMs).toBe(15 * 60_000);
     expect(config.remoteTargets).toEqual([]);
+  });
+
+  it('maps configured intervalMinutes and paths into self-deploy worker dependencies', () => {
+    const config = resolveHeadlessSelfDeployConfig({
+      selfDeploy: {
+        intervalMinutes: 45,
+        repoPath: '~/Invoker',
+        remoteName: 'upstream',
+        branchName: 'master',
+        deployScriptPath: 'scripts/deploy-do1.sh',
+      },
+    });
+
+    expect(config).toEqual({
+      intervalMs: 45 * 60_000,
+      repoPath: '~/Invoker',
+      remoteName: 'upstream',
+      branchName: 'master',
+      deployScriptPath: 'scripts/deploy-do1.sh',
+    });
+  });
+
+  it('defaults self-deploy interval to 30 minutes when config is omitted', () => {
+    const config = resolveHeadlessSelfDeployConfig({});
+    expect(config.intervalMs).toBe(30 * 60_000);
   });
 });
 
