@@ -206,7 +206,6 @@ export function editTaskAgentImpl(host: TaskEditHost, taskId: string, agentName:
   host.refreshFromDb();
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-  if (task.config.isMergeNode) throw new Error(`Cannot change execution agent of merge node ${taskId}`);
 
   if (isActiveForInvalidation(task.status)) {
     host.cancelTask(taskId);
