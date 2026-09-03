@@ -191,3 +191,20 @@ describe('headless set model', () => {
     await expect(runHeadless(['set', 'model'], deps)).rejects.toThrow('Usage: --headless set model');
   });
 });
+
+describe('coordinator task scoping for set sub-commands', () => {
+  it('scopes every task-scoped registry entry to its task id', async () => {
+    const { PersistedWorkflowMutationCoordinator } = await import('../persisted-workflow-mutation-coordinator.js');
+    const targetArg = (PersistedWorkflowMutationCoordinator.prototype as unknown as {
+      headlessTaskTargetArg: (rawArgs: unknown[]) => unknown;
+    }).headlessTaskTargetArg;
+    expect(typeof targetArg).toBe('function');
+    const wrong: string[] = [];
+    for (const { name, scope } of HEADLESS_SET_SUBCOMMANDS) {
+      const scoped = targetArg.call(null, ['set', name, 'wf-1/task-1', 'value']);
+      const expected = scope === 'task' ? 'wf-1/task-1' : undefined;
+      if (scoped !== expected) wrong.push(`${name}=${String(scoped)}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+});

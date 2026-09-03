@@ -8,6 +8,7 @@ import type { Logger, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { parseReviewGateCiRepairWorkflowMutationArgs } from '@invoker/execution-engine';
 import { resolveHeadlessTarget } from './headless-command-classification.js';
 import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
+import { findHeadlessSetSubcommandScope } from './headless-command-registry.js';
 import {
   resolveHeadlessExecCommand,
   summarizeMutationFailureMessage,
@@ -87,18 +88,6 @@ const TARGET_RESOLVED_HEADLESS_COMMANDS = new Set([
   'rebase-recreate',
 ]);
 
-const TASK_SCOPED_HEADLESS_SET_COMMANDS = new Set([
-  'command',
-  'prompt',
-  'pool',
-  'executor',
-  'agent',
-  'model',
-  'fix-prompt',
-  'fix-context',
-  'gate-policy',
-  'task',
-]);
 
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -657,7 +646,7 @@ export class PersistedWorkflowMutationCoordinator {
     const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
     if (command === 'set') {
       const subCommand = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
-      return TASK_SCOPED_HEADLESS_SET_COMMANDS.has(subCommand) ? rawArgs[2] : undefined;
+      return findHeadlessSetSubcommandScope(subCommand) === 'task' ? rawArgs[2] : undefined;
     }
     return TASK_SCOPED_HEADLESS_COMMANDS.has(command) || TARGET_RESOLVED_HEADLESS_COMMANDS.has(command)
       ? rawArgs[1]
