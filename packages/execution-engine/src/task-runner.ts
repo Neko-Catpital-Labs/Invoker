@@ -1756,6 +1756,13 @@ export class TaskRunner {
 
   private resolvePrAuthoringAgentName(workflowId?: string, mergeNodeTaskId?: string): string {
     const allTasks = this.orchestrator.getAllTasks();
+    if (mergeNodeTaskId) {
+      const ownMergeTask = allTasks.find((task) => task.id === mergeNodeTaskId && task.config.isMergeNode);
+      const ownAgent = ownMergeTask?.config.executionAgent?.trim();
+      if (ownAgent) {
+        return ownAgent;
+      }
+    }
     let candidateTasks = allTasks.filter((task) => !task.config.isMergeNode);
     if (workflowId) {
       candidateTasks = candidateTasks.filter((task) => task.config.workflowId === workflowId);
