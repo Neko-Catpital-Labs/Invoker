@@ -70,7 +70,7 @@ export function hasActiveOrUnknownTask(tasks: readonly WorkflowRetirementTask[])
   );
 }
 
-function hasExecutingOrUnknownTask(tasks: readonly WorkflowRetirementTask[]): boolean {
+export function hasExecutingOrUnknownTask(tasks: readonly WorkflowRetirementTask[]): boolean {
   return tasks.some((task) =>
     !isKnownTaskStatus(task.status) || EXECUTING_TASK_STATUS_SET.has(task.status),
   );
