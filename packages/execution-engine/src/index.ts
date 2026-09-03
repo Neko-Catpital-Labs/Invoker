@@ -84,6 +84,7 @@ export * from './workers/idle-task-cleanup-worker.js';
 export * from './workers/e2e-autofix-worker.js';
 export * from './workers/cross-repo-research-worker.js';
 export * from './workers/catstack-deploy-worker.js';
+export * from './workers/self-deploy-worker.js';
 export * from './workers/mergify-queue-research-worker.js';
 export * from './workers/worker-session-mine-worker.js';
 export * from './workers/reaper-worker.js';
