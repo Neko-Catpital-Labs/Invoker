@@ -138,6 +138,9 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'agent':
       await headlessEditAgent(args[1], args[2], deps);
       break;
+    case 'model':
+      await headlessEditModel(args[1], args[2], deps);
+      break;
     case 'task-pool':
       await headlessEditTaskPool(args[1], args[2], deps);
       break;
@@ -810,6 +813,35 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set agent accepted; exiting without tracking.\n');
+    return;
+  }
+  if (runnable.length === 0) {
+    return;
+  }
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+}
+
+async function headlessEditModel(taskId: string, modelArg: string | undefined, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || modelArg === undefined) throw new Error('Missing arguments. Usage: --headless set model <taskId> <model|"">');
+  const executionModel = modelArg.trim() === '' ? null : modelArg;
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set model');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
+  const taskExecutor = createHeadlessExecutor(deps);
+
+  const envelope = makeEnvelope('edit-task-model', 'headless', 'task', { taskId, executionModel });
+  const result = await deps.commandService.editTaskModel(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter(isDispatchableLaunch);
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-model');
+  process.stdout.write(`Edited task "${taskId}" model → "${executionModel ?? ''}"\n`);
+
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set model accepted; exiting without tracking.\n');
     return;
   }
   if (runnable.length === 0) {

@@ -875,8 +875,11 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
             return { workflowId: targetArg === undefined ? undefined : String(targetArg), priority: 'high' };
           case 'command':
           case 'prompt':
+          case 'pool':
+          case 'task-pool':
           case 'executor':
           case 'agent':
+          case 'model':
           case 'fix-prompt':
           case 'fix-context':
           case 'gate-policy':

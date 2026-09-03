@@ -11,6 +11,7 @@ export const HEADLESS_SET_SUBCOMMANDS = [
   'pool',
   'executor',
   'agent',
+  'model',
   'task-pool',
   'merge-mode',
   'fix-prompt',
