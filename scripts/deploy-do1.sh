@@ -84,6 +84,66 @@ if grep -qF "$stale" packages/surfaces/dist/index.js; then
 fi
 grep -qF "[MENTION_ROUTE]" packages/surfaces/dist/index.js
 
+pnpm run check:versions
+
+NPM_GLOBAL_PLATFORM="$(node -p "process.platform")"
+NPM_GLOBAL_ARCH="$(node -p "process.arch")"
+CLI_VERSION="$(node -p "require('./packages/npm-cli/package.json').version")"
+SLACK_VERSION="$(node -p "require('./packages/npm-slack/package.json').version")"
+UI_VERSION="$(node -p "require('./packages/npm-ui/package.json').version")"
+
+pnpm run dist:cli
+pnpm run dist:slack
+
+CLI_TARBALL_ASSET="release/invoker-cli-${CLI_VERSION}-${NPM_GLOBAL_PLATFORM}-${NPM_GLOBAL_ARCH}.tar.gz"
+SLACK_TARBALL_ASSET="release/invoker-slack-${SLACK_VERSION}-${NPM_GLOBAL_PLATFORM}-${NPM_GLOBAL_ARCH}.tar.gz"
+test -s "$CLI_TARBALL_ASSET"
+test -s "$SLACK_TARBALL_ASSET"
+
+NPM_ASSET_DIR="$(mktemp -d)"
+cp "$APPIMAGE_SRC" "$NPM_ASSET_DIR/"
+cp "$CLI_TARBALL_ASSET" "$NPM_ASSET_DIR/"
+cp "$SLACK_TARBALL_ASSET" "$NPM_ASSET_DIR/"
+bash scripts/release-sha256.sh "$NPM_ASSET_DIR/SHA256SUMS"
+
+NPM_ASSET_PORT="$(python3 -c 'import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()')"
+python3 -m http.server "$NPM_ASSET_PORT" --bind 127.0.0.1 --directory "$NPM_ASSET_DIR" >/tmp/deploy-do1-npm-asset-server.log 2>&1 &
+NPM_ASSET_SERVER_PID=$!
+trap 'kill "$NPM_ASSET_SERVER_PID" 2>/dev/null || true' EXIT
+
+NPM_ASSET_SERVER_READY=0
+for _ in $(seq 1 20); do
+  if curl -sf "http://127.0.0.1:$NPM_ASSET_PORT/SHA256SUMS" >/dev/null 2>&1; then
+    NPM_ASSET_SERVER_READY=1
+    break
+  fi
+  sleep 0.3
+done
+[ "$NPM_ASSET_SERVER_READY" -eq 1 ] || {
+  echo "local npm asset server never became ready on port $NPM_ASSET_PORT" >&2
+  exit 1
+}
+
+NPM_PACK_DIR="$(mktemp -d)"
+CLI_PACK_TARBALL="$(pnpm --filter @neko-catpital-labs/invoker-cli pack --pack-destination "$NPM_PACK_DIR" | tail -n 1)"
+SLACK_PACK_TARBALL="$(pnpm --filter @neko-catpital-labs/invoker-slack pack --pack-destination "$NPM_PACK_DIR" | tail -n 1)"
+UI_PACK_TARBALL_RAW="$(pnpm --filter @neko-catpital-labs/invoker-ui pack --pack-destination "$NPM_PACK_DIR" | tail -n 1)"
+UI_PACK_TARBALL="$NPM_PACK_DIR/invoker-ui-pinned.tgz"
+node scripts/pin-npm-ui-cli-dependency.mjs "$UI_PACK_TARBALL_RAW" "$CLI_PACK_TARBALL" "$UI_PACK_TARBALL"
+
+INVOKER_RELEASE_BASE_URL="http://127.0.0.1:$NPM_ASSET_PORT" npm install -g "$CLI_PACK_TARBALL"
+INVOKER_RELEASE_BASE_URL="http://127.0.0.1:$NPM_ASSET_PORT" npm install -g "$SLACK_PACK_TARBALL"
+INVOKER_RELEASE_BASE_URL="http://127.0.0.1:$NPM_ASSET_PORT" npm install -g "$UI_PACK_TARBALL"
+
+kill "$NPM_ASSET_SERVER_PID" 2>/dev/null || true
+trap - EXIT
+rm -rf "$NPM_ASSET_DIR" "$NPM_PACK_DIR"
+echo "npm-global refresh complete: cli=$CLI_VERSION slack=$SLACK_VERSION ui=$UI_VERSION"
+
 systemctl --user unmask slack-manager.service 2>/dev/null || true
 
 LOG_FILE="$(mktemp)"
