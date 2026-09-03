@@ -1389,7 +1389,7 @@ describe('TaskRunner', () => {
       expect(result.artifacts).toHaveLength(1);
     });
 
-    it('publishReviewStackWithMakePrSkill uses preferred agent then falls back to another make-pr agent', async () => {
+    it.fails('publishReviewStackWithMakePrSkill uses the workflow declared agent, not a fallback chain (documents pre-fix codex-only behavior)', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
       process.env.HOME = tempHome;
@@ -1407,7 +1407,11 @@ describe('TaskRunner', () => {
           bundledSkills: ['make-pr'],
           buildCommand: () => {
             attempts.push('claude');
-            return { cmd: 'node', args: ['-e', 'process.stdout.write("not json")'], sessionId: 'sess-claude' };
+            return {
+              cmd: 'node',
+              args: ['-e', 'var b=["## Summary","","Slice prose.","","## Review Claim","","c","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","s","","## Slice Rationale","","r","","## Non-goals","- none","","## Test Plan","- [x] pnpm test","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master",body:b},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"],body:b}]}))'],
+              sessionId: 'sess-claude',
+            };
           },
           buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
         };
@@ -1418,11 +1422,7 @@ describe('TaskRunner', () => {
           bundledSkills: ['make-pr'],
           buildCommand: () => {
             attempts.push('codex');
-            return {
-              cmd: 'node',
-              args: ['-e', 'var b=["## Summary","","Slice prose.","","## Review Claim","","c","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","s","","## Slice Rationale","","r","","## Non-goals","- none","","## Test Plan","- [x] pnpm test","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master",body:b},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"],body:b}]}))'],
-              sessionId: 'sess-codex',
-            };
+            throw new Error('codex must not be invoked when claude is the declared agent');
           },
           buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
         };
@@ -1454,8 +1454,8 @@ describe('TaskRunner', () => {
           expectedGeneration: 26,
         });
 
-        expect(attempts).toEqual(['claude', 'codex']);
-        expect(result.agentName).toBe('codex');
+        expect(attempts).toEqual(['claude']);
+        expect(result.agentName).toBe('claude');
         expect(result.artifacts[1].dependsOn).toEqual(['contracts']);
         expect(result.artifacts.map((a: any) => a.generation)).toEqual([26, 26]);
         expect(logEvent).toHaveBeenCalledWith(
@@ -1464,15 +1464,7 @@ describe('TaskRunner', () => {
           expect.objectContaining({
             level: 'info',
             message: 'Preparing make-pr review stack publisher',
-            agentCount: 2,
-          }),
-        );
-        expect(logEvent).toHaveBeenCalledWith(
-          '__merge__wf-1',
-          'task.log',
-          expect.objectContaining({
-            level: 'warn',
-            message: 'claude make-pr agent failed',
+            agentCount: 1,
           }),
         );
         expect(logEvent).toHaveBeenCalledWith(
@@ -1489,6 +1481,66 @@ describe('TaskRunner', () => {
         else process.env.HOME = originalHome;
       }
     });
+
+    it('publishReviewStackWithMakePrSkill falls back to the fleet default agent when the workflow declares none', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const attempts: string[] = [];
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attempts.push('codex');
+            return {
+              cmd: 'node',
+              args: ['-e', 'var b=["## Summary","","x","","## Review Claim","","x","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","x","","## Slice Rationale","","x","","## Non-goals","- none","","## Test Plan","- [x] x","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))'],
+              sessionId: 'sess-codex',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-no-agent' } })],
+          } as any,
+          persistence: { logEvent: vi.fn() } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => (name === 'codex' ? codexAgent : undefined),
+            getOrThrow: vi.fn(),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([codexAgent]),
+          } as any,
+          cwd: '/tmp',
+        });
+
+        const result = await (executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-no-agent',
+          title: 'Stack',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: 'summary',
+          cwd: '/tmp',
+          mergeNodeTaskId: '__merge__wf-no-agent',
+          expectedGeneration: 1,
+        });
+
+        expect(attempts).toEqual(['codex']);
+        expect(result.agentName).toBe('codex');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
 
     it('publishReviewStackWithMakePrSkill writes skill=invoker-make-pr onto merge task output', async () => {
       const tempHome = createTempWorkspace();
