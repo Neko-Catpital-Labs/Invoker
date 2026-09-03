@@ -11,15 +11,15 @@ grep -qF 'Stacked onto WF-X' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKI
 grep -qF -- '--onto-workflow' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing --onto-workflow"; exit 1; }
 grep -qF 'gate-only wait' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing gate-only wait distinction"; exit 1; }
 
-mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/plans"
+mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/plans" "$TMP_DIR/bin"
 cp "$ROOT/scripts/submit-workflow-chain.sh" "$TMP_DIR/scripts/submit-workflow-chain.sh"
 chmod +x "$TMP_DIR/scripts/submit-workflow-chain.sh"
 
-cat > "$TMP_DIR/run.sh" <<'EOF'
+cat > "$TMP_DIR/bin/invoker-cli" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-STATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.state"
+STATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.state"
 mkdir -p "$STATE_DIR"
 
 WORKFLOWS_JSON="$STATE_DIR/workflows.json"
@@ -29,12 +29,6 @@ SEQ_FILE="$STATE_DIR/seq"
 [[ -f "$WORKFLOWS_JSON" ]] || printf '[]' > "$WORKFLOWS_JSON"
 [[ -f "$TASKS_JSON" ]] || printf '[]' > "$TASKS_JSON"
 [[ -f "$SEQ_FILE" ]] || printf '1000' > "$SEQ_FILE"
-
-if [[ "${1:-}" != "--headless" ]]; then
-  echo "mock run.sh expects --headless" >&2
-  exit 1
-fi
-shift
 
 cmd="${1:-}"
 shift || true
@@ -80,7 +74,7 @@ case "$cmd" in
       "$TASKS_JSON" > "$TASKS_JSON.tmp"
     mv "$TASKS_JSON.tmp" "$TASKS_JSON"
 
-    echo "Workflow ID: $wf_id"
+    jq -n --arg id "$wf_id" '{workflow:{id:$id,status:"success"},result:{workflowId:$id,status:"success",completedTasks:0,failedTasks:0,mode:"live"}}'
     ;;
   *)
     echo "unsupported command: $cmd" >&2
@@ -88,7 +82,8 @@ case "$cmd" in
     ;;
 esac
 EOF
-chmod +x "$TMP_DIR/run.sh"
+chmod +x "$TMP_DIR/bin/invoker-cli"
+export PATH="$TMP_DIR/bin:$PATH"
 
 cat > "$TMP_DIR/plans/a.yaml" <<'EOF'
 name: "A"
@@ -172,7 +167,6 @@ rp3_rr="$(printf '%s\n' "$out_rr" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '2p')
 grep -q '^ *gatePolicy: review_ready$' "$rp2_rr"
 grep -q '^ *gatePolicy: review_ready$' "$rp3_rr"
 
-# Seed an upstream workflow that plan[0] can stack onto via concrete extDep.
 SEED_STATE="$TMP_DIR/.state"
 mkdir -p "$SEED_STATE"
 printf '[]' > "$SEED_STATE/workflows.json"
@@ -229,7 +223,6 @@ grep -q '^baseBranch: plan/fanout-upstream$' "$rp_onto"
 wf_onto_base="$(printf '%s\n' "$out_onto" | awk -F'[= ]' '/^WF1=/{print $4; exit}')"
 [[ "$wf_onto_base" == "plan/fanout-upstream" ]] || { echo "WF1 base should be fanout feature; got: $wf_onto_base"; echo "$out_onto"; exit 1; }
 
-# Auto-detect concrete extDep on plan[0] when --onto-workflow is omitted.
 printf '[]' > "$SEED_STATE/workflows.json"
 printf '[]' > "$SEED_STATE/tasks.json"
 printf '3000' > "$SEED_STATE/seq"

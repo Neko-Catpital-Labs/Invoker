@@ -174,7 +174,7 @@ resolve_persisted_workflow_id() {
   for _ in $(seq 1 30); do
     attempt=$((attempt + 1))
     wf_id="$(
-      ./run.sh --headless query workflows --output json 2>/dev/null \
+      invoker-cli query workflows --output json 2>/dev/null \
         | extract_json_stream \
         | jq -r --arg n "$workflow_name" '[.[] | select(.name == $n)] | sort_by(.createdAt) | last | .id // empty'
     )"
@@ -198,7 +198,7 @@ resolve_workflow_feature_branch() {
   for _ in $(seq 1 30); do
     attempt=$((attempt + 1))
     feature_branch="$(
-      ./run.sh --headless query workflows --output json 2>/dev/null \
+      invoker-cli query workflows --output json 2>/dev/null \
         | extract_json_stream \
         | jq -r --arg id "$workflow_id" '.[] | select(.id == $id) | .featureBranch // empty' \
         | head -1
@@ -264,7 +264,7 @@ wait_for_external_merge_gate() {
   local attempt=0
   for _ in $(seq 1 60); do
     attempt=$((attempt + 1))
-    if ./run.sh --headless query tasks --output json 2>/dev/null | extract_json_stream | jq -e --arg id "$merge_id" '.[] | select(.id == $id)' >/dev/null; then
+    if invoker-cli query tasks --output json 2>/dev/null | extract_json_stream | jq -e --arg id "$merge_id" '.[] | select(.id == $id)' >/dev/null; then
       log_chain "wait_for_external_merge_gate mergeTaskId=\"$merge_id\" found attempt=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
       return 0
     fi
@@ -584,13 +584,12 @@ for i in "${!INPUT_PLANS[@]}"; do
   _chain_out="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-out$((i+1)).XXXXXX")"
   out_file="${_chain_out}.log"
   rm -f "$_chain_out"
-  ./run.sh --headless run "$submit_plan" --no-track >"$out_file" 2>&1 || true
+  invoker-cli run "$submit_plan" --live --json >"$out_file" 2>/dev/null || true
   log_chain "headless-run end step=$((i+1)) elapsedMs=$(( $(now_ms) - run_start_ms )) out=\"$out_file\""
 
-  printed_id="$(awk '/Workflow ID:/{print $3}' "$out_file" | tail -1)"
-  delegated_id="$(sed -n 's/.*workflow: \(wf-[0-9]\+-[0-9]\+\).*/\1/p' "$out_file" | tail -1)"
-  if [[ -n "${printed_id:-}" || -n "${delegated_id:-}" ]]; then
-    echo "  printed_id=${printed_id:-<none>} delegated_id=${delegated_id:-<none>}"
+  printed_id="$(jq -r '.workflow.id // empty' "$out_file" 2>/dev/null || true)"
+  if [[ -n "${printed_id:-}" ]]; then
+    echo "  printed_id=${printed_id:-<none>}"
   fi
 
   persisted_id="$(resolve_persisted_workflow_id "$plan_name" || true)"
@@ -603,7 +602,7 @@ for i in "${!INPUT_PLANS[@]}"; do
 
   CHAIN_WORKFLOW_IDS+=("$persisted_id")
   wf_base_branch="$(
-    ./run.sh --headless query workflows --output json 2>/dev/null \
+    invoker-cli query workflows --output json 2>/dev/null \
       | extract_json_stream \
       | jq -r --arg id "$persisted_id" '.[] | select(.id == $id) | .baseBranch // empty' | head -1
   )"
