@@ -35,6 +35,7 @@ import {
   DEFAULT_PLANNER_RETRY_BASE_DELAY_MS,
   DEFAULT_PLANNER_RETRY_LIMIT,
   PlanConversation,
+  applySlackDockerIsolationDefault,
   buildEmptyPlannerOutputError,
   defaultPlanningCommand,
   isConfirmation,
@@ -1660,7 +1661,7 @@ export class SlackSurface implements Surface {
     }
     const planTextForSubmit = draft.planningDraftId
       ? approvedPlanText
-      : this.normalizeDraftedPlanRepoUrl(approvedPlanText, draft.repoUrl);
+      : applySlackDockerIsolationDefault(this.normalizeDraftedPlanRepoUrl(approvedPlanText, draft.repoUrl));
     const executionKey = this.slackPlanDraftRepo?.claim(draft);
     if (!executionKey) {
       throw new Error('This plan is already being submitted.');

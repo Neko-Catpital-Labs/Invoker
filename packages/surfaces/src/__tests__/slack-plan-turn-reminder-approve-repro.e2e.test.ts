@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SlackSurface } from '../slack/slack-surface.js';
+import { applySlackDockerIsolationDefault } from '../slack/plan-conversation.js';
 import { SQLiteAdapter, ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
 
@@ -207,6 +208,9 @@ describe('replaying the stuck Slack plan-staging thread end to end', () => {
       respond: vi.fn().mockResolvedValue(undefined),
     });
 
-    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({ type: 'start_plan', planText: draft!.planText }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const submittedCommand = onCommand.mock.calls[0]![0] as { type: string; planText: string };
+    expect(submittedCommand.type).toBe('start_plan');
+    expect(submittedCommand.planText).toBe(applySlackDockerIsolationDefault(draft!.planText));
   });
 });

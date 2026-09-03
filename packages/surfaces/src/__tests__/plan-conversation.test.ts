@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, buildPlanSystemPrompt, extractYamlPlan, globToRegex, isDangerousCommand, isConfirmation, redactEmbeddedPlanFence } from '../slack/plan-conversation.js';
+import { PlanConversation, applySlackDockerIsolationDefault, buildPlanSystemPrompt, extractYamlPlan, globToRegex, isDangerousCommand, isConfirmation, redactEmbeddedPlanFence } from '../slack/plan-conversation.js';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -388,6 +388,117 @@ Does this look better?`;
         expect.stringContaining('task missing id or description'),
       );
     });
+  });
+});
+
+describe('applySlackDockerIsolationDefault', () => {
+  it('stamps dockerImage on every task that has no explicit routing', () => {
+    const planText = `name: "Slack Plan"
+onFinish: none
+tasks:
+  - id: task-1
+    description: "First task"
+    command: "npm test"
+  - id: task-2
+    description: "Second task"
+    command: "npm build"
+`;
+    const result = parsePlanText(applySlackDockerIsolationDefault(planText));
+    expect(result.tasks[0].dockerImage).toBe('invoker/agent-base:latest');
+    expect(result.tasks[1].dockerImage).toBe('invoker/agent-base:latest');
+  });
+
+  it('does not clobber a task that already declares dockerImage', () => {
+    const planText = `name: "Slack Plan"
+tasks:
+  - id: task-1
+    description: "First task"
+    command: "npm test"
+    dockerImage: custom/image:v1
+`;
+    const result = parsePlanText(applySlackDockerIsolationDefault(planText));
+    expect(result.tasks[0].dockerImage).toBe('custom/image:v1');
+  });
+
+  it('does not clobber a task that already declares poolId', () => {
+    const planText = `name: "Slack Plan"
+tasks:
+  - id: task-1
+    description: "First task"
+    command: "npm test"
+    poolId: my-pool
+`;
+    const result = parsePlanText(applySlackDockerIsolationDefault(planText));
+    expect(result.tasks[0].dockerImage).toBeUndefined();
+    expect(result.tasks[0].poolId).toBe('my-pool');
+  });
+
+  it('leaves a plan-level poolId untouched and does not stamp any task', () => {
+    const planText = `name: "Slack Plan"
+poolId: my-pool
+tasks:
+  - id: task-1
+    description: "First task"
+    command: "npm test"
+`;
+    const result = parsePlanText(applySlackDockerIsolationDefault(planText));
+    expect(result.tasks[0].dockerImage).toBeUndefined();
+  });
+
+  it('leaves a scratch plan untouched', () => {
+    const planText = `name: "Slack Plan"
+scratch: true
+tasks:
+  - id: task-1
+    description: "First task"
+    command: "npm test"
+`;
+    const result = parsePlanText(applySlackDockerIsolationDefault(planText));
+    expect(result.tasks[0].dockerImage).toBeUndefined();
+  });
+
+  it('stamps tasks inside each workflow of a stacked plan', () => {
+    const planText = `name: "Stack"
+workflows:
+  - name: "Workflow 1"
+    tasks:
+      - id: task-1
+        description: "First task"
+        command: "npm test"
+  - name: "Workflow 2"
+    tasks:
+      - id: task-2
+        description: "Second task"
+        command: "npm build"
+        poolId: my-pool
+`;
+    const result = parsePlanText(applySlackDockerIsolationDefault(planText));
+    expect(result.workflows[0].tasks[0].dockerImage).toBe('invoker/agent-base:latest');
+    expect(result.workflows[1].tasks[0].dockerImage).toBeUndefined();
+  });
+
+  it('respects a stack-level scratch default inherited by a workflow', () => {
+    const planText = `name: "Stack"
+scratch: true
+workflows:
+  - name: "Workflow 1"
+    tasks:
+      - id: task-1
+        description: "First task"
+        command: "npm test"
+`;
+    const result = parsePlanText(applySlackDockerIsolationDefault(planText));
+    expect(result.workflows[0].tasks[0].dockerImage).toBeUndefined();
+  });
+
+  it('returns the input unchanged for invalid YAML', () => {
+    const planText = 'not: [valid: yaml: here';
+    expect(applySlackDockerIsolationDefault(planText)).toBe(planText);
+  });
+
+  it('returns the input unchanged when the plan has no tasks array', () => {
+    const planText = 'name: "Empty"\n';
+    expect(applySlackDockerIsolationDefault(planText)).toBe(planText);
   });
 });
 

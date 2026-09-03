@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { SlackSurface } from '../slack/slack-surface.js';
+import { applySlackDockerIsolationDefault } from '../slack/plan-conversation.js';
 import { SQLiteAdapter, ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, WorkflowChannelRepository } from '@invoker/data-store';
 
 interface MockHandler {
@@ -184,11 +185,11 @@ describe('slack planning session happy path', () => {
       respond: vi.fn().mockResolvedValue(undefined),
     });
 
-    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'start_plan',
-      planText: draft!.planText,
-      repoUrl: 'https://github.com/example/repo.git',
-    }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const submittedCommand = onCommand.mock.calls[0]![0] as { type: string; planText: string; repoUrl: string };
+    expect(submittedCommand.type).toBe('start_plan');
+    expect(submittedCommand.repoUrl).toBe('https://github.com/example/repo.git');
+    expect(submittedCommand.planText).toBe(applySlackDockerIsolationDefault(draft!.planText));
     expect(parseYaml(draft!.planText)).toMatchObject({
       name: 'CodeRabbit Audit',
       repoUrl: 'https://github.com/example/repo.git',
@@ -271,11 +272,10 @@ workflows:
         respond: vi.fn().mockResolvedValue(undefined),
       });
 
-      expect(onCommand).toHaveBeenLastCalledWith(expect.objectContaining({
-        type: 'start_plan',
-        repoUrl,
-        planText: draft!.planText,
-      }));
+      const lastSubmittedCommand = onCommand.mock.calls.at(-1)![0] as { type: string; planText: string; repoUrl: string };
+      expect(lastSubmittedCommand.type).toBe('start_plan');
+      expect(lastSubmittedCommand.repoUrl).toBe(repoUrl);
+      expect(lastSubmittedCommand.planText).toBe(applySlackDockerIsolationDefault(draft!.planText));
     }
 
     expect(onCommand.mock.calls.map(([command]) => (command as any).repoUrl)).toEqual([

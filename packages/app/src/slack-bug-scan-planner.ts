@@ -33,8 +33,14 @@ function buildDraftPrompt(input: { repoUrl: string; problemStatement: string; th
 
 export function createSlackBugScanPlanner(deps: SlackBugScanPlannerDeps): SlackBugScanPlanSubmitter {
   return async (input) => {
-    const { PlanConversation, extractYamlPlan, selectHarnessSessionDriver, BUILTIN_HARNESS_PRESETS, DEFAULT_HARNESS_PRESET }
-      = await import('@invoker/surfaces');
+    const {
+      PlanConversation,
+      applySlackDockerIsolationDefault,
+      extractYamlPlan,
+      selectHarnessSessionDriver,
+      BUILTIN_HARNESS_PRESETS,
+      DEFAULT_HARNESS_PRESET,
+    } = await import('@invoker/surfaces');
     const presets = { ...BUILTIN_HARNESS_PRESETS, ...(deps.config.slackHarnessPresets ?? {}) };
     const presetKey = deps.config.defaultSlackHarnessPreset ?? DEFAULT_HARNESS_PRESET;
     const preset = presets[presetKey];
@@ -73,8 +79,9 @@ export function createSlackBugScanPlanner(deps: SlackBugScanPlannerDeps): SlackB
       });
 
       const plannerOutput = await conversation.sendMessage(buildDraftPrompt(input));
-      const planText = extractYamlPlan(plannerOutput);
-      if (!planText) throw new Error('Planner did not return a valid YAML plan.');
+      const draftedPlanText = extractYamlPlan(plannerOutput);
+      if (!draftedPlanText) throw new Error('Planner did not return a valid YAML plan.');
+      const planText = applySlackDockerIsolationDefault(draftedPlanText);
 
       const loaded = await loadPlanSubmissionBundle(planText, {
         persistence: deps.persistence,

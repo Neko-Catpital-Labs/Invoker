@@ -1407,6 +1407,57 @@ export function extractYamlPlan(text: string): string | null {
   }
 }
 
+const SLACK_DEFAULT_DOCKER_IMAGE = 'invoker/agent-base:latest';
+
+function stampDockerImageOnTasks(
+  plan: Record<string, unknown>,
+  inheritedScratch: boolean,
+  inheritedPoolId: string | undefined,
+): boolean {
+  const effectiveScratch = plan.scratch === true || (plan.scratch === undefined && inheritedScratch);
+  if (effectiveScratch) return false;
+  const effectivePoolId = typeof plan.poolId === 'string' ? plan.poolId : inheritedPoolId;
+  if (typeof effectivePoolId === 'string' && effectivePoolId.trim() !== '') return false;
+  if (!Array.isArray(plan.tasks)) return false;
+
+  let changed = false;
+  for (const task of plan.tasks) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) continue;
+    const t = task as Record<string, unknown>;
+    if (typeof t.dockerImage === 'string' && t.dockerImage.trim() !== '') continue;
+    if (typeof t.poolId === 'string' && t.poolId.trim() !== '') continue;
+    t.dockerImage = SLACK_DEFAULT_DOCKER_IMAGE;
+    changed = true;
+  }
+  return changed;
+}
+
+export function applySlackDockerIsolationDefault(planText: string): string {
+  let raw: unknown;
+  try {
+    raw = parseYaml(planText);
+  } catch {
+    return planText;
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return planText;
+
+  const plan = raw as Record<string, unknown>;
+  let changed: boolean;
+  if (Array.isArray(plan.workflows)) {
+    const stackScratch = plan.scratch === true;
+    const stackPoolId = typeof plan.poolId === 'string' ? plan.poolId : undefined;
+    changed = false;
+    for (const workflow of plan.workflows) {
+      if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) continue;
+      changed = stampDockerImageOnTasks(workflow as Record<string, unknown>, stackScratch, stackPoolId) || changed;
+    }
+  } else {
+    changed = stampDockerImageOnTasks(plan, false, undefined);
+  }
+
+  return changed ? stringifyYaml(plan) : planText;
+}
+
 const PLAN_DRAFT_PLACEHOLDER = '_(Plan drafted — see the review card for the full plan.)_';
 
 /**
