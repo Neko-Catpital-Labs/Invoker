@@ -102,6 +102,49 @@ class TestTokenAndQuotaExtraction(unittest.TestCase):
         self.assertEqual(row["resets_at"], 1787201973)
         self.assertEqual(row["plan_type"], "pro")
 
+    def test_null_info_from_no_credit_account_does_not_crash(self):
+        session_dir = tempfile.mkdtemp()
+        write_session(session_dir, "rollout-2026-09-03T12-48-23-repro.jsonl", [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": None,
+                    "rate_limits": {
+                        "limit_id": "premium",
+                        "limit_name": None,
+                        "primary": None,
+                        "secondary": None,
+                        "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+                        "individual_limit": None,
+                        "spend_control_reached": None,
+                        "plan_type": None,
+                        "rate_limit_reached_type": None,
+                    },
+                },
+            },
+        ])
+        results = codex_session_audit.audit(session_dir)
+        row = results[0]
+        self.assertIsNone(row["total_tokens"])
+        self.assertIsNone(row["used_percent"])
+        self.assertIsNone(row["resets_at"])
+        self.assertIsNone(row["plan_type"])
+        self.assertIsNone(row["note"])
+
+    def test_null_rate_limits_does_not_crash(self):
+        session_dir = tempfile.mkdtemp()
+        write_session(session_dir, "rollout-2026-09-03T09-00-00-null-rl.jsonl", [
+            {
+                "type": "event_msg",
+                "payload": {"type": "token_count", "info": {"total_token_usage": {"total_tokens": 42}}, "rate_limits": None},
+            },
+        ])
+        results = codex_session_audit.audit(session_dir)
+        row = results[0]
+        self.assertEqual(row["total_tokens"], 42)
+        self.assertIsNone(row["used_percent"])
+
     def test_later_token_count_event_overwrites_earlier_one(self):
         session_dir = tempfile.mkdtemp()
         write_session(session_dir, "rollout-2026-08-15T09-00-00-xyz.jsonl", [
