@@ -9,6 +9,7 @@ import {
   type InvokerConfig,
   type MergifyQueueResearchConfig,
   type MergifyQueueResearchSource,
+  type SelfDeployConfig,
   DEFAULT_CROSS_REPO_RESEARCH_LOOKBACK_DAYS,
   DEFAULT_MERGIFY_QUEUE_RESEARCH_LOOKBACK_DAYS,
 } from './config.js';
@@ -257,6 +258,44 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateSelfDeployConfig(config: InvokerConfig): void {
+  const selfDeploy = config.selfDeploy;
+  if (selfDeploy === undefined) return;
+  if (typeof selfDeploy !== 'object' || selfDeploy === null || Array.isArray(selfDeploy)) {
+    throw new Error('selfDeploy must be an object');
+  }
+  const typed = selfDeploy as SelfDeployConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('selfDeploy.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.repoPath !== undefined) {
+    if (typeof typed.repoPath !== 'string' || typed.repoPath.trim().length === 0) {
+      throw new Error('selfDeploy.repoPath must be a non-empty string when set');
+    }
+  }
+  if (typed.remoteName !== undefined) {
+    if (typeof typed.remoteName !== 'string' || typed.remoteName.trim().length === 0) {
+      throw new Error('selfDeploy.remoteName must be a non-empty string when set');
+    }
+  }
+  if (typed.branchName !== undefined) {
+    if (typeof typed.branchName !== 'string' || typed.branchName.trim().length === 0) {
+      throw new Error('selfDeploy.branchName must be a non-empty string when set');
+    }
+  }
+  if (typed.deployScriptPath !== undefined) {
+    if (typeof typed.deployScriptPath !== 'string' || typed.deployScriptPath.trim().length === 0) {
+      throw new Error('selfDeploy.deployScriptPath must be a non-empty string when set');
+    }
+  }
+}
+
 function validateDbReaperConfig(config: InvokerConfig): void {
   const dbReaper = config.dbReaper;
   if (dbReaper === undefined) return;
@@ -365,6 +404,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateSelfDeployConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);
   return config;
