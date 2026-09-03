@@ -1015,6 +1015,43 @@ describe('catstackDeploy config', () => {
   });
 });
 
+describe('selfDeploy config', () => {
+  it('accepts omitted selfDeploy block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts a valid intervalMinutes and paths', () => {
+    const config = validateInvokerConfig({
+      selfDeploy: {
+        intervalMinutes: 30,
+        repoPath: '~/Invoker',
+        remoteName: 'upstream',
+        branchName: 'master',
+        deployScriptPath: 'scripts/deploy-do1.sh',
+      },
+    });
+    expect(config.selfDeploy?.intervalMinutes).toBe(30);
+  });
+
+  it('rejects intervalMinutes of 0', () => {
+    expect(() => validateInvokerConfig({
+      selfDeploy: { intervalMinutes: 0 },
+    })).toThrow(/selfDeploy.intervalMinutes must be an integer > 0/);
+  });
+
+  it('rejects non-integer intervalMinutes', () => {
+    expect(() => validateInvokerConfig({
+      selfDeploy: { intervalMinutes: 1.5 },
+    })).toThrow(/selfDeploy.intervalMinutes must be an integer > 0/);
+  });
+
+  it('rejects an empty repoPath', () => {
+    expect(() => validateInvokerConfig({
+      selfDeploy: { repoPath: '' },
+    })).toThrow(/selfDeploy.repoPath must be a non-empty string/);
+  });
+});
+
 describe('dbReaper config', () => {
   it('accepts omitted dbReaper block', () => {
     expect(validateInvokerConfig({})).toEqual({});
