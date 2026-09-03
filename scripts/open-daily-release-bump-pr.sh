@@ -25,7 +25,7 @@ fi
 
 BRANCH="$(git branch --show-current)"
 
-mergify stack push
+mergify stack push --trunk origin/master
 
 pr_number="$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // empty')"
 if [ -z "$pr_number" ]; then
