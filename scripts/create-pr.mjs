@@ -575,9 +575,11 @@ export function isUiImpactingPath(filePath) {
   const path = filePath.replace(/\\/g, '/');
   if (path.startsWith('packages/ui/')) return true;
   if (path.startsWith('packages/app/src/window/')) return true;
+  if (path.startsWith('packages/app/src/web/')) return true;
   if (path === 'packages/app/src/main.ts') return true;
   if (path === 'packages/app/src/preload.ts') return true;
   if (path === 'packages/app/src/app-menu.ts') return true;
+  if (path === 'packages/app/src/task-graph-event-publisher.ts') return true;
   return false;
 }
 
