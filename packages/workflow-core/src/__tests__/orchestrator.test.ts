@@ -4435,6 +4435,28 @@ describe('Orchestrator', () => {
       expect(() => orchestrator.editTaskPool(mergeTask.id, 'mixed-local-ssh')).toThrow('Cannot change executor pool');
     });
 
+    it('allows agent and model edits for merge nodes', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        logger: consoleLogger,
+        availablePoolIds: ['mixed-local-ssh'],
+      });
+      orchestrator.loadPlan({
+        name: 'edit-agent-model-merge',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
+      });
+      const mergeTask = orchestrator.getAllTasks().find((candidate) => candidate.config.isMergeNode)!;
+
+      orchestrator.editTaskAgent(mergeTask.id, 'claude');
+      orchestrator.editTaskModel(mergeTask.id, 'claude-sonnet-5');
+
+      const updated = orchestrator.getTask(mergeTask.id)!;
+      expect(updated.config.executionAgent).toBe('claude');
+      expect(updated.config.executionModel).toBe('claude-sonnet-5');
+    });
+
     it('cancels active work before retrying for a pool edit', () => {
       orchestrator = new Orchestrator({
         persistence,
