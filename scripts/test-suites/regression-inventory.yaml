@@ -132,3 +132,20 @@ candidates:
     reason: >-
       Requires a caller-supplied --db path to an existing SQLite file; not
       self-contained, so it cannot run unattended in a hermetic nightly job.
+
+  - id: fix-ci-token-bench-live-canary
+    tier: manual
+    hermetic: false
+    description: >-
+      Opt-in live canary that runs one real codex session against the tiny
+      failing fixture repo and asserts its real total_tokens (read back
+      through scripts/codex-session-audit.py) stays under a small ceiling.
+      Inert by default; the offline simulator gate in `pnpm test` covers the
+      deterministic half of the same budget.
+    script: scripts/run-fix-ci-token-bench-live.sh
+    command: INVOKER_FIX_CI_TOKEN_BUDGET_LIVE=1 bash scripts/run-fix-ci-token-bench-live.sh
+    reason: >-
+      Spends real Codex API tokens on a live model session, so it only ever
+      runs when a human sets INVOKER_FIX_CI_TOKEN_BUDGET_LIVE=1 by hand;
+      without that variable it stands down and exits 0, and it is never wired
+      into `pnpm test`, nightly tooling, or any CI job.
