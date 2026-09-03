@@ -483,6 +483,13 @@ function buildRegisteredOwnerWorkerDeps(
         connection: target.connection,
       })),
     },
+    selfDeploy: {
+      intervalMs: (invokerConfig.selfDeploy?.intervalMinutes ?? 30) * 60_000,
+      repoPath: invokerConfig.selfDeploy?.repoPath,
+      remoteName: invokerConfig.selfDeploy?.remoteName,
+      branchName: invokerConfig.selfDeploy?.branchName,
+      deployScriptPath: invokerConfig.selfDeploy?.deployScriptPath,
+    },
     dbReaper: {
       intervalMs: (invokerConfig.dbReaper?.intervalMinutes ?? 60) * 60_000,
       eventsRetentionDays: invokerConfig.dbReaper?.eventsRetentionDays,
