@@ -21,6 +21,7 @@ echo
 
 source scripts/submit-workflow-chain.sh
 
+BACKEND="live"
 START_MS="$(now_ms)"
 RESULT="$(resolve_workflow_feature_branch "$LIVE_ID" 2>&1)"
 STATUS=$?
