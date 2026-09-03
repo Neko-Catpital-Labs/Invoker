@@ -11,6 +11,7 @@
 
 import type { BundledSkillsInstallMode } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
+import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -246,6 +247,7 @@ async function headlessRepairFiling(args: string[], deps: HeadlessDeps): Promise
 
 async function headlessInstallSkills(
   mode: BundledSkillsInstallMode | undefined,
+  category: BundledSkillCategory | undefined,
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
 ): Promise<void> {
   process.stderr.write(
@@ -254,7 +256,9 @@ async function headlessInstallSkills(
   if (!deps.installBundledSkills) {
     throw new Error('Bundled AI helper installation is not available in this runtime.');
   }
-  const status = deps.installBundledSkills(mode ?? 'install');
+  const status = category === undefined
+    ? deps.installBundledSkills(mode ?? 'install')
+    : deps.installBundledSkills(mode ?? 'install', category);
   const verb = mode === 'uninstall' ? 'Uninstalled' : 'Installed';
   process.stdout.write(`${verb} ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
   for (const target of status.targets) {
@@ -303,6 +307,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<u
     case 'install-skills':
       await headlessInstallSkills(
         args[1] === 'reinstall' || args[1] === 'update' || args[1] === 'uninstall' ? args[1] : 'install',
+        args[2] === 'core' || args[2] === 'optimization' || args[2] === 'all' ? args[2] : undefined,
         deps,
       );
       break;
