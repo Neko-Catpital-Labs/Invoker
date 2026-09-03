@@ -67,7 +67,7 @@ describe('headless-command-classification', () => {
   });
 
   it('classifies every registered set subcommand as mutating', () => {
-    for (const subcommand of HEADLESS_SET_SUBCOMMANDS) {
+    for (const { name: subcommand } of HEADLESS_SET_SUBCOMMANDS) {
       expect(isHeadlessMutatingCommand(['set', subcommand])).toBe(true);
     }
 
@@ -90,7 +90,7 @@ describe('headless-command-classification', () => {
     await runHeadless(['--help'], {} as any);
 
     const help = write.mock.calls.map(([chunk]) => String(chunk)).join('');
-    for (const subcommand of HEADLESS_SET_SUBCOMMANDS) {
+    for (const { name: subcommand } of HEADLESS_SET_SUBCOMMANDS) {
       if (subcommand === 'executor') continue;
       expect(help).toContain(`set ${subcommand}`);
     }

@@ -55,7 +55,7 @@ function makeContext(): GuiMutationTaskActionsContext {
   } as unknown as GuiMutationTaskActionsContext;
 }
 
-const WORKFLOW_SCOPED_SET_SUBCOMMANDS = new Set(['workflow', 'merge-mode']);
+const REGISTERED_SET_SUBCOMMAND_NAMES = HEADLESS_SET_SUBCOMMANDS.map((definition) => definition.name);
 
 describe('delegated edit-task-model (set model) classification', () => {
   it('resolves the task workflow for the translated invoker:edit-task-model payload', () => {
@@ -95,15 +95,35 @@ describe('delegated edit-task-model (set model) classification', () => {
   it('classifies every registered set subcommand to a workflow so no-track delegation can queue it', () => {
     const actions = createGuiMutationTaskActions(makeContext());
     const unresolved: string[] = [];
-    for (const subCommand of HEADLESS_SET_SUBCOMMANDS) {
-      const target = WORKFLOW_SCOPED_SET_SUBCOMMANDS.has(subCommand) ? 'wf-1' : 'wf-1/task-1';
+    for (const { name, scope } of HEADLESS_SET_SUBCOMMANDS) {
+      const target = scope === 'workflow' ? 'wf-1' : 'wf-1/task-1';
       const { workflowId } = actions.classifyHeadlessExecMutation({
-        args: ['set', subCommand, target, 'value'],
+        args: ['set', name, target, 'value'],
         noTrack: true,
       });
-      if (workflowId !== 'wf-1') unresolved.push(subCommand);
+      if (workflowId !== 'wf-1') unresolved.push(name);
     }
     expect(unresolved).toEqual([]);
+  });
+
+  it.each([
+    ['invoker:edit-task-command', ['wf-1/task-1', 'pnpm test']],
+    ['invoker:edit-task-prompt', ['wf-1/task-1', 'do the thing']],
+    ['invoker:edit-task-type', ['wf-1/task-1', 'docker']],
+    ['invoker:edit-task-agent', ['wf-1/task-1', 'codex']],
+    ['invoker:edit-task-model', ['wf-1/task-1', 'claude-sonnet-5']],
+    ['invoker:set-task-external-gate-policies', ['wf-1/task-1', [{ workflowId: 'wf-0', gatePolicy: 'completed' }]]],
+  ])('%s translates to a registered set sub-command that classifies to its workflow', (channel, args) => {
+    const actions = createGuiMutationTaskActions(makeContext());
+    const translated = actions.translateGuiMutationToHeadless({ channel, args } as never) as {
+      channel: string;
+      request: { args: string[]; noTrack: true };
+    } | null;
+    expect(translated?.channel).toBe('headless.exec');
+    const [command, subCommand] = translated!.request.args;
+    expect(command).toBe('set');
+    expect(REGISTERED_SET_SUBCOMMAND_NAMES).toContain(subCommand);
+    expect(actions.classifyHeadlessExecMutation(translated!.request).workflowId).toBe('wf-1');
   });
 });
 
@@ -145,7 +165,7 @@ describe('headless set model', () => {
   });
 
   it('registers model as a set subcommand', () => {
-    expect(HEADLESS_SET_SUBCOMMANDS).toContain('model');
+    expect(REGISTERED_SET_SUBCOMMAND_NAMES).toContain('model');
   });
 
   it('routes set model <taskId> <model> through commandService.editTaskModel', async () => {

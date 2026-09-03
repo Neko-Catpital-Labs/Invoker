@@ -43,7 +43,9 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import {
+  findHeadlessSetSubcommandScope,
   formatHeadlessSetSubcommands,
+  type HeadlessSetSubcommand,
   isHeadlessHelpCommand,
 } from './headless-command-registry.js';
 import { printHeadlessUsage } from './headless-usage.js';
@@ -124,48 +126,29 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     throw new Error(`Missing set sub-command. Usage: --headless set <${formatHeadlessSetSubcommands('|')}>`);
   }
 
-  switch (subCommand) {
-    case 'command':
-      await headlessEdit(args[1], args.slice(2).join(' '), deps);
-      break;
-    case 'prompt':
-      await headlessEditPrompt(args[1], args.slice(2).join(' '), deps);
-      break;
-    case 'pool':
-    case 'executor':
-      await headlessEditExecutor(args[1], args[2], args[3], deps);
-      break;
-    case 'agent':
-      await headlessEditAgent(args[1], args[2], deps);
-      break;
-    case 'model':
-      await headlessEditModel(args[1], args[2], deps);
-      break;
-    case 'task-pool':
-      await headlessEditTaskPool(args[1], args[2], deps);
-      break;
-    case 'merge-mode':
-      await headlessSetMergeMode(args[1], args[2], deps);
-      break;
-    case 'fix-prompt':
-      await headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps);
-      break;
-    case 'fix-context':
-      await headlessSetFixContext(args[1], { fixContext: args.slice(2).join(' ') }, deps);
-      break;
-    case 'gate-policy':
-      await headlessSetGatePolicy(args.slice(1), deps);
-      break;
-    case 'workflow':
-      await headlessSetWorkflowMetadata(args[1], args[2], args.slice(3).join(' '), deps);
-      break;
-    case 'task':
-      await headlessSetTaskMetadata(args[1], args[2], args.slice(3).join(' '), deps);
-      break;
-    default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: ${formatHeadlessSetSubcommands(', ')}`);
+  if (findHeadlessSetSubcommandScope(subCommand) === undefined) {
+    throw new Error(`Unknown set sub-command: "${subCommand}". Use: ${formatHeadlessSetSubcommands(', ')}`);
   }
+  await HEADLESS_SET_HANDLERS[subCommand as HeadlessSetSubcommand](args, deps);
 }
+
+type HeadlessSetHandler = (args: string[], deps: HeadlessDeps) => Promise<void>;
+
+const HEADLESS_SET_HANDLERS: Record<HeadlessSetSubcommand, HeadlessSetHandler> = {
+  command: (args, deps) => headlessEdit(args[1], args.slice(2).join(' '), deps),
+  prompt: (args, deps) => headlessEditPrompt(args[1], args.slice(2).join(' '), deps),
+  pool: (args, deps) => headlessEditExecutor(args[1], args[2], args[3], deps),
+  executor: (args, deps) => headlessEditExecutor(args[1], args[2], args[3], deps),
+  agent: (args, deps) => headlessEditAgent(args[1], args[2], deps),
+  model: (args, deps) => headlessEditModel(args[1], args[2], deps),
+  'task-pool': (args, deps) => headlessEditTaskPool(args[1], args[2], deps),
+  'merge-mode': (args, deps) => headlessSetMergeMode(args[1], args[2], deps),
+  'fix-prompt': (args, deps) => headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps),
+  'fix-context': (args, deps) => headlessSetFixContext(args[1], { fixContext: args.slice(2).join(' ') }, deps),
+  'gate-policy': (args, deps) => headlessSetGatePolicy(args.slice(1), deps),
+  workflow: (args, deps) => headlessSetWorkflowMetadata(args[1], args[2], args.slice(3).join(' '), deps),
+  task: (args, deps) => headlessSetTaskMetadata(args[1], args[2], args.slice(3).join(' '), deps),
+};
 
 async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   const report = deps.persistence.runCompatibilityMigration();
