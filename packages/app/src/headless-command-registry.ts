@@ -60,6 +60,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'close-task', kind: 'write' },
   { name: 'delete', kind: 'write' },
   { name: 'delete-all', kind: 'write' },
+  { name: 'reset-autofix-budget', kind: 'write' },
   { name: 'open-terminal', kind: 'read' },
   { name: 'query-select', kind: 'read' },
   { name: 'worker', kind: 'read' },
