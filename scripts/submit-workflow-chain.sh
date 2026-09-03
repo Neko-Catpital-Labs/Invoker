@@ -41,6 +41,46 @@ log_chain() {
   echo "[submit-workflow-chain] ${msg}"
 }
 
+BACKEND=""
+
+chain_backend_query_workflows() {
+  if [[ "$BACKEND" == "live" ]]; then
+    invoker-cli query workflows --output json 2>/dev/null
+  else
+    ./run.sh --headless query workflows --output json 2>/dev/null
+  fi
+}
+
+chain_backend_query_tasks() {
+  if [[ "$BACKEND" == "live" ]]; then
+    invoker-cli query tasks --output json 2>/dev/null
+  else
+    ./run.sh --headless query tasks --output json 2>/dev/null
+  fi
+}
+
+chain_backend_submit() {
+  local plan="$1"
+  local out_file="$2"
+  if [[ "$BACKEND" == "live" ]]; then
+    invoker-cli run "$plan" --live --json >"$out_file" 2>/dev/null || true
+  else
+    ./run.sh --headless run "$plan" --no-track >"$out_file" 2>&1 || true
+  fi
+}
+
+chain_backend_parse_submit_id() {
+  local out_file="$1"
+  if [[ "$BACKEND" == "live" ]]; then
+    jq -r '.workflow.id // empty' "$out_file" 2>/dev/null || true
+  else
+    local printed_id delegated_id
+    printed_id="$(awk '/Workflow ID:/{print $3}' "$out_file" | tail -1)"
+    delegated_id="$(sed -n 's/.*workflow: \(wf-[0-9]\+-[0-9]\+\).*/\1/p' "$out_file" | tail -1)"
+    printf '%s' "${printed_id:-$delegated_id}"
+  fi
+}
+
 resolve_abs() {
   local p="$1"
   cd "$(dirname "$p")" && pwd
@@ -174,7 +214,7 @@ resolve_persisted_workflow_id() {
   for _ in $(seq 1 30); do
     attempt=$((attempt + 1))
     wf_id="$(
-      ./run.sh --headless query workflows --output json 2>/dev/null \
+      chain_backend_query_workflows \
         | extract_json_stream \
         | jq -r --arg n "$workflow_name" '[.[] | select(.name == $n)] | sort_by(.createdAt) | last | .id // empty'
     )"
@@ -198,7 +238,7 @@ resolve_workflow_feature_branch() {
   for _ in $(seq 1 30); do
     attempt=$((attempt + 1))
     feature_branch="$(
-      ./run.sh --headless query workflows --output json 2>/dev/null \
+      chain_backend_query_workflows \
         | extract_json_stream \
         | jq -r --arg id "$workflow_id" '.[] | select(.id == $id) | .featureBranch // empty' \
         | head -1
@@ -264,7 +304,7 @@ wait_for_external_merge_gate() {
   local attempt=0
   for _ in $(seq 1 60); do
     attempt=$((attempt + 1))
-    if ./run.sh --headless query tasks --output json 2>/dev/null | extract_json_stream | jq -e --arg id "$merge_id" '.[] | select(.id == $id)' >/dev/null; then
+    if chain_backend_query_tasks | extract_json_stream | jq -e --arg id "$merge_id" '.[] | select(.id == $id)' >/dev/null; then
       log_chain "wait_for_external_merge_gate mergeTaskId=\"$merge_id\" found attempt=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
       return 0
     fi
@@ -536,6 +576,12 @@ for i in "${!INPUT_PLANS[@]}"; do
       fi
     fi
     if [[ -n "$onto_id" ]]; then
+      BACKEND="live"
+    else
+      BACKEND="local"
+    fi
+    log_chain "backend=${BACKEND}"
+    if [[ -n "$onto_id" ]]; then
       onto_feature="$(resolve_workflow_feature_branch "$onto_id" || true)"
       if [[ -z "${onto_feature:-}" ]]; then
         echo "Failed to resolve featureBranch for --onto-workflow: $onto_id" >&2
@@ -578,19 +624,18 @@ for i in "${!INPUT_PLANS[@]}"; do
     RENDERED_PLANS+=("$submit_plan")
   fi
 
-  echo "Submitting workflow $((i+1)) (no track): $submit_plan"
+  echo "Submitting workflow $((i+1)) (backend=${BACKEND}): $submit_plan"
   run_start_ms="$(now_ms)"
-  log_chain "headless-run begin step=$((i+1)) plan=\"$submit_plan\" noTrack=true"
+  log_chain "headless-run begin step=$((i+1)) plan=\"$submit_plan\" backend=${BACKEND}"
   _chain_out="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-out$((i+1)).XXXXXX")"
   out_file="${_chain_out}.log"
   rm -f "$_chain_out"
-  ./run.sh --headless run "$submit_plan" --no-track >"$out_file" 2>&1 || true
+  chain_backend_submit "$submit_plan" "$out_file"
   log_chain "headless-run end step=$((i+1)) elapsedMs=$(( $(now_ms) - run_start_ms )) out=\"$out_file\""
 
-  printed_id="$(awk '/Workflow ID:/{print $3}' "$out_file" | tail -1)"
-  delegated_id="$(sed -n 's/.*workflow: \(wf-[0-9]\+-[0-9]\+\).*/\1/p' "$out_file" | tail -1)"
-  if [[ -n "${printed_id:-}" || -n "${delegated_id:-}" ]]; then
-    echo "  printed_id=${printed_id:-<none>} delegated_id=${delegated_id:-<none>}"
+  printed_id="$(chain_backend_parse_submit_id "$out_file")"
+  if [[ -n "${printed_id:-}" ]]; then
+    echo "  printed_id=${printed_id:-<none>}"
   fi
 
   persisted_id="$(resolve_persisted_workflow_id "$plan_name" || true)"
@@ -603,7 +648,7 @@ for i in "${!INPUT_PLANS[@]}"; do
 
   CHAIN_WORKFLOW_IDS+=("$persisted_id")
   wf_base_branch="$(
-    ./run.sh --headless query workflows --output json 2>/dev/null \
+    chain_backend_query_workflows \
       | extract_json_stream \
       | jq -r --arg id "$persisted_id" '.[] | select(.id == $id) | .baseBranch // empty' | head -1
   )"
@@ -622,6 +667,7 @@ done
 echo
 echo "Workflow chain submitted."
 echo "GATE_POLICY=${GATE_POLICY}"
+echo "BACKEND=${BACKEND}"
 for i in "${!CHAIN_WORKFLOW_IDS[@]}"; do
   echo "WF$((i+1))=${CHAIN_WORKFLOW_IDS[$i]} base=${CHAIN_BASE_BRANCHES[$i]} feature=${CHAIN_FEATURE_BRANCHES[$i]}"
 done
