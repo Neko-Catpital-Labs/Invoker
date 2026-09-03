@@ -58,7 +58,7 @@ function makeContext(): GuiMutationTaskActionsContext {
 const WORKFLOW_SCOPED_SET_SUBCOMMANDS = new Set(['workflow', 'merge-mode']);
 
 describe('delegated edit-task-model (set model) classification', () => {
-  it.fails('resolves the task workflow for the translated invoker:edit-task-model payload', () => {
+  it('resolves the task workflow for the translated invoker:edit-task-model payload', () => {
     const actions = createGuiMutationTaskActions(makeContext());
     const translated = actions.translateGuiMutationToHeadless({
       channel: 'invoker:edit-task-model',
@@ -75,7 +75,7 @@ describe('delegated edit-task-model (set model) classification', () => {
     expect(classified).toEqual({ workflowId: 'wf-1', priority: 'high' });
   });
 
-  it.fails('queues the no-track set model mutation instead of rejecting it as workflow-not-resolved', () => {
+  it('queues the no-track set model mutation instead of rejecting it as workflow-not-resolved', () => {
     const actions = createGuiMutationTaskActions(makeContext());
     const payload = { args: ['set', 'model', 'wf-1/task-1', 'claude-sonnet-5'], noTrack: true as const };
     const { workflowId, priority } = actions.classifyHeadlessExecMutation(payload);
@@ -92,7 +92,7 @@ describe('delegated edit-task-model (set model) classification', () => {
     expect(submit).toHaveBeenCalledWith('wf-1', 'high', 'headless.exec', [payload], expect.anything());
   });
 
-  it.fails('classifies every registered set subcommand to a workflow so no-track delegation can queue it', () => {
+  it('classifies every registered set subcommand to a workflow so no-track delegation can queue it', () => {
     const actions = createGuiMutationTaskActions(makeContext());
     const unresolved: string[] = [];
     for (const subCommand of HEADLESS_SET_SUBCOMMANDS) {
@@ -144,11 +144,11 @@ describe('headless set model', () => {
     };
   });
 
-  it.fails('registers model as a set subcommand', () => {
+  it('registers model as a set subcommand', () => {
     expect(HEADLESS_SET_SUBCOMMANDS).toContain('model');
   });
 
-  it.fails('routes set model <taskId> <model> through commandService.editTaskModel', async () => {
+  it('routes set model <taskId> <model> through commandService.editTaskModel', async () => {
     await runHeadless(['set', 'model', 'wf-1/task-1', 'claude-sonnet-5'], deps);
 
     expect(deps.commandService.editTaskModel).toHaveBeenCalledTimes(1);
@@ -158,7 +158,7 @@ describe('headless set model', () => {
     expect(envelope.payload).toEqual({ taskId: 'wf-1/task-1', executionModel: 'claude-sonnet-5' });
   });
 
-  it.fails('clears the model when the value is empty, matching the GUI reset payload', async () => {
+  it('clears the model when the value is empty, matching the GUI reset payload', async () => {
     await runHeadless(['set', 'model', 'wf-1/task-1', ''], deps);
 
     const envelope = vi.mocked(deps.commandService.editTaskModel).mock.calls[0]?.[0] as {
@@ -167,7 +167,7 @@ describe('headless set model', () => {
     expect(envelope.payload).toEqual({ taskId: 'wf-1/task-1', executionModel: null });
   });
 
-  it.fails('rejects a missing task id', async () => {
+  it('rejects a missing task id', async () => {
     await expect(runHeadless(['set', 'model'], deps)).rejects.toThrow('Usage: --headless set model');
   });
 });
