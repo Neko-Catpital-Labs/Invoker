@@ -35,8 +35,10 @@ BLOCKER_RECREATE_STDOUT="$TMP_DIR/blocker-recreate.stdout.log"
 BLOCKER_RECREATE_STDERR="$TMP_DIR/blocker-recreate.stderr.log"
 TARGET_RECREATE_STDOUT="$TMP_DIR/target-recreate.stdout.log"
 TARGET_RECREATE_STDERR="$TMP_DIR/target-recreate.stderr.log"
+BLOCKER_RELEASE_PATH="$TMP_DIR/blocker.release"
 
 cleanup() {
+  touch "$BLOCKER_RELEASE_PATH" >/dev/null 2>&1 || true
   if [[ -n "${BLOCKER_RECREATE_PID:-}" ]]; then
     kill "$BLOCKER_RECREATE_PID" >/dev/null 2>&1 || true
     wait "$BLOCKER_RECREATE_PID" >/dev/null 2>&1 || true
@@ -163,10 +165,10 @@ tasks:
     description: Completed task that should reset immediately when recreate-task takes authority
     command: >-
       bash -lc 'exit 0'
-  - id: blocker-slow
+  - id: z-blocker-slow
     description: Running task whose recreate-task mutation keeps the workflow mutation queue occupied
     command: >-
-      bash -lc 'sleep 20'
+      bash -lc 'while [ ! -e "$BLOCKER_RELEASE_PATH" ]; do sleep 0.1; done'
 EOF
 
 HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
@@ -218,7 +220,7 @@ if [[ "$SUBMIT_STATUS" -ne 0 || -z "${WORKFLOW_ID:-}" ]]; then
 fi
 
 TARGET_ID="$WORKFLOW_ID/target-fast"
-BLOCKER_ID="$WORKFLOW_ID/blocker-slow"
+BLOCKER_ID="$WORKFLOW_ID/z-blocker-slow"
 
 wait_for_query_status "$TARGET_ID" "completed" "$TIMEOUT_SECONDS"
 wait_for_query_status "$BLOCKER_ID" "running" "$TIMEOUT_SECONDS"
