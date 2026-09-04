@@ -548,6 +548,10 @@ export function App() {
     await invoker.stopWorker(kind);
     void refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
+  const handleTickWorker = useCallback(async (kind: string) => {
+    await invoker.tickWorker(kind);
+    void refreshWorkerStatus();
+  }, [invoker, refreshWorkerStatus]);
   const runningTaskIds = useMemo(
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
     [queueStatus],
@@ -4350,6 +4354,7 @@ export function App() {
                 readOnly={runtimeStatus?.readOnly === true}
                 onStartWorker={handleStartWorker}
                 onStopWorker={handleStopWorker}
+                onTickWorker={handleTickWorker}
               />
               <button
                 type="button"
