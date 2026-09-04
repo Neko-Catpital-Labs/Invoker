@@ -43,6 +43,10 @@ import type {
 } from './workers/idle-task-cleanup-worker.js';
 import type { DbReaperWorkerConfig, DbReaperWorkerStore } from './workers/db-reaper-worker.js';
 import type {
+  SpendCircuitBreakerWorkerConfig,
+  SpendCircuitBreakerWorkerStore,
+} from './workers/spend-circuit-breaker-worker.js';
+import type {
   AdminBypassE2eBabysitWorkerConfig,
   InvestigativePlanSubmitter,
   RepairFilingStore,
@@ -60,7 +64,8 @@ export interface WorkerRuntimeDependencies {
     & WorkflowResumeWorkerStore
     & DiskHeadroomWorkerStore
     & IdleTaskCleanupWorkerStore
-    & DbReaperWorkerStore;
+    & DbReaperWorkerStore
+    & SpendCircuitBreakerWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & ReviewGateCiRepairSubmitter
@@ -108,6 +113,7 @@ export interface WorkerRuntimeDependencies {
   /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
   dbReaper?: DbReaperWorkerConfig;
+  spendCircuitBreaker?: SpendCircuitBreakerWorkerConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitWorkerConfig;
   workerLifecycleStarter?: WorkerLifecycleReader & WorkerLifecycleStarter;
   repairFilingStore?: RepairFilingStore;
