@@ -220,6 +220,22 @@ describe('cancelTask', () => {
     const attemptA = persistence.loadAttempt(orchestrator.getTask('a')!.execution.selectedAttemptId!);
     expect(attemptA?.status).toBe('failed');
     expect(orchestrator.getTask('b')!.execution.selectedAttemptId).toBeUndefined();
+    expect(orchestrator.getTask('b')!.status).toBe('blocked');
+  });
+
+  it('keeps an already-skipped dependent blocked instead of reviving it as failed', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.startExecution();
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: sid(orchestrator, 0, 'a'), status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+    );
+    expect(orchestrator.getTask('b')!.status).toBe('skipped');
+
+    const result = orchestrator.cancelTask('a');
+
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'b'));
+    expect(orchestrator.getTask('b')!.status).toBe('blocked');
+    expect(orchestrator.getTask('b')!.execution.error).toBeUndefined();
   });
 
   it('throws when cancelling a completed task', () => {
