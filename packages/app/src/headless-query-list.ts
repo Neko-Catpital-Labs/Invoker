@@ -12,6 +12,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
+import type { Workflow } from '@invoker/data-store';
 import {
   type AgentSessionData,
   type NormalizedCostEvent,
@@ -34,7 +35,7 @@ import {
   parseQueryFlags,
   restoreWorkflowForTask,
 } from './headless-shared.js';
-import { resolveDefaultExecutionAgent } from './config.js';
+import { resolveDefaultExecutionAgent, type InvokerConfig } from './config.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
 import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot, listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
@@ -55,7 +56,7 @@ import {
  * per request, so concurrent delegated queries never cross output.
  */
 const queryOutputSink = new AsyncLocalStorage<(chunk: string) => void>();
-const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, alert-history, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks';
+const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, alert-history, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks, capacity';
 const QUERY_SUBCOMMAND_USAGE = QUERY_SUBCOMMANDS.replaceAll(', ', '|');
 
 function writeOut(chunk: string): void {
@@ -651,9 +652,181 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       }
       break;
     }
+    case 'capacity': {
+      const report = buildCapacityReport(deps.persistence, deps.invokerConfig);
+      switch (flags.output) {
+        case 'label':
+          writeOut(report.pools.flatMap((pool) => pool.members.map((member) => `${pool.poolId}/${member.memberId}`)).join('\n') + '\n');
+          break;
+        case 'json':
+          writeOut(formatAsJson(report) + '\n');
+          break;
+        case 'jsonl':
+          writeOut(formatAsJsonl(report.pools) + '\n');
+          break;
+        default:
+          writeOut(formatCapacityReport(report) + '\n');
+          break;
+      }
+      break;
+    }
     default:
       throw new Error(`Unknown query sub-command: "${subCommand}". Use: ${QUERY_SUBCOMMANDS}`);
   }
+}
+
+const CAPACITY_QUEUE_PREFIX_TRIM_RE = /\b[0-9a-f]{7,40}\b.*$/i;
+
+function normalizeCapacityWorkflowPrefix(name: string): string {
+  const stripped = name.replace(CAPACITY_QUEUE_PREFIX_TRIM_RE, '').trim().replace(/[:\-\s]+$/, '');
+  return stripped || name.trim();
+}
+
+const CAPACITY_WAITING_TASK_STATUSES = new Set(['queued', 'pending']);
+
+export interface CapacityPoolMemberReport {
+  memberId: string;
+  maxConcurrentTasks: number;
+  inUse: number;
+  full: boolean;
+}
+
+export interface CapacityPoolReport {
+  poolId: string;
+  maxConcurrentTasksPerMember: number;
+  members: CapacityPoolMemberReport[];
+}
+
+export interface CapacityQueuePrefixReport {
+  prefix: string;
+  queuedTasks: number;
+  workflowCount: number;
+}
+
+export interface CapacityOldestWaitingReport {
+  taskId: string;
+  workflowId: string;
+  createdAt: string;
+  ageMs: number;
+}
+
+export interface CapacityReport {
+  generatedAt: string;
+  pools: CapacityPoolReport[];
+  totalQueued: number;
+  queueByWorkflowPrefix: CapacityQueuePrefixReport[];
+  oldestWaiting: CapacityOldestWaitingReport | null;
+}
+
+export function buildCapacityReport(
+  persistence: Pick<HeadlessQueryDeps['persistence'], 'loadWorkflowTaskSnapshot' | 'listExecutionResourceLeases'>,
+  invokerConfig: Pick<InvokerConfig, 'executionPools'>,
+): CapacityReport {
+  const nowIso = new Date().toISOString();
+  const now = Date.now();
+
+  const listLeases = persistence.listExecutionResourceLeases?.bind(persistence);
+  const leases = listLeases ? listLeases().filter((lease) => lease.leaseExpiresAt > nowIso) : [];
+  const inUseByPoolMember = new Map<string, number>();
+  for (const lease of leases) {
+    if (!lease.poolId || !lease.poolMemberId) continue;
+    const key = `${lease.poolId} ${lease.poolMemberId}`;
+    inUseByPoolMember.set(key, (inUseByPoolMember.get(key) ?? 0) + 1);
+  }
+
+  const pools: CapacityPoolReport[] = [];
+  for (const [poolId, pool] of Object.entries(invokerConfig.executionPools ?? {})) {
+    const maxConcurrentTasksPerMember = pool.maxConcurrentTasksPerMember ?? 1;
+    const members: CapacityPoolMemberReport[] = pool.members.map((member) => {
+      const maxConcurrentTasks = member.maxConcurrentTasks ?? maxConcurrentTasksPerMember;
+      const inUse = inUseByPoolMember.get(`${poolId} ${member.id}`) ?? 0;
+      return { memberId: member.id, maxConcurrentTasks, inUse, full: inUse >= maxConcurrentTasks };
+    });
+    pools.push({ poolId, maxConcurrentTasksPerMember, members });
+  }
+
+  const snapshot = persistence.loadWorkflowTaskSnapshot();
+  const workflowNameById = new Map<string, string>(
+    snapshot.workflows.map((workflow: Workflow) => [workflow.id, workflow.name]),
+  );
+
+  const waitingTasks = snapshot.tasks.filter((task) => (
+    CAPACITY_WAITING_TASK_STATUSES.has(task.status) && !task.config.isMergeNode
+  ));
+
+  const prefixCounts = new Map<string, { queuedTasks: number; workflowIds: Set<string> }>();
+  for (const task of waitingTasks) {
+    const workflowId = task.config.workflowId;
+    const name = (workflowId && workflowNameById.get(workflowId)) || 'unknown';
+    const prefix = normalizeCapacityWorkflowPrefix(name);
+    const entry = prefixCounts.get(prefix) ?? { queuedTasks: 0, workflowIds: new Set<string>() };
+    entry.queuedTasks += 1;
+    if (workflowId) entry.workflowIds.add(workflowId);
+    prefixCounts.set(prefix, entry);
+  }
+  const queueByWorkflowPrefix = [...prefixCounts.entries()]
+    .map(([prefix, entry]) => ({ prefix, queuedTasks: entry.queuedTasks, workflowCount: entry.workflowIds.size }))
+    .sort((a, b) => b.queuedTasks - a.queuedTasks);
+
+  let oldestWaiting: CapacityOldestWaitingReport | null = null;
+  for (const task of waitingTasks) {
+    const createdAtMs = task.createdAt.getTime();
+    if (!oldestWaiting || createdAtMs < new Date(oldestWaiting.createdAt).getTime()) {
+      oldestWaiting = {
+        taskId: task.id,
+        workflowId: task.config.workflowId ?? '',
+        createdAt: task.createdAt.toISOString(),
+        ageMs: now - createdAtMs,
+      };
+    }
+  }
+
+  return {
+    generatedAt: nowIso,
+    pools,
+    totalQueued: waitingTasks.length,
+    queueByWorkflowPrefix,
+    oldestWaiting,
+  };
+}
+
+function formatCapacityAge(ageMs: number): string {
+  const totalSeconds = Math.floor(ageMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours > 0) return `${hours}h${minutes}m`;
+  return `${minutes}m`;
+}
+
+export function formatCapacityReport(report: CapacityReport): string {
+  const lines: string[] = [];
+  lines.push('POOL/MEMBER CAPACITY');
+  if (report.pools.length === 0) {
+    lines.push('No execution pools configured.');
+  } else {
+    for (const pool of report.pools) {
+      lines.push(`${pool.poolId} (default cap ${pool.maxConcurrentTasksPerMember}/member):`);
+      for (const member of pool.members) {
+        lines.push(`  ${member.memberId}: ${member.inUse}/${member.maxConcurrentTasks}${member.full ? ' (FULL)' : ''}`);
+      }
+    }
+  }
+  lines.push('');
+  lines.push(`QUEUE DEPTH (${report.totalQueued} waiting task(s))`);
+  if (report.queueByWorkflowPrefix.length === 0) {
+    lines.push('No queued or pending tasks.');
+  } else {
+    for (const entry of report.queueByWorkflowPrefix) {
+      lines.push(`  ${entry.prefix}: ${entry.queuedTasks} queued task(s) across ${entry.workflowCount} workflow(s)`);
+    }
+  }
+  lines.push('');
+  if (report.oldestWaiting) {
+    lines.push(`OLDEST WAITING: ${report.oldestWaiting.taskId} (workflow ${report.oldestWaiting.workflowId}) — waiting ${formatCapacityAge(report.oldestWaiting.ageMs)}`);
+  } else {
+    lines.push('OLDEST WAITING: none');
+  }
+  return lines.join('\n');
 }
 
 /**

@@ -195,4 +195,39 @@ describe('invoker-cli query', () => {
     expect(output.stdout).toBe('[]\n');
     output.restore();
   });
+
+  it('delegates a capacity query to a live owner with the cli-query request shape', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const queryHandler = vi.fn(async (request: unknown) => {
+      expect(request).toEqual({
+        kind: 'cli-query',
+        args: ['query', 'capacity', '--output', 'json'],
+      });
+      return { output: '{"pools":[]}\n' };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', queryHandler);
+
+    const code = await main(['query', 'capacity', '--output', 'json'], { createMessageBus: () => bus });
+
+    expect(code).toBe(0);
+    expect(queryHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toBe('{"pools":[]}\n');
+    output.restore();
+  });
+
+  it('refuses a standalone capacity query with a clear live-owner-required error', async () => {
+    const dbDir = makeTempDir('invoker-cli-query-capacity-standalone-');
+    await seedDb(dbDir);
+    process.env.INVOKER_DB_DIR = dbDir;
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+
+    const code = await main(['query', 'capacity'], { createMessageBus: () => bus });
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain('query capacity requires a live owner');
+    output.restore();
+  });
 });
