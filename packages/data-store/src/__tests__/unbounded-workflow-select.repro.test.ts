@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { Buffer } from 'node:buffer';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -54,24 +55,23 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('listWorkflows materializes every row into JS objects', () => {
     const workflowCount = 5_000;
+    const descriptionPayload = 'x'.repeat(256);
     for (let i = 0; i < workflowCount; i++) {
       adapter.saveWorkflow({
         id: `wf-${i}`,
         name: `Workflow ${i} with a longer name to increase memory footprint`,
-        description: `Description for workflow ${i} that adds more bytes per row`,
+        description: `Description for workflow ${i}: ${descriptionPayload}`,
         status: 'pending',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
     }
 
-    const before = process.memoryUsage().heapUsed;
     const workflows = adapter.listWorkflows();
-    const after = process.memoryUsage().heapUsed;
-    const memoryDelta = after - before;
+    const materializedBytes = Buffer.byteLength(JSON.stringify(workflows));
 
     expect(workflows).toHaveLength(workflowCount);
-    expect(memoryDelta).toBeLessThan(1_000_000);
+    expect(materializedBytes).toBeLessThan(1_000_000);
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
