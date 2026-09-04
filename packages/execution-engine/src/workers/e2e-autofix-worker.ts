@@ -4,6 +4,7 @@ import type { Readable } from 'node:stream';
 
 import { resolveRepoRoot, type Logger } from '@invoker/contracts';
 
+import { terminateChildProcessGroup } from '../process-utils.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
@@ -95,12 +96,13 @@ export function createE2eAutoFixWorker(options: E2eAutoFixWorkerOptions): Worker
 }
 
 export function createE2eAutoFixTick(options: E2eAutoFixTickOptions): WorkerTick {
-  return async () => {
-    await runE2eAutoFixEntrypoint(options);
+  return async (ctx) => {
+    await runE2eAutoFixEntrypoint(options, ctx?.signal);
   };
 }
 
-async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions): Promise<void> {
+async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   const repoRoot = options.repoRoot ? resolve(options.repoRoot) : resolveRepoRoot(process.cwd());
   const scriptPath = resolve(repoRoot, E2E_AUTOFIX_SCRIPT_RELATIVE_PATH);
   const shell = options.shell ?? 'bash';
@@ -122,6 +124,7 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions): Promise<
       cwd: repoRoot,
       env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
   } catch (err) {
     options.logger.error(`[worker:${E2E_AUTOFIX_WORKER_KIND}] spawn failed`, {
@@ -150,13 +153,13 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions): Promise<
       fn();
     };
 
-    const finish = (code: number | null, signal: NodeJS.Signals | null, source: 'close' | 'exit'): void => {
+    const finish = (code: number | null, exitSignal: NodeJS.Signals | null, source: 'close' | 'exit'): void => {
       settle(() => {
         const fields = {
           module: 'e2e-autofix-worker',
           worker: E2E_AUTOFIX_WORKER_KIND,
           code,
-          signal,
+          signal: exitSignal,
           source,
         };
         if (code === 0) {
@@ -171,14 +174,32 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions): Promise<
           resolvePromise();
           return;
         }
+        if (signal?.aborted) {
+          options.logger.info(`[worker:${E2E_AUTOFIX_WORKER_KIND}] shell entrypoint aborted by stop`, fields);
+          resolvePromise();
+          return;
+        }
         const message = `e2e auto-fix worker exited with code ${code ?? 'null'}`
-          + (signal ? ` signal ${signal}` : '');
+          + (exitSignal ? ` signal ${exitSignal}` : '');
         options.logger.error(`[worker:${E2E_AUTOFIX_WORKER_KIND}] shell entrypoint failed`, fields);
         rejectPromise(new Error(message));
       });
     };
 
+    const onAbort = (): void => {
+      void terminateChildProcessGroup(child, () => settled);
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
     child.once('error', (err) => {
+      signal?.removeEventListener('abort', onAbort);
       settle(() => {
         options.logger.error(`[worker:${E2E_AUTOFIX_WORKER_KIND}] process error`, {
           module: 'e2e-autofix-worker',
@@ -189,11 +210,17 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions): Promise<
       });
     });
 
-    child.once('close', (code, signal) => finish(code, signal, 'close'));
+    child.once('close', (code, exitSignal) => {
+      signal?.removeEventListener('abort', onAbort);
+      finish(code, exitSignal, 'close');
+    });
 
-    child.once('exit', (code, signal) => {
+    child.once('exit', (code, exitSignal) => {
       if (settled) return;
-      graceTimer = setTimeout(() => finish(code, signal, 'exit'), closeGraceMs);
+      graceTimer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        finish(code, exitSignal, 'exit');
+      }, closeGraceMs);
       graceTimer.unref?.();
     });
   });
