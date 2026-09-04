@@ -1309,6 +1309,10 @@ export const IpcChannels = {
     request: [kind: string];
     response: WorkerStatusEntry;
   },
+  'invoker:tick-worker': {} as {
+    request: [kind: string];
+    response: WorkerStatusEntry;
+  },
   'invoker:get-action-graph': {} as {
     request: [];
     response: ActionGraphResponse;
