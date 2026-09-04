@@ -35,15 +35,14 @@ BLOCKER_RECREATE_STDOUT="$TMP_DIR/blocker-recreate.stdout.log"
 BLOCKER_RECREATE_STDERR="$TMP_DIR/blocker-recreate.stderr.log"
 TARGET_RECREATE_STDOUT="$TMP_DIR/target-recreate.stdout.log"
 TARGET_RECREATE_STDERR="$TMP_DIR/target-recreate.stderr.log"
+BLOCKER_RELEASE_PATH="$TMP_DIR/blocker-release"
 
 cleanup() {
+  touch "$BLOCKER_RELEASE_PATH" >/dev/null 2>&1 || true
+  sleep 1
   if [[ -n "${BLOCKER_RECREATE_PID:-}" ]]; then
     kill "$BLOCKER_RECREATE_PID" >/dev/null 2>&1 || true
     wait "$BLOCKER_RECREATE_PID" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${TARGET_RECREATE_PID:-}" ]]; then
-    kill "$TARGET_RECREATE_PID" >/dev/null 2>&1 || true
-    wait "$TARGET_RECREATE_PID" >/dev/null 2>&1 || true
   fi
   if [[ -n "${OWNER_PID:-}" ]]; then
     kill "$OWNER_PID" >/dev/null 2>&1 || true
@@ -57,13 +56,7 @@ trap cleanup EXIT
 
 query_sqlite_value() {
   local sql="$1"
-  node "$ROOT_DIR/scripts/repro/sqljs-query.mjs" "$DB_DIR/invoker.db" "$sql"
-}
-
-query_action_graph_value() {
-  HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
-    node "$HEADLESS_CLIENT_JS" query action-graph --output json 2>/dev/null \
-    | node "$ROOT_DIR/scripts/repro/action-graph-query.mjs" "$@"
+  node "$ROOT_DIR/scripts/repro/sqlite-query.mjs" "$DB_DIR/invoker.db" "$sql"
 }
 
 sqlite_schema_ready() {
@@ -81,7 +74,7 @@ wait_for_query_status() {
   started_at="$(date +%s)"
   while true; do
     local status
-    status="$(query_action_graph_value task-status "$task_id" || true)"
+    status="$(query_sqlite_value "SELECT status FROM tasks WHERE id = '$task_id' LIMIT 1;" || true)"
     if [[ "$status" == "$expected_status" ]]; then
       return 0
     fi
@@ -101,7 +94,7 @@ wait_for_intent_status() {
   started_at="$(date +%s)"
   while true; do
     local status
-    status="$(query_action_graph_value intent-status "$intent_id" || true)"
+    status="$(query_sqlite_value "SELECT status FROM workflow_mutation_intents WHERE id = $intent_id LIMIT 1;" || true)"
     if [[ "$status" == "$expected_status" ]]; then
       return 0
     fi
@@ -151,7 +144,24 @@ git -C "$REPO_FIXTURE_DIR" commit -m "Initial fixture" >/dev/null 2>&1
 
 cat > "$CONFIG_PATH" <<'EOF'
 {
-  "maxConcurrency": 2
+  "maxConcurrency": 2,
+  "worktreeTargets": {
+    "repro-local": {
+      "maxConcurrentTasks": 2
+    }
+  },
+  "executionPools": {
+    "repro-local": {
+      "members": [
+        {
+          "type": "worktree",
+          "id": "repro-local",
+          "maxConcurrentTasks": 2
+        }
+      ]
+    }
+  },
+  "defaultPoolId": "repro-local"
 }
 EOF
 
@@ -166,7 +176,7 @@ tasks:
   - id: blocker-slow
     description: Running task whose recreate-task mutation keeps the workflow mutation queue occupied
     command: >-
-      bash -lc 'sleep 20'
+      bash -lc 'while [ ! -e "$BLOCKER_RELEASE_PATH" ]; do sleep 0.05; done'
 EOF
 
 HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
@@ -228,13 +238,14 @@ echo "workflow: $WORKFLOW_ID"
 echo "completed target task: $TARGET_ID"
 echo "running blocker task: $BLOCKER_ID"
 
-HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test node "$HEADLESS_CLIENT_JS" recreate-task "$BLOCKER_ID" \
+HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
+  node "$HEADLESS_CLIENT_JS" recreate-task "$BLOCKER_ID" \
   >"$BLOCKER_RECREATE_STDOUT" 2>"$BLOCKER_RECREATE_STDERR" &
 BLOCKER_RECREATE_PID=$!
 
 BLOCKER_RECREATE_INTENT_ID=""
 for _ in {1..100}; do
-  BLOCKER_RECREATE_INTENT_ID="$(query_action_graph_value intent-id "$WORKFLOW_ID" "\"recreate-task\",\"$BLOCKER_ID\"" || true)"
+  BLOCKER_RECREATE_INTENT_ID="$(query_sqlite_value "SELECT id FROM workflow_mutation_intents WHERE workflow_id = '$WORKFLOW_ID' AND args_json LIKE '%\"recreate-task\",\"$BLOCKER_ID\"%' ORDER BY id DESC LIMIT 1;" || true)"
   if [[ -n "$BLOCKER_RECREATE_INTENT_ID" && "$BLOCKER_RECREATE_INTENT_ID" != "0" ]]; then
     break
   fi
@@ -249,16 +260,18 @@ fi
 
 wait_for_intent_status "$BLOCKER_RECREATE_INTENT_ID" "running" 15
 
-HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test node "$HEADLESS_CLIENT_JS" recreate-task "$TARGET_ID" \
-  >"$TARGET_RECREATE_STDOUT" 2>"$TARGET_RECREATE_STDERR" &
-TARGET_RECREATE_PID=$!
+if ! HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
+  node "$HEADLESS_CLIENT_JS" --no-track recreate-task "$TARGET_ID" \
+  >"$TARGET_RECREATE_STDOUT" 2>"$TARGET_RECREATE_STDERR"; then
+  echo "repro: failed to enqueue target recreate-task intent" >&2
+  cat "$TARGET_RECREATE_STDERR" >&2 || true
+  exit 1
+fi
 
 TARGET_RECREATE_INTENT_ID=""
 for _ in {1..100}; do
-  TARGET_RECREATE_INTENT_ID="$(query_action_graph_value intent-id "$WORKFLOW_ID" "\"recreate-task\",\"$TARGET_ID\"" "$BLOCKER_RECREATE_INTENT_ID" || true)"
-  if [[ -n "$TARGET_RECREATE_INTENT_ID" && "$TARGET_RECREATE_INTENT_ID" != "$BLOCKER_RECREATE_INTENT_ID" ]]; then
-    break
-  fi
+  TARGET_RECREATE_INTENT_ID="$(query_sqlite_value "SELECT id FROM workflow_mutation_intents WHERE workflow_id = '$WORKFLOW_ID' AND id != $BLOCKER_RECREATE_INTENT_ID AND args_json LIKE '%\"recreate-task\",\"$TARGET_ID\"%' ORDER BY id DESC LIMIT 1;" || true)"
+  [[ -n "$TARGET_RECREATE_INTENT_ID" ]] && break
   sleep 0.1
 done
 
@@ -270,11 +283,11 @@ fi
 
 sleep 3
 
-BLOCKER_RECREATE_STATUS="$(query_action_graph_value intent-status "$BLOCKER_RECREATE_INTENT_ID")"
-TARGET_RECREATE_STATUS="$(query_action_graph_value intent-status "$TARGET_RECREATE_INTENT_ID")"
-TARGET_PENDING_EVENTS="$(query_action_graph_value task-event-count-since-intent "$TARGET_ID" task.pending "$TARGET_RECREATE_INTENT_ID")"
-TARGET_STATUS_AFTER_SECOND="$(query_action_graph_value task-status "$TARGET_ID")"
-BLOCKER_STATUS_AFTER_SECOND="$(query_action_graph_value task-status "$BLOCKER_ID")"
+BLOCKER_RECREATE_STATUS="$(query_sqlite_value "SELECT status FROM workflow_mutation_intents WHERE id = $BLOCKER_RECREATE_INTENT_ID;")"
+TARGET_RECREATE_STATUS="$(query_sqlite_value "SELECT status FROM workflow_mutation_intents WHERE id = $TARGET_RECREATE_INTENT_ID;")"
+TARGET_PENDING_EVENTS="$(query_sqlite_value "SELECT COUNT(*) FROM events JOIN workflow_mutation_intents ON workflow_mutation_intents.id = $TARGET_RECREATE_INTENT_ID WHERE events.task_id = '$TARGET_ID' AND events.event_type = 'task.pending' AND datetime(events.created_at) >= datetime(workflow_mutation_intents.created_at);")"
+TARGET_STATUS_AFTER_SECOND="$(query_sqlite_value "SELECT status FROM tasks WHERE id = '$TARGET_ID';")"
+BLOCKER_STATUS_AFTER_SECOND="$(query_sqlite_value "SELECT status FROM tasks WHERE id = '$BLOCKER_ID';")"
 
 if [[ "$EXPECTATION" == "bug" ]]; then
   if [[ "$BLOCKER_RECREATE_STATUS" != "running" ]]; then
