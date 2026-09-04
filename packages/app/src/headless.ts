@@ -611,6 +611,27 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     return;
   }
 
+  if (subCommand === 'tick') {
+    const kind = args[1];
+    if (!kind) {
+      throw new Error('Missing worker kind. Usage: --headless worker tick <kind>');
+    }
+    if (!registry.get(kind)) {
+      const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+      throw new Error(`Unknown worker kind: "${kind}". Use: ${knownKinds}`);
+    }
+    const controller = deps.getWorkerRuntimeController?.();
+    if (!controller) {
+      throw new Error(
+        `Cannot tick worker "${kind}": no live owner worker runtime in this process. `
+        + 'Run this against a live "owner-serve" process.',
+      );
+    }
+    const entry = await controller.tick(kind);
+    process.stdout.write(`${kind}: ticked (desiredEnabled=${entry.desiredEnabled})\n`);
+    return;
+  }
+
   const definition = registry.get(subCommand);
   if (!definition) {
     const knownKinds = registry.list().map((worker) => worker.kind).join(', ');

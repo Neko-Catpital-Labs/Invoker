@@ -1,7 +1,10 @@
-export type WorkerControlChannel = 'invoker:start-worker' | 'invoker:stop-worker';
+export type WorkerControlChannel =
+  | 'invoker:start-worker'
+  | 'invoker:stop-worker'
+  | 'invoker:tick-worker';
 
 export interface WorkerControlMutation {
-  readonly action: 'start' | 'stop';
+  readonly action: 'start' | 'stop' | 'tick';
   readonly channel: WorkerControlChannel;
   readonly kind: string;
 }
@@ -14,9 +17,13 @@ export function resolveWorkerControlMutation(args: readonly string[]): WorkerCon
   if (!kind) {
     throw new Error(`Missing worker kind. Usage: --headless worker ${action} <kind>`);
   }
+  const channel: WorkerControlChannel =
+    action === 'start' ? 'invoker:start-worker'
+    : action === 'stop' ? 'invoker:stop-worker'
+    : 'invoker:tick-worker';
   return {
     action,
-    channel: action === 'start' ? 'invoker:start-worker' : 'invoker:stop-worker',
+    channel,
     kind,
   };
 }

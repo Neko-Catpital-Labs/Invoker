@@ -1917,6 +1917,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return workerRuntimeController.stop(String(kindArg), { source: 'gui-ipc' });
   });
 
+  registerGuiMutationHandler('invoker:tick-worker', async (kindArg: unknown) => {
+    if (!workerRuntimeController) {
+      throw new Error('Worker runtime controller is unavailable');
+    }
+    return workerRuntimeController.tick(String(kindArg));
+  });
+
   ipcMain.handle('invoker:get-queue-status', (_event, options?: { refresh?: boolean }) => resolveGuiQueueStatusRead({
     ownerMode,
     messageBus,
