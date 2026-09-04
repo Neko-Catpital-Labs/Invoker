@@ -39,7 +39,12 @@ trap cleanup EXIT
 
 echo "==> case 2.17: start GUI owner"
 unset ELECTRON_RUN_AS_NODE
-./run.sh >"$OWNER_LOG" 2>&1 &
+# run-all.sh has already built the app. Launch that artifact directly through
+# the development-profile guard so the readiness budget measures owner startup,
+# not run.sh's unconditional clean rebuild of every workspace package.
+node "$REPO_ROOT/scripts/with-invoker-development-profile.mjs" -- \
+  "$REPO_ROOT/scripts/electron.cjs" "$REPO_ROOT/packages/app/dist/main.js" \
+  >"$OWNER_LOG" 2>&1 &
 OWNER_PID=$!
 
 echo "==> case 2.17: wait for owner mutation readiness"

@@ -204,6 +204,28 @@ describe('cancelTask', () => {
     expect(persistence.listWorkflows().find((w) => w.id === wfId)?.status).toBe('failed');
   });
 
+  it('blocks a never-started dependent already skipped by upstream failure recovery', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.startExecution();
+
+    orchestrator.handleWorkerResponse(
+      makeResponse({
+        actionId: 'a',
+        status: 'failed',
+        outputs: { exitCode: 1, error: 'launch failed before cancellation' },
+      }),
+    );
+    expect(orchestrator.getTask('b')!.status).toBe('skipped');
+    expect(orchestrator.getTask('b')!.execution.startedAt).toBeUndefined();
+
+    orchestrator.cancelTask('a');
+
+    const taskB = orchestrator.getTask('b');
+    expect(taskB!.status).toBe('blocked');
+    expect(taskB!.execution.blockedBy).toContain('upstream task "a"');
+    expect(taskB!.execution.error).toBeUndefined();
+  });
+
   it('returns running tasks in runningCancelled', () => {
     orchestrator.loadPlan(simplePlan());
     // startExecution makes 'a' running (it has no deps)
