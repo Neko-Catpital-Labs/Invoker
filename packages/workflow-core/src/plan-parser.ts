@@ -143,6 +143,7 @@ export interface RawPlanTask {
   executionAgent?: string;
   executionModel?: string;
   maxTurns?: number;
+  priority?: number;
   freshness?: unknown;
 }
 
@@ -158,6 +159,7 @@ export interface RawPlan {
   repoUrl?: string;
   scratch?: boolean;
   poolId?: string;
+  priority?: number;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -363,6 +365,15 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
   const planPoolId = typeof raw.poolId === 'string' ? raw.poolId.trim() : undefined;
 
+  const validatePriority = (owner: string, value: number | undefined): number | undefined => {
+    if (value === undefined) return undefined;
+    if (!Number.isInteger(value) || value < 1 || value > 5) {
+      throw new PlanParseError(`${owner} "priority" must be an integer from 1 (highest) to 5 (lowest); got ${value}.`);
+    }
+    return value;
+  };
+  const planPriority = validatePriority('Plan', raw.priority);
+
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
   const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
@@ -475,6 +486,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       })(),
       executionModel: task.executionModel?.trim() || undefined,
       maxTurns: task.maxTurns,
+      priority: validatePriority(`Task "${task.id}"`, task.priority) ?? planPriority,
       ...(freshness !== undefined ? { freshness } : {}),
     };
   });

@@ -269,4 +269,51 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow(expected);
   });
+
+  it('threads an explicit task-level priority through to the parsed task', () => {
+    const yaml = `
+name: Priority Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: urgent
+    description: Do it now
+    command: echo ok
+    priority: 1
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].priority).toBe(1);
+  });
+
+  it('a task priority overrides the plan-level priority', () => {
+    const yaml = `
+name: Priority Override Plan
+repoUrl: git@github.com:test/repo.git
+priority: 4
+tasks:
+  - id: overridden
+    description: Overridden
+    command: echo ok
+    priority: 1
+  - id: inherits
+    description: Inherits plan default
+    command: echo ok
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].priority).toBe(1);
+    expect(plan.tasks[1].priority).toBe(4);
+  });
+
+  it.each([0, 6, 1.5])('rejects a task priority outside 1-5: %s', (badPriority) => {
+    const yaml = `
+name: Bad Priority Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    priority: ${badPriority}
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/priority.*1.*5/i);
+  });
 });
