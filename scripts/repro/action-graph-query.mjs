@@ -34,6 +34,24 @@ function intentNode(intentId) {
   return nodes.find((node) => node.type === 'mutation-intent' && String(node.intentId) === String(intentId));
 }
 
+function mutationHistory() {
+  return nodes.flatMap((node) => {
+    const history = Array.isArray(node.history) ? node.history : [];
+    return history.flatMap((entry) => {
+      if (entry?.source !== 'workflow.mutation.timing' || typeof entry.message !== 'string') return [];
+      try {
+        return [{ entry, payload: JSON.parse(entry.message) }];
+      } catch {
+        return [];
+      }
+    });
+  });
+}
+
+function mutationHistoryForIntent(intentId) {
+  return mutationHistory().filter(({ payload }) => String(payload.intentId) === String(intentId));
+}
+
 switch (command) {
   case 'task-status': {
     const node = taskNode(args[0]);
@@ -48,18 +66,59 @@ switch (command) {
       .filter((candidate) => String(candidate.intentId) !== String(excludedId ?? ''))
       .filter((candidate) => JSON.stringify(candidate.details?.args ?? []).includes(needle))
       .sort((a, b) => Number(b.intentId ?? 0) - Number(a.intentId ?? 0))[0];
-    process.stdout.write(node?.intentId === undefined ? '' : String(node.intentId));
+    let intentId = node?.intentId;
+    if (intentId === undefined) {
+      let mutationKind = '';
+      let taskId = '';
+      try {
+        const parsedNeedle = JSON.parse(`[${needle}]`);
+        mutationKind = typeof parsedNeedle[0] === 'string' ? parsedNeedle[0] : '';
+        taskId = typeof parsedNeedle[1] === 'string' ? parsedNeedle[1] : '';
+      } catch {
+        mutationKind = '';
+        taskId = '';
+      }
+      intentId = mutationHistory()
+        .filter(({ payload }) => (
+          payload.workflowId === workflowId
+          && payload.taskId === taskId
+          && String(payload.function ?? '').includes(`headless.${mutationKind}.`)
+        ))
+        .map(({ payload }) => payload.intentId)
+        .filter((candidate) => candidate !== undefined && String(candidate) !== String(excludedId ?? ''))
+        .sort((a, b) => Number(b) - Number(a))[0];
+    }
+    process.stdout.write(intentId === undefined ? '' : String(intentId));
     break;
   }
   case 'intent-status': {
-    process.stdout.write(String(intentNode(args[0])?.status ?? ''));
+    const node = intentNode(args[0]);
+    if (node) {
+      process.stdout.write(String(node.status ?? ''));
+      break;
+    }
+    const phases = mutationHistoryForIntent(args[0]).map(({ payload }) => payload.phase);
+    const status = phases.includes('failed')
+      ? 'failed'
+      : phases.includes('completed')
+        ? 'completed'
+        : phases.includes('started')
+          ? 'running'
+          : phases.includes('queued')
+            ? 'queued'
+            : '';
+    process.stdout.write(status);
     break;
   }
   case 'task-event-count-since-intent': {
     const [taskId, eventType, intentId] = args;
     const task = taskNode(taskId);
     const intent = intentNode(intentId);
-    const since = intent?.createdAt ? Date.parse(intent.createdAt) : NaN;
+    const historySince = mutationHistoryForIntent(intentId)
+      .map(({ entry }) => parseTimestamp(entry.timestamp))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)[0];
+    const since = intent?.createdAt ? Date.parse(intent.createdAt) : historySince;
     const history = Array.isArray(task?.history) ? task.history : [];
     const count = history.filter((entry) => {
       const timestamp = entry?.timestamp ? Date.parse(entry.timestamp) : NaN;

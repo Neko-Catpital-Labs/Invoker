@@ -260,7 +260,10 @@ export function cancelTaskImpl(
     const neverStarted =
       id !== rootId &&
       !t.execution.startedAt &&
-      (t.status === 'pending' || (t.status as string) === 'queued' || t.status === 'blocked');
+      (t.status === 'pending' ||
+        (t.status as string) === 'queued' ||
+        t.status === 'blocked' ||
+        t.status === 'skipped');
 
     if (neverStarted) {
       const blockedChanges: TaskStateChanges = {
