@@ -1457,6 +1457,7 @@ function startHeadlessMode(): void {
         return undefined;
       });
 
+
       registerStandaloneOwnerCapability('invoker:clear', async (payload) => {
         logger.info('clear — stopping all tasks and resetting daemon DAG', { module: 'ipc-delegate' });
         await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: undefined });
@@ -1664,6 +1665,13 @@ function startHeadlessMode(): void {
           throw new Error('Worker runtime controller is unavailable');
         }
         return workerRuntimeController.stop(String(payload.args[0]));
+      });
+
+      registerStandaloneOwnerCapability('invoker:tick-worker', async (payload) => {
+        if (!workerRuntimeController) {
+          throw new Error('Worker runtime controller is unavailable');
+        }
+        return workerRuntimeController.tick(String(payload.args[0]));
       });
 
       registerStandaloneOwnerCapability('invoker:inject-task-states', async (payload) => {
