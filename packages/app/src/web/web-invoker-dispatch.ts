@@ -423,27 +423,6 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           return { ok: false, reason: 'unsupported' };
         }
         return deps.taskTerminals.close(String(args[0]));
-      case 'invoker:start-worker':
-      case 'invoker:stop-worker':
-      case 'invoker:tick-worker':
-        if (deps.guiMutations) return deps.guiMutations(channel, args);
-        return unsupported(channel);
-
-      case 'invoker:plan-from-goal':
-      case 'invoker:planning-chat-create':
-      case 'invoker:planning-chat-list':
-      case 'invoker:planning-chat-send':
-      case 'invoker:planning-chat-submit':
-      case 'invoker:planning-chat-discard-draft':
-      case 'invoker:planning-chat-reset':
-      case 'invoker:planning-chat-delete':
-      case 'invoker:planning-chat-delete-submitted':
-      case 'invoker:planning-chat-rebind-repo':
-        if (deps.guiMutations) return deps.guiMutations(channel, args);
-        return unsupported(channel);
-      case 'invoker:planning-chat-set-terminal-mode':
-        if (deps.guiMutations) return deps.guiMutations(channel, args);
-        return { ok: false, error: 'Planning tmux is not available in the web UI' };
       case 'invoker:planning-terminal-open':
         if (deps.planningTerminals) return deps.planningTerminals.open(String(args[0]));
         return { opened: false, reason: 'Planning terminals are not available in the web UI' };
