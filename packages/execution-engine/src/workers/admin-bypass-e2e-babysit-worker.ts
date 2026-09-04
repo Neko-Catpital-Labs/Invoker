@@ -4,6 +4,11 @@ import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-dec
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
+import {
+  createInvestigationPlanThrottle,
+  DEFAULT_INVESTIGATION_COOLDOWN_MS,
+  type InvestigationPlanThrottle,
+} from './investigation-plan-throttle.js';
 
 export const ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND = 'admin-bypass-e2e-babysit';
 
@@ -30,7 +35,6 @@ export const E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX = 'ci-regression-needs-human
 export const E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX = 'ci-regression-needs-human-investigated:';
 
 const DEFAULT_INTERVAL_MS = 10 * 60_000;
-const DEFAULT_INVESTIGATION_COOLDOWN_MS = 60 * 60_000;
 
 export interface WorkerLifecycleSnapshot {
   readonly kind: string;
@@ -197,30 +201,19 @@ export async function runAdminBypassE2eBabysitTick(
   const actions: AdminBypassE2eBabysitAction[] = [];
   const watchedWorkerKinds = new Set(options.watchedWorkerKinds ?? DEFAULT_WATCHED_WORKER_KINDS);
   const workers = await options.workerLifecycle.listWorkers();
-  const cooldownMs = options.investigationCooldownMs ?? DEFAULT_INVESTIGATION_COOLDOWN_MS;
-  const recentInvestigations = options.recentInvestigations ?? new Map<string, number>();
-  const now = Date.now();
-
-  const isInvestigationThrottled = (externalKey: string): boolean => {
-    if (cooldownMs <= 0) return false;
-    const last = recentInvestigations.get(externalKey);
-    return last !== undefined && now - last < cooldownMs;
-  };
-
-  const markInvestigation = (externalKey: string): void => {
-    if (cooldownMs > 0) {
-      recentInvestigations.set(externalKey, now);
-    }
-  };
+  const throttle = createInvestigationPlanThrottle(
+    options.investigationCooldownMs ?? DEFAULT_INVESTIGATION_COOLDOWN_MS,
+    options.recentInvestigations,
+  );
 
   for (const worker of workers) {
     if (!watchedWorkerKinds.has(worker.kind)) continue;
     if (worker.desiredEnabled !== true || worker.lifecycle !== 'stopped') continue;
 
     const externalKey = `worker:${worker.kind}`;
-    if (!isInvestigationThrottled(externalKey)) {
+    if (!throttle.isThrottled(externalKey)) {
       actions.push({ type: 'worker-start', kind: worker.kind });
-      markInvestigation(externalKey);
+      throttle.mark(externalKey);
     }
     try {
       await options.workerLifecycle.start(worker.kind);
@@ -262,7 +255,7 @@ export async function runAdminBypassE2eBabysitTick(
 
     const subjectId = `${row.kind}:${row.subject}:${row.stateSha}`;
     const externalKey = `repair-filing-delete:${subjectId}`;
-    if (!isInvestigationThrottled(externalKey)) {
+    if (!throttle.isThrottled(externalKey)) {
       actions.push({
         type: 'repair-filing-delete',
         kind: row.kind,
@@ -270,7 +263,7 @@ export async function runAdminBypassE2eBabysitTick(
         stateSha: row.stateSha,
         createdAt: row.createdAt,
       });
-      markInvestigation(externalKey);
+      throttle.mark(externalKey);
     }
     try {
       await options.repairFilings.deleteRepairFiling(row.kind, row.subject, row.stateSha);
