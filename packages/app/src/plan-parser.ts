@@ -60,6 +60,17 @@ export function applyConfiguredPlanDefaults(plan: PlanDefinition): PlanDefinitio
   return applyPlanExecutionAgentDefault(plan, resolveDefaultExecutionAgent(loadConfig()));
 }
 
+export const WORKER_SUBMITTED_TASK_PRIORITY = -10;
+
+export function applyWorkerSubmittedTaskPriorityDefault(plan: PlanDefinition): PlanDefinition {
+  return {
+    ...plan,
+    tasks: plan.tasks.map((task) => (
+      task.priority === undefined ? { ...task, priority: WORKER_SUBMITTED_TASK_PRIORITY } : task
+    )),
+  };
+}
+
 
 export interface RawExperimentVariant {
   id?: string;
@@ -89,6 +100,7 @@ export interface RawPlanTask {
   executionAgent?: string;
   executionModel?: string;
   maxTurns?: number;
+  priority?: number;
   freshness?: unknown;
 }
 
@@ -523,6 +535,11 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
         throw new PlanParseError(`Task "${task.id}" field "maxTurns" must be a positive integer when provided`);
       }
     }
+    if (task.priority !== undefined) {
+      if (typeof task.priority !== 'number' || !Number.isInteger(task.priority)) {
+        throw new PlanParseError(`Task "${task.id}" field "priority" must be an integer when provided`);
+      }
+    }
 
     const freshness = (() => {
       try {
@@ -547,6 +564,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       executionAgent: task.executionAgent?.trim() || undefined,
       executionModel: task.executionModel?.trim() || undefined,
       maxTurns: task.maxTurns,
+      priority: task.priority,
       ...(freshness !== undefined ? { freshness } : {}),
     };
   });

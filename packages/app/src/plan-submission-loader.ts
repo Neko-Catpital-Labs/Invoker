@@ -25,6 +25,7 @@ export interface PlanSubmissionLoadOptions {
   repositoryBinding?: InAppPlanningRepoBinding;
   taskHandles?: { clear(): void };
   staged?: boolean;
+  submittedBy?: 'worker' | 'human';
 }
 
 export async function loadPlanSubmissionBundle(
@@ -32,7 +33,11 @@ export async function loadPlanSubmissionBundle(
   deps: PlanSubmissionLoadDeps,
   options?: PlanSubmissionLoadOptions,
 ): Promise<PlanSubmissionLoadResult> {
-  const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+  const {
+    applyConfiguredPlanDefaults,
+    applyWorkerSubmittedTaskPriorityDefault,
+    parsePlanSubmissionBundle,
+  } = await import('./plan-parser.js');
   const submission = parsePlanSubmissionBundle(planText);
   const existingWorkflowIds = new Set(deps.persistence.listWorkflows().map((workflow) => workflow.id));
   const loadedWorkflowIds: string[] = [];
@@ -53,6 +58,9 @@ export async function loadPlanSubmissionBundle(
       ? { ...parsedPlan, repoUrl: options.repositoryBinding.repoUrl }
       : parsedPlan;
     let plan = applyConfiguredPlanDefaults(resolvedPlan);
+    if (options?.submittedBy === 'worker') {
+      plan = applyWorkerSubmittedTaskPriorityDefault(plan);
+    }
     if (!submission.isStack) {
       plan = { ...plan, baseBranch: PINNED_WORKFLOW_BASE_BRANCH };
     }
