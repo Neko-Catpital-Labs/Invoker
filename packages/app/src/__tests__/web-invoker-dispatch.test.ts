@@ -382,6 +382,28 @@ describe('buildWebInvokerDispatch', () => {
     });
   });
 
+  describe('worker lifecycle routes', () => {
+    it('routes start/stop/tick worker through guiMutations when wired', async () => {
+      const guiMutations = vi.fn(async () => ({ ok: true }));
+      const { dispatch } = makeDispatch({ guiMutations });
+
+      await expect(dispatch('invoker:start-worker', ['pr-status'])).resolves.toEqual({ ok: true });
+      await expect(dispatch('invoker:stop-worker', ['pr-status'])).resolves.toEqual({ ok: true });
+      await expect(dispatch('invoker:tick-worker', ['pr-status'])).resolves.toEqual({ ok: true });
+
+      expect(guiMutations).toHaveBeenCalledWith('invoker:start-worker', ['pr-status']);
+      expect(guiMutations).toHaveBeenCalledWith('invoker:stop-worker', ['pr-status']);
+      expect(guiMutations).toHaveBeenCalledWith('invoker:tick-worker', ['pr-status']);
+    });
+
+    it('rejects worker lifecycle channels when guiMutations is absent', async () => {
+      const { dispatch } = makeDispatch();
+      await expect(dispatch('invoker:tick-worker', ['pr-status'])).rejects.toMatchObject({
+        code: 'unsupported_on_web',
+      });
+    });
+  });
+
   describe('planning routes', () => {
     it('routes planning-chat channels through owner capabilities when wired', async () => {
       const ownerCapabilities = new OwnerCapabilityRegistry();
