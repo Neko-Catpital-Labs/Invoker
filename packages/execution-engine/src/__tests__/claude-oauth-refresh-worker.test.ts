@@ -233,7 +233,7 @@ function jwtWithExp(expSeconds: number): string {
 }
 
 function codexAuthJson(now: number, overrides: { lastRefresh?: string; expSeconds?: number } = {}): string {
-  const expSeconds = overrides.expSeconds ?? Math.floor((now + 60 * 60 * 1000) / 1000);
+  const expSeconds = overrides.expSeconds ?? Math.floor((now + 30 * 60 * 60 * 1000) / 1000);
   return JSON.stringify({
     auth_mode: 'chatgpt',
     tokens: {
