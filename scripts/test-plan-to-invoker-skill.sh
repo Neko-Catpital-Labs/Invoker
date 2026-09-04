@@ -36,6 +36,15 @@ must_contain() {
   fi
 }
 
+must_match() {
+  local file="$1"
+  local pattern="$2"
+  local hint="$3"
+  if ! grep -qE -- "$pattern" "$file"; then
+    fail "$hint — pattern missing in $file: $pattern"
+  fi
+}
+
 must_contain_count() {
   local file="$1"
   local needle="$2"
@@ -70,7 +79,7 @@ must_output_contain() {
   local output="$1"
   local needle="$2"
   local hint="$3"
-  if ! printf '%s\n' "$output" | grep -qF -- "$needle"; then
+  if ! grep -qF -- "$needle" <<< "$output"; then
     fail "$hint — missing in command output: $needle"
   fi
 }
@@ -211,7 +220,7 @@ must_contain "$SKILL_MD" "skill://review-compression/SKILL.md" "SKILL handoff mo
 must_contain "$SKILL_MD" "before writing workflow YAML" "SKILL handoff mode must require review compression before workflow YAML"
 must_contain "$SKILL_MD" 'Present plan and submit on confirmation. That confirmation authorizes the reviewed `onFinish` outcome; implementation plans default to GitHub publication through `onFinish: pull_request` without a second approval prompt.' "SKILL intended flow must authorize the reviewed publication outcome"
 must_contain "$SKILL_MD" "approved implementation plans use **Mergify Stacks** for their declared GitHub publication outcome" "SKILL dogfooding rule must use Mergify for the reviewed Invoker publication outcome"
-must_contain "$SKILL_MD" "then publish/update the resulting commit stack with \`mergify stack push\`. Do not ask again after the work is ready." "SKILL dogfooding rule must document the later PR publication command"
+must_match "$SKILL_MD" '^\*\*Invoker dogfooding rule:\*\*.*then publish/update the resulting commit stack with `mergify stack push`.*(without asking again|[Dd]o not ask again)' "SKILL dogfooding rule must document the later PR publication command without a second approval"
 must_contain "$SKILL_MD" "Do **not** generalize this to unrelated target repos" "SKILL dogfooding rule must keep Invoker-only PR publication scoped"
 must_not_contain "$SKILL_MD" "workflow handoff only" "SKILL must not preserve the obsolete no-publication approval boundary"
 must_not_contain "$SKILL_MD" "PR publication still requires a separate explicit request" "SKILL must not require redundant publication approval"
