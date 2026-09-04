@@ -587,28 +587,42 @@ export function getUiImpactingFiles(files) {
   return files.filter(isUiImpactingPath);
 }
 
-function changedFilesSinceBase(baseBranch) {
+export function resolveAtomicityBaseRef(baseBranch, mergifyState, stackParentBranch) {
+  if (mergifyState.managed && stackParentBranch) {
+    return `${DEFAULT_BASE_REMOTE}/${stackParentBranch}`;
+  }
+  return `${DEFAULT_BASE_REMOTE}/${baseBranch}`;
+}
+
+async function resolveStackedPrParentBranch(nwo, currentBranch, mergifyState, dryRun) {
+  if (!mergifyState.managed || dryRun) return '';
+  const prs = listPullRequestsForHead(nwo, currentBranch);
+  const openPr = prs.find((pr) => pr.state === 'open') ?? prs[0];
+  return openPr?.base?.ref ?? '';
+}
+
+export function changedFilesSinceBase(baseRef) {
   try {
-    const output = runGit(['diff', '--name-only', `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`]).trim();
+    const output = runGit(['diff', '--name-only', `${baseRef}...HEAD`]).trim();
     return output ? output.split('\n').filter(Boolean) : [];
   } catch {
     return [];
   }
 }
 
-function fullContextDiffSinceBase(baseBranch) {
+export function fullContextDiffSinceBase(baseRef) {
   try {
     return runGit([
       'diff',
       '--find-renames',
       '--unified=200000',
       '--diff-filter=ACMRTD',
-      `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`,
+      `${baseRef}...HEAD`,
       '--',
     ]);
   } catch (error) {
     throw new Error(
-      `Unable to compute diff atomicity context against ${DEFAULT_BASE_REMOTE}/${baseBranch}. Fetch the base ref and retry.\n${error.message}`,
+      `Unable to compute diff atomicity context against ${baseRef}. Fetch the base ref and retry.\n${error.message}`,
     );
   }
 }
@@ -1056,9 +1070,8 @@ async function main() {
   assertNotPlanBaseForMergifyStack(args.base, currentBranch, mergifyState);
   assertCleanPrBase(args.base);
   assertStackHeadForStackedBase(args.base, currentBranch, mergifyState);
-  let nwo = '';
+  let nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
   if (args.base.startsWith('pr/')) {
-    nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
     assertOpenHelperBasePr(nwo, args.base, args.dryRun);
   }
 
@@ -1069,8 +1082,10 @@ async function main() {
     body = args.body;
   }
 
-  const changedFiles = changedFilesSinceBase(args.base);
-  const diffText = fullContextDiffSinceBase(args.base);
+  const stackParentBranch = await resolveStackedPrParentBranch(nwo, currentBranch, mergifyState, args.dryRun);
+  const atomicityBaseRef = resolveAtomicityBaseRef(args.base, mergifyState, stackParentBranch);
+  const changedFiles = changedFilesSinceBase(atomicityBaseRef);
+  const diffText = fullContextDiffSinceBase(atomicityBaseRef);
   assertBranchHasReviewableChanges(args.base, changedFiles);
   const uiImpactingFiles = getUiImpactingFiles(changedFiles);
   if (uiImpactingFiles.length > 0) {
