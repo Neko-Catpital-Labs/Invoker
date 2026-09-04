@@ -152,7 +152,7 @@ type CliRuntimeConfig = {
   externalWorkers?: ExternalWorkerConfig[];
 };
 
-type QueryResource = 'workflows' | 'tasks';
+type QueryResource = 'workflows' | 'tasks' | 'capacity';
 type QueryOutput = 'text' | 'json';
 
 type QueryOptions = {
@@ -193,6 +193,7 @@ function usage(): string {
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli query workflows [--status <status>] [--output text|json]',
     '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
+    '  invoker-cli query capacity [--output text|json]',
     '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
     '  invoker-cli retry-task <taskId>',
     '  invoker-cli retry <workflowId>',
@@ -214,6 +215,7 @@ function usage(): string {
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
     '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
+    '  query capacity  Show live pool/member slot usage, queue depth by workflow, and the oldest-waiting task. Requires a live owner.',
     '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
@@ -296,8 +298,8 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
 
 function parseQueryArgs(argv: string[]): QueryOptions {
   const resource = argv[0];
-  if (resource !== 'workflows' && resource !== 'tasks') {
-    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks>');
+  if (resource !== 'workflows' && resource !== 'tasks' && resource !== 'capacity') {
+    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks|capacity>');
   }
 
   const options: QueryOptions = {
@@ -514,6 +516,9 @@ function renderTaskText(tasks: TaskState[]): string {
 }
 
 async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
+  if (options.resource === 'capacity') {
+    throw new Error('query capacity requires a live owner: start the Invoker app or run `invoker-cli owner serve`.');
+  }
   let parsedFilter: import('@invoker/contracts').TaskFilterNode | undefined;
   if (options.filter !== undefined) {
     let rawFilter: unknown;
