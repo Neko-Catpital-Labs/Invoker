@@ -4745,6 +4745,33 @@ describe('Orchestrator', () => {
       expect(orchestrator.getAllTasks().filter((t) => t.status === 'running')).toHaveLength(3);
       expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(2);
     });
+
+    it('launches a higher-priority ready task before a lower-priority one under constrained capacity', () => {
+      const reproPersistence = new InMemoryPersistence();
+      const reproBus = new InMemoryBus();
+      const repro = new Orchestrator({
+        persistence: reproPersistence,
+        messageBus: reproBus,
+        maxConcurrency: 1,
+      });
+
+      repro.loadPlan({
+        name: 'priority-order-test',
+        tasks: [
+          { id: 'a-worker-task', description: 'Worker task', priority: -10 },
+          { id: 'z-human-task', description: 'Human task' },
+        ],
+      });
+
+      const humanId = sid(repro, 0, 'z-human-task');
+      const workerId = sid(repro, 0, 'a-worker-task');
+
+      const started = repro.startExecution();
+      expect(started).toHaveLength(1);
+      expect(started[0]!.id).toBe(humanId);
+      expect(repro.getTask(humanId)?.status).toBe('running');
+      expect(repro.getTask(workerId)?.status).toBe('pending');
+    });
   });
 
   // ── DB-is-source-of-truth invariants ──────────────────
