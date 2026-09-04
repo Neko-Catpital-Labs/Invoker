@@ -47,6 +47,9 @@ function mergeTrace(tag: string, data: Record<string, unknown>): void {
 }
 
 // ── Typed domain error codes ────────────────────────────────────
+export const DEFAULT_TASK_PRIORITY = 2;
+export const DEFAULT_WORKER_TASK_PRIORITY = 4;
+
 export const OrchestratorErrorCode = {
   TASK_NOT_FOUND: 'TASK_NOT_FOUND',
   TASK_ALREADY_TERMINAL: 'TASK_ALREADY_TERMINAL',
@@ -381,13 +384,13 @@ export interface OrchestratorPersistence {
     taskId: string;
     attemptId: string;
     workflowId: string;
-    priority?: 'high' | 'normal' | 'low';
+    priority?: 1 | 2 | 3 | 4 | 5;
     generation: number;
     suppressEvent?: boolean;
   }): {
     id: number;
     state?: 'enqueued' | 'leased' | 'completed' | 'abandoned';
-    priority?: 'high' | 'normal' | 'low';
+    priority?: 1 | 2 | 3 | 4 | 5;
   };
   abandonLaunchDispatchesForTasks?(
     taskIds: readonly string[],
@@ -460,6 +463,7 @@ export interface PlanDefinition {
     executionAgent?: string;
     executionModel?: string;
     maxTurns?: number;
+    priority?: number;
     freshness?: TaskFreshnessSpec;
   }>;
 }
@@ -1530,6 +1534,7 @@ export class Orchestrator {
         executionAgent: taskDef.executionAgent,
         executionModel: taskDef.executionModel,
         maxTurns: taskDef.maxTurns,
+        priority: taskDef.priority ?? DEFAULT_TASK_PRIORITY,
         ...(taskDef.freshness !== undefined ? { freshness: taskDef.freshness } : {}),
       } as const;
       let taskConfig: TaskConfig;
