@@ -192,9 +192,11 @@ export function mapRowToAttempt(row: any): Attempt {
 }
 
 export function mapRowToTaskLaunchDispatch(row: Record<string, unknown>): TaskLaunchDispatch {
-  const priorityRaw = String(row.priority ?? 'normal');
+  const priorityParsed = Number.parseInt(String(row.priority ?? '2'), 10);
   const priority: TaskLaunchDispatchPriority =
-    priorityRaw === 'high' || priorityRaw === 'low' ? priorityRaw : 'normal';
+    Number.isInteger(priorityParsed) && priorityParsed >= 1 && priorityParsed <= 5
+      ? (priorityParsed as TaskLaunchDispatchPriority)
+      : 2;
   return {
     id: Number(row.id),
     taskId: String(row.task_id),

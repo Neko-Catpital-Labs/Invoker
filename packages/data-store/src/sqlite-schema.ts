@@ -416,7 +416,7 @@ export const SCHEMA_DDL = `
         attempt_id TEXT NOT NULL,
         workflow_id TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'enqueued',
-        priority TEXT NOT NULL DEFAULT 'normal',
+        priority TEXT NOT NULL DEFAULT '2',
         dispatch_owner TEXT,
         enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
         leased_at TEXT,
