@@ -68,6 +68,14 @@ switch (command) {
     process.stdout.write(String(count));
     break;
   }
+  case 'task-event-count': {
+    const [taskId, eventType] = args;
+    const task = taskNode(taskId);
+    const history = Array.isArray(task?.history) ? task.history : [];
+    const count = history.filter((entry) => entry?.source === eventType).length;
+    process.stdout.write(String(count));
+    break;
+  }
   case 'task-event-time-since': {
     const [taskId, eventType, sinceRaw] = args;
     const task = taskNode(taskId);
