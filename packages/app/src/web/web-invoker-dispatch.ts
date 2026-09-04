@@ -317,6 +317,14 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           return { ok: false, reason: 'unsupported' };
         }
         return deps.taskTerminals.close(String(args[0]));
+      // ── Worker lifecycle ──
+      // Routed to the owner's shared GUI-mutation handlers when available.
+      case 'invoker:start-worker':
+      case 'invoker:stop-worker':
+      case 'invoker:tick-worker':
+        if (deps.guiMutations) return deps.guiMutations(channel, args);
+        return unsupported(channel);
+
       // ── Planning chat + planning terminals ──
       // Routed to the owner's shared GUI-mutation handlers / terminal adapter
       // when the host wires them; otherwise keep the historical downgrades.
