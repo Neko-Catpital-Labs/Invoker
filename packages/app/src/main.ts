@@ -1853,6 +1853,8 @@ function startHeadlessMode(): void {
             }, taskId);
           },
           buildCommandServiceInvalidationDeps,
+          submitRegisteredOwnerWorkerMutation,
+          autoFixAttemptLedger,
         });
 
         if (!workflowMutationDispatcher.has('headless.exec')) {
@@ -3171,6 +3173,8 @@ startMainProcessBootstrap({
       cancelDeferredWorkflowLaunch,
       killRunningTask,
       buildCommandServiceInvalidationDeps,
+      submitRegisteredOwnerWorkerMutation,
+      autoFixAttemptLedger,
     });
     guiMutationTaskActions = mutationActions;
     submitAdminBypassE2eBabysitPlan = (planText) => loadPlanSubmissionBundle(planText, {
@@ -3645,6 +3649,8 @@ startMainProcessBootstrap({
       cancelDeferredWorkflowLaunch,
       killRunningTask,
       buildCommandServiceInvalidationDeps,
+      submitRegisteredOwnerWorkerMutation,
+      autoFixAttemptLedger,
       getOrchestrator: () => orchestrator,
       setOrchestrator: (nextOrchestrator) => { orchestrator = nextOrchestrator; },
       getCommandService: () => commandService,
