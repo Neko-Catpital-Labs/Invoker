@@ -30,6 +30,7 @@ export const E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX = 'ci-regression-needs-human
 export const E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX = 'ci-regression-needs-human-investigated:';
 
 const DEFAULT_INTERVAL_MS = 10 * 60_000;
+const DEFAULT_INVESTIGATION_COOLDOWN_MS = 60 * 60_000;
 
 export interface WorkerLifecycleSnapshot {
   readonly kind: string;
@@ -76,6 +77,7 @@ export interface AdminBypassE2eBabysitWorkerConfig {
   tickOnStart?: boolean;
   watchedWorkerKinds?: readonly string[];
   staleTtlMs?: number;
+  investigationCooldownMs?: number;
   store?: WorkerDecisionStore;
   onTick?: WorkerTick;
 }
@@ -86,6 +88,8 @@ export interface AdminBypassE2eBabysitWorkerOptions {
   tickOnStart?: boolean;
   watchedWorkerKinds?: readonly string[];
   staleTtlMs?: number;
+  investigationCooldownMs?: number;
+  recentInvestigations?: Map<string, number>;
   workerLifecycle: WorkerLifecycleReader & WorkerLifecycleStarter;
   repairFilings: RepairFilingStore;
   planSubmitter: InvestigativePlanSubmitter;
@@ -193,12 +197,31 @@ export async function runAdminBypassE2eBabysitTick(
   const actions: AdminBypassE2eBabysitAction[] = [];
   const watchedWorkerKinds = new Set(options.watchedWorkerKinds ?? DEFAULT_WATCHED_WORKER_KINDS);
   const workers = await options.workerLifecycle.listWorkers();
+  const cooldownMs = options.investigationCooldownMs ?? DEFAULT_INVESTIGATION_COOLDOWN_MS;
+  const recentInvestigations = options.recentInvestigations ?? new Map<string, number>();
+  const now = Date.now();
+
+  const isInvestigationThrottled = (externalKey: string): boolean => {
+    if (cooldownMs <= 0) return false;
+    const last = recentInvestigations.get(externalKey);
+    return last !== undefined && now - last < cooldownMs;
+  };
+
+  const markInvestigation = (externalKey: string): void => {
+    if (cooldownMs > 0) {
+      recentInvestigations.set(externalKey, now);
+    }
+  };
 
   for (const worker of workers) {
     if (!watchedWorkerKinds.has(worker.kind)) continue;
     if (worker.desiredEnabled !== true || worker.lifecycle !== 'stopped') continue;
 
-    actions.push({ type: 'worker-start', kind: worker.kind });
+    const externalKey = `worker:${worker.kind}`;
+    if (!isInvestigationThrottled(externalKey)) {
+      actions.push({ type: 'worker-start', kind: worker.kind });
+      markInvestigation(externalKey);
+    }
     try {
       await options.workerLifecycle.start(worker.kind);
       options.logger.info(`[${ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND}] started stopped desired-enabled worker`, {
@@ -238,13 +261,17 @@ export async function runAdminBypassE2eBabysitTick(
     if (!(Date.now() - Date.parse(row.createdAt) > staleTtlMs)) continue;
 
     const subjectId = `${row.kind}:${row.subject}:${row.stateSha}`;
-    actions.push({
-      type: 'repair-filing-delete',
-      kind: row.kind,
-      subject: row.subject,
-      stateSha: row.stateSha,
-      createdAt: row.createdAt,
-    });
+    const externalKey = `repair-filing-delete:${subjectId}`;
+    if (!isInvestigationThrottled(externalKey)) {
+      actions.push({
+        type: 'repair-filing-delete',
+        kind: row.kind,
+        subject: row.subject,
+        stateSha: row.stateSha,
+        createdAt: row.createdAt,
+      });
+      markInvestigation(externalKey);
+    }
     try {
       await options.repairFilings.deleteRepairFiling(row.kind, row.subject, row.stateSha);
       options.logger.info(`[${ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND}] deleted stale repair filing`, {
@@ -370,12 +397,15 @@ export function createAdminBypassE2eBabysitWorker(
     planSubmitter: InvestigativePlanSubmitter;
   },
 ): WorkerRuntime {
+  const recentInvestigations = new Map<string, number>();
   const options: AdminBypassE2eBabysitWorkerOptions = {
     logger: config.logger,
     intervalMs: config.intervalMs,
     tickOnStart: config.tickOnStart,
     watchedWorkerKinds: config.watchedWorkerKinds,
     staleTtlMs: config.staleTtlMs,
+    investigationCooldownMs: config.investigationCooldownMs ?? DEFAULT_INVESTIGATION_COOLDOWN_MS,
+    recentInvestigations,
     workerLifecycle: config.workerLifecycle,
     repairFilings: config.repairFilings,
     planSubmitter: config.planSubmitter,
