@@ -587,28 +587,35 @@ export function getUiImpactingFiles(files) {
   return files.filter(isUiImpactingPath);
 }
 
-function changedFilesSinceBase(baseBranch) {
+export function resolveAtomicityBaseRef(baseBranch, mergifyState) {
+  if (mergifyState.managed && mergifyState.trackedBaseRef) {
+    return mergifyState.trackedBaseRef;
+  }
+  return `${DEFAULT_BASE_REMOTE}/${baseBranch}`;
+}
+
+export function changedFilesSinceBase(baseRef) {
   try {
-    const output = runGit(['diff', '--name-only', `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`]).trim();
+    const output = runGit(['diff', '--name-only', `${baseRef}...HEAD`]).trim();
     return output ? output.split('\n').filter(Boolean) : [];
   } catch {
     return [];
   }
 }
 
-function fullContextDiffSinceBase(baseBranch) {
+export function fullContextDiffSinceBase(baseRef) {
   try {
     return runGit([
       'diff',
       '--find-renames',
       '--unified=200000',
       '--diff-filter=ACMRTD',
-      `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`,
+      `${baseRef}...HEAD`,
       '--',
     ]);
   } catch (error) {
     throw new Error(
-      `Unable to compute diff atomicity context against ${DEFAULT_BASE_REMOTE}/${baseBranch}. Fetch the base ref and retry.\n${error.message}`,
+      `Unable to compute diff atomicity context against ${baseRef}. Fetch the base ref and retry.\n${error.message}`,
     );
   }
 }
@@ -1069,8 +1076,9 @@ async function main() {
     body = args.body;
   }
 
-  const changedFiles = changedFilesSinceBase(args.base);
-  const diffText = fullContextDiffSinceBase(args.base);
+  const atomicityBaseRef = resolveAtomicityBaseRef(args.base, mergifyState);
+  const changedFiles = changedFilesSinceBase(atomicityBaseRef);
+  const diffText = fullContextDiffSinceBase(atomicityBaseRef);
   assertBranchHasReviewableChanges(args.base, changedFiles);
   const uiImpactingFiles = getUiImpactingFiles(changedFiles);
   if (uiImpactingFiles.length > 0) {
