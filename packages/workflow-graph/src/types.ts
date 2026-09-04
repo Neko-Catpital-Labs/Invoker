@@ -62,6 +62,7 @@ export interface BaseTaskConfig {
   readonly executionModel?: string;
   /** Finite agent turn budget (Claude `--max-turns`) when set. */
   readonly maxTurns?: number;
+  readonly priority?: number;
   readonly freshness?: TaskFreshnessSpec;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
