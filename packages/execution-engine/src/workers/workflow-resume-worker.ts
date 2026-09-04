@@ -225,6 +225,7 @@ export function createWorkflowResumeWorker(options: WorkflowResumeWorkerOptions)
     start,
     wake: runtime.wake,
     tick: runtime.tick,
+    run: runtime.run,
     stop,
     isRunning: runtime.isRunning,
   };

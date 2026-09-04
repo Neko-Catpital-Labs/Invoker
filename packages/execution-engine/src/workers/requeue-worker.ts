@@ -325,6 +325,7 @@ export function createRequeueWorker(options: RequeueWorkerOptions): WorkerRuntim
     start,
     wake: runtime.wake,
     tick: runtime.tick,
+    run: runtime.run,
     stop,
     isRunning: runtime.isRunning,
   };
