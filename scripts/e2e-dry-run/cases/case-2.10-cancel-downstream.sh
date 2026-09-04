@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Group 2.10 — cancel running task A, downstream B stays pending.
+# Group 2.10 — cancel running task A and its downstream task B.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
@@ -43,10 +43,10 @@ if ! invoker_e2e_wait_task_status e2e-g2210-taskA failed 180; then
 fi
 
 STB=$(invoker_e2e_task_status e2e-g2210-taskB)
-# B is a never-started dependent of the cancelled root, so the cascade marks it
-# 'blocked' (#3473). 'pending' is valid if the cascade hasn't reached it yet.
-if [ "$STB" != "blocked" ] && [ "$STB" != "pending" ]; then
-  echo "FAIL case 2.10: expected B=blocked|pending, got B='$STB'"
+# Explicit task cancellation now cascades through all downstream tasks so the
+# workflow remains gated instead of leaving never-started dependents pending.
+if [ "$STB" != "failed" ]; then
+  echo "FAIL case 2.10: expected B=failed, got B='$STB'"
   invoker_e2e_dump_tasks
   exit 1
 fi
