@@ -1258,6 +1258,7 @@ export function createInfraRepairWorker(options: InfraRepairWorkerOptions): Work
     start,
     wake: runtime.wake,
     tick: runtime.tick,
+    run: runtime.run,
     stop,
     isRunning: runtime.isRunning,
   };

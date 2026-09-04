@@ -527,6 +527,7 @@ export function createAutoApproveWorker(options: AutoApproveWorkerOptions): Work
     start,
     wake: runtime.wake,
     tick: runtime.tick,
+    run: runtime.run,
     stop,
     isRunning: runtime.isRunning,
   };
