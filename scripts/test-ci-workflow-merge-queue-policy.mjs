@@ -240,6 +240,12 @@ assert(
   optionalOtherSteps[0] === 'Reclaim workspace' && optionalOtherSteps[1] === 'Checkout',
   'optional-other must reclaim the self-hosted runner workspace before checkout',
 );
+assert(
+  !jobs['optional-other'].needs
+    && !optionalOtherSteps.includes('Download build artifacts')
+    && !optionalOtherSteps.includes('Extract build artifacts'),
+  'optional-other suites must not depend on unused build artifacts whose download can fail before either suite runs',
+);
 const optionalOtherEntries = jobs['optional-other'].strategy?.matrix?.include ?? [];
 const worktreeProvisioningEntry = optionalOtherEntries.find((entry) => entry.name === 'Worktree Provisioning');
 assert(worktreeProvisioningEntry, 'optional-other matrix must include Worktree Provisioning');
