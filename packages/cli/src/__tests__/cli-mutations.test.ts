@@ -73,6 +73,7 @@ describe('invoker-cli mutations', () => {
     ['retry-task', 'wf-1/task-1'],
     ['retry', 'wf-1'],
     ['resume', 'wf-1'],
+    ['delete', 'wf-1'],
   ])('sends %s over headless.exec with noTrack', async (command, targetId) => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
