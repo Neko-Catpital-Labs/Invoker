@@ -37,6 +37,7 @@ import {
   parseSpawnRepairWorkflowMutationArgs,
   SPAWN_REPAIR_WORKFLOW_CHANNEL,
   submitRepairWorkflowFromCiFailure,
+  createAutoFixAttemptLedger,
   type WorktreeExecutor,
 } from '@invoker/execution-engine';
 import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
@@ -51,6 +52,7 @@ import {
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
 import { backupPlan } from '../plan-backup.js';
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
+import { repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
 import { publishForcedRefreshTaskGraphSnapshot, resolveRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
@@ -370,6 +372,14 @@ export interface GuiMutationTaskActionsContext {
   cancelDeferredWorkflowLaunch: (workflowId: string, reason: string) => void;
   killRunningTask: (taskId: string) => Promise<void>;
   buildCommandServiceInvalidationDeps: () => ConstructorParameters<typeof CommandService>[1];
+  submitRegisteredOwnerWorkerMutation?: (
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    mutationArgs: unknown[],
+    options?: { deferDrain?: boolean },
+  ) => number;
+  autoFixAttemptLedger?: ReturnType<typeof createAutoFixAttemptLedger>;
 }
 
 export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskActionsContext {
@@ -424,6 +434,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     cancelDeferredWorkflowLaunch,
     killRunningTask,
     buildCommandServiceInvalidationDeps,
+    submitRegisteredOwnerWorkerMutation,
+    autoFixAttemptLedger,
   } = context;
   let orchestrator = context.getOrchestrator();
   let commandService = context.getCommandService();
@@ -800,6 +812,23 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       ownerTaskRunnerProvider: headlessCommand === 'check-pr-status'
         ? () => requireTaskExecutor()
         : undefined,
+      ...(submitRegisteredOwnerWorkerMutation && autoFixAttemptLedger
+        ? {
+          repairReviewGateCi: (prArg: string) => repairReviewGateCiByPr(prArg, {
+            persistence,
+            repoRoot,
+            policy: {
+              store: persistence,
+              submitter: { submit: submitRegisteredOwnerWorkerMutation },
+              logger,
+              defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+              getAutoFixAgent: () => invokerConfig.autoFixAgent,
+              getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+              attemptLedger: autoFixAttemptLedger,
+            },
+          }),
+        }
+        : {}),
     });
     const { workflowId } = classifyHeadlessExecMutation(payload);
     logger.info(`executeHeadlessExec end args="${payload.args.join(' ')}" workflow="${workflowId ?? 'unknown'}"`, {
