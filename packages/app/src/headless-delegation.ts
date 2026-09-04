@@ -94,6 +94,7 @@ export async function tryDelegateResume(
 function usesExtendedDelegationTimeout(command: string): boolean {
   return command === 'rebase-retry'
     || command === 'rebase-recreate'
+    || command === 'retry-task'
     || command === 'restart'
     || command === 'start-ready';
 }
@@ -132,9 +133,11 @@ export async function resolveDelegationTimeoutMs(args: string[]): Promise<number
   if (!usesExtendedDelegationTimeout(command)) {
     return DEFAULT_DELEGATION_TIMEOUT_MS;
   }
-  // start-ready is global (no workflow arg) but recreates/starts many workflows.
   if (command === 'start-ready') {
     return startReadyDelegationTimeoutMs(args);
+  }
+  if (command === 'retry-task') {
+    return WORKFLOW_DELEGATION_TIMEOUT_MS;
   }
   return looksLikeWorkflowId(args[1])
     ? WORKFLOW_DELEGATION_TIMEOUT_MS
