@@ -12,7 +12,7 @@ export interface WorkerControlMutation {
 export function resolveWorkerControlMutation(args: readonly string[]): WorkerControlMutation | null {
   if (args[0] !== 'worker') return null;
   const action = args[1];
-  if (action !== 'start' && action !== 'stop') return null;
+  if (action !== 'start' && action !== 'stop' && action !== 'tick') return null;
   const kind = args[2];
   if (!kind) {
     throw new Error(`Missing worker kind. Usage: --headless worker ${action} <kind>`);
