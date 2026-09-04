@@ -87,6 +87,7 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
     backfillEventTypeCounters(exec);
     migrateTestCommands(exec);
     migrateGatePolicyApprovedToCompleted(exec);
+    migrateTaskLaunchDispatchPriorityToNumeric(exec);
     migrateTaskExternalDependenciesToWorkflows(exec);
     runCompatibilityMigration(exec);
   }
@@ -530,6 +531,16 @@ export function migrateGatePolicyApprovedToCompleted(exec: SqliteExecutor): void
  * This is intentionally idempotent: once task rows are cleared, later runs
  * only see the workflow-level source of truth.
  */
+export function migrateTaskLaunchDispatchPriorityToNumeric(exec: SqliteExecutor): void {
+  try {
+    exec.execRun("UPDATE task_launch_dispatch SET priority = '1' WHERE priority = 'high'");
+    exec.execRun("UPDATE task_launch_dispatch SET priority = '2' WHERE priority = 'normal'");
+    exec.execRun("UPDATE task_launch_dispatch SET priority = '4' WHERE priority = 'low'");
+  } catch (err) {
+    logSwallowedMigrationError('migrateTaskLaunchDispatchPriorityToNumeric', err);
+  }
+}
+
 export function migrateTaskExternalDependenciesToWorkflows(exec: SqliteExecutor): void {
   try {
     const rows = exec.queryAll(

@@ -588,7 +588,7 @@ export type TaskLaunchDispatchState =
   | 'completed'
   | 'abandoned';
 
-export type TaskLaunchDispatchPriority = 'high' | 'normal' | 'low';
+export type TaskLaunchDispatchPriority = 1 | 2 | 3 | 4 | 5;
 
 export interface TaskLaunchDispatch {
   id: number;
@@ -4109,7 +4109,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     generation: number;
     suppressEvent?: boolean;
   }): TaskLaunchDispatch {
-    const priority: TaskLaunchDispatchPriority = input.priority ?? 'normal';
+    const priority: TaskLaunchDispatchPriority = input.priority ?? 2;
     return this.runTransaction(() => {
       const inserted = this.queryOne(
         `INSERT OR IGNORE INTO task_launch_dispatch (
@@ -4234,11 +4234,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
            FROM task_launch_dispatch d
            LEFT JOIN tasks t ON t.id = d.task_id
            WHERE d.state = 'enqueued'
-           ORDER BY CASE d.priority
-             WHEN 'high' THEN 0
-             WHEN 'normal' THEN 1
-             ELSE 2
-           END, d.id
+           ORDER BY CAST(d.priority AS INTEGER) ASC, d.id ASC
            LIMIT 1`,
         );
         if (!candidate || candidate.id == null) return undefined;
