@@ -78,7 +78,8 @@ function getCandidatePriority(host: SchedulerDomainHost, task: TaskState, fallba
   const attempt = task.execution.selectedAttemptId
     ? host.loadAttemptById(task.execution.selectedAttemptId)
     : undefined;
-  return Math.max(fallback, attempt?.queuePriority ?? fallback);
+  const base = fallback === 0 ? task.config.priority ?? 0 : fallback;
+  return Math.max(base, attempt?.queuePriority ?? base);
 }
 
 function hasActiveLaunchAttempt(

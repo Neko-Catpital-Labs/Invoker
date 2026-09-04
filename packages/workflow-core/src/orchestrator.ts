@@ -460,6 +460,7 @@ export interface PlanDefinition {
     executionAgent?: string;
     executionModel?: string;
     maxTurns?: number;
+    priority?: number;
     freshness?: TaskFreshnessSpec;
   }>;
 }
@@ -1530,6 +1531,7 @@ export class Orchestrator {
         executionAgent: taskDef.executionAgent,
         executionModel: taskDef.executionModel,
         maxTurns: taskDef.maxTurns,
+        priority: taskDef.priority,
         ...(taskDef.freshness !== undefined ? { freshness: taskDef.freshness } : {}),
       } as const;
       let taskConfig: TaskConfig;
