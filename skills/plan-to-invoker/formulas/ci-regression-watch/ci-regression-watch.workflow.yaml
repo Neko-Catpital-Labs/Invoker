@@ -7,6 +7,7 @@ onFinish: pull_request
 mergeMode: external_review
 baseBranch: {{base_branch}}
 repoUrl: {{repo_url}}
+priority: 4
 
 tasks:
   - id: fix-ci-{{job_slug}}
