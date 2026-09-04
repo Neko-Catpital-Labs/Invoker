@@ -20,6 +20,7 @@ import { registerCatstackDeployWorker } from './workers/catstack-deploy-worker.j
 import { registerSelfDeployWorker } from './workers/self-deploy-worker.js';
 import { registerAdminBypassE2eBabysitWorker } from './workers/admin-bypass-e2e-babysit-worker.js';
 import { registerMergifyQueueResearchWorker } from './workers/mergify-queue-research-worker.js';
+import { registerSpendCircuitBreakerWorker } from './workers/spend-circuit-breaker-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -45,5 +46,6 @@ export function registerBuiltinWorkers(
   registerSelfDeployWorker(registry);
   registerAdminBypassE2eBabysitWorker(registry);
   registerMergifyQueueResearchWorker(registry);
+  registerSpendCircuitBreakerWorker(registry);
   return registry;
 }
