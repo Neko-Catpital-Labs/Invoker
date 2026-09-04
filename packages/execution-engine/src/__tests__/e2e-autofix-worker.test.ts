@@ -115,6 +115,27 @@ function makeExitWithoutCloseHarness(options: { exitCode?: number } = {}): {
   return { calls, spawnProcess: spawnProcess as unknown as typeof spawn };
 }
 
+function makeHangingSpawnHarness(): { calls: SpawnCall[]; spawnProcess: typeof spawn; child: ChildProcess & { kill: ReturnType<typeof vi.fn> } } {
+  const calls: SpawnCall[] = [];
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const child = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin: null,
+    killed: false,
+    pid: 4242,
+    kill: vi.fn(),
+  }) as unknown as ChildProcess & { kill: ReturnType<typeof vi.fn> };
+
+  const spawnProcess = vi.fn((command: string, args: string[], spawnOptions: SpawnOptions) => {
+    calls.push({ command, args, options: spawnOptions });
+    return child;
+  });
+
+  return { calls, spawnProcess: spawnProcess as unknown as typeof spawn, child };
+}
+
 describe('e2e auto-fix worker', () => {
   let tmpRoot: string | undefined;
 
@@ -233,6 +254,50 @@ describe('e2e auto-fix worker', () => {
     });
 
     await expect(tick(makeCtx())).rejects.toThrow('exited with code 1');
+  });
+
+  it('kills the spawned child when the tick is aborted mid-flight, instead of leaving it running past a worker disable', async () => {
+    const repoRoot = makeRepoRoot();
+    const harness = makeHangingSpawnHarness();
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      spawnProcess: harness.spawnProcess,
+    });
+    const controller = new AbortController();
+
+    const tickPromise = tick({
+      identity: { kind: E2E_AUTOFIX_WORKER_KIND, instanceId: `${E2E_AUTOFIX_WORKER_KIND}-test` },
+      reason: 'manual',
+      tickNumber: 1,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.calls).toHaveLength(1);
+    });
+
+    controller.abort();
+    await vi.waitFor(() => {
+      expect(harness.child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    harness.child.emit('close', null, 'SIGTERM');
+    await expect(tickPromise).resolves.toBeUndefined();
+  });
+
+  it('spawns the child detached so a process-group kill can reach its own grandchildren', async () => {
+    const repoRoot = makeRepoRoot();
+    const harness = makeSpawnHarness({ exitCode: 0 });
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      spawnProcess: harness.spawnProcess,
+    });
+
+    await tick(makeCtx());
+
+    expect(harness.calls[0]?.options.detached).toBe(process.platform !== 'win32');
   });
 
   it('resolves via exit when close never fires within the grace window, instead of hanging forever', async () => {
