@@ -69,9 +69,11 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
     const workflows = adapter.listWorkflows();
     const after = process.memoryUsage().heapUsed;
     const memoryDelta = after - before;
+    const materializedObjects = new Set(workflows);
 
     expect(workflows).toHaveLength(workflowCount);
     expect(memoryDelta).toBeLessThan(1_000_000);
+    expect(materializedObjects.size).toBeLessThan(workflowCount);
   });
 
   it('listWorkflowsPaged returns bounded results with pagination metadata', () => {
