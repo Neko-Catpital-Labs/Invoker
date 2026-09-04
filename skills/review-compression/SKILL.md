@@ -1,5 +1,6 @@
 ---
 name: review-compression
+category: optimization
 description: >
   Shape code changes, workflow plans, and PR stacks so each diff is easy to
   review: one local claim, one safety invariant, clear architectural effect,

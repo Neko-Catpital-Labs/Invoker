@@ -51,6 +51,10 @@ bash scripts/setup-agent-skills.sh
 pnpm run build
 ```
 
+Set `INVOKER_SKILL_CATEGORY` before running `scripts/setup-agent-skills.sh` to install only one
+labeled subset of the bundled skills instead of all of them — for example `INVOKER_SKILL_CATEGORY=core`
+or `INVOKER_SKILL_CATEGORY=optimization`. Leave it unset to install everything, as today.
+
 Invoker does not provision machines for you. You are responsible for bringing your own local workstation, VM, container host, or remote machines and making sure the required tools are installed there before running workflows.
 
 If pnpm skips Electron's dependency install hook and you hit `Electron failed to install correctly`, rerun `pnpm install` or any normal launch command after allowing Electron's build script. Recent pnpm versions may require `pnpm approve-builds`.

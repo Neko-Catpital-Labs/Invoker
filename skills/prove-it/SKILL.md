@@ -1,5 +1,6 @@
 ---
 name: prove-it
+category: optimization
 description: >
   Shared evidence rule for investigating, diagnosing, debugging, proving, or explaining what happened or why for any problem or situation:
   do not assert something is fixed, working, passing, merged, or running

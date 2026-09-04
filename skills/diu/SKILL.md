@@ -1,5 +1,6 @@
 ---
 name: diu
+category: optimization
 description: >
   Default communication-brevity rule: before finishing any response, check
   whether it would run over roughly 150 words or lean on unexplained jargon. If

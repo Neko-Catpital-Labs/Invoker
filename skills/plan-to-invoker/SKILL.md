@@ -1,5 +1,6 @@
 ---
 name: plan-to-invoker
+category: core
 description: >
   Convert a plan into an Invoker YAML plan file. After `install-skills`, this
   routing is always on via Cursor `~/.cursor/rules/invoker-execution-precedence.mdc`,

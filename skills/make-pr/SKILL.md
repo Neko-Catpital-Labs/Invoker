@@ -1,5 +1,6 @@
 ---
 name: make-pr
+category: core
 description: >
   Create or update a pull request in this repo using the preferred PR schema,
   upstream-first branch workflow, and repo-specific publication rules. Trigger

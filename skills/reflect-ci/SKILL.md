@@ -1,5 +1,6 @@
 ---
 name: reflect-ci
+category: optimization
 description: >
   Invoker-owned adapter for automated reflect-ci-* / autofix-miss tasks filed by
   the optional CI regression watcher (INVOKER_CI_REGRESSION_REFLECT=1). Use when

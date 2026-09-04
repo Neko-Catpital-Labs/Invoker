@@ -1,5 +1,6 @@
 ---
 name: maintain-verify
+category: optimization
 description: >
   Keep skills/verify/references/features in sync with sidebar testids, e2e specs,
   and repros. Use when adding UI surfaces, when catalog --check fails, or on a

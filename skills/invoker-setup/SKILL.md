@@ -1,5 +1,6 @@
 ---
 name: invoker-setup
+category: core
 description: >
   Get a new machine "good to go" for Invoker and optionally wire up the Slack integration.
   Trigger when asked to set up Invoker, run the setup/tutorial, check the environment,

@@ -1,5 +1,6 @@
 ---
 name: verify
+category: optimization
 description: >
   Drive and prove Invoker UI/live-path changes via skills/verify/control-invoker.mjs:
   doctor, feature-map prove commands, isolated-Electron drive, visual-proof wrap,
