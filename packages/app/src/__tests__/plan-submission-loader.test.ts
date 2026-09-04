@@ -132,4 +132,50 @@ workflows:
       gatePolicy: 'review_ready',
     });
   });
+
+  it('defaults worker-submitted task priority below human-submitted default', async () => {
+    const { deps, loadedPlans } = makeDeps();
+    const plan = `
+name: Worker Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build it
+`;
+
+    await loadPlanSubmissionBundle(plan, deps, { submittedBy: 'worker' });
+
+    expect(loadedPlans[0]?.tasks[0]?.priority).toBeLessThan(0);
+  });
+
+  it('leaves task priority unset for a human-submitted plan', async () => {
+    const { deps, loadedPlans } = makeDeps();
+    const plan = `
+name: Human Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build it
+`;
+
+    await loadPlanSubmissionBundle(plan, deps);
+
+    expect(loadedPlans[0]?.tasks[0]?.priority).toBeUndefined();
+  });
+
+  it('does not override an explicit task priority on a worker-submitted plan', async () => {
+    const { deps, loadedPlans } = makeDeps();
+    const plan = `
+name: Worker Plan With Explicit Priority
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build it
+    priority: 5
+`;
+
+    await loadPlanSubmissionBundle(plan, deps, { submittedBy: 'worker' });
+
+    expect(loadedPlans[0]?.tasks[0]?.priority).toBe(5);
+  });
 });

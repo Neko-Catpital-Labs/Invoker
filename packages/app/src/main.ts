@@ -1398,15 +1398,16 @@ function startHeadlessMode(): void {
         planText: string,
         repositoryBinding?: InAppPlanningRepoBinding,
         staged = true,
+        submittedBy?: 'worker' | 'human',
       ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => (
         loadPlanSubmissionBundle(planText, {
           persistence,
           orchestrator,
           allowGraphMutation: invokerConfig.allowGraphMutation,
           logger,
-        }, { staged, repositoryBinding })
+        }, { staged, repositoryBinding, submittedBy })
       );
-      submitAdminBypassE2eBabysitPlan = (planText) => loadGeneratedPlan(planText);
+      submitAdminBypassE2eBabysitPlan = (planText) => loadGeneratedPlan(planText, undefined, true, 'worker');
 
       // Web clients get planning-chat token streaming over SSE. The bridge does
       // not exist yet when these handlers are built, so route through a
@@ -3177,7 +3178,7 @@ startMainProcessBootstrap({
       orchestrator,
       allowGraphMutation: invokerConfig.allowGraphMutation,
       logger,
-    }, { staged: true });
+    }, { staged: true, submittedBy: 'worker' });
 
     const guiMutationRegistrationContext: GuiMutationRegistrationContext = {
       ipcMain,
