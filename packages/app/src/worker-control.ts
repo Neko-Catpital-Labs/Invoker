@@ -180,6 +180,7 @@ export interface WorkerRuntimeController {
   startAutoStartedWorkers(): void;
   start(kind: string, options?: { persistDesiredState?: boolean; source?: string }): WorkerStatusEntry;
   stop(kind: string, options?: { source?: string }): Promise<WorkerStatusEntry>;
+  tick(kind: string): Promise<WorkerStatusEntry>;
   stopAll(): Promise<void>;
   snapshot(): WorkerStatusSnapshot;
 }
@@ -516,6 +517,18 @@ export function createWorkerRuntimeController(options: {
         return rowForKind(kind);
       }
       await stopHandle(kind, handle);
+      invalidateSnapshot();
+      return rowForKind(kind);
+    },
+
+    async tick(kind: string): Promise<WorkerStatusEntry> {
+      requireDefinition(kind);
+      invalidateSnapshot();
+      const handle = handles.get(kind);
+      if (!handle || !handle.runtime.isRunning()) {
+        throw new Error(`Worker "${kind}" is not running; start it before tick.`);
+      }
+      await handle.runtime.tick('manual');
       invalidateSnapshot();
       return rowForKind(kind);
     },
