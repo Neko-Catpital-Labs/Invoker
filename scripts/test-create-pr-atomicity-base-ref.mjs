@@ -47,15 +47,17 @@ function buildStackedRepoFixture(root) {
 }
 
 function assertStandaloneBaseUnchanged() {
-  const baseRef = resolveAtomicityBaseRef('master', { managed: false, trackedBaseRef: '' });
+  const baseRef = resolveAtomicityBaseRef('master', { managed: false }, '');
   assert.equal(baseRef, 'origin/master');
 }
 
-function assertStackedBaseResolvesToTrackedParent() {
-  const baseRef = resolveAtomicityBaseRef('master', {
-    managed: true,
-    trackedBaseRef: 'origin/stack/pr-adds-b',
-  });
+function assertManagedWithNoResolvedParentFallsBackToDeclaredBase() {
+  const baseRef = resolveAtomicityBaseRef('master', { managed: true }, '');
+  assert.equal(baseRef, 'origin/master');
+}
+
+function assertStackedBaseResolvesToRealParentBranch() {
+  const baseRef = resolveAtomicityBaseRef('master', { managed: true }, 'stack/pr-adds-b');
   assert.equal(baseRef, 'origin/stack/pr-adds-b');
 }
 
@@ -66,10 +68,7 @@ function assertIncrementalDiffExcludesParentStackChanges(workDir) {
   const cumulativeFromMaster = changedFilesSinceBase('origin/master');
   assert.deepEqual(cumulativeFromMaster.sort(), ['packages/b/index.ts', 'packages/c/index.ts']);
 
-  const incrementalBaseRef = resolveAtomicityBaseRef('master', {
-    managed: true,
-    trackedBaseRef: 'origin/stack/pr-adds-b',
-  });
+  const incrementalBaseRef = resolveAtomicityBaseRef('master', { managed: true }, 'stack/pr-adds-b');
   const incrementalFromStackParent = changedFilesSinceBase(incrementalBaseRef);
   assert.deepEqual(incrementalFromStackParent, ['packages/c/index.ts']);
 
@@ -84,9 +83,10 @@ const startingCwd = process.cwd();
 try {
   const workDir = buildStackedRepoFixture(root);
   assertStandaloneBaseUnchanged();
-  assertStackedBaseResolvesToTrackedParent();
+  assertManagedWithNoResolvedParentFallsBackToDeclaredBase();
+  assertStackedBaseResolvesToRealParentBranch();
   assertIncrementalDiffExcludesParentStackChanges(workDir);
-  console.log('ok      test-create-pr-atomicity-base-ref.mjs (3 cases)');
+  console.log('ok      test-create-pr-atomicity-base-ref.mjs (4 cases)');
 } finally {
   process.chdir(startingCwd);
   rmSync(root, { recursive: true, force: true });

@@ -587,11 +587,18 @@ export function getUiImpactingFiles(files) {
   return files.filter(isUiImpactingPath);
 }
 
-export function resolveAtomicityBaseRef(baseBranch, mergifyState) {
-  if (mergifyState.managed && mergifyState.trackedBaseRef) {
-    return mergifyState.trackedBaseRef;
+export function resolveAtomicityBaseRef(baseBranch, mergifyState, stackParentBranch) {
+  if (mergifyState.managed && stackParentBranch) {
+    return `${DEFAULT_BASE_REMOTE}/${stackParentBranch}`;
   }
   return `${DEFAULT_BASE_REMOTE}/${baseBranch}`;
+}
+
+async function resolveStackedPrParentBranch(nwo, currentBranch, mergifyState, dryRun) {
+  if (!mergifyState.managed || dryRun) return '';
+  const prs = listPullRequestsForHead(nwo, currentBranch);
+  const openPr = prs.find((pr) => pr.state === 'open') ?? prs[0];
+  return openPr?.base?.ref ?? '';
 }
 
 export function changedFilesSinceBase(baseRef) {
@@ -1063,9 +1070,8 @@ async function main() {
   assertNotPlanBaseForMergifyStack(args.base, currentBranch, mergifyState);
   assertCleanPrBase(args.base);
   assertStackHeadForStackedBase(args.base, currentBranch, mergifyState);
-  let nwo = '';
+  let nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
   if (args.base.startsWith('pr/')) {
-    nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
     assertOpenHelperBasePr(nwo, args.base, args.dryRun);
   }
 
@@ -1076,7 +1082,8 @@ async function main() {
     body = args.body;
   }
 
-  const atomicityBaseRef = resolveAtomicityBaseRef(args.base, mergifyState);
+  const stackParentBranch = await resolveStackedPrParentBranch(nwo, currentBranch, mergifyState, args.dryRun);
+  const atomicityBaseRef = resolveAtomicityBaseRef(args.base, mergifyState, stackParentBranch);
   const changedFiles = changedFilesSinceBase(atomicityBaseRef);
   const diffText = fullContextDiffSinceBase(atomicityBaseRef);
   assertBranchHasReviewableChanges(args.base, changedFiles);
