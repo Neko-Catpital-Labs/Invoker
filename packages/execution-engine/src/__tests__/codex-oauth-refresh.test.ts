@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { OAUTH_EXPIRY_BUFFER_MS } from '../claude-oauth-refresh.js';
 import {
   applyRefreshedCodexToken,
+  CODEX_JWT_EXPIRY_BUFFER_MS,
   CODEX_LAST_REFRESH_MAX_AGE_MS,
   isCodexAuthExpiring,
   parseCodexAuthFile,
@@ -77,7 +77,7 @@ describe('isCodexAuthExpiring', () => {
   });
 
   it('is true when the access-token JWT is inside the refresh buffer', () => {
-    const expSeconds = Math.floor((now + OAUTH_EXPIRY_BUFFER_MS - 1000) / 1000);
+    const expSeconds = Math.floor((now + CODEX_JWT_EXPIRY_BUFFER_MS - 1000) / 1000);
     expect(isCodexAuthExpiring(authJson({
       accessToken: jwtWithExp(expSeconds),
       lastRefresh: new Date(now).toISOString(),
@@ -85,11 +85,19 @@ describe('isCodexAuthExpiring', () => {
   });
 
   it('is false when the JWT has more than the buffer left and last_refresh is recent', () => {
-    const expSeconds = Math.floor((now + OAUTH_EXPIRY_BUFFER_MS + 60_000) / 1000);
+    const expSeconds = Math.floor((now + CODEX_JWT_EXPIRY_BUFFER_MS + 60_000) / 1000);
     expect(isCodexAuthExpiring(authJson({
       accessToken: jwtWithExp(expSeconds),
       lastRefresh: new Date(now).toISOString(),
     }), now)).toBe(false);
+  });
+
+  it('is true a full day before the JWT actually expires, closing the narrow multi-host refresh-collision window', () => {
+    const expSeconds = Math.floor((now + 12 * 60 * 60 * 1000) / 1000);
+    expect(isCodexAuthExpiring(authJson({
+      accessToken: jwtWithExp(expSeconds),
+      lastRefresh: new Date(now).toISOString(),
+    }), now)).toBe(true);
   });
 
   it('is true when last_refresh is older than seven days', () => {
