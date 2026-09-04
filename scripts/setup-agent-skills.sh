@@ -6,6 +6,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+INVOKER_SKILL_CATEGORY="${INVOKER_SKILL_CATEGORY:-}"
+
 log() {
   echo "[setup] $*"
 }
@@ -44,7 +46,11 @@ install_bundled_skills() {
   local mode="${1:-reinstall}"
   log "Installing bundled Invoker skills with prefix invoker-..."
   unset ELECTRON_RUN_AS_NODE
-  node scripts/electron.cjs packages/app/dist/main.js --headless install-skills "$mode"
+  if [ -n "$INVOKER_SKILL_CATEGORY" ]; then
+    node scripts/electron.cjs packages/app/dist/main.js --headless install-skills "$mode" "$INVOKER_SKILL_CATEGORY"
+  else
+    node scripts/electron.cjs packages/app/dist/main.js --headless install-skills "$mode"
+  fi
 }
 
 check_required_commands
