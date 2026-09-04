@@ -456,6 +456,10 @@ export function createMockInvoker(
       const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
       return row;
     }),
+    tickWorker: vi.fn(async (kind: string) => {
+      const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
+      return row;
+    }),
     getActionGraph: vi.fn(async () => actionGraphSnapshot),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
