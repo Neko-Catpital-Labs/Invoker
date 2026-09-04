@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { OAUTH_EXPIRY_BUFFER_MS, type OauthFetchFn } from './claude-oauth-refresh.js';
+import { type OauthFetchFn } from './claude-oauth-refresh.js';
 
 const DEFAULT_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 // Public Codex CLI OAuth client id — not a secret, the same value the
@@ -9,6 +9,7 @@ const DEFAULT_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const REFRESH_TIMEOUT_MS = 10_000;
 export const CODEX_LAST_REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const CODEX_JWT_EXPIRY_BUFFER_MS = 24 * 60 * 60 * 1000;
 
 interface CodexTokenBlob {
   access_token?: unknown;
@@ -88,7 +89,7 @@ export function isCodexAuthExpiring(authJson: string, now: number = Date.now()):
   const jwtExpMs = typeof accessToken === 'string' ? readJwtExpMs(accessToken) : null;
   const lastRefreshMs = readLastRefreshMs(parsed?.last_refresh);
   if (jwtExpMs === null && lastRefreshMs === null) return true;
-  if (jwtExpMs !== null && now + OAUTH_EXPIRY_BUFFER_MS >= jwtExpMs) return true;
+  if (jwtExpMs !== null && now + CODEX_JWT_EXPIRY_BUFFER_MS >= jwtExpMs) return true;
   if (lastRefreshMs !== null && now - lastRefreshMs >= CODEX_LAST_REFRESH_MAX_AGE_MS) return true;
   return false;
 }
