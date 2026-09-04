@@ -290,4 +290,42 @@ describe('runAdminBypassE2eBabysitTick', () => {
       status: 'failed',
     });
   });
+
+  it('throttles duplicate investigation plans for the same worker or repair filing within the cooldown window', async () => {
+    const staleRow: RepairFilingRow = {
+      kind: 'admin-requeue:rebase-conflict',
+      subject: '11219',
+      stateSha: 'sha-stale',
+      createdAt: new Date(Date.now() - REPAIR_FILING_STALE_TTL_MS - 60_000).toISOString(),
+    };
+    const workerLifecycle = new FakeWorkerLifecycle([
+      { kind: DEFAULT_WATCHED_WORKER_KINDS[0], desiredEnabled: true, lifecycle: 'stopped' },
+    ]);
+    const repairFilings = new FakeRepairFilingStore([staleRow]);
+    const planSubmitter = new FakeInvestigativePlanSubmitter();
+    const { store } = makeDecisionStore();
+    const recentInvestigations = new Map<string, number>();
+
+    const baseOptions = {
+      logger: makeLogger(),
+      workerLifecycle,
+      repairFilings,
+      planSubmitter,
+      store,
+      investigationCooldownMs: 60_000,
+      recentInvestigations,
+    };
+
+    await runAdminBypassE2eBabysitTick(baseOptions);
+    expect(planSubmitter.submittedPlans).toHaveLength(1);
+    expect(workerLifecycle.startCalls).toHaveLength(1);
+    expect(repairFilings.deleteCalls).toHaveLength(1);
+
+    // A second tick immediately should not file another plan, but should still
+    // attempt the start and delete operations.
+    await runAdminBypassE2eBabysitTick(baseOptions);
+    expect(planSubmitter.submittedPlans).toHaveLength(1);
+    expect(workerLifecycle.startCalls).toHaveLength(2);
+    expect(repairFilings.deleteCalls).toHaveLength(2);
+  });
 });
