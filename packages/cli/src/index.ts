@@ -198,6 +198,7 @@ function usage(): string {
     '  invoker-cli retry <workflowId>',
     '  invoker-cli resume <workflowId>',
     '  invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]',
+    '  invoker-cli delete <workflowId>',
     '  invoker-cli delete-all',
     '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
@@ -718,7 +719,7 @@ async function sendHeadlessExec(bus: MessageBus, args: string[]): Promise<void> 
   );
 }
 
-async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume', targetId: string | undefined, deps: CliDeps): Promise<number> {
+async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume' | 'delete', targetId: string | undefined, deps: CliDeps): Promise<number> {
   if (!targetId) {
     const target = command === 'retry-task' ? 'taskId' : 'workflowId';
     throw new Error(`Missing ${target}. Usage: invoker-cli ${command} <${target}>`);
@@ -1310,7 +1311,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'wait') {
       return await runWait(parseWaitArgs(argv.slice(1)), deps);
     }
-    if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume') {
+    if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume' || argv[0] === 'delete') {
       if (argv.length > 2) {
         throw new Error(`Unexpected argument: ${argv[2]}`);
       }
