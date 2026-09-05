@@ -252,7 +252,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       taskId: dispatch.taskId,
       attemptId: dispatch.attemptId,
       ownerId: dispatch.dispatchOwner,
-      priority: dispatch.priority === 'high' ? 1 : dispatch.priority === 'normal' ? 0 : -1,
+      priority: dispatch.priority,
       createdAt: dispatch.enqueuedAt,
       startedAt: dispatch.leasedAt,
       completedAt: dispatch.completedAt,

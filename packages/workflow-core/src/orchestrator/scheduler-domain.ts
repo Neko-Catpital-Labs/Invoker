@@ -532,11 +532,16 @@ export function drainSchedulerImpl(
       && task.config.workflowId
     ) {
       try {
+        const rawPriority = task.config.priority;
+        const dispatchPriority = Number.isInteger(rawPriority) && rawPriority! >= 1 && rawPriority! <= 5
+          ? (rawPriority as 1 | 2 | 3 | 4 | 5)
+          : 2;
         const dispatch = host.persistence.enqueueLaunchDispatch({
           taskId: job.taskId,
           attemptId: launchAttemptId,
           workflowId: task.config.workflowId,
           generation: host.getExecutionGeneration(task),
+          priority: dispatchPriority,
           suppressEvent: true,
         });
         host.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
