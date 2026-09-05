@@ -1491,7 +1491,7 @@ describe('SQLiteAdapter', () => {
 
       expect(inserted.id).toBeGreaterThan(0);
       expect(inserted.state).toBe('enqueued');
-      expect(inserted.priority).toBe('normal');
+      expect(inserted.priority).toBe(2);
       expect(inserted.attemptsCount).toBe(0);
 
       const byId = adapter.loadLaunchDispatchById(inserted.id);
@@ -1514,7 +1514,7 @@ describe('SQLiteAdapter', () => {
         attemptId: 'attempt-1',
         workflowId: 'wf-launch',
         generation: 0,
-        priority: 'normal',
+        priority: 2,
       });
     });
 
@@ -1524,19 +1524,19 @@ describe('SQLiteAdapter', () => {
         taskId: 'wf-launch/t1',
         attemptId: 'attempt-dup',
         workflowId: 'wf-launch',
-        priority: 'high',
+        priority: 1,
         generation: 0,
       });
       const second = adapter.enqueueLaunchDispatch({
         taskId: 'wf-launch/t1',
         attemptId: 'attempt-dup',
         workflowId: 'wf-launch',
-        priority: 'low',
+        priority: 4,
         generation: 0,
       });
 
       expect(second.id).toBe(first.id);
-      expect(second.priority).toBe('high');
+      expect(second.priority).toBe(1);
       expect(
         adapter.listLaunchDispatchesByState(['enqueued', 'leased']),
       ).toHaveLength(1);
@@ -1863,14 +1863,14 @@ describe('SQLiteAdapter', () => {
           taskId: 'wf-launch/t-low',
           attemptId: 'attempt-low',
           workflowId: 'wf-launch',
-          priority: 'low',
+          priority: 4,
           generation: 0,
         });
         const high = adapter.enqueueLaunchDispatch({
           taskId: 'wf-launch/t-high',
           attemptId: 'attempt-high',
           workflowId: 'wf-launch',
-          priority: 'high',
+          priority: 1,
           generation: 0,
         });
 
@@ -1933,14 +1933,14 @@ describe('SQLiteAdapter', () => {
           taskId: 'wf-launch/t-stale',
           attemptId: 'attempt-stale',
           workflowId: 'wf-launch',
-          priority: 'high',
+          priority: 1,
           generation: 0,
         });
         const valid = adapter.enqueueLaunchDispatch({
           taskId: 'wf-launch/t-valid',
           attemptId: 'attempt-valid',
           workflowId: 'wf-launch',
-          priority: 'normal',
+          priority: 2,
           generation: 0,
         });
 
