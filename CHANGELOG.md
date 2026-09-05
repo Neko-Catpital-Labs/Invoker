@@ -4,6 +4,35 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.20
+
+- 0.0.15 through 0.0.19 were version-bumped but never tagged or published to
+  GitHub Releases or npm; this release catches up the published channels to
+  the current `master` and covers the changes accumulated across all of them.
+- Fix PR-authoring publication always using Codex regardless of a workflow's
+  declared execution agent: `publishReviewStackWithMakePrSkill()` now
+  resolves and publishes through the same single declared agent the rest of
+  the workflow's tasks use, instead of a hardcoded Codex lookup (#11892,
+  #11894).
+- Let a merge node's own pool, execution agent, and execution model be
+  edited at runtime, with PR authoring honoring a merge node's own declared
+  agent over its upstream tasks' (#11893, #11895, #11896, #11900).
+- Add an optional per-task priority field and wire it through parsing and
+  the dispatch queue, defaulting worker-submitted tasks to lower priority
+  than user-submitted ones (#11966, #11967, #11968, #11995).
+- Add `invoker-cli run-worker <kind> -- <args...>` for one-shot worker runs,
+  `invoker-cli query capacity` for pool/member slot usage and queue depth,
+  and `invoker-cli delete` as a first-class subcommand (#11943, #11944,
+  #11957, #11937).
+- Add an off-by-default spend circuit breaker worker and a self-deploy
+  worker (opt-in) for DO1 (#11948, #11927-#11930).
+- Widen the Codex OAuth proactive-refresh window from 5 minutes to a day to
+  reduce mid-task auth expiry (#11942).
+- Fix a cancel-cascade bug where an already-skipped dependent task was
+  treated as never-started, and fix resurrection of a skipped descendant's
+  launch outbox entry after its blocking task is fixed and approved
+  (#11833-#11835, #11994).
+
 ## 0.0.14
 
 - Fix packaged desktop owner-serve: bundle `@invoker/surfaces` and `@slack/bolt` into the Electron main bundle so loading the in-app planner no longer depends on pnpm-nested asar deps (npm 0.0.13 died with `Cannot find module 'form-data'`).
