@@ -208,6 +208,7 @@ function usage(): string {
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli worker toggles [--enable <id>|--disable <id> ...]',
+    '  invoker-cli run-worker <kind> -- <args...>',
     '  invoker-cli auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
     '  invoker-cli --help',
     '  invoker-cli --version',
@@ -1241,6 +1242,53 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
   process.stdout.write(`${workerDisplayName(definition.kind)} worker stopped.\n`);
   return 0;
 }
+
+async function runWorkerOnce(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus, runArgs: string[]): Promise<number> {
+  const homeRoot = resolveInvokerHomeRoot();
+  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+
+  let lock;
+  let persistence;
+  let worker: WorkerRuntime | undefined;
+  let autoFixAttemptLedger;
+  try {
+    lock = acquireWorkerLock({ kind: definition.kind, homeRoot, logger: silentLogger });
+    persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
+      outputDir: join(homeRoot, 'outputs'),
+    });
+    autoFixAttemptLedger = createAutoFixAttemptLedger();
+    worker = definition.factory({
+      logger: silentLogger,
+      messageBus: bus,
+      store: persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, mutationArgs) =>
+          persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+      },
+      autoFix: {
+        defaultAutoFixRetries: autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
+        getAutoFixAgent: () => autoFixAgent,
+      },
+    });
+
+    process.stdout.write(`${workerDisplayName(definition.kind)} worker running.\n`);
+    await worker.run(runArgs);
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      process.stderr.write(`${err.message}\n`);
+      return 1;
+    }
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  } finally {
+    await worker?.stop({ settleTimeoutMs: 5_000 });
+    lock?.release();
+    persistence?.close();
+  }
+  process.stdout.write(`${workerDisplayName(definition.kind)} worker finished.\n`);
+  return 0;
+}
 async function runHeadlessOwnerServe(deps: CliDeps): Promise<number> {
   const repoRoot = resolveRepoRoot(__dirname, { fallback: resolve(__dirname, '../../../..') });
   const launchSpec = (deps.resolveOwnerLaunchSpec ?? resolveHeadlessOwnerLaunchSpec)(repoRoot);
@@ -1309,6 +1357,25 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
       return await runWorker(definition, bus);
+    }
+    if (argv[0] === 'run-worker') {
+      const kind = argv[1];
+      if (!kind) {
+        throw new Error('Missing worker kind. Usage: invoker-cli run-worker <kind> -- <args...>');
+      }
+      const dashDash = argv.indexOf('--', 2);
+      const workerArgs = dashDash === -1 ? [] : argv.slice(dashDash + 1);
+      const registry = registerExternalWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
+      );
+      const definition = registry.get(kind);
+      if (!definition) {
+        const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+        throw new Error(`Unknown worker kind: "${kind}". Usage: invoker-cli run-worker <${knownKinds}>`);
+      }
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      return await runWorkerOnce(definition, bus, workerArgs);
     }
     if (argv[0] === 'query') {
       return await runQuery(parseQueryArgs(argv.slice(1)), deps);
