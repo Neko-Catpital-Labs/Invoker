@@ -1,6 +1,6 @@
 {
   "name": "@neko-catpital-labs/invoker-cli",
-  "version": "0.0.20",
+  "version": "0.1.0",
   "description": "Invoker standalone CLI installer",
   "type": "module",
   "repository": {

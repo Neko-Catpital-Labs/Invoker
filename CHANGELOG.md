@@ -4,11 +4,15 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
-## 0.0.20
+## 0.1.0
 
-- 0.0.15 through 0.0.19 were version-bumped but never tagged or published to
-  GitHub Releases or npm; this release catches up the published channels to
-  the current `master` and covers the changes accumulated across all of them.
+- 0.0.14 through 0.0.19 were version-bumped but never merged into `master`'s
+  release lineage (0.0.14/0.0.15 landed on a branch that diverged before
+  `master` moved on; 0.0.16-0.0.19 were never tagged at all), so the guard
+  that enforces a minor bump from the last real release (`v0.0.13`) is what
+  this version number reflects. This release catches up the published
+  channels to the current `master` and covers the changes accumulated since
+  `v0.0.13`.
 - Fix PR-authoring publication always using Codex regardless of a workflow's
   declared execution agent: `publishReviewStackWithMakePrSkill()` now
   resolves and publishes through the same single declared agent the rest of
