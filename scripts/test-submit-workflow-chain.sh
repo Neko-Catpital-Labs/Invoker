@@ -11,13 +11,92 @@ grep -qF 'Stacked onto WF-X' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKI
 grep -qF -- '--onto-workflow' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing --onto-workflow"; exit 1; }
 grep -qF 'gate-only wait' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing gate-only wait distinction"; exit 1; }
 
-mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/plans"
+mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/plans" "$TMP_DIR/bin"
 cp "$ROOT/scripts/submit-workflow-chain.sh" "$TMP_DIR/scripts/submit-workflow-chain.sh"
 chmod +x "$TMP_DIR/scripts/submit-workflow-chain.sh"
+
+cat > "$TMP_DIR/bin/invoker-cli" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${INVOKER_CLI_FORBIDDEN:-0}" == "1" ]]; then
+  echo "TEST FAILURE: invoker-cli mock invoked during a local-backend scenario" >&2
+  exit 1
+fi
+
+STATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.state"
+mkdir -p "$STATE_DIR"
+
+WORKFLOWS_JSON="$STATE_DIR/workflows.json"
+TASKS_JSON="$STATE_DIR/tasks.json"
+SEQ_FILE="$STATE_DIR/seq"
+
+[[ -f "$WORKFLOWS_JSON" ]] || printf '[]' > "$WORKFLOWS_JSON"
+[[ -f "$TASKS_JSON" ]] || printf '[]' > "$TASKS_JSON"
+[[ -f "$SEQ_FILE" ]] || printf '1000' > "$SEQ_FILE"
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  query)
+    sub="${1:-}"
+    if [[ "$sub" == "workflows" ]]; then
+      cat "$WORKFLOWS_JSON"
+      exit 0
+    fi
+    if [[ "$sub" == "tasks" ]]; then
+      cat "$TASKS_JSON"
+      exit 0
+    fi
+    echo "unsupported query subcommand: $sub" >&2
+    exit 1
+    ;;
+  run)
+    plan="${1:-}"
+    [[ -f "$plan" ]] || { echo "missing plan: $plan" >&2; exit 1; }
+
+    seq="$(cat "$SEQ_FILE")"
+    wf_id="wf-${seq}-1"
+    printf '%s' "$((seq + 1))" > "$SEQ_FILE"
+
+    name="$(awk -F': *' '/^name:/{v=$2; gsub(/^"|"$/, "", v); print v; exit}' "$plan")"
+    base="$(awk -F': *' '/^baseBranch:/{print $2; exit}' "$plan")"
+    feature="$(awk -F': *' '/^featureBranch:/{print $2; exit}' "$plan")"
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    jq --arg id "$wf_id" \
+      --arg name "$name" \
+      --arg base "$base" \
+      --arg feature "$feature" \
+      --arg now "$now" \
+      '. += [{id:$id,name:$name,status:"running",baseBranch:$base,featureBranch:$feature,createdAt:$now}]' \
+      "$WORKFLOWS_JSON" > "$WORKFLOWS_JSON.tmp"
+    mv "$WORKFLOWS_JSON.tmp" "$WORKFLOWS_JSON"
+
+    jq --arg id "__merge__${wf_id}" \
+      '. += [{id:$id,status:"pending",config:{}}]' \
+      "$TASKS_JSON" > "$TASKS_JSON.tmp"
+    mv "$TASKS_JSON.tmp" "$TASKS_JSON"
+
+    jq -n --arg id "$wf_id" '{workflow:{id:$id,status:"success"},result:{workflowId:$id,status:"success",completedTasks:0,failedTasks:0,mode:"live"}}'
+    ;;
+  *)
+    echo "unsupported command: $cmd" >&2
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$TMP_DIR/bin/invoker-cli"
 
 cat > "$TMP_DIR/run.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+if [[ "${RUN_SH_FORBIDDEN:-0}" == "1" ]]; then
+  echo "TEST FAILURE: ./run.sh mock invoked during a live-backend scenario" >&2
+  exit 1
+fi
 
 STATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.state"
 mkdir -p "$STATE_DIR"
@@ -89,6 +168,7 @@ case "$cmd" in
 esac
 EOF
 chmod +x "$TMP_DIR/run.sh"
+export PATH="$TMP_DIR/bin:$PATH"
 
 cat > "$TMP_DIR/plans/a.yaml" <<'EOF'
 name: "A"
@@ -137,8 +217,10 @@ EOF
 
 out="$(
   cd "$TMP_DIR"
-  ./scripts/submit-workflow-chain.sh ./plans/a.yaml ./plans/b.yaml ./plans/c.yaml
+  INVOKER_CLI_FORBIDDEN=1 ./scripts/submit-workflow-chain.sh ./plans/a.yaml ./plans/b.yaml ./plans/c.yaml
 )"
+
+grep -q '^BACKEND=local$' <<<"$out" || { echo "expected local backend for a plain chain with no external ref"; echo "$out"; exit 1; }
 
 wf1="$(printf '%s\n' "$out" | awk -F'[ =]' '/^WF1=/{print $2; exit}')"
 wf2="$(printf '%s\n' "$out" | awk -F'[ =]' '/^WF2=/{print $2; exit}')"
@@ -163,8 +245,10 @@ grep -q '^baseBranch: feature/b$' "$rp3"
 
 out_rr="$(
   cd "$TMP_DIR"
-  ./scripts/submit-workflow-chain.sh --gate-policy review_ready ./plans/a.yaml ./plans/b.yaml ./plans/c.yaml
+  INVOKER_CLI_FORBIDDEN=1 ./scripts/submit-workflow-chain.sh --gate-policy review_ready ./plans/a.yaml ./plans/b.yaml ./plans/c.yaml
 )"
+
+grep -q '^BACKEND=local$' <<<"$out_rr" || { echo "expected local backend for review_ready chain with no external ref"; echo "$out_rr"; exit 1; }
 
 rp2_rr="$(printf '%s\n' "$out_rr" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '1p')"
 rp3_rr="$(printf '%s\n' "$out_rr" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '2p')"
@@ -172,7 +256,6 @@ rp3_rr="$(printf '%s\n' "$out_rr" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '2p')
 grep -q '^ *gatePolicy: review_ready$' "$rp2_rr"
 grep -q '^ *gatePolicy: review_ready$' "$rp3_rr"
 
-# Seed an upstream workflow that plan[0] can stack onto via concrete extDep.
 SEED_STATE="$TMP_DIR/.state"
 mkdir -p "$SEED_STATE"
 printf '[]' > "$SEED_STATE/workflows.json"
@@ -221,15 +304,15 @@ EOF
 
 out_onto="$(
   cd "$TMP_DIR"
-  ./scripts/submit-workflow-chain.sh --onto-workflow wf-fanout-1 ./plans/onto-head.yaml ./plans/onto-next.yaml
+  RUN_SH_FORBIDDEN=1 ./scripts/submit-workflow-chain.sh --onto-workflow wf-fanout-1 ./plans/onto-head.yaml ./plans/onto-next.yaml
 )"
+grep -q '^BACKEND=live$' <<<"$out_onto" || { echo "expected live backend for --onto-workflow"; echo "$out_onto"; exit 1; }
 rp_onto="$(printf '%s\n' "$out_onto" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '1p')"
 [[ -f "$rp_onto" ]] || { echo "missing rendered onto-head plan"; echo "$out_onto"; exit 1; }
 grep -q '^baseBranch: plan/fanout-upstream$' "$rp_onto"
 wf_onto_base="$(printf '%s\n' "$out_onto" | awk -F'[= ]' '/^WF1=/{print $4; exit}')"
 [[ "$wf_onto_base" == "plan/fanout-upstream" ]] || { echo "WF1 base should be fanout feature; got: $wf_onto_base"; echo "$out_onto"; exit 1; }
 
-# Auto-detect concrete extDep on plan[0] when --onto-workflow is omitted.
 printf '[]' > "$SEED_STATE/workflows.json"
 printf '[]' > "$SEED_STATE/tasks.json"
 printf '3000' > "$SEED_STATE/seq"
@@ -245,10 +328,11 @@ jq -n --arg id "__merge__wf-fanout-1" '[{id:$id,status:"review_ready",config:{}}
 
 out_auto="$(
   cd "$TMP_DIR"
-  ./scripts/submit-workflow-chain.sh ./plans/onto-head.yaml ./plans/onto-next.yaml
+  RUN_SH_FORBIDDEN=1 ./scripts/submit-workflow-chain.sh ./plans/onto-head.yaml ./plans/onto-next.yaml
 )"
+grep -q '^BACKEND=live$' <<<"$out_auto" || { echo "expected live backend for auto-detected concrete externalDependency"; echo "$out_auto"; exit 1; }
 rp_auto="$(printf '%s\n' "$out_auto" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '1p')"
 [[ -f "$rp_auto" ]] || { echo "missing auto-onto rendered plan"; echo "$out_auto"; exit 1; }
 grep -q '^baseBranch: plan/fanout-upstream$' "$rp_auto"
 
-echo "PASS: submit-workflow-chain enforces merge-gate deps, branch chaining, gate policy, and --onto-workflow"
+echo "PASS: submit-workflow-chain enforces merge-gate deps, branch chaining, gate policy, --onto-workflow, and local/live backend isolation"
