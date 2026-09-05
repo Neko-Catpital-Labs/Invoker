@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
 
-import { LINUX_HEADLESS_ELECTRON_FLAGS } from '@invoker/contracts';
+import { LINUX_HEADLESS_ELECTRON_FLAGS, resolveProductionOwnerServiceMarkerPath } from '@invoker/contracts';
 
-import { buildOwnerSpawnEnv, resolveOwnerLaunch, withoutMissingPathEntries } from '../invoker-launcher.js';
+import {
+  buildOwnerSpawnEnv,
+  resolveOwnerLaunch,
+  withoutMissingPathEntries,
+  writeProductionOwnerServiceMarkerFile,
+} from '../invoker-launcher.js';
 
 describe('withoutMissingPathEntries', () => {
   const exists = (path: string) => path !== '/snap/bin' && path !== '/gone';
@@ -123,5 +128,24 @@ describe('buildOwnerSpawnEnv', () => {
     expect(env.SLACK_BOT_TOKEN).toBeUndefined();
     expect(env.PATH).toBe('/usr/bin');
     expect(env.LIBGL_ALWAYS_SOFTWARE).toBe('1');
+  });
+});
+
+describe('writeProductionOwnerServiceMarkerFile', () => {
+  it('writes the marker at the shared contracts path so a sibling process can detect production by file, not just inherited env', () => {
+    const markerPath = resolveProductionOwnerServiceMarkerPath('/home/invoker');
+    const mkdirCalls: Array<[string, { recursive: boolean }]> = [];
+    const writeCalls: Array<[string, string]> = [];
+
+    writeProductionOwnerServiceMarkerFile(
+      markerPath,
+      (path, options) => { mkdirCalls.push([path, options]); },
+      (path, data) => { writeCalls.push([path, data]); },
+    );
+
+    expect(mkdirCalls).toEqual([['/home/invoker/.invoker', { recursive: true }]]);
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0][0]).toBe(markerPath);
+    expect(() => new Date(writeCalls[0][1]).toISOString()).not.toThrow();
   });
 });
