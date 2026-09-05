@@ -877,6 +877,7 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
     start,
     wake: runtime.wake,
     tick: runtime.tick,
+    run: runtime.run,
     stop,
     isRunning: runtime.isRunning,
   };
