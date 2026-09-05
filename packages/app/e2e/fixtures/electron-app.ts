@@ -269,7 +269,15 @@ exit 64
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
         ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
         PATH: pathEnv,
+        INVOKER_BENCH_EXECUTE_TASK: '1',
       },
+    });
+    // DEBUG (temporary): surface Electron main-process stdout/stderr in CI logs.
+    app.process().stdout?.on('data', (d: Buffer) => {
+      process.stderr.write(`[DEBUG-MAIN-STDOUT] ${d.toString()}`);
+    });
+    app.process().stderr?.on('data', (d: Buffer) => {
+      process.stderr.write(`[DEBUG-MAIN-STDERR] ${d.toString()}`);
     });
     try {
       await use(app);
@@ -484,13 +492,26 @@ export async function waitForTaskStatus(
   timeoutMs = 55000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  let pollCount = 0;
+  let lastObservedStatus: string | undefined;
   while (Date.now() < deadline) {
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const task = tasks.find((t: any) => matchesTaskId(t.id, taskId));
+    pollCount += 1;
+    if (task && task.status !== lastObservedStatus) {
+      lastObservedStatus = task.status;
+      process.stderr.write(
+        `[DEBUG-POLL] taskId=${taskId} poll#${pollCount} elapsedMs=${Date.now() - startedAt} status=${task.status}\n`,
+      );
+    }
     if (task && task.status === status) return;
     await page.waitForTimeout(300);
   }
+  process.stderr.write(
+    `[DEBUG-POLL] taskId=${taskId} TIMED OUT after ${pollCount} polls, elapsedMs=${Date.now() - startedAt}, lastObservedStatus=${lastObservedStatus}\n`,
+  );
   throw new Error(`Task "${taskId}" did not reach status "${status}" within ${timeoutMs}ms`);
 }
 
