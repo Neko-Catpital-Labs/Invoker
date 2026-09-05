@@ -131,6 +131,11 @@ function createExternalWorkerRuntime(config: ExternalWorkerConfig): ExternalWork
     launch();
   };
 
+  const run = async (_args?: string[]): Promise<void> => {
+    launch();
+    await (closePromise ?? Promise.resolve());
+  };
+
   return {
     identity,
     finished: finishedGate.promise,
@@ -139,6 +144,7 @@ function createExternalWorkerRuntime(config: ExternalWorkerConfig): ExternalWork
       void launch();
     },
     tick,
+    run,
     stop,
     isRunning: () => started && !stopped && child !== null,
   };
