@@ -34,3 +34,7 @@ export function resolveInvokerIpcSocketPath(
 ): string {
   return env.INVOKER_IPC_SOCKET || join(resolveInvokerHomeRoot(env, homeDir), 'ipc-transport.sock');
 }
+
+export function resolveProductionOwnerServiceMarkerPath(homeDir: string = homedir()): string {
+  return join(homeDir, '.invoker', '.production-owner-service-marker');
+}

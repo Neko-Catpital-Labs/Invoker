@@ -55,6 +55,33 @@ describe('resolveActiveInvokerProfileEnv', () => {
     });
   });
 
+  describe('when a sibling process cannot inherit the production env marker', () => {
+    it('recognizes production via the on-disk marker file instead', () => {
+      const repoRoot = resolveRepoRoot(process.cwd());
+
+      const actual = resolveActiveInvokerProfileEnv({
+        repoRoot,
+        homeDir: '/home/invoker',
+        productionMarkerFileExists: (path) => path === '/home/invoker/.invoker/.production-owner-service-marker',
+      });
+
+      expect(actual).toEqual({ INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' });
+    });
+
+    it('still falls through to dev-profile detection when the marker file is absent', () => {
+      const repoRoot = resolveRepoRoot(process.cwd());
+
+      const actual = resolveActiveInvokerProfileEnv({
+        repoRoot,
+        homeDir: '/home/some-developer',
+        productionMarkerFileExists: () => false,
+      });
+
+      expect(actual.INVOKER_PRODUCTION_OWNER_SERVICE).toBeUndefined();
+      expect(actual.INVOKER_DEVELOPMENT_PROFILE).toBeTruthy();
+    });
+  });
+
   it('matches the development profile script for this repository', () => {
     const repoRoot = resolveRepoRoot(process.cwd());
     const scriptPath = join(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
