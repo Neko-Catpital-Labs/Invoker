@@ -53,12 +53,28 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     } catch {
       continue;
     }
+    let countedByFormat = false;
+
+    // Legacy Codex stream
+    if (row.type === 'turn.completed' || row.type === 'turn.failed') {
+      assistantTurns += 1;
+      const usage = row.usage ?? {};
+      cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.input_tokens ?? usage.cached_tokens ?? 0) || 0;
+      countedByFormat = true;
+    }
+    if (row.type === 'item.completed' && row.item?.type === 'command_execution') {
+      const cmd = String(row.item?.command ?? row.item?.cmd ?? '').trim();
+      if (cmd) bashCounts.set(cmd, (bashCounts.get(cmd) ?? 0) + 1);
+      countedByFormat = true;
+    }
+
+    // Current Codex stream
     if (row.type === 'event_msg' && row.payload?.type === 'token_count') {
       assistantTurns += 1;
       const usage = row.payload?.info?.total_token_usage ?? {};
       const cached = Number(usage.cached_input_tokens ?? 0) || 0;
       if (cached > codexCacheReadTokens) codexCacheReadTokens = cached;
-      continue;
+      countedByFormat = true;
     }
     if (row.type === 'response_item') {
       const payload = row.payload ?? {};
@@ -69,11 +85,11 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
         codexCmd = extractCodexExecCommandFromArguments(payload.arguments);
       }
       if (codexCmd) bashCounts.set(codexCmd, (bashCounts.get(codexCmd) ?? 0) + 1);
-      continue;
+      countedByFormat = true;
     }
     const msg = row.message ?? row;
     const role = msg.role ?? row.type;
-    if (role === 'assistant' || row.type === 'assistant') {
+    if (!countedByFormat && (role === 'assistant' || row.type === 'assistant')) {
       assistantTurns += 1;
       const usage = msg.usage ?? row.usage ?? {};
       cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0;
