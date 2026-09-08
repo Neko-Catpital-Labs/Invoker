@@ -418,7 +418,8 @@ def build_repair_bot_thread_plan(
         f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {start_head}\nThread: {thread_id}\n"
     )
     yaml_text = _write_plan_header(
-        name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review"
+        name=name, base_branch=pr.base_ref_name, repo=repo, merge_mode="external_review", on_finish="pull_request",
+        description=f"Resolve an unresolved bot review thread on PR #{pr.number} with a real code change.",
     )
     yaml_text += _repair_task_yaml(description=f"Resolve bot review thread on PR #{pr.number}", prompt=prompt)
     yaml_text += _safe_push_task_yaml(

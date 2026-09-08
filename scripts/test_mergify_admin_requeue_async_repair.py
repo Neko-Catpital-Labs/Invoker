@@ -80,14 +80,14 @@ class AsyncRepairPlanTests(unittest.TestCase):
         bot_thread_plan = async_repair.build_repair_bot_thread_plan(
             pr(), "tbot", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
-        for plan, expected_task_ids, expected_merge_mode in (
-            (checks_plan, ["repair", "normalize", "safe-push"], "manual"),
-            (rebase_plan, ["repair", "safe-push"], "manual"),
-            (bot_thread_plan, ["repair", "safe-push"], "external_review"),
+        for plan, expected_task_ids, expected_merge_mode, expected_on_finish in (
+            (checks_plan, ["repair", "normalize", "safe-push"], "manual", "none"),
+            (rebase_plan, ["repair", "safe-push"], "manual", "none"),
+            (bot_thread_plan, ["repair", "safe-push"], "external_review", "pull_request"),
         ):
             with self.subTest(plan=plan.plan_name):
                 doc = yaml.safe_load(plan.yaml_text)
-                self.assertEqual(doc["onFinish"], "none")
+                self.assertEqual(doc["onFinish"], expected_on_finish)
                 self.assertEqual(doc["mergeMode"], expected_merge_mode)
                 self.assertEqual(doc["repoUrl"], "https://github.com/owner/repo.git")
                 self.assertEqual([task["id"] for task in doc["tasks"]], expected_task_ids)
@@ -336,6 +336,16 @@ class AsyncRepairPlanTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 async_repair.submit_async_repair_plan(plan)
 
+    def test_bot_thread_plan_yaml_is_accepted_by_invokers_real_plan_validator(self):
+        plan = async_repair.build_repair_bot_thread_plan(
+            pr(number=12006, head_ref_name="stack/bot-thread-example", merge_state_status="BLOCKED"),
+            "PRRT_example",
+            repo="owner/repo",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assert_plan_accepted_by_real_validator(plan, "bot-thread")
+
     def test_requeue_stuck_plan_yaml_is_accepted_by_invokers_real_plan_validator(self):
         plan = async_repair.build_requeue_stuck_plan(
             pr(number=11441, head_ref_name="stack/requeue-stuck-example", merge_state_status="BLOCKED"),
@@ -344,7 +354,9 @@ class AsyncRepairPlanTests(unittest.TestCase):
             start_head=HEAD,
             state_file=Path("/tmp/ledger.jsonl"),
         )
+        self.assert_plan_accepted_by_real_validator(plan, "requeue-stuck")
 
+    def assert_plan_accepted_by_real_validator(self, plan, label):
         repo_root = Path(__file__).resolve().parent.parent
         validator = repo_root / "skills" / "plan-to-invoker" / "scripts" / "validate-plan.sh"
         self.assertTrue(validator.exists(), f"real validator missing at {validator}")
@@ -374,7 +386,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
             unexpected = [e for e in errors if e.get("errorType") != "non_portable_pipefail"]
             self.assertEqual(
                 unexpected, [],
-                f"requeue-stuck plan failed real Invoker plan validation: {unexpected}",
+                f"{label} plan failed real Invoker plan validation: {unexpected}",
             )
 
 
