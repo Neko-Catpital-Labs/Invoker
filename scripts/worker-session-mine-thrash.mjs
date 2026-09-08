@@ -17,10 +17,32 @@ export function sessionHash(sessionId, workflowName = '') {
   return createHash('sha256').update(`${workflowName}\0${sessionId}`).digest('hex').slice(0, 16);
 }
 
+function extractCodexExecCommandFromJsInput(input) {
+  if (typeof input !== 'string') return '';
+  const match = /cmd\s*:\s*"((?:\\.|[^"\\])*)"/.exec(input);
+  if (!match) return '';
+  try {
+    return String(JSON.parse(`"${match[1]}"`)).trim();
+  } catch {
+    return '';
+  }
+}
+
+function extractCodexExecCommandFromArguments(args) {
+  if (typeof args !== 'string') return '';
+  try {
+    const parsed = JSON.parse(args);
+    return String(parsed?.cmd ?? parsed?.command ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
 export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   let assistantTurns = 0;
   let cacheReadTokens = 0;
+  let codexCacheReadTokens = 0;
   const bashCounts = new Map();
   let workflowHint = '';
 
@@ -31,20 +53,43 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     } catch {
       continue;
     }
-    // Codex structured stream
+    let countedByFormat = false;
+
+    // Legacy Codex stream
     if (row.type === 'turn.completed' || row.type === 'turn.failed') {
       assistantTurns += 1;
       const usage = row.usage ?? {};
-      cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.input_tokens ?? 0) || 0;
-      continue;
+      cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.input_tokens ?? usage.cached_tokens ?? 0) || 0;
+      countedByFormat = true;
     }
     if (row.type === 'item.completed' && row.item?.type === 'command_execution') {
       const cmd = String(row.item?.command ?? row.item?.cmd ?? '').trim();
       if (cmd) bashCounts.set(cmd, (bashCounts.get(cmd) ?? 0) + 1);
+      countedByFormat = true;
+    }
+
+    // Current Codex stream
+    if (row.type === 'event_msg' && row.payload?.type === 'token_count') {
+      assistantTurns += 1;
+      const usage = row.payload?.info?.total_token_usage ?? {};
+      const cached = Number(usage.cached_input_tokens ?? 0) || 0;
+      if (cached > codexCacheReadTokens) codexCacheReadTokens = cached;
+      countedByFormat = true;
+    }
+    if (row.type === 'response_item') {
+      const payload = row.payload ?? {};
+      let codexCmd = '';
+      if (payload.type === 'custom_tool_call' && payload.name === 'exec') {
+        codexCmd = extractCodexExecCommandFromJsInput(payload.input);
+      } else if (payload.type === 'function_call' && payload.name === 'exec_command') {
+        codexCmd = extractCodexExecCommandFromArguments(payload.arguments);
+      }
+      if (codexCmd) bashCounts.set(codexCmd, (bashCounts.get(codexCmd) ?? 0) + 1);
+      countedByFormat = true;
     }
     const msg = row.message ?? row;
     const role = msg.role ?? row.type;
-    if (role === 'assistant' || row.type === 'assistant') {
+    if (!countedByFormat && (role === 'assistant' || row.type === 'assistant')) {
       assistantTurns += 1;
       const usage = msg.usage ?? row.usage ?? {};
       cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0;
@@ -71,6 +116,8 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       else if (/Failed check:/i.test(joined)) workflowHint = 'admin-bypass-repair';
     }
   }
+
+  cacheReadTokens += codexCacheReadTokens;
 
   let maxSameBash = 0;
   let maxSameBashCmd = '';
@@ -181,10 +228,76 @@ function selfTest() {
   const neg = analyzeClaudeJsonl(clean);
   if (!pos.thrash) throw new Error('expected thrash fixture to fire');
   if (neg.thrash) throw new Error('expected clean fixture to stay silent');
-  const codexThrashy = Array.from({ length: 40 }, () => JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } })).join('\n');
-  const codexPos = analyzeClaudeJsonl(codexThrashy);
-  if (!codexPos.thrash) throw new Error('expected codex turn.completed thrash');
-  console.log(JSON.stringify({ ok: true, positiveReasons: pos.reasons, negativeThrash: neg.thrash, codexReasons: codexPos.reasons }, null, 2));
+
+  const codexTokenCountRow = (cachedInputTokens) => JSON.stringify({
+    timestamp: '2026-09-01T00:00:00.000Z',
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: { input_tokens: cachedInputTokens * 2, cached_input_tokens: cachedInputTokens },
+        last_token_usage: { input_tokens: cachedInputTokens, cached_input_tokens: cachedInputTokens },
+      },
+    },
+  });
+  const codexExecRow = (cmd) => JSON.stringify({
+    timestamp: '2026-09-01T00:00:00.000Z',
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      status: 'completed',
+      call_id: 'call_x',
+      name: 'exec',
+      input: `const r = await tools.exec_command({cmd:"${cmd}","workdir":"/repo","yield_time_ms":10000,"max_output_tokens":20000});\ntext(r.output);`,
+    },
+  });
+  const codexFunctionCallExecRow = (cmd) => JSON.stringify({
+    timestamp: '2026-07-03T00:00:00.000Z',
+    type: 'response_item',
+    payload: {
+      type: 'function_call',
+      name: 'exec_command',
+      arguments: JSON.stringify({ cmd, workdir: '/repo', yield_time_ms: 10_000, max_output_tokens: 20_000 }),
+      call_id: 'call_y',
+    },
+  });
+
+  const codexTurnsRows = Array.from({ length: 40 }, (_, i) => codexTokenCountRow(100 * (i + 1)));
+  const codexRepeatedExecRows = Array.from({ length: 5 }, () => codexExecRow('pnpm test'));
+  const codexJsThrashy = [...codexTurnsRows, ...codexRepeatedExecRows].join('\n');
+  const codexJsPos = analyzeClaudeJsonl(codexJsThrashy);
+  if (!codexJsPos.thrash) throw new Error('expected codex response_item/event_msg thrash to fire');
+  if (codexJsPos.assistantTurns !== 40) throw new Error(`expected 40 codex assistant turns, got ${codexJsPos.assistantTurns}`);
+  if (codexJsPos.cacheReadTokens !== 4000) throw new Error(`expected codex cache_read_tokens to take the final cumulative value (4000), got ${codexJsPos.cacheReadTokens}`);
+  if (codexJsPos.maxSameBash !== 5) throw new Error(`expected 5 repeated codex exec commands, got ${codexJsPos.maxSameBash}`);
+
+  const codexFnCallThrashy = [
+    codexTokenCountRow(100),
+    codexTokenCountRow(200),
+    ...Array.from({ length: 5 }, () => codexFunctionCallExecRow('rg -n foo .')),
+  ].join('\n');
+  const codexFnCallPos = analyzeClaudeJsonl(codexFnCallThrashy);
+  if (!codexFnCallPos.thrash) throw new Error('expected codex function_call/exec_command thrash to fire');
+  if (codexFnCallPos.maxSameBash !== 5) throw new Error(`expected 5 repeated codex exec_command commands, got ${codexFnCallPos.maxSameBash}`);
+
+  const codexClean = [
+    codexTokenCountRow(100),
+    codexTokenCountRow(200),
+    codexTokenCountRow(300),
+    codexExecRow('git status'),
+    codexExecRow('pnpm build'),
+  ].join('\n');
+  const codexNeg = analyzeClaudeJsonl(codexClean);
+  if (codexNeg.thrash) throw new Error('expected clean codex fixture to stay silent');
+
+  console.log(JSON.stringify({
+    ok: true,
+    positiveReasons: pos.reasons,
+    negativeThrash: neg.thrash,
+    codexJsReasons: codexJsPos.reasons,
+    codexFnCallReasons: codexFnCallPos.reasons,
+    codexNegativeThrash: codexNeg.thrash,
+  }, null, 2));
 }
 
 const isMain = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('worker-session-mine-thrash.mjs');
