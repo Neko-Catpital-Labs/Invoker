@@ -15,6 +15,7 @@ import {
   PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  WORKER_SESSION_MINE_WORKER_KIND,
 } from '@invoker/execution-engine';
 
 /**
@@ -102,6 +103,13 @@ export const WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
     description: 'Automatically reclaims disk space when a machine gets critically full. The monitoring worker always runs; this only controls whether it is allowed to delete anything.',
     configPath: 'diskHeadroom.cleanupEnabled',
     defaultEnabled: true,
+  },
+  {
+    id: 'worker-session-mine',
+    label: 'Worker session mine',
+    description: 'Mines finished worker agent sessions (Claude, Codex, OMP) for thrash: 40+ turns, 10M+ cache-read or total tokens, or the same shell command 5+ times. Files one Invoker follow-up per session, capped at 1 per tick and 2 per day. Off by default; enable on the DO1 owner only.',
+    workerKinds: [WORKER_SESSION_MINE_WORKER_KIND],
+    includeInOnboarding: false,
   },
   {
     id: 'idle-task-cleanup',
