@@ -157,12 +157,13 @@ function listFromDiskFallback() {
         continue;
       }
       if (name.endsWith('.jsonl')) {
+        const sessionId = name.replace(/\.jsonl$/, '');
         out.push({
           workflowName: '',
-          sessionId: name.replace(/\.jsonl$/, ''),
+          sessionId,
           agentName: 'codex',
           status: 'failed',
-          path,
+          path: resolveTranscriptPath('codex', sessionId) ?? path,
         });
       } else if (name.endsWith('.omp.txt')) {
         out.push({
