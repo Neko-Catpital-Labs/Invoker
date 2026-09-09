@@ -21,6 +21,40 @@ export function agentSessionsDir() {
   return join(base, 'agent-sessions');
 }
 
+export function codexSessionsDir() {
+  const base = process.env.CODEX_HOME?.trim() || join(homedir(), '.codex');
+  return join(base, 'sessions');
+}
+
+function listDirs(path) {
+  try {
+    return readdirSync(path, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return [];
+  }
+}
+
+export function findCodexRollout(sessionId, root = codexSessionsDir()) {
+  if (!sessionId || !existsSync(root)) return null;
+  const suffix = `-${sessionId}.jsonl`;
+  for (const year of listDirs(root).sort().reverse()) {
+    for (const month of listDirs(join(root, year)).sort().reverse()) {
+      for (const day of listDirs(join(root, year, month)).sort().reverse()) {
+        const dayDir = join(root, year, month, day);
+        let names;
+        try {
+          names = readdirSync(dayDir);
+        } catch {
+          continue;
+        }
+        const hit = names.find((name) => name.startsWith('rollout-') && name.endsWith(suffix));
+        if (hit) return join(dayDir, hit);
+      }
+    }
+  }
+  return null;
+}
+
 function findInClaudeProjects(sessionId, roots = claudeProjectRoots()) {
   for (const root of roots) {
     if (!existsSync(root)) continue;
@@ -50,6 +84,8 @@ export function resolveTranscriptPath(agentName, sessionId) {
     return findInClaudeProjects(sessionId);
   }
   if (name === 'codex') {
+    const rollout = findCodexRollout(sessionId);
+    if (rollout) return rollout;
     const p = join(agentSessionsDir(), `${sessionId}.jsonl`);
     return existsSync(p) ? p : null;
   }
@@ -65,5 +101,6 @@ export function resolveTranscriptPathSelfTest() {
   return {
     claudeRoots: claudeProjectRoots(),
     agentSessionsDir: agentSessionsDir(),
+    codexSessionsDir: codexSessionsDir(),
   };
 }

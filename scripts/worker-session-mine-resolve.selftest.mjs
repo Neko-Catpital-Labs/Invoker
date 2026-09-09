@@ -12,6 +12,7 @@ try {
   process.env.INVOKER_CLAUDE_CONFIG_DIR = join(root, 'claude-worker');
   process.env.CLAUDE_CONFIG_DIR = process.env.INVOKER_CLAUDE_CONFIG_DIR;
   process.env.INVOKER_DB_DIR = root;
+  process.env.CODEX_HOME = join(root, 'codex-home');
 
   const claudeProjects = join(process.env.CLAUDE_CONFIG_DIR, 'projects', 'enc-cwd');
   mkdirSync(claudeProjects, { recursive: true });
@@ -22,19 +23,27 @@ try {
   writeFileSync(join(sessions, 'sid-codex.jsonl'), '{}\n');
   writeFileSync(join(sessions, 'sid-omp.omp.txt'), 'hi\n');
 
+  const rolloutDay = join(process.env.CODEX_HOME, 'sessions', '2026', '09', '08');
+  mkdirSync(rolloutDay, { recursive: true });
+  writeFileSync(join(rolloutDay, 'rollout-2026-09-08T20-44-26-sid-rollout.jsonl'), '{}\n');
+  writeFileSync(join(sessions, 'sid-rollout.jsonl'), '{}\n');
+
   const claudePath = resolveTranscriptPath('claude', 'sid-claude');
   const codexPath = resolveTranscriptPath('codex', 'sid-codex');
+  const codexRolloutPath = resolveTranscriptPath('codex', 'sid-rollout');
   const ompPath = resolveTranscriptPath('omp', 'sid-omp');
   const missing = resolveTranscriptPath('kimi', 'sid-x');
 
   if (!claudePath?.includes('claude-worker')) throw new Error(`claude path wrong: ${claudePath}`);
   if (!codexPath?.endsWith('sid-codex.jsonl')) throw new Error(`codex path wrong: ${codexPath}`);
+  if (!codexRolloutPath?.endsWith('rollout-2026-09-08T20-44-26-sid-rollout.jsonl')) throw new Error(`codex rollout should win over the mirror: ${codexRolloutPath}`);
   if (!ompPath?.endsWith('sid-omp.omp.txt')) throw new Error(`omp path wrong: ${ompPath}`);
   if (missing !== null) throw new Error('kimi should be null');
-  console.log(JSON.stringify({ ok: true, claudePath, codexPath, ompPath }, null, 2));
+  console.log(JSON.stringify({ ok: true, claudePath, codexPath, codexRolloutPath, ompPath }, null, 2));
 } finally {
   rmSync(root, { recursive: true, force: true });
   delete process.env.INVOKER_CLAUDE_CONFIG_DIR;
   delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.INVOKER_DB_DIR;
+  delete process.env.CODEX_HOME;
 }
