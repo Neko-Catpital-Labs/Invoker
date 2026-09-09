@@ -630,12 +630,7 @@ export class PlanConversation {
 
       this.messages = saved.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
-        content: typeof m.content === 'string'
-          ? m.content
-          : (m.content as any[])
-              .filter((b: any) => b.type === 'text')
-              .map((b: any) => b.text)
-              .join(''),
+        content: this.normalizeRecoveredMessageContent(m.content),
       })).filter((m) => m.content.length > 0);
       this._planSubmitted = saved.planSubmitted;
       this.mode = saved.mode ?? this.mode;
@@ -646,6 +641,17 @@ export class PlanConversation {
     } catch (err) {
       this.log('plan-conversation', 'error', `Failed to load conversation ${this.threadTs}: ${err}`);
     }
+  }
+
+  private normalizeRecoveredMessageContent(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text)
+        .join('');
+    }
+    return JSON.stringify(content) ?? '';
   }
 
   /**

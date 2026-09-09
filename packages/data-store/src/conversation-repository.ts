@@ -190,12 +190,18 @@ export class ConversationRepository {
   }
 
   private parseJson(json: string, context: string): unknown {
+    let parsed: unknown;
     try {
-      return JSON.parse(json);
+      parsed = JSON.parse(json);
     } catch {
       // Content may be a plain string, not JSON — return as-is
       this.log.warn(`Non-JSON content in ${context}, returning raw string`);
       return json;
     }
+    return isMessageContent(parsed) ? parsed : json;
   }
+}
+
+function isMessageContent(value: unknown): value is string | object {
+  return typeof value === 'string' || (typeof value === 'object' && value !== null);
 }
