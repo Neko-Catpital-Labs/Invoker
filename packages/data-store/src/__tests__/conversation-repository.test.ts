@@ -164,6 +164,31 @@ describe('ConversationRepository', () => {
       expect(repo.loadConversation('nonexistent')).toBeNull();
     });
 
+    it('round-trips a bare numeric reply as the string the user typed', () => {
+      repo.saveConversation('ts-numeric', [
+        { role: 'user', content: 'Which option? 1, 2, or 3' },
+        { role: 'assistant', content: 'Pick one.' },
+        { role: 'user', content: '3' },
+      ]);
+
+      const loaded = repo.loadConversation('ts-numeric');
+      expect(loaded!.messages.map((m) => m.content)).toEqual([
+        'Which option? 1, 2, or 3',
+        'Pick one.',
+        '3',
+      ]);
+    });
+
+    it('keeps JSON-looking scalar replies (true, null) as strings', () => {
+      repo.saveConversation('ts-scalar', [
+        { role: 'user', content: 'true' },
+        { role: 'user', content: 'null' },
+      ]);
+
+      const loaded = repo.loadConversation('ts-scalar');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['true', 'null']);
+    });
+
     it('deserializes plan and messages from JSON', () => {
       seedConversation('ts-1');
       adapter.updateConversation('ts-1', {
