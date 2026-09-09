@@ -39,6 +39,14 @@ assert "grep -q 'inputs:' .github/workflows/reusable-release-build.yml && grep -
   "reusable-release-build.yml must accept ref input"
 assert "grep -q 'cleanup-daily-releases.sh' .github/workflows/daily-release.yml" \
   "daily-release.yml must clean up old daily prereleases"
+assert "! grep -q 'mergify' scripts/open-daily-release-bump-pr.sh" \
+  "the nightly bump PR must not depend on the mergify CLI (its GitHub login fails under the Actions token)"
+assert "grep -q 'create-pr.mjs' scripts/open-daily-release-bump-pr.sh && grep -q 'git push' scripts/open-daily-release-bump-pr.sh" \
+  "the nightly bump PR must be pushed with git and opened through create-pr.mjs using the Actions token"
+assert "! grep -q 'Install mergify CLI' .github/workflows/daily-release.yml" \
+  "daily-release.yml must not install the mergify CLI"
+assert "! grep -q 'MERGIFY_TOKEN' .github/workflows/daily-release.yml" \
+  "daily-release.yml must not pass MERGIFY_TOKEN to the bump step"
 assert "grep -q 'daily-YYYYMMDD' docs/local-macos-release-build.md" \
   "docs must mention daily-YYYYMMDD prereleases"
 

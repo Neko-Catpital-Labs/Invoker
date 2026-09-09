@@ -24,24 +24,24 @@ if [ -z "$TAG" ]; then
 fi
 
 BRANCH="$(git branch --show-current)"
-
-mergify stack push --trunk origin/master
-
-pr_number="$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // empty')"
-if [ -z "$pr_number" ]; then
-  echo "Could not resolve PR number for branch $BRANCH after mergify stack push" >&2
-  exit 1
-fi
+TITLE="[Daily Release Bump](1) Bump patch version for ${TAG}"
 
 body_file="$(mktemp)"
 trap 'rm -f "$body_file"' EXIT
 sed "s/{{TAG}}/${TAG}/g" scripts/daily-release-bump-pr-body-template.txt > "$body_file"
 
+git push --force-with-lease --set-upstream origin "$BRANCH"
+
 node scripts/create-pr.mjs \
-  --title "[Daily Release Bump](1) Bump patch version for ${TAG}" \
+  --title "$TITLE" \
   --base master \
-  --body-file "$body_file" \
-  --update-existing
+  --body-file "$body_file"
+
+pr_number="$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // empty')"
+if [ -z "$pr_number" ]; then
+  echo "Could not resolve PR number for branch $BRANCH after create-pr.mjs" >&2
+  exit 1
+fi
 
 gh pr edit "$pr_number" --add-label admin-bypass
-node scripts/land-stack.mjs "$pr_number" --execute
+echo "Opened bump PR #${pr_number}; the admin-bypass label queues it for merge."
