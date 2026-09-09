@@ -37,7 +37,7 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
-import { resolvePrMaintenanceWorkerConfig } from './config.js';
+import { resolvePrMaintenanceWorkerConfig, resolveSpendCircuitBreakerWorkerConfig } from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
 import {
   isDispatchableLaunch,
@@ -669,6 +669,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
       diskHeadroom: resolveHeadlessDiskHeadroomConfig(deps.invokerConfig),
+      spendCircuitBreaker: resolveSpendCircuitBreakerWorkerConfig(deps.invokerConfig),
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
