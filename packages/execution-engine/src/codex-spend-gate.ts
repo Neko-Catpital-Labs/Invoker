@@ -44,7 +44,9 @@ export function loadCodexSpendGateTrip(statePath: string): CodexSpendGateTrip | 
   }
   const trip = parsed as Partial<CodexSpendGateTrip> | null;
   if (!trip || typeof trip.trippedAt !== 'string' || typeof trip.observedTokens !== 'number') {
-    return undefined;
+    throw new Error(
+      `codex spend gate state at ${statePath} is malformed; clear it with \`invoker-cli spend-gate reset\``,
+    );
   }
   return {
     trippedAt: trip.trippedAt,
