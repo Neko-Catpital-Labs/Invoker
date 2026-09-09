@@ -34,13 +34,14 @@ const MAX_PER_TICK = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_TICK ?? '1'
 const MAX_PER_DAY = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_DAY ?? '2');
 const LOOKBACK_HOURS = Number(process.env.INVOKER_SESSION_MINE_LOOKBACK_HOURS ?? '168');
 const WORKFLOW_PREFIXES = (process.env.INVOKER_SESSION_MINE_WORKFLOW_PREFIXES
-  ?? 'admin-bypass-repair-')
+  ?? 'admin-bypass-repair-,CI regression')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
 const EXCLUDE_NAME_RE = /(session-mine|reflect-ci-|worker-session-mine)/i;
 const POOL_ID = process.env.INVOKER_SESSION_MINE_POOL_ID ?? 'remote_digital_ocean_1';
 const DRY_RUN = process.env.INVOKER_SESSION_MINE_DRY_RUN === '1';
+const OWNER_CLI = process.env.INVOKER_SESSION_MINE_CLI ?? 'invoker-cli';
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stale']);
 
 function loadLedger() {
@@ -61,8 +62,8 @@ function dayKey(d = new Date()) {
   return d.toISOString().slice(0, 10);
 }
 
-function runHeadlessJson(args) {
-  const result = spawnSync('bash', [join(REPO_ROOT, 'run.sh'), '--headless', ...args, '--output', 'json'], {
+function runOwnerQueryJson(args) {
+  const result = spawnSync(OWNER_CLI, [...args, '--output', 'json'], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     env: { ...process.env },
@@ -90,15 +91,15 @@ function listFromInventoryFile(path) {
   })).filter((r) => r.sessionId);
 }
 
-function listFromHeadless() {
-  const workflows = runHeadlessJson(['query', 'workflows']);
+function listFromOwner() {
+  const workflows = runOwnerQueryJson(['query', 'workflows']);
   if (!Array.isArray(workflows)) return null;
   const out = [];
   for (const wf of workflows) {
     const name = wf.name || wf.id || '';
     if (EXCLUDE_NAME_RE.test(name)) continue;
     if (!WORKFLOW_PREFIXES.some((p) => name.startsWith(p) || name.includes(p))) continue;
-    const tasks = runHeadlessJson(['query', 'tasks', '--workflow', wf.id]);
+    const tasks = runOwnerQueryJson(['query', 'tasks', '--workflow', wf.id]);
     if (!Array.isArray(tasks)) continue;
     for (const task of tasks) {
       const status = task.status || '';
@@ -266,9 +267,9 @@ function main() {
   if (process.env.INVOKER_SESSION_MINE_INVENTORY_JSON) {
     candidates = listFromInventoryFile(process.env.INVOKER_SESSION_MINE_INVENTORY_JSON);
   } else {
-    candidates = listFromHeadless();
-    if (!candidates) {
-      console.log('session-mine: headless inventory unavailable; using disk fallback');
+    candidates = listFromOwner();
+    if (!candidates || candidates.length === 0) {
+      console.log('session-mine: owner inventory empty or unavailable; using disk fallback');
       candidates = listFromDiskFallback();
     }
   }
