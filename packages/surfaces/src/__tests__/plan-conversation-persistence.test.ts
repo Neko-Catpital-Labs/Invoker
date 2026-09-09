@@ -116,6 +116,24 @@ describe('PlanConversation persistence', () => {
       expect(recovered.conversationMode).toBe('agent');
     });
 
+    it('restores a thread whose user replied with a bare number', async () => {
+      repo.saveConversation('ts-numeric-reply', [
+        { role: 'user', content: 'Which option should we take?' },
+        { role: 'assistant', content: 'Options: 1, 2, or 3.' },
+        { role: 'user', content: '3' },
+        { role: 'assistant', content: 'Going with option 3.' },
+      ]);
+
+      const recovered = createConversation('ts-numeric-reply');
+      await recovered.init();
+      expect(recovered.history.map((m) => m.content)).toEqual([
+        'Which option should we take?',
+        'Options: 1, 2, or 3.',
+        '3',
+        'Going with option 3.',
+      ]);
+    });
+
     it('no longer persists extractedPlan (plan is scanned on demand)', async () => {
       const conv = createConversation('ts-plan');
       mockCursorResponse(VALID_YAML_PLAN);
