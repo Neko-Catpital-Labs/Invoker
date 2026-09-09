@@ -97,6 +97,15 @@ export class ConversationRepository {
 
     // Determine how many messages already exist without reading the transcript.
     const existingMessageCount = this.adapter.countMessages(threadTs);
+    if (messages.length < existingMessageCount) {
+      this.log.error(
+        `Diverged conversation ${threadTs}: memory holds ${messages.length} message(s), `
+        + `the stored row holds ${existingMessageCount}. The in-memory transcript is not an `
+        + 'extension of the stored one, so these messages are NOT persisted. Reconcile the '
+        + 'row (reload the thread, or clear it if the thread id was reused) before saving again.',
+      );
+      return;
+    }
     const newMessages = messages.slice(existingMessageCount);
 
     for (const msg of newMessages) {

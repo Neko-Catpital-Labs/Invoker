@@ -157,7 +157,7 @@ describe('ConversationRepository', () => {
     });
   });
 
-  // ── saved-count divergence (repro: PR #7518 Non-goals) ───
+  // ── saved-count divergence ───────────────────────────────
 
   describe('saveConversation when the stored row holds more messages than memory', () => {
     function seedOrphanedRow(threadTs: string): void {
@@ -168,7 +168,7 @@ describe('ConversationRepository', () => {
       adapter.appendMessage(threadTs, 'assistant', 'orphan answer two');
     }
 
-    it('documents the live defect: a fresh transcript is silently dropped', () => {
+    it('leaves the stored transcript intact rather than interleaving a divergent one', () => {
       seedOrphanedRow('ts-orphan');
 
       repo.saveConversation('ts-orphan', [
@@ -181,7 +181,7 @@ describe('ConversationRepository', () => {
       expect(stored).not.toContain('brand new session, first message');
     });
 
-    it('documents the live defect: nothing reports the divergence', () => {
+    it('reports the divergence with both counts instead of a silent success', () => {
       const warnings: string[] = [];
       const errors: string[] = [];
       const loudRepo = new ConversationRepository(adapter, {
@@ -195,7 +195,11 @@ describe('ConversationRepository', () => {
         { role: 'user', content: 'brand new session, first message' },
       ]);
 
-      expect(errors).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('ts-orphan-log');
+      expect(errors[0]).toContain('memory holds 1 message(s)');
+      expect(errors[0]).toContain('the stored row holds 4');
+      expect(errors[0]).toContain('NOT persisted');
       expect(warnings).toEqual([]);
     });
   });
