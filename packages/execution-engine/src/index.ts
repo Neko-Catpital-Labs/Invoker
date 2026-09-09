@@ -94,6 +94,7 @@ export * from './workers/slack-bug-scan-worker.js';
 export * from './workers/slack-bug-scan-scanner.js';
 export * from './workers/spend-circuit-breaker-worker.js';
 export * from './spend-attribution.js';
+export * from './codex-spend-gate.js';
 export * from './spend-circuit-breaker-state.js';
 export * from './reconcile-terminal-worker-actions.js';
 export * from './requeue-attempt-ledger.js';
