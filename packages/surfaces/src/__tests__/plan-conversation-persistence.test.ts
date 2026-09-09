@@ -134,6 +134,18 @@ describe('PlanConversation persistence', () => {
       ]);
     });
 
+    it('restores a thread whose user replied with a bare object literal', async () => {
+      repo.saveConversation('ts-object-reply', [
+        { role: 'user', content: { reason: 'object reply' } },
+      ]);
+
+      const recovered = createConversation('ts-object-reply');
+      await recovered.init();
+      expect(recovered.history).toEqual([
+        { role: 'user', content: '{"reason":"object reply"}' },
+      ]);
+    });
+
     it('no longer persists extractedPlan (plan is scanned on demand)', async () => {
       const conv = createConversation('ts-plan');
       mockCursorResponse(VALID_YAML_PLAN);
