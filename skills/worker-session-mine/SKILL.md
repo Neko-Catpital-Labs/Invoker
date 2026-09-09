@@ -35,7 +35,7 @@ description: >
 
 ## Detector
 
-`scripts/worker-session-mine-thrash.mjs` — thrash if any of assistant/Codex turns >= 40, cache_read >= 10M, same bash argv >= 5, or catstack `token_audit.py` flags when `CATSTACK_ROOT` is set.
+`scripts/worker-session-mine-thrash.mjs` — thrash if any of assistant/Codex turns >= 40, cache_read >= 10M, total tokens (input + cached + output, what the quota meter charges) >= 10M, same bash argv >= 5, or catstack `token_audit.py` flags when `CATSTACK_ROOT` is set.
 
 Self-test: `node scripts/worker-session-mine-thrash.mjs --self-test`
 Resolve self-test: `node scripts/worker-session-mine-resolve.selftest.mjs`
