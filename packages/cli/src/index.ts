@@ -229,7 +229,7 @@ function usage(): string {
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
-    '  worker toggles      Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
+    '  worker toggles      Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, worker-session-mine, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
     '  auto-approve-authors  Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
     '',
     'Options:',

@@ -40,6 +40,14 @@ describe('ONBOARDING_WORKER_TOGGLES', () => {
     expect(ONBOARDING_WORKER_TOGGLES.some((spec) => spec.id === 'autofix')).toBe(false);
     expect(WORKER_TOGGLES.some((spec) => spec.id === 'pr-status')).toBe(true);
   });
+
+  it('exposes worker-session-mine as an opt-in desired-state toggle outside onboarding', () => {
+    const mine = findWorkerToggle('worker-session-mine')!;
+    expect(isDesiredStateWorkerToggle(mine)).toBe(true);
+    expect(mine.workerKinds).toEqual(['worker-session-mine']);
+    expect(mine.defaultEnabled).toBeUndefined();
+    expect(ONBOARDING_WORKER_TOGGLES.some((spec) => spec.id === 'worker-session-mine')).toBe(false);
+  });
 });
 
 describe('policy applyWorkerToggle / readWorkerToggleValue', () => {
