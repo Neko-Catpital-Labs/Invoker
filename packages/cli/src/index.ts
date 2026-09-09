@@ -75,6 +75,7 @@ import {
   resolveCliInstanceProfile,
 } from './worker-toggles.js';
 import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
+import { runSpendGateCommand } from './spend-gate-command.js';
 
 const VERSION = '0.1.1';
 
@@ -209,6 +210,7 @@ function usage(): string {
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli worker toggles [--enable <id>|--disable <id> ...]',
     '  invoker-cli run-worker <kind> -- <args...>',
+    '  invoker-cli spend-gate [status|reset]',
     '  invoker-cli auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
     '  invoker-cli --help',
     '  invoker-cli --version',
@@ -230,6 +232,7 @@ function usage(): string {
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
     '  worker toggles      Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, worker-session-mine, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
+    '  spend-gate      Show or clear the Codex daily-spend shutoff. While tripped, every Codex request fails; `reset` reopens it after you review the sessions.',
     '  auto-approve-authors  Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
     '',
     'Options:',
@@ -1327,6 +1330,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'mcp') {
       await (deps.runMcpServer ?? runMcpServer)();
       return 0;
+    }
+    if (argv[0] === 'spend-gate') {
+      return runSpendGateCommand(argv.slice(1));
     }
     if (argv[0] === 'auto-approve-authors') {
       return await runAutoApproveAuthorsCommand(argv.slice(1), { configPath: defaultConfigPath() });
