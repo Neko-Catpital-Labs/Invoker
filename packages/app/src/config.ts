@@ -11,7 +11,12 @@ import { homedir } from 'node:os';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
-import type { E2eAutoFixWorkerConfig, PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
+import type {
+  E2eAutoFixWorkerConfig,
+  PrMaintenanceWorkerConfig,
+  SpendCircuitBreakerWorkerConfig,
+} from '@invoker/execution-engine';
+import { DEFAULT_CODEX_DAILY_TOKEN_BUDGET } from '@invoker/execution-engine';
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
 
 export { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
@@ -239,6 +244,22 @@ export interface SelfDeployConfig {
 }
 
 export const DEFAULT_SELF_DEPLOY_INTERVAL_MINUTES = 30;
+
+export interface CodexDailySpendGateConfigEntry {
+  enabled?: boolean;
+  dailyTokenBudget?: number;
+  statePath?: string;
+}
+
+export interface SpendCircuitBreakerConfig {
+  enabled?: boolean;
+  windowMinutes?: number;
+  tokenBudgetByWorkerKind?: Record<string, number>;
+  intervalMinutes?: number;
+  codexDailyGate?: CodexDailySpendGateConfigEntry;
+}
+
+export const DEFAULT_SPEND_CIRCUIT_BREAKER_INTERVAL_MINUTES = 10;
 
 export interface DbReaperConfig {
   intervalMinutes?: number;
@@ -620,6 +641,7 @@ export interface InvokerConfig {
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
   dbReaper?: DbReaperConfig;
+  spendCircuitBreaker?: SpendCircuitBreakerConfig;
 }
 
 export const BUILT_IN_LOCAL_WORKTREE_TARGET_ID = 'local-worktree';
@@ -872,6 +894,36 @@ export function resolveSecretsFilePath(config: InvokerConfig): string | undefine
  * SQLite desired state; this only threads interval/lock/repoRoot/env/shell
  * so a started PR-maintenance worker still gets launch settings.
  */
+export function resolveSpendCircuitBreakerWorkerConfig(
+  invokerConfig: InvokerConfig,
+): SpendCircuitBreakerWorkerConfig {
+  const configured = invokerConfig.spendCircuitBreaker;
+  const gate = configured?.codexDailyGate;
+  return {
+    enabled: configured?.enabled,
+    windowMinutes: configured?.windowMinutes,
+    tokenBudgetByWorkerKind: configured?.tokenBudgetByWorkerKind,
+    intervalMs: configured?.intervalMinutes !== undefined
+      ? configured.intervalMinutes * 60_000
+      : undefined,
+    codexDailyGate: {
+      enabled: gate?.enabled ?? true,
+      dailyTokenBudget: gate?.dailyTokenBudget ?? DEFAULT_CODEX_DAILY_TOKEN_BUDGET,
+      statePath: gate?.statePath,
+      localHostName: 'owner',
+      remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+        name,
+        connection: {
+          host: target.host,
+          user: target.user,
+          sshKeyPath: target.sshKeyPath,
+          port: target.port,
+        },
+      })),
+    },
+  };
+}
+
 export function resolvePrMaintenanceWorkerConfig(
   config: InvokerConfig,
 ): PrMaintenanceWorkerConfig | undefined {
