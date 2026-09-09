@@ -157,6 +157,49 @@ describe('ConversationRepository', () => {
     });
   });
 
+  // ── saved-count divergence (repro: PR #7518 Non-goals) ───
+
+  describe('saveConversation when the stored row holds more messages than memory', () => {
+    function seedOrphanedRow(threadTs: string): void {
+      seedConversation(threadTs);
+      adapter.appendMessage(threadTs, 'user', 'orphan question one');
+      adapter.appendMessage(threadTs, 'assistant', 'orphan answer one');
+      adapter.appendMessage(threadTs, 'user', 'orphan question two');
+      adapter.appendMessage(threadTs, 'assistant', 'orphan answer two');
+    }
+
+    it('documents the live defect: a fresh transcript is silently dropped', () => {
+      seedOrphanedRow('ts-orphan');
+
+      repo.saveConversation('ts-orphan', [
+        { role: 'user', content: 'brand new session, first message' },
+        { role: 'assistant', content: 'brand new session, first reply' },
+      ]);
+
+      const stored = repo.loadConversation('ts-orphan')!.messages.map((m) => m.content);
+      expect(stored).toHaveLength(4);
+      expect(stored).not.toContain('brand new session, first message');
+    });
+
+    it('documents the live defect: nothing reports the divergence', () => {
+      const warnings: string[] = [];
+      const errors: string[] = [];
+      const loudRepo = new ConversationRepository(adapter, {
+        info: () => {},
+        warn: (message: string) => warnings.push(message),
+        error: (message: string) => errors.push(message),
+      });
+      seedOrphanedRow('ts-orphan-log');
+
+      loudRepo.saveConversation('ts-orphan-log', [
+        { role: 'user', content: 'brand new session, first message' },
+      ]);
+
+      expect(errors).toEqual([]);
+      expect(warnings).toEqual([]);
+    });
+  });
+
   // ── loadConversation ─────────────────────────────────────
 
   describe('loadConversation', () => {
