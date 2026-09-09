@@ -30,11 +30,28 @@ export type ElectronFixtures = {
   breakPlanningPresets: boolean;
   standaloneOwnerIdleTimeoutMs: string;
   repoConfig: Partial<InvokerConfig>;
+  codexSpendGateTripped: boolean;
   page: Page;
   testDir: string;
 };
 
 const repoRoot = resolveRepoRoot(__dirname);
+
+function writeTrippedCodexSpendGate(testDir: string): string {
+  const statePath = path.join(testDir, 'codex-spend-gate.json');
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      trippedAt: '2026-09-04T04:11:00.000Z',
+      dayKey: '2026-09-04',
+      tokenBudget: 100_000_000,
+      observedTokens: 1_471_200_000,
+      tokensByHost: { owner: 894_900_000, remote_digital_ocean_3: 202_900_000 },
+    }),
+    'utf8',
+  );
+  return statePath;
+}
 type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
 
 async function removeTestDir(dir: string): Promise<void> {
@@ -124,6 +141,7 @@ export const test = base.extend<ElectronFixtures>({
   breakPlanningPresets: [false, { option: true }],
   standaloneOwnerIdleTimeoutMs: [process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000', { option: true }],
   repoConfig: [{ autoFixRetries: 0 }, { option: true }],
+  codexSpendGateTripped: [false, { option: true }],
 
   testDir: async ({}, use) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
@@ -133,7 +151,7 @@ export const test = base.extend<ElectronFixtures>({
     }
   },
 
-  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, standaloneOwnerIdleTimeoutMs, repoConfig, testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, standaloneOwnerIdleTimeoutMs, repoConfig, codexSpendGateTripped, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
@@ -263,6 +281,9 @@ exit 64
           : {}),
         ...(process.env.INVOKER_E2E_CODEX_DEMO_RENDERER
           ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
+          : {}),
+        ...(codexSpendGateTripped
+          ? { INVOKER_CODEX_SPEND_GATE_PATH: writeTrippedCodexSpendGate(testDir) }
           : {}),
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         ...(breakPlanningPresets ? { INVOKER_E2E_BREAK_PLANNING_PRESETS: '1' } : {}),

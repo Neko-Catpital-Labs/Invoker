@@ -129,6 +129,7 @@ import {
   resolveConfigFileState,
   resolveE2eAutoFixWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
+  resolveSpendCircuitBreakerWorkerConfig,
   type InvokerConfig,
 } from './config.js';
 import {
@@ -434,6 +435,7 @@ function buildRegisteredOwnerWorkerDeps(
     claudeOauthRefresh: {
       remoteTargets: remoteTargets.map((target) => ({ name: target.name, connection: target.connection })),
     },
+    spendCircuitBreaker: resolveSpendCircuitBreakerWorkerConfig(invokerConfig),
     infraRepair: {
       ownerRepoRoot: repoRoot,
       ownerInvokerHome: resolveInvokerHomeRoot(),
