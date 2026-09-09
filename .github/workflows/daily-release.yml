@@ -53,16 +53,9 @@ jobs:
         if: steps.decide.outputs.should_run == 'true'
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Install mergify CLI
-        if: steps.decide.outputs.should_run == 'true'
-        run: |
-          pipx install mergify-cli==2026.8.31.1
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
       - name: Bump nightly patch version
         if: steps.decide.outputs.should_run == 'true'
         env:
-          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           node scripts/bump-release-version.mjs --type patch
