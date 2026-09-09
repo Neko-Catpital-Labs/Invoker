@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 export const DEFAULT_THRESHOLDS = Object.freeze({
   minAssistantTurns: 40,
   minCacheReadTokens: 10_000_000,
+  minTotalTokens: 10_000_000,
   minSameBashArgv: 5,
 });
 
@@ -43,6 +44,8 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   let assistantTurns = 0;
   let cacheReadTokens = 0;
   let codexCacheReadTokens = 0;
+  let totalTokens = 0;
+  let codexTotalTokens = 0;
   const bashCounts = new Map();
   let workflowHint = '';
 
@@ -60,6 +63,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       assistantTurns += 1;
       const usage = row.usage ?? {};
       cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.input_tokens ?? usage.cached_tokens ?? 0) || 0;
+      totalTokens += (Number(usage.input_tokens ?? 0) || 0) + (Number(usage.output_tokens ?? 0) || 0);
       countedByFormat = true;
     }
     if (row.type === 'item.completed' && row.item?.type === 'command_execution') {
@@ -74,6 +78,8 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       const usage = row.payload?.info?.total_token_usage ?? {};
       const cached = Number(usage.cached_input_tokens ?? 0) || 0;
       if (cached > codexCacheReadTokens) codexCacheReadTokens = cached;
+      const total = Number(usage.total_tokens ?? 0) || (Number(usage.input_tokens ?? 0) || 0) + (Number(usage.output_tokens ?? 0) || 0);
+      if (total > codexTotalTokens) codexTotalTokens = total;
       countedByFormat = true;
     }
     if (row.type === 'response_item') {
@@ -93,6 +99,10 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       assistantTurns += 1;
       const usage = msg.usage ?? row.usage ?? {};
       cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0;
+      totalTokens += (Number(usage.input_tokens ?? 0) || 0)
+        + (Number(usage.output_tokens ?? 0) || 0)
+        + (Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0)
+        + (Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? 0) || 0);
       const content = Array.isArray(msg.content) ? msg.content : [];
       for (const block of content) {
         if (block?.type === 'tool_use' && (block.name === 'Bash' || block.name === 'bash')) {
@@ -118,6 +128,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   }
 
   cacheReadTokens += codexCacheReadTokens;
+  totalTokens += codexTotalTokens;
 
   let maxSameBash = 0;
   let maxSameBashCmd = '';
@@ -135,6 +146,9 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   if (cacheReadTokens >= thresholds.minCacheReadTokens) {
     reasons.push(`cache_read_tokens=${cacheReadTokens}>=${thresholds.minCacheReadTokens}`);
   }
+  if (totalTokens >= thresholds.minTotalTokens) {
+    reasons.push(`total_tokens=${totalTokens}>=${thresholds.minTotalTokens}`);
+  }
   if (maxSameBash >= thresholds.minSameBashArgv) {
     reasons.push(`same_bash_argv=${maxSameBash}>=${thresholds.minSameBashArgv}`);
   }
@@ -145,6 +159,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     maxSameBash,
     maxSameBashCmd: maxSameBashCmd.slice(0, 200),
     workflowHint,
+    totalTokens,
     thrash: reasons.length > 0,
     reasons,
   };
@@ -152,7 +167,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
 
 export function analyzeClaudeJsonlFile(path, thresholds = DEFAULT_THRESHOLDS) {
   if (!existsSync(path)) {
-    return { thrash: false, reasons: [`missing:${path}`], assistantTurns: 0, cacheReadTokens: 0, maxSameBash: 0 };
+    return { thrash: false, reasons: [`missing:${path}`], assistantTurns: 0, cacheReadTokens: 0, totalTokens: 0, maxSameBash: 0 };
   }
   return analyzeClaudeJsonl(readFileSync(path, 'utf8'), thresholds);
 }
@@ -229,6 +244,30 @@ function selfTest() {
   if (!pos.thrash) throw new Error('expected thrash fixture to fire');
   if (neg.thrash) throw new Error('expected clean fixture to stay silent');
 
+  const heavyClaude = [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'Fix CI job required-fast / Vitest Workspace' } }),
+    ...Array.from({ length: 12 }, () => JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        usage: { input_tokens: 400_000, output_tokens: 5_000, cache_read_input_tokens: 500_000, cache_creation_input_tokens: 20_000 },
+        content: [{ type: 'text', text: 'working' }],
+      },
+    })),
+  ].join('\n');
+  const heavy = analyzeClaudeJsonl(heavyClaude);
+  if (heavy.totalTokens !== 11_100_000) throw new Error(`expected 11,100,000 total tokens, got ${heavy.totalTokens}`);
+  if (!heavy.reasons.some((r) => r.startsWith('total_tokens='))) throw new Error(`expected total_tokens reason, got ${JSON.stringify(heavy.reasons)}`);
+  if (heavy.reasons.some((r) => r.startsWith('cache_read_tokens=') || r.startsWith('assistant_turns='))) throw new Error('heavy fixture must trip only on total tokens');
+
+  const heavyCodex = [
+    JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 9_000_000, cached_input_tokens: 8_900_000, output_tokens: 40_000 } }),
+    JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1_500_000, cached_input_tokens: 1_400_000, output_tokens: 10_000 } }),
+  ].join('\n');
+  const heavyCodexRes = analyzeClaudeJsonl(heavyCodex, { ...DEFAULT_THRESHOLDS, minCacheReadTokens: 50_000_000 });
+  if (heavyCodexRes.totalTokens !== 10_550_000) throw new Error(`expected 10,550,000 codex mirror total tokens, got ${heavyCodexRes.totalTokens}`);
+  if (!heavyCodexRes.reasons.some((r) => r.startsWith('total_tokens='))) throw new Error('expected codex mirror total_tokens reason');
+
   const codexTokenCountRow = (cachedInputTokens) => JSON.stringify({
     timestamp: '2026-09-01T00:00:00.000Z',
     type: 'event_msg',
@@ -269,6 +308,7 @@ function selfTest() {
   if (!codexJsPos.thrash) throw new Error('expected codex response_item/event_msg thrash to fire');
   if (codexJsPos.assistantTurns !== 40) throw new Error(`expected 40 codex assistant turns, got ${codexJsPos.assistantTurns}`);
   if (codexJsPos.cacheReadTokens !== 4000) throw new Error(`expected codex cache_read_tokens to take the final cumulative value (4000), got ${codexJsPos.cacheReadTokens}`);
+  if (codexJsPos.totalTokens !== 8000) throw new Error(`expected codex total_tokens to take the final cumulative value (8000), got ${codexJsPos.totalTokens}`);
   if (codexJsPos.maxSameBash !== 5) throw new Error(`expected 5 repeated codex exec commands, got ${codexJsPos.maxSameBash}`);
 
   const codexFnCallThrashy = [
@@ -293,6 +333,8 @@ function selfTest() {
   console.log(JSON.stringify({
     ok: true,
     positiveReasons: pos.reasons,
+    heavyReasons: heavy.reasons,
+    heavyCodexReasons: heavyCodexRes.reasons,
     negativeThrash: neg.thrash,
     codexJsReasons: codexJsPos.reasons,
     codexFnCallReasons: codexFnCallPos.reasons,
