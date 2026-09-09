@@ -39,7 +39,7 @@ const WORKFLOW_PREFIXES = (process.env.INVOKER_SESSION_MINE_WORKFLOW_PREFIXES
   .map((s) => s.trim())
   .filter(Boolean);
 const EXCLUDE_NAME_RE = /(session-mine|reflect-ci-|worker-session-mine)/i;
-const POOL_ID = process.env.INVOKER_SESSION_MINE_POOL_ID ?? 'remote_digital_ocean_1';
+const POOL_ID = process.env.INVOKER_SESSION_MINE_POOL_ID?.trim() ?? '';
 const DRY_RUN = process.env.INVOKER_SESSION_MINE_DRY_RUN === '1';
 const OWNER_CLI = process.env.INVOKER_SESSION_MINE_CLI ?? 'invoker-cli';
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stale']);
@@ -200,8 +200,7 @@ onFinish: pull_request
 mergeMode: external_review
 baseBranch: master
 repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
-poolId: ${POOL_ID}
-
+${POOL_ID ? `poolId: ${POOL_ID}\n` : ''}
 tasks:
   - id: repro-thrash
     description: |
@@ -242,8 +241,7 @@ function submitPlan(yamlText) {
     console.log(`dry-run plan written: ${planPath}`);
     return { ok: true, dryRun: true, planPath };
   }
-  const submit = join(REPO_ROOT, 'submit-plan.sh');
-  const result = spawnSync('bash', [submit, planPath], {
+  const result = spawnSync(OWNER_CLI, ['run', '--live', planPath], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     env: { ...process.env },
