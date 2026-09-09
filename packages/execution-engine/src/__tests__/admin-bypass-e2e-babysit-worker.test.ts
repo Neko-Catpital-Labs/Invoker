@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildInvestigativePlanYaml,
   DEFAULT_WATCHED_WORKER_KINDS,
   E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX,
   E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX,
@@ -327,5 +328,20 @@ describe('runAdminBypassE2eBabysitTick', () => {
     expect(planSubmitter.submittedPlans).toHaveLength(1);
     expect(workerLifecycle.startCalls).toHaveLength(2);
     expect(repairFilings.deleteCalls).toHaveLength(2);
+  });
+
+  it('serializes investigative tasks so one stale-filing sweep cannot saturate the owner host', () => {
+    const plan = buildInvestigativePlanYaml([
+      { type: 'worker-start', kind: 'worker-a' },
+      { type: 'worker-start', kind: 'worker-b' },
+      { type: 'worker-start', kind: 'worker-c' },
+    ]);
+
+    expect(plan).toContain('  - id: investigate-finding-1\n');
+    expect(plan).toContain('    dependencies: []\n');
+    expect(plan).toContain('  - id: investigate-finding-2\n');
+    expect(plan).toContain('    dependencies: [investigate-finding-1]\n');
+    expect(plan).toContain('  - id: investigate-finding-3\n');
+    expect(plan).toContain('    dependencies: [investigate-finding-2]\n');
   });
 });
