@@ -127,12 +127,26 @@ function reset_file_buckets() {
   file_has_policy = 0
   file_has_docs = 0
 }
+function collect_hook_dirs(s,    after) {
+  while (match(s, /[a-z0-9_.\/-]+\/detect\.py/)) {
+    after = substr(s, RSTART + RLENGTH, 1)
+    if (after !~ /[a-z0-9_]/) {
+      hook_dirs[substr(s, RSTART, RLENGTH - length("/detect.py"))] = 1
+    }
+    s = substr(s, RSTART + RLENGTH)
+  }
+}
+function is_hook_readme(path) {
+  if (path !~ /\/readme\.md$/) return 0
+  return ((substr(path, 1, length(path) - length("/readme.md"))) in hook_dirs)
+}
 function classify_file_path(path) {
   if (path == "") return
   if (path ~ /^scripts\/repro\//) {
     file_has_proof = 1
     return
   }
+  if (is_hook_readme(path)) return
   if (path ~ /^skills\// || path ~ /^docs\// || path ~ /\.md$/) {
     file_has_docs = 1
     return
@@ -279,7 +293,7 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
     if (length(prompt_text) < 120) {
       errors[++errn] = "Task \"" id "\" prompt too short (<120 chars); include file paths + explicit acceptance criteria"
     }
-    if (prompt_text !~ /(packages\/|scripts\/|docs\/|skills\/|\.ts|\.tsx|\.js|\.jsx|\.json|\.md|\.sh|\.yaml|\.yml)/) {
+    if (prompt_text !~ /(packages\/|scripts\/|docs\/|skills\/|\.ts|\.tsx|\.js|\.jsx|\.json|\.md|\.sh|\.yaml|\.yml|[A-Za-z0-9_-]\/[A-Za-z0-9_.\/-]*[A-Za-z0-9_-]\.[A-Za-z])/) {
       errors[++errn] = "Task \"" id "\" prompt missing concrete file paths or file extensions"
     }
     if (tolower(prompt_text) !~ /(acceptance criteria|must|ensure|verify|expected|should)/) {
@@ -485,6 +499,11 @@ BEGIN {
   on_finish = "pull_request"
   enforce_layering = 1
   is_scratch = 0
+}
+
+FNR == NR {
+  collect_hook_dirs(tolower($0))
+  next
 }
 
 {
@@ -766,4 +785,4 @@ END {
   }
   print "Atomicity lint passed: " ARGV[1]
 }
-' "$file"
+' "$file" "$file"
