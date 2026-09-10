@@ -1,0 +1,31 @@
+# Headless commands invoker-cli does not expose yet.
+# Shrink-only: scripts/check-cli-headless-parity.mjs fails if a name is added,
+# and fails again if a name stays here after the CLI learns the verb.
+migrate-compat
+repair-filing
+watch
+start-ready
+recreate
+recreate-task
+recreate-downstream
+replace-task
+fork-workflow
+detach-workflow
+attach-workflow
+rebase-retry
+rebase-recreate
+repair-review-gate-ci
+check-pr-status
+fix
+resolve-conflict
+approve
+reject
+input
+select
+cancel
+cancel-workflow
+delete-task
+close-task
+reset-autofix-budget
+open-terminal
+query-select
