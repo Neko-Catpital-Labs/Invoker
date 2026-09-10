@@ -171,7 +171,8 @@ export const SCHEMA_DDL = `
         extracted_plan TEXT,
         plan_submitted INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
+        updated_at TEXT DEFAULT (datetime('now')),
+        surface TEXT NOT NULL DEFAULT 'slack'
       );
 
       CREATE TABLE IF NOT EXISTS planning_drafts (
@@ -215,7 +216,8 @@ export const SCHEMA_DDL = `
         requested_by TEXT NOT NULL,
         lobby_channel_id TEXT NOT NULL,
         confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
-        harness_session_id TEXT
+        harness_session_id TEXT,
+        surface TEXT NOT NULL DEFAULT 'slack'
       );
 
       CREATE TABLE IF NOT EXISTS slack_plan_drafts (
@@ -240,6 +242,7 @@ export const SCHEMA_DDL = `
         decided_by TEXT,
         execution_key TEXT,
         workflow_ids_json TEXT,
+        surface TEXT NOT NULL DEFAULT 'slack',
         PRIMARY KEY (draft_id, version)
       );
 
@@ -254,7 +257,8 @@ export const SCHEMA_DDL = `
         kind TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL
+        expires_at TEXT NOT NULL,
+        surface TEXT NOT NULL DEFAULT 'slack'
       );
 
       CREATE INDEX IF NOT EXISTS idx_slack_pending_confirmations_expiry
@@ -677,6 +681,10 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_id TEXT',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_hash TEXT',
   'ALTER TABLE workflows ADD COLUMN staged INTEGER NOT NULL DEFAULT 0 CHECK (staged IN (0, 1))',
+  "ALTER TABLE conversations ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_launch_contexts ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_plan_drafts ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_pending_confirmations ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
 ];
 
 /**
@@ -760,6 +768,10 @@ export const POST_MIGRATION_STATEMENTS = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_filings_kind_subject_sha ON repair_filings(kind, subject, state_sha)',
+  'CREATE INDEX IF NOT EXISTS idx_conversations_surface_thread ON conversations(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_launch_contexts_surface_thread ON slack_launch_contexts(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_plan_drafts_surface_thread ON slack_plan_drafts(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_pending_confirmations_surface_thread ON slack_pending_confirmations(surface, thread_ts)',
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */
