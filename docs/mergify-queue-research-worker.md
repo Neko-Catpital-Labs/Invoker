@@ -52,7 +52,7 @@ Also ensure `idea-skip` exists as a Linear label for skip verdicts.
 
 1. For each target→source map, mine ledger rows / Mergify comments in lookback.
 2. Fingerprint-dedupe against `~/.invoker/mergify-queue-research/ledger.json`.
-3. Submit `scripts/submit-workflow-chain.sh` with:
+3. Submit `skills/plan-to-invoker/scripts/submit-chain.mjs` with:
    - discover (`onFinish: none`)
    - research swarm (K parallel prompt tasks, `onFinish: none`)
    - file-linear (command task calling `scripts/linear-issue-create.mjs`)

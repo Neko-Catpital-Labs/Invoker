@@ -17,7 +17,7 @@ Submit a workflow chain headlessly, where each workflow is gated on the previous
 
 ## What it wraps
 
-- Script: `scripts/submit-workflow-chain.sh`
+- Script: `skills/plan-to-invoker/scripts/submit-chain.mjs`
 
 ## Required inputs
 
@@ -38,9 +38,9 @@ externalDependencies:
 ## Command
 
 ```bash
-./scripts/submit-workflow-chain.sh <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
-./scripts/submit-workflow-chain.sh --gate-policy review_ready <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
-./scripts/submit-workflow-chain.sh --onto-workflow <wf-id> <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
+node skills/plan-to-invoker/scripts/submit-chain.mjs <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
+node skills/plan-to-invoker/scripts/submit-chain.mjs --gate-policy review_ready <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
+node skills/plan-to-invoker/scripts/submit-chain.mjs --onto-workflow <wf-id> <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
 ```
 
 ## Stacked onto an existing workflow

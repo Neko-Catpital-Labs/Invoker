@@ -846,7 +846,7 @@ function validatePlan(yamlContent, repoRoot) {
     errors.push({
       errorType: 'unrendered_template_placeholder',
       field: 'externalDependencies',
-      message: "Plan contains unrendered template placeholder '__UPSTREAM_WORKFLOW_ID__'. Use submit-workflow-chain.sh or replace with a concrete workflow ID.",
+      message: "Plan contains unrendered template placeholder '__UPSTREAM_WORKFLOW_ID__'. Use submit-chain.mjs or replace with a concrete workflow ID.",
     });
   }
 
@@ -871,7 +871,7 @@ function validatePlan(yamlContent, repoRoot) {
     errors.push({
       errorType: 'stacked_basebranch_default',
       field: 'baseBranch',
-      message: `Plan has a single concrete upstream merge-gate externalDependency but baseBranch is trunk '${baseBranch}'. Stacked-onto means externalDependencies on that workflow's __merge__ AND baseBranch == that workflow's featureBranch. Gate-only wait is not stacked-onto. Set baseBranch to the upstream featureBranch, or use submit-workflow-chain.sh --onto-workflow / step-submit-stacked.`,
+      message: `Plan has a single concrete upstream merge-gate externalDependency but baseBranch is trunk '${baseBranch}'. Stacked-onto means externalDependencies on that workflow's __merge__ AND baseBranch == that workflow's featureBranch. Gate-only wait is not stacked-onto. Set baseBranch to the upstream featureBranch, or use submit-chain.mjs --onto-workflow / step-submit-stacked.`,
       value: baseBranch,
     });
   }

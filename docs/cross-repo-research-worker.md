@@ -46,7 +46,7 @@ Also ensure `idea-skip` exists as a Linear label for skip verdicts.
 
 1. For each target→source map, fetch source releases/feat commits in lookback.
 2. Fingerprint-dedupe against `~/.invoker/cross-repo-research/ledger.json`.
-3. Submit `scripts/submit-workflow-chain.sh` with:
+3. Submit `skills/plan-to-invoker/scripts/submit-chain.mjs` with:
    - discover (`onFinish: none`)
    - research swarm (`onFinish: none`) — per candidate slot, five parallel lens
      tasks (`research-N-fit`, `research-N-peers`, `research-N-implementations`,

@@ -38,7 +38,7 @@ that file are not a workflow stack.
 Split into multiple workflow files when the plan has more than one review slice,
 layer, implementation prompt task, package boundary, UI+non-UI boundary, or
 PR-worthy commit. Submit the resulting chain with
-`scripts/submit-workflow-chain.sh`, using `__UPSTREAM_WORKFLOW_ID__` in later
+`skills/plan-to-invoker/scripts/submit-chain.mjs`, using `__UPSTREAM_WORKFLOW_ID__` in later
 templates so each workflow depends on the previous workflow's `__merge__` task.
 
 Standalone implementation workflows are exceptions. If a standalone

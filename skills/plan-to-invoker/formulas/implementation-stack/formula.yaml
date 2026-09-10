@@ -7,7 +7,7 @@ description: >
   the cross-workflow merge gates, and the required review/rationale headings;
   the author fills the {{var}} slots and specializes the REPLACE_ME prose per
   layer, then submits the rendered files in order with
-  scripts/submit-workflow-chain.sh (which wires __UPSTREAM_WORKFLOW_ID__ and the
+  skills/plan-to-invoker/scripts/submit-chain.mjs (which wires __UPSTREAM_WORKFLOW_ID__ and the
   stacked baseBranch). Drop a layer's workflow if the feature does not touch it.
 vars:
   repo_url:

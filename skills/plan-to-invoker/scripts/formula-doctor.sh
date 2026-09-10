@@ -6,7 +6,7 @@
 #
 # For stacked recipes, a rendered step still carries the reserved
 # __UPSTREAM_WORKFLOW_ID__ token and baseBranch: master, both of which
-# submit-workflow-chain.sh rewrites at submit time. To validate the shape as it
+# submit-chain.mjs rewrites at submit time. To validate the shape as it
 # will appear after wiring, this gate checks a dummy-wired copy: a concrete
 # upstream id and a non-default baseBranch. The rendered plan itself is left
 # untouched for the real chain submission.
@@ -40,7 +40,7 @@ fail=0
 for plan in "${RENDERED[@]}"; do
   check_plan="$plan"
   if grep -q '__UPSTREAM_WORKFLOW_ID__' "$plan"; then
-    # Stacked step: simulate submit-workflow-chain.sh wiring for validation only.
+    # Stacked step: simulate submit-chain.mjs wiring for validation only.
     check_plan="${plan%.yaml}.wired.yaml"
     sed -e 's|__UPSTREAM_WORKFLOW_ID__|wf-example-upstream|g' \
         -e 's|^baseBranch:.*$|baseBranch: plan/example-upstream-feature|' \

@@ -7,7 +7,7 @@
 // rendered plan flag prose the author is expected to specialize. This script
 // only substitutes {{var}} slots — the reserved stack-wiring token
 // __UPSTREAM_WORKFLOW_ID__ is intentionally left untouched for
-// submit-workflow-chain.sh to fill.
+// submit-chain.mjs to fill.
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, join, basename, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
