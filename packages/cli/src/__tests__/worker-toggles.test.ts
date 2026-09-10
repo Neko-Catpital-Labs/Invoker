@@ -48,6 +48,21 @@ describe('ONBOARDING_WORKER_TOGGLES', () => {
     expect(mine.defaultEnabled).toBeUndefined();
     expect(ONBOARDING_WORKER_TOGGLES.some((spec) => spec.id === 'worker-session-mine')).toBe(false);
   });
+
+  it('exposes codex-spend-clamp as an opt-in desired-state toggle outside onboarding', () => {
+    const clamp = findWorkerToggle('codex-spend-clamp')!;
+    expect(isDesiredStateWorkerToggle(clamp)).toBe(true);
+    expect(clamp.workerKinds).toEqual(['spend-circuit-breaker']);
+    expect(clamp.defaultEnabled).toBeUndefined();
+    expect(ONBOARDING_WORKER_TOGGLES.some((spec) => spec.id === 'codex-spend-clamp')).toBe(false);
+  });
+
+  it('gives every registered builtin worker kind a toggle that can switch it on', () => {
+    const toggled = new Set(
+      WORKER_TOGGLES.flatMap((spec) => (isDesiredStateWorkerToggle(spec) ? [...spec.workerKinds] : [])),
+    );
+    expect(toggled.has('spend-circuit-breaker')).toBe(true);
+  });
 });
 
 describe('policy applyWorkerToggle / readWorkerToggleValue', () => {
