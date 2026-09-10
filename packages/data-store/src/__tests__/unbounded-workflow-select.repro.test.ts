@@ -21,15 +21,17 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('listWorkflows has no LIMIT and returns all workflows regardless of count', () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    adapter.runInTransaction(() => {
+      for (let i = 0; i < workflowCount; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
 
     const workflows = adapter.listWorkflows();
     expect(workflows).toHaveLength(workflowCount);
@@ -38,15 +40,17 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
 
   it.fails('loadWorkflowTaskSnapshot has no LIMIT and returns all workflows regardless of count', () => {
     const workflowCount = 10_000;
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    adapter.runInTransaction(() => {
+      for (let i = 0; i < workflowCount; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
 
     const snapshot = adapter.loadWorkflowTaskSnapshot();
     expect(snapshot.workflows).toHaveLength(workflowCount);
@@ -56,16 +60,18 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   it.fails('listWorkflows materializes every row into JS objects', () => {
     const workflowCount = 5_000;
     const descriptionPayload = 'x'.repeat(256);
-    for (let i = 0; i < workflowCount; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i} with a longer name to increase memory footprint`,
-        description: `Description for workflow ${i}: ${descriptionPayload}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    adapter.runInTransaction(() => {
+      for (let i = 0; i < workflowCount; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i} with a longer name to increase memory footprint`,
+          description: `Description for workflow ${i}: ${descriptionPayload}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
 
     const workflows = adapter.listWorkflows();
     const materializedBytes = Buffer.byteLength(JSON.stringify(workflows));
@@ -100,15 +106,17 @@ describe('unbounded workflow SELECT (ui-read-scale proof)', () => {
   });
 
   it('listWorkflowsPaged respects limit at scale without loading all rows', () => {
-    for (let i = 0; i < 5000; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    adapter.runInTransaction(() => {
+      for (let i = 0; i < 5000; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
 
     const started = performance.now();
     const result = adapter.listWorkflowsPaged({ limit: 50 });
