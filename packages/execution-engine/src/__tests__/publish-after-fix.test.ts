@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync, execFileSync } from 'node:child_process';
-import type { TaskState } from '@invoker/workflow-core';
+import { applyTaskConfigPatch, type TaskConfigPatch, type TaskState } from '@invoker/workflow-core';
 import { publishAfterFixImpl, type MergeRunnerHost } from '../merge-runner.js';
 
 const REAL_GIT_TIMEOUT_MS = 60_000;
@@ -586,4 +586,97 @@ describe('publishAfterFixImpl integration (real git)', () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, REAL_GIT_TIMEOUT_MS);
+
+  describe('keeps the merge gate config valid under the orchestrator config patch', () => {
+    function mergeGateTask(execution: Record<string, unknown> = {}): TaskState {
+      return {
+        id: '__merge__wf-int',
+        description: 'Merge gate',
+        status: 'running',
+        dependencies: ['t1'],
+        createdAt: new Date(),
+        config: { isMergeNode: true, runnerKind: 'merge', workflowId: 'wf-int' } as any,
+        execution: execution as any,
+      };
+    }
+
+    const taskT1: TaskState = {
+      id: 't1',
+      description: 'Task 1',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t1' } as any,
+    };
+
+    function patchConfigLikeOrchestrator(host: MergeRunnerHost, mergeTask: TaskState): () => unknown {
+      let persistedConfig: unknown = mergeTask.config;
+      host.orchestrator.setTaskReviewReady = vi.fn((_id: string, changes: { config?: TaskConfigPatch }) => {
+        persistedConfig = applyTaskConfigPatch(mergeTask.config, changes.config);
+      }) as any;
+      return () => persistedConfig;
+    }
+
+    it.fails('without review publication', async () => {
+      const sandbox = createSandbox();
+      root = sandbox.root;
+      const mergeTask = mergeGateTask();
+      const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+      const persistedConfig = patchConfigLikeOrchestrator(host, mergeTask);
+
+      await publishAfterFixImpl(host, mergeTask);
+
+      expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+      expect(persistedConfig()).toMatchObject({ isMergeNode: true, runnerKind: 'merge', summary: '## Summary' });
+    }, REAL_GIT_TIMEOUT_MS);
+
+    it.fails('with review publication', async () => {
+      const sandbox = createSandbox();
+      root = sandbox.root;
+      const fixCommit = git('rev-parse HEAD', sandbox.gateDir);
+      const mergeTask = mergeGateTask({ fixedIntegrationSha: fixCommit });
+      const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+      (host.persistence as any).loadWorkflow = () => ({
+        id: 'wf-int',
+        onFinish: 'pull_request',
+        mergeMode: 'external_review',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        name: 'Integration Test',
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      });
+      host.publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
+        artifacts: [{ url: 'https://github.com/example/pr/1', providerId: '1' }],
+        sessionId: 'session-1',
+        agentName: 'claude',
+      });
+      const persistedConfig = patchConfigLikeOrchestrator(host, mergeTask);
+
+      await publishAfterFixImpl(host, mergeTask);
+
+      expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+      expect(persistedConfig()).toMatchObject({ isMergeNode: true, runnerKind: 'merge', summary: '## Summary' });
+    }, REAL_GIT_TIMEOUT_MS);
+
+    it.fails('without a feature branch', async () => {
+      const sandbox = createSandbox();
+      root = sandbox.root;
+      const mergeTask = mergeGateTask();
+      const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+      (host.persistence as any).loadWorkflow = () => ({
+        id: 'wf-int',
+        onFinish: 'none',
+        mergeMode: 'manual',
+        baseBranch: 'master',
+        name: 'Integration Test',
+      });
+      const persistedConfig = patchConfigLikeOrchestrator(host, mergeTask);
+
+      await publishAfterFixImpl(host, mergeTask);
+
+      expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+      expect(persistedConfig()).toMatchObject({ isMergeNode: true, runnerKind: 'merge', summary: '## Summary' });
+    }, REAL_GIT_TIMEOUT_MS);
+  });
 });

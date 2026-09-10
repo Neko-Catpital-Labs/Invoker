@@ -3462,7 +3462,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it('no featureBranch: early exit with setTaskReviewReady', async () => {
+    it.fails('no featureBranch: early exit with setTaskReviewReady', async () => {
       const { executor, mergeTask, orchestrator, gitCalls } = setupPublishAfterFix({
         featureBranch: undefined,
         gateWorkspacePath: '/tmp/gate-clone',
@@ -3471,7 +3471,7 @@ describe('TaskRunner', () => {
       await executor.publishAfterFix(mergeTask);
 
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
-        config: expect.objectContaining({ runnerKind: 'worktree' }),
+        config: expect.objectContaining({ runnerKind: 'merge' }),
         execution: expect.objectContaining({ workspacePath: '/tmp/gate-clone' }),
       }), expect.objectContaining({ generation: 0 }));
 
