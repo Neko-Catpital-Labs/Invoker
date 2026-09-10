@@ -28,6 +28,8 @@ import { buildTaskResetChanges, type TaskResetKind } from '../task-reset-policy.
 
 const TASK_DELTA_CHANNEL = 'task.delta';
 
+export const ALREADY_TERMINAL_TASK_STATUSES: readonly TaskStatus[] = ['completed', 'closed', 'stale'];
+
 function isActiveForInvalidation(status: TaskStatus): boolean {
   return (
     status === 'running' ||
@@ -209,8 +211,7 @@ export function cancelTaskImpl(
   const task = host.stateGetTask(taskId);
   if (!task) throw new OrchestratorError('TASK_NOT_FOUND', `Task "${taskId}" not found`);
 
-  const terminal: Partial<Record<TaskStatus, true>> = { completed: true, closed: true, stale: true };
-  if (terminal[task.status]) {
+  if (ALREADY_TERMINAL_TASK_STATUSES.includes(task.status)) {
     throw new OrchestratorError('TASK_ALREADY_TERMINAL', `Task "${taskId}" is already ${task.status}`);
   }
 
