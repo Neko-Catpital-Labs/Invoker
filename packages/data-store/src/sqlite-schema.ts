@@ -165,6 +165,7 @@ export const SCHEMA_DDL = `
 
       CREATE TABLE IF NOT EXISTS conversations (
         thread_ts TEXT PRIMARY KEY,
+        surface TEXT NOT NULL DEFAULT 'slack',
         channel_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
         mode TEXT DEFAULT 'plan',
@@ -209,6 +210,7 @@ export const SCHEMA_DDL = `
 
       CREATE TABLE IF NOT EXISTS slack_launch_contexts (
         thread_ts TEXT PRIMARY KEY,
+        surface TEXT NOT NULL DEFAULT 'slack',
         repo_url TEXT NOT NULL,
         harness_preset TEXT NOT NULL,
         working_dir TEXT NOT NULL,
@@ -220,6 +222,7 @@ export const SCHEMA_DDL = `
 
       CREATE TABLE IF NOT EXISTS slack_plan_drafts (
         draft_id TEXT NOT NULL,
+        surface TEXT NOT NULL DEFAULT 'slack',
         version INTEGER NOT NULL,
         planning_draft_id TEXT,
         channel_id TEXT NOT NULL,
@@ -248,6 +251,7 @@ export const SCHEMA_DDL = `
 
       CREATE TABLE IF NOT EXISTS slack_pending_confirmations (
         confirm_key TEXT PRIMARY KEY,
+        surface TEXT NOT NULL DEFAULT 'slack',
         thread_ts TEXT NOT NULL,
         channel_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
@@ -577,6 +581,10 @@ export const SCHEMA_DDL = `
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
 export const COLUMN_MIGRATIONS = [
+  "ALTER TABLE conversations ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_launch_contexts ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_plan_drafts ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_pending_confirmations ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
   'ALTER TABLE workflow_channels ADD COLUMN progress_card_ts TEXT',
   "ALTER TABLE conversations ADD COLUMN mode TEXT DEFAULT 'plan'",
   'ALTER TABLE slack_launch_contexts ADD COLUMN harness_session_id TEXT',
@@ -685,6 +693,10 @@ export const COLUMN_MIGRATIONS = [
  * dispatch index. Order preserved from the original `migrate()` body.
  */
 export const POST_MIGRATION_STATEMENTS = [
+  'CREATE INDEX IF NOT EXISTS idx_conversations_surface_thread ON conversations(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_launch_contexts_surface_thread ON slack_launch_contexts(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_plan_drafts_surface_thread ON slack_plan_drafts(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_pending_confirmations_surface_thread ON slack_pending_confirmations(surface, thread_ts)',
   'DROP TRIGGER IF EXISTS trg_tasks_executor_routing_insert',
   'DROP TRIGGER IF EXISTS trg_tasks_executor_routing_update',
   `CREATE TRIGGER trg_tasks_executor_routing_insert
