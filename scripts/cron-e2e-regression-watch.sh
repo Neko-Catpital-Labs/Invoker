@@ -5,6 +5,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+INVOKER_OPERATOR_ENV="${INVOKER_OPERATOR_ENV:-$HOME/.invoker/env.sh}"
+if [ -f "$INVOKER_OPERATOR_ENV" ]; then
+  set +u
+  . "$INVOKER_OPERATOR_ENV"
+  set -u
+fi
+
 # Mirror scripts/e2e-regression-watch.mjs's own CLI > env target-repo
 # precedence just enough to pick a non-colliding lock file: a --target-repo
 # flag on argv wins, otherwise INVOKER_GITHUB_TARGET_REPO, otherwise the
