@@ -19,4 +19,12 @@ describe('always-on execution routing', () => {
     expect(contents).not.toContain('workflow handoff only');
     expect(contents).not.toContain('do not publish PRs unless the user asks');
   });
+
+  it.each([
+    ['Codex and Claude', EXECUTION_ROUTING_FRAGMENT],
+    ['Cursor', CURSOR_RULE_CONTENTS],
+  ])('sends publishing fan-out to the route-delegation skill for %s', (_host, contents) => {
+    expect(contents).toContain('About to fan out subagents? Read `invoker-route-delegation` first');
+    expect(contents).toContain('never a subagent swarm');
+  });
 });
