@@ -10,6 +10,9 @@
 
 import {
   makeEnvelope,
+  parseRouteTaskArgs,
+  type RouteTaskArgs,
+  type RouteTaskRunnerKind,
   type StartReadyFreshBasePreview,
   type StartReadyFreshBaseScope,
   type StartReadyRequest,
@@ -609,6 +612,145 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
       printTaskOutput: true,
       setExitCodeOnFailure: false,
     });
+  });
+}
+
+const ROUTE_TASK_TERMINAL_STATUSES = new Set(['completed', 'skipped', 'closed']);
+
+type RouteTaskPoolConfig = { members?: ReadonlyArray<{ type?: string }> };
+
+function routeTaskCurrentPoolId(task: TaskState): string | undefined {
+  const config = task.config as { poolId?: string };
+  const poolId = config.poolId?.trim();
+  return poolId ? poolId : undefined;
+}
+
+function assertRouteTaskAllowed(
+  task: TaskState,
+  parsed: RouteTaskArgs,
+  pools: Record<string, RouteTaskPoolConfig>,
+  agentNames: readonly string[],
+): void {
+  const taskId = task.id;
+
+  if (ROUTE_TASK_TERMINAL_STATUSES.has(task.status)) {
+    throw new Error(
+      `Cannot re-route task "${taskId}": it is ${task.status} and will not be dispatched again.`,
+    );
+  }
+  if (task.status === 'running' && !parsed.force) {
+    throw new Error(
+      `Cannot re-route task "${taskId}" while it is running because the launched attempt already resolved its agent. ` +
+      'Pass --force to re-route anyway.',
+    );
+  }
+
+  const isMergeNode = task.config.isMergeNode === true || task.config.runnerKind === 'merge';
+  if (isMergeNode && parsed.poolId !== undefined) {
+    throw new Error(
+      `Cannot assign pool "${parsed.poolId}" to merge node "${taskId}": merge nodes carry no execution pool.`,
+    );
+  }
+
+  if (parsed.poolId !== undefined && !Object.hasOwn(pools, parsed.poolId)) {
+    const available = Object.keys(pools);
+    throw new Error(
+      `Cannot route task "${taskId}" to pool "${parsed.poolId}": pool is not defined in executionPools. ` +
+      `Available: [${available.join(', ')}]`,
+    );
+  }
+
+  const effectiveRunnerKind: string = parsed.runnerKind ?? task.config.runnerKind;
+  const effectivePoolId = parsed.poolId ?? routeTaskCurrentPoolId(task);
+  if ((effectiveRunnerKind === 'worktree' || effectiveRunnerKind === 'ssh') && !effectivePoolId) {
+    throw new Error(
+      `Cannot route task "${taskId}" to runner "${effectiveRunnerKind}" without a pool: ` +
+      'worktree and ssh runners require a non-empty pool. Pass --pool <id>.',
+    );
+  }
+
+  if (parsed.poolId !== undefined && effectiveRunnerKind === 'ssh') {
+    const members = pools[parsed.poolId]?.members ?? [];
+    if (members.length === 0 || members.every((member) => member.type === 'worktree')) {
+      throw new Error(
+        `Cannot route task "${taskId}" to pool "${parsed.poolId}" with runner "ssh": ` +
+        'the pool has no ssh member, so that combination cannot execute.',
+      );
+    }
+  }
+
+  if (parsed.agent !== undefined && !agentNames.includes(parsed.agent)) {
+    throw new Error(
+      `Cannot route task "${taskId}" to agent "${parsed.agent}": no execution agent is registered under that name. ` +
+      `Available: [${agentNames.join(', ')}]`,
+    );
+  }
+}
+
+async function applyRouteTaskEdit(
+  taskId: string,
+  deps: HeadlessDeps,
+  label: string,
+  run: () => Promise<{ ok: true; data: TaskState[] } | { ok: false; error: { message: string } }>,
+): Promise<TaskState> {
+  const result = deps.mutationTiming
+    ? await deps.mutationTiming.span(`headless.route-task.${label}`, { taskId }, run)
+    : await run();
+  if (!result.ok) throw new Error(result.error.message);
+  const updated = deps.orchestrator.getTask(taskId);
+  if (!updated) throw new Error(`Task "${taskId}" disappeared while routing`);
+  return updated;
+}
+
+export async function headlessRouteTask(args: string[], deps: HeadlessDeps): Promise<void> {
+  const parsed = parseRouteTaskArgs(args);
+  await withRestoredTaskUnlessDeleteAllWon(parsed.taskId, deps, 'route-task', async (restored) => {
+    const taskId = restored.resolvedTaskId;
+    const task = deps.orchestrator.getTask(taskId);
+    if (!task) throw new Error(`Task "${taskId}" not found in any workflow`);
+
+    const pools = deps.invokerConfig.executionPools ?? {};
+    const agentRegistry = deps.executionAgentRegistry ?? registerBuiltinAgents();
+    const agentNames = agentRegistry.listExecution().map((agent) => agent.name);
+    assertRouteTaskAllowed(task, parsed, pools, agentNames);
+
+    const changed: string[] = [];
+    let current = task;
+
+    if (parsed.poolId !== undefined) {
+      const poolId = parsed.poolId;
+      current = await applyRouteTaskEdit(taskId, deps, 'editTaskPool', () =>
+        deps.commandService.editTaskPool(makeEnvelope('route-task', 'headless', 'task', { taskId, poolId })));
+      changed.push(`pool=${poolId}`);
+    }
+
+    const targetRunnerKind: RouteTaskRunnerKind | undefined = parsed.runnerKind;
+    const runnerKindChanges = targetRunnerKind !== undefined
+      && targetRunnerKind !== current.config.runnerKind;
+    const memberNeedsClear = parsed.clearMember
+      && (current.config as { poolMemberId?: string }).poolMemberId !== undefined;
+    if (runnerKindChanges || memberNeedsClear) {
+      const runnerKind = targetRunnerKind ?? current.config.runnerKind;
+      current = await applyRouteTaskEdit(taskId, deps, 'editTaskType', () =>
+        deps.commandService.editTaskType(
+          makeEnvelope('route-task', 'headless', 'task', { taskId, runnerKind, poolMemberId: undefined }),
+        ));
+      if (runnerKindChanges) changed.push(`runner=${runnerKind}`);
+      if (memberNeedsClear) changed.push('member=<cleared>');
+    }
+
+    if (parsed.agent !== undefined) {
+      const agentName = parsed.agent;
+      await applyRouteTaskEdit(taskId, deps, 'editTaskAgent', () =>
+        deps.commandService.editTaskAgent(makeEnvelope('route-task', 'headless', 'task', { taskId, agentName })));
+      changed.push(`agent=${agentName}`);
+    }
+
+    process.stdout.write(
+      changed.length > 0
+        ? `Re-routed task "${taskId}" — ${changed.join(', ')}\n`
+        : `Task "${taskId}" routing already matches the requested target\n`,
+    );
   });
 }
 

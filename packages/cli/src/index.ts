@@ -5,6 +5,8 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+  formatRouteTaskArgs,
+  parseRouteTaskArgs,
   readInvokerConfigFile,
   resolveHeadlessOwnerLaunchSpec,
   resolveInvokerHomeRoot,
@@ -197,6 +199,7 @@ function usage(): string {
     '  invoker-cli query capacity [--output text|json]',
     '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
     '  invoker-cli retry-task <taskId>',
+    '  invoker-cli route-task <taskId> [--agent <name>] [--pool <id>] [--runner worktree|ssh] [--clear-member] [--force]',
     '  invoker-cli retry <workflowId>',
     '  invoker-cli resume <workflowId>',
     '  invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]',
@@ -221,6 +224,7 @@ function usage(): string {
     '  query capacity  Show live pool/member slot usage, queue depth by workflow, and the oldest-waiting task. Requires a live owner.',
     '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
+    '  route-task <taskId>  Ask a live Invoker owner to repoint one task\'s execution agent, pool, runner, or pool member.',
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
     '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
     '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
@@ -250,6 +254,11 @@ function usage(): string {
     '  --status <status>  Restrict `query workflows` or `query tasks` to one status.',
     '  --max-wait-ms <ms>  Maximum park time for `wait`. Defaults to 86400000 (24h).',
     '  --poll-interval-ms <ms>  Query interval for `wait`. Defaults to 5000.',
+    '  --agent <name>   Execution agent for `route-task`. Must be registered.',
+    '  --pool <id>      Execution pool for `route-task`. Must exist in config.executionPools.',
+    '  --runner <kind>  Runner kind for `route-task`. Supported values: worktree, ssh.',
+    '  --clear-member   Clear the pinned pool member for `route-task`.',
+    '  --force          Re-route a running task with `route-task`.',
     '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
     '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
     '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
@@ -721,9 +730,13 @@ async function requireLiveOwnerForMutation(bus: MessageBus): Promise<LiveOwnerIn
   return owner;
 }
 
-async function sendHeadlessExec(bus: MessageBus, args: string[]): Promise<void> {
+async function sendHeadlessExec(
+  bus: MessageBus,
+  args: string[],
+  opts: { noTrack?: boolean } = {},
+): Promise<void> {
   await withTimeout(
-    bus.request('headless.exec', { args, noTrack: true }),
+    bus.request('headless.exec', { args, noTrack: opts.noTrack ?? true }),
     30_000,
   );
 }
@@ -739,6 +752,23 @@ async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume' | 'd
     await requireLiveOwnerForMutation(bus);
     await sendHeadlessExec(bus, [command, targetId]);
     process.stdout.write(`${command} accepted by live owner.\n`);
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+async function runRouteTaskMutation(args: string[], deps: CliDeps): Promise<number> {
+  const parsed = parseRouteTaskArgs(args);
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    await sendHeadlessExec(bus, ['route-task', ...formatRouteTaskArgs(parsed)], { noTrack: false });
+    process.stdout.write('route-task applied by live owner.\n');
     return 0;
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
@@ -1394,6 +1424,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
         throw new Error(`Unexpected argument: ${argv[2]}`);
       }
       return await runSimpleMutation(argv[0], argv[1], deps);
+    }
+    if (argv[0] === 'route-task') {
+      return await runRouteTaskMutation(argv.slice(1), deps);
     }
     if (argv[0] === 'retry-tasks') {
       return await runRetryTasks(parseRetryTasksArgs(argv.slice(1)), deps);

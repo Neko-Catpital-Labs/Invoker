@@ -70,6 +70,7 @@ const TASK_SCOPED_HEADLESS_COMMANDS = new Set([
   'input',
   'select',
   'retry-task',
+  'route-task',
   'recreate-task',
   'recreate-downstream',
   'replace-task',

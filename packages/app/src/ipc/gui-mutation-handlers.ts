@@ -922,6 +922,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { workflowId: workflowIdForTargetArg(arg0), priority: 'high' };
       case 'cancel':
       case 'retry-task':
+      case 'route-task':
       case 'recreate-task':
       case 'delete-task':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };

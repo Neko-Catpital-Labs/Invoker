@@ -36,6 +36,8 @@ ${BOLD}Execute:${RESET}
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
   retry-task <taskId>                                 Retry a single failed/stuck task
+  route-task <taskId> [--agent N] [--pool P] [--runner worktree|ssh] [--clear-member] [--force]
+                                                      Repoint a task's execution agent, pool, runner, or pool member
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
   recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
   recreate-downstream <taskId>                         Recreate downstream of task only (target preserved)
