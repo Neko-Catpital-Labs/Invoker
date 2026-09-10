@@ -77,7 +77,7 @@ import {
 import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
 import { runSpendGateCommand } from './spend-gate-command.js';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 type CliOptions = {
   dbDir?: string;
