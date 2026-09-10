@@ -182,6 +182,30 @@ export function detectReviewUnits(text) {
   return detected;
 }
 
+function isPathLikeToken(token) {
+  const bareToken = token.replace(/[)\]}>'"`,;:!?.]+$/, '');
+  return bareToken.includes('/') || /\.[a-z0-9]+$/i.test(bareToken);
+}
+
+function blankPathTokens(text) {
+  return String(text).replace(/\S+/g, (token) => (isPathLikeToken(token) ? '_' : token));
+}
+
+export function detectReviewUnitTriggerWords(text) {
+  const haystack = blankPathTokens(String(text).toLowerCase());
+  const wordsByUnit = new Map();
+  for (const [unit, patterns] of UNIT_PATTERNS) {
+    const words = new Set();
+    for (const pattern of patterns) {
+      for (const match of haystack.matchAll(new RegExp(pattern.source, 'g'))) {
+        words.add(match[0].replace(/\s+/g, ' '));
+      }
+    }
+    if (words.size > 0) wordsByUnit.set(unit, words);
+  }
+  return wordsByUnit;
+}
+
 function includedWorkText(text) {
   return String(text)
     .split(/\r?\n/)
@@ -189,25 +213,40 @@ function includedWorkText(text) {
     .join('\n');
 }
 
+function collectIncludedWorkTriggerWords(texts) {
+  const wordsByUnit = new Map();
+  for (const text of texts) {
+    for (const [unit, words] of detectReviewUnitTriggerWords(includedWorkText(text))) {
+      if (!wordsByUnit.has(unit)) wordsByUnit.set(unit, new Set());
+      for (const word of words) wordsByUnit.get(unit).add(word);
+    }
+  }
+  return wordsByUnit;
+}
+
+function formatTriggerWords(wordsByUnit, units) {
+  const unitSet = new Set(units);
+  const perUnit = VALID_REVIEW_UNITS
+    .filter((unit) => unitSet.has(unit))
+    .map((unit) => `${unit}: ${Array.from(wordsByUnit.get(unit) ?? [], (word) => `"${word}"`).join(', ')}`);
+  return `Trigger words: ${perUnit.join('; ')}.`;
+}
+
 export function validateSingleReviewUnitFocus({ texts = [], context }) {
   const errors = [];
 
-  const detected = new Set();
-  for (const text of texts) {
-    for (const unit of detectReviewUnits(includedWorkText(text))) {
-      detected.add(unit);
-    }
-  }
-
-  const detectedProductUnits = Array.from(detected).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
+  const wordsByUnit = collectIncludedWorkTriggerWords(texts);
+  const detectedProductUnits = Array.from(wordsByUnit.keys()).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
   if (detectedProductUnits.length > 1) {
     errors.push(
-      `${context} mentions multiple review units (${formatReviewUnits(detectedProductUnits)}); split into one conceptual unit per diff/task.`,
+      `${context} mentions multiple review units (${formatReviewUnits(detectedProductUnits)}); split into one conceptual unit per diff/task. ${formatTriggerWords(wordsByUnit, detectedProductUnits)}`,
     );
   }
 
-  if (detected.has('docs') && detectedProductUnits.length > 0) {
-    errors.push(`${context} mixes docs language with product-unit language; split docs from implementation policy.`);
+  if (wordsByUnit.has('docs') && detectedProductUnits.length > 0) {
+    errors.push(
+      `${context} mixes docs language with product-unit language; split docs from implementation policy. ${formatTriggerWords(wordsByUnit, ['docs', ...detectedProductUnits])}`,
+    );
   }
 
   return errors;
@@ -246,17 +285,11 @@ export function validateReviewUnitFocus({ declaredReviewUnit, texts = [], contex
   const errors = validateSingleReviewUnitFocus({ texts, context });
   if (!VALID_REVIEW_UNIT_SET.has(declaredReviewUnit)) return errors;
 
-  const detected = new Set();
-  for (const text of texts) {
-    for (const unit of detectReviewUnits(includedWorkText(text))) {
-      detected.add(unit);
-    }
-  }
-
-  const detectedProductUnits = Array.from(detected).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
+  const wordsByUnit = collectIncludedWorkTriggerWords(texts);
+  const detectedProductUnits = Array.from(wordsByUnit.keys()).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
   if (detectedProductUnits.length === 1 && PRODUCT_REVIEW_UNITS.has(declaredReviewUnit) && detectedProductUnits[0] !== declaredReviewUnit) {
     errors.push(
-      `${context} Review Unit "${declaredReviewUnit}" does not match the described ${detectedProductUnits[0]} work.`,
+      `${context} Review Unit "${declaredReviewUnit}" does not match the described ${detectedProductUnits[0]} work. ${formatTriggerWords(wordsByUnit, detectedProductUnits)}`,
     );
   }
 
