@@ -23,6 +23,7 @@ import {
   resolveE2eAutoFixWorkerConfig,
   DEFAULT_PR_MAINTENANCE_TARGET_REPO,
   DEFAULT_E2E_AUTOFIX_TARGET_REPO,
+  resolveSpendCircuitBreakerWorkerConfig,
 } from '../config.js';
 import { validateInvokerConfig } from '../config-validation.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -1153,5 +1154,24 @@ describe('e2eAutoFix.targetRepos', () => {
     expect(() => validateInvokerConfig({
       e2eAutoFix: { targetRepos: ['owner,other/repo'] },
     })).toThrow(/owner\/repo/);
+  });
+});
+
+describe('resolveSpendCircuitBreakerWorkerConfig', () => {
+  it('names the owner host from config so a fleet member that is also the owner is counted once', () => {
+    const resolved = resolveSpendCircuitBreakerWorkerConfig({
+      remoteTargets: {
+        remote_digital_ocean_1: { host: 'h1', user: 'invoker', sshKeyPath: '/k' },
+        remote_digital_ocean_3: { host: 'h3', user: 'invoker', sshKeyPath: '/k' },
+      },
+      spendCircuitBreaker: { codexDailyGate: { localHostName: 'remote_digital_ocean_1' } },
+    } as never);
+
+    expect(resolved.codexDailyGate?.localHostName).toBe('remote_digital_ocean_1');
+  });
+
+  it('falls back to a neutral owner label when config does not name the host', () => {
+    const resolved = resolveSpendCircuitBreakerWorkerConfig({ remoteTargets: {} } as never);
+    expect(resolved.codexDailyGate?.localHostName).toBe('owner');
   });
 });

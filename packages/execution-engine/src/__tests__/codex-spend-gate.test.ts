@@ -158,6 +158,24 @@ describe('runCodexDailySpendGateTick', () => {
     expect(loadCodexSpendGateTrip(config.statePath)?.observedTokens).toBe(900_000_000);
   });
 
+  it('counts a host once when the owner is also a configured remote target', async () => {
+    const config = gateConfig({
+      localHostName: 'remote_digital_ocean_1',
+      tallyLocal: () => 20_406_837,
+      remoteTargets: [
+        { name: 'remote_digital_ocean_1', connection: { host: 'h1', user: 'invoker', sshKeyPath: '/k' } },
+        { name: 'remote_digital_ocean_3', connection: { host: 'h3', user: 'invoker', sshKeyPath: '/k' } },
+      ],
+      tallyRemote: async (target: { name: string }) => (target.name === 'remote_digital_ocean_1' ? 20_406_837 : 14_235),
+    });
+
+    const result = await runCodexDailySpendGateTick(config, makeLogger(), NOW_MS);
+
+    expect(result.tokensByHost.size).toBe(2);
+    expect(result.tokensByHost.get('remote_digital_ocean_1')).toBe(20_406_837);
+    expect(result.totalTokens).toBe(20_421_072);
+  });
+
   it('does nothing when the gate is disabled', async () => {
     const config = gateConfig({ enabled: false, tallyRemote: async () => 500_000_000 });
     const result = await runCodexDailySpendGateTick(config, makeLogger(), NOW_MS);
