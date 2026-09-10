@@ -741,6 +741,9 @@ export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = (config.defaultExecutionHarness ?? config.defaultExecutionAgent)?.trim();
   return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
 }
+export function loadDefaultExecutionAgent(): string {
+  return resolveDefaultExecutionAgent(loadConfig());
+}
 
 /**
  * Resolve the configured execution-agent allowlist.
