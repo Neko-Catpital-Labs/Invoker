@@ -11,7 +11,7 @@
  *   INVOKER_MERGIFY_QUEUE_RESEARCH_ACTIVITY_FIXTURE  JSON activity by source repoUrl
  *   INVOKER_MERGIFY_QUEUE_RESEARCH_LEDGER_PATH   JSONL ledger path (default ~/.invoker/mergify-admin-requeue-state.jsonl)
  *   INVOKER_MERGIFY_QUEUE_RESEARCH_DRY_RUN=1     generate chain only; do not submit
- *   INVOKER_MERGIFY_QUEUE_RESEARCH_SUBMIT_CMD    override submit-workflow-chain.sh
+ *   INVOKER_MERGIFY_QUEUE_RESEARCH_SUBMIT_CMD    override submit-chain.mjs
  *   INVOKER_MERGIFY_QUEUE_RESEARCH_WORK_DIR      ledger + generated plans (default ~/.invoker/mergify-queue-research)
  *   INVOKER_MERGIFY_QUEUE_RESEARCH_GENERATE_ONLY=1  write chain YAML and exit 0 (tests)
  */
@@ -438,7 +438,7 @@ function submitChain(plans, { dryRun, submitCmd }) {
     log(`dry-run/generate-only chain: ${plans.join(' ')}`);
     return { status: 0, stdout: plans.join('\n') };
   }
-  const cmd = submitCmd || join(REPO_ROOT, 'scripts/submit-workflow-chain.sh');
+  const cmd = submitCmd || join(REPO_ROOT, 'skills/plan-to-invoker/scripts/submit-chain.mjs');
   const result = spawnSync('bash', [cmd, '--gate-policy', 'completed', ...plans], {
     encoding: 'utf8',
     cwd: REPO_ROOT,

@@ -12,7 +12,7 @@ baseBranch: {{base_branch}}
 repoUrl: {{repo_url}}
 
 externalDependencies:
-  # submit-workflow-chain.sh injects taskId: "__merge__" and gatePolicy here at
+  # submit-chain.mjs injects taskId: "__merge__" and gatePolicy here at
   # submit time; do not hardcode them or the injector duplicates the gatePolicy key.
   - workflowId: "__UPSTREAM_WORKFLOW_ID__"
     requiredStatus: completed
