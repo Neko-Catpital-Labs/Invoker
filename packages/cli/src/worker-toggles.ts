@@ -15,6 +15,7 @@ import {
   PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  SPEND_CIRCUIT_BREAKER_WORKER_KIND,
   WORKER_SESSION_MINE_WORKER_KIND,
 } from '@invoker/execution-engine';
 
@@ -109,6 +110,13 @@ export const WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
     label: 'Worker session mine',
     description: 'Mines finished worker agent sessions (Claude, Codex, OMP) for thrash: 40+ turns, 10M+ cache-read or total tokens, or the same shell command 5+ times. Files one Invoker follow-up per session, capped at 1 per tick and 2 per day. Off by default; enable on the DO1 owner only.',
     workerKinds: [WORKER_SESSION_MINE_WORKER_KIND],
+    includeInOnboarding: false,
+  },
+  {
+    id: 'codex-spend-clamp',
+    label: 'Codex daily spend clamp',
+    description: 'Adds up the day\'s Codex tokens on the owner and over SSH on every remote target, and once the fleet total passes the daily budget it writes a trip that makes every Codex request fail until `invoker-cli spend-gate reset`. Off until switched on; enable on the DO1 owner.',
+    workerKinds: [SPEND_CIRCUIT_BREAKER_WORKER_KIND],
     includeInOnboarding: false,
   },
   {
