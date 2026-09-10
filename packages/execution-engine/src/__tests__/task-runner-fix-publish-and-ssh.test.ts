@@ -3536,7 +3536,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it.fails('no featureBranch: early exit with setTaskReviewReady', async () => {
+    it('no featureBranch: early exit with setTaskReviewReady', async () => {
       const { executor, mergeTask, orchestrator, gitCalls } = setupPublishAfterFix({
         featureBranch: undefined,
         gateWorkspacePath: '/tmp/gate-clone',
