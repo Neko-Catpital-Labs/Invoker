@@ -25,6 +25,8 @@ Use this skill when **all** of the following are true:
 
 Do **not** use this skill for one-slice same-repo feature iteration, one-file fixes with a local repro, or read-only questions. Keep those in the current chat.
 
+About to fan out subagents instead? Read `skill://route-delegation/SKILL.md` first: units that commit, open a PR, tag, merge, or deploy come here, never to a subagent swarm.
+
 ## Local vs remote owner
 
 - Default MCP target is **local** `invoker-cli mcp`.
