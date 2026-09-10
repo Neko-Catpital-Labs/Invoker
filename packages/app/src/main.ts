@@ -124,6 +124,7 @@ import { FileAndDbLogger } from './logger.js';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
+  loadDefaultExecutionAgent,
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
   resolveConfigFileState,
@@ -1001,6 +1002,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
+    defaultExecutionAgentProvider: loadDefaultExecutionAgent,
     deferRunningUntilLaunch: true,
   });
   commandService = new CommandService(
@@ -1473,6 +1475,7 @@ function startHeadlessMode(): void {
           executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
           defaultPoolId: invokerConfig.defaultPoolId,
           availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
+          defaultExecutionAgentProvider: loadDefaultExecutionAgent,
           deferRunningUntilLaunch: true,
         });
         commandService = new CommandService(
