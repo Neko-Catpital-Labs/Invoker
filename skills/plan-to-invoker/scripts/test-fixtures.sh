@@ -27,6 +27,7 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-n-broad-autofix-policy-review-unit.yaml"
   "anti-pattern-o-all-in-one-autofix-review-unit.yaml"
   "anti-pattern-p-inter-task-ephemeral-carry.yaml"
+  "anti-pattern-q-behavior-plus-unrelated-docs.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -1532,6 +1533,39 @@ test_lint_rejects_behavior_plus_proof_files() {
   fi
 }
 
+test_lint_accepts_hook_readme_beside_detect_py() {
+  local fixture="$POSITIVE_DIR/12-hook-plan-with-readme.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected lint to accept a hook README beside its detect.py and non-Invoker file paths, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_rejects_behavior_plus_unrelated_docs() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-q-behavior-plus-unrelated-docs.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject a behavior lane that edits a README outside the hook directory" >&2
+    return 1
+  fi
+
+  if ! grep -q 'mixes Review lane "behavior" with policy/docs/proof files' <<<"$output"; then
+    echo "Expected behavior-plus-docs lint error, got: $output" >&2
+    return 1
+  fi
+}
+
 test_lint_rejects_refactor_plus_fields() {
   local fixture="$NEGATIVE_DIR/anti-pattern-m-refactor-plus-fields.yaml"
   local output
@@ -1698,6 +1732,8 @@ run_test "Lint: reject missing design sections for prompt tasks" test_lint_requi
 run_test "Lint: reject missing review-compression sections" test_lint_requires_review_compression_sections
 run_test "Lint: reject missing review lane" test_lint_requires_review_lane
 run_test "Lint: reject behavior lane mixed with proof files" test_lint_rejects_behavior_plus_proof_files
+run_test "Lint: accept hook README beside detect.py" test_lint_accepts_hook_readme_beside_detect_py
+run_test "Lint: reject behavior lane mixed with unrelated docs" test_lint_rejects_behavior_plus_unrelated_docs
 run_test "Lint: reject refactor lane mixed with field additions" test_lint_rejects_refactor_plus_fields
 run_test "Lint: reject inter-task ephemeral carry without commit" test_lint_rejects_inter_task_ephemeral_carry_without_commit
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
