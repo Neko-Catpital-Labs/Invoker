@@ -91,6 +91,47 @@ describe('invoker-cli mutations', () => {
     output.restore();
   });
 
+  it.each([
+    ['task-pool', 'wf-1/task-1', ['local-only']],
+    ['agent', 'wf-1/task-1', ['claude']],
+    ['task', 'wf-1/task-1', ['config.poolId', 'local-only']],
+  ])('forwards set %s over headless.exec with noTrack', async (subcommand, targetId, rest) => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const execHandler = vi.fn(async (request: unknown) => {
+      expect(request).toEqual({ args: ['set', subcommand, targetId, ...rest], noTrack: true });
+      return { ok: true };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.exec', execHandler);
+
+    const code = await main(['set', subcommand, targetId, ...rest], { createMessageBus: () => bus });
+
+    expect(code).toBe(0);
+    expect(execHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toContain(`set ${subcommand} accepted by live owner.`);
+    output.restore();
+  });
+
+  it.each([
+    [['set'], 'Missing set sub-command'],
+    [['set', 'task-pool'], 'Missing id'],
+    [['set', 'task-pool', 'wf-1/task-1'], 'Missing value'],
+  ])('rejects incomplete set invocation %j without contacting the owner', async (argv, expected) => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const execHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.exec', execHandler);
+
+    const code = await main(argv, { createMessageBus: () => bus });
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain(expected);
+    expect(execHandler).not.toHaveBeenCalled();
+    output.restore();
+  });
+
   it('refuses owner-required mutations with actionable guidance when no owner is reachable', async () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();

@@ -200,6 +200,7 @@ function usage(): string {
     '  invoker-cli retry <workflowId>',
     '  invoker-cli resume <workflowId>',
     '  invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]',
+    '  invoker-cli set <sub-command> <id> <value...>',
     '  invoker-cli delete <workflowId>',
     '  invoker-cli delete-all',
     '  invoker-cli owner serve',
@@ -224,6 +225,7 @@ function usage(): string {
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
     '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
     '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
+    '  set <sub-command> <id> <value...>  Edit a task or workflow field through a live owner (task-pool, agent, model, prompt, task <fieldPath>, ...).',
     '  delete-all      Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
@@ -786,6 +788,32 @@ async function runBounded<T>(
   });
   await Promise.all(workers);
   return { accepted, failed };
+}
+
+async function runSetMutation(args: string[], deps: CliDeps): Promise<number> {
+  const [subcommand, targetId] = args;
+  if (!subcommand) {
+    throw new Error('Missing set sub-command. Usage: invoker-cli set <sub-command> <id> <value...>');
+  }
+  if (!targetId) {
+    throw new Error(`Missing id. Usage: invoker-cli set ${subcommand} <id> <value...>`);
+  }
+  if (args.length < 3) {
+    throw new Error(`Missing value. Usage: invoker-cli set ${subcommand} ${targetId} <value...>`);
+  }
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    await sendHeadlessExec(bus, ['set', ...args]);
+    process.stdout.write(`set ${subcommand} accepted by live owner.\n`);
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
 }
 
 async function runRetryTasks(options: RetryTasksOptions, deps: CliDeps): Promise<number> {
@@ -1403,6 +1431,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
         throw new Error(`Unexpected argument: ${argv[1]}`);
       }
       return await runDeleteAllMutation(deps);
+    }
+    if (argv[0] === 'set') {
+      return await runSetMutation(argv.slice(1), deps);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
