@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve, join } from 'node:path';
-import { homedir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, resolve, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
@@ -192,6 +192,7 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli run-chain [--gate-policy completed|review_ready] [--onto-workflow <id>] <plan.yaml>...',
     '  invoker-cli query workflows [--status <status>] [--output text|json]',
     '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
     '  invoker-cli query capacity [--output text|json]',
@@ -573,6 +574,158 @@ async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
   } finally {
     persistence.close();
   }
+}
+
+type RunChainOptions = {
+  gatePolicy: 'completed' | 'review_ready';
+  ontoWorkflow?: string;
+  planPaths: string[];
+};
+
+const UPSTREAM_PLACEHOLDER = '__UPSTREAM_WORKFLOW_ID__';
+
+export function parseRunChainArgs(argv: string[]): RunChainOptions {
+  let gatePolicy: 'completed' | 'review_ready' = 'review_ready';
+  let ontoWorkflow: string | undefined;
+  const planPaths: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--gate-policy') {
+      const value = argv[++i];
+      if (value !== 'completed' && value !== 'review_ready') {
+        throw new Error(`Invalid --gate-policy value: ${value ?? '(missing)'}. Expected completed or review_ready.`);
+      }
+      gatePolicy = value;
+      continue;
+    }
+    if (arg === '--onto-workflow') {
+      ontoWorkflow = argv[++i];
+      if (!ontoWorkflow) throw new Error('Missing value for --onto-workflow');
+      continue;
+    }
+    if (arg.startsWith('--')) throw new Error(`Unknown run-chain option: ${arg}`);
+    planPaths.push(arg);
+  }
+  if (planPaths.length === 0) {
+    throw new Error('Missing plan file(s). Usage: invoker-cli run-chain [--gate-policy completed|review_ready] [--onto-workflow <id>] <plan.yaml>...');
+  }
+  return { gatePolicy, ontoWorkflow, planPaths };
+}
+
+function planNameOf(planText: string, planPath: string): string {
+  const match = planText.match(/^name:\s*"?(.+?)"?\s*$/m);
+  if (!match) throw new Error(`${planPath} has no top-level name:`);
+  return match[1];
+}
+
+export function wireStackedPlan(
+  planText: string,
+  planPath: string,
+  upstreamId: string,
+  upstreamBranch: string,
+  gatePolicy: string,
+): string {
+  if (!planText.includes(UPSTREAM_PLACEHOLDER)) {
+    throw new Error(`${planPath} is a stacked step but does not contain ${UPSTREAM_PLACEHOLDER}`);
+  }
+  let wired = planText.split(UPSTREAM_PLACEHOLDER).join(upstreamId);
+  wired = wired.replace(/^baseBranch:.*$/m, `baseBranch: ${upstreamBranch}`);
+  wired = wired.replace(
+    new RegExp(`(- workflowId: "?${upstreamId}"?\\n)(\\s*)requiredStatus: completed`),
+    (_match, head: string, indent: string) =>
+      `${head}${indent}taskId: "__merge__"\n${indent}requiredStatus: completed\n${indent}gatePolicy: ${gatePolicy}`,
+  );
+  return wired;
+}
+
+async function listOwnerWorkflows(bus: MessageBus): Promise<Array<Record<string, unknown>>> {
+  const raw = await queryLiveOwner(
+    { resource: 'workflows', output: 'json', forwardedFlags: [] },
+    bus,
+  );
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error('not an array');
+    return parsed as Array<Record<string, unknown>>;
+  } catch {
+    throw new Error(`Live owner returned unreadable workflow JSON: ${raw.slice(0, 200)}`);
+  }
+}
+
+async function runChain(options: RunChainOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  const submitted: Array<{ id: string; name: string; featureBranch: string }> = [];
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) {
+      throw new Error('run-chain requires a live Invoker owner; none is responding. Start one with `invoker-cli owner serve`.');
+    }
+
+    let upstreamId = options.ontoWorkflow;
+    let upstreamBranch: string | undefined;
+    if (upstreamId) {
+      const existing = (await listOwnerWorkflows(bus)).find((workflow) => workflow.id === upstreamId);
+      if (!existing) throw new Error(`--onto-workflow ${upstreamId} is not known to the live owner`);
+      upstreamBranch = typeof existing.featureBranch === 'string' ? existing.featureBranch : undefined;
+      if (!upstreamBranch) throw new Error(`Upstream ${upstreamId} has no featureBranch yet; it cannot be stacked onto.`);
+    }
+
+    const scratchDir = mkdtempSync(join(tmpdir(), 'invoker-run-chain-'));
+
+    for (const [index, planPath] of options.planPaths.entries()) {
+      const original = readFileSync(planPath, 'utf8');
+      const stacked = index > 0 || Boolean(options.ontoWorkflow);
+      let planText = original;
+      if (stacked) {
+        planText = wireStackedPlan(original, planPath, upstreamId!, upstreamBranch!, options.gatePolicy);
+      } else if (original.includes(UPSTREAM_PLACEHOLDER)) {
+        throw new Error(`${planPath} is the chain head but still contains ${UPSTREAM_PLACEHOLDER}`);
+      }
+
+      const name = planNameOf(planText, planPath);
+      if ((await listOwnerWorkflows(bus)).some((workflow) => workflow.name === name)) {
+        throw new Error(`The live owner already has a workflow named "${name}"; refusing to submit a duplicate.`);
+      }
+
+      const stagedPath = join(scratchDir, `${index + 1}-${basename(planPath)}`);
+      writeFileSync(stagedPath, planText);
+      await submitPlanToLiveOwner(stagedPath, bus, owner);
+
+      const created = (await listOwnerWorkflows(bus)).find((workflow) => workflow.name === name);
+      if (!created) {
+        throw new Error(
+          `Submitted ${planPath} but the live owner does not list a workflow named "${name}". `
+          + 'The submission did not reach the owner; no further plan was submitted.',
+        );
+      }
+      const featureBranch = typeof created.featureBranch === 'string' ? created.featureBranch : '';
+      if (!featureBranch) {
+        throw new Error(`Owner created ${String(created.id)} but reported no featureBranch; the next step cannot stack onto it.`);
+      }
+
+      submitted.push({ id: String(created.id), name, featureBranch });
+      upstreamId = String(created.id);
+      upstreamBranch = featureBranch;
+    }
+  } catch (error) {
+    if (submitted.length > 0) {
+      process.stderr.write('run-chain stopped. Already submitted and still running:\n');
+      for (const entry of submitted) {
+        process.stderr.write(`  ${entry.id}  ${entry.name}\n`);
+      }
+    }
+    throw error;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) disconnect.call(bus);
+  }
+
+  process.stdout.write(`GATE_POLICY=${options.gatePolicy}\n`);
+  submitted.forEach((entry, index) => {
+    process.stdout.write(`WF${index + 1}=${entry.id} feature=${entry.featureBranch}\n`);
+  });
+  return 0;
 }
 
 async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
@@ -1382,6 +1535,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
       return await runWorkerOnce(definition, bus, workerArgs);
+    }
+    if (argv[0] === 'run-chain') {
+      return await runChain(parseRunChainArgs(argv.slice(1)), deps);
     }
     if (argv[0] === 'query') {
       return await runQuery(parseQueryArgs(argv.slice(1)), deps);
