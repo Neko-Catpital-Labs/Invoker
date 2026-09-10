@@ -249,6 +249,7 @@ export interface CodexDailySpendGateConfigEntry {
   enabled?: boolean;
   dailyTokenBudget?: number;
   statePath?: string;
+  localHostName?: string;
 }
 
 export interface SpendCircuitBreakerConfig {
@@ -910,7 +911,7 @@ export function resolveSpendCircuitBreakerWorkerConfig(
       enabled: gate?.enabled ?? true,
       dailyTokenBudget: gate?.dailyTokenBudget ?? DEFAULT_CODEX_DAILY_TOKEN_BUDGET,
       statePath: gate?.statePath,
-      localHostName: 'owner',
+      localHostName: gate?.localHostName ?? 'owner',
       remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
         name,
         connection: {
