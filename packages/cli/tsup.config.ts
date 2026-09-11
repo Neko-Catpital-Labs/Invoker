@@ -5,6 +5,7 @@ export default defineConfig({
   format: ['esm'],
   dts: false,
   clean: true,
+  removeNodeProtocol: false,
   banner: {
     js: '#!/usr/bin/env node',
   },
