@@ -184,15 +184,15 @@ module.exports = {
     {
       name: 'layer-4-deps',
       comment:
-        'Layer 4 packages (test-kit, app) can only depend on Layers 0, 1, 2, and 3.',
+        'Layer 4 packages (test-kit, app, discord) can only depend on Layers 0, 1, 2, and 3.',
       severity: 'error',
       from: {
-        path: '^packages/(test-kit|app|cli|slack-manager)/',
+        path: '^packages/(test-kit|app|cli|slack-manager|discord)/',
       },
       to: {
         path: '^packages/',
         pathNot: [
-          '^packages/(test-kit|app|cli|slack-manager)/',
+          '^packages/(test-kit|app|cli|slack-manager|discord)/',
           '^packages/(execution-engine|surfaces|planning-core)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
