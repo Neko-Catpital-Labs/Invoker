@@ -25,6 +25,8 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
+import { parseLocalRequest } from './mention-parsers.js';
+import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
@@ -187,10 +189,8 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
 
-export type LocalRequest =
-  | { kind: 'command'; text: string }
-  | { kind: 'agent'; text: string }
-  | { kind: 'change'; text: string };
+export { parseLocalRequest } from './mention-parsers.js';
+export type { LocalRequest } from './mention-parsers.js';
 
 export { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
 
@@ -474,50 +474,6 @@ export function parseWorkflowStatusQuery(text: string): { intent: 'command'; ope
   if (!/\bworkflows?\b/i.test(trimmed)) return null;
   if (!/\b(status|how many|count|running|active|in progress|progress)\b/i.test(trimmed)) return null;
   return { intent: 'command', operation: 'status', target: { all: true } };
-}
-
-/** Explicit local-mode prefixes. `run local:` means “use the local agent”; `exec local:` means raw shell. */
-export function parseLocalRequest(text: string): LocalRequest | null {
-  const trimmed = text.trim();
-  const commandPatterns = [
-    /^(?:exec|execute)\s+local(?:ly)?\s*:\s*/i,
-    /^local\s+(?:command|cmd)\s*:\s*/i,
-  ];
-  for (const pattern of commandPatterns) {
-    const match = pattern.exec(trimmed);
-    if (match) {
-      const rest = trimmed.slice(match[0].length).trim();
-      return rest ? { kind: 'command', text: rest } : null;
-    }
-  }
-
-  const agentPatterns = [
-    /^run\s+local(?:ly)?\s*:\s*/i,
-    /^local\s+run\s*:\s*/i,
-  ];
-  for (const pattern of agentPatterns) {
-    const match = pattern.exec(trimmed);
-    if (match) {
-      const rest = trimmed.slice(match[0].length).trim();
-      return rest ? { kind: 'agent', text: rest } : null;
-    }
-  }
-
-  const changePatterns = [
-    /^local\s*:\s*/i,
-    /^local\s+(?:change|edit|patch)\s*:\s*/i,
-    /^(?:change|edit|patch)\s+local(?:ly)?\s*:\s*/i,
-    /^locally\s*:\s*/i,
-  ];
-  for (const pattern of changePatterns) {
-    const match = pattern.exec(trimmed);
-    if (match) {
-      const rest = trimmed.slice(match[0].length).trim();
-      return rest ? { kind: 'change', text: rest } : null;
-    }
-  }
-
-  return null;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
