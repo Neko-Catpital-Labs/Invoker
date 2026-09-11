@@ -24,8 +24,8 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { choosePlanningRoute, routeWorkflowMention } from '../core/mention-router.js';
-import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+import { routePlanningMention, routeWorkflowMention } from '../core/mention-router.js';
+import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 import type { ChannelRepoSetupPair, LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -945,18 +945,14 @@ export class SlackSurface implements Surface {
     channel: string,
   ): Promise<void> {
     const threadTs = event.thread_ts ?? event.ts;
-    const parsed = parsePlanningRequest(
-      event.text ?? '',
-      Object.keys(this.harnessPresets),
-      this.defaultHarnessPreset,
-    );
-    const route = choosePlanningRoute(parsed, event.user, {
+    const mention = routePlanningMention({ text: event.text ?? '', userId: event.user }, {
       presetKeys: Object.keys(this.harnessPresets),
       defaultPresetKey: this.defaultHarnessPreset,
       readyDraft: () => this.slackPlanDraftRepo?.getReady(channel, threadTs),
     });
+    const { parsed, route } = mention;
     this.log('slack', 'info', `@mention: instance=${this.instanceId} event_ts=${event.ts} "${parsed.text.slice(0, 100)}${parsed.text.length > 100 ? '...' : ''}" (user=${event.user}, preset=${parsed.presetKey}, repo=${parsed.repo ?? 'default'})`);
-    if (parsed.autoSubmitRequested && route.kind !== 'unknown_preset' && route.kind !== 'greeting') {
+    if (mention.announceAutoSubmitUnavailable) {
       await say({
         text: 'Auto-submit is unavailable in conversational planning. I will stage the draft for review instead.',
         thread_ts: threadTs,
