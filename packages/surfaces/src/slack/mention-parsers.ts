@@ -5,6 +5,10 @@ export type LocalRequest =
 
 export const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
 
+export function looksLikePreset(normalized: string): boolean {
+  return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
+}
+
 export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
   const trimmed = text.trim();
   if (/\n/.test(trimmed)) return null;
