@@ -14,7 +14,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   formatPlanSummaryLines,
   formatSlackPlanBrief,
-  resolvePlanningSubmitAction,
   summarizePlanText,
   type PlanSummary,
   type PlanningConfirmationMode,
@@ -25,8 +24,8 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { routeWorkflowMention } from '../core/mention-router.js';
-import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseChannelRepoSetupRequest, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+import { choosePlanningRoute, routeWorkflowMention } from '../core/mention-router.js';
+import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 import type { ChannelRepoSetupPair, LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -945,57 +944,55 @@ export class SlackSurface implements Surface {
     say: SayFn,
     channel: string,
   ): Promise<void> {
+    const threadTs = event.thread_ts ?? event.ts;
     const parsed = parsePlanningRequest(
       event.text ?? '',
       Object.keys(this.harnessPresets),
       this.defaultHarnessPreset,
     );
+    const route = choosePlanningRoute(parsed, event.user, {
+      presetKeys: Object.keys(this.harnessPresets),
+      defaultPresetKey: this.defaultHarnessPreset,
+      readyDraft: () => this.slackPlanDraftRepo?.getReady(channel, threadTs),
+    });
     this.log('slack', 'info', `@mention: instance=${this.instanceId} event_ts=${event.ts} "${parsed.text.slice(0, 100)}${parsed.text.length > 100 ? '...' : ''}" (user=${event.user}, preset=${parsed.presetKey}, repo=${parsed.repo ?? 'default'})`);
-    if (parsed.unknownPreset) {
-      await say({
-        text: `Unknown preset \`[${parsed.unknownPreset}]\`. Valid presets: ${Object.keys(this.harnessPresets).join(', ')}. Omit the tag to use the default (\`${this.defaultHarnessPreset}\`).`,
-        thread_ts: event.ts,
-      });
-      return;
-    }
-    if (!parsed.text) {
-      await say({
-        text: 'Hi! Tag me with a message to start a plan conversation. Example: `@Invoker I want to add a REST API endpoint`',
-        thread_ts: event.ts,
-      });
-      return;
-    }
-    const threadTs = event.thread_ts ?? event.ts;
-    if (parsed.autoSubmitRequested) {
+    if (parsed.autoSubmitRequested && route.kind !== 'unknown_preset' && route.kind !== 'greeting') {
       await say({
         text: 'Auto-submit is unavailable in conversational planning. I will stage the draft for review instead.',
         thread_ts: threadTs,
       });
     }
-    if (/^\/plan\s*$/i.test(parsed.text)) {
-      await this.handleExplicitPlanAction(channel, threadTs, event.user ?? 'unknown', say);
-      return;
-    }
-
-    const channelRepoSetup = parseChannelRepoSetupRequest(parsed.text);
-    if (channelRepoSetup) {
-      await this.handleChannelRepoSetup(channelRepoSetup, event, channel, say);
-      return;
-    }
-
-    const readyDraft = this.slackPlanDraftRepo?.getReady(channel, threadTs);
-    const submitAction = resolvePlanningSubmitAction(parsed.text, Boolean(readyDraft));
-    if (submitAction === 'submit_ready' && readyDraft) {
-      if (!event.user || readyDraft.requestedBy !== event.user) {
+    switch (route.kind) {
+      case 'unknown_preset':
+        await say({
+          text: `Unknown preset \`[${route.preset}]\`. Valid presets: ${Object.keys(this.harnessPresets).join(', ')}. Omit the tag to use the default (\`${this.defaultHarnessPreset}\`).`,
+          thread_ts: event.ts,
+        });
+        return;
+      case 'greeting':
+        await say({
+          text: 'Hi! Tag me with a message to start a plan conversation. Example: `@Invoker I want to add a REST API endpoint`',
+          thread_ts: event.ts,
+        });
+        return;
+      case 'explicit_plan':
+        await this.handleExplicitPlanAction(channel, threadTs, event.user ?? 'unknown', say);
+        return;
+      case 'channel_repo_setup':
+        await this.handleChannelRepoSetup(route.pairs, event, channel, say);
+        return;
+      case 'submit_denied':
         await say({ text: 'Only the user who requested this plan may submit it.', thread_ts: threadTs });
         return;
-      }
-      try {
-        await this.planDrafts.submitPlanDraft(readyDraft, { userId: event.user });
-      } catch (error) {
-        await say({ text: error instanceof Error ? error.message : String(error), thread_ts: threadTs });
-      }
-      return;
+      case 'submit_ready_draft':
+        try {
+          await this.planDrafts.submitPlanDraft(route.draft, { userId: route.userId });
+        } catch (error) {
+          await say({ text: error instanceof Error ? error.message : String(error), thread_ts: threadTs });
+        }
+        return;
+      case 'resolve_repo':
+        break;
     }
 
     const preset = this.resolveHarnessPreset(parsed.presetKey);
