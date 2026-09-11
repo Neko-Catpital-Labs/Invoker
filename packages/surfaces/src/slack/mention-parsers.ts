@@ -3,6 +3,15 @@ export type LocalRequest =
   | { kind: 'agent'; text: string }
   | { kind: 'change'; text: string };
 
+export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
+  const trimmed = text.trim();
+  if (/\n/.test(trimmed)) return null;
+  if (trimmed.split(/\s+/).length > 12) return null;
+  if (!/\bworkflows?\b/i.test(trimmed)) return null;
+  if (!/\b(status|how many|count|running|active|in progress|progress)\b/i.test(trimmed)) return null;
+  return { intent: 'command', operation: 'status', target: { all: true } };
+}
+
 export function parseLocalRequest(text: string): LocalRequest | null {
   const trimmed = text.trim();
   const commandPatterns = [
