@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { GITHUB_REPO_ROOT_PATH_RE, looksLikePreset, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+import { looksLikePreset, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -385,29 +385,6 @@ function extractMessageRepoCandidates(text: string): string[] {
   }
   return urls;
 }
-
-function normalizeSupportedRepoCandidate(candidate: string): string | undefined {
-  if (/^git@[\w.-]+:.+/.test(candidate)) return candidate;
-  if (/^ssh:\/\//i.test(candidate)) return candidate;
-  if (!/^https?:\/\//i.test(candidate) || /[?#]/.test(candidate)) return undefined;
-
-  let url: URL;
-  try {
-    url = new URL(candidate);
-  } catch {
-    return undefined;
-  }
-  if (!url.host || url.username || url.password || url.search || url.hash) return undefined;
-
-  const host = url.host.toLowerCase();
-  if (host === 'github.com') {
-    return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
-      ? candidate.replace(/\/$/, '')
-      : undefined;
-  }
-  return url.pathname.endsWith('.git') ? candidate : undefined;
-}
-
 function repositoryIdentity(repoUrl: string): string {
   const parts = parseRepoParts(repoUrl);
   if (!parts) return stripGitSuffix(repoUrl.trim()).toLowerCase();
