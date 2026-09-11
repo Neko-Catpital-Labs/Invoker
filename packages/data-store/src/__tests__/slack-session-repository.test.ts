@@ -32,7 +32,7 @@ describe('SlackSessionRepository', () => {
 
     repo.saveLaunchContext(context);
 
-    expect(repo.getLaunchContext(context.threadTs)).toEqual(context);
+    expect(repo.getLaunchContext(context.threadTs)).toEqual({ ...context, surface: 'slack' });
     repo.deleteLaunchContext(context.threadTs);
     expect(repo.getLaunchContext(context.threadTs)).toBeNull();
   });
@@ -55,7 +55,7 @@ describe('SlackSessionRepository', () => {
       writer.close();
 
       const restarted = await SQLiteAdapter.create(databasePath, { ownerCapability: true });
-      expect(new SlackSessionRepository(restarted).getLaunchContext(context.threadTs)).toEqual(context);
+      expect(new SlackSessionRepository(restarted).getLaunchContext(context.threadTs)).toEqual({ ...context, surface: 'slack' });
       restarted.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
