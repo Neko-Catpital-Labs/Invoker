@@ -14,6 +14,7 @@ export default defineConfig({
     '@invoker/data-store',
     '@invoker/execution-engine',
     '@invoker/planning-core',
+    '@invoker/slack-bug-scan',
     '@invoker/transport',
     'yaml',
   ],

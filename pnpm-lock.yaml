@@ -521,6 +521,9 @@ importers:
       '@invoker/planning-core':
         specifier: workspace:*
         version: link:../planning-core
+      '@invoker/slack-bug-scan':
+        specifier: workspace:*
+        version: link:../slack-bug-scan
       '@invoker/transport':
         specifier: workspace:*
         version: link:../transport
