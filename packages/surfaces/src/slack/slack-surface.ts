@@ -14,7 +14,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   formatPlanSummaryLines,
   formatSlackPlanBrief,
-  preparePlanningReview,
   resolvePlanningSubmitAction,
   summarizePlanText,
   type PlanSummary,
@@ -22,6 +21,10 @@ import {
 } from '@invoker/planning-core';
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress } from '../surface.js';
 import { resolveChannelRepo } from '../channel-repo-resolver.js';
+import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transport.js';
+import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
+import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
+import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
@@ -38,8 +41,6 @@ import {
   PlanConversation,
   buildEmptyPlannerOutputError,
   defaultPlanningCommand,
-  isConfirmation,
-  isNegation,
 } from './plan-conversation.js';
 import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
@@ -186,32 +187,12 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
 
-interface PlanningContext {
-  repoUrl?: string;
-  presetKey: string;
-  workingDir?: string;
-  requestedBy?: string;
-  lobbyChannel?: string;
-  confirmationMode: PlanningConfirmationMode;
-  harnessSessionId?: string;
-}
-
 export type LocalRequest =
   | { kind: 'command'; text: string }
   | { kind: 'agent'; text: string }
   | { kind: 'change'; text: string };
 
-export class PlanDraftPostingError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'PlanDraftPostingError';
-  }
-}
-
-type StageDraftReviewResult =
-  | { staged: true }
-  | { staged: false; reason: 'not_ready' | 'no_context' }
-  | { staged: false; reason: 'posting_error'; message: string; draftId: string };
+export { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
 
 type AlertSurfaceEvent = Extract<SurfaceEvent, { type: 'alert' }>;
 
@@ -556,18 +537,6 @@ interface ConversationLike {
   readonly submittedPlanText: string | null;  readonly workingDir?: string;
 }
 
-/** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
-type PendingConfirm =
-  | { kind: 'op'; op: WorkflowOp }
-  | { kind: 'plan_intent'; requestText: string; userId: string; context: PlanningContext; channel: string; alreadySent?: boolean }
-  | { kind: 'restart' };
-
-interface SayResult {
-  ts?: string;
-}
-
-type SayFn = (msg: { text: string; thread_ts: string; blocks?: unknown[] }) => Promise<SayResult>;
-
 type ConversationSessionOptions = {
   tool?: string;
   model?: string;
@@ -635,8 +604,6 @@ export class SlackSurface implements Surface {
   private ackMessages = new Map<string, string>();
   /** Maps thread_ts → planning context carried into start_plan. */
   private planningContexts = new Map<string, PlanningContext>();
-  /** Maps thread_ts → an action awaiting yes/no (or button) confirmation. */
-  private pendingConfirms = new Map<string, PendingConfirm>();
   private defaultPlanningConfirmationMode: PlanningConfirmationMode;
 
   // ── Slack-native workflow extensions ──────────────────────
@@ -657,6 +624,9 @@ export class SlackSurface implements Surface {
   private harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
   /** Guard key -> last lobby alert post timestamp, held in-process like watchdog cooldowns. */
   private alertLastPostAt = new Map<string, number>();
+  private chatTransport: ChatTransport;
+  private approvals: ApprovalStateMachine;
+  private planDrafts: PlanDraftLifecycle;
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -725,6 +695,82 @@ export class SlackSurface implements Surface {
         onHarnessSessionId: (id, sessionId) => this.persistHarnessSessionId(id.threadTs, sessionId),
       });
     }
+
+    this.chatTransport = this.createChatTransport();
+    const chatBlocks = this.createChatBlocks();
+    const coreLog = (level: 'info' | 'warn' | 'error', message: string): void => this.log('slack', level, message);
+    this.approvals = new ApprovalStateMachine({
+      transport: this.chatTransport,
+      blocks: chatBlocks,
+      log: coreLog,
+      allowsControls: (channel) => this.allowsLobbyControls(channel),
+      store: this.slackSessionRepo,
+      runWorkflowOp: this.runWorkflowOp,
+      restart: this.onRestartInvoker,
+    });
+    this.planDrafts = new PlanDraftLifecycle({
+      platformName: 'Slack',
+      transport: this.chatTransport,
+      blocks: chatBlocks,
+      log: coreLog,
+      store: this.slackPlanDraftRepo,
+      dispatch: (command) => this.onCommand?.(command),
+      normalizePlanRepoUrl: (planText, repoUrl) => this.normalizeDraftedPlanRepoUrl(planText, repoUrl),
+      loadPlanningContext: (threadTs) => this.loadPlanningContext(threadTs),
+      defaultConfirmationMode: this.defaultPlanningConfirmationMode,
+      raiseAlert: (event) => this.handleEvent(event),
+    });
+  }
+
+  private createChatTransport(): ChatTransport {
+    return {
+      post: async (channel, { text, thread_ts, blocks }) => {
+        const res = await this.app.client.chat.postMessage({
+          channel,
+          text,
+          thread_ts,
+          ...(blocks ? { blocks: blocks as never } : {}),
+        });
+        return { ts: res.ts as string | undefined };
+      },
+      sendWithRetry: (say, message) => this.sayWithRateLimitRetry(say, message),
+      update: async (channel, ts, { text, blocks }) => {
+        await this.app.client.chat.update({
+          channel,
+          ts,
+          text,
+          ...(blocks ? { blocks: blocks as never } : {}),
+        });
+      },
+      upload: async ({ channel, threadTs, content, filename, title }) => {
+        const upload = await this.app.client.files.uploadV2({
+          channel_id: channel,
+          thread_ts: threadTs,
+          file_uploads: [{
+            file: Buffer.from(content, 'utf8'),
+            filename,
+            title,
+          }],
+        }) as unknown as { files?: Array<{ files?: Array<{ id?: string }> }> };
+        return upload.files?.[0]?.files?.[0]?.id;
+      },
+      awaitUploadVisible: (channel, threadTs, fileId) => this.waitForFileMessage(channel, threadTs, fileId),
+      react: async (channel, timestamp, name) => {
+        await this.app.client.reactions.add({ channel, timestamp, name });
+      },
+      unreact: async (channel, timestamp, name) => {
+        await this.app.client.reactions.remove({ channel, timestamp, name });
+      },
+    };
+  }
+
+  private createChatBlocks(): ChatBlocks {
+    return {
+      confirmPrompt: (prompt, confirmKey) => this.buildConfirmBlocks(prompt, confirmKey),
+      planIntentPrompt: (confirmKey) => this.buildPlanIntentBlocks(confirmKey),
+      planDraftCard: (summary, draft, state) => this.planDraftBlocks(summary, draft, state),
+      describeActions: (blocks) => this.describeOutboundActions(blocks),
+    };
   }
 
   async start(onCommand: CommandHandler): Promise<void> {
@@ -912,15 +958,7 @@ export class SlackSurface implements Surface {
       user: request.userId,
       channel,
     };
-    const say: SayFn = async ({ text: replyText, thread_ts, blocks }) => {
-      const res = await this.app.client.chat.postMessage({
-        channel,
-        text: replyText,
-        thread_ts,
-        ...(blocks ? { blocks: blocks as never } : {}),
-      });
-      return { ts: res.ts as string };
-    };
+    const say: SayFn = (message) => this.chatTransport.post(channel, message);
     this.log('slack', 'info', `[SMOKE_INJECT] channel=${channel} thread_ts=${threadTs} user=${request.userId}`);
     const mapping = this.workflowChannelRepo?.getByChannelId(channel);
     await this.handleMention(event, say, channel, mapping ?? undefined);
@@ -1001,31 +1039,30 @@ export class SlackSurface implements Surface {
     this.app.action('plan_draft_approve', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      await this.approveSlackPlanDraft(action.value, body, respond);
+      await this.planDrafts.approvePlanDraft(action.value, this.draftActionContext(body), this.replaceOriginal(respond));
     });
     this.app.action('plan_draft_discard', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      await this.discardSlackPlanDraft(action.value, body, respond);
+      await this.planDrafts.discardPlanDraft(action.value, this.draftActionContext(body), this.replaceOriginal(respond));
     });
 
     this.app.action('plan_draft_cancel', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      await this.cancelSlackPlanDraft(action.value, body, respond);
+      await this.planDrafts.cancelPlanDraft(action.value, this.draftActionContext(body), this.replaceOriginal(respond));
     });
 
     this.app.action('lobby_confirm', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
       const key = action.value;
-      const pending = this.getPendingConfirm(key);
+      const pending = this.approvals.getPendingConfirm(key);
       if (!pending) {
         await respond?.({ text: 'This confirmation has expired.', replace_original: true });
         return;
       }
-      this.pendingConfirms.delete(key);
-      this.slackSessionRepo?.deletePendingConfirmation(key);
+      this.approvals.clearPendingConfirm(key);
       this.log('slack', 'info', `Button: lobby_confirm key=${key} kind=${pending.kind}`);
       // Acknowledge instantly by replacing the buttons. The op itself can take
       // minutes (e.g. rebase-recreate all), and silence here reads as "nothing happened".
@@ -1033,16 +1070,15 @@ export class SlackSurface implements Surface {
       // Follow-ups post in-thread via the bot client: a response_url expires after
       // 30 minutes / 5 uses, which a long bulk op can outlast.
       const opChannel = (body as { channel?: { id?: string } })?.channel?.id;
-      await this.executeConfirm(pending, key, this.lobbyButtonSay(body, respond), opChannel);
+      await this.approvals.executeConfirm(pending, key, this.lobbyButtonSay(body, respond), opChannel);
     });
 
     this.app.action('lobby_cancel', async ({ action, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      const pending = this.getPendingConfirm(action.value);
+      const pending = this.approvals.getPendingConfirm(action.value);
       if (!pending) return;
-      this.pendingConfirms.delete(action.value);
-      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.approvals.clearPendingConfirm(action.value);
       this.log('slack', 'info', `Button: lobby_cancel key=${action.value}`);
       await respond?.({ text: '❌ Cancelled.', replace_original: true });
     });
@@ -1050,13 +1086,12 @@ export class SlackSurface implements Surface {
     this.app.action('lobby_plan_for_execution', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      const pending = this.getPendingConfirm(action.value);
+      const pending = this.approvals.getPendingConfirm(action.value);
       if (!pending || pending.kind !== 'plan_intent') {
         await respond?.({ text: 'This planning choice has expired.', replace_original: true });
         return;
       }
-      this.pendingConfirms.delete(action.value);
-      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.approvals.clearPendingConfirm(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] accepted key=${action.value}`);
       await respond?.({ text: '✅ Planning for execution.', replace_original: true });
       const say = this.lobbyButtonSay(body, respond);
@@ -1065,15 +1100,7 @@ export class SlackSurface implements Surface {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.log('slack', 'error', `[PLAN_INTENT_CONFIRM] drafting failed key=${action.value}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-        this.pendingConfirms.set(action.value, pending);
-        this.slackSessionRepo?.createPendingConfirmation({
-          confirmKey: action.value,
-          threadTs: action.value,
-          channelId: pending.channel,
-          userId: pending.userId,
-          kind: pending.kind,
-          payload: pending,
-        });
+        this.approvals.rearmPlanIntentConfirm(action.value, pending);
         await this.sayWithRateLimitRetry(say, {
           text: `Planning failed: ${message}. Click Approve above to try again.`,
           thread_ts: action.value,
@@ -1085,13 +1112,12 @@ export class SlackSurface implements Surface {
     this.app.action('lobby_continue_conversation', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      const pending = this.getPendingConfirm(action.value);
+      const pending = this.approvals.getPendingConfirm(action.value);
       if (!pending || pending.kind !== 'plan_intent') {
         await respond?.({ text: 'This planning choice has expired.', replace_original: true });
         return;
       }
-      this.pendingConfirms.delete(action.value);
-      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.approvals.clearPendingConfirm(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] declined key=${action.value}`);
       await respond?.({ text: '✅ Continuing the conversation without planning.', replace_original: true });
       await this.startConversationIntent(pending, this.lobbyButtonSay(body, respond), action.value);
@@ -1180,7 +1206,7 @@ export class SlackSurface implements Surface {
         return;
       }
       try {
-        await this.submitSlackPlanDraft(readyDraft, { userId: event.user });
+        await this.planDrafts.submitPlanDraft(readyDraft, { userId: event.user });
       } catch (error) {
         await say({ text: error instanceof Error ? error.message : String(error), thread_ts: threadTs });
       }
@@ -1232,7 +1258,7 @@ export class SlackSurface implements Surface {
         lobbyChannel: channel,
         confirmationMode: parsed.confirmationMode ?? this.defaultPlanningConfirmationMode,
       };
-      await this.stagePlanIntentConfirm(threadTs, channel, {
+      await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
         kind: 'plan_intent',
         requestText: parsed.text.replace(/^\/plan\s+/i, ''),
         userId: event.user ?? 'unknown',
@@ -1243,27 +1269,27 @@ export class SlackSurface implements Surface {
     }
 
     // Confirm/cancel a staged action first (plain yes/no in-thread).
-    if (await this.resolveConfirm(threadTs, parsed.text, say, channel)) return;
+    if (await this.approvals.resolveConfirm(threadTs, parsed.text, say, channel)) return;
 
     // Deterministic verb commands respond instantly and take priority over agent sessions.
     const ctrl = parseLobbyControl(parsed.text);
     if (ctrl?.kind === 'op' || ctrl?.kind === 'restart') {
       if (!this.allowsLobbyControls(channel)) {
-        await this.rejectNonLobbyControl(threadTs, say);
+        await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
       }
       if (ctrl.kind === 'op') {
-        await this.handleLobbyOp(ctrl, threadTs, channel, say);
+        await this.approvals.requestOp({ operation: ctrl.operation, target: ctrl.target }, threadTs, channel, say);
         return;
       }
-      await this.handleLobbyRestart(threadTs, channel, say);
+      await this.approvals.requestRestart(threadTs, say);
       return;
     }
 
     const localRequest = parseLocalRequest(parsed.text);
     if (localRequest?.kind === 'command') {
       if (!this.allowsLobbyControls(channel)) {
-        await this.rejectNonLobbyControl(threadTs, say);
+        await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
       }
       await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
@@ -1273,10 +1299,10 @@ export class SlackSurface implements Surface {
     const workflowStatusQuery = parseWorkflowStatusQuery(localRequest?.kind === 'agent' ? localRequest.text : parsed.text);
     if (workflowStatusQuery?.intent === 'command') {
       if (!this.allowsLobbyControls(channel)) {
-        await this.rejectNonLobbyControl(threadTs, say);
+        await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
       }
-      await this.handleLobbyOp({ kind: 'op', operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
+      await this.approvals.requestOp({ operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
       return;
     }
 
@@ -1363,7 +1389,7 @@ export class SlackSurface implements Surface {
       return;
     }
     const plannerOutput = await conversation.runPlanConversion();
-    const result = await this.stageDraftReviewFromPlannerOutput(plannerOutput, conversation, channel, threadTs, userId, say, { silentWhenNotReady: false });
+    const result = await this.planDrafts.stageDraftReview(plannerOutput, conversation, channel, threadTs, userId, say, { silentWhenNotReady: false });
     if (result.staged === false && result.reason === 'posting_error') {
       await this.sayWithRateLimitRetry(say, {
         text: `I hit an error trying to prepare the plan review card: ${result.message}. An operator needs to look at draft ${result.draftId}.`,
@@ -1372,118 +1398,9 @@ export class SlackSurface implements Surface {
     }
   }
 
-  private async stageDraftReviewFromPlannerOutput(
-    plannerOutput: string,
-    conversation: ConversationLike,
-    channel: string,
-    threadTs: string,
-    userId: string,
-    say: SayFn,
-    opts: { silentWhenNotReady: boolean },
-  ): Promise<StageDraftReviewResult> {
-    if (!this.slackPlanDraftRepo) return { staged: false, reason: 'not_ready' };
-    const review = preparePlanningReview({
-      plannerOutput,
-      extractDraftPlanText: () => conversation.lastTurnDraftPlanText,
-      confirmationMode: this.loadPlanningContext(threadTs)?.confirmationMode ?? this.defaultPlanningConfirmationMode,
-    });
-    if ('kind' in review) {
-      if (!opts.silentWhenNotReady) {
-        await this.sayWithRateLimitRetry(say, { text: review.reply, thread_ts: threadTs });
-      }
-      return { staged: false, reason: 'not_ready' };
-    }
-    const draftReview = review;
-    const context = this.loadPlanningContext(threadTs);
-    if (!context?.repoUrl || !context.workingDir) {
-      if (opts.silentWhenNotReady) {
-        this.log('slack', 'warn', `[DRAFT_STAGE] Skipped staging draft for thread ${threadTs}: no pinned repository context.`);
-        return { staged: false, reason: 'no_context' };
-      }
-      await this.sayWithRateLimitRetry(say, {
-        text: 'This thread has no pinned repository context. Start a new thread with the repository selected.',
-        thread_ts: threadTs,
-      });
-      return { staged: false, reason: 'no_context' };
-    }
-    const approvedDraft = conversation.approvedPlanningDraft;
-    if (conversation.draftDoctorEnabled && !approvedDraft) {
-      throw new Error('The review text does not exactly match the immutable doctor-approved draft.');
-    }
-    const planTextForStage = approvedDraft && conversation.draftDoctorEnabled
-      ? approvedDraft.planText
-      : this.normalizeDraftedPlanRepoUrl(
-        approvedDraft?.planText ?? draftReview.planText,
-        context.repoUrl,
-      );
-    const planSummary = summarizePlanText(planTextForStage) ?? draftReview.summary;
-    const draft = this.slackPlanDraftRepo.create({
-      channelId: channel,
-      threadTs,
-      planningDraftId: approvedDraft?.id,
-      planText: planTextForStage,
-      summaryJson: JSON.stringify(planSummary),
-      repoUrl: context.repoUrl,
-      harnessPreset: context.presetKey,
-      workingDir: context.workingDir,
-      requestedBy: context.requestedBy ?? userId,
-      confirmationMode: draftReview.confirmationMode,
-    });
-    try {
-      await this.postSlackPlanDraft(draft, planSummary, say);
-      return { staged: true };
-    } catch (error) {
-      // The draft row already exists at this point and postSlackPlanDraft has
-      // already surfaced the failure by updating the Slack message in place.
-      // Returning a result here (instead of throwing) matters: a caller that
-      // offers a retry button must not treat this as a fresh, unhandled
-      // failure to re-arm -- re-running this method on retry would create a
-      // second, orphaned draft instead of reconciling the one that exists.
-      const message = error instanceof Error ? error.message : String(error);
-      this.log('slack', 'error', `Posting plan draft ${draft.draftId}:${draft.version} failed: ${message}`);
-      await this.handleEvent({
-        type: 'alert',
-        severity: 'critical',
-        source: 'slack-plan-draft',
-        subject: draft.draftId,
-        message: `Plan review card failed to post: ${message}`,
-        alertKey: `plan-draft-post-failed:${draft.draftId}`,
-      });
-      return { staged: false, reason: 'posting_error', message, draftId: draft.draftId };
-    }
-  }
-
   async stageSlackPlanDraftForReview(input: StageSlackPlanDraftInput): Promise<StageSlackPlanDraftResult> {
-    if (!this.slackPlanDraftRepo) {
-      throw new Error('Slack plan reviews are not configured in this deployment.');
-    }
-    const planText = this.normalizeDraftedPlanRepoUrl(input.planText, input.repoUrl);
-    const summary = summarizePlanText(planText);
-    if (!summary) {
-      throw new Error('The supplied plan YAML could not be summarized for Slack review.');
-    }
-    const draft = this.slackPlanDraftRepo.create({
-      channelId: input.channelId,
-      threadTs: input.threadTs,
-      planText,
-      summaryJson: JSON.stringify(summary),
-      repoUrl: input.repoUrl,
-      harnessPreset: input.harnessPreset,
-      workingDir: input.workingDir,
-      requestedBy: input.requestedBy,
-      confirmationMode: 'require',
-    });
-    const say: SayFn = async ({ text, thread_ts, blocks }) => {
-      const posted = await this.app.client.chat.postMessage({
-        channel: input.channelId,
-        text,
-        thread_ts,
-        ...(blocks ? { blocks: blocks as never } : {}),
-      });
-      return { ts: posted.ts as string | undefined };
-    };
-    await this.postSlackPlanDraft(draft, summary, say);
-    const ready = this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft;
+    const say: SayFn = (message) => this.chatTransport.post(input.channelId, message);
+    const { draft: ready, summary } = await this.planDrafts.stagePlanDraftForReview(input, say);
     return {
       draftId: ready.draftId,
       version: ready.version,
@@ -1511,51 +1428,6 @@ export class SlackSurface implements Surface {
     if (!ts) return;
     this.ackMessages.delete(threadTs);
     await this.deleteMessage(channel, ts);
-  }
-
-  private async handleLobbyOp(
-    ctrl: Extract<LobbyControl, { kind: 'op' }>,
-    threadTs: string,
-    channel: string,
-    say: SayFn,
-  ): Promise<void> {
-    if (!this.runWorkflowOp) {
-      await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
-      return;
-    }
-    const op: WorkflowOp = { operation: ctrl.operation, target: ctrl.target };
-    // Destructive bulk mutations require explicit confirmation; status and single-workflow ops run now.
-    if (ctrl.operation !== 'status' && 'all' in ctrl.target) {
-      await this.stageConfirm(threadTs, channel, { kind: 'op', op }, `This will \`${ctrl.operation}\` ALL workflows.`, say);
-      return;
-    }
-    await this.runConfirmedOp(op, threadTs, say, channel);
-  }
-
-  private async runConfirmedOp(op: WorkflowOp, threadTs: string, say: SayFn, channel?: string): Promise<void> {
-    const onIt = await say({ text: `On it — ${this.describeOp(op)}. I'll post a summary here when it finishes.`, thread_ts: threadTs });
-    const progressTs = onIt?.ts;
-    let lastEdit = 0;
-    const onProgress = channel && progressTs
-      ? (p: WorkflowOpProgress): void => {
-          if (p.total <= 1) return;
-          const now = Date.now();
-          if (now - lastEdit < 2000 && p.done < p.total) return;
-          lastEdit = now;
-          const icon = p.done >= p.total ? '✅' : '⏳';
-          const tail = p.failed ? `, ${p.failed} failed` : '';
-          const cur = p.current && p.done < p.total ? ` · now \`${p.current}\`` : '';
-          void this.app.client.chat
-            .update({ channel, ts: progressTs, text: `${icon} ${this.describeOp(op)} — ${p.done}/${p.total} (${p.ok} ok${tail})${cur}` })
-            .catch(() => {});
-        }
-      : undefined;
-    try {
-      const result = await this.runWorkflowOp!(op, onProgress);
-      await say({ text: result.summary, thread_ts: threadTs });
-    } catch (err) {
-      await say({ text: `Operation failed: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
-    }
   }
 
   /** Build a say() for a button action: posts in-thread via the bot client so
@@ -1590,19 +1462,14 @@ export class SlackSurface implements Surface {
     await respond?.({ text, replace_original: true });
   }
 
-  private describeOp(op: WorkflowOp): string {
-    const target = 'all' in op.target ? 'ALL workflows' : `\`${op.target.workflow}\``;
-    return `${op.operation} ${target}`;
-  }
-
   private renderPlanSummary(summary: PlanSummary): string {
     return formatSlackPlanBrief(summary);
   }
 
-  private parseDraftAction(value: string): { draftId: string; version: number } | undefined {
-    const [draftId, rawVersion] = value.split(':');
-    const version = Number(rawVersion);
-    return draftId && Number.isInteger(version) && version > 0 ? { draftId, version } : undefined;
+  private replaceOriginal(respond: RespondFn | undefined): (text: string) => Promise<void> {
+    return async (text) => {
+      await respond?.({ text, replace_original: true });
+    };
   }
 
   private draftActionContext(body: unknown): { channel?: string; threadTs?: string; userId?: string } {
@@ -1619,11 +1486,6 @@ export class SlackSurface implements Surface {
     };
   }
 
-  private parseSlackDraftSummary(draft: SlackPlanDraft): PlanSummary {
-    const parsed = JSON.parse(draft.summaryJson) as PlanSummary;
-    return parsed;
-  }
-
   private describeOutboundActions(blocks: unknown[] | undefined): string {
     if (!blocks?.length) return 'none';
     const pairs: string[] = [];
@@ -1633,143 +1495,6 @@ export class SlackSurface implements Surface {
       }
     }
     return pairs.length > 0 ? pairs.join(',') : 'none';
-  }
-
-  private async replacePlanDraftMessage(draft: SlackPlanDraft, text: string, blocks: unknown[]): Promise<void> {
-    if (!draft.messageTs) return;
-    this.log('slack', 'info',
-      `[OUTBOUND_MESSAGE] chat.update channel=${draft.channelId} thread_ts=${draft.threadTs} ts=${draft.messageTs} draft=${draft.draftId}:${draft.version} textPreview="${text.slice(0, 100).replace(/\n/g, '\\n')}" actions=${this.describeOutboundActions(blocks)}`);
-    await this.app.client.chat.update({
-      channel: draft.channelId,
-      ts: draft.messageTs,
-      text,
-      blocks: blocks as never,
-    });
-  }
-
-  private async submitSlackPlanDraft(
-    draft: SlackPlanDraft,
-    context: { userId?: string },
-  ): Promise<void> {
-    if (draft.status !== 'ready') {
-      throw new Error(`This plan review is ${draft.status}.`);
-    }
-    if (!draft.messageTs || !draft.slackFileId) {
-      throw new Error('This plan review failed its integrity check and cannot be approved.');
-    }
-    const approvedPlanText = this.slackPlanDraftRepo?.resolvePlanText(draft);
-    if (!approvedPlanText) {
-      throw new Error('This plan review has no resolvable immutable draft.');
-    }
-    const planTextForSubmit = draft.planningDraftId
-      ? approvedPlanText
-      : this.normalizeDraftedPlanRepoUrl(approvedPlanText, draft.repoUrl);
-    const executionKey = this.slackPlanDraftRepo?.claim(draft);
-    if (!executionKey) {
-      throw new Error('This plan is already being submitted.');
-    }
-    await this.replacePlanDraftMessage(draft, 'Starting plan execution…', []);
-    try {
-      const result = await this.onCommand?.({
-        type: 'start_plan',
-        planText: planTextForSubmit,
-        repoUrl: draft.repoUrl,
-        harnessPreset: draft.harnessPreset,
-        requestedBy: draft.requestedBy,
-        lobbyChannel: draft.channelId,
-        lobbyThreadTs: draft.threadTs,
-        executionKey,
-      });
-      this.slackPlanDraftRepo?.markSubmitted(draft, result?.workflowIds ?? []);
-    } catch (error) {
-      this.slackPlanDraftRepo?.markFailed(draft, context.userId ?? 'unknown');
-      await this.replacePlanDraftMessage(
-        draft,
-        `Plan execution failed: ${error instanceof Error ? error.message : String(error)}`,
-        [],
-      );
-      throw error;
-    }
-  }
-
-  private logDraftActionUnavailable(
-    actionName: string,
-    value: string,
-    key: { draftId: string; version: number } | undefined,
-    context: { channel?: string; threadTs?: string; userId?: string },
-    draft: SlackPlanDraft | undefined,
-  ): void {
-    const reasons: string[] = [];
-    if (!key) reasons.push('unparseable_button_value');
-    if (key && !draft) reasons.push('draft_row_not_found');
-    if (!context.channel) reasons.push('missing_context_channel');
-    if (!context.threadTs) reasons.push('missing_context_threadTs');
-    if (!context.userId) reasons.push('missing_context_userId');
-    if (draft && context.channel && draft.channelId !== context.channel) reasons.push(`channel_mismatch(draft=${draft.channelId},click=${context.channel})`);
-    if (draft && context.threadTs && draft.threadTs !== context.threadTs) reasons.push(`threadTs_mismatch(draft=${draft.threadTs},click=${context.threadTs})`);
-    if (draft && context.userId && draft.requestedBy !== context.userId) reasons.push(`requestedBy_mismatch(draft=${draft.requestedBy},click=${context.userId})`);
-    this.log('slack', 'warn',
-      `[PLAN_DRAFT_ACTION_UNAVAILABLE] action=${actionName} value="${value}" draft=${draft ? `${draft.draftId}:${draft.version}(status=${draft.status})` : 'none'} click_channel=${context.channel ?? 'none'} click_threadTs=${context.threadTs ?? 'none'} click_userId=${context.userId ?? 'none'} reasons=${reasons.join('|') || 'unknown'}`);
-  }
-
-  private async approveSlackPlanDraft(value: string, body: unknown, respond?: RespondFn): Promise<void> {
-    const key = this.parseDraftAction(value);
-    const context = this.draftActionContext(body);
-    const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs || !context.userId
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
-      || draft.requestedBy !== context.userId) {
-      this.logDraftActionUnavailable('approve', value, key, context, draft);
-      await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
-      return;
-    }
-    try {
-      await this.submitSlackPlanDraft(draft, context);
-    } catch (error) {
-      await respond?.({ text: error instanceof Error ? error.message : String(error), replace_original: true });
-    }
-  }
-
-  private async cancelSlackPlanDraft(value: string, body: unknown, respond?: RespondFn): Promise<void> {
-    const key = this.parseDraftAction(value);
-    const context = this.draftActionContext(body);
-    const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs || !context.userId
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
-      || draft.requestedBy !== context.userId) {
-      this.logDraftActionUnavailable('cancel', value, key, context, draft);
-      await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
-      return;
-    }
-    if (draft.status !== 'ready') {
-      await respond?.({ text: `This plan review is ${draft.status}.`, replace_original: true });
-      return;
-    }
-    const summary = this.parseSlackDraftSummary(draft);
-    await this.replacePlanDraftMessage(
-      draft,
-      `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}\nPlan not submitted. Draft kept.`,
-      this.planDraftBlocks(summary, draft, 'kept'),
-    );
-  }
-
-  private async discardSlackPlanDraft(value: string, body: unknown, respond?: RespondFn): Promise<void> {
-    const key = this.parseDraftAction(value);
-    const context = this.draftActionContext(body);
-    const draft = key && this.slackPlanDraftRepo?.get(key.draftId, key.version);
-    if (!draft || !context.channel || !context.threadTs || !context.userId
-      || draft.channelId !== context.channel || draft.threadTs !== context.threadTs
-      || draft.requestedBy !== context.userId) {
-      this.logDraftActionUnavailable('discard', value, key, context, draft);
-      await respond?.({ text: 'This plan review is no longer available.', replace_original: true });
-      return;
-    }
-    if (draft.status !== 'ready') {
-      await respond?.({ text: `This plan review is ${draft.status}.`, replace_original: true });
-      return;
-    }
-    this.slackPlanDraftRepo?.decide(draft, 'rejected', context.userId ?? 'unknown');
-    await this.replacePlanDraftMessage(draft, 'Plan draft discarded.', []);
   }
 
   private planDraftBlocks(
@@ -1816,46 +1541,6 @@ export class SlackSurface implements Surface {
         elements: actionButtons,
       }] : []),
     ];
-  }
-
-  private async postSlackPlanDraft(
-    draft: SlackPlanDraft,
-    summary: PlanSummary,
-    say: SayFn,
-  ): Promise<void> {
-    if (!this.slackPlanDraftRepo) return;
-    let fileId: string | undefined;
-    try {
-      const upload = await this.app.client.files.uploadV2({
-        channel_id: draft.channelId,
-        thread_ts: draft.threadTs,
-        file_uploads: [{
-          file: Buffer.from(draft.planText, 'utf8'),
-          filename: `${draft.draftId}.yaml`,
-          title: `${summary.name}.yaml`,
-        }],
-      }) as unknown as { files?: Array<{ files?: Array<{ id?: string }> }> };
-      fileId = upload.files?.[0]?.files?.[0]?.id;
-      if (!fileId) throw new Error('Slack did not return an uploaded YAML file id.');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new PlanDraftPostingError(message, { cause: error });
-    }
-    this.slackPlanDraftRepo.bindAttachment(draft, fileId);
-    // files.uploadV2 resolving doesn't guarantee the file's share message has
-    // landed in the channel yet -- Slack attaches it to the thread slightly
-    // asynchronously. Confirm it's visible before posting the button message,
-    // so the file reliably appears above the Approve/Cancel card, not below it.
-    await this.waitForFileMessage(draft.channelId, draft.threadTs, fileId);
-
-    const posted = await this.sayWithRateLimitRetry(say, {
-      text: `${summary.name}\n${formatPlanSummaryLines(summary).join('\n')}`,
-      thread_ts: draft.threadTs,
-      blocks: this.planDraftBlocks(summary, draft, 'ready'),
-    });
-    if (!posted?.ts) throw new PlanDraftPostingError('Slack did not return a timestamp for the plan review message.');
-    this.slackPlanDraftRepo.bindMessage(draft, posted.ts);
-    this.slackPlanDraftRepo.markReady(draft);
   }
 
   private async waitForFileMessage(channelId: string, threadTs: string, fileId: string): Promise<void> {
@@ -1907,39 +1592,8 @@ export class SlackSurface implements Surface {
     ];
   }
 
-  private async stagePlanIntentConfirm(
-    threadTs: string,
-    channel: string,
-    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
-    say: SayFn,
-  ): Promise<void> {
-    const existing = this.getPendingConfirm(threadTs);
-    if (existing) {
-      await say({
-        text: 'There is already a pending confirmation in this thread. Resolve it before asking again.',
-        thread_ts: threadTs,
-      });
-      return;
-    }
-    this.pendingConfirms.set(threadTs, pending);
-    this.slackSessionRepo?.createPendingConfirmation({
-      confirmKey: threadTs,
-      threadTs,
-      channelId: channel,
-      userId: pending.userId,
-      kind: pending.kind,
-      payload: pending,
-    });
-    this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] staged key=${threadTs} thread_ts=${threadTs}`);
-    await say({
-      text: 'Do you want a plan for execution, or should I continue the conversation without planning?',
-      thread_ts: threadTs,
-      blocks: this.buildPlanIntentBlocks(threadTs),
-    });
-  }
-
   private async startConversationIntent(
-    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
+    pending: PlanIntentConfirm,
     say: SayFn,
     threadTs: string,
   ): Promise<void> {
@@ -1962,7 +1616,7 @@ export class SlackSurface implements Surface {
   }
 
   private async startPlanIntent(
-    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
+    pending: PlanIntentConfirm,
     say: SayFn,
     threadTs: string,
   ): Promise<void> {
@@ -1976,103 +1630,10 @@ export class SlackSurface implements Surface {
     await this.handleExplicitPlanAction(pending.channel, threadTs, pending.userId, say);
   }
 
-  /** Stage an action and post the prompt with Approve/Cancel buttons (plain yes/no also works). */
-  private async stageConfirm(
-    threadTs: string,
-    channel: string,
-    pending: PendingConfirm,
-    prompt: string,
-    say: SayFn,
-  ): Promise<void> {
-    this.stagePendingConfirm(threadTs, channel, pending);
-    await say({
-      text: `${prompt}\n_Approve to proceed, or reply \`no\` to cancel._`,
-      thread_ts: threadTs,
-      blocks: this.buildConfirmBlocks(prompt, threadTs),
-    });
-  }
-
-  private stagePendingConfirm(threadTs: string, channel: string, pending: PendingConfirm): void {
-    this.pendingConfirms.set(threadTs, pending);
-  }
-
-
   /** Lobby controls stay in the lobby channel or DMs; planning may run elsewhere. */
   private allowsLobbyControls(channel: string | undefined): boolean {
     if (!channel) return true;
     return channel === this.lobbyChannelId || channel.startsWith('D');
-  }
-
-  private async rejectNonLobbyControl(threadTs: string, say: SayFn): Promise<void> {
-    await say({
-      text: 'I can plan here, but restart/submit/workflow controls only work in the lobby channel or DMs.',
-      thread_ts: threadTs,
-    });
-  }
-
-  /** Resolve a staged action from a plain-text reply. Returns true if the reply was consumed. */
-  private async resolveConfirm(threadTs: string, text: string, say: SayFn, channel?: string): Promise<boolean> {
-    const pending = this.getPendingConfirm(threadTs);
-    if (!pending) return false;
-    if (!this.allowsLobbyControls(channel)) {
-      await this.rejectNonLobbyControl(threadTs, say);
-      return true;
-    }
-    if (isConfirmation(text)) {
-      this.pendingConfirms.delete(threadTs);
-      this.slackSessionRepo?.deletePendingConfirmation(threadTs);
-      await this.executeConfirm(pending, threadTs, say, channel);
-      return true;
-    }
-    if (isNegation(text)) {
-      this.pendingConfirms.delete(threadTs);
-      this.slackSessionRepo?.deletePendingConfirmation(threadTs);
-      await say({ text: 'Cancelled.', thread_ts: threadTs });
-      return true;
-    }
-    this.pendingConfirms.delete(threadTs);
-    await say({
-      text: 'Dropped the pending approval because the reply was not a confirmation.',
-      thread_ts: threadTs,
-    });
-    return true;
-  }
-
-  /** Run a confirmed action — a workflow op or a restart. */
-  private async executeConfirm(pending: PendingConfirm, threadTs: string, say: SayFn, channel?: string): Promise<void> {
-    if (pending.kind === 'op') {
-      if (!this.runWorkflowOp) {
-        await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
-        return;
-      }
-      await this.runConfirmedOp(pending.op, threadTs, say, channel);
-      return;
-    }
-    await this.runConfirmedRestart(threadTs, say);
-  }
-
-  /** Restart Invoker on request — always confirm first (it interrupts the running app). */
-  private async handleLobbyRestart(threadTs: string, channel: string, say: SayFn): Promise<void> {
-    if (!this.onRestartInvoker) {
-      await say({ text: 'Restarting Invoker is not available in this deployment.', thread_ts: threadTs });
-      return;
-    }
-    await this.stageConfirm(threadTs, channel, { kind: 'restart' }, 'This will restart Invoker.', say);
-  }
-
-  /** Run a confirmed restart: relaunch Invoker, then report health. */
-  private async runConfirmedRestart(threadTs: string, say: SayFn): Promise<void> {
-    if (!this.onRestartInvoker) {
-      await say({ text: 'Restarting Invoker is not available in this deployment.', thread_ts: threadTs });
-      return;
-    }
-    await say({ text: 'Bringing Invoker back… :hourglass_flowing_sand:', thread_ts: threadTs });
-    try {
-      await this.onRestartInvoker();
-      await say({ text: 'Invoker is back ✅', thread_ts: threadTs });
-    } catch (err) {
-      await say({ text: `Restart failed: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
-    }
   }
 
   /** Route a deterministic verb from `/invoker` (channel-level — slash can't run in a thread). */
@@ -2091,7 +1652,7 @@ export class SlackSurface implements Surface {
     }
     if (ctrl.kind === 'restart') {
       const key = `slash:${channel}:${command.user_id}:${Date.now()}`;
-      this.pendingConfirms.set(key, { kind: 'restart' });
+      this.approvals.stagePendingConfirm(key, { kind: 'restart' });
       const prompt = 'This will restart Invoker.';
       await respond({ text: prompt, response_type: 'ephemeral', blocks: this.buildConfirmBlocks(prompt, key) as never });
       return;
@@ -2104,7 +1665,7 @@ export class SlackSurface implements Surface {
     const op: WorkflowOp = { operation: ctrl.operation, target: ctrl.target };
     if (ctrl.operation !== 'status' && 'all' in ctrl.target) {
       const key = `slash:${channel}:${command.user_id}:${Date.now()}`;
-      this.pendingConfirms.set(key, { kind: 'op', op });
+      this.approvals.stagePendingConfirm(key, { kind: 'op', op });
       const prompt = `This will \`${ctrl.operation}\` ALL workflows.`;
       await respond({ text: prompt, response_type: 'ephemeral', blocks: this.buildConfirmBlocks(prompt, key) as never });
       return;
@@ -2262,16 +1823,6 @@ export class SlackSurface implements Surface {
       harnessSessionDriver: this.harnessSessionDriverFactory?.(preset),
       harnessSessionId: context.harnessSessionId,
     };
-  }
-
-  private getPendingConfirm(key: string): PendingConfirm | undefined {
-    const inMemory = this.pendingConfirms.get(key);
-    if (inMemory) return inMemory;
-    const persisted = this.slackSessionRepo?.getPendingConfirmation(key);
-    if (persisted?.kind !== 'plan_intent' || !persisted.payload || typeof persisted.payload !== 'object') return undefined;
-    const pending = persisted.payload as PendingConfirm;
-    this.pendingConfirms.set(key, pending);
-    return pending;
   }
 
   private async handleLocalRequest(
@@ -3053,7 +2604,7 @@ ${text}`;
           await this.handleExplicitPlanAction(channel, msg.thread_ts, msg.user ?? 'unknown', say);
           return;
         }
-        await this.stagePlanIntentConfirm(msg.thread_ts, channel, {
+        await this.approvals.stagePlanIntentConfirm(msg.thread_ts, channel, {
           kind: 'plan_intent',
           requestText: text.replace(/^\/plan\s+/i, ''),
           userId: msg.user ?? 'unknown',
@@ -3063,7 +2614,7 @@ ${text}`;
         return;
       }
 
-      if (await this.resolveConfirm(msg.thread_ts, text, say, channel)) return;
+      if (await this.approvals.resolveConfirm(msg.thread_ts, text, say, channel)) return;
 
       const rebind = await this.maybeRebindThreadRepo(channel, msg.thread_ts, msg.user, text, say);
       if (rebind.rebound || rebind.blocked) return;
@@ -3207,7 +2758,7 @@ ${text}`;
 
       if (planIntentContext && conversation.lastTurnPlanIntentSignal?.wantsPlan) {
         try {
-          await this.stagePlanIntentConfirm(threadTs, channel, {
+          await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
             kind: 'plan_intent',
             requestText: text,
             userId: planIntentContext.userId,
@@ -3225,7 +2776,7 @@ ${text}`;
 
       if (this.conversationalPlanning && conversation.conversationMode === 'plan' && conversation.lastTurnDraftPlanText) {
         try {
-          const stageResult = await this.stageDraftReviewFromPlannerOutput(reply, conversation, channel, threadTs,
+          const stageResult = await this.planDrafts.stageDraftReview(reply, conversation, channel, threadTs,
             planIntentContext?.userId ?? 'unknown', say, { silentWhenNotReady: true });
           if (stageResult.staged === false && stageResult.reason === 'posting_error') {
             await this.sayWithRateLimitRetry(say, {
@@ -3682,11 +3233,7 @@ ${text}`;
   private async startTypingIndicator(channel: string, timestamp: string): Promise<boolean> {
     if (!this.useTypingIndicator) return false;
     try {
-      await this.app.client.reactions.add({
-        channel,
-        timestamp,
-        name: this.immediateAckEmoji,
-      });
+      await this.chatTransport.react(channel, timestamp, this.immediateAckEmoji);
       this.log('slack', 'info', `[TYPING] Started indicator (ts=${timestamp})`);
       return true;
     } catch (err) {
@@ -3701,11 +3248,7 @@ ${text}`;
   private async stopTypingIndicator(channel: string, timestamp: string): Promise<void> {
     if (!this.useTypingIndicator) return;
     try {
-      await this.app.client.reactions.remove({
-        channel,
-        timestamp,
-        name: this.immediateAckEmoji,
-      });
+      await this.chatTransport.unreact(channel, timestamp, this.immediateAckEmoji);
       this.log('slack', 'info', `[TYPING] Stopped indicator (ts=${timestamp})`);
     } catch (err) {
       // Silently ignore removal failures (reaction may not exist)
