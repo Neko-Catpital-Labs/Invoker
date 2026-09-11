@@ -10,6 +10,28 @@ export function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
 }
 
+export function normalizeSupportedRepoCandidate(candidate: string): string | undefined {
+  if (/^git@[\w.-]+:.+/.test(candidate)) return candidate;
+  if (/^ssh:\/\//i.test(candidate)) return candidate;
+  if (!/^https?:\/\//i.test(candidate) || /[?#]/.test(candidate)) return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return undefined;
+  }
+  if (!url.host || url.username || url.password || url.search || url.hash) return undefined;
+
+  const host = url.host.toLowerCase();
+  if (host === 'github.com') {
+    return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
+      ? candidate.replace(/\/$/, '')
+      : undefined;
+  }
+  return url.pathname.endsWith('.git') ? candidate : undefined;
+}
+
 export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
   const trimmed = text.trim();
   if (/\n/.test(trimmed)) return null;
