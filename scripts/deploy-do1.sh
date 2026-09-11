@@ -232,7 +232,7 @@ PY
   systemctl --user is-active --quiet slack-manager.service
 
   if ! owner_is_up; then
-    setsid nohup "'"$REPO_ROOT"'/$APPIMAGE_DEST" --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox --disable-software-rasterizer --headless owner-serve </dev/null >/tmp/deploy-do1-owner-launch.log 2>&1 &
+    INVOKER_PRODUCTION_OWNER_SERVICE=1 setsid nohup "'"$REPO_ROOT"'/$APPIMAGE_DEST" --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox --disable-software-rasterizer --headless owner-serve </dev/null >/tmp/deploy-do1-owner-launch.log 2>&1 &
   fi
 
   for _ in $(seq 1 45); do
