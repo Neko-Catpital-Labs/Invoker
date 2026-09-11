@@ -25,8 +25,8 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { CHANNEL_REPO_PAIR_RE, CHANNEL_REPO_SETUP_INTENT_RE, extractRepositoryUrls, extractRepoUrlFromMessage, normalizePublicChannelName, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
-import type { LocalRequest } from './mention-parsers.js';
+import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseChannelRepoSetupRequest, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+import type { ChannelRepoSetupPair, LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
@@ -302,33 +302,6 @@ function channelRepoBindingWorkflowId(channelId: string): string {
 
 function isChannelRepoBinding(mapping: WorkflowChannel | undefined | null): boolean {
   return !!mapping?.workflowId?.startsWith(CHANNEL_REPO_BINDING_WORKFLOW_PREFIX);
-}
-
-interface ChannelRepoSetupPair {
-  channelName: string;
-  repoUrl: string;
-}
-
-function parseChannelRepoSetupRequest(text: string): ChannelRepoSetupPair[] | null {
-  if (!CHANNEL_REPO_SETUP_INTENT_RE.test(text)) return null;
-  const repositoryUrls = extractRepositoryUrls(text);
-  if (repositoryUrls.length === 0) return null;
-
-  const pairs: ChannelRepoSetupPair[] = [];
-  const seenChannels = new Set<string>();
-  for (const match of text.matchAll(CHANNEL_REPO_PAIR_RE)) {
-    const channelName = normalizePublicChannelName(match[1]);
-    let rawRepo = (match[3] ?? match[2]).trim();
-    while (rawRepo && TRAILING_URL_PUNCTUATION.has(rawRepo.at(-1)!)) {
-      rawRepo = rawRepo.slice(0, -1);
-    }
-    const repoUrl = normalizeSupportedRepoCandidate(rawRepo);
-    if (!channelName || !repoUrl || seenChannels.has(channelName)) return null;
-    seenChannels.add(channelName);
-    pairs.push({ channelName, repoUrl });
-  }
-
-  return pairs.length === repositoryUrls.length ? pairs : null;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
