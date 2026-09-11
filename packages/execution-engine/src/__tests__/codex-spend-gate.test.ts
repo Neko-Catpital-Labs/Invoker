@@ -176,6 +176,39 @@ describe('runCodexDailySpendGateTick', () => {
     expect(result.totalTokens).toBe(20_421_072);
   });
 
+  it.fails('counts the owner once when a remote target points at one of its own addresses', async () => {
+    const config = gateConfig({
+      tallyLocal: () => 18_254,
+      localAddresses: new Set(['157.245.231.246']),
+      remoteTargets: [
+        { name: 'remote_digital_ocean_1', connection: { host: '157.245.231.246', user: 'invoker', sshKeyPath: '/k' } },
+        { name: 'remote_digital_ocean_3', connection: { host: 'h3', user: 'invoker', sshKeyPath: '/k' } },
+      ],
+      tallyRemote: async (target: { name: string }) => (target.name === 'remote_digital_ocean_1' ? 18_254 : 0),
+    });
+
+    const result = await runCodexDailySpendGateTick(config, makeLogger(), NOW_MS);
+
+    expect(result.totalTokens).toBe(18_254);
+    expect([...result.tokensByHost.keys()]).toEqual(['owner', 'remote_digital_ocean_3']);
+  });
+
+  it.fails('skips a remote target on the loopback address without any config', async () => {
+    const tallyRemote = vi.fn(async () => 18_254);
+    const config = gateConfig({
+      tallyLocal: () => 18_254,
+      remoteTargets: [
+        { name: 'self', connection: { host: '127.0.0.1', user: 'invoker', sshKeyPath: '/k' } },
+      ],
+      tallyRemote,
+    });
+
+    const result = await runCodexDailySpendGateTick(config, makeLogger(), NOW_MS);
+
+    expect(result.totalTokens).toBe(18_254);
+    expect(tallyRemote).not.toHaveBeenCalled();
+  });
+
   it('does nothing when the gate is disabled', async () => {
     const config = gateConfig({ enabled: false, tallyRemote: async () => 500_000_000 });
     const result = await runCodexDailySpendGateTick(config, makeLogger(), NOW_MS);
