@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+  listHeadlessSetSubcommandsForScope,
   readInvokerConfigFile,
   resolveHeadlessOwnerLaunchSpec,
   resolveInvokerHomeRoot,
@@ -36,11 +37,13 @@ import {
 } from '@invoker/execution-engine';
 import { type MessageBus } from '@invoker/transport';
 import {
+  ALREADY_TERMINAL_TASK_STATUSES,
   Orchestrator,
   parsePlanFile,
   type OrchestratorMessageBus,
   type PlanDefinition,
   type TaskState,
+  type TaskStatus,
 } from '@invoker/workflow-core';
 import { logCaughtException } from './logging.js';
 import {
@@ -176,6 +179,33 @@ type RetryTaskRow = {
   status?: string;
 };
 
+type SetOptions = {
+  field: string;
+  taskId: string;
+  values: string[];
+  force: boolean;
+};
+
+type ExecutorRouting = {
+  runnerKind?: string;
+  poolId?: string;
+  poolMemberId?: string;
+};
+
+type SetTargetTask = {
+  id: string;
+  status: string;
+  isMergeNode: boolean;
+  routing: ExecutorRouting;
+};
+
+export const CLI_SET_FIELDS: readonly string[] = listHeadlessSetSubcommandsForScope('task');
+
+const LAUNCHED_TASK_STATUSES = new Set<string>(['running', 'fixing_with_ai']);
+const RUNNER_KINDS_REQUIRING_POOL = new Set<string>(['worktree', 'ssh']);
+const RUNNER_KINDS_FORBIDDING_POOL = new Set<string>(['docker', 'merge', 'scratch']);
+const ROUTING_CONFIG_FIELD_PATH = /^(?:raw\.)?config\.(runnerKind|poolId|poolMemberId)$/;
+
 const silentLogger: Logger = {
   debug() {},
   info() {},
@@ -200,6 +230,7 @@ function usage(): string {
     '  invoker-cli retry <workflowId>',
     '  invoker-cli resume <workflowId>',
     '  invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]',
+    '  invoker-cli set <field> <taskId> <value...> [--force] [-- <value...>]',
     '  invoker-cli delete <workflowId>',
     '  invoker-cli delete-all',
     '  invoker-cli owner serve',
@@ -224,6 +255,7 @@ function usage(): string {
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
     '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
     '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
+    `  set <field> <taskId> <value...>  Edit one task field through a live owner. Fields: ${CLI_SET_FIELDS.join(', ')}. Refuses terminal tasks, running tasks without --force, and pool or executor changes the task's runner kind cannot take.`,
     '  delete-all      Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
@@ -252,6 +284,8 @@ function usage(): string {
     '  --poll-interval-ms <ms>  Query interval for `wait`. Defaults to 5000.',
     '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
     '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
+    '  --force         Let `set` edit a running task; the owner cancels the launched attempt first.',
+    '  --              End `set` options; later arguments are passed as values even if they start with --.',
     '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
     '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
     '  --fix            Best-effort install of missing doctor tools.',
@@ -755,6 +789,172 @@ async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
     await requireLiveOwnerForMutation(bus);
     await sendHeadlessExec(bus, ['delete-all']);
     process.stdout.write('delete-all accepted by live owner.\n');
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+function setUsage(field = `<${CLI_SET_FIELDS.join('|')}>`, taskId = '<taskId>'): string {
+  return `Usage: invoker-cli set ${field} ${taskId} <value...> [--force]`;
+}
+
+function parseSetArgs(argv: string[]): SetOptions {
+  const positional: string[] = [];
+  let force = false;
+  let optionsEnded = false;
+  for (const arg of argv) {
+    if (optionsEnded) {
+      positional.push(arg);
+    } else if (arg === '--') {
+      optionsEnded = true;
+    } else if (arg === '--force') {
+      force = true;
+    } else if (arg === '--help') {
+      throw new Error(setUsage());
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown set option: ${arg}. Put -- before values that start with --.`);
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  const [field, taskId, ...values] = positional;
+  if (!field) {
+    throw new Error(`Missing set field. ${setUsage()}`);
+  }
+  if (!CLI_SET_FIELDS.includes(field)) {
+    throw new Error(`Unknown set field: "${field}". Task fields: ${CLI_SET_FIELDS.join(', ')}`);
+  }
+  if (!taskId) {
+    throw new Error(`Missing taskId. ${setUsage(field)}`);
+  }
+  if (values.length === 0) {
+    throw new Error(`Missing value. ${setUsage(field, taskId)}`);
+  }
+  return { field, taskId, values, force };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+function parseMetadataArg(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function parseSetTargetTask(output: string, taskId: string): SetTargetTask {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch (err) {
+    throw new Error(`Could not parse task query JSON for "${taskId}": ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const record = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
+  if (typeof record.id !== 'string' || typeof record.status !== 'string') {
+    throw new Error(`Live owner returned an invalid task for "${taskId}": missing id or status`);
+  }
+  const config = (record.config && typeof record.config === 'object' ? record.config : {}) as Record<string, unknown>;
+  return {
+    id: record.id,
+    status: record.status,
+    isMergeNode: config.isMergeNode === true || config.runnerKind === 'merge',
+    routing: {
+      runnerKind: optionalString(config.runnerKind),
+      poolId: optionalString(config.poolId),
+      poolMemberId: optionalString(config.poolMemberId),
+    },
+  };
+}
+
+async function querySetTargetTask(bus: MessageBus, taskId: string): Promise<SetTargetTask> {
+  const raw = await withTimeout(
+    bus.request('headless.query', {
+      kind: 'cli-query',
+      args: ['query', 'task', taskId, '--output', 'json'],
+    }),
+    15_000,
+  );
+  return parseSetTargetTask(validateLiveQueryResponse(raw), taskId);
+}
+
+function describeExecutorRoutingViolation(routing: ExecutorRouting): string | undefined {
+  const { runnerKind } = routing;
+  if (!runnerKind) return undefined;
+  if (RUNNER_KINDS_REQUIRING_POOL.has(runnerKind) && !routing.poolId) {
+    return `${runnerKind} tasks require a non-empty pool`;
+  }
+  if (RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind) && (routing.poolId || routing.poolMemberId)) {
+    return `${runnerKind} tasks cannot have a pool or pool member`;
+  }
+  return undefined;
+}
+
+function findExecutorRoutingRefusal(options: SetOptions, task: SetTargetTask): string | undefined {
+  const { field, values } = options;
+  const routingKey = field === 'task' ? values[0]?.match(ROUTING_CONFIG_FIELD_PATH)?.[1] : undefined;
+  const changesRouting = field === 'pool' || field === 'executor' || field === 'task-pool' || routingKey !== undefined;
+  if (!changesRouting) {
+    return undefined;
+  }
+  if (task.isMergeNode) {
+    return 'merge nodes run on the merge executor and cannot take a pool, pool member, or executor change';
+  }
+  if (field === 'pool' || field === 'executor') {
+    const [runnerKind, poolMemberId] = values;
+    if (runnerKind === 'merge') {
+      return 'the merge executor is reserved for merge nodes';
+    }
+    if (RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind) && poolMemberId) {
+      return `${runnerKind} tasks cannot take a pool member`;
+    }
+    return undefined;
+  }
+  if (field === 'task-pool') {
+    const { runnerKind } = task.routing;
+    return runnerKind && RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind)
+      ? `${runnerKind} tasks cannot take a pool`
+      : undefined;
+  }
+  if (!routingKey) {
+    return undefined;
+  }
+  const requested = optionalString(parseMetadataArg(values.slice(1).join(' ')));
+  const violation = describeExecutorRoutingViolation({ ...task.routing, [routingKey]: requested });
+  return violation
+    ? `${violation}; use \`invoker-cli set executor\` or \`invoker-cli set task-pool\` to change routing`
+    : undefined;
+}
+
+function findSetRefusal(options: SetOptions, task: SetTargetTask): string | undefined {
+  if (ALREADY_TERMINAL_TASK_STATUSES.includes(task.status as TaskStatus)) {
+    return `it is ${task.status}, a terminal state`;
+  }
+  if (LAUNCHED_TASK_STATUSES.has(task.status) && !options.force) {
+    return `it is ${task.status} and its launched attempt has already resolved its configuration; re-run with --force to cancel that attempt and apply the change`;
+  }
+  return findExecutorRoutingRefusal(options, task);
+}
+
+async function runSetMutation(options: SetOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    const task = await querySetTargetTask(bus, options.taskId);
+    const refusal = findSetRefusal(options, task);
+    if (refusal) {
+      throw new Error(`Cannot set ${options.field} on task "${task.id}": ${refusal}.`);
+    }
+    await sendHeadlessExec(bus, ['set', options.field, options.taskId, ...options.values]);
+    process.stdout.write(`set ${options.field} accepted by live owner.\n`);
     return 0;
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
@@ -1403,6 +1603,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
         throw new Error(`Unexpected argument: ${argv[1]}`);
       }
       return await runDeleteAllMutation(deps);
+    }
+    if (argv[0] === 'set') {
+      return await runSetMutation(parseSetArgs(argv.slice(1)), deps);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
