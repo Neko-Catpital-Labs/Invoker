@@ -25,6 +25,7 @@ import { resolveChannelRepo } from '../channel-repo-resolver.js';
 import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transport.js';
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
+import { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
@@ -192,12 +193,7 @@ export type LocalRequest =
   | { kind: 'agent'; text: string }
   | { kind: 'change'; text: string };
 
-export class PlanDraftPostingError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'PlanDraftPostingError';
-  }
-}
+export { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
 
 type StageDraftReviewResult =
   | { staged: true }
