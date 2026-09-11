@@ -2160,6 +2160,80 @@ describe('TaskRunner', () => {
       }
     });
 
+    function createRepoCheckerWorkspace(checkerSource?: string) {
+      const cwd = createTempWorkspace();
+      if (checkerSource !== undefined) {
+        mkdirSync(join(cwd, 'scripts'), { recursive: true });
+        writeFileSync(join(cwd, 'scripts', 'validate-pr-body-local.mjs'), checkerSource);
+      }
+      return cwd;
+    }
+
+    async function authorNonInvokerBody(body: string, cwd: string) {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+      try {
+        const executor = makeStrictGateExecutor(makeBodyEmittingAgent(tempHome, body), cwd);
+        return await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Test Workflow',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: '## Summary\nSource summary',
+          cwd,
+          repoUrl: 'https://github.com/EdbertChan/catstack',
+        });
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    }
+
+    it('authorPrBodyWithSkill refuses canonical fallback when a non-Invoker repo checker rejects every body', async () => {
+      const cwd = createRepoCheckerWorkspace(
+        "console.error('catstack checker: missing ## Why section'); process.exit(1);\n",
+      );
+
+      const outcome = authorNonInvokerBody(CANONICAL_ONLY_BODY, cwd);
+
+      await expect(outcome).rejects.toThrow(
+        /^\[pr-authoring\] target repo checker rejected every PR body; refusing canonical fallback/,
+      );
+      await expect(outcome).rejects.toThrow(/catstack checker: missing ## Why section/);
+    });
+
+    it('authorPrBodyWithSkill returns the agent body when a non-Invoker repo checker accepts it', async () => {
+      const cwd = createRepoCheckerWorkspace(
+        [
+          "import { readFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          "const body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');",
+          "process.exit(body.includes('## Summary') && args[args.indexOf('--base') + 1] === 'master' ? 0 : 1);",
+          '',
+        ].join('\n'),
+      );
+
+      const result = await authorNonInvokerBody(CANONICAL_ONLY_BODY, cwd);
+
+      expect(result.agentName).toBe('codex');
+      expect(result.sessionId).not.toBe('canonical-fallback');
+      expect(result.body).toBe(CANONICAL_ONLY_BODY);
+    });
+
+    it('authorPrBodyWithSkill keeps the canonical fallback for a non-Invoker repo without a checker', async () => {
+      const cwd = createRepoCheckerWorkspace();
+
+      const result = await authorNonInvokerBody('## Summary\n\nOnly summary', cwd);
+
+      expect(result.agentName).toBe('canonical');
+      expect(result.sessionId).toBe('canonical-fallback');
+      expect(result.body).toContain('## Test Plan');
+      expect(result.body).toContain('## Revert Plan');
+    });
+
     it('authorPrBodyWithSkill falls back to second agent when first fails', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
