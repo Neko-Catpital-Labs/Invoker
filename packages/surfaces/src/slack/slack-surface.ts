@@ -22,6 +22,9 @@ import {
 } from '@invoker/planning-core';
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress } from '../surface.js';
 import { resolveChannelRepo } from '../channel-repo-resolver.js';
+import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transport.js';
+import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
+import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
@@ -38,8 +41,6 @@ import {
   PlanConversation,
   buildEmptyPlannerOutputError,
   defaultPlanningCommand,
-  isConfirmation,
-  isNegation,
 } from './plan-conversation.js';
 import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
@@ -185,16 +186,6 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
 };
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
-
-interface PlanningContext {
-  repoUrl?: string;
-  presetKey: string;
-  workingDir?: string;
-  requestedBy?: string;
-  lobbyChannel?: string;
-  confirmationMode: PlanningConfirmationMode;
-  harnessSessionId?: string;
-}
 
 export type LocalRequest =
   | { kind: 'command'; text: string }
@@ -556,18 +547,6 @@ interface ConversationLike {
   readonly submittedPlanText: string | null;  readonly workingDir?: string;
 }
 
-/** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
-type PendingConfirm =
-  | { kind: 'op'; op: WorkflowOp }
-  | { kind: 'plan_intent'; requestText: string; userId: string; context: PlanningContext; channel: string; alreadySent?: boolean }
-  | { kind: 'restart' };
-
-interface SayResult {
-  ts?: string;
-}
-
-type SayFn = (msg: { text: string; thread_ts: string; blocks?: unknown[] }) => Promise<SayResult>;
-
 type ConversationSessionOptions = {
   tool?: string;
   model?: string;
@@ -635,8 +614,6 @@ export class SlackSurface implements Surface {
   private ackMessages = new Map<string, string>();
   /** Maps thread_ts → planning context carried into start_plan. */
   private planningContexts = new Map<string, PlanningContext>();
-  /** Maps thread_ts → an action awaiting yes/no (or button) confirmation. */
-  private pendingConfirms = new Map<string, PendingConfirm>();
   private defaultPlanningConfirmationMode: PlanningConfirmationMode;
 
   // ── Slack-native workflow extensions ──────────────────────
@@ -657,6 +634,8 @@ export class SlackSurface implements Surface {
   private harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
   /** Guard key -> last lobby alert post timestamp, held in-process like watchdog cooldowns. */
   private alertLastPostAt = new Map<string, number>();
+  private chatTransport: ChatTransport;
+  private approvals: ApprovalStateMachine;
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -725,6 +704,54 @@ export class SlackSurface implements Surface {
         onHarnessSessionId: (id, sessionId) => this.persistHarnessSessionId(id.threadTs, sessionId),
       });
     }
+
+    this.chatTransport = this.createChatTransport();
+    const chatBlocks = this.createChatBlocks();
+    const coreLog = (level: 'info' | 'warn' | 'error', message: string): void => this.log('slack', level, message);
+    this.approvals = new ApprovalStateMachine({
+      transport: this.chatTransport,
+      blocks: chatBlocks,
+      log: coreLog,
+      allowsControls: (channel) => this.allowsLobbyControls(channel),
+      store: this.slackSessionRepo,
+      runWorkflowOp: this.runWorkflowOp,
+      restart: this.onRestartInvoker,
+    });
+  }
+
+  private createChatTransport(): ChatTransport {
+    return {
+      post: async (channel, { text, thread_ts, blocks }) => {
+        const res = await this.app.client.chat.postMessage({
+          channel,
+          text,
+          thread_ts,
+          ...(blocks ? { blocks: blocks as never } : {}),
+        });
+        return { ts: res.ts as string | undefined };
+      },
+      update: async (channel, ts, { text, blocks }) => {
+        await this.app.client.chat.update({
+          channel,
+          ts,
+          text,
+          ...(blocks ? { blocks: blocks as never } : {}),
+        });
+      },
+      react: async (channel, timestamp, name) => {
+        await this.app.client.reactions.add({ channel, timestamp, name });
+      },
+      unreact: async (channel, timestamp, name) => {
+        await this.app.client.reactions.remove({ channel, timestamp, name });
+      },
+    };
+  }
+
+  private createChatBlocks(): ChatBlocks {
+    return {
+      confirmPrompt: (prompt, confirmKey) => this.buildConfirmBlocks(prompt, confirmKey),
+      planIntentPrompt: (confirmKey) => this.buildPlanIntentBlocks(confirmKey),
+    };
   }
 
   async start(onCommand: CommandHandler): Promise<void> {
@@ -912,15 +939,7 @@ export class SlackSurface implements Surface {
       user: request.userId,
       channel,
     };
-    const say: SayFn = async ({ text: replyText, thread_ts, blocks }) => {
-      const res = await this.app.client.chat.postMessage({
-        channel,
-        text: replyText,
-        thread_ts,
-        ...(blocks ? { blocks: blocks as never } : {}),
-      });
-      return { ts: res.ts as string };
-    };
+    const say: SayFn = (message) => this.chatTransport.post(channel, message);
     this.log('slack', 'info', `[SMOKE_INJECT] channel=${channel} thread_ts=${threadTs} user=${request.userId}`);
     const mapping = this.workflowChannelRepo?.getByChannelId(channel);
     await this.handleMention(event, say, channel, mapping ?? undefined);
@@ -1019,13 +1038,12 @@ export class SlackSurface implements Surface {
       await ack();
       if (action.type !== 'button' || !action.value) return;
       const key = action.value;
-      const pending = this.getPendingConfirm(key);
+      const pending = this.approvals.getPendingConfirm(key);
       if (!pending) {
         await respond?.({ text: 'This confirmation has expired.', replace_original: true });
         return;
       }
-      this.pendingConfirms.delete(key);
-      this.slackSessionRepo?.deletePendingConfirmation(key);
+      this.approvals.clearPendingConfirm(key);
       this.log('slack', 'info', `Button: lobby_confirm key=${key} kind=${pending.kind}`);
       // Acknowledge instantly by replacing the buttons. The op itself can take
       // minutes (e.g. rebase-recreate all), and silence here reads as "nothing happened".
@@ -1033,16 +1051,15 @@ export class SlackSurface implements Surface {
       // Follow-ups post in-thread via the bot client: a response_url expires after
       // 30 minutes / 5 uses, which a long bulk op can outlast.
       const opChannel = (body as { channel?: { id?: string } })?.channel?.id;
-      await this.executeConfirm(pending, key, this.lobbyButtonSay(body, respond), opChannel);
+      await this.approvals.executeConfirm(pending, key, this.lobbyButtonSay(body, respond), opChannel);
     });
 
     this.app.action('lobby_cancel', async ({ action, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      const pending = this.getPendingConfirm(action.value);
+      const pending = this.approvals.getPendingConfirm(action.value);
       if (!pending) return;
-      this.pendingConfirms.delete(action.value);
-      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.approvals.clearPendingConfirm(action.value);
       this.log('slack', 'info', `Button: lobby_cancel key=${action.value}`);
       await respond?.({ text: '❌ Cancelled.', replace_original: true });
     });
@@ -1050,13 +1067,12 @@ export class SlackSurface implements Surface {
     this.app.action('lobby_plan_for_execution', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      const pending = this.getPendingConfirm(action.value);
+      const pending = this.approvals.getPendingConfirm(action.value);
       if (!pending || pending.kind !== 'plan_intent') {
         await respond?.({ text: 'This planning choice has expired.', replace_original: true });
         return;
       }
-      this.pendingConfirms.delete(action.value);
-      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.approvals.clearPendingConfirm(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] accepted key=${action.value}`);
       await respond?.({ text: '✅ Planning for execution.', replace_original: true });
       const say = this.lobbyButtonSay(body, respond);
@@ -1065,15 +1081,7 @@ export class SlackSurface implements Surface {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.log('slack', 'error', `[PLAN_INTENT_CONFIRM] drafting failed key=${action.value}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-        this.pendingConfirms.set(action.value, pending);
-        this.slackSessionRepo?.createPendingConfirmation({
-          confirmKey: action.value,
-          threadTs: action.value,
-          channelId: pending.channel,
-          userId: pending.userId,
-          kind: pending.kind,
-          payload: pending,
-        });
+        this.approvals.rearmPlanIntentConfirm(action.value, pending);
         await this.sayWithRateLimitRetry(say, {
           text: `Planning failed: ${message}. Click Approve above to try again.`,
           thread_ts: action.value,
@@ -1085,13 +1093,12 @@ export class SlackSurface implements Surface {
     this.app.action('lobby_continue_conversation', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
-      const pending = this.getPendingConfirm(action.value);
+      const pending = this.approvals.getPendingConfirm(action.value);
       if (!pending || pending.kind !== 'plan_intent') {
         await respond?.({ text: 'This planning choice has expired.', replace_original: true });
         return;
       }
-      this.pendingConfirms.delete(action.value);
-      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.approvals.clearPendingConfirm(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] declined key=${action.value}`);
       await respond?.({ text: '✅ Continuing the conversation without planning.', replace_original: true });
       await this.startConversationIntent(pending, this.lobbyButtonSay(body, respond), action.value);
@@ -1232,7 +1239,7 @@ export class SlackSurface implements Surface {
         lobbyChannel: channel,
         confirmationMode: parsed.confirmationMode ?? this.defaultPlanningConfirmationMode,
       };
-      await this.stagePlanIntentConfirm(threadTs, channel, {
+      await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
         kind: 'plan_intent',
         requestText: parsed.text.replace(/^\/plan\s+/i, ''),
         userId: event.user ?? 'unknown',
@@ -1243,27 +1250,27 @@ export class SlackSurface implements Surface {
     }
 
     // Confirm/cancel a staged action first (plain yes/no in-thread).
-    if (await this.resolveConfirm(threadTs, parsed.text, say, channel)) return;
+    if (await this.approvals.resolveConfirm(threadTs, parsed.text, say, channel)) return;
 
     // Deterministic verb commands respond instantly and take priority over agent sessions.
     const ctrl = parseLobbyControl(parsed.text);
     if (ctrl?.kind === 'op' || ctrl?.kind === 'restart') {
       if (!this.allowsLobbyControls(channel)) {
-        await this.rejectNonLobbyControl(threadTs, say);
+        await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
       }
       if (ctrl.kind === 'op') {
-        await this.handleLobbyOp(ctrl, threadTs, channel, say);
+        await this.approvals.requestOp({ operation: ctrl.operation, target: ctrl.target }, threadTs, channel, say);
         return;
       }
-      await this.handleLobbyRestart(threadTs, channel, say);
+      await this.approvals.requestRestart(threadTs, say);
       return;
     }
 
     const localRequest = parseLocalRequest(parsed.text);
     if (localRequest?.kind === 'command') {
       if (!this.allowsLobbyControls(channel)) {
-        await this.rejectNonLobbyControl(threadTs, say);
+        await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
       }
       await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
@@ -1273,10 +1280,10 @@ export class SlackSurface implements Surface {
     const workflowStatusQuery = parseWorkflowStatusQuery(localRequest?.kind === 'agent' ? localRequest.text : parsed.text);
     if (workflowStatusQuery?.intent === 'command') {
       if (!this.allowsLobbyControls(channel)) {
-        await this.rejectNonLobbyControl(threadTs, say);
+        await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
       }
-      await this.handleLobbyOp({ kind: 'op', operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
+      await this.approvals.requestOp({ operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
       return;
     }
 
@@ -1513,51 +1520,6 @@ export class SlackSurface implements Surface {
     await this.deleteMessage(channel, ts);
   }
 
-  private async handleLobbyOp(
-    ctrl: Extract<LobbyControl, { kind: 'op' }>,
-    threadTs: string,
-    channel: string,
-    say: SayFn,
-  ): Promise<void> {
-    if (!this.runWorkflowOp) {
-      await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
-      return;
-    }
-    const op: WorkflowOp = { operation: ctrl.operation, target: ctrl.target };
-    // Destructive bulk mutations require explicit confirmation; status and single-workflow ops run now.
-    if (ctrl.operation !== 'status' && 'all' in ctrl.target) {
-      await this.stageConfirm(threadTs, channel, { kind: 'op', op }, `This will \`${ctrl.operation}\` ALL workflows.`, say);
-      return;
-    }
-    await this.runConfirmedOp(op, threadTs, say, channel);
-  }
-
-  private async runConfirmedOp(op: WorkflowOp, threadTs: string, say: SayFn, channel?: string): Promise<void> {
-    const onIt = await say({ text: `On it — ${this.describeOp(op)}. I'll post a summary here when it finishes.`, thread_ts: threadTs });
-    const progressTs = onIt?.ts;
-    let lastEdit = 0;
-    const onProgress = channel && progressTs
-      ? (p: WorkflowOpProgress): void => {
-          if (p.total <= 1) return;
-          const now = Date.now();
-          if (now - lastEdit < 2000 && p.done < p.total) return;
-          lastEdit = now;
-          const icon = p.done >= p.total ? '✅' : '⏳';
-          const tail = p.failed ? `, ${p.failed} failed` : '';
-          const cur = p.current && p.done < p.total ? ` · now \`${p.current}\`` : '';
-          void this.app.client.chat
-            .update({ channel, ts: progressTs, text: `${icon} ${this.describeOp(op)} — ${p.done}/${p.total} (${p.ok} ok${tail})${cur}` })
-            .catch(() => {});
-        }
-      : undefined;
-    try {
-      const result = await this.runWorkflowOp!(op, onProgress);
-      await say({ text: result.summary, thread_ts: threadTs });
-    } catch (err) {
-      await say({ text: `Operation failed: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
-    }
-  }
-
   /** Build a say() for a button action: posts in-thread via the bot client so
    *  follow-ups survive past the 30-minute response_url window; falls back to respond(). */
   private lobbyButtonSay(body: unknown, respond?: RespondFn): SayFn {
@@ -1588,11 +1550,6 @@ export class SlackSurface implements Surface {
       return;
     }
     await respond?.({ text, replace_original: true });
-  }
-
-  private describeOp(op: WorkflowOp): string {
-    const target = 'all' in op.target ? 'ALL workflows' : `\`${op.target.workflow}\``;
-    return `${op.operation} ${target}`;
   }
 
   private renderPlanSummary(summary: PlanSummary): string {
@@ -1907,39 +1864,8 @@ export class SlackSurface implements Surface {
     ];
   }
 
-  private async stagePlanIntentConfirm(
-    threadTs: string,
-    channel: string,
-    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
-    say: SayFn,
-  ): Promise<void> {
-    const existing = this.getPendingConfirm(threadTs);
-    if (existing) {
-      await say({
-        text: 'There is already a pending confirmation in this thread. Resolve it before asking again.',
-        thread_ts: threadTs,
-      });
-      return;
-    }
-    this.pendingConfirms.set(threadTs, pending);
-    this.slackSessionRepo?.createPendingConfirmation({
-      confirmKey: threadTs,
-      threadTs,
-      channelId: channel,
-      userId: pending.userId,
-      kind: pending.kind,
-      payload: pending,
-    });
-    this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] staged key=${threadTs} thread_ts=${threadTs}`);
-    await say({
-      text: 'Do you want a plan for execution, or should I continue the conversation without planning?',
-      thread_ts: threadTs,
-      blocks: this.buildPlanIntentBlocks(threadTs),
-    });
-  }
-
   private async startConversationIntent(
-    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
+    pending: PlanIntentConfirm,
     say: SayFn,
     threadTs: string,
   ): Promise<void> {
@@ -1962,7 +1888,7 @@ export class SlackSurface implements Surface {
   }
 
   private async startPlanIntent(
-    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
+    pending: PlanIntentConfirm,
     say: SayFn,
     threadTs: string,
   ): Promise<void> {
@@ -1976,103 +1902,10 @@ export class SlackSurface implements Surface {
     await this.handleExplicitPlanAction(pending.channel, threadTs, pending.userId, say);
   }
 
-  /** Stage an action and post the prompt with Approve/Cancel buttons (plain yes/no also works). */
-  private async stageConfirm(
-    threadTs: string,
-    channel: string,
-    pending: PendingConfirm,
-    prompt: string,
-    say: SayFn,
-  ): Promise<void> {
-    this.stagePendingConfirm(threadTs, channel, pending);
-    await say({
-      text: `${prompt}\n_Approve to proceed, or reply \`no\` to cancel._`,
-      thread_ts: threadTs,
-      blocks: this.buildConfirmBlocks(prompt, threadTs),
-    });
-  }
-
-  private stagePendingConfirm(threadTs: string, channel: string, pending: PendingConfirm): void {
-    this.pendingConfirms.set(threadTs, pending);
-  }
-
-
   /** Lobby controls stay in the lobby channel or DMs; planning may run elsewhere. */
   private allowsLobbyControls(channel: string | undefined): boolean {
     if (!channel) return true;
     return channel === this.lobbyChannelId || channel.startsWith('D');
-  }
-
-  private async rejectNonLobbyControl(threadTs: string, say: SayFn): Promise<void> {
-    await say({
-      text: 'I can plan here, but restart/submit/workflow controls only work in the lobby channel or DMs.',
-      thread_ts: threadTs,
-    });
-  }
-
-  /** Resolve a staged action from a plain-text reply. Returns true if the reply was consumed. */
-  private async resolveConfirm(threadTs: string, text: string, say: SayFn, channel?: string): Promise<boolean> {
-    const pending = this.getPendingConfirm(threadTs);
-    if (!pending) return false;
-    if (!this.allowsLobbyControls(channel)) {
-      await this.rejectNonLobbyControl(threadTs, say);
-      return true;
-    }
-    if (isConfirmation(text)) {
-      this.pendingConfirms.delete(threadTs);
-      this.slackSessionRepo?.deletePendingConfirmation(threadTs);
-      await this.executeConfirm(pending, threadTs, say, channel);
-      return true;
-    }
-    if (isNegation(text)) {
-      this.pendingConfirms.delete(threadTs);
-      this.slackSessionRepo?.deletePendingConfirmation(threadTs);
-      await say({ text: 'Cancelled.', thread_ts: threadTs });
-      return true;
-    }
-    this.pendingConfirms.delete(threadTs);
-    await say({
-      text: 'Dropped the pending approval because the reply was not a confirmation.',
-      thread_ts: threadTs,
-    });
-    return true;
-  }
-
-  /** Run a confirmed action — a workflow op or a restart. */
-  private async executeConfirm(pending: PendingConfirm, threadTs: string, say: SayFn, channel?: string): Promise<void> {
-    if (pending.kind === 'op') {
-      if (!this.runWorkflowOp) {
-        await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
-        return;
-      }
-      await this.runConfirmedOp(pending.op, threadTs, say, channel);
-      return;
-    }
-    await this.runConfirmedRestart(threadTs, say);
-  }
-
-  /** Restart Invoker on request — always confirm first (it interrupts the running app). */
-  private async handleLobbyRestart(threadTs: string, channel: string, say: SayFn): Promise<void> {
-    if (!this.onRestartInvoker) {
-      await say({ text: 'Restarting Invoker is not available in this deployment.', thread_ts: threadTs });
-      return;
-    }
-    await this.stageConfirm(threadTs, channel, { kind: 'restart' }, 'This will restart Invoker.', say);
-  }
-
-  /** Run a confirmed restart: relaunch Invoker, then report health. */
-  private async runConfirmedRestart(threadTs: string, say: SayFn): Promise<void> {
-    if (!this.onRestartInvoker) {
-      await say({ text: 'Restarting Invoker is not available in this deployment.', thread_ts: threadTs });
-      return;
-    }
-    await say({ text: 'Bringing Invoker back… :hourglass_flowing_sand:', thread_ts: threadTs });
-    try {
-      await this.onRestartInvoker();
-      await say({ text: 'Invoker is back ✅', thread_ts: threadTs });
-    } catch (err) {
-      await say({ text: `Restart failed: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
-    }
   }
 
   /** Route a deterministic verb from `/invoker` (channel-level — slash can't run in a thread). */
@@ -2091,7 +1924,7 @@ export class SlackSurface implements Surface {
     }
     if (ctrl.kind === 'restart') {
       const key = `slash:${channel}:${command.user_id}:${Date.now()}`;
-      this.pendingConfirms.set(key, { kind: 'restart' });
+      this.approvals.stagePendingConfirm(key, { kind: 'restart' });
       const prompt = 'This will restart Invoker.';
       await respond({ text: prompt, response_type: 'ephemeral', blocks: this.buildConfirmBlocks(prompt, key) as never });
       return;
@@ -2104,7 +1937,7 @@ export class SlackSurface implements Surface {
     const op: WorkflowOp = { operation: ctrl.operation, target: ctrl.target };
     if (ctrl.operation !== 'status' && 'all' in ctrl.target) {
       const key = `slash:${channel}:${command.user_id}:${Date.now()}`;
-      this.pendingConfirms.set(key, { kind: 'op', op });
+      this.approvals.stagePendingConfirm(key, { kind: 'op', op });
       const prompt = `This will \`${ctrl.operation}\` ALL workflows.`;
       await respond({ text: prompt, response_type: 'ephemeral', blocks: this.buildConfirmBlocks(prompt, key) as never });
       return;
@@ -2262,16 +2095,6 @@ export class SlackSurface implements Surface {
       harnessSessionDriver: this.harnessSessionDriverFactory?.(preset),
       harnessSessionId: context.harnessSessionId,
     };
-  }
-
-  private getPendingConfirm(key: string): PendingConfirm | undefined {
-    const inMemory = this.pendingConfirms.get(key);
-    if (inMemory) return inMemory;
-    const persisted = this.slackSessionRepo?.getPendingConfirmation(key);
-    if (persisted?.kind !== 'plan_intent' || !persisted.payload || typeof persisted.payload !== 'object') return undefined;
-    const pending = persisted.payload as PendingConfirm;
-    this.pendingConfirms.set(key, pending);
-    return pending;
   }
 
   private async handleLocalRequest(
@@ -3053,7 +2876,7 @@ ${text}`;
           await this.handleExplicitPlanAction(channel, msg.thread_ts, msg.user ?? 'unknown', say);
           return;
         }
-        await this.stagePlanIntentConfirm(msg.thread_ts, channel, {
+        await this.approvals.stagePlanIntentConfirm(msg.thread_ts, channel, {
           kind: 'plan_intent',
           requestText: text.replace(/^\/plan\s+/i, ''),
           userId: msg.user ?? 'unknown',
@@ -3063,7 +2886,7 @@ ${text}`;
         return;
       }
 
-      if (await this.resolveConfirm(msg.thread_ts, text, say, channel)) return;
+      if (await this.approvals.resolveConfirm(msg.thread_ts, text, say, channel)) return;
 
       const rebind = await this.maybeRebindThreadRepo(channel, msg.thread_ts, msg.user, text, say);
       if (rebind.rebound || rebind.blocked) return;
@@ -3207,7 +3030,7 @@ ${text}`;
 
       if (planIntentContext && conversation.lastTurnPlanIntentSignal?.wantsPlan) {
         try {
-          await this.stagePlanIntentConfirm(threadTs, channel, {
+          await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
             kind: 'plan_intent',
             requestText: text,
             userId: planIntentContext.userId,
@@ -3682,11 +3505,7 @@ ${text}`;
   private async startTypingIndicator(channel: string, timestamp: string): Promise<boolean> {
     if (!this.useTypingIndicator) return false;
     try {
-      await this.app.client.reactions.add({
-        channel,
-        timestamp,
-        name: this.immediateAckEmoji,
-      });
+      await this.chatTransport.react(channel, timestamp, this.immediateAckEmoji);
       this.log('slack', 'info', `[TYPING] Started indicator (ts=${timestamp})`);
       return true;
     } catch (err) {
@@ -3701,11 +3520,7 @@ ${text}`;
   private async stopTypingIndicator(channel: string, timestamp: string): Promise<void> {
     if (!this.useTypingIndicator) return;
     try {
-      await this.app.client.reactions.remove({
-        channel,
-        timestamp,
-        name: this.immediateAckEmoji,
-      });
+      await this.chatTransport.unreact(channel, timestamp, this.immediateAckEmoji);
       this.log('slack', 'info', `[TYPING] Stopped indicator (ts=${timestamp})`);
     } catch (err) {
       // Silently ignore removal failures (reaction may not exist)
