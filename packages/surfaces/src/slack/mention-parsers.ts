@@ -4,6 +4,7 @@ export type LocalRequest =
   | { kind: 'change'; text: string };
 
 export const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
+export const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
 export const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 
 export function looksLikePreset(normalized: string): boolean {
