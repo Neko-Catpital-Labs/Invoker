@@ -4,10 +4,8 @@
  * No LLM. Used by worker-session-mine and follow-up repro tasks.
  */
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
 export const DEFAULT_THRESHOLDS = Object.freeze({
   minAssistantTurns: 40,
@@ -186,71 +184,28 @@ export function runTokenAuditIfAvailable(jsonlPath, catstackRoot = process.env.C
 }
 
 function runTokenAuditScript(script, jsonlPath) {
-  const mode = inferTokenAuditMode(jsonlPath);
-  const dir = mkdtempSync(join(tmpdir(), 'worker-session-mine-audit-'));
-  const outPath = join(dir, 'audit.json');
+  const result = spawnSync('python3', [script, 'claude', jsonlPath, '--out', '-'], {
+    encoding: 'utf8',
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    return { ok: false, error: result.stderr || result.stdout || `exit ${result.status}` };
+  }
   try {
-    const result = spawnSync('python3', [script, mode, jsonlPath, '--out', outPath], {
-      encoding: 'utf8',
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    if (result.status !== 0) {
-      return { ok: false, mode, error: result.stderr || result.stdout || `exit ${result.status}` };
-    }
-    const parsed = JSON.parse(readFileSync(outPath, 'utf8'));
+    const parsed = JSON.parse(result.stdout);
     const flags = parsed.flags ?? parsed.thrash_flags ?? parsed;
     const interesting = [
       'recurring-failure-signatures',
       'no-verify-edit-streak',
       'cache-creation-spikes',
     ].filter((k) => {
-      const v = tokenAuditFlagValue(flags, k);
+      const v = flags?.[k] ?? flags?.[k.replace(/-/g, '_')];
       return Array.isArray(v) ? v.length > 0 : Boolean(v);
     });
-    return { ok: true, mode, flags: interesting, raw: parsed };
+    return { ok: true, flags: interesting, raw: parsed };
   } catch (err) {
-    return { ok: false, mode, error: err instanceof Error ? err.message : String(err) };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-function inferTokenAuditMode(jsonlPath) {
-  if (/\.codex\/sessions\/|\/rollout-\d{4}-\d{2}-\d{2}T/.test(jsonlPath)) return 'codex';
-  try {
-    const text = readFileSync(jsonlPath, 'utf8');
-    for (const line of text.split(/\r?\n/, 50)) {
-      if (!line.trim()) continue;
-      const row = JSON.parse(line);
-      if ([
-        'event_msg',
-        'response_item',
-        'session_meta',
-        'turn_context',
-        'world_state',
-        'turn.completed',
-        'turn.failed',
-        'item.completed',
-      ].includes(row.type)) {
-        return 'codex';
-      }
-      if (row.type === 'assistant' || row.type === 'user') return 'claude';
-    }
-  } catch {
-    // Fall through to Claude mode, which was the historical default.
-  }
-  return 'claude';
-}
-
-function tokenAuditFlagValue(flags, name) {
-  if (Array.isArray(flags)) {
-    const found = flags.find((flag) => flag?.name === name || flag?.name === name.replace(/-/g, '_'));
-    if (!found) return null;
-    if (found.value === 'yes') return true;
-    if (Array.isArray(found.value)) return found.value;
-    return Number(found.count ?? 0) > 0;
-  }
-  return flags?.[name] ?? flags?.[name.replace(/-/g, '_')];
 }
 
 export function detectThrash(jsonlPath, options = {}) {
@@ -374,26 +329,6 @@ function selfTest() {
   ].join('\n');
   const codexNeg = analyzeClaudeJsonl(codexClean);
   if (codexNeg.thrash) throw new Error('expected clean codex fixture to stay silent');
-
-  const fakeRoot = mkdtempSync(join(tmpdir(), 'worker-session-mine-catstack-'));
-  const fakeScripts = join(fakeRoot, 'engine', 'skills', 'reflect', 'scripts');
-  mkdirSync(fakeScripts, { recursive: true });
-  const fakeAuditScript = join(fakeScripts, 'token_audit.py');
-  writeFileSync(fakeAuditScript, `#!/usr/bin/env python3
-import json, sys
-mode, out_path = sys.argv[1], sys.argv[4]
-with open(out_path, 'w') as f:
-    json.dump({"mode": mode, "flags": [{"name": "cache-creation-spikes", "value": "yes"}]}, f)
-print("summary only")
-`);
-  chmodSync(fakeAuditScript, 0o755);
-  const codexFixture = join(fakeRoot, 'rollout-2026-09-01T00-00-00-01abc.jsonl');
-  writeFileSync(codexFixture, codexClean);
-  const audit = runTokenAuditIfAvailable(codexFixture, fakeRoot);
-  rmSync(fakeRoot, { recursive: true, force: true });
-  if (!audit?.ok) throw new Error(`expected fake token_audit to succeed, got ${JSON.stringify(audit)}`);
-  if (audit.raw?.mode !== 'codex') throw new Error(`expected codex token_audit mode, got ${audit.raw?.mode}`);
-  if (!audit.flags.includes('cache-creation-spikes')) throw new Error(`expected token_audit flags, got ${JSON.stringify(audit.flags)}`);
 
   console.log(JSON.stringify({
     ok: true,
