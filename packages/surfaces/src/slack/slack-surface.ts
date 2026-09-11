@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { extractRepositoryUrls, extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
+import { CHANNEL_REPO_SETUP_INTENT_RE, extractRepositoryUrls, extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -244,7 +244,6 @@ function capTailChars(value: string, max: number): string {
 const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
 const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
 const CHANNEL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
-const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
 const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
 
 type RepoParts = {
