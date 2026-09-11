@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { CHANNEL_REPO_PAIR_RE, CHANNEL_REPO_SETUP_INTENT_RE, extractRepositoryUrls, extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
+import { CHANNEL_REPO_PAIR_RE, CHANNEL_REPO_SETUP_INTENT_RE, extractRepositoryUrls, extractRepoUrlFromMessage, normalizePublicChannelName, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -302,10 +302,6 @@ function channelRepoBindingWorkflowId(channelId: string): string {
 
 function isChannelRepoBinding(mapping: WorkflowChannel | undefined | null): boolean {
   return !!mapping?.workflowId?.startsWith(CHANNEL_REPO_BINDING_WORKFLOW_PREFIX);
-}
-
-function normalizePublicChannelName(name: string): string {
-  return name.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
 }
 
 interface ChannelRepoSetupPair {
