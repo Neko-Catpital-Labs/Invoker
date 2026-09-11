@@ -12,6 +12,10 @@ export function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
 }
 
+export function extractRepositoryUrls(text: string): string[] {
+  return extractMessageRepoCandidates(text);
+}
+
 export function extractMessageRepoCandidates(text: string): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
