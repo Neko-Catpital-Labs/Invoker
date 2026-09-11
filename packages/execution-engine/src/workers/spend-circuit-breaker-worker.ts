@@ -1,3 +1,5 @@
+import { hostname, networkInterfaces } from 'node:os';
+
 import type { Logger } from '@invoker/contracts';
 
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -57,6 +59,7 @@ export interface CodexDailySpendGateConfig {
   dailyTokenBudget?: number;
   localHostName?: string;
   localSessionRoot?: string;
+  localAddresses?: ReadonlySet<string>;
   remoteTargets?: ReadonlyArray<CodexSpendGateRemoteTarget>;
   statePath?: string;
   tallyRemote?: (target: CodexSpendGateRemoteTarget, nowMs: number) => Promise<number>;
@@ -106,6 +109,14 @@ export interface CodexDailySpendGateTickResult {
   readonly tokenBudget: number;
   readonly tripped: boolean;
   readonly failedHosts: ReadonlyArray<{ host: string; reason: string }>;
+}
+
+function ownAddresses(): ReadonlySet<string> {
+  const addresses = new Set([hostname().toLowerCase()]);
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) addresses.add(entry.address.toLowerCase());
+  }
+  return addresses;
 }
 
 function defaultTallyRemote(target: CodexSpendGateRemoteTarget, nowMs: number): Promise<number> {
@@ -168,7 +179,9 @@ export async function runCodexDailySpendGateTick(
   }
 
   const tallyRemote = config.tallyRemote ?? defaultTallyRemote;
+  const localAddresses = config.localAddresses ?? ownAddresses();
   for (const target of config.remoteTargets ?? []) {
+    if (localAddresses.has(target.connection.host.toLowerCase())) continue;
     try {
       tokensByHost.set(target.name, await tallyRemote(target, nowMs));
     } catch (error) {
