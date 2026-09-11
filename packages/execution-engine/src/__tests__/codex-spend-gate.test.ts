@@ -176,7 +176,7 @@ describe('runCodexDailySpendGateTick', () => {
     expect(result.totalTokens).toBe(20_421_072);
   });
 
-  it.fails('counts the owner once when a remote target points at one of its own addresses', async () => {
+  it('counts the owner once when a remote target points at one of its own addresses', async () => {
     const config = gateConfig({
       tallyLocal: () => 18_254,
       localAddresses: new Set(['157.245.231.246']),
@@ -193,7 +193,7 @@ describe('runCodexDailySpendGateTick', () => {
     expect([...result.tokensByHost.keys()]).toEqual(['owner', 'remote_digital_ocean_3']);
   });
 
-  it.fails('skips a remote target on the loopback address without any config', async () => {
+  it('skips a remote target on the loopback address without any config', async () => {
     const tallyRemote = vi.fn(async () => 18_254);
     const config = gateConfig({
       tallyLocal: () => 18_254,
