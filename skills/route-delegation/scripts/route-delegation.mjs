@@ -80,9 +80,7 @@ function main(argv) {
   const payload = argv[0] ? JSON.parse(argv[0]) : {};
   const tools = payload.tools ?? [];
   const workKind = payload.work_kind ?? 'small_local';
-  const route = payload.produces === undefined
-    ? routeExecution({ tools, workKind })
-    : routeDelegation({ tools, workKind, produces: payload.produces });
+  const route = routeDelegation({ tools, workKind, produces: payload.produces });
   process.stdout.write(`${JSON.stringify({ route, steps: handoffStepsFor(route) })}\n`);
 }
 
