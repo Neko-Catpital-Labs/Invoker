@@ -174,11 +174,13 @@ export function normalizeReviewUnit(value = '') {
 const TOKEN_WRAPPER = /^[`'"([{<]+|[`'")\]}>.,;:!?]+$/g;
 const FILE_EXTENSION = /[^./]\.[a-z][a-z0-9]{0,5}$/i;
 const SLASH_JOINED_WORDS = /^[a-z]+(?:\/[a-z]+)+$/i;
+const REPOSITORY_PATH_PREFIX = /^(?:packages|scripts|skills|docs|plans|\.github)\//;
 const BLANKED_PATH = '\u0000';
 
 function isPathLikeToken(token) {
   const bare = token.replace(TOKEN_WRAPPER, '');
   if (FILE_EXTENSION.test(bare)) return true;
+  if (REPOSITORY_PATH_PREFIX.test(bare)) return true;
   return bare.includes('/') && !SLASH_JOINED_WORDS.test(bare);
 }
 

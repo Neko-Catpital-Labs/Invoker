@@ -24,15 +24,17 @@ assert.deepEqual(
 assert.deepEqual(validateSingleReviewUnitFocus({ texts: pathOnlyTexts, context: 'PR body' }), []);
 assert.deepEqual(validateReviewUnitFocus({ declaredReviewUnit: 'routing', texts: pathOnlyTexts, context: 'PR body' }), []);
 
-for (const pathToken of [
-  '`scripts/submit-workflow-chain.sh`',
-  '(scripts/submit-workflow-chain.sh).',
-  'skills/workflow-chain-submit/',
-  'skills/chat-submit/SKILL.md,',
-  'submit-workflow-chain.sh',
-  'https://github.com/Neko-Catpital-Labs/Invoker/blob/master/scripts/submit-workflow-chain.sh',
+for (const [pathToken, unit] of [
+  ['`scripts/submit-workflow-chain.sh`', 'write-path'],
+  ['(scripts/submit-workflow-chain.sh).', 'write-path'],
+  ['scripts/submit', 'write-path'],
+  ['skills/workflow-chain-submit/', 'write-path'],
+  ['skills/chat-submit/SKILL.md,', 'write-path'],
+  ['submit-workflow-chain.sh', 'write-path'],
+  ['https://github.com/Neko-Catpital-Labs/Invoker/blob/master/scripts/submit-workflow-chain.sh', 'write-path'],
+  ['packages/contracts', 'contract'],
 ]) {
-  assert.equal(detectReviewUnits(`Covers ${pathToken} only.`).has('write-path'), false, `path token must be blanked: ${pathToken}`);
+  assert.equal(detectReviewUnits(`Covers ${pathToken} only.`).has(unit), false, `path token must be blanked: ${pathToken}`);
 }
 
 const proseTexts = ['Submit the chain and route the wakeup to the worker.'];
