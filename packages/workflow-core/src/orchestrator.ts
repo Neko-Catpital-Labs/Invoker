@@ -751,6 +751,7 @@ export interface OrchestratorConfig {
   deferRunningUntilLaunch?: boolean;
   /** Resolve the repo default branch. Must throw when no safe branch is known. */
   resolveRepoDefaultBranch?: (repoUrl: string) => string;
+  defaultExecutionAgentProvider?: () => string | undefined;
   /** Invoked after recreate-class mutations reset the supplied task IDs. */
   onRecreateTasksReset?: (taskIds: readonly string[]) => void;
   /**
@@ -796,6 +797,7 @@ export class Orchestrator {
   private readonly deferRunningUntilLaunch: boolean;
   private readonly launchDeferralBackoffMs?: number;
   private readonly resolveRepoDefaultBranch: (repoUrl: string) => string;
+  private readonly defaultExecutionAgentProvider?: () => string | undefined;
   private readonly onRecreateTasksReset?: (taskIds: readonly string[]) => void;
 
   private activeWorkflowIds = new Set<string>();
@@ -858,6 +860,7 @@ export class Orchestrator {
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
     this.launchDeferralBackoffMs = config.launchDeferralBackoffMs;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
+    this.defaultExecutionAgentProvider = config.defaultExecutionAgentProvider;
     this.onRecreateTasksReset = config.onRecreateTasksReset;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
@@ -896,6 +899,14 @@ export class Orchestrator {
     for (const task of tasks) {
       this.stateMachine.restoreTask(task);
     }
+  }
+
+  private mergeNodeExecutionAgentConfig(workflowTasks: readonly TaskState[]): { executionAgent?: string } {
+    const declared = workflowTasks
+      .map((task) => task.config.executionAgent?.trim())
+      .find((agent): agent is string => Boolean(agent));
+    const executionAgent = declared || this.defaultExecutionAgentProvider?.()?.trim();
+    return executionAgent ? { executionAgent } : {};
   }
 
   /**
@@ -1599,7 +1610,12 @@ export class Orchestrator {
       mergeNodeId,
       descriptionForMergeNode(plan),
       leafIds,
-      { workflowId, isMergeNode: true, runnerKind: 'merge' },
+      {
+        workflowId,
+        isMergeNode: true,
+        runnerKind: 'merge',
+        ...this.mergeNodeExecutionAgentConfig(validatedTasks),
+      },
     );
 
     // ── Pass 2: all validation passed — persist everything ──
@@ -2759,7 +2775,12 @@ export class Orchestrator {
       newMergeId,
       mergeDescription,
       leafIds,
-      { workflowId: newWfId, isMergeNode: true, runnerKind: 'merge' },
+      {
+        workflowId: newWfId,
+        isMergeNode: true,
+        runnerKind: 'merge',
+        ...this.mergeNodeExecutionAgentConfig(sourceMergeNode ? [sourceMergeNode, ...createdNew] : createdNew),
+      },
     );
     this.createAndSync(newMerge);
     this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newMerge });
