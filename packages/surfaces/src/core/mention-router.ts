@@ -10,6 +10,11 @@ import type { WorkflowControl } from '../slack/workflow-assistant.js';
 
 export type ParsedPlanningRequest = ReturnType<typeof parsePlanningRequest>;
 
+export interface MentionMessage {
+  text: string;
+  userId?: string;
+}
+
 export interface MentionRoutingContext {
   presetKeys: string[];
   defaultPresetKey: string;
@@ -30,12 +35,27 @@ export type PlanningMentionRoute =
   | { kind: 'submit_denied' }
   | { kind: 'resolve_repo' };
 
+export interface PlanningMention {
+  parsed: ParsedPlanningRequest;
+  announceAutoSubmitUnavailable: boolean;
+  route: PlanningMentionRoute;
+}
+
 export function routeWorkflowMention(rawText: string): WorkflowMentionRoute {
   const text = rawText.replace(/<@[A-Z0-9]+>/g, '').trim();
   if (!text) return { kind: 'workflow_help' };
   const control = parseWorkflowControl(text);
   if (control) return { kind: 'workflow_control', control };
   return { kind: 'workflow_question', text };
+}
+
+export function routePlanningMention(message: MentionMessage, context: MentionRoutingContext): PlanningMention {
+  const parsed = parsePlanningRequest(message.text, context.presetKeys, context.defaultPresetKey);
+  const route = choosePlanningRoute(parsed, message.userId, context);
+  const announceAutoSubmitUnavailable = Boolean(parsed.autoSubmitRequested)
+    && route.kind !== 'unknown_preset'
+    && route.kind !== 'greeting';
+  return { parsed, announceAutoSubmitUnavailable, route };
 }
 
 export function choosePlanningRoute(
