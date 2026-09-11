@@ -259,14 +259,26 @@ export function validateReviewStackPrBodyAgainstLocalDiff(args: {
   baseBranch: string;
 }): string[] {
   const structuralErrors = validateReviewStackPrBody(args.body);
-  const validatorPath = join(args.cwd, 'scripts', 'validate-pr-body-local.mjs');
+  const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   if (!existsSync(validatorPath)) {
     return [
       ...structuralErrors,
       `CI-parity PR body validator is missing: ${validatorPath}`,
     ];
   }
+  return [...structuralErrors, ...runRepoLocalPrBodyChecker(args)];
+}
 
+export function repoLocalPrBodyCheckerPath(cwd: string): string {
+  return join(cwd, 'scripts', 'validate-pr-body-local.mjs');
+}
+
+export function runRepoLocalPrBodyChecker(args: {
+  body: string;
+  cwd: string;
+  baseBranch: string;
+}): string[] {
+  const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   const tempDir = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
   const bodyFile = join(tempDir, 'body.md');
   try {
@@ -276,16 +288,12 @@ export function validateReviewStackPrBodyAgainstLocalDiff(args: {
       [validatorPath, '--body-file', bodyFile, '--base', args.baseBranch],
       { cwd: args.cwd, encoding: 'utf8' },
     );
-    if (result.status === 0) return structuralErrors;
+    if (result.status === 0) return [];
 
     const output = `${String(result.stdout ?? '')}\n${String(result.stderr ?? '')}`.trim();
-    return [
-      ...structuralErrors,
-      `CI-parity PR body validation failed: ${output || 'validator exited without output'}`,
-    ];
+    return [`CI-parity PR body validation failed: ${output || 'validator exited without output'}`];
   } catch (error) {
     return [
-      ...structuralErrors,
       `CI-parity PR body validation could not run: ${error instanceof Error ? error.message : String(error)}`,
     ];
   } finally {
