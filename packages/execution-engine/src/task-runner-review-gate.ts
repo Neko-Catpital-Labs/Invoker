@@ -282,9 +282,10 @@ export async function pollMergeGateTask(
     const currentGate = current!.execution.reviewGate ?? latestGate;
     if (currentGate) {
       latestGate = updateReviewGateArtifact(currentGate, providerId, status);
-      host.persistence.updateTask(task.id, {
+      host.orchestrator.recordReviewGateStatus(task.id, {
         ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
-        execution: { reviewGate: latestGate, reviewStatus: status.statusText },
+        reviewGate: latestGate,
+        reviewStatus: status.statusText,
       });
       if (!approvedGate && reviewGateIsApproved(latestGate)) {
         approvedGate = true;
@@ -298,9 +299,9 @@ export async function pollMergeGateTask(
       continue;
     }
 
-    host.persistence.updateTask(task.id, {
+    host.orchestrator.recordReviewGateStatus(task.id, {
       ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
-      execution: { reviewStatus: status.statusText },
+      reviewStatus: status.statusText,
     });
     if (!approvedGate && status.lifecycle === 'merged') {
       approvedGate = true;

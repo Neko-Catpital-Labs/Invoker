@@ -3477,6 +3477,23 @@ export class Orchestrator {
     return updated;
   }
 
+  recordReviewGateStatus(
+    taskId: string,
+    update: Pick<TaskExecution, 'reviewGate' | 'reviewStatus'> & { status?: 'closed' },
+  ): TaskState | undefined {
+    const task = this.stateGetTask(taskId);
+    if (!task) return undefined;
+
+    const { status, ...execution } = update;
+    const changes: TaskStateChanges = {
+      ...(status !== undefined ? { status } : {}),
+      execution,
+    };
+    const updated = this.writeAndSync(task.id, changes, { skipWorkflowStatusSync: status === undefined });
+    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
+    return updated;
+  }
+
   getAllTasks(): TaskState[] {
     return this.stateMachine.getAllTasks();
   }

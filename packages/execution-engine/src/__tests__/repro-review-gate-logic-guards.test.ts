@@ -176,11 +176,11 @@ describe('repro #1865: reviewPollStillMatches blocks writes after the task left 
     const tasks = new Map<string, TaskState>([[task.id, task]]);
 
     const warn = vi.fn();
-    const updateTask = vi.fn();
+    const recordReviewGateStatus = vi.fn();
     const orchestrator = {
       getTask: (id: string) => tasks.get(id),
+      recordReviewGateStatus,
     };
-    const persistence = { updateTask };
     const mergeGateProvider = {
       checkApproval: async () => {
         tasks.set(task.id, failed);
@@ -197,7 +197,6 @@ describe('repro #1865: reviewPollStillMatches blocks writes after the task left 
     };
     const runner = makeRunner({
       orchestrator: orchestrator as unknown as TaskRunnerConfig['orchestrator'],
-      persistence: persistence as unknown as TaskRunnerConfig['persistence'],
       mergeGateProvider: mergeGateProvider as unknown as TaskRunnerConfig['mergeGateProvider'],
       logger: logger as unknown as TaskRunnerConfig['logger'],
     });
@@ -207,7 +206,7 @@ describe('repro #1865: reviewPollStillMatches blocks writes after the task left 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`task=${task.id}`));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('providerId=pr#1'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('mismatchedFields=status'));
-    expect(updateTask).not.toHaveBeenCalled();
+    expect(recordReviewGateStatus).not.toHaveBeenCalled();
   });
 });
 
@@ -232,9 +231,7 @@ describe('repro #1811 sibling: a closed PR must not complete a scalar merge gate
     const orchestrator = {
       getTask: (id: string) => tasks.get(id),
       approve: async () => { approveCalled = true; return []; },
-    };
-    const persistence = {
-      updateTask: (id: string, changes: unknown) => { updateCalls.push({ id, changes }); return tasks.get(id); },
+      recordReviewGateStatus: (id: string, changes: unknown) => { updateCalls.push({ id, changes }); return tasks.get(id); },
     };
     const mergeGateProvider = {
       checkApproval: async () => ({ lifecycle: 'closed', rejected: false, statusText: 'Closed' }),
@@ -242,7 +239,6 @@ describe('repro #1811 sibling: a closed PR must not complete a scalar merge gate
 
     const runner = makeRunner({
       orchestrator: orchestrator as unknown as TaskRunnerConfig['orchestrator'],
-      persistence: persistence as unknown as TaskRunnerConfig['persistence'],
       mergeGateProvider: mergeGateProvider as unknown as TaskRunnerConfig['mergeGateProvider'],
     });
 
