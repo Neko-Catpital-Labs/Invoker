@@ -149,3 +149,39 @@ candidates:
       runs when a human sets INVOKER_FIX_CI_TOKEN_BUDGET_LIVE=1 by hand;
       without that variable it stands down and exits 0, and it is never wired
       into `pnpm test`, nightly tooling, or any CI job.
+
+  - id: discord-live-e2e-guard
+    tier: nightly
+    hermetic: true
+    description: >-
+      Proves the live Discord harness refuses any guild other than
+      DISCORD_TEST_GUILD_ID before loading the Discord client, reports an
+      unconfigured run as UNCHECKED with its own non-zero exit code, and
+      never prints the bot token. Subprocesses run with networking blocked.
+    script: scripts/test-discord-live-e2e.mjs
+    command: node scripts/test-discord-live-e2e.mjs
+
+  - id: discord-live-e2e-loop
+    tier: nightly
+    hermetic: true
+    description: >-
+      Drives the live Discord harness's full plan loop and cleanup against an
+      in-memory fake Discord using the real DiscordSurface bundle, proving the
+      loop's assertions, the runtime per-write guild guard, and that cleanup
+      removes only what the harness created.
+    script: scripts/test-discord-live-e2e-loop.mjs
+    command: 'pnpm --filter "@invoker/discord..." build && node scripts/test-discord-live-e2e-loop.mjs'
+
+  - id: discord-live-e2e
+    tier: manual
+    hermetic: false
+    description: >-
+      Live Discord harness: mention, thread, /plan review message, Approve,
+      private workflow channel, progress and workflow-channel controls against
+      a real Discord test guild, followed by cleanup of everything it created.
+    script: scripts/discord-live-e2e.mjs
+    command: node scripts/discord-live-e2e.mjs
+    reason: >-
+      Calls the live Discord API with a real bot token and writes to a
+      dedicated test guild, so it needs credentials a CI job does not hold;
+      without them it exits 2 (UNCHECKED), never 0.
