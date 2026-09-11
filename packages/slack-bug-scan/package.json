@@ -9,6 +9,11 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "require": "./src/index.ts"
+    },
+    "./repo-url": {
+      "types": "./src/repo-url.ts",
+      "import": "./src/repo-url.ts",
+      "require": "./src/repo-url.ts"
     }
   },
   "scripts": {
