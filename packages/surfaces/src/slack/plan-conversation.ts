@@ -125,6 +125,7 @@ export interface PlanConversationConfig {
   planningCommandBuilder?: PlanningCommandBuilder;
   /** Root directory for codebase exploration. */
   workingDir?: string;
+  planDraftDir?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
   timeoutMs?: number;
   /** Slack thread timestamp. Required for persistence. */
@@ -525,6 +526,7 @@ export class PlanConversation {
   private _submittedPlanText: string | null = null;
   private _planSubmitted = false;
   readonly workingDir?: string;
+  private planDraftDir?: string;
   private timeoutMs: number;
   private threadTs?: string;
   private channelId?: string;
@@ -570,6 +572,7 @@ export class PlanConversation {
     this.mode = config.mode ?? 'plan';
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.workingDir = config.workingDir;
+    this.planDraftDir = config.planDraftDir;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.threadTs = config.threadTs;
     this.channelId = config.channelId;
@@ -972,8 +975,10 @@ export class PlanConversation {
   // its output limit. Gated on workingDir + threadTs; without both, planning
   // falls back to inline extraction unchanged. `.invoker/` is gitignored.
   planDraftFilePath(): string | null {
-    if (!this.workingDir || !this.threadTs) return null;
+    if (!this.threadTs) return null;
     const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (this.planDraftDir) return join(this.planDraftDir, `${safeId}.yaml`);
+    if (!this.workingDir) return null;
     return join(this.workingDir, '.invoker', 'plan-drafts', `${safeId}.yaml`);
   }
 
