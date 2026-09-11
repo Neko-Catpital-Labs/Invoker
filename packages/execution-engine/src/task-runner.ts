@@ -6,7 +6,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, readdirSync, copyFileSync, rmSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, readdirSync, copyFileSync, rmSync, mkdtempSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -53,7 +53,9 @@ import {
   buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
   parseMakePrStackPublishResult,
+  repoLocalPrBodyCheckerPath,
   resolveSkillPathViaAgent,
+  runRepoLocalPrBodyChecker,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
   validateReviewStackPrBody,
@@ -1451,6 +1453,7 @@ export class TaskRunner {
     repoUrl?: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }> {
     const strictReviewStack = isInvokerRepoUrl(args.repoUrl);
+    const hasRepoChecker = !strictReviewStack && existsSync(repoLocalPrBodyCheckerPath(args.cwd));
     if (!this.executionAgentRegistry) {
       if (strictReviewStack) {
         throw new Error(
@@ -1508,7 +1511,16 @@ export class TaskRunner {
             cwd: args.cwd,
             baseBranch: args.baseBranch,
           })
-          : validateCanonicalPrBody(result.body);
+          : hasRepoChecker
+            ? [
+              ...validateCanonicalPrBody(result.body),
+              ...runRepoLocalPrBodyChecker({
+                body: result.body,
+                cwd: args.cwd,
+                baseBranch: args.baseBranch,
+              }),
+            ]
+            : validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
           this.logger.warn(
             `[pr-authoring] body validation failed agent=${agent.name} `
@@ -1532,6 +1544,13 @@ export class TaskRunner {
       throw new Error(
         '[pr-authoring] All AI agents failed to author a review-stack PR body for the Invoker repo; '
           + `refusing canonical fallback (it cannot pass scripts/validate-pr-body.mjs). Errors: ${errors.join(' | ')}`,
+      );
+    }
+
+    if (hasRepoChecker) {
+      throw new Error(
+        '[pr-authoring] target repo checker rejected every PR body; refusing canonical fallback. '
+          + `Errors: ${errors.join(' | ')}`,
       );
     }
 
