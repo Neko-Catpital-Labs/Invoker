@@ -14,7 +14,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   formatPlanSummaryLines,
   formatSlackPlanBrief,
-  resolvePlanningSubmitAction,
   summarizePlanText,
   type PlanSummary,
   type PlanningConfirmationMode,
@@ -25,6 +24,9 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
+import { routePlanningMention, routeRepoScopedMention, routeWorkflowMention } from '../core/mention-router.js';
+import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest } from './mention-parsers.js';
+import type { ChannelRepoSetupPair, LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
@@ -46,7 +48,7 @@ import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from 
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
-import { buildAssistantPrompt, parseWorkflowControl } from './workflow-assistant.js';
+import { buildAssistantPrompt } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, PlanningDraft, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 import { SlackPlanDraftRepository } from '@invoker/data-store';
@@ -187,10 +189,8 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
 
-export type LocalRequest =
-  | { kind: 'command'; text: string }
-  | { kind: 'agent'; text: string }
-  | { kind: 'change'; text: string };
+export { extractRepoUrlFromMessage, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+export type { LocalRequest } from './mention-parsers.js';
 
 export { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
 
@@ -241,24 +241,9 @@ function capTailChars(value: string, max: number): string {
 
 // ── Planning request parsing ─────────────────────────────────
 
-const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
-const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
-const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
-const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
 const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
 const CHANNEL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
-const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
-const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
-
-/** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
-function looksLikePreset(normalized: string): boolean {
-  return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
-}
-
-export function extractRepoUrlFromMessage(text: string): string | undefined {
-  return extractMessageRepoCandidates(text)[0];
-}
 
 type RepoParts = {
   host: string;
@@ -303,118 +288,6 @@ function repoDisplayName(repoUrl: string): string {
   return segments.length >= 2 ? segments.slice(-2).join('/') : parts.path;
 }
 
-/** Peel leading `[preset]` and `[repo:]` tags off a lobby mention; the rest is the request text. A preset-shaped tag matching no key is returned as `unknownPreset` so the caller can reject it instead of silently using the default. */
-export function parsePlanningRequest(
-  text: string,
-  presetKeys: string[],
-  defaultPresetKey: string,
-): {
-  presetKey: string;
-  repo?: string;
-  repositoryUrls?: string[];
-  hasExplicitPreset?: boolean;
-  confirmationMode?: PlanningConfirmationMode;
-  autoSubmitRequested?: boolean;
-  text: string;
-  unknownPreset?: string;
-} {
-  let rest = text.replace(/<@[^>]+>/g, '').trim();
-  let presetKey = defaultPresetKey;
-  let repo: string | undefined;
-  let confirmationMode: PlanningConfirmationMode | undefined;
-  let autoSubmitRequested = false;
-  let unknownPreset: string | undefined;
-  let hasExplicitPreset = false;
-  const keyset = new Set(presetKeys.map((k) => k.toLowerCase()));
-  const tagRe = /^\[([^\]]*)\]\s*/;
-
-  for (;;) {
-    const m = tagRe.exec(rest);
-    if (!m) break;
-    const raw = m[1].trim();
-    if (/^repo:/i.test(raw)) {
-      repo = raw.slice(raw.indexOf(':') + 1).trim();
-      rest = rest.slice(m[0].length);
-      continue;
-    }
-    const normalized = raw.toLowerCase().replace(/\s+/g, '').replace(/^plain/, '');
-    if (normalized === 'auto-submit' || normalized === 'autosubmit') {
-      confirmationMode = 'require';
-      autoSubmitRequested = true;
-      rest = rest.slice(m[0].length);
-      continue;
-    }
-    if (keyset.has(normalized)) {
-      presetKey = normalized;
-      hasExplicitPreset = true;
-      rest = rest.slice(m[0].length);
-      continue;
-    }
-    if (looksLikePreset(normalized)) {
-      unknownPreset = raw;
-      rest = rest.slice(m[0].length);
-    }
-    break;
-  }
-
-  const repositoryUrls = extractRepositoryUrls(rest);
-  return {
-    presetKey,
-    repo,
-    text: rest.trim(),
-    ...(repositoryUrls.length > 0 ? { repositoryUrls } : {}),
-    ...(hasExplicitPreset ? { hasExplicitPreset } : {}),
-    ...(confirmationMode ? { confirmationMode } : {}),
-    ...(autoSubmitRequested ? { autoSubmitRequested } : {}),
-    ...(unknownPreset ? { unknownPreset } : {}),
-  };
-}
-
-function extractRepositoryUrls(text: string): string[] {
-  return extractMessageRepoCandidates(text);
-}
-
-function extractMessageRepoCandidates(text: string): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  for (const match of text.matchAll(MESSAGE_REPO_TOKEN_RE)) {
-    let candidate = (match[1] ?? match[0]).trim();
-    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
-      candidate = candidate.slice(0, -1);
-    }
-
-    const accepted = normalizeSupportedRepoCandidate(candidate);
-
-    if (accepted && !seen.has(accepted)) {
-      seen.add(accepted);
-      urls.push(accepted);
-    }
-  }
-  return urls;
-}
-
-function normalizeSupportedRepoCandidate(candidate: string): string | undefined {
-  if (/^git@[\w.-]+:.+/.test(candidate)) return candidate;
-  if (/^ssh:\/\//i.test(candidate)) return candidate;
-  if (!/^https?:\/\//i.test(candidate) || /[?#]/.test(candidate)) return undefined;
-
-  let url: URL;
-  try {
-    url = new URL(candidate);
-  } catch {
-    return undefined;
-  }
-  if (!url.host || url.username || url.password || url.search || url.hash) return undefined;
-
-  const host = url.host.toLowerCase();
-  if (host === 'github.com') {
-    return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
-      ? candidate.replace(/\/$/, '')
-      : undefined;
-  }
-  return url.pathname.endsWith('.git') ? candidate : undefined;
-}
-
 function repositoryIdentity(repoUrl: string): string {
   const parts = parseRepoParts(repoUrl);
   if (!parts) return stripGitSuffix(repoUrl.trim()).toLowerCase();
@@ -429,95 +302,6 @@ function channelRepoBindingWorkflowId(channelId: string): string {
 
 function isChannelRepoBinding(mapping: WorkflowChannel | undefined | null): boolean {
   return !!mapping?.workflowId?.startsWith(CHANNEL_REPO_BINDING_WORKFLOW_PREFIX);
-}
-
-function normalizePublicChannelName(name: string): string {
-  return name.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
-}
-
-interface ChannelRepoSetupPair {
-  channelName: string;
-  repoUrl: string;
-}
-
-function parseChannelRepoSetupRequest(text: string): ChannelRepoSetupPair[] | null {
-  if (!CHANNEL_REPO_SETUP_INTENT_RE.test(text)) return null;
-  const repositoryUrls = extractRepositoryUrls(text);
-  if (repositoryUrls.length === 0) return null;
-
-  const pairs: ChannelRepoSetupPair[] = [];
-  const seenChannels = new Set<string>();
-  for (const match of text.matchAll(CHANNEL_REPO_PAIR_RE)) {
-    const channelName = normalizePublicChannelName(match[1]);
-    let rawRepo = (match[3] ?? match[2]).trim();
-    while (rawRepo && TRAILING_URL_PUNCTUATION.has(rawRepo.at(-1)!)) {
-      rawRepo = rawRepo.slice(0, -1);
-    }
-    const repoUrl = normalizeSupportedRepoCandidate(rawRepo);
-    if (!channelName || !repoUrl || seenChannels.has(channelName)) return null;
-    seenChannels.add(channelName);
-    pairs.push({ channelName, repoUrl });
-  }
-
-  return pairs.length === repositoryUrls.length ? pairs : null;
-}
-
-// ── Lobby intent routing ─────────────────────────────────────
-
-export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
-  const trimmed = text.trim();
-  // A quick status ask is a single short line. Longer or multi-line text is an
-  // instruction that happens to mention "workflow" and a progress-ish word in
-  // passing, not a request for a status report — fall through to conversation.
-  if (/\n/.test(trimmed)) return null;
-  if (trimmed.split(/\s+/).length > 12) return null;
-  if (!/\bworkflows?\b/i.test(trimmed)) return null;
-  if (!/\b(status|how many|count|running|active|in progress|progress)\b/i.test(trimmed)) return null;
-  return { intent: 'command', operation: 'status', target: { all: true } };
-}
-
-/** Explicit local-mode prefixes. `run local:` means “use the local agent”; `exec local:` means raw shell. */
-export function parseLocalRequest(text: string): LocalRequest | null {
-  const trimmed = text.trim();
-  const commandPatterns = [
-    /^(?:exec|execute)\s+local(?:ly)?\s*:\s*/i,
-    /^local\s+(?:command|cmd)\s*:\s*/i,
-  ];
-  for (const pattern of commandPatterns) {
-    const match = pattern.exec(trimmed);
-    if (match) {
-      const rest = trimmed.slice(match[0].length).trim();
-      return rest ? { kind: 'command', text: rest } : null;
-    }
-  }
-
-  const agentPatterns = [
-    /^run\s+local(?:ly)?\s*:\s*/i,
-    /^local\s+run\s*:\s*/i,
-  ];
-  for (const pattern of agentPatterns) {
-    const match = pattern.exec(trimmed);
-    if (match) {
-      const rest = trimmed.slice(match[0].length).trim();
-      return rest ? { kind: 'agent', text: rest } : null;
-    }
-  }
-
-  const changePatterns = [
-    /^local\s*:\s*/i,
-    /^local\s+(?:change|edit|patch)\s*:\s*/i,
-    /^(?:change|edit|patch)\s+local(?:ly)?\s*:\s*/i,
-    /^locally\s*:\s*/i,
-  ];
-  for (const pattern of changePatterns) {
-    const match = pattern.exec(trimmed);
-    if (match) {
-      const rest = trimmed.slice(match[0].length).trim();
-      return rest ? { kind: 'change', text: rest } : null;
-    }
-  }
-
-  return null;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
@@ -1160,57 +944,51 @@ export class SlackSurface implements Surface {
     say: SayFn,
     channel: string,
   ): Promise<void> {
-    const parsed = parsePlanningRequest(
-      event.text ?? '',
-      Object.keys(this.harnessPresets),
-      this.defaultHarnessPreset,
-    );
-    this.log('slack', 'info', `@mention: instance=${this.instanceId} event_ts=${event.ts} "${parsed.text.slice(0, 100)}${parsed.text.length > 100 ? '...' : ''}" (user=${event.user}, preset=${parsed.presetKey}, repo=${parsed.repo ?? 'default'})`);
-    if (parsed.unknownPreset) {
-      await say({
-        text: `Unknown preset \`[${parsed.unknownPreset}]\`. Valid presets: ${Object.keys(this.harnessPresets).join(', ')}. Omit the tag to use the default (\`${this.defaultHarnessPreset}\`).`,
-        thread_ts: event.ts,
-      });
-      return;
-    }
-    if (!parsed.text) {
-      await say({
-        text: 'Hi! Tag me with a message to start a plan conversation. Example: `@Invoker I want to add a REST API endpoint`',
-        thread_ts: event.ts,
-      });
-      return;
-    }
     const threadTs = event.thread_ts ?? event.ts;
-    if (parsed.autoSubmitRequested) {
+    const mention = routePlanningMention({ text: event.text ?? '', userId: event.user }, {
+      presetKeys: Object.keys(this.harnessPresets),
+      defaultPresetKey: this.defaultHarnessPreset,
+      readyDraft: () => this.slackPlanDraftRepo?.getReady(channel, threadTs),
+    });
+    const { parsed, route } = mention;
+    this.log('slack', 'info', `@mention: instance=${this.instanceId} event_ts=${event.ts} "${parsed.text.slice(0, 100)}${parsed.text.length > 100 ? '...' : ''}" (user=${event.user}, preset=${parsed.presetKey}, repo=${parsed.repo ?? 'default'})`);
+    if (mention.announceAutoSubmitUnavailable) {
       await say({
         text: 'Auto-submit is unavailable in conversational planning. I will stage the draft for review instead.',
         thread_ts: threadTs,
       });
     }
-    if (/^\/plan\s*$/i.test(parsed.text)) {
-      await this.handleExplicitPlanAction(channel, threadTs, event.user ?? 'unknown', say);
-      return;
-    }
-
-    const channelRepoSetup = parseChannelRepoSetupRequest(parsed.text);
-    if (channelRepoSetup) {
-      await this.handleChannelRepoSetup(channelRepoSetup, event, channel, say);
-      return;
-    }
-
-    const readyDraft = this.slackPlanDraftRepo?.getReady(channel, threadTs);
-    const submitAction = resolvePlanningSubmitAction(parsed.text, Boolean(readyDraft));
-    if (submitAction === 'submit_ready' && readyDraft) {
-      if (!event.user || readyDraft.requestedBy !== event.user) {
+    switch (route.kind) {
+      case 'unknown_preset':
+        await say({
+          text: `Unknown preset \`[${route.preset}]\`. Valid presets: ${Object.keys(this.harnessPresets).join(', ')}. Omit the tag to use the default (\`${this.defaultHarnessPreset}\`).`,
+          thread_ts: event.ts,
+        });
+        return;
+      case 'greeting':
+        await say({
+          text: 'Hi! Tag me with a message to start a plan conversation. Example: `@Invoker I want to add a REST API endpoint`',
+          thread_ts: event.ts,
+        });
+        return;
+      case 'explicit_plan':
+        await this.handleExplicitPlanAction(channel, threadTs, event.user ?? 'unknown', say);
+        return;
+      case 'channel_repo_setup':
+        await this.handleChannelRepoSetup(route.pairs, event, channel, say);
+        return;
+      case 'submit_denied':
         await say({ text: 'Only the user who requested this plan may submit it.', thread_ts: threadTs });
         return;
-      }
-      try {
-        await this.planDrafts.submitPlanDraft(readyDraft, { userId: event.user });
-      } catch (error) {
-        await say({ text: error instanceof Error ? error.message : String(error), thread_ts: threadTs });
-      }
-      return;
+      case 'submit_ready_draft':
+        try {
+          await this.planDrafts.submitPlanDraft(route.draft, { userId: route.userId });
+        } catch (error) {
+          await say({ text: error instanceof Error ? error.message : String(error), thread_ts: threadTs });
+        }
+        return;
+      case 'resolve_repo':
+        break;
     }
 
     const preset = this.resolveHarnessPreset(parsed.presetKey);
@@ -1249,64 +1027,48 @@ export class SlackSurface implements Surface {
       });
     }
 
-    if (/^\/plan\s+.+/i.test(parsed.text)) {
-      const context: PlanningContext = {
-        repoUrl: routeRepoUrl,
-        presetKey: parsed.presetKey,
-        workingDir: this.workingDir,
-        requestedBy: event.user,
-        lobbyChannel: channel,
-        confirmationMode: parsed.confirmationMode ?? this.defaultPlanningConfirmationMode,
-      };
-      await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
-        kind: 'plan_intent',
-        requestText: parsed.text.replace(/^\/plan\s+/i, ''),
-        userId: event.user ?? 'unknown',
-        context,
-        channel,
-      }, say);
-      return;
-    }
-
-    // Confirm/cancel a staged action first (plain yes/no in-thread).
-    if (await this.approvals.resolveConfirm(threadTs, parsed.text, say, channel)) return;
-
-    // Deterministic verb commands respond instantly and take priority over agent sessions.
-    const ctrl = parseLobbyControl(parsed.text);
-    if (ctrl?.kind === 'op' || ctrl?.kind === 'restart') {
-      if (!this.allowsLobbyControls(channel)) {
+    const scoped = routeRepoScopedMention(parsed, {
+      allowsLobbyControls: this.allowsLobbyControls(channel),
+      hasPendingConfirm: () => this.approvals.getPendingConfirm(threadTs) !== undefined,
+    });
+    switch (scoped.kind) {
+      case 'plan_intent': {
+        const context: PlanningContext = {
+          repoUrl: routeRepoUrl,
+          presetKey: parsed.presetKey,
+          workingDir: this.workingDir,
+          requestedBy: event.user,
+          lobbyChannel: channel,
+          confirmationMode: parsed.confirmationMode ?? this.defaultPlanningConfirmationMode,
+        };
+        await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
+          kind: 'plan_intent',
+          requestText: scoped.requestText,
+          userId: event.user ?? 'unknown',
+          context,
+          channel,
+        }, say);
+        return;
+      }
+      case 'confirm_reply':
+        await this.approvals.resolveConfirm(threadTs, parsed.text, say, channel);
+        return;
+      case 'control_rejected':
         await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
-      }
-      if (ctrl.kind === 'op') {
-        await this.approvals.requestOp({ operation: ctrl.operation, target: ctrl.target }, threadTs, channel, say);
+      case 'workflow_op':
+        await this.approvals.requestOp(scoped.op, threadTs, channel, say);
         return;
-      }
-      await this.approvals.requestRestart(threadTs, say);
-      return;
-    }
-
-    const localRequest = parseLocalRequest(parsed.text);
-    if (localRequest?.kind === 'command') {
-      if (!this.allowsLobbyControls(channel)) {
-        await this.approvals.rejectNonLobbyControl(threadTs, say);
+      case 'restart':
+        await this.approvals.requestRestart(threadTs, say);
         return;
-      }
-      await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
-      return;
-    }
-
-    const workflowStatusQuery = parseWorkflowStatusQuery(localRequest?.kind === 'agent' ? localRequest.text : parsed.text);
-    if (workflowStatusQuery?.intent === 'command') {
-      if (!this.allowsLobbyControls(channel)) {
-        await this.approvals.rejectNonLobbyControl(threadTs, say);
+      case 'local_command':
+        await this.handleLocalRequest(scoped.request, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
         return;
-      }
-      await this.approvals.requestOp({ operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
-      return;
+      case 'conversation_turn':
+        break;
     }
-
-    const requestText = localRequest?.kind === 'agent' || localRequest?.kind === 'change' ? localRequest.text : parsed.text;
+    const { requestText, explicitLocalAgent } = scoped;
 
     if (this.enableImmediateAck) {
       await this.sendImmediateAck(threadTs, say);
@@ -1348,7 +1110,6 @@ export class SlackSurface implements Surface {
         }
       }
 
-      const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
       const opts = {
         tool: contextPreset.tool,
         model: contextPreset.model,
@@ -2173,9 +1934,9 @@ ${text}`;
   ): Promise<void> {
     const threadTs = event.thread_ts ?? event.ts;
     const channel = event.channel ?? mapping.channelId;
-    const text = (event.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
+    const route = routeWorkflowMention(event.text ?? '');
     this.log('slack', 'info', `[WORKFLOW_MENTION] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} workflow=${mapping.workflowId}`);
-    if (!text) {
+    if (route.kind === 'workflow_help') {
       await say({
         text: `I answer questions about workflow \`${mapping.workflowId}\` and run controls: \`status\`, \`approve <id>\`, \`reject <id>\`, \`retry <id>\`, \`input <id>: <text>\`.`,
         thread_ts: threadTs,
@@ -2183,11 +1944,11 @@ ${text}`;
       return;
     }
 
-    const ctrl = parseWorkflowControl(text);
-    if (ctrl) {
-      await this.dispatchWorkflowControl(mapping, ctrl, say, threadTs);
+    if (route.kind === 'workflow_control') {
+      await this.dispatchWorkflowControl(mapping, route.control, say, threadTs);
       return;
     }
+    const { text } = route;
 
     if (!this.gatherWorkflowContext) {
       await say({ text: 'Workflow context is not available in this deployment.', thread_ts: threadTs });
