@@ -16,6 +16,7 @@ import { FailureClassifier, type TaskState } from '@invoker/workflow-core';
 import {
   defaultCircuitBreakerPath,
   isCircuitBreakerPaused,
+  isFailureCoveredByCircuitBreaker,
   loadCircuitBreakerState,
   tripCircuitBreaker,
 } from './auto-fix-circuit-breaker.js';
@@ -551,8 +552,13 @@ function validateAutoFixCandidate(
   }
 
   if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.error)) {
-    tripAutoFixCircuitBreaker(options);
-    skipAutoFixCandidate(options, candidate, 'usage-limit', { status: latest.status });
+    const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
+    const alreadyCounted = isFailureCoveredByCircuitBreaker(breakerState, latest.execution.completedAt);
+    if (!alreadyCounted) tripAutoFixCircuitBreaker(options);
+    skipAutoFixCandidate(options, candidate, 'usage-limit', {
+      status: latest.status,
+      rearmedCircuitBreaker: !alreadyCounted,
+    });
     return undefined;
   }
 
