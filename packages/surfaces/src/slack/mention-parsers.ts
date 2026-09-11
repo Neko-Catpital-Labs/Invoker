@@ -4,6 +4,7 @@ export type LocalRequest =
   | { kind: 'change'; text: string };
 
 export const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
+export const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 
 export function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
