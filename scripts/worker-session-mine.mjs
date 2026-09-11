@@ -213,20 +213,21 @@ tasks:
 
   - id: reflect-and-fix
     description: |
-      Reflect via catstack and open a PR to catstack or Invoker by root cause.
-      Review claim: Accepted findings land as a non-merged PR in the correct repo for session ${hash}.
+      Reflect via catstack and route each Accepted finding by root cause: catstack gets its own PR; Invoker changes are committed here for the merge gate to publish.
+      Review claim: Accepted findings land exactly once, as a catstack PR or an Invoker commit published by this workflow's merge gate, for session ${hash}.
       Review lane: behavior
       Safety invariant: Never vendor skills/reflect/ into Invoker; never merge; original workflow untouched.
       Acceptance criteria:
-      - Summary says no durable finding or lists PR URL(s).
+      - Summary says no durable finding, lists catstack PR URL(s), or names the Invoker commit(s) left for the merge gate.
       - test ! -e skills/reflect
     maxTurns: 30
     prompt: |
-      Goal: Reflect on thrashy Invoker worker session ${sessionId} (agent=${agentName}) and open a non-merged PR to catstack or Invoker.
+      Goal: Reflect on thrashy Invoker worker session ${sessionId} (agent=${agentName}) and land each Accepted finding exactly once, unmerged.
       Safety invariant: Never vendor skills/reflect/; never merge; do not touch the original repair workflow.
       Implementation details: |
         Clone https://github.com/EdbertChan/catstack.git. Follow engine/skills/reflect/SKILL.md against ${jsonlPath}.
-        Skill/hook/methodology -> catstack PR. Invoker harness/prompt/product -> Invoker PR. Never merge.
+        Skill/hook/methodology -> catstack PR. Invoker harness/prompt/product -> commit in this task's worktree only.
+        For Invoker changes, do not push and do not open a PR: this workflow's merge gate owns Invoker publication (onFinish: pull_request). Never merge.
       Pass condition: Exit 0 when acceptance criteria hold.
     dependencies:
       - repro-thrash
