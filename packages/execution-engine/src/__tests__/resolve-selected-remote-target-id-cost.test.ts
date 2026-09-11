@@ -55,11 +55,14 @@ describe('resolveSelectedRemoteTargetId bounded event lookup', () => {
     };
     adapter.saveTask('wf-1', task);
 
-    adapter.logEvent('wf-1/t1', 'task.executor.selected', { poolMemberId: 'stale-target' });
-    for (let index = 0; index < 20_000; index += 1) {
-      adapter.logEvent('wf-1/t1', 'debug.progress', { index });
-    }
-    adapter.logEvent('wf-1/t1', 'task.executor.selected', { poolMemberId: 'current-target' });
+    const seeded = adapter;
+    seeded.runInTransaction(() => {
+      seeded.logEvent('wf-1/t1', 'task.executor.selected', { poolMemberId: 'stale-target' });
+      for (let index = 0; index < 20_000; index += 1) {
+        seeded.logEvent('wf-1/t1', 'debug.progress', { index });
+      }
+      seeded.logEvent('wf-1/t1', 'task.executor.selected', { poolMemberId: 'current-target' });
+    });
 
     const host = { persistence: adapter } as unknown as ConflictResolverHost;
     const runnableTask = { ...task, execution: {} } as unknown as ReturnType<Orchestrator['getTask']> & {};
