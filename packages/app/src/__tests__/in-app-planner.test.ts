@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
@@ -2294,6 +2294,157 @@ describe('planning chat worktree provisioning', () => {
       expect(parsed.mcpServers.invoker.command).toBe('invoker-cli');
     } finally {
       rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('planner scratch folder for sessions without a repo worktree', () => {
+  const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
+  let invokerHome: string;
+  let readOnlyWorkingDir: string;
+
+  beforeEach(() => {
+    invokerHome = mkdtempSync(join(tmpdir(), 'in-app-scratch-home-'));
+    readOnlyWorkingDir = mkdtempSync(join(tmpdir(), 'in-app-scratch-readonly-'));
+    chmodSync(readOnlyWorkingDir, 0o555);
+    vi.stubEnv('INVOKER_DB_DIR', invokerHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    chmodSync(readOnlyWorkingDir, 0o755);
+    rmSync(readOnlyWorkingDir, { recursive: true, force: true });
+    rmSync(invokerHome, { recursive: true, force: true });
+  });
+
+  async function createWorkspacelessSession(
+    sessions: ReturnType<typeof createInAppPlanningChatSessions>,
+    planningSessionStore?: SQLiteAdapter,
+  ): Promise<InAppPlanningChatSession> {
+    const created = await createPlanningChatSession({}, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      workingDir: readOnlyWorkingDir,
+      planningSessionStore,
+    });
+    if (!created.ok) throw new Error(created.error);
+    const session = sessions.get(created.session.id);
+    if (!session) throw new Error('expected session in map');
+    return session;
+  }
+
+  function writeDraftFromPlanner(session: InAppPlanningChatSession): void {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementationOnce(async () => {
+      const draftPath = session.conversation.planDraftFilePath();
+      if (!draftPath) throw new Error('expected draft path');
+      writeFileSync(draftPath, VALID_PLAN_TEXT, 'utf8');
+      return 'Plan written.';
+    });
+  }
+
+  it('puts the draft file under <home>/planning-sessions/plan-drafts when the working folder is read-only', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const session = await createWorkspacelessSession(sessions);
+
+    expect(session.conversation.workingDir).toBe(readOnlyWorkingDir);
+    expect(session.conversation.planDraftFilePath()).toBe(
+      join(invokerHome, 'planning-sessions', 'plan-drafts', `${session.id}.yaml`),
+    );
+  });
+
+  it('turns the YAML the planner writes to the scratch draft file into the session draft', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const session = await createWorkspacelessSession(sessions);
+    writeDraftFromPlanner(session);
+
+    const result = await sendPlanningChatMessage({
+      sessionId: session.id,
+      message: 'draft the full plan',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      workingDir: readOnlyWorkingDir,
+    });
+
+    expect(result).toMatchObject({ ok: true, draftPlanAvailable: true });
+    expect(sessions.get(session.id)?.draftPlanText).toBe(VALID_PLAN_TEXT);
+  });
+
+  it('keeps the draft file inside the worktree when a repo worktree is bound', async () => {
+    const worktreePath = mkdtempSync(join(tmpdir(), 'in-app-scratch-worktree-'));
+    try {
+      const release = vi.fn(async () => {});
+      const softRelease = vi.fn();
+      const repoPool: PlanningRepoPool = {
+        ensureCloneThroughRepoQueue: vi.fn(async () => '/fake/clone'),
+        resolveBaseCommit: vi.fn(async () => 'fake-head-sha'),
+        acquireWorktree: vi.fn(async (_repoUrl: string, branch: string) => ({
+          clonePath: '/fake/clone',
+          worktreePath,
+          branch,
+          release,
+          softRelease,
+        })),
+        externalWorktreePath: vi.fn(() => worktreePath),
+        release,
+        softRelease,
+      };
+      const sessions = createInAppPlanningChatSessions();
+      const created = await createPlanningChatSession({}, {
+        config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        workingDir: readOnlyWorkingDir,
+        repoPool,
+      });
+      if (!created.ok) throw new Error(created.error);
+
+      const session = sessions.get(created.session.id);
+      expect(session?.worktreePath).toBe(worktreePath);
+      expect(session?.conversation.planDraftFilePath()).toBe(
+        join(worktreePath, '.invoker', 'plan-drafts', `${created.session.id}.yaml`),
+      );
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('never clears the <home>/plan-drafts sidecar file during a planner turn', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const session = await createWorkspacelessSession(sessions, adapter);
+      const sidecarPath = join(invokerHome, 'plan-drafts', `${session.id}.yaml`);
+      const turnDeps = {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        workingDir: readOnlyWorkingDir,
+        planningSessionStore: adapter,
+      };
+
+      writeDraftFromPlanner(session);
+      await sendPlanningChatMessage({ sessionId: session.id, message: 'draft the full plan' }, turnDeps);
+      expect(readFileSync(sidecarPath, 'utf8')).toBe(VALID_PLAN_TEXT);
+
+      let sidecarPresentDuringTurn = false;
+      vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementationOnce(async () => {
+        sidecarPresentDuringTurn = existsSync(sidecarPath);
+        return 'Anything else to add.';
+      });
+      await sendPlanningChatMessage({ sessionId: session.id, message: 'Thanks, that looks right.' }, turnDeps);
+
+      expect(sidecarPresentDuringTurn).toBe(true);
+      expect(sessions.get(session.id)?.draftPlanText).toBe(VALID_PLAN_TEXT);
+      expect(readFileSync(sidecarPath, 'utf8')).toBe(VALID_PLAN_TEXT);
+    } finally {
+      adapter.close();
     }
   });
 });
