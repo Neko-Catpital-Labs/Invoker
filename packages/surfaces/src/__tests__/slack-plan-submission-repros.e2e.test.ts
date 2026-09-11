@@ -13,6 +13,7 @@ import {
 } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 import { SessionIdentifier } from '../slack/thread-session-manager.js';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
 
@@ -143,6 +144,7 @@ function config(repo: ConversationRepository, extra: Partial<ConstructorParamete
     enableImmediateAck: false,
     planningHeartbeatIntervalSeconds: 0,
     log: silentLog,
+    planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     ...extra,
   };
 }
