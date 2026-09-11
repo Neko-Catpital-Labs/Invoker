@@ -24,8 +24,8 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { routePlanningMention, routeWorkflowMention } from '../core/mention-router.js';
-import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+import { routePlanningMention, routeRepoScopedMention, routeWorkflowMention } from '../core/mention-router.js';
+import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest } from './mention-parsers.js';
 import type { ChannelRepoSetupPair, LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -1027,64 +1027,48 @@ export class SlackSurface implements Surface {
       });
     }
 
-    if (/^\/plan\s+.+/i.test(parsed.text)) {
-      const context: PlanningContext = {
-        repoUrl: routeRepoUrl,
-        presetKey: parsed.presetKey,
-        workingDir: this.workingDir,
-        requestedBy: event.user,
-        lobbyChannel: channel,
-        confirmationMode: parsed.confirmationMode ?? this.defaultPlanningConfirmationMode,
-      };
-      await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
-        kind: 'plan_intent',
-        requestText: parsed.text.replace(/^\/plan\s+/i, ''),
-        userId: event.user ?? 'unknown',
-        context,
-        channel,
-      }, say);
-      return;
-    }
-
-    // Confirm/cancel a staged action first (plain yes/no in-thread).
-    if (await this.approvals.resolveConfirm(threadTs, parsed.text, say, channel)) return;
-
-    // Deterministic verb commands respond instantly and take priority over agent sessions.
-    const ctrl = parseLobbyControl(parsed.text);
-    if (ctrl?.kind === 'op' || ctrl?.kind === 'restart') {
-      if (!this.allowsLobbyControls(channel)) {
+    const scoped = routeRepoScopedMention(parsed, {
+      allowsLobbyControls: this.allowsLobbyControls(channel),
+      hasPendingConfirm: () => this.approvals.getPendingConfirm(threadTs) !== undefined,
+    });
+    switch (scoped.kind) {
+      case 'plan_intent': {
+        const context: PlanningContext = {
+          repoUrl: routeRepoUrl,
+          presetKey: parsed.presetKey,
+          workingDir: this.workingDir,
+          requestedBy: event.user,
+          lobbyChannel: channel,
+          confirmationMode: parsed.confirmationMode ?? this.defaultPlanningConfirmationMode,
+        };
+        await this.approvals.stagePlanIntentConfirm(threadTs, channel, {
+          kind: 'plan_intent',
+          requestText: scoped.requestText,
+          userId: event.user ?? 'unknown',
+          context,
+          channel,
+        }, say);
+        return;
+      }
+      case 'confirm_reply':
+        await this.approvals.resolveConfirm(threadTs, parsed.text, say, channel);
+        return;
+      case 'control_rejected':
         await this.approvals.rejectNonLobbyControl(threadTs, say);
         return;
-      }
-      if (ctrl.kind === 'op') {
-        await this.approvals.requestOp({ operation: ctrl.operation, target: ctrl.target }, threadTs, channel, say);
+      case 'workflow_op':
+        await this.approvals.requestOp(scoped.op, threadTs, channel, say);
         return;
-      }
-      await this.approvals.requestRestart(threadTs, say);
-      return;
-    }
-
-    const localRequest = parseLocalRequest(parsed.text);
-    if (localRequest?.kind === 'command') {
-      if (!this.allowsLobbyControls(channel)) {
-        await this.approvals.rejectNonLobbyControl(threadTs, say);
+      case 'restart':
+        await this.approvals.requestRestart(threadTs, say);
         return;
-      }
-      await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
-      return;
-    }
-
-    const workflowStatusQuery = parseWorkflowStatusQuery(localRequest?.kind === 'agent' ? localRequest.text : parsed.text);
-    if (workflowStatusQuery?.intent === 'command') {
-      if (!this.allowsLobbyControls(channel)) {
-        await this.approvals.rejectNonLobbyControl(threadTs, say);
+      case 'local_command':
+        await this.handleLocalRequest(scoped.request, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
         return;
-      }
-      await this.approvals.requestOp({ operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
-      return;
+      case 'conversation_turn':
+        break;
     }
-
-    const requestText = localRequest?.kind === 'agent' || localRequest?.kind === 'change' ? localRequest.text : parsed.text;
+    const { requestText, explicitLocalAgent } = scoped;
 
     if (this.enableImmediateAck) {
       await this.sendImmediateAck(threadTs, say);
@@ -1126,7 +1110,6 @@ export class SlackSurface implements Surface {
         }
       }
 
-      const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
       const opts = {
         tool: contextPreset.tool,
         model: contextPreset.model,
