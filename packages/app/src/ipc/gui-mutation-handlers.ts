@@ -45,6 +45,7 @@ import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   filterExecutionHarnesses,
   loadConfig,
+  loadDefaultExecutionAgent,
   resolveAutoFixExecutionModel,
   resolveDefaultTaskExecutionSettings,
   type InvokerConfig,
@@ -1621,6 +1622,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
       defaultPoolId: invokerConfig.defaultPoolId,
       availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
+      defaultExecutionAgentProvider: loadDefaultExecutionAgent,
       deferRunningUntilLaunch: true,
       onRecreateTasksReset: (taskIds) => {
         resetAutoFixBudgetForTasks(persistence, taskIds);
