@@ -125,6 +125,7 @@ export interface PlanConversationConfig {
   planningCommandBuilder?: PlanningCommandBuilder;
   /** Root directory for codebase exploration. */
   workingDir?: string;
+  plannerScratchRoot?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
   timeoutMs?: number;
   /** Slack thread timestamp. Required for persistence. */
@@ -525,6 +526,8 @@ export class PlanConversation {
   private _submittedPlanText: string | null = null;
   private _planSubmitted = false;
   readonly workingDir?: string;
+  private plannerScratchRoot?: string;
+  private planDraftDirUnavailable = false;
   private timeoutMs: number;
   private threadTs?: string;
   private channelId?: string;
@@ -570,6 +573,7 @@ export class PlanConversation {
     this.mode = config.mode ?? 'plan';
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.workingDir = config.workingDir;
+    this.plannerScratchRoot = config.plannerScratchRoot;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.threadTs = config.threadTs;
     this.channelId = config.channelId;
@@ -972,9 +976,16 @@ export class PlanConversation {
   // its output limit. Gated on workingDir + threadTs; without both, planning
   // falls back to inline extraction unchanged. `.invoker/` is gitignored.
   planDraftFilePath(): string | null {
-    if (!this.workingDir || !this.threadTs) return null;
+    if (this.planDraftDirUnavailable) return null;
+    return this.plannerScratchFilePath('plan-drafts', 'yaml');
+  }
+
+  private plannerScratchFilePath(folder: string, extension: string): string | null {
+    if (!this.threadTs) return null;
+    const root = this.plannerScratchRoot ?? (this.workingDir ? join(this.workingDir, '.invoker') : undefined);
+    if (!root) return null;
     const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
-    return join(this.workingDir, '.invoker', 'plan-drafts', `${safeId}.yaml`);
+    return join(root, folder, `${safeId}.${extension}`);
   }
 
   private readPlanDraftFile(): string | null {
@@ -994,6 +1005,7 @@ export class PlanConversation {
   // write is required each turn (getDraftedPlan must never return a stale plan)
   // and the planner's write into it succeeds.
   private resetPlanDraftFile(): void {
+    this.planDraftDirUnavailable = false;
     const path = this.planDraftFilePath();
     if (!path) return;
     try {
@@ -1001,6 +1013,7 @@ export class PlanConversation {
       mkdirSync(dirname(path), { recursive: true });
     } catch (err) {
       this.log('plan-conversation', 'error', `Failed to reset plan draft file ${path}: ${err}`);
+      this.planDraftDirUnavailable = true;
     }
   }
 
@@ -1010,9 +1023,7 @@ export class PlanConversation {
   // every turn so a stale signal from turn N can't leak into turn N+1.
   // `.invoker/` is gitignored.
   planIntentSignalFilePath(): string | null {
-    if (!this.workingDir || !this.threadTs) return null;
-    const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
-    return join(this.workingDir, '.invoker', 'plan-intent', `${safeId}.json`);
+    return this.plannerScratchFilePath('plan-intent', 'json');
   }
 
   private readPlanIntentSignalFile(): PlanIntentSignal | null {

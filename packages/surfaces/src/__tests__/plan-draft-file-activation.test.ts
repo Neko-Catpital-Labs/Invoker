@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -403,6 +403,74 @@ describe('plan draft file - activation side', () => {
     expect(existsSync(path)).toBe(false);
     expect(conversation.lastTurnDraftPlanText).toBeNull();
     expect(conversation.getDraftedPlan()).toBeNull();
+  });
+
+  it('asks for inline YAML when the working folder is read-only', async () => {
+    chmodSync(workingDir, 0o555);
+    try {
+      const conversation = new PlanConversation({ workingDir, threadTs: 'read-only-123', plannerRetryLimit: 0 });
+
+      mockSpawn.mockReturnValueOnce(fakePlannerChild(INLINE_PLAN_RESPONSE));
+      await conversation.sendMessage('Create the plan');
+
+      const turnPrompt = String(mockSpawn.mock.calls[0]?.[1]);
+      expect(turnPrompt).toContain('inside a ```yaml code block');
+      expect(turnPrompt).not.toContain('write the COMPLETE YAML to');
+      expect(conversation.planDraftFilePath()).toBeNull();
+    } finally {
+      chmodSync(workingDir, 0o755);
+    }
+  });
+
+  it('uses an inline YAML reply as the draft when the working folder is read-only', async () => {
+    chmodSync(workingDir, 0o555);
+    try {
+      const conversation = new PlanConversation({ workingDir, threadTs: 'read-only-456', plannerRetryLimit: 0 });
+
+      mockSpawn.mockReturnValueOnce(fakePlannerChild(INLINE_PLAN_RESPONSE));
+      await conversation.sendMessage('Create the plan');
+
+      expect(conversation.lastTurnDraftPlanText).not.toBeNull();
+      const parsedDraft = parseYaml(conversation.lastTurnDraftPlanText!) as Record<string, unknown>;
+      expect(parsedDraft.name).toBe('Draft Activation');
+      expect(conversation.lastTurnDraftFromSidecarFile).toBe(false);
+    } finally {
+      chmodSync(workingDir, 0o755);
+    }
+  });
+
+  it('writes and picks up the draft under plannerScratchRoot when one is given', async () => {
+    const plannerScratchRoot = mkdtempSync(join(tmpdir(), 'plan-draft-scratch-'));
+    try {
+      const conversation = new PlanConversation({
+        workingDir,
+        plannerScratchRoot,
+        threadTs: 'scratch-123',
+        plannerRetryLimit: 0,
+      });
+      const expectedPath = join(plannerScratchRoot, 'plan-drafts', 'scratch-123.yaml');
+      expect(conversation.planDraftFilePath()).toBe(expectedPath);
+
+      mockSpawn.mockReturnValueOnce(fakePlannerChild(
+        'Drafted the plan.',
+        () => writeFileSync(expectedPath, VALID_PLAN_YAML, 'utf8'),
+      ));
+      await conversation.sendMessage('Create the plan');
+
+      expect(String(mockSpawn.mock.calls[0]?.[1])).toContain(`write the COMPLETE YAML to \`${expectedPath}\``);
+      expect(conversation.lastTurnDraftPlanText).toBe(VALID_PLAN_YAML.trim());
+      expect(conversation.lastTurnDraftFromSidecarFile).toBe(true);
+      expect(existsSync(join(workingDir, '.invoker'))).toBe(false);
+    } finally {
+      rmSync(plannerScratchRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('puts the plan-intent file under plannerScratchRoot when one is given', () => {
+    const plannerScratchRoot = join(tmpdir(), 'plan-intent-scratch');
+    const conversation = new PlanConversation({ workingDir, plannerScratchRoot, threadTs: 'intent-123' });
+
+    expect(conversation.planIntentSignalFilePath()).toBe(join(plannerScratchRoot, 'plan-intent', 'intent-123.json'));
   });
 
   it('keeps one default doctor budget across every production PlanConversation host', () => {
