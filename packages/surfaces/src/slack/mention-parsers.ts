@@ -1,3 +1,5 @@
+import type { PlanningConfirmationMode } from '@invoker/planning-core';
+
 export type LocalRequest =
   | { kind: 'command'; text: string }
   | { kind: 'agent'; text: string }
@@ -14,6 +16,72 @@ export function looksLikePreset(normalized: string): boolean {
 
 export function extractRepoUrlFromMessage(text: string): string | undefined {
   return extractMessageRepoCandidates(text)[0];
+}
+
+export function parsePlanningRequest(
+  text: string,
+  presetKeys: string[],
+  defaultPresetKey: string,
+): {
+  presetKey: string;
+  repo?: string;
+  repositoryUrls?: string[];
+  hasExplicitPreset?: boolean;
+  confirmationMode?: PlanningConfirmationMode;
+  autoSubmitRequested?: boolean;
+  text: string;
+  unknownPreset?: string;
+} {
+  let rest = text.replace(/<@[^>]+>/g, '').trim();
+  let presetKey = defaultPresetKey;
+  let repo: string | undefined;
+  let confirmationMode: PlanningConfirmationMode | undefined;
+  let autoSubmitRequested = false;
+  let unknownPreset: string | undefined;
+  let hasExplicitPreset = false;
+  const keyset = new Set(presetKeys.map((k) => k.toLowerCase()));
+  const tagRe = /^\[([^\]]*)\]\s*/;
+
+  for (;;) {
+    const m = tagRe.exec(rest);
+    if (!m) break;
+    const raw = m[1].trim();
+    if (/^repo:/i.test(raw)) {
+      repo = raw.slice(raw.indexOf(':') + 1).trim();
+      rest = rest.slice(m[0].length);
+      continue;
+    }
+    const normalized = raw.toLowerCase().replace(/\s+/g, '').replace(/^plain/, '');
+    if (normalized === 'auto-submit' || normalized === 'autosubmit') {
+      confirmationMode = 'require';
+      autoSubmitRequested = true;
+      rest = rest.slice(m[0].length);
+      continue;
+    }
+    if (keyset.has(normalized)) {
+      presetKey = normalized;
+      hasExplicitPreset = true;
+      rest = rest.slice(m[0].length);
+      continue;
+    }
+    if (looksLikePreset(normalized)) {
+      unknownPreset = raw;
+      rest = rest.slice(m[0].length);
+    }
+    break;
+  }
+
+  const repositoryUrls = extractRepositoryUrls(rest);
+  return {
+    presetKey,
+    repo,
+    text: rest.trim(),
+    ...(repositoryUrls.length > 0 ? { repositoryUrls } : {}),
+    ...(hasExplicitPreset ? { hasExplicitPreset } : {}),
+    ...(confirmationMode ? { confirmationMode } : {}),
+    ...(autoSubmitRequested ? { autoSubmitRequested } : {}),
+    ...(unknownPreset ? { unknownPreset } : {}),
+  };
 }
 
 export function extractRepositoryUrls(text: string): string[] {
