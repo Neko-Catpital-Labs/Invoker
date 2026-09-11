@@ -3,6 +3,7 @@ export * from './state-machine.js';
 export * from './response-handler.js';
 export * from './scheduler.js';
 export * from './orchestrator.js';
+export { ALREADY_TERMINAL_TASK_STATUSES } from './orchestrator/cancellation.js';
 export * from './task-id-scope.js';
 export * from './merge-conflict-error.js';
 export * from './review-gate-artifacts.js';
