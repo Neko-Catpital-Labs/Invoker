@@ -193,6 +193,26 @@ describe('runCodexDailySpendGateTick', () => {
     expect([...result.tokensByHost.keys()]).toEqual(['owner', 'remote_digital_ocean_3']);
   });
 
+  it('matches configured local addresses with mixed-case hostnames and IPv6 text', async () => {
+    const tallyRemote = vi.fn(async () => 9_000);
+    const config = gateConfig({
+      tallyLocal: () => 18_254,
+      localAddresses: new Set(['OwnerHost.Local', 'FE80::A']),
+      remoteTargets: [
+        { name: 'hostname_self', connection: { host: 'ownerhost.local', user: 'invoker', sshKeyPath: '/k' } },
+        { name: 'ipv6_self', connection: { host: 'fe80::a', user: 'invoker', sshKeyPath: '/k' } },
+        { name: 'remote_digital_ocean_3', connection: { host: 'h3', user: 'invoker', sshKeyPath: '/k' } },
+      ],
+      tallyRemote,
+    });
+
+    const result = await runCodexDailySpendGateTick(config, makeLogger(), NOW_MS);
+
+    expect(result.totalTokens).toBe(27_254);
+    expect([...result.tokensByHost.keys()]).toEqual(['owner', 'remote_digital_ocean_3']);
+    expect(tallyRemote).toHaveBeenCalledOnce();
+  });
+
   it('skips a remote target on the loopback address without any config', async () => {
     const tallyRemote = vi.fn(async () => 18_254);
     const config = gateConfig({

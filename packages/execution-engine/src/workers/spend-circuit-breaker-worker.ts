@@ -112,11 +112,19 @@ export interface CodexDailySpendGateTickResult {
 }
 
 function ownAddresses(): ReadonlySet<string> {
-  const addresses = new Set([hostname().toLowerCase()]);
+  const addresses = new Set([normalizeLocalAddress(hostname())]);
   for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) addresses.add(entry.address.toLowerCase());
+    for (const entry of entries ?? []) addresses.add(normalizeLocalAddress(entry.address));
   }
   return addresses;
+}
+
+function normalizeLocalAddress(address: string): string {
+  return address.toLowerCase();
+}
+
+function normalizeLocalAddressSet(addresses: ReadonlySet<string>): ReadonlySet<string> {
+  return new Set([...addresses].map(normalizeLocalAddress));
 }
 
 function defaultTallyRemote(target: CodexSpendGateRemoteTarget, nowMs: number): Promise<number> {
@@ -179,9 +187,9 @@ export async function runCodexDailySpendGateTick(
   }
 
   const tallyRemote = config.tallyRemote ?? defaultTallyRemote;
-  const localAddresses = config.localAddresses ?? ownAddresses();
+  const localAddresses = normalizeLocalAddressSet(config.localAddresses ?? ownAddresses());
   for (const target of config.remoteTargets ?? []) {
-    if (localAddresses.has(target.connection.host.toLowerCase())) continue;
+    if (localAddresses.has(normalizeLocalAddress(target.connection.host))) continue;
     try {
       tokensByHost.set(target.name, await tallyRemote(target, nowMs));
     } catch (error) {
