@@ -636,6 +636,12 @@ function planDraftSidecarPath(sessionId: string): string {
   return join(resolveInvokerHomeRoot(), 'plan-drafts', `${sessionId}.yaml`);
 }
 
+function ensurePlannerDraftDir(): string {
+  const draftDir = join(resolveInvokerHomeRoot(), 'planner-drafts');
+  mkdirSync(draftDir, { recursive: true });
+  return draftDir;
+}
+
 function logPlanDraftSidecarError(sessionId: string, step: string, error: unknown): void {
   console.error(`[planning-chat] plan draft sidecar ${step} failed session="${sessionId}": ${
     error instanceof Error ? error.message : String(error)
@@ -731,6 +737,7 @@ function planConversationConfig(
     tool: preset.tool,
     model: preset.model,
     workingDir: deps.workingDir,
+    planDraftDir: ensurePlannerDraftDir(),
     timeoutMs: (deps.config.planningTimeoutSeconds ?? 7200) * 1000,
     defaultBranch: deps.config.defaultBranch,
     repoUrl: deps.config.defaultRepoUrl,
