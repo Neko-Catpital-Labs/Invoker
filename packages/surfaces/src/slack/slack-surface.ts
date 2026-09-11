@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { looksLikePreset, MESSAGE_REPO_TOKEN_RE, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
+import { extractMessageRepoCandidates, looksLikePreset, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -363,25 +363,6 @@ export function parsePlanningRequest(
 
 function extractRepositoryUrls(text: string): string[] {
   return extractMessageRepoCandidates(text);
-}
-
-function extractMessageRepoCandidates(text: string): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  for (const match of text.matchAll(MESSAGE_REPO_TOKEN_RE)) {
-    let candidate = (match[1] ?? match[0]).trim();
-    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
-      candidate = candidate.slice(0, -1);
-    }
-
-    const accepted = normalizeSupportedRepoCandidate(candidate);
-
-    if (accepted && !seen.has(accepted)) {
-      seen.add(accepted);
-      urls.push(accepted);
-    }
-  }
-  return urls;
 }
 function repositoryIdentity(repoUrl: string): string {
   const parts = parseRepoParts(repoUrl);
