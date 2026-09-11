@@ -636,6 +636,10 @@ function planDraftSidecarPath(sessionId: string): string {
   return join(resolveInvokerHomeRoot(), 'plan-drafts', `${sessionId}.yaml`);
 }
 
+function workspacelessPlannerScratchRoot(): string {
+  return join(resolveInvokerHomeRoot(), 'planning-sessions');
+}
+
 function logPlanDraftSidecarError(sessionId: string, step: string, error: unknown): void {
   console.error(`[planning-chat] plan draft sidecar ${step} failed session="${sessionId}": ${
     error instanceof Error ? error.message : String(error)
@@ -723,7 +727,7 @@ function planConversationConfig(
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput' | 'planDoctorScriptPath'> & { mcpConfigPath?: string },
   threadTs: string,
   selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
-  options: { conversationalPlanning?: boolean; draftingPreauthorized?: boolean } = {},
+  options: { conversationalPlanning?: boolean; draftingPreauthorized?: boolean; plannerScratchRoot?: string } = {},
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -731,6 +735,7 @@ function planConversationConfig(
     tool: preset.tool,
     model: preset.model,
     workingDir: deps.workingDir,
+    plannerScratchRoot: options.plannerScratchRoot,
     timeoutMs: (deps.config.planningTimeoutSeconds ?? 7200) * 1000,
     defaultBranch: deps.config.defaultBranch,
     repoUrl: deps.config.defaultRepoUrl,
@@ -822,7 +827,10 @@ async function createSession(
     confirmationMode,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, conversationDeps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
+    conversation: new PlanConversation(planConversationConfig(preset, conversationDeps, id, selectHarnessSessionDriver, {
+      conversationalPlanning: true,
+      plannerScratchRoot: worktreeBinding ? undefined : workspacelessPlannerScratchRoot(),
+    })),
     repoUrl: worktreeBinding?.repoUrl,
     baseBranch: worktreeBinding?.baseBranch,
     baseCommit: worktreeBinding?.baseCommit,
@@ -933,7 +941,11 @@ export async function planFromGoal(
 
   try {
     const { PlanConversation, extractYamlPlan, selectHarnessSessionDriver } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver, { conversationalPlanning: true, draftingPreauthorized: true }));
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver, {
+      conversationalPlanning: true,
+      draftingPreauthorized: true,
+      plannerScratchRoot: workspacelessPlannerScratchRoot(),
+    }));
     const plannerOutput = await conversation.sendMessage(goal);
     const planText = conversation.lastTurnDraftPlanText ?? extractYamlPlan(plannerOutput);
     if (!planText) {
@@ -1660,7 +1672,10 @@ export async function restorePlanningChatSessions(
         }
       : deps;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver, { conversationalPlanning: true }));
+    const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver, {
+      conversationalPlanning: true,
+      plannerScratchRoot: restoredWorktreePath ? undefined : workspacelessPlannerScratchRoot(),
+    }));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
