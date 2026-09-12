@@ -4,6 +4,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "composite": false,
+    "emitDeclarationOnly": true,
     "allowImportingTsExtensions": true
   },
   "include": [

@@ -16,10 +16,12 @@ describe('conversational planning submission ownership (repro for the pink-theme
       conversationalPlanning: true,
       draftingAuthorized: true,
       planFilePath: PLAN_FILE_PATH,
+      planningSurface: 'slack',
     });
 
     expect(prompt).not.toContain("proceed through the skill's review/submission steps");
-    expect(prompt).toContain('Only the hosting surface (the Slack orchestrator or the in-app planner) may submit the plan');
+    const hostOwnsSubmission = prompt.includes('Only the current planning host may submit the plan');
+    expect(hostOwnsSubmission).toBe(true);
     expect(prompt).toContain('Never run `invoker-cli`, `invoker_submit_plan`, `scripts/headless-ipc.js`');
     expect(prompt).toContain("overrides the plan-to-invoker skill's Harness handoff mode");
   });
@@ -29,6 +31,7 @@ describe('conversational planning submission ownership (repro for the pink-theme
       conversationalPlanning: true,
       draftingAuthorized: true,
       planFilePath: PLAN_FILE_PATH,
+      planningSurface: 'slack',
     });
 
     expect(prompt).toContain(PLAN_FILE_PATH);

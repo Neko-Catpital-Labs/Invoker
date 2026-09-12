@@ -20,9 +20,66 @@ export interface InvokerTerminalPlanningStream {
   status: 'streaming' | 'failed';
 }
 
-interface PlanningPresetOptionView {
+export interface PlanningPresetOptionView {
   key: string;
   label: string;
+  tool: string;
+  model?: string;
+}
+
+export interface PlanningHarnessChoice {
+  tool: string;
+  label: string;
+  directPreset?: PlanningPresetOptionView;
+  modelPresets: PlanningPresetOptionView[];
+}
+
+function titleCaseIdentifier(value: string): string {
+  return value
+    .split(/[-_\s/]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ');
+}
+
+function formatPlanningHarnessLabel(tool: string, options: PlanningPresetOptionView[]): string {
+  const directPreset = options.find((option) => option.tool === tool && !option.model);
+  return directPreset?.label ?? titleCaseIdentifier(tool);
+}
+
+function formatPlanningModelLabel(model: string): string {
+  return titleCaseIdentifier(model);
+}
+
+export function buildPlanningHarnessChoices(options: PlanningPresetOptionView[]): PlanningHarnessChoice[] {
+  const byTool = new Map<string, PlanningPresetOptionView[]>();
+  for (const option of options) {
+    const existing = byTool.get(option.tool) ?? [];
+    existing.push(option);
+    byTool.set(option.tool, existing);
+  }
+
+  return Array.from(byTool.entries()).map(([tool, toolOptions]) => ({
+    tool,
+    label: formatPlanningHarnessLabel(tool, toolOptions),
+    directPreset: toolOptions.find((option) => !option.model),
+    modelPresets: toolOptions.filter((option) => Boolean(option.model)),
+  }));
+}
+
+function findPresetOption(options: PlanningPresetOptionView[], presetKey: string): PlanningPresetOptionView | undefined {
+  return options.find((option) => option.key === presetKey);
+}
+
+function resolvePresetForHarness(
+  harness: PlanningHarnessChoice,
+  preferredModel: string | undefined,
+): PlanningPresetOptionView | undefined {
+  if (preferredModel) {
+    const matchingModel = harness.modelPresets.find((option) => option.model === preferredModel);
+    if (matchingModel) return matchingModel;
+  }
+  return harness.directPreset ?? harness.modelPresets[0];
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
@@ -51,11 +108,13 @@ function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): 
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
   busy: boolean;
+  binding?: boolean;
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
   selectedConfirmationMode: PlanningConfirmationMode;
   draftPlanAvailable: boolean;
+  draftReviewOpen?: boolean;
   draftPlanSummary?: {
     name: string;
     taskCount: number;
@@ -71,10 +130,18 @@ interface InvokerTerminalProps {
   terminalError?: string | null;
   terminalActive?: boolean;
   workflowRunning?: boolean;
+  repoValue?: string;
+  repoLocked?: boolean;
+  repoSuggestions?: string[];
+  repoError?: string | null;
+  turnError?: string | null;
+  onRetryTurn?: () => void;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
   onConfirmationModeChange: (confirmationMode: PlanningConfirmationMode) => void;
+  onRepoInputChange?: (value: string) => void;
+  onRepoCommit?: () => void;
   onModeChange?: (mode: PlanningTerminalMode) => void;
   onExpand: () => void;
   onCloseExpanded?: () => void;
@@ -473,11 +540,13 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
 export function InvokerTerminal({
   lines,
   busy,
+  binding = false,
   value,
   selectedPresetKey,
   presetOptions,
   selectedConfirmationMode,
   draftPlanAvailable,
+  draftReviewOpen = false,
   draftPlanSummary,
   planningStream,
   readOnly = false,
@@ -490,8 +559,16 @@ export function InvokerTerminal({
   workflowRunning = false,
   onValueChange,
   onSubmit,
+  repoValue = '',
+  repoLocked = true,
+  repoSuggestions = [],
+  repoError = null,
+  turnError = null,
+  onRetryTurn,
   onPresetChange,
   onConfirmationModeChange,
+  onRepoInputChange,
+  onRepoCommit,
   onModeChange,
   onExpand,
   onCloseExpanded,
@@ -611,8 +688,35 @@ export function InvokerTerminal({
   };
 
   const composerDisabledCursorClass = busy || readOnly ? 'disabled:cursor-not-allowed' : '';
-  const sendButtonDisabled = busy || readOnly || !value.trim();
+  const sendButtonDisabled = busy || binding || readOnly || !value.trim();
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
+  const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
+  const selectedPreset = useMemo(
+    () => findPresetOption(presetOptions, selectedPresetKey) ?? presetOptions[0],
+    [presetOptions, selectedPresetKey],
+  );
+  const selectedHarness = useMemo(
+    () => harnessChoices.find((choice) => choice.tool === selectedPreset?.tool) ?? harnessChoices[0],
+    [harnessChoices, selectedPreset?.tool],
+  );
+  const selectedHarnessValue = selectedHarness?.tool ?? '';
+  const modelSelectOptions = selectedHarness
+    ? [
+        ...(selectedHarness.directPreset ? [selectedHarness.directPreset] : []),
+        ...selectedHarness.modelPresets,
+      ]
+    : [];
+  const showModelSelect = Boolean(selectedHarness && selectedHarness.modelPresets.length > 0);
+  const selectedModelPresetKey = selectedPreset && modelSelectOptions.some((option) => option.key === selectedPreset.key)
+    ? selectedPreset.key
+    : modelSelectOptions[0]?.key ?? '';
+
+  const handleHarnessChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+    const nextHarness = harnessChoices.find((choice) => choice.tool === event.target.value);
+    if (!nextHarness) return;
+    const nextPreset = resolvePresetForHarness(nextHarness, selectedPreset?.model);
+    if (nextPreset) onPresetChange(nextPreset.key);
+  }, [harnessChoices, onPresetChange, selectedPreset?.model]);
 
   const handleValueChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const startedAt = nowMs();
@@ -660,7 +764,7 @@ export function InvokerTerminal({
   };
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !binding && !readOnly && value.trim()) {
       event.preventDefault();
       submitFromComposer('enter');
     }
@@ -800,7 +904,7 @@ export function InvokerTerminal({
                     <button
                       key={chip}
                       type="button"
-                      disabled={busy || readOnly}
+                      disabled={busy || binding || readOnly}
                       onClick={() => {
                         onValueChange(chip);
                         focusComposer();
@@ -817,7 +921,28 @@ export function InvokerTerminal({
             )}
           </div>
 
-          {draftPlanAvailable && !readOnly && (
+          {turnError && !readOnly && (
+            <div
+              data-testid="invoker-terminal-turn-error"
+              role="alert"
+              className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-card/80 px-4 py-3.5 backdrop-blur-sm"
+            >
+              <span className="min-w-0 flex-1 text-xs text-red-400">{turnError}</span>
+              {onRetryTurn && (
+                <button
+                  type="button"
+                  data-testid="invoker-terminal-retry-turn"
+                  disabled={busy}
+                  onClick={onRetryTurn}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
+
+          {draftPlanAvailable && !draftReviewOpen && !readOnly && (
             <div
               data-testid="invoker-terminal-ready-bar"
               className="sticky bottom-0 z-10 border-t border-border bg-card/80 px-4 py-3.5 text-sm text-foreground backdrop-blur-sm"
@@ -891,7 +1016,7 @@ export function InvokerTerminal({
                 ref={inputRef}
                 data-testid="invoker-terminal-input"
                 value={value}
-                disabled={busy || readOnly}
+                disabled={busy || binding || readOnly}
                 rows={expanded ? 5 : 1}
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
@@ -911,19 +1036,37 @@ export function InvokerTerminal({
                   {showComposerOptions && (
                     <div className="ml-3 flex flex-wrap items-center gap-3">
                       <label className="text-xs text-muted-foreground">
-                        Agent
+                        Harness
                         <select
                           data-testid="invoker-terminal-harness"
-                          value={selectedPresetKey}
-                          onChange={(event) => onPresetChange(event.target.value)}
+                          value={selectedHarnessValue}
+                          onChange={handleHarnessChange}
                           disabled={readOnly}
                           className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
                         >
-                          {presetOptions.map((option) => (
-                            <option key={option.key} value={option.key}>{option.label}</option>
+                          {harnessChoices.map((option) => (
+                            <option key={option.tool} value={option.tool}>{option.label}</option>
                           ))}
                         </select>
                       </label>
+                      {showModelSelect && (
+                        <label className="text-xs text-muted-foreground">
+                          Model
+                          <select
+                            data-testid="invoker-terminal-model"
+                            value={selectedModelPresetKey}
+                            onChange={(event) => onPresetChange(event.target.value)}
+                            disabled={readOnly}
+                            className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                          >
+                            {modelSelectOptions.map((option) => (
+                              <option key={option.key} value={option.key}>
+                                {option.model ? formatPlanningModelLabel(option.model) : 'Default'}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <label className="text-xs text-muted-foreground">
                         Review
                         <select
@@ -934,9 +1077,35 @@ export function InvokerTerminal({
                           className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
                         >
                           <option value="require">Ask first</option>
-                          <option value="auto_submit">Auto-submit</option>
                         </select>
                       </label>
+                      {!repoLocked && (
+                        <label className="text-xs text-muted-foreground">
+                          Repo
+                          <input
+                            data-testid="invoker-terminal-repo"
+                            list="invoker-terminal-repo-suggestions"
+                            value={repoValue}
+                            disabled={readOnly || binding}
+                            placeholder="path or URL (default if empty)"
+                            onChange={(event) => onRepoInputChange?.(event.target.value)}
+                            onBlur={() => onRepoCommit?.()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                onRepoCommit?.();
+                              }
+                            }}
+                            className="ml-2 w-56 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                          />
+                          <datalist id="invoker-terminal-repo-suggestions">
+                            {repoSuggestions.map((repo) => <option key={repo} value={repo} />)}
+                          </datalist>
+                        </label>
+                      )}
+                      {repoError && !repoLocked && (
+                        <span data-testid="invoker-terminal-repo-error" className="text-xs text-red-400">{repoError}</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -946,10 +1115,18 @@ export function InvokerTerminal({
                   disabled={sendButtonDisabled}
                   className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
                 >
-                  <SendIcon
-                    data-testid="invoker-terminal-send-icon"
-                    className="h-4 w-4"
-                  />
+                  {busy || binding ? (
+                    <span
+                      data-testid="invoker-terminal-send-spinner"
+                      aria-hidden="true"
+                      className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-500 border-t-gray-100"
+                    />
+                  ) : (
+                    <SendIcon
+                      data-testid="invoker-terminal-send-icon"
+                      className="h-4 w-4"
+                    />
+                  )}
                 </button>
               </div>
             </div>

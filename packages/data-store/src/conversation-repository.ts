@@ -8,6 +8,7 @@
 
 import type { PlanDefinition } from '@invoker/workflow-core';
 import type { PersistenceAdapter, Conversation, ConversationMessage, ConversationMode } from './adapter.js';
+import { PlanningDraftRepository } from './planning-draft-repository.js';
 
 // ── Public Types ─────────────────────────────────────────────
 
@@ -47,10 +48,12 @@ const defaultLogger: Logger = {
 export class ConversationRepository {
   private adapter: PersistenceAdapter;
   private log: Logger;
+  readonly planningDrafts: PlanningDraftRepository;
 
   constructor(adapter: PersistenceAdapter, logger?: Logger) {
     this.adapter = adapter;
     this.log = logger ?? defaultLogger;
+    this.planningDrafts = new PlanningDraftRepository(adapter);
   }
 
   /**
@@ -94,6 +97,15 @@ export class ConversationRepository {
 
     // Determine how many messages already exist without reading the transcript.
     const existingMessageCount = this.adapter.countMessages(threadTs);
+    if (messages.length < existingMessageCount) {
+      this.log.error(
+        `Diverged conversation ${threadTs}: memory holds ${messages.length} message(s), `
+        + `the stored row holds ${existingMessageCount}. The in-memory transcript is not an `
+        + 'extension of the stored one, so these messages are NOT persisted. Reconcile the '
+        + 'row (reload the thread, or clear it if the thread id was reused) before saving again.',
+      );
+      return;
+    }
     const newMessages = messages.slice(existingMessageCount);
 
     for (const msg of newMessages) {
@@ -187,12 +199,18 @@ export class ConversationRepository {
   }
 
   private parseJson(json: string, context: string): unknown {
+    let parsed: unknown;
     try {
-      return JSON.parse(json);
+      parsed = JSON.parse(json);
     } catch {
       // Content may be a plain string, not JSON — return as-is
       this.log.warn(`Non-JSON content in ${context}, returning raw string`);
       return json;
     }
+    return isMessageContent(parsed) ? parsed : json;
   }
+}
+
+function isMessageContent(value: unknown): value is string | object {
+  return typeof value === 'string' || (typeof value === 'object' && value !== null);
 }

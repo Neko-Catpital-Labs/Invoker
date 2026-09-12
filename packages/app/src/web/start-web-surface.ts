@@ -13,7 +13,11 @@
  */
 
 import type {
+  BundledSkillsInstallMode,
   BundledSkillsStatus,
+  CliInstallResult,
+  InvokerSetupRequest,
+  InvokerSetupResult,
   Logger,
 } from '@invoker/contracts';
 import { Channels, type MessageBus } from '@invoker/transport';
@@ -46,9 +50,13 @@ import {
   createTerminalUiPerfSink,
 } from '../terminal-ui-perf.js';
 import {
+  createPlanningTerminalAdapter,
   registerTerminalSessionPersistence,
+  type PlanningTerminalAdapter,
   type TerminalSessionPersistenceHandle,
 } from '../terminal-session-ipc.js';
+import type { InAppPlanningChatSessions } from '../in-app-planner.js';
+import type { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 import { WorkflowRollupProjection } from '../workflow-rollup-projection.js';
 import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot } from '../worker-control.js';
 import { buildWebInvokerDispatch } from './web-invoker-dispatch.js';
@@ -95,6 +103,12 @@ export interface StartHeadlessWebSurfaceDeps {
   /** Main process dist directory (`__dirname` of main.js) used to locate the built UI. */
   appRootDir: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  updateInvokerCli?: () => CliInstallResult;
+  runInvokerCliSetup?: (request: InvokerSetupRequest) => Promise<InvokerSetupResult>;
+  ownerCapabilities?: OwnerCapabilityRegistry;
+  /** Enables planning terminals over the web when present (with repoRoot + executorRegistry + taskHandles). */
+  planningChatSessions?: InAppPlanningChatSessions;
 }
 
 export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebBridge | null {
@@ -113,6 +127,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
 
   let terminalSessionPersistenceHandle: TerminalSessionPersistenceHandle | null = null;
   let taskTerminals: TaskTerminalAdapter | undefined;
+  let planningTerminals: PlanningTerminalAdapter | undefined;
   let terminalEvents: WebBridgeTerminalEvents | undefined;
   if (deps.repoRoot && deps.executorRegistry && deps.taskHandles) {
     const embeddedTerminalManager = new EmbeddedTerminalManager({
@@ -159,6 +174,16 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
         };
       },
     };
+    if (deps.planningChatSessions) {
+      const planningChatSessions = deps.planningChatSessions;
+      planningTerminals = createPlanningTerminalAdapter({
+        embeddedTerminalManager,
+        logger: deps.logger,
+        planningChatSessions,
+        getPlanningSessionStore: () => deps.persistence,
+        repoRoot: deps.repoRoot,
+      });
+    }
   }
   const streamSeq = createTaskDeltaStreamSequence();
   const projection = new WorkflowRollupProjection();
@@ -175,6 +200,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     const d = delta as TaskDelta;
     const rollups = projection.applyDelta(d);
     publisher.publishDelta(d, rollups);
+    bridge?.requestWorkflowsPush();
   });
 
   const refreshTaskGraph = async (): Promise<void> => {
@@ -201,6 +227,9 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     deleteWorkflow: deps.deleteWorkflow,
     detachWorkflow: deps.detachWorkflow,
     getBundledSkillsStatus: deps.getBundledSkillsStatus,
+    installBundledSkills: deps.installBundledSkills,
+    updateInvokerCli: deps.updateInvokerCli,
+    runInvokerCliSetup: deps.runInvokerCliSetup,
     getWorkers: () => createLocalWorkerStatusSnapshot({
       registry: registerExternalWorkersFromConfig(
         deps.config.externalWorkers,
@@ -210,8 +239,19 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(deps.config),
     }),
     taskTerminals,
+    ownerCapabilities: deps.ownerCapabilities,
+    planningTerminals,
     logger: deps.logger,
   });
+
+  const buildSnapshot = () => {
+    deps.orchestrator.syncAllFromDb();
+    const tasks = deps.orchestrator.getAllTasks();
+    const workflows = deps.persistence.listWorkflows();
+    const streamSequence = streamSeq.current();
+    projection.replaceAll(tasks);
+    return { tasks, workflows, streamSequence };
+  };
 
   bridge = startWebBridge({
     logger: deps.logger,
@@ -223,12 +263,24 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     host,
     port,
     terminalEvents,
+    onClientConnect: (sendToClient) => {
+      const snapshot = buildSnapshot();
+      sendToClient('invoker:task-graph-event', {
+        type: 'snapshot',
+        tasks: snapshot.tasks,
+        workflows: snapshot.workflows,
+        streamSequence: snapshot.streamSequence,
+        reason: 'sse-connect',
+        forced: true,
+      });
+    },
   });
 
   const originalClose = bridge.close;
   return {
     whenReady: bridge.whenReady,
     broadcast: bridge.broadcast,
+    requestWorkflowsPush: bridge.requestWorkflowsPush,
     get port(): number {
       return bridge!.port;
     },
@@ -253,6 +305,11 @@ export interface HeadlessWebSurfaceHost {
   taskHandles?: TaskHandleMap;
   appRootDir?: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  updateInvokerCli?: () => CliInstallResult;
+  runInvokerCliSetup?: (request: InvokerSetupRequest) => Promise<InvokerSetupResult>;
+  ownerCapabilities?: OwnerCapabilityRegistry;
+  planningChatSessions?: InAppPlanningChatSessions;
 }
 
 /**
@@ -284,5 +341,10 @@ export function startWebSurfaceForHeadless(
     taskHandles: host.taskHandles,
     appRootDir: host.appRootDir ?? __dirname,
     getBundledSkillsStatus: host.getBundledSkillsStatus,
+    installBundledSkills: host.installBundledSkills,
+    updateInvokerCli: host.updateInvokerCli,
+    runInvokerCliSetup: host.runInvokerCliSetup,
+    ownerCapabilities: host.ownerCapabilities,
+    planningChatSessions: host.planningChatSessions,
   });
 }

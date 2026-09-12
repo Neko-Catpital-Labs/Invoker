@@ -29,10 +29,34 @@ import type { WebInvokerDispatch } from './web-invoker-dispatch.js';
 const COOKIE_NAME = 'invoker_web';
 const MAX_INVOKE_BODY_BYTES = 1024 * 1024; // 1 MiB
 const MAX_SSE_CLIENTS = 64;
+
+interface MappedError {
+  message: string;
+  code: string;
+}
+
+const INVOKE_ERROR_PATTERNS: ReadonlyArray<[pattern: RegExp, code: string]> = [
+  [/^Validation failed:/i, 'VALIDATION_ERROR'],
+  [/not found/i, 'NOT_FOUND'],
+  [/^Cannot (approve|reject|delete|edit|cancel)/i, 'INVALID_OPERATION'],
+  [/is required|must be|must have|missing/i, 'VALIDATION_ERROR'],
+  [/limit must be/i, 'VALIDATION_ERROR'],
+  [/invalid (mode|value|option|argument)/i, 'INVALID_ARGUMENT'],
+];
+
+function mapInvokeError(message: string): MappedError | null {
+  for (const [pattern, code] of INVOKE_ERROR_PATTERNS) {
+    if (pattern.test(message)) {
+      return { message, code };
+    }
+  }
+  return null;
+}
 const SSE_PING_INTERVAL_MS = 20_000;
 const ACTIVITY_POLL_INTERVAL_MS = 2_000;
-const WORKFLOWS_POLL_INTERVAL_MS = 2_000;
-const SSE_DROP_BUFFER_BYTES = 8 * 1024 * 1024; // drop a client whose backlog exceeds this
+const WORKFLOWS_SAFETY_POLL_INTERVAL_MS = 30_000;
+const WORKFLOWS_PUSH_COALESCE_MS = 50;
+const SSE_DROP_BUFFER_BYTES = 8 * 1024 * 1024;
 const JSON_COMPRESSION_MIN_BYTES = 1024;
 
 export interface WebBridgeDeps {
@@ -45,6 +69,7 @@ export interface WebBridgeDeps {
   host: string;
   port: number;
   terminalEvents?: WebBridgeTerminalEvents;
+  onClientConnect?: (sendToClient: (channel: string, data: unknown) => void) => void;
 }
 export interface WebBridgeTerminalEvents {
   onOutput(cb: (payload: TerminalOutputEvent) => void): () => void;
@@ -53,12 +78,10 @@ export interface WebBridgeTerminalEvents {
 
 export interface WebBridge {
   close: () => Promise<void>;
-  /** Resolves with the actually-bound port once the server is listening. */
   whenReady: Promise<number>;
-  /** Best-effort current bound port (use `whenReady` when port was 0). */
   readonly port: number;
-  /** Push a Server-Sent Event to every connected client. */
   broadcast: (channel: string, data: unknown) => void;
+  requestWorkflowsPush: () => void;
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -102,12 +125,21 @@ function contentTypeFor(filePath: string): string {
   return CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown, req?: IncomingMessage): void {
+function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  req?: IncomingMessage,
+  opts?: { forceClose?: boolean },
+): void {
   const payload = Buffer.from(JSON.stringify(body), 'utf8');
   const headers: Record<string, string> = {
     'content-type': 'application/json; charset=utf-8',
     vary: 'Accept-Encoding',
   };
+  if (opts?.forceClose) {
+    headers.connection = 'close';
+  }
   const accepted = typeof req?.headers['accept-encoding'] === 'string' ? req.headers['accept-encoding'] : '';
   let responseBody = payload;
   if (payload.length >= JSON_COMPRESSION_MIN_BYTES) {
@@ -196,8 +228,8 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
       total += (chunk as Buffer).length;
       if (total > MAX_INVOKE_BODY_BYTES) {
         aborted = true;
-        sendJson(res, 413, { ok: false, error: { message: 'request body too large' } }, req);
-        req.destroy();
+        sendJson(res, 413, { ok: false, error: { message: 'request body too large' } }, req, { forceClose: true });
+        req.resume();
         return;
       }
       chunks.push(chunk as Buffer);
@@ -226,6 +258,11 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
         return;
       }
       const errorMessage = err instanceof Error ? err.message : String(err);
+      const mappedError = mapInvokeError(errorMessage);
+      if (mappedError) {
+        sendJson(res, 200, { ok: false, error: mappedError }, req);
+        return;
+      }
       logger?.warn(`web invoke failed for ${parsed.channel}: ${errorMessage}`, {
         module: 'web-bridge',
       });
@@ -250,6 +287,14 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     };
     req.on('close', cleanup);
     res.on('error', cleanup);
+    if (deps.onClientConnect) {
+      const sendToClient = (channel: string, data: unknown): void => {
+        if (res.writableEnded) return;
+        const frame = `event: ${channel}\ndata: ${JSON.stringify(data)}\n\n`;
+        res.write(frame);
+      };
+      deps.onClientConnect(sendToClient);
+    }
   };
 
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -259,7 +304,11 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
         const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
         const pathname = url.pathname;
 
-        if (method === 'POST' && pathname === '/invoke') {
+        if (pathname === '/invoke') {
+          if (method !== 'POST') {
+            sendJson(res, 405, { error: 'method_not_allowed' });
+            return;
+          }
           if (!cookieValid(req) && !headerValid(req)) {
             sendJson(res, 401, { error: 'unauthorized' });
             return;
@@ -336,7 +385,13 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
   activityTimer.unref?.();
 
   let workflowsSignature = '';
-  const workflowsTimer = setInterval(() => {
+  let workflowsPushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushWorkflowsPush = (): void => {
+    if (workflowsPushTimer) {
+      clearTimeout(workflowsPushTimer);
+      workflowsPushTimer = null;
+    }
+    if (clients.size === 0) return;
     try {
       const workflows = persistence.listWorkflows();
       const signature = workflows.map((w) => `${w.id}:${w.status}:${w.updatedAt}`).join('|');
@@ -346,7 +401,15 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     } catch {
       // DB may be briefly locked; next tick retries.
     }
-  }, WORKFLOWS_POLL_INTERVAL_MS);
+  };
+  const requestWorkflowsPush = (): void => {
+    if (workflowsPushTimer) return;
+    workflowsPushTimer = setTimeout(flushWorkflowsPush, WORKFLOWS_PUSH_COALESCE_MS);
+    workflowsPushTimer.unref?.();
+  };
+  const workflowsTimer = setInterval(() => {
+    flushWorkflowsPush();
+  }, WORKFLOWS_SAFETY_POLL_INTERVAL_MS);
   workflowsTimer.unref?.();
 
   const pingTimer = setInterval(() => {
@@ -368,6 +431,10 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     clearInterval(activityTimer);
     clearInterval(workflowsTimer);
     clearInterval(pingTimer);
+    if (workflowsPushTimer) {
+      clearTimeout(workflowsPushTimer);
+      workflowsPushTimer = null;
+    }
     logger?.error(
       `Web surface failed to bind http://${host}:${port} (${err.code ?? err.message}) — continuing without the web surface`,
       { module: 'web-bridge' },
@@ -385,6 +452,10 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     clearInterval(activityTimer);
     clearInterval(workflowsTimer);
     clearInterval(pingTimer);
+    if (workflowsPushTimer) {
+      clearTimeout(workflowsPushTimer);
+      workflowsPushTimer = null;
+    }
     unsubscribeOutput?.();
     unsubscribeTerminalOutput?.();
     unsubscribeTerminalExit?.();
@@ -399,6 +470,7 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     close,
     whenReady,
     broadcast,
+    requestWorkflowsPush,
     get port(): number {
       const address = server.address();
       return typeof address === 'object' && address ? address.port : port;

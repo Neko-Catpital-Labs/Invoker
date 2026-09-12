@@ -19,6 +19,8 @@ type StartReadyOrchestrator = Pick<
   | 'recreateWorkflow'
   | 'startExecution'
   | 'getWorkflowMergeMode'
+  | 'activateStagedWorkflows'
+  | 'getStagedWorkflowIds'
 >;
 
 type StartReadyRequestExt = StartReadyRequest & {
@@ -225,7 +227,7 @@ function formatStartReadyError(err: unknown): string {
 
 export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): StartReadyPreview {
   const tasks = orchestrator.getAllTasks();
-  const readyTasks = orchestrator.getExecutableReadyTasks();
+  const readyTasks = orchestrator.getExecutableReadyTasks({ includeStaged: true });
   const recoverableTasks = collectRecoverableTasks(orchestrator);
   const failedTasks = tasks.filter((task) => task.status === 'failed');
   const pendingTasks = tasks.filter((task) => isPendingOrQueued(task));
@@ -297,6 +299,7 @@ async function runStartReadyAsync(
   const recreatedWorkflowIds: string[] = [];
   const freshBaseRecreatedWorkflowIds: string[] = [];
   const workflowOutcomes: StartReadyWorkflowOutcome[] = [];
+  orchestrator.activateStagedWorkflows(orchestrator.getStagedWorkflowIds());
 
   if (freshBasePreview) {
     if (freshBasePreview.workflowIds.length > 0 && !options.freshBaseRecreateWorkflow) {
@@ -331,7 +334,7 @@ async function runStartReadyAsync(
 
   const recoverableTasks = collectRecoverableTasks(orchestrator);
   for (const task of recoverableTasks) {
-    orchestrator.prepareTaskForNewAttempt(task.id, 'start_ready_recovery');
+    orchestrator.prepareTaskForNewAttempt(task.id, 'start_ready_recovery', { alreadyRefreshed: true });
   }
 
   started.push(...orchestrator.startExecution());

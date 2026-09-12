@@ -9,10 +9,13 @@ describe('CodexExecutionAgent', () => {
     expect(spec.args).toEqual(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', 'test prompt']);
   });
 
-  it('supports explicit sandboxed full-auto mode when bypass is disabled', () => {
+  it('uses the workspace-write sandbox when bypass is disabled', () => {
     const agent = new CodexExecutionAgent({ bypassApprovalsAndSandbox: false, fullAuto: true });
     const spec = agent.buildCommand('test prompt');
-    expect(spec.args).toEqual(['exec', '--json', '--full-auto', 'test prompt']);
+    expect(spec).toMatchObject({
+      args: ['exec', '--json', '--sandbox', 'workspace-write', 'test prompt'],
+    });
+    expect(spec.args).not.toContain('--full-auto');
   });
   it('passes executionModel through as --model', () => {
     const agent = new CodexExecutionAgent();
@@ -66,6 +69,12 @@ describe('CodexExecutionAgent', () => {
     expect(spec.cmd).toBe('codex');
     expect(spec.args).toEqual(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', 'fix the bug']);
     expect(spec.sessionId).toBeDefined();
+  });
+  it('buildFixCommand uses the workspace-write sandbox when bypass is disabled', () => {
+    const agent = new CodexExecutionAgent({ bypassApprovalsAndSandbox: false, fullAuto: true });
+    const spec = agent.buildFixCommand('fix the bug');
+    expect(spec.args).toEqual(['exec', '--json', '--sandbox', 'workspace-write', 'fix the bug']);
+    expect(spec.args).not.toContain('--full-auto');
   });
   it('buildFixCommand passes executionModel through', () => {
     const agent = new CodexExecutionAgent();
