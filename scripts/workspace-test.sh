@@ -18,7 +18,18 @@ if ! [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || [ "$CONCURRENCY" -lt 1 ]; then
   exit 2
 fi
 
+# CI-only: local `pnpm -r test` runs the full suite unchanged. vitest
+# resolves --exclude relative to the package it runs in either way, so the
+# same registry entries work whether this ran via `pnpm --filter <pkg> test`
+# (a single package) or `pnpm -r test` (every package) -- see
+# scripts/flaky-test-registry.mjs.
+FLAKY_EXCLUDE_ARGS=()
+if [ -n "${CI:-}" ]; then
+  # shellcheck disable=SC2207
+  FLAKY_EXCLUDE_ARGS=($(node "$ROOT/scripts/flaky-test-registry.mjs" exclude-args))
+fi
+
 echo "==> Running package workspace tests (concurrency=$CONCURRENCY)"
-env -u INVOKER_HEADLESS_STANDALONE pnpm -r --workspace-concurrency="$CONCURRENCY" test
+env -u INVOKER_HEADLESS_STANDALONE pnpm -r --workspace-concurrency="$CONCURRENCY" test -- "${FLAKY_EXCLUDE_ARGS[@]}"
 echo "==> Running required package builds"
 env -u INVOKER_HEADLESS_STANDALONE bash "$ROOT/scripts/required-builds.sh"

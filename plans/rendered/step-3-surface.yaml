@@ -1,0 +1,83 @@
+name: "PR #9903 rebase (3) ui layer"
+description: |
+  Reconcile PR #9903's UI-side repo-binding hydration and submit logic in
+  packages/ui/src/App.tsx with master's independently-landed
+  "[Web surface parity]" per-chat repo-binding UI (#9961/#9963/#9977), which
+  rewrote the exact same hydration effect and submit handler PR #9903
+  modifies. Master turned the old hydration `useEffect` into a
+  `refreshPlanningSessionsNow` useCallback with new session-dedup/alias/
+  gone-tracking logic (`admissibleRestored`, `aliasedBackendIds`,
+  `goneCounts`), and added a `commitPlanningRepo()` / `activePlanningRepoLocked`
+  / `repoInput` per-chat repo-edit flow to `handlePlanningSubmit`, introducing
+  a new `sendSessionId` variable in place of the plain `planningSessionId`
+  this PR reads. PR #9903's two changes (default `planningRepoBindingRef`
+  hydration from `chatList.repoBinding`, and conditionally attaching
+  `repoBinding` to the first-send request) need to be re-threaded into
+  master's current structure rather than pasted back verbatim. Gated on the
+  domain workflow's merge, since it needs the reconciled backend behavior.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "wf-1787605381072-7"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: implement-planning-repo-binding-rebase-surface
+    description: |
+      Reapply PR #9903's UI-side repo-binding default hydration and
+      first-send request wiring in App.tsx on top of master's rewritten
+      `refreshPlanningSessionsNow` / `handlePlanningSubmit`.
+      Review claim: App.tsx hydrates the backend-default repoBinding into planningRepoBindingRef inside master's current refreshPlanningSessionsNow, and attaches repoBinding to a first-send request only when the user has not already committed a different explicit per-chat repo via commitPlanningRepo.
+      Review lane: behavior
+      Safety invariant: Only the ui layer changes; master's admissibleRestored/aliasedBackendIds/goneCounts dedup logic and the commitPlanningRepo/repoInput per-chat repo-edit flow keep their current behavior for sessions that already have an explicit repoInput commit.
+      Slice rationale: One layer slice built on the domain layer; it is the top of the stack.
+      Architectural effect: Restores PR #9903's UI behavior (new "local-" sessions display and send with the backend-resolved default repo binding) without regressing master's newer per-chat repo-override and session-dedup mechanisms.
+      Goal: Implement the ui layer so `pnpm --filter @invoker/ui test -- src/__tests__/invoker-terminal.test.tsx` passes, and no App.tsx test covering refreshPlanningSessionsNow's dedup/alias/gone-tracking or commitPlanningRepo regresses.
+      Motivation: PR #9903 (https://github.com/Neko-Catpital-Labs/Invoker/pull/9903, "Keep planning bound to its repository") has a GitHub merge conflict against master because master's "[Web surface parity]" stack (#9961, #9963, #9977) rewrote the exact hydration effect and submit handler this PR touches, in the 93 commits since this PR's merge-base.
+      Alternative considerations: Dropping master's dedup/alias/gone-tracking logic to make the textual merge trivial was rejected — it was added to fix real session-duplication and lost-connection bugs. Dropping PR #9903's default-binding hydration was also rejected — that is the PR's core purpose. Making repoBinding always override an explicit user-committed repoInput was rejected as a regression of the newer per-chat override feature; the default binding must only apply when the user has not explicitly named a different repo for this chat.
+      Implementation details: In packages/ui/src/App.tsx's `refreshPlanningSessionsNow` (the useCallback that replaced the old hydration useEffect), add PR #9903's `planningRepoBindingRef.current = chatList.repoBinding ?? {}` assignment, and reapply the `chatList.sessions.length === 0` early-return branch that maps existing "local-" sessions to include the resolved repoBinding fields — insert it consistently with the function's current admissibleRestored/dedup flow (i.e. still run before the dedup logic, since it only applies when there are zero server sessions to reconcile against). In `handlePlanningSubmit`, change PR #9903's original condition (`!planningSessionId && session.repoUrl && session.baseBranch`) to use master's current `sendSessionId` variable instead of `planningSessionId` (so it still means "this is a first send with no prior backend session"), and only attach `repoBinding` to the request when the user did not just commit an explicit `pendingRepoInput` via `commitPlanningRepo` in this same submit (i.e. `bind.sessionId` was not just set) — an explicit per-chat repo commit takes precedence over the passive default binding.
+      Non-goals: No persistence or domain work here, no refactor, no unrelated cleanup, no doc edits, no change to the dedup/alias/gone-tracking algorithm itself.
+      Layer: ui
+      Feature state: active
+      Files: packages/ui/src/App.tsx
+      Change types:
+      - packages/ui/src/App.tsx: modify
+      Acceptance criteria:
+      - `pnpm --filter @invoker/ui test -- src/__tests__/invoker-terminal.test.tsx` exits 0 after the change.
+    prompt: |
+      Goal: Reapply PR #9903's UI-side repo-binding default hydration and first-send request wiring in App.tsx on top of master's rewritten refreshPlanningSessionsNow/handlePlanningSubmit.
+      Review lane: behavior
+      Motivation: PR #9903 (https://github.com/Neko-Catpital-Labs/Invoker/pull/9903, head SHA a46b024e37963287e13b7d0b9d50f0055f469d80) cannot merge into master due to a GitHub-reported conflict. Master's "[Web surface parity]" stack (#9961, #9963, #9977) rewrote packages/ui/src/App.tsx's planning-session hydration from a `useEffect` into a `refreshPlanningSessionsNow` useCallback with new `admissibleRestored`/`aliasedBackendIds`/`goneCounts` dedup logic, and added `commitPlanningRepo()`/`activePlanningRepoLocked`/`repoInput` (a per-chat repo-edit flow) plus a `sendSessionId` variable to `handlePlanningSubmit`, in the 93 commits since this PR's merge-base.
+      Alternative considerations: Do not bundle contracts (ipc-channels.ts) or domain (in-app-planner.ts) work here — assume those workflow steps already landed. Do not remove or simplify master's dedup/alias/gone-tracking logic. Do not make the default repoBinding override an explicit per-chat repoInput commit.
+      Implementation details: Fetch PR #9903 for reference (`git fetch origin refs/pull/9903/head`, or `git log -p a46b024e3 -- packages/ui/src/App.tsx`) to see the exact original diff (two hunks: the hydration effect around what is now `refreshPlanningSessionsNow`, and the request-building object inside `handlePlanningSubmit`). In `refreshPlanningSessionsNow`, add `planningRepoBindingRef.current = chatList.repoBinding ?? {}` and the `chatList.sessions.length === 0` early-return branch (mapping "local-" sessions to include the resolved repoBinding), placed before the current dedup/admissibleRestored logic runs. In `handlePlanningSubmit`, change the original `!planningSessionId && session.repoUrl && session.baseBranch` condition to read master's `sendSessionId` in place of `planningSessionId`, and gate it so it does not fire when this same submit already committed an explicit `pendingRepoInput` via `commitPlanningRepo` (i.e. skip when `bind.sessionId` was just set) — explicit per-chat binding wins over the passive default.
+      Non-goals: No persistence or domain work, no refactor, no unrelated cleanup, no change to the dedup/alias/gone-tracking algorithm.
+      Assume no prior context. You are given only this task.
+      Implement the ui layer described above in packages/ui/src/App.tsx. Touch nothing outside this layer.
+      Acceptance criteria:
+      - `pnpm --filter @invoker/ui test -- src/__tests__/invoker-terminal.test.tsx` exits 0 after your change (this is the pass condition).
+    dependencies: []
+
+  - id: verify-planning-repo-binding-rebase-surface
+    description: |
+      Run the deterministic proof for the ui layer.
+      Review claim: `pnpm --filter @invoker/ui test -- src/__tests__/invoker-terminal.test.tsx` passes only when the ui layer is correct.
+      Review lane: proof
+      Safety invariant: Proof-only; adds no product behavior.
+      Slice rationale: One proof slice for the ui layer; it is the top of the stack.
+      Architectural effect: None; verification only.
+      Goal: Prove the ui layer deterministically.
+      Motivation: This is the original PR's own recorded test plan entry for the UI change.
+      Alternative considerations: Manual verification was rejected as non-deterministic.
+      Implementation details: Execute `pnpm --filter @invoker/ui test -- src/__tests__/invoker-terminal.test.tsx` as the terminal proof.
+      Non-goals: No product edits here; proof only.
+      Layer: app_regression
+      Layer exception: allowed — this proof task verifies the "ui" layer implementation task above; the formula's normalized layer list places "ui" after "app_regression", so a same-step verify-follows-implement dependency here is an expected, deliberate ordering, not a foundational-layer-depends-on-integration-layer mistake.
+      Feature state: active
+    command: "pnpm --filter @invoker/ui test -- src/__tests__/invoker-terminal.test.tsx"
+    dependencies:
+      - implement-planning-repo-binding-rebase-surface

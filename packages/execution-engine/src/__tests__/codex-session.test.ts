@@ -309,6 +309,7 @@ describe('extractCodexUsage', () => {
       inputTokens: 500,
       outputTokens: 200,
       cachedTokens: 0,
+      cacheCreationTokens: 0,
       totalTokens: 700,
       confidence: 'exact',
     });
@@ -330,6 +331,7 @@ describe('extractCodexUsage', () => {
       inputTokens: 1000,
       outputTokens: 400,
       cachedTokens: 100,
+      cacheCreationTokens: 0,
       totalTokens: 1400,
       confidence: 'exact',
     });
@@ -351,6 +353,7 @@ describe('extractCodexUsage', () => {
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
+      cacheCreationTokens: 0,
       totalTokens: 150,
       confidence: 'estimated',
     });

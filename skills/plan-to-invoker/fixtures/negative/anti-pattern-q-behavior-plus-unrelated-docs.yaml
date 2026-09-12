@@ -1,0 +1,95 @@
+name: "Invalid behavior lane mixed with an unrelated README"
+description: "Hook behavior slice that also edits a README outside the hook's own directory."
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/hooks-repo.git
+tasks:
+  - id: implement-stale-lock-hook
+    description: |
+      Review claim:
+      - The stale-lock hook flags lock files older than one hour.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Lock files younger than one hour are never flagged.
+      Effectiveness measurement:
+      - `python3 -m pytest engine/hooks/stale-lock` exits 0.
+      Slice rationale:
+      - This should be one hook slice, so the shared hooks index must not ride along.
+      Architectural effect:
+      - Adds one detector under engine/hooks/stale-lock.
+      Goal:
+      - Detect stale lock files.
+      Motivation:
+      - Stale locks block later runs without any visible error.
+      Alternative considerations:
+      - Option A (chosen): a dedicated hook with its own README.
+      - Option B: fold the check into an existing hook.
+      Implementation details:
+      - Add detect.py and the README beside it, and also edit the shared hooks index.
+      Non-goals:
+      - No change to other hooks.
+      Layer: domain
+      Feature state: active
+      Files:
+      - engine/hooks/stale-lock/detect.py
+      - engine/hooks/stale-lock/README.md
+      - engine/hooks/README.md
+      Change types:
+      - engine/hooks/stale-lock/detect.py: create
+      - engine/hooks/stale-lock/README.md: create
+      - engine/hooks/README.md: modify
+      Acceptance criteria:
+      - Pass condition: `python3 -m pytest engine/hooks/stale-lock` exits 0.
+    prompt: |
+      Review claim:
+      - The stale-lock hook flags lock files older than one hour.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Lock files younger than one hour are never flagged.
+      Slice rationale:
+      - One hook slice.
+      Architectural effect:
+      - Adds one detector under engine/hooks/stale-lock.
+      Goal:
+      - Detect stale lock files.
+      Motivation:
+      - Stale locks block later runs without any visible error.
+      Alternative considerations:
+      - Option A (chosen): a dedicated hook with its own README.
+      - Option B: fold the check into an existing hook.
+      Implementation details:
+      - Create engine/hooks/stale-lock/detect.py and its README, and list the hook in engine/hooks/README.md.
+      Non-goals:
+      - No change to other hooks.
+      Assume no prior context. The detector must flag lock files older than one hour and ignore younger ones. Pass condition: `python3 -m pytest engine/hooks/stale-lock` exits 0.
+    dependencies: []
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - No ephemeral handoff files are left behind before the PR merge gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This read-only check changes no files.
+      Effectiveness measurement:
+      - `bash scripts/scrub-handoff-artifacts.sh` exits 0.
+      Slice rationale:
+      - The scrub check runs last and stays separate from implementation.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Confirm no handoff artifacts remain.
+      Motivation:
+      - Uncommitted handoff files do not flow across worktrees.
+      Alternative considerations:
+      - Option A (chosen): a read-only absence check.
+      Implementation details:
+      - Run the handoff scrub script without --apply.
+      Non-goals:
+      - Do not modify source files.
+      Layer: e2e_regression
+      Feature state: active
+    command: 'bash scripts/scrub-handoff-artifacts.sh'
+    dependencies: [implement-stale-lock-hook]

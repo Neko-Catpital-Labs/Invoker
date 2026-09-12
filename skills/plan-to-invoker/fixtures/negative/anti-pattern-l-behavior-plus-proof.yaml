@@ -12,6 +12,8 @@ tasks:
       - behavior
       Safety invariant:
       - The change is isolated to refresh fallback behavior and directly affected tests.
+      Effectiveness measurement:
+      - `cd packages/app && pnpm test` exits 0.
       Slice rationale:
       - This should be one behavior slice, so repro proof must not ride in the same workflow.
       Architectural effect:
@@ -71,6 +73,8 @@ tasks:
       - proof
       Safety invariant:
       - This command changes no production behavior.
+      Effectiveness measurement:
+      - `pnpm run test:all` exits 0.
       Slice rationale:
       - Final regression stays separate from implementation.
       Architectural effect:
