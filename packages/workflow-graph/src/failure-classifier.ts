@@ -24,6 +24,18 @@ export const SSH_INFRA_FAILURE_CLASSES: readonly SshInfraFailureClass[] = [
   'ssh-disk-full',
 ];
 
+const CI_CHECK_TABLE_ROW = /^[^\t]*\t(?:pass|fail|skipping|pending|cancelled|neutral|timed_out)\t/i;
+
+const AGENT_QUOTA_REFUSAL = new RegExp([
+  'usage limit',
+  'rate[ _-]limit(?:_error|_exceeded)',
+  'rate limit exceeded',
+  'exceeded your (?:[\\w-]+ )?rate limit',
+  'too many requests',
+  'quota exceeded',
+  'exceeded your quota',
+].join('|'), 'i');
+
 export class FailureClassifier {
   /**
    * Map a failed task's `execution.error` to a persisted infra failure class,
@@ -121,6 +133,9 @@ export class FailureClassifier {
    */
   static isUsageLimit(errorText: unknown): boolean {
     if (typeof errorText !== 'string') return false;
-    return /usage limit|rate limit/i.test(errorText);
+    return errorText
+      .split('\n')
+      .filter((line) => !CI_CHECK_TABLE_ROW.test(line))
+      .some((line) => AGENT_QUOTA_REFUSAL.test(line));
   }
 }
