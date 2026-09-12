@@ -260,6 +260,13 @@ suite_preflight() {
         return 10
       fi
       ;;
+    optional/34-e2e-cli-install.sh)
+      if [ "$(node -p "String(process.config.variables.single_executable_application)")" != "true" ] \
+        && ! { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }; then
+        echo "node was built with single_executable_application=false and no Docker daemon is reachable"
+        return 10
+      fi
+      ;;
   esac
   return 0
 }
