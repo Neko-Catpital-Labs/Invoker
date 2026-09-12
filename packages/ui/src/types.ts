@@ -22,7 +22,8 @@ export type TaskStatus =
   | 'review_ready'
   | 'awaiting_approval'
   | 'stale'
-  | 'queued';
+  | 'queued'
+  | 'skipped';
 
 // ── Experiment Types ────────────────────────────────────────
 

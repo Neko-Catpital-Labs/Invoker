@@ -37,6 +37,7 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
   let blocked = 0;
   let fixing = 0;
   let fixApproval = 0;
+  let skipped = 0;
 
   for (const task of tasks.values()) {
     switch (task.status) {
@@ -86,6 +87,9 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
         break;
       case 'blocked':
         blocked++;
+        break;
+      case 'skipped':
+        skipped++;
         break;
     }
   }
@@ -203,6 +207,16 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
           onClick={(e) => onStatusClick?.('blocked', e)}
         >
           Blocked: <span className="font-medium">{blocked}</span>
+        </span>
+      )}
+      {skipped > 0 && (
+        <span
+          data-testid="status-bar-pill-skipped"
+          data-status-key="skipped"
+          className={`${statusTextClass('skipped')} ${filterClass('skipped')}`}
+          onClick={(e) => onStatusClick?.('skipped', e)}
+        >
+          Skipped: <span className="font-medium">{skipped}</span>
         </span>
       )}
       {fixing > 0 && (
