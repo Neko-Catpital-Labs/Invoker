@@ -1,0 +1,163 @@
+name: "restack-pr-10369-fix-uninstall-fold-regex"
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+
+tasks:
+  - id: restack-pr-10369-onto-master-with-regex-fix
+    description: >
+      Review claim: PR #10369's head branch
+      (stack/EdbertChan/pr/install-skills-always-on-routing/install-skills-always-routing-7-fold-uninstall--9d220acb)
+      reports a merge conflict against master. A plain rebase onto master
+      auto-skips the four stack commits (items 1, 2, 3, 5) that are already
+      merged via patch-id matching, but conflicts on item (4)
+      ("Document always-on helpers on plan-to-invoker") because master
+      already carries equivalent, more detailed content for that same
+      assertion block via a separate later PR (#10386, on a branch literally
+      named for commit eb2543b95), and again on item (6) ("Loosen
+      install-skills help assertions for uninstall fold-in") because
+      master's merged version of that commit
+      (b16c2490a, PR #10368) is a stricter regex
+      (`/install-skills\s+uninstall/`) than the stale local copy
+      (`toContain('uninstall')`). Both of those conflicts resolve cleanly by
+      keeping master's already-merged (superset/stricter) version and
+      dropping the stale duplicate local commit content.
+
+      After that resolution, only one commit remains on top of master:
+      cc75a534f1b40f192715849f198d19bc68736d2a, PR #10369's actual change,
+      which folds
+      `install-skills [install|update|reinstall]` / `install-skills uninstall`
+      (two help lines in packages/app/src/headless-usage.ts) into one line
+      `install-skills [install|update|reinstall|uninstall]`. That single
+      commit cherry-picks cleanly onto master with zero conflicts (verified
+      at diagnosis time). But the resulting tree fails its own declared
+      narrow-proof test
+      (`pnpm --filter @invoker/app exec vitest run src/__tests__/headless-install-skills.test.ts`),
+      because master's already-merged regex
+      `/install-skills\s+uninstall/` (from #10368) requires "uninstall" to
+      follow "install-skills" with only whitespace between them, and the
+      folded bracket text `install-skills [install|update|reinstall|uninstall]`
+      puts `[install|update|reinstall|` in between instead. This is a
+      genuine forward-incompatibility between two already-landed/in-flight
+      pieces of work, not just a git-level conflict, so a mechanical rebase
+      alone cannot close PR #10369 without also correcting this one
+      assertion line to match the folded format it was written to prepare
+      for.
+
+      This task restacks PR #10369's branch onto master's current tip and,
+      as part of the same commit, updates that one now-incompatible
+      assertion so it matches the folded help line instead of the old
+      un-folded shape the regex assumed. Verified at diagnosis time:
+      applying this exact patch on top of a fresh cherry-pick of
+      cc75a534f onto master makes the previously-failing narrow-proof test
+      pass (4/4 tests green).
+
+      Review lane: tooling-policy.
+
+      Safety invariant: never touch the remote head branch unless its
+      current tip is exactly the expected SHA
+      cc75a534f1b40f192715849f198d19bc68736d2a at push time; push only with
+      --force-with-lease keyed to that SHA (never a bare --force), so a
+      concurrent human/agent push to the same branch aborts this task
+      instead of being silently overwritten. Abort without pushing anything
+      if the cherry-pick no longer applies cleanly onto master's current
+      tip, if the patch no longer applies cleanly, or if the narrow-proof
+      test does not pass after the patch is applied (base or PR may have
+      moved further since diagnosis).
+
+      Slice rationale: one slice — restack PR #10369 onto master and repair
+      the one assertion its own fold-in change invalidates, since the two
+      cannot be reviewed or landed independently without the narrow proof
+      failing in between.
+
+      Architectural effect: none beyond PR #10369's own already-reviewed
+      intent (folding two help lines into one); this task additionally
+      updates a test assertion to match that folded format so the
+      already-merged proof-lane regex from #10368 and PR #10369's help-text
+      change agree.
+
+      Layer: tooling_policy.
+      Feature state: active.
+      Files: packages/app/src/headless-usage.ts,
+      packages/app/src/__tests__/headless-install-skills.test.ts.
+      Change types: git fetch of master and the PR head branch, cherry-pick
+      of the single new commit (cc75a534f) onto master's current tip, a
+      one-line test-assertion patch on top of that cherry-pick, a narrow
+      vitest run as a gate, then a force-with-lease push of the existing
+      remote head branch.
+      Acceptance criteria: the command exits 0 only if (a) the fetched head
+      branch tip matched the expected SHA before rewriting, (b) the
+      cherry-pick of cc75a534f1b40f192715849f198d19bc68736d2a onto master's
+      current tip succeeded with no conflicts, (c) the assertion patch
+      applied cleanly, (d)
+      `pnpm --filter @invoker/app exec vitest run src/__tests__/headless-install-skills.test.ts`
+      exits 0 on the resulting tree, and (e) the force-with-lease push of
+      the resulting commit onto the head branch succeeded. Any other
+      outcome must exit non-zero and must not push anything, leaving PR
+      #10369 for manual restructuring instead.
+    command: |
+      set -eu
+
+      BASE_REF="master"
+      HEAD_REF="stack/EdbertChan/pr/install-skills-always-on-routing/install-skills-always-routing-7-fold-uninstall--9d220acb"
+      EXPECTED_HEAD_SHA="cc75a534f1b40f192715849f198d19bc68736d2a"
+      NEW_COMMIT_SHA="cc75a534f1b40f192715849f198d19bc68736d2a"
+
+      git fetch origin "$BASE_REF":refs/heads/__restack_base
+      git fetch origin "$HEAD_REF":refs/heads/__restack_head
+
+      ACTUAL_HEAD_SHA="$(git rev-parse __restack_head)"
+      if [ "$ACTUAL_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+        echo "head branch moved since diagnosis (expected $EXPECTED_HEAD_SHA, got $ACTUAL_HEAD_SHA); aborting without pushing" >&2
+        exit 1
+      fi
+
+      git branch -f __restack_new __restack_base
+      git checkout __restack_new
+
+      if ! git cherry-pick -x "$NEW_COMMIT_SHA"; then
+        git cherry-pick --abort || true
+        echo "cherry-pick of $NEW_COMMIT_SHA onto the current base tip conflicted; this PR needs manual restructuring instead" >&2
+        exit 1
+      fi
+
+      TEST_FILE="packages/app/src/__tests__/headless-install-skills.test.ts"
+
+      if ! python3 - "$TEST_FILE" <<'PY_EOF'
+      import sys
+      path = sys.argv[1]
+      old = "    expect(output).toMatch(/install-skills\\s+uninstall/);\n"
+      new = "    expect(output).toContain('install-skills [install|update|reinstall|uninstall]');\n"
+      with open(path) as f:
+          content = f.read()
+      if content.count(old) != 1:
+          sys.stderr.write("expected exactly one occurrence of the old assertion line, found %d\n" % content.count(old))
+          sys.exit(1)
+      content = content.replace(old, new)
+      with open(path, "w") as f:
+          f.write(content)
+      PY_EOF
+      then
+        echo "regex-fix substitution did not apply cleanly onto the cherry-picked tree; this PR needs manual restructuring instead" >&2
+        exit 1
+      fi
+
+      git add "$TEST_FILE"
+      git commit -m "Fix install-skills help regex to match the folded uninstall mode list
+
+      PR #10369 folds install-skills uninstall into the
+      install-skills [install|update|reinstall] help line. The proof test
+      merged separately via #10368 asserted a stricter regex
+      (/install-skills\\\\s+uninstall/) that assumed uninstall would still
+      follow install-skills with only whitespace between them, which the
+      folded bracket format no longer satisfies. Update the assertion to
+      match the folded format instead."
+
+      if ! pnpm --filter @invoker/app exec vitest run src/__tests__/headless-install-skills.test.ts; then
+        echo "narrow-proof test still fails after the regex fix; aborting without pushing" >&2
+        exit 1
+      fi
+
+      git push "--force-with-lease=refs/heads/$HEAD_REF:$ACTUAL_HEAD_SHA" origin "__restack_new:refs/heads/$HEAD_REF"
+    dependencies: []
+    requiresManualApproval: true

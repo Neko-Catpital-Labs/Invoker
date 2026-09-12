@@ -169,9 +169,29 @@ When writing `prompt` fields for LLM tasks:
 6. **Assume zero context**: include explicit phrasing such as "assume no prior context" or "zero-context execution".
 7. **Include deterministic pass/fail expectations**: require explicit outcomes like `exit code 0`, `exits 0`, or expected output text.
 
+## Inter-task file carry (hard)
+
+Invoker gives each task its own worktree from **committed** history. Uncommitted
+files on disk in task A's worktree are invisible to task B.
+
+**Rule:** Inter-task file carry across Invoker tasks MUST be via **git commit** on
+the task branch. Local/uncommitted paths under `work/`, `state/artifacts/`,
+caches, and similar do **not** flow to dependent tasks. Object-store / remote
+artifact APIs are OK when the plan explicitly uses them; silent "same machine
+path" handoff is not.
+
+**Prefer:**
+- One command task that both produces and consumes ephemeral local state, **or**
+- Commit a tracked path (for example under `docs/` / allowed `outputs/`) in the
+  producer before the dependent task runs.
+
+`scratch: true` plans are exempt from the footgun lint. Experiment briefs already
+require committing the artifact; this section is the general form of that rule.
+
 ## Experiment artifact handoff templates (required when experiments are planned)
 
-When a workflow includes experiment design/proof work, use a three-task handoff sequence:
+When a workflow includes experiment design/proof work, use a three-task handoff sequence
+(same commit-to-carry rule as § *Inter-task file carry*):
 
 1. **`experiment-write-*` prompt task**
    - Include deterministic artifact path in `description` and `prompt` (for example `docs/context/inv-123/experiment-brief.md`)
@@ -247,6 +267,37 @@ When writing `command` fields:
 3. **Exit codes matter**: the command succeeds (exit 0) or fails (non-zero). Design accordingly.
 4. **No interactive commands**: everything must run non-interactively
 5. **Quote paths with spaces**: `test -f "path with spaces/file.ts"`
+
+## Traps that cost a resubmit
+
+Each of these passed `skill-doctor` and was rejected by the owner or by verify, so every one cost a cancel-and-resubmit cycle (reflect session 4db2ca74, 2026-09-01: three of four chains, eleven workflows). Run the two pre-submit checks at the end of this section before every submit.
+
+1. **`pnpm --filter <pkg> test -- --run <file>` runs the whole package.** When the package `test` script is bare `vitest run` (`workflow-core`, `workflow-graph`, `data-store`, ...), pnpm forwards the `--` literally and vitest drops the file filter. Only packages that route through `scripts/run-vitest.mjs` (`execution-engine`, `ui`) strip it. Use `pnpm --filter <pkg> test --run <file>`. Repro in `packages/workflow-graph`:
+
+   ```text
+   $ pnpm test -- --run src/__tests__/does-not-exist.test.ts
+    Test Files  8 passed (8)
+   $ pnpm test --run src/__tests__/does-not-exist.test.ts
+   No test files found, exiting with code 1
+   ```
+
+   A verify task that names four files and reports `Test Files 6 failed | 53 passed (59)` ran the suite, not the four files.
+
+2. **"Focused proof by default" is wrong for a shared-enum or contract reversal.** When a task changes what an existing status, enum value, or contract means (for example dependents of a failed task go `skipped` instead of staying `pending`), the `Files:` fence must include every test that asserts the old value, not just the tests nearest the change. Before authoring the fence, grep for the old expected value (`grep -rn "toBe('pending')" packages/<pkg>/src` style) and list every hit under `Files:` / `Change types:`. Chain B's four-file fence broke 31 assertions across six unlisted `workflow-core` test files, and the agent honored the fence ("I won't broaden edits outside the user's file fence") until verify failed.
+
+3. **A `Change types: create` path must not carry a hedged verb in the prompt.** "Extend or create `<path>`" lets the agent extend nothing and create nothing; the verify task then dies with `No test files found`. If the path is `create`, the prompt says "Create `<path>` (it does not exist yet)" and nothing else about it.
+
+4. **Never put an anchor word on a task line that names a path or backticked symbol the task creates.** The owner's freshness preflight (`ANCHOR_CLAUSE_PATTERN` in `packages/execution-engine/src/task-specification-preflight.ts` on master) matches `existing`, `already exists`, `do not create`, `must not create`, and `without creating`. Any line that matches turns every repo path and backticked identifier on that same line into a must-exist anchor, and a missing anchor blocks the task as `needs_input` before launch — with the reason stored only in `execution.inputPrompt`, which no headless query prints. Keep create targets and "the existing X" references on separate lines.
+
+Pre-submit checks for items 1-4:
+
+```bash
+node skills/plan-to-invoker/scripts/freshness-check.mjs --ref origin/master . plans/<step>.yaml
+node skills/plan-to-invoker/scripts/unit-triggers.mjs plans/<step>.yaml
+grep -n "test -- --run" plans/<step>.yaml
+```
+
+`freshness-check.mjs` reproduces the owner's prose gate against the ref the plan will run on and exits 1 with the missing anchor and the clause that created it. `unit-triggers.mjs` gives the same verdict as `lint-review-units.mjs` and prints the scanned section line behind each tripped review unit, so a reword targets the line instead of guessing synonyms. The `grep` must print nothing.
 
 ## UI Change Plans
 

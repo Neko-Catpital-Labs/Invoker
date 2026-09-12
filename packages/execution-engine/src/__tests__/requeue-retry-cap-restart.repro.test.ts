@@ -27,7 +27,7 @@ const logger = {
 };
 
 const POLL_CTX = {
-  identity: { kind: 'requeue', instanceId: 'r1' },
+  identity: { kind: 'heartbeat-requeue', instanceId: 'r1' },
   reason: 'poll' as const,
   tickNumber: 1,
   signal: new AbortController().signal,
@@ -115,7 +115,7 @@ describe('requeue retry cap restart regression', () => {
 
     await firstProcessTick(POLL_CTX);
     expect(h.submit.mock.calls.map((call) => call[2])).toEqual([REQUEUE_COMMAND_CHANNEL]);
-    expect(h.store.getWorkerAction('requeue', requeueRetryCapExternalKey('wf-1/gate'))?.attemptCount).toBe(1);
+    expect(h.store.getWorkerAction('heartbeat-requeue', requeueRetryCapExternalKey('wf-1/gate'))?.attemptCount).toBe(1);
 
     await firstProcessTick(POLL_CTX);
     expect(h.submit.mock.calls.map((call) => call[2])).toEqual([

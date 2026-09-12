@@ -5,7 +5,7 @@
  * Orchestrator writes a WorkRequest; executor runs the action;
  * executor returns a WorkResponse (via callback or IPC).
  */
-import type { FailureClass, ReviewGateArtifact, ReviewGateState, TaskStatus } from '@invoker/workflow-graph';
+import type { FailureClass, ReviewGateArtifact, ReviewGateState, TaskFreshnessSpec, TaskStatus } from '@invoker/workflow-graph';
 
 // ── Action Types ────────────────────────────────────────────
 
@@ -61,10 +61,14 @@ export interface WorkRequestInputs {
   baseBranch?: string;
   /** Already-resolved base commit for baseBranch, used to skip redundant base ref resolution. */
   baseCommit?: string;
+  specificationSnapshotCommit?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   executionAgent?: string;
   /** Agent-specific model selector. The selected CLI owns validation. */
   executionModel?: string;
+  /** Finite agent turn budget (Claude `--max-turns`) when set. */
+  maxTurns?: number;
+  freshness?: TaskFreshnessSpec;
   /** When true, executors must not reuse existing task worktrees for this run. */
   freshWorkspace?: boolean;
   /**
@@ -110,6 +114,7 @@ export type ResponseStatus =
   | 'review_ready'
   | 'failed'
   | 'needs_input'
+  | 'stale'
   | 'spawn_experiments'
   | 'select_experiment';
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow } from '../adapter.js';
+import { resolveTaskConfig } from '@invoker/workflow-core';
 
 /**
  * Regression tests for owner-boundary enforcement.
@@ -239,7 +240,7 @@ describe('owner boundary enforcement', () => {
         status: 'pending' as const,
         dependencies: [],
         createdAt: new Date(),
-        config: { workflowId: 'wf-boundary-test', command: 'echo test' },
+        config: resolveTaskConfig({ workflowId: 'wf-boundary-test', command: 'echo test' }),
         execution: {},
       };
 
@@ -272,7 +273,7 @@ describe('owner boundary enforcement', () => {
         status: 'pending' as const,
         dependencies: [],
         createdAt: new Date(),
-        config: { workflowId: 'wf-boundary-test', command: 'echo test' },
+        config: resolveTaskConfig({ workflowId: 'wf-boundary-test', command: 'echo test' }),
         execution: {},
       };
       owner.saveTask('wf-boundary-test', testTask);

@@ -5,10 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKFLOWS="${PROD_SCALE_WORKFLOWS:-24}"
 DRAIN_MS="${PROD_SCALE_DRAIN_MS:-30000}"
 TIMEOUT_SECONDS="${PROD_SCALE_TIMEOUT_SECONDS:-120}"
+MAX_QUEUE_WAIT_MS="${PROD_SCALE_MAX_QUEUE_WAIT_MS:-100}"
+MAX_ELAPSED_MS="${PROD_SCALE_MAX_ELAPSED_MS:-500}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/bench-workflow-drain-queue.sh [--workflows N] [--drain-ms MS] [--timeout SECONDS]
+Usage: scripts/bench-workflow-drain-queue.sh [--workflows N] [--drain-ms MS] [--timeout SECONDS] [--max-queue-wait-ms MS] [--max-elapsed-ms MS]
 
 Runs a synthetic, in-memory workflow mutation drain benchmark. This measures
 workflow_mutation_intents queue wait: started_at - created_at.
@@ -37,6 +39,14 @@ while [[ $# -gt 0 ]]; do
       TIMEOUT_SECONDS="${2:-}"
       shift 2
       ;;
+    --max-queue-wait-ms)
+      MAX_QUEUE_WAIT_MS="${2:-}"
+      shift 2
+      ;;
+    --max-elapsed-ms)
+      MAX_ELAPSED_MS="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -61,6 +71,14 @@ if ! [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --timeout value: $TIMEOUT_SECONDS" >&2
   exit 1
 fi
+if ! [[ "$MAX_QUEUE_WAIT_MS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --max-queue-wait-ms value: $MAX_QUEUE_WAIT_MS" >&2
+  exit 1
+fi
+if ! [[ "$MAX_ELAPSED_MS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --max-elapsed-ms value: $MAX_ELAPSED_MS" >&2
+  exit 1
+fi
 
 BENCH_FILE="$ROOT_DIR/packages/app/src/__tests__/workflow-drain-queue-bench.tmp.test.ts"
 
@@ -77,6 +95,8 @@ import { PersistedWorkflowMutationCoordinator } from '../persisted-workflow-muta
 const workflowCount = Number(process.env.PROD_SCALE_WORKFLOWS ?? 24);
 const drainMs = Number(process.env.PROD_SCALE_DRAIN_MS ?? 30_000);
 const timeoutMs = Number(process.env.PROD_SCALE_TIMEOUT_SECONDS ?? 120) * 1000;
+const maxQueueWaitMs = Number(process.env.PROD_SCALE_MAX_QUEUE_WAIT_MS ?? 100);
+const maxElapsedMs = Number(process.env.PROD_SCALE_MAX_ELAPSED_MS ?? 500);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -123,6 +143,7 @@ describe('temporary workflow drain queue benchmark', () => {
       order by id asc
     `);
     const waits = rows.map((row) => row.queue_wait_seconds).sort((left, right) => left - right);
+    const p99QueueWaitSeconds = percentile(waits, 0.99);
     process.stdout.write(
       [
         'WORKFLOW_DRAIN_QUEUE_BENCH',
@@ -132,10 +153,12 @@ describe('temporary workflow drain queue benchmark', () => {
         `elapsedSeconds=${elapsedSeconds.toFixed(3)}`,
         `p50QueueWaitSeconds=${percentile(waits, 0.5).toFixed(3)}`,
         `p90QueueWaitSeconds=${percentile(waits, 0.9).toFixed(3)}`,
-        `p99QueueWaitSeconds=${percentile(waits, 0.99).toFixed(3)}`,
+        `p99QueueWaitSeconds=${p99QueueWaitSeconds.toFixed(3)}`,
         `maxQueueWaitSeconds=${(waits.at(-1) ?? 0).toFixed(3)}`,
       ].join(' ') + '\n',
     );
+    expect(p99QueueWaitSeconds * 1000).toBeLessThanOrEqual(maxQueueWaitMs);
+    expect(elapsedSeconds * 1000).toBeLessThanOrEqual(maxElapsedMs);
     adapter.close();
   }, timeoutMs);
 });
@@ -146,5 +169,7 @@ TS
   PROD_SCALE_WORKFLOWS="$WORKFLOWS" \
   PROD_SCALE_DRAIN_MS="$DRAIN_MS" \
   PROD_SCALE_TIMEOUT_SECONDS="$TIMEOUT_SECONDS" \
+  PROD_SCALE_MAX_QUEUE_WAIT_MS="$MAX_QUEUE_WAIT_MS" \
+  PROD_SCALE_MAX_ELAPSED_MS="$MAX_ELAPSED_MS" \
     pnpm --filter @invoker/app exec vitest run src/__tests__/workflow-drain-queue-bench.tmp.test.ts --reporter=verbose
 )

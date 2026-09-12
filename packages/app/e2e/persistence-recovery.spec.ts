@@ -31,18 +31,10 @@ test.describe('Persistence recovery', () => {
   test('stop marks workflow as failed in DB', async ({ page }) => {
     // Load and start a slow plan
     await loadPlan(page, SLOW_PLAN);
-    await page.evaluate(() => window.invoker.start());
+    await startPlan(page);
 
     // Wait for the slow task to start running
-    await page.waitForFunction(
-      async () => {
-        const result = await window.invoker.getTasks();
-        const tasks = Array.isArray(result) ? result : result.tasks;
-        return tasks.some((t: any) => (t.id === 'slow-task' || t.id.endsWith('/slow-task')) && t.status === 'running');
-      },
-      null,
-      { timeout: 10000 },
-    );
+    await waitForTaskStatus(page, 'slow-task', 'running', 10_000);
 
     // Stop while running. This preserves the workflow record while failing
     // in-flight work, unlike clear/delete-all which intentionally removes it.

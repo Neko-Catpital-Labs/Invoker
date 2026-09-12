@@ -8,7 +8,12 @@ import type {
 import type { PlanDefinition, TaskState } from '@invoker/workflow-core';
 
 import { normalizeAutoFixRetryBudget } from './auto-fix-gating.js';
-import { checkAutoFixRetryCap, recordAutoFixRetryConsumed } from './auto-fix-retry-cap.js';
+import {
+  checkAutoFixRetryCap,
+  recordAutoFixRetryConsumed,
+  recordAutoFixRetryPending,
+  recordAutoFixRetryUnacknowledged,
+} from './auto-fix-retry-cap.js';
 import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
@@ -425,12 +430,21 @@ export function queueRepairWorkflowSpawn(
     source: 'worker',
     queuedByRepairWorkflowGuard: true,
   });
-  const intentId = options.submitter.submit(
-    event.workflowId,
-    'normal',
-    SPAWN_REPAIR_WORKFLOW_CHANNEL,
-    [payload],
-  );
+  recordAutoFixRetryPending(options.store, event.taskId, { workflowId: event.workflowId });
+  let intentId: number;
+  try {
+    intentId = options.submitter.submit(
+      event.workflowId,
+      'normal',
+      SPAWN_REPAIR_WORKFLOW_CHANNEL,
+      [payload],
+    );
+  } catch (error) {
+    recordAutoFixRetryUnacknowledged(options.store, event.taskId, error, {
+      workflowId: event.workflowId,
+    });
+    throw error;
+  }
   recordRepairWorkflowAction(options.store, event, actionKey, 'queued', 'Queued CI repair workflow spawn', {
     channel: SPAWN_REPAIR_WORKFLOW_CHANNEL,
     failedChecksHash: ciFailureChecksHash(event.failedChecks),

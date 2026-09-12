@@ -402,7 +402,7 @@ describe('TaskDAG camera ownership', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
   });
 
-  it('centers the selected task on a centerSelection command, preserving the current zoom', async () => {
+  it('centers the selected task on a centerTarget command, preserving the current zoom', async () => {
     const issuer = createGraphCameraCommandIssuer();
     getZoomMock.mockReturnValue(1.5);
 
@@ -415,7 +415,7 @@ describe('TaskDAG camera ownership', () => {
       createElement(TaskDAG, {
         tasks: tasksMap('task-a'),
         selectedTaskId: 'task-a',
-        cameraCommand: issuer.centerSelection('task', 'task-a'),
+        cameraCommand: issuer.centerTarget('task', 'task-a'),
       }),
     );
 
@@ -459,7 +459,7 @@ describe('TaskDAG camera ownership', () => {
       createElement(TaskDAG, {
         tasks: tasksMap('task-a'),
         selectedTaskId: 'task-a',
-        cameraCommand: issuer.centerSelection('workflow', 'task-a'),
+        cameraCommand: issuer.centerTarget('workflow', 'task-a'),
       }),
     );
 
@@ -470,7 +470,7 @@ describe('TaskDAG camera ownership', () => {
 
   it('consumes each command once by sequence, not on every re-render', async () => {
     const issuer = createGraphCameraCommandIssuer();
-    const command = issuer.centerSelection('task', 'task-a');
+    const command = issuer.centerTarget('task', 'task-a');
 
     const { rerender } = await renderDagAndSettleInitialFit({
       tasks: tasksMap('task-a'),

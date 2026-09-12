@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
+import { patchStrippedNodeBuiltinPrefixesInFile } from './lib/patch-sea-builtin-prefix.mjs';
+
 const require = createRequire(import.meta.url);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = require(join(root, 'packages/cli/package.json'));
@@ -107,6 +109,8 @@ try {
     '--external',
     'cpu-features',
   ]);
+
+  await patchStrippedNodeBuiltinPrefixesInFile(bundlePath);
 
   await writeFile(seaConfigPath, JSON.stringify({
     main: bundlePath,

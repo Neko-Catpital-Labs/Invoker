@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/contracts';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import { TaskRunner, ExecutorRegistry, WorktreeExecutor } from '@invoker/execution-engine';
 import { rebaseRecreate } from '../workflow-actions.js';
 
@@ -77,9 +77,9 @@ function makeTaskState(overrides: {
     status: overrides.status ?? 'pending',
     dependencies: overrides.dependencies ?? [],
     createdAt: new Date(),
-    config: { ...overrides.config },
+    config: resolveTaskConfig(overrides.config ?? {}),
     execution: { ...overrides.execution },
-  } as TaskState;
+  };
 }
 
 describe('rebase-recreate: pool mirror cleanup before restart', { timeout: 120_000 }, () => {

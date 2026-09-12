@@ -104,11 +104,12 @@ async function approveDraft(
   surface: SlackSurface,
   draft: { draftId: string; version: number; channelId: string; threadTs: string },
   messageTs: string,
+  userId = 'U_PROOF',
 ): Promise<{ respond: ReturnType<typeof vi.fn> }> {
   const respond = vi.fn().mockResolvedValue(undefined);
   await actionHandler(surface, 'plan_draft_approve')({
     action: { type: 'button', value: `${draft.draftId}:${draft.version}` },
-    body: { channel: { id: draft.channelId }, message: { thread_ts: draft.threadTs, ts: messageTs }, user: { id: 'U_PROOF' } },
+    body: { channel: { id: draft.channelId }, message: { thread_ts: draft.threadTs, ts: messageTs }, user: { id: userId } },
     ack: vi.fn().mockResolvedValue(undefined),
     respond,
   });
@@ -232,23 +233,18 @@ describe('Slack plan submission restart repro contracts', () => {
     const say = await mention(slack, '/plan', 'plan-turn', 'incident-thread');
 
     expect(JSON.stringify(mockSpawn.mock.calls[1])).toContain('attention inbox');
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('Preparing YAML attachment'),
-    }));
     const draft = slackPlanDrafts.getReady('C_LOBBY', 'incident-thread');
     expect(draft).toBeTruthy();
     expect(draft?.planText.trim()).toContain('name: Proof plan');
-    expect(sharedSlack.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'C_LOBBY',
-      blocks: expect.arrayContaining([
-        expect.objectContaining({
-          elements: expect.arrayContaining([
-            expect.objectContaining({ action_id: 'plan_draft_approve', text: expect.objectContaining({ text: 'Approve' }) }),
-            expect.objectContaining({ action_id: 'plan_draft_cancel', text: expect.objectContaining({ text: 'Cancel' }) }),
-          ]),
-        }),
-      ]),
-    }));
+    const reviewCardCall = say.mock.calls.find(([msg]) => msg?.thread_ts === 'incident-thread'
+      && JSON.stringify(msg?.blocks ?? []).includes('plan_draft_approve'));
+    expect(reviewCardCall).toBeDefined();
+    const [reviewCardMessage] = reviewCardCall ?? [];
+    const actionElements = reviewCardMessage?.blocks?.flatMap((block) => block.elements ?? []) ?? [];
+    expect(actionElements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action_id: 'plan_draft_approve', text: expect.objectContaining({ text: 'Approve' }) }),
+      expect.objectContaining({ action_id: 'plan_draft_cancel', text: expect.objectContaining({ text: 'Cancel' }) }),
+    ]));
   });
 
   it('treats untagged thread replies as passive context that never reaches the planner', async () => {
@@ -309,26 +305,75 @@ describe('Slack plan submission restart repro contracts', () => {
     expect(slackPlanDrafts.get(draft!.draftId, draft!.version)?.status).toBe('ready');
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
   });
-  it('auto-submits a plan draft when the thread is tagged [auto-submit]', async () => {
-    const commands: SurfaceCommand[] = [];
-    const slack = surface(commands);
-    await start(slack, commands);
+  it('rejects [auto-submit] and stages the plan for review', async () => {
+    const autoSubmitCommands: SurfaceCommand[] = [];
+    const slack = surface(autoSubmitCommands);
+    await start(slack, autoSubmitCommands);
     mockSpawn.mockImplementationOnce(() => processWith('ok'));
-    await mention(slack, '[auto-submit] build this draft', 'thread-auto-start');
+    const warning = await mention(slack, '[auto-submit] build this draft', 'thread-auto-start');
     mockSpawn.mockImplementationOnce(() => processWith(plan));
-    await mention(slack, '/plan', 'plan-turn-auto', 'thread-auto-start');
+    const planSay = await mention(slack, '/plan', 'plan-turn-auto', 'thread-auto-start');
 
-    expect(commands).toContainEqual(expect.objectContaining({
+    expect(warning).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Auto-submit is unavailable in conversational planning. I will stage the draft for review instead.',
+      thread_ts: 'thread-auto-start',
+    }));
+    expect(autoSubmitCommands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+    expect(slackPlanDrafts.getReady('C_LOBBY', 'thread-auto-start')).toEqual(expect.objectContaining({
+      status: 'ready',
+      confirmationMode: 'require',
+    }));
+    expect(planSay).toHaveBeenCalledWith(expect.objectContaining({
+      thread_ts: 'thread-auto-start',
+      blocks: expect.arrayContaining([
+        expect.objectContaining({
+          elements: expect.arrayContaining([
+            expect.objectContaining({ action_id: 'plan_draft_approve' }),
+            expect.objectContaining({ action_id: 'plan_draft_cancel' }),
+          ]),
+        }),
+      ]),
+    }));
+  });
+
+  it('submits the ready draft when its requester types an exact submit command', async () => {
+    const typedSubmitCommands: SurfaceCommand[] = [];
+    const slack = surface(typedSubmitCommands);
+    await start(slack, typedSubmitCommands);
+    mockSpawn.mockImplementationOnce(() => processWith('ok'));
+    await mention(slack, 'create a proof', 'thread-typed-submit');
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, '/plan', 'plan-turn-typed', 'thread-typed-submit');
+    expect(slackPlanDrafts.getReady('C_LOBBY', 'thread-typed-submit')).toBeTruthy();
+
+    await mention(slack, 'submit it', 'submit-turn', 'thread-typed-submit');
+
+    expect(typedSubmitCommands).toContainEqual(expect.objectContaining({
       type: 'start_plan',
       planText: expect.stringContaining('name: Proof plan'),
-      lobbyThreadTs: 'thread-auto-start',
+      lobbyThreadTs: 'thread-typed-submit',
+      requestedBy: 'U_PROOF',
     }));
-    expect(sharedSlack.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'C_LOBBY',
-      ts: 'plan-turn-auto-reply',
-      text: 'Starting plan execution…',
-      blocks: [],
-    }));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(slackPlanDrafts.getReady('C_LOBBY', 'thread-typed-submit')).toBeUndefined();
+  });
+
+  it('does not let a different Slack user approve another user\'s ready draft', async () => {
+    const otherUserCommands: SurfaceCommand[] = [];
+    const slack = surface(otherUserCommands);
+    await start(slack, otherUserCommands);
+    mockSpawn.mockImplementationOnce(() => processWith('ok'));
+    await mention(slack, 'create a proof', 'thread-owner');
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, '/plan', 'plan-turn-owner', 'thread-owner');
+    const draft = slackPlanDrafts.getReady('C_LOBBY', 'thread-owner');
+    expect(draft).toBeTruthy();
+
+    const { respond } = await approveDraft(slack, draft!, 'owner-message', 'U_OTHER');
+
+    expect(respond).toHaveBeenCalledWith({ text: 'This plan review is no longer available.', replace_original: true });
+    expect(otherUserCommands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+    expect(slackPlanDrafts.getReady('C_LOBBY', 'thread-owner')).toEqual(expect.objectContaining({ status: 'ready' }));
   });
 
   it('restores repo, preset, and harness session context for a /plan draft after a SlackSurface restart', async () => {
@@ -423,6 +468,28 @@ describe('Slack plan submission restart repro contracts', () => {
     const { respond: doubleRespond } = await approveDraft(slack, current, 'current-ts');
     expect(doubleRespond).toHaveBeenCalledWith({ text: 'This plan review is submitted.', replace_original: true });
     expect(commands).toHaveLength(1);
+  });
+
+  it('lets the requester approve the current draft after a conversational (non-/plan) re-draft supersedes an older one', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands, { conversationalPlanning: true });
+    await start(slack, commands);
+
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'draft the first pass', 'conv-turn-1', 'thread-conversational');
+    const stale = slackPlanDrafts.getReady('C_LOBBY', 'thread-conversational')!;
+    expect(stale).toBeTruthy();
+
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'please try again', 'conv-turn-2', 'thread-conversational');
+    const current = slackPlanDrafts.getReady('C_LOBBY', 'thread-conversational')!;
+    expect(current).toBeTruthy();
+    expect(current.version).toBe(stale.version + 1);
+    expect(slackPlanDrafts.get(stale.draftId, stale.version)?.status).toBe('superseded');
+
+    const { respond } = await approveDraft(slack, current, 'current-ts');
+    expect(respond).not.toHaveBeenCalledWith(expect.objectContaining({ text: 'This plan review is no longer available.' }));
+    expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
   });
 
   it('reacquires an external repository checkout before restoring its thread', async () => {
