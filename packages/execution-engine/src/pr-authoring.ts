@@ -9,6 +9,15 @@ import type { SessionDriver } from './session-driver.js';
 import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { materializeLocalAgentPrompt } from './agent-prompt-transport.js';
 
+export class EmptyAgentTurnError extends Error {
+  readonly retryable: boolean;
+  constructor(message: string, retryable: boolean) {
+    super(message);
+    this.name = 'EmptyAgentTurnError';
+    this.retryable = retryable;
+  }
+}
+
 export interface MakePrStackArtifactOutput {
   readonly id: string;
   readonly title?: string;
@@ -301,6 +310,101 @@ export function runRepoLocalPrBodyChecker(args: {
   }
 }
 
+interface AgentJsonlScan {
+  readonly unparsedLines: readonly string[];
+}
+
+function forEachAgentJsonlEntry(
+  rawStdout: string,
+  visit: (entry: any) => void,
+): AgentJsonlScan {
+  const unparsedLines: string[] = [];
+  for (const line of rawStdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(trimmed);
+    } catch (error) {
+      unparsedLines.push(
+        `${trimmed.slice(0, 200)} (${error instanceof Error ? error.message : String(error)})`,
+      );
+      continue;
+    }
+    visit(entry);
+  }
+  return { unparsedLines };
+}
+
+export function collectAgentErrorMessages(rawStdout: string): string[] {
+  const messages: string[] = [];
+  forEachAgentJsonlEntry(rawStdout, (entry) => {
+    const item = entry?.item;
+    if (item?.type !== 'error') return;
+    const message = typeof item.message === 'string' ? item.message.trim() : '';
+    if (message && !messages.includes(message)) messages.push(message);
+  });
+  return messages;
+}
+
+export interface AgentTurnWorkVerdict {
+  readonly verdict: 'no-work' | 'did-work' | 'unknown';
+  readonly reason: string;
+}
+
+export function classifyAgentTurnWork(rawStdout: string): AgentTurnWorkVerdict {
+  let sawUsage = false;
+  let sawTokens = false;
+  let sawNonErrorItem = false;
+  const scan = forEachAgentJsonlEntry(rawStdout, (entry) => {
+    const usage = entry?.type === 'turn.completed' ? entry.usage : undefined;
+    if (usage && typeof usage === 'object') {
+      sawUsage = true;
+      const total = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
+        'output_tokens', 'reasoning_output_tokens']
+        .reduce((sum, key) => sum + (Number((usage as Record<string, unknown>)[key]) || 0), 0);
+      if (total > 0) sawTokens = true;
+    }
+    const item = entry?.item;
+    if (item && typeof item === 'object' && item.type !== 'error') sawNonErrorItem = true;
+  });
+
+  if (scan.unparsedLines.length > 0) {
+    return {
+      verdict: 'unknown',
+      reason: `${scan.unparsedLines.length} unreadable JSONL line(s), cannot prove the turn `
+        + `did no work: ${scan.unparsedLines.slice(0, 3).join(' ; ')}`,
+    };
+  }
+  if (!sawUsage) {
+    return { verdict: 'unknown', reason: 'transcript reported no token usage for the turn' };
+  }
+  if (sawTokens) {
+    return { verdict: 'did-work', reason: 'the turn consumed tokens' };
+  }
+  if (sawNonErrorItem) {
+    return { verdict: 'did-work', reason: 'the turn emitted a non-error item' };
+  }
+  return {
+    verdict: 'no-work',
+    reason: 'the turn completed with zero token usage and no non-error item, so the model was '
+      + 'never reached and nothing was published',
+  };
+}
+
+export function describeEmptyAgentTurn(rawStdout: string, stderr: string): string {
+  const agentErrors = collectAgentErrorMessages(rawStdout);
+  const parts: string[] = [];
+  if (agentErrors.length > 0) parts.push(`agent reported: ${agentErrors.join(' | ')}`);
+  parts.push(classifyAgentTurnWork(rawStdout).reason);
+  const detail = buildAgentExitFailureDetail(rawStdout, stderr);
+  const detailDescribesNonZeroExit = detail.startsWith('agent exited non-zero');
+  if (detail && detail !== '(no output)' && !detailDescribesNonZeroExit) {
+    parts.push(`output tail: ${detail}`);
+  }
+  return parts.join('; ');
+}
+
 function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
   const rawSession = driver?.loadSession(sessionId);
   if (rawSession && driver) {
@@ -458,6 +562,9 @@ function extractJsonPayload(raw: string): string {
 }
 
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
+  if (raw.trim().length === 0) {
+    throw new Error('make-pr stack publisher produced no output');
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.trim());
@@ -855,6 +962,14 @@ export function spawnAgentPrAuthorViaRegistry(
           const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
           if (code === 0) {
             const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
+            if (!body.trim()) {
+              reject(new EmptyAgentTurnError(
+                `${agent.name} PR authoring exited 0 but produced no assistant message: `
+                  + describeEmptyAgentTurn(stdout, stderr),
+                classifyAgentTurnWork(stdout).verdict === 'no-work',
+              ));
+              return;
+            }
             resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
             return;
           }

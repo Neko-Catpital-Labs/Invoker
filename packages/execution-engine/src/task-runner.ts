@@ -52,6 +52,7 @@ import {
   isInvokerRepoUrl,
   buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
+  EmptyAgentTurnError,
   parseMakePrStackPublishResult,
   repoLocalPrBodyCheckerPath,
   resolveSkillPathViaAgent,
@@ -121,6 +122,18 @@ export type FreshBaseCommit = {
   commit: string;
 };
 
+
+const MAX_EMPTY_TURN_PUBLISH_ATTEMPTS = 3;
+const DEFAULT_EMPTY_TURN_PUBLISH_RETRY_BASE_DELAY_MS = 2_000;
+
+function emptyTurnPublishRetryBaseDelayMs(): number {
+  const raw = process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS?.trim();
+  if (!raw || !/^(0|[1-9]\d*)$/.test(raw)) {
+    return DEFAULT_EMPTY_TURN_PUBLISH_RETRY_BASE_DELAY_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_EMPTY_TURN_PUBLISH_RETRY_BASE_DELAY_MS;
+}
 
 const NOOP_LOGGER: Logger = {
   debug: () => {},
@@ -1660,7 +1673,35 @@ export class TaskRunner {
             INVOKER_REPAIR_SESSION_COMMIT: args.recordedFixCommit,
           }
           : {};
-        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver, repairPublicationEnv);
+        let result: Awaited<ReturnType<typeof spawnAgentPrAuthorViaRegistry>> | undefined;
+        for (let attempt = 1; result === undefined; attempt += 1) {
+          try {
+            result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver, repairPublicationEnv);
+          } catch (spawnError) {
+            const emptyTurn = spawnError instanceof EmptyAgentTurnError && spawnError.retryable;
+            if (!emptyTurn) throw spawnError;
+            if (attempt >= MAX_EMPTY_TURN_PUBLISH_ATTEMPTS) {
+              throw new EmptyAgentTurnError(
+                `${spawnError.message} (after ${attempt} attempts)`,
+                spawnError.retryable,
+              );
+            }
+            const backoffMs = emptyTurnPublishRetryBaseDelayMs() * (2 ** (attempt - 1));
+            this.logger.warn(
+              `[pr-authoring] review-stack publish attempt ${attempt}/`
+                + `${MAX_EMPTY_TURN_PUBLISH_ATTEMPTS} produced an empty ${agent.name} turn; `
+                + `backing off ${backoffMs}ms then retrying same agent: ${spawnError.message}`,
+            );
+            logProgress('warn', `${agent.name} produced an empty turn; retrying`, {
+              agentName: agent.name,
+              attempt,
+              maxAttempts: MAX_EMPTY_TURN_PUBLISH_ATTEMPTS,
+              backoffMs,
+              error: spawnError.message,
+            });
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, backoffMs));
+          }
+        }
         logProgress('info', `${agent.name} make-pr agent finished; validating output`, {
           agentName: agent.name,
           sessionId: result.sessionId,

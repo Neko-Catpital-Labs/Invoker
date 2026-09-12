@@ -7,6 +7,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   buildCanonicalPrBody,
   buildMakePrStackPublishPrompt,
+  classifyAgentTurnWork,
+  describeEmptyAgentTurn,
   parseMakePrStackPublishResult,
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
@@ -14,6 +16,7 @@ import {
   validateReviewStackPrBody,
 } from '../pr-authoring.js';
 import type { ExecutionAgent } from '../agent.js';
+import { CodexSessionDriver } from '../codex-session-driver.js';
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -515,5 +518,131 @@ describe('spawnAgentPrAuthorViaRegistry', () => {
         process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS = previousTimeout;
       }
     }
+  });
+});
+
+// ── empty-turn detection ────────────────────────────────
+//
+// Captured verbatim from the merge-gate publisher session that failed this
+// workflow twice (~72 min apart): codex emitted a benign skills warning, then
+// completed the turn with zero token usage and no agent_message, and exited 0.
+// Its own rollout log recorded `last_agent_message: null`, and its only user
+// items were codex's own boilerplate (`<recommended_plugins>`, AGENTS.md,
+// `<environment_context>`) -- the publish prompt was never delivered, so the
+// model was never asked to publish anything.
+const CODEX_EMPTY_TURN_JSONL = [
+  '{"type":"thread.started","thread_id":"01a093b2-aac5-77b0-a62e-37ba0ecbb26d"}',
+  '{"type":"turn.started"}',
+  '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Skill'
+    + ' descriptions were shortened to fit the skills context budget. Codex can still'
+    + ' see every skill, but some descriptions are shorter. Disable unused skills or'
+    + ' plugins to leave more room for the rest."}}',
+  '{"type":"turn.completed","usage":{"input_tokens":0,"cached_input_tokens":0,'
+    + '"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}',
+].join('\n');
+
+describe('agent turn that produced no assistant message', () => {
+  function makeEmptyTurnAgent(jsonl: string): ExecutionAgent {
+    return {
+      name: 'codex',
+      stdinMode: 'ignore',
+      buildCommand: () => ({
+        cmd: process.execPath,
+        args: ['-e', `process.stdout.write(${JSON.stringify(jsonl)})`],
+        sessionId: 'empty-turn-publisher',
+      }),
+      buildResumeArgs: () => ({ cmd: process.execPath, args: ['-e', ''] }),
+    };
+  }
+
+  it('rejects instead of resolving an empty body when codex exits 0 with no agent message', async () => {
+    const tmpDir = createTempDir();
+    const dbDir = createTempDir();
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = dbDir;
+    try {
+      await expect(
+        spawnAgentPrAuthorViaRegistry(
+          'publish stack',
+          tmpDir,
+          makeEmptyTurnAgent(CODEX_EMPTY_TURN_JSONL),
+          new CodexSessionDriver(),
+        ),
+      ).rejects.toThrow(/produced no assistant message/i);
+    } finally {
+      if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = previousDbDir;
+    }
+  });
+
+  it("surfaces the agent's own error text so the operator can tell why the turn was empty", async () => {
+    const tmpDir = createTempDir();
+    const dbDir = createTempDir();
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = dbDir;
+    try {
+      await expect(
+        spawnAgentPrAuthorViaRegistry(
+          'publish stack',
+          tmpDir,
+          makeEmptyTurnAgent(CODEX_EMPTY_TURN_JSONL),
+          new CodexSessionDriver(),
+        ),
+      ).rejects.toThrow(/skills context budget/);
+    } finally {
+      if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = previousDbDir;
+    }
+  });
+
+  it('classifies the captured zero-token turn as provably no-work', () => {
+    expect(classifyAgentTurnWork(CODEX_EMPTY_TURN_JSONL).verdict).toBe('no-work');
+  });
+
+  it('refuses to call a token-burning turn no-work, so it is never retried', () => {
+    const raw = [
+      '{"type":"turn.started"}',
+      '{"type":"turn.completed","usage":{"input_tokens":1200,"output_tokens":0}}',
+    ].join('\n');
+    expect(classifyAgentTurnWork(raw).verdict).toBe('did-work');
+  });
+
+  it('refuses to call a turn with a non-error item no-work, so it is never retried', () => {
+    const raw = [
+      '{"type":"turn.started"}',
+      '{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"gh pr create"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":0,"output_tokens":0}}',
+    ].join('\n');
+    expect(classifyAgentTurnWork(raw).verdict).toBe('did-work');
+  });
+
+  it('reports unknown, not no-work, when a JSONL line cannot be read', () => {
+    const raw = [
+      '{"type":"turn.started"}',
+      '{"type":"item.completed","item":{"id":"i1","type":"error",',
+      '{"type":"turn.completed","usage":{"input_tokens":0,"output_tokens":0}}',
+    ].join('\n');
+    const result = classifyAgentTurnWork(raw);
+    expect(result.verdict).toBe('unknown');
+    expect(result.reason).toMatch(/unreadable JSONL/);
+  });
+
+  it('reports unknown, not no-work, when the transcript has no usage at all', () => {
+    expect(classifyAgentTurnWork('some plain agent chatter').verdict).toBe('unknown');
+  });
+
+  it('never tells the operator the agent exited non-zero when it exited 0', () => {
+    const described = describeEmptyAgentTurn('', 'Reading additional input from stdin...');
+    expect(described).not.toMatch(/exited non-zero/);
+  });
+
+  it('reports an empty publisher body as missing output, not as malformed JSON', () => {
+    expect(() => parseMakePrStackPublishResult('   ')).toThrow(/produced no output/i);
+  });
+
+  it('still reports genuinely non-JSON output as a JSON format failure', () => {
+    expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
+      'make-pr stack publisher must output JSON',
+    );
   });
 });

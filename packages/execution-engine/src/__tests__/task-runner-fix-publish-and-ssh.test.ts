@@ -14,6 +14,7 @@ import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
 import { createAutoCompleteExecutor } from './helpers/task-runner-fixtures.js';
+import { CodexSessionDriver } from '../codex-session-driver.js';
 
 function makeTask(overrides: {
   id?: string;
@@ -1343,6 +1344,148 @@ describe('TaskRunner', () => {
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
+      }
+    });
+
+    // Captured from the merge-gate publisher session that failed wf-1787905088453-2
+    // twice: codex exits 0 having emitted only a skills warning and a zero-token
+    // turn.completed, so the turn never reached the model and published nothing.
+    const CODEX_EMPTY_TURN_LINES = [
+      '{"type":"thread.started","thread_id":"empty-turn"}',
+      '{"type":"turn.started"}',
+      '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Skill descriptions were shortened to fit the skills context budget."}}',
+      '{"type":"turn.completed","usage":{"input_tokens":0,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}',
+    ].join('\n');
+
+    function reviewStackJsonl(): string {
+      const body = [
+        '## Summary', '', 'x', '', '## Review Claim', '', 'x', '', '## Review Lane', '', 'cleanup', '',
+        '## Review Unit', '', 'scalar', '', '## Safety Invariant', '', 'x', '', '## Slice Rationale', '', 'x', '',
+        '## Non-goals', '- none', '', '## Test Plan', '- [x] x', '', '## Revert Plan', '- Safe to revert? Yes',
+      ].join('\n');
+      const payload = JSON.stringify({
+        artifacts: [{
+          id: 'only', title: 'Only', url: 'https://example.test/pr/1', providerId: '1',
+          branch: 'stack/only', baseBranch: 'master', body,
+        }],
+      });
+      return [
+        '{"type":"thread.started","thread_id":"real-turn"}',
+        JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: payload } }),
+        '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}',
+      ].join('\n');
+    }
+
+    function makeEmptyTurnPublishExecutor(
+      emptyTurns: number,
+      dbDir: string,
+      emptyTurnLines: string = CODEX_EMPTY_TURN_LINES,
+    ) {
+      const attempts: string[] = [];
+      const codexAgent = {
+        name: 'codex',
+        stdinMode: 'ignore',
+        bundledSkillRoot: join(dbDir, 'codex-skills'),
+        bundledSkills: ['make-pr'],
+        buildCommand: () => {
+          attempts.push('codex');
+          const jsonl = attempts.length <= emptyTurns ? emptyTurnLines : reviewStackJsonl();
+          return {
+            cmd: 'node',
+            args: ['-e', `process.stdout.write(${JSON.stringify(jsonl)})`],
+            sessionId: `sess-attempt-${attempts.length}`,
+          };
+        },
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+      mkdirSync(join(dbDir, 'codex-skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(dbDir, 'codex-skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: { logEvent: vi.fn() } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: (name: string) => name === 'codex' ? codexAgent : undefined,
+          getOrThrow: vi.fn(),
+          getSessionDriver: () => new CodexSessionDriver(),
+          listWithCapability: vi.fn().mockReturnValue([codexAgent]),
+        } as any,
+        cwd: '/tmp',
+      });
+      return { executor, attempts };
+    }
+
+    it('publishReviewStackWithMakePrSkill retries the same agent after a provably empty turn', async () => {
+      const dbDir = createTempWorkspace();
+      const previousDbDir = process.env.INVOKER_DB_DIR;
+      const previousDelay = process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS;
+      process.env.INVOKER_DB_DIR = dbDir;
+      process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS = '0';
+      try {
+        const { executor, attempts } = makeEmptyTurnPublishExecutor(1, dbDir);
+        const result = await (executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-empty-turn', title: 'Stack', baseBranch: 'master', featureBranch: 'plan/feature',
+          workflowSummary: 'summary', cwd: '/tmp', mergeNodeTaskId: '__merge__wf-empty-turn', expectedGeneration: 1,
+        });
+        expect(attempts).toEqual(['codex', 'codex']);
+        expect(result.agentName).toBe('codex');
+        expect(result.artifacts).toHaveLength(1);
+      } finally {
+        if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+        else process.env.INVOKER_DB_DIR = previousDbDir;
+        if (previousDelay === undefined) delete process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS;
+        else process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS = previousDelay;
+      }
+    });
+
+    it('publishReviewStackWithMakePrSkill stays single-agent on empty turns, never reopening the PR #11629 fallback chain', async () => {
+      const dbDir = createTempWorkspace();
+      const previousDbDir = process.env.INVOKER_DB_DIR;
+      const previousDelay = process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS;
+      process.env.INVOKER_DB_DIR = dbDir;
+      process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS = '0';
+      try {
+        const { executor, attempts } = makeEmptyTurnPublishExecutor(99, dbDir);
+        await expect((executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-empty-turn-forever', title: 'Stack', baseBranch: 'master', featureBranch: 'plan/feature',
+          workflowSummary: 'summary', cwd: '/tmp', mergeNodeTaskId: '__merge__wf-empty-turn-forever', expectedGeneration: 1,
+        })).rejects.toThrow(/produced no assistant message/i);
+        expect(attempts.every((name) => name === 'codex')).toBe(true);
+        expect(attempts.length).toBeLessThanOrEqual(3);
+        expect(attempts.length).toBeGreaterThan(1);
+      } finally {
+        if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+        else process.env.INVOKER_DB_DIR = previousDbDir;
+        if (previousDelay === undefined) delete process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS;
+        else process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS = previousDelay;
+      }
+    });
+
+    it('publishReviewStackWithMakePrSkill never retries an empty turn that may have published', async () => {
+      const dbDir = createTempWorkspace();
+      const previousDbDir = process.env.INVOKER_DB_DIR;
+      const previousDelay = process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS;
+      process.env.INVOKER_DB_DIR = dbDir;
+      process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS = '0';
+      try {
+        const tokenBurningEmptyTurn = [
+          '{"type":"thread.started","thread_id":"burned-tokens"}',
+          '{"type":"turn.started"}',
+          '{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"gh pr create"}}',
+          '{"type":"turn.completed","usage":{"input_tokens":4200,"output_tokens":31}}',
+        ].join('\n');
+        const { executor, attempts } = makeEmptyTurnPublishExecutor(99, dbDir, tokenBurningEmptyTurn);
+        await expect((executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-may-have-published', title: 'Stack', baseBranch: 'master',
+          featureBranch: 'plan/feature', workflowSummary: 'summary', cwd: '/tmp',
+          mergeNodeTaskId: '__merge__wf-may-have-published', expectedGeneration: 1,
+        })).rejects.toThrow(/produced no assistant message/i);
+        expect(attempts).toEqual(['codex']);
+      } finally {
+        if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+        else process.env.INVOKER_DB_DIR = previousDbDir;
+        if (previousDelay === undefined) delete process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS;
+        else process.env.INVOKER_EMPTY_TURN_RETRY_BASE_DELAY_MS = previousDelay;
       }
     });
 
