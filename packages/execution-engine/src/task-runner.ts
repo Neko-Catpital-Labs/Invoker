@@ -1547,10 +1547,31 @@ export class TaskRunner {
       );
     }
 
+    const canonicalBody = buildCanonicalPrBody({
+      title: args.title,
+      workflowSummary: args.workflowSummary,
+      structuredContext: args.structuredContext,
+    });
+
     if (hasRepoChecker) {
+      const canonicalErrors = [
+        ...validateCanonicalPrBody(canonicalBody),
+        ...runRepoLocalPrBodyChecker({
+          body: canonicalBody,
+          cwd: args.cwd,
+          baseBranch: args.baseBranch,
+        }),
+      ];
+      if (canonicalErrors.length === 0) {
+        this.logger.warn(
+          `[pr-authoring] All AI agents failed for PR authoring; using validated canonical fallback. `
+            + `Errors: ${errors.join(' | ')}`,
+        );
+        return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
+      }
       throw new Error(
         '[pr-authoring] target repo checker rejected every PR body; refusing canonical fallback. '
-          + `Errors: ${errors.join(' | ')}`,
+          + `Errors: ${[...errors, `canonical: ${canonicalErrors.join('; ')}`].join(' | ')}`,
       );
     }
 
@@ -1558,11 +1579,6 @@ export class TaskRunner {
     this.logger.warn(
       `[pr-authoring] All AI agents failed for PR authoring, using canonical fallback. Errors: ${errors.join(' | ')}`,
     );
-    const canonicalBody = buildCanonicalPrBody({
-      title: args.title,
-      workflowSummary: args.workflowSummary,
-      structuredContext: args.structuredContext,
-    });
     return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
   }
 

@@ -8,7 +8,9 @@ import {
   buildCanonicalPrBody,
   buildMakePrStackPublishPrompt,
   parseMakePrStackPublishResult,
+  resolvePrBodyValidatorNodeBinary,
   resolveSkillPathViaAgent,
+  runRepoLocalPrBodyChecker,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
   validateReviewStackPrBody,
@@ -32,6 +34,8 @@ function makeAgent(name: string, opts?: {
 }
 
 const tempDirs: string[] = [];
+const originalElectronRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+const originalPrBodyValidatorNode = process.env.INVOKER_PR_BODY_VALIDATOR_NODE;
 function createTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'pr-authoring-test-'));
   tempDirs.push(dir);
@@ -39,6 +43,11 @@ function createTempDir(): string {
 }
 
 afterEach(() => {
+  if (originalElectronRunAsNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+  else process.env.ELECTRON_RUN_AS_NODE = originalElectronRunAsNode;
+  if (originalPrBodyValidatorNode === undefined) delete process.env.INVOKER_PR_BODY_VALIDATOR_NODE;
+  else process.env.INVOKER_PR_BODY_VALIDATOR_NODE = originalPrBodyValidatorNode;
+
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -338,6 +347,40 @@ describe('validateReviewStackPrBody', () => {
     );
     const errors = validateReviewStackPrBody(inlineOnly);
     expect(errors).toContain('Missing required section: ## Non-goals');
+  });
+});
+
+// ── runRepoLocalPrBodyChecker ────────────────────────────
+
+describe('runRepoLocalPrBodyChecker', () => {
+  it('honors an explicit validator Node binary override', () => {
+    process.env.INVOKER_PR_BODY_VALIDATOR_NODE = process.execPath;
+
+    expect(resolvePrBodyValidatorNodeBinary()).toBe(process.execPath);
+  });
+
+  it('runs the repo checker with Electron process vars removed', () => {
+    const cwd = createTempDir();
+    mkdirSync(join(cwd, 'scripts'));
+    writeFileSync(
+      join(cwd, 'scripts', 'validate-pr-body-local.mjs'),
+      [
+        "if (process.env.ELECTRON_RUN_AS_NODE) {",
+        "  console.error('leaked ELECTRON_RUN_AS_NODE');",
+        '  process.exit(1);',
+        '}',
+        'process.exit(0);',
+        '',
+      ].join('\n'),
+    );
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    process.env.INVOKER_PR_BODY_VALIDATOR_NODE = process.execPath;
+
+    expect(runRepoLocalPrBodyChecker({
+      body: '## Summary\n\nok\n\n## Test Plan\n\nok\n\n## Revert Plan\n\nok',
+      cwd,
+      baseBranch: 'master',
+    })).toEqual([]);
   });
 });
 
