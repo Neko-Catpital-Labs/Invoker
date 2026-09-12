@@ -45,6 +45,14 @@ interface BundledSkillsManifest {
    * and can't resolve their own Invoker checkout via git.
    */
   sourceRepoRoot?: string;
+  /**
+   * Directory holding a resolvable `node_modules/yaml`, recorded for packaged
+   * installs whose `sourceRepoRoot` is unset. Read by installed doctor scripts
+   * (skills/plan-to-invoker/scripts/) as the last-resort fallback when they run
+   * from a machine-level skill copy with no checkout and no sibling
+   * node_modules of their own.
+   */
+  yamlModuleRoot?: string;
 }
 
 interface BundledSkillsContext {
@@ -298,6 +306,27 @@ function resolveManagedMcpTargets(isInstalled: IsInstalled = commandExists): Mcp
     },
   ];
   return candidates.map((candidate) => ({ ...candidate, available: isInstalled(candidate.probeCommand) }));
+}
+
+function resolveYamlModuleRoot(context: BundledSkillsContext): string | undefined {
+  const roots: string[] = [];
+  if (context.isPackaged) {
+    const resourceRoot = context.resourcesPath ?? electronResourcesPath();
+    if (resourceRoot) {
+      let dir = resourceRoot;
+      for (let depth = 0; depth < 6; depth += 1) {
+        dir = path.dirname(dir);
+        roots.push(dir);
+      }
+    }
+  } else {
+    roots.push(path.join(context.repoRoot, 'packages', 'app'));
+    roots.push(context.repoRoot);
+  }
+  for (const root of roots) {
+    if (existsSync(path.join(root, 'node_modules', 'yaml', 'dist', 'index.js'))) return root;
+  }
+  return undefined;
 }
 
 function resolveManifestPath(invokerHomeRoot: string): string {
@@ -1049,6 +1078,7 @@ export function installBundledSkills(
     instructionTargets: manifestInstructionTargets,
     instructionHash,
     sourceRepoRoot: context.isPackaged ? undefined : context.repoRoot,
+    yamlModuleRoot: resolveYamlModuleRoot(context),
   };
 
   writeManifest(invokerHomeRoot, manifest);
