@@ -74,6 +74,7 @@ describe('auto-fix circuit breaker integration', () => {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
           + 'to purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
+        failureClass: 'agent-usage-limit',
       },
     });
     const unrelatedTask = makeFailedTask({ id: 'wf-1/unrelated' });
@@ -147,6 +148,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: new Date(tripAt.getTime() - 1000),
       },
     });
@@ -171,6 +173,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: failedAt,
       },
     });
@@ -191,6 +194,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: new Date(Date.now() - 60 * 1000),
       },
     });
@@ -203,6 +207,32 @@ describe('auto-fix circuit breaker integration', () => {
     expect(state.triggeredAt).not.toBe(tripAt.toISOString());
     expect(isCircuitBreakerPaused(state, Date.now())).toBe(true);
     expect(submitted).not.toContain('wf-1/unrelated');
+  });
+
+  it('does not trip on a CI check table rate-limit row without a typed agent failure class', async () => {
+    const mergeGateCheckTable = [
+      'quality / TypeScript Types\tpass\t42s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265672\t',
+      'CodeRabbit\tpass\t0\t\tReview rate limited',
+      'UI Vitest\tpass\t2m44s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265910\t',
+      '[worktree] Process exited: actionId=wf-1788249568173-6/land-verified-pr exitCode=1',
+    ].join('\n');
+    const mergeGateTask = makeFailedTask({
+      id: 'wf-1/merge-gate',
+      config: { workflowId: 'wf-1', runnerKind: 'merge' },
+      execution: {
+        generation: 2,
+        selectedAttemptId: 'a1',
+        branch: 'x',
+        error: mergeGateCheckTable,
+        failureClass: undefined,
+      },
+    });
+    const submitted: string[] = [];
+
+    await runTick([mergeGateTask], submitted);
+
+    expect(isCircuitBreakerPaused(loadCircuitBreakerState(circuitBreakerPath), Date.now())).toBe(false);
+    expect(submitted).toContain('wf-1/merge-gate');
   });
 
   it('dispatches normally with no pause file at all', async () => {
