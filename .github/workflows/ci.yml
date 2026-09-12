@@ -861,6 +861,7 @@ jobs:
               e2e/workers-surface.spec.ts
               e2e/rebase-recreate-ui-drift-repro.spec.ts
               e2e/rebase-recreate-ui-never-recovers.spec.ts
+              e2e/codex-spend-gate-blocks-task.spec.ts
           - name: terminal-garbling
             files: >-
               e2e/planning-terminal-live-model.proof.spec.ts
