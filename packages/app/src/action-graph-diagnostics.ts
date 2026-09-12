@@ -79,6 +79,7 @@ function taskStatusToActionStatus(status: TaskState['status']): ActionGraphNodeS
     case 'stale':
       return 'cancelled';
     case 'closed':
+    case 'skipped':
       return 'failed';
     case 'fixing_with_ai':
       return 'running';
@@ -96,6 +97,7 @@ function attemptStatusToActionStatus(status: Attempt['status']): ActionGraphNode
       return 'pending';
     case 'needs_input':
       return 'waiting';
+    case 'stale':
     case 'superseded':
       return 'cancelled';
   }
@@ -250,7 +252,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       taskId: dispatch.taskId,
       attemptId: dispatch.attemptId,
       ownerId: dispatch.dispatchOwner,
-      priority: dispatch.priority === 'high' ? 1 : dispatch.priority === 'normal' ? 0 : -1,
+      priority: dispatch.priority,
       createdAt: dispatch.enqueuedAt,
       startedAt: dispatch.leasedAt,
       completedAt: dispatch.completedAt,

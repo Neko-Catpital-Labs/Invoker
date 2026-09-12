@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { ConversationRepository, SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import { SlackSurface, DEFAULT_HARNESS_PRESET } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 // A bounded, seeded random ("monkey") pass over the Slack plan-intent flow —
 // not to prove any one specific behavior (the targeted repro suites already
@@ -167,6 +168,7 @@ describe('Slack plan-intent monkey pass', () => {
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     await surface.start(async (command) => { commands.push(command); });
   });
@@ -329,5 +331,11 @@ describe('Slack plan-intent monkey pass', () => {
     // step spawns at most once (mention/plan/approve/no), so the ceiling is
     // generous on purpose — this is a smoke check, not a tight budget.
     expect(mockSpawn.mock.calls.length).toBeLessThan(RUN_COUNT * STEPS_PER_RUN * 2);
+    // Every spawn actually went through the codex-shaped command, proving
+    // the default harness preset is really backed by a codex session here.
+    expect(mockSpawn.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mockSpawn.mock.calls) {
+      expect(call[0]).toBe('codex');
+    }
   });
 });

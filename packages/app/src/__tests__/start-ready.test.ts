@@ -38,6 +38,8 @@ function harness(
     getPersistedActiveTaskIds: vi.fn(() => new Set(activeTaskIds)),
     getExecutableReadyTasks: vi.fn(() => readyTasks),
     getWorkflowMergeMode: vi.fn((workflowId: string) => mergeModes[workflowId]),
+    activateStagedWorkflows: vi.fn(() => []),
+    getStagedWorkflowIds: vi.fn(() => ['wf-staged']),
     prepareTaskForNewAttempt: vi.fn((taskId: string) => {
       tasks = tasks.map((task) => task.id === taskId
         ? { ...task, status: 'pending' as TaskState['status'], execution: {} }
@@ -58,6 +60,18 @@ function harness(
 }
 
 describe('start-ready', () => {
+  it('activates staged pending workflows before starting ready work', async () => {
+    const ready = makeTask('wf-staged/ready', 'pending');
+    const orchestrator = harness([ready], [ready]);
+
+    await runStartReady(orchestrator);
+
+    expect(orchestrator.activateStagedWorkflows).toHaveBeenCalledWith(['wf-staged']);
+    expect(orchestrator.activateStagedWorkflows.mock.invocationCallOrder[0]).toBeLessThan(
+      orchestrator.startExecution.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it('previews ready, recoverable, failed, and gated work', () => {
     const ready = makeTask('wf-1/ready', 'pending');
     const recoverable = makeTask('wf-1/recoverable', 'pending', {
@@ -108,7 +122,11 @@ describe('start-ready', () => {
     const result = await runStartReady(orchestrator);
 
     expect(orchestrator.syncAllFromDb).toHaveBeenCalledTimes(1);
-    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/recoverable', 'start_ready_recovery');
+    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith(
+      'wf-1/recoverable',
+      'start_ready_recovery',
+      { alreadyRefreshed: true },
+    );
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
     expect(result.started.map((task) => task.id)).toEqual(['wf-1/ready']);
   });
@@ -123,8 +141,16 @@ describe('start-ready', () => {
 
     const result = await runStartReady(orchestrator);
 
-    expect(orchestrator.prepareTaskForNewAttempt).not.toHaveBeenCalledWith('wf-1/live', 'start_ready_recovery');
-    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/orphaned', 'start_ready_recovery');
+    expect(orchestrator.prepareTaskForNewAttempt).not.toHaveBeenCalledWith(
+      'wf-1/live',
+      'start_ready_recovery',
+      { alreadyRefreshed: true },
+    );
+    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith(
+      'wf-1/orphaned',
+      'start_ready_recovery',
+      { alreadyRefreshed: true },
+    );
     expect(result.preview.recoverableTaskIds).toEqual(['wf-1/orphaned']);
   });
 

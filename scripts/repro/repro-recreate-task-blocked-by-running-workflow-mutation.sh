@@ -20,9 +20,12 @@ done
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-repro-recreate-task-queue.XXXXXX")"
 HOME_DIR="$TMP_DIR/home"
-DB_DIR="$HOME_DIR/.invoker"
+# Not "$HOME_DIR/.invoker": the profile launcher fail-closes on that exact path as a
+# production collision, even under a disposable test HOME (see with-invoker-development-profile.mjs).
+DB_DIR="$HOME_DIR/.invoker-repro"
 PLAN_PATH="$TMP_DIR/repro-plan.yaml"
 CONFIG_PATH="$DB_DIR/config.json"
+export INVOKER_REPO_CONFIG_PATH="$CONFIG_PATH"
 REPO_FIXTURE_DIR="$TMP_DIR/repro-repo"
 IPC_SOCKET_PATH="$TMP_DIR/i.sock"
 OWNER_STDOUT="$TMP_DIR/owner.stdout.log"
@@ -33,8 +36,10 @@ BLOCKER_RECREATE_STDOUT="$TMP_DIR/blocker-recreate.stdout.log"
 BLOCKER_RECREATE_STDERR="$TMP_DIR/blocker-recreate.stderr.log"
 TARGET_RECREATE_STDOUT="$TMP_DIR/target-recreate.stdout.log"
 TARGET_RECREATE_STDERR="$TMP_DIR/target-recreate.stderr.log"
+BLOCKER_RELEASE_PATH="$TMP_DIR/blocker-release"
 
 cleanup() {
+  touch "$BLOCKER_RELEASE_PATH" >/dev/null 2>&1 || true
   if [[ -n "${BLOCKER_RECREATE_PID:-}" ]]; then
     kill "$BLOCKER_RECREATE_PID" >/dev/null 2>&1 || true
     wait "$BLOCKER_RECREATE_PID" >/dev/null 2>&1 || true
@@ -149,7 +154,18 @@ git -C "$REPO_FIXTURE_DIR" commit -m "Initial fixture" >/dev/null 2>&1
 
 cat > "$CONFIG_PATH" <<'EOF'
 {
-  "maxConcurrency": 2
+  "maxConcurrency": 2,
+  "worktreeTargets": {
+    "repro-local": {}
+  },
+  "executionPools": {
+    "repro-local": {
+      "members": [
+        { "type": "worktree", "id": "repro-local", "maxConcurrentTasks": 2 }
+      ]
+    }
+  },
+  "defaultPoolId": "repro-local"
 }
 EOF
 
@@ -164,7 +180,7 @@ tasks:
   - id: blocker-slow
     description: Running task whose recreate-task mutation keeps the workflow mutation queue occupied
     command: >-
-      bash -lc 'sleep 20'
+      bash -lc 'while [ ! -e "$BLOCKER_RELEASE_PATH" ]; do sleep 0.1; done'
 EOF
 
 HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
@@ -247,6 +263,8 @@ fi
 
 wait_for_intent_status "$BLOCKER_RECREATE_INTENT_ID" "running" 15
 
+TARGET_PENDING_EVENTS_BEFORE="$(query_action_graph_value task-event-count "$TARGET_ID" task.pending)"
+
 HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test node "$HEADLESS_CLIENT_JS" recreate-task "$TARGET_ID" \
   >"$TARGET_RECREATE_STDOUT" 2>"$TARGET_RECREATE_STDERR" &
 TARGET_RECREATE_PID=$!
@@ -270,7 +288,7 @@ sleep 3
 
 BLOCKER_RECREATE_STATUS="$(query_action_graph_value intent-status "$BLOCKER_RECREATE_INTENT_ID")"
 TARGET_RECREATE_STATUS="$(query_action_graph_value intent-status "$TARGET_RECREATE_INTENT_ID")"
-TARGET_PENDING_EVENTS="$(query_action_graph_value task-event-count-since-intent "$TARGET_ID" task.pending "$TARGET_RECREATE_INTENT_ID")"
+TARGET_PENDING_EVENTS_AFTER="$(query_action_graph_value task-event-count "$TARGET_ID" task.pending)"
 TARGET_STATUS_AFTER_SECOND="$(query_action_graph_value task-status "$TARGET_ID")"
 BLOCKER_STATUS_AFTER_SECOND="$(query_action_graph_value task-status "$BLOCKER_ID")"
 
@@ -283,8 +301,8 @@ if [[ "$EXPECTATION" == "bug" ]]; then
     echo "repro: expected target recreate-task intent to be queued behind the running workflow mutation, got $TARGET_RECREATE_STATUS" >&2
     exit 1
   fi
-  if [[ "$TARGET_PENDING_EVENTS" != "0" ]]; then
-    echo "repro: expected no fresh task.pending events for $TARGET_ID after the delayed recreate-task was queued, saw $TARGET_PENDING_EVENTS" >&2
+  if (( TARGET_PENDING_EVENTS_AFTER != TARGET_PENDING_EVENTS_BEFORE )); then
+    echo "repro: expected no fresh task.pending events for $TARGET_ID after the delayed recreate-task was queued, saw $TARGET_PENDING_EVENTS_BEFORE before and $TARGET_PENDING_EVENTS_AFTER after" >&2
     exit 1
   fi
   if [[ "$TARGET_STATUS_AFTER_SECOND" != "completed" ]]; then
@@ -301,8 +319,8 @@ else
     echo "repro: expected target recreate-task intent to take authority immediately, got $TARGET_RECREATE_STATUS" >&2
     exit 1
   fi
-  if [[ "$TARGET_PENDING_EVENTS" == "0" ]]; then
-    echo "repro: expected fresh task.pending events for $TARGET_ID after recreate-task took over, saw 0" >&2
+  if (( TARGET_PENDING_EVENTS_AFTER <= TARGET_PENDING_EVENTS_BEFORE )); then
+    echo "repro: expected a fresh task.pending event for $TARGET_ID after recreate-task took over, saw $TARGET_PENDING_EVENTS_BEFORE before and $TARGET_PENDING_EVENTS_AFTER after" >&2
     exit 1
   fi
   echo "repro: confirmed fix"
@@ -311,7 +329,7 @@ fi
 echo "workflow: $WORKFLOW_ID"
 echo "blocker recreate-task intent: $BLOCKER_RECREATE_INTENT_ID status=$BLOCKER_RECREATE_STATUS"
 echo "target recreate-task intent: $TARGET_RECREATE_INTENT_ID status=$TARGET_RECREATE_STATUS"
-echo "task.pending events after target recreate-task enqueue: $TARGET_PENDING_EVENTS"
+echo "task.pending events around target recreate-task enqueue: before=$TARGET_PENDING_EVENTS_BEFORE after=$TARGET_PENDING_EVENTS_AFTER"
 echo "task status after target recreate-task enqueue: $TARGET_ID=$TARGET_STATUS_AFTER_SECOND"
 echo "task status after target recreate-task enqueue: $BLOCKER_ID=$BLOCKER_STATUS_AFTER_SECOND"
 echo "tmp-dir: $TMP_DIR"

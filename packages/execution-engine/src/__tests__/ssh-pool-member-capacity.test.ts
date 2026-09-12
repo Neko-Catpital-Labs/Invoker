@@ -662,6 +662,71 @@ describe('execution-pool member circuit breaker', () => {
     expect(getPendingSelection(runner, nextTask.id).member.id).toBe('remote-a');
   });
 
+  it('quarantines the member when mid-run response handling fails with a transient SSH transport error', async () => {
+    const failingTask = makeTask('wf-1/task-a');
+    const tasks = new Map([[failingTask.id, failingTask]]);
+    const completeByTaskId = new Map<string, (response: any) => void>();
+    const sshExecutor = {
+      type: 'ssh',
+      start: vi.fn(async (request: any) => ({
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: `/remote/${request.actionId}`,
+      })),
+      onComplete: vi.fn((handle: any, cb: any) => {
+        completeByTaskId.set(handle.taskId, cb);
+      }),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = makeRunner({
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+      sshExecutor,
+      orchestrator: {
+        getTask: (id: string) => tasks.get(id) ?? null,
+        getAllTasks: () => [...tasks.values()],
+        markTaskRunningAfterLaunch: () => true,
+        handleWorkerResponse: vi.fn((response: any) => {
+          if (response.status === 'completed') {
+            failingTask.execution = {
+              ...failingTask.execution,
+              failureClass: 'ssh-transport-transient',
+            };
+            throw new Error('SSH transport failed (exit 255): connection timed out.');
+          }
+          return [];
+        }),
+        deferTask: vi.fn(),
+      },
+      persistence: {
+        logEvent: vi.fn(),
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+      },
+    });
+
+    const run = runner.executeTask(failingTask);
+    await vi.waitFor(() => expect(completeByTaskId.has(failingTask.id)).toBe(true));
+    completeByTaskId.get(failingTask.id)?.({
+      requestId: `complete-${failingTask.id}`,
+      actionId: failingTask.id,
+      attemptId: failingTask.execution.selectedAttemptId,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await run;
+
+    expect(runner.getPoolMemberHealthSnapshot()).toEqual([
+      expect.objectContaining({ memberKey: 'ssh:remote-a', consecutiveFailures: 1 }),
+    ]);
+  });
+
   it('re-admits a member automatically once its cooldown expires', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-09T00:00:00Z'));

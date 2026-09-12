@@ -121,7 +121,7 @@ const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
-const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
+const { InvokerTerminal, buildPlanningHarnessChoices } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
 
@@ -310,16 +310,128 @@ describe('Invoker terminal (component)', () => {
       busy: false,
       value: '',
       selectedPresetKey: 'codex',
-      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      presetOptions: [{ key: 'codex', label: 'Codex', tool: 'codex' }],
+      selectedConfirmationMode: 'require' as const,
       draftPlanAvailable: false,
       onValueChange: vi.fn(),
       onSubmit: vi.fn(),
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
+      onConfirmationModeChange: vi.fn(),
       onExpand: vi.fn(),
       ...overrides,
     };
   }
+
+  it('groups flat configured planning presets into harness and model choices', () => {
+    expect(buildPlanningHarnessChoices([
+      { key: 'codex', label: 'Codex', tool: 'codex' },
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+      { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+      { key: 'omp', label: 'OMP', tool: 'omp' },
+    ])).toEqual([
+      {
+        tool: 'codex',
+        label: 'Codex',
+        directPreset: { key: 'codex', label: 'Codex', tool: 'codex' },
+        modelPresets: [],
+      },
+      {
+        tool: 'omp',
+        label: 'OMP',
+        directPreset: { key: 'omp', label: 'OMP', tool: 'omp' },
+        modelPresets: [
+          { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+          { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+        ],
+      },
+    ]);
+  });
+
+  it('renders separate harness and model selectors while emitting configured preset keys', () => {
+    const onPresetChange = vi.fn();
+    render(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'omp+claude',
+        presetOptions: [
+          { key: 'codex', label: 'Codex', tool: 'codex' },
+          { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+          { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+          { key: 'omp', label: 'OMP', tool: 'omp' },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+
+    expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('omp');
+    const modelSelect = screen.getByTestId('invoker-terminal-model');
+    expect(modelSelect).toHaveValue('omp+claude');
+    expect(within(modelSelect).getByRole('option', { name: 'Default' })).toHaveValue('omp');
+    expect(within(modelSelect).getByRole('option', { name: 'Claude' })).toHaveValue('omp+claude');
+    expect(within(modelSelect).getByRole('option', { name: 'Codex' })).toHaveValue('omp+codex');
+
+    fireEvent.change(modelSelect, { target: { value: 'omp+codex' } });
+    expect(onPresetChange).toHaveBeenLastCalledWith('omp+codex');
+  });
+
+  it('hides the model selector for direct harness presets without configured models', () => {
+    render(<InvokerTerminal {...terminalProps()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+
+    expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    expect(screen.queryByTestId('invoker-terminal-model')).not.toBeInTheDocument();
+  });
+
+  it('announces the turn error and only renders Retry when a handler is provided', () => {
+    const { rerender } = render(<InvokerTerminal
+      {...terminalProps({
+        turnError: 'Planner was interrupted before it could answer.',
+      })}
+    />);
+
+    const errorBar = screen.getByTestId('invoker-terminal-turn-error');
+    expect(errorBar).toHaveAttribute('role', 'alert');
+    expect(errorBar).toHaveTextContent('Planner was interrupted before it could answer.');
+    expect(screen.queryByTestId('invoker-terminal-retry-turn')).not.toBeInTheDocument();
+
+    const onRetryTurn = vi.fn();
+    rerender(<InvokerTerminal
+      {...terminalProps({
+        turnError: 'Planner was interrupted before it could answer.',
+        onRetryTurn,
+      })}
+    />);
+
+    fireEvent.click(screen.getByTestId('invoker-terminal-retry-turn'));
+    expect(onRetryTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a still-valid model when switching harnesses', () => {
+    const onPresetChange = vi.fn();
+    render(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'omp+claude',
+        presetOptions: [
+          { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
+          { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
+          { key: 'cursor+claude', label: 'Claude via Cursor', tool: 'cursor', model: 'claude' },
+          { key: 'cursor+codex', label: 'Codex via Cursor', tool: 'cursor', model: 'codex' },
+          { key: 'codex', label: 'Codex', tool: 'codex' },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'cursor' } });
+    expect(onPresetChange).toHaveBeenLastCalledWith('cursor+claude');
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'codex' } });
+    expect(onPresetChange).toHaveBeenLastCalledWith('codex');
+  });
 
   it('shows the submitted-plan bar running state while the workflow is still running', () => {
     render(<InvokerTerminal
@@ -659,7 +771,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
@@ -735,11 +847,20 @@ describe('Invoker terminal (component)', () => {
       expect(panel).toHaveTextContent('Planning stopped. Try again when ready.');
     });
 
+    const firstTurnId = vi.mocked(mock.api.planningChatSend).mock.calls[0][0].turnId;
+    expect(typeof firstTurnId).toBe('string');
+
     submitPlanningText('try again');
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      const secondTurnId = vi.mocked(mock.api.planningChatSend).mock.calls[1][0].turnId;
+      // A plain resend after failure is a new turn, not the dedicated Retry
+      // action (which reuses activeTurnId) — it must mint a fresh turnId.
+      expect(typeof secondTurnId).toBe('string');
+      expect(secondTurnId).not.toBe(firstTurnId);
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: secondTurnId,
         sessionId: 'session-1',
         message: 'try again',
         presetKey: 'codex',
@@ -950,7 +1071,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
     });
   });
 
@@ -984,12 +1105,14 @@ describe('Invoker terminal (component)', () => {
       busy: false,
       value: '',
       selectedPresetKey: 'codex',
-      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      presetOptions: [{ key: 'codex', label: 'Codex', tool: 'codex' }],
+      selectedConfirmationMode: 'require' as const,
       draftPlanAvailable: false,
       onValueChange: vi.fn(),
       onSubmit: vi.fn(),
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
+      onConfirmationModeChange: vi.fn(),
       onExpand: vi.fn(),
     };
     const { rerender } = render(<InvokerTerminal {...props} />);
@@ -1067,12 +1190,14 @@ describe('Invoker terminal (component)', () => {
           busy={false}
           value={value}
           selectedPresetKey="codex"
-          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          presetOptions={[{ key: 'codex', label: 'Codex', tool: 'codex' }]}
+          selectedConfirmationMode="require"
           draftPlanAvailable={false}
           onValueChange={setValue}
           onSubmit={vi.fn()}
           onSubmitDraft={vi.fn()}
           onPresetChange={vi.fn()}
+          onConfirmationModeChange={vi.fn()}
           onExpand={vi.fn()}
         />
       );
@@ -1124,10 +1249,9 @@ describe('Invoker terminal (component)', () => {
     });
     fireEvent.click(screen.getByTestId('workflow-node-wf-chat-0'));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-wf-chat-0/message-00')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByTestId('rf__node-wf-chat-0/message-00'));
+    const promptTaskNode = await screen.findByTestId('rf__node-wf-chat-0/message-00');
+    expect(promptTaskNode).toBeInTheDocument();
+    fireEvent.click(promptTaskNode);
 
     await waitFor(() => {
       expect(screen.getByTestId('prompt-command-display')).toBeInTheDocument();
@@ -1219,6 +1343,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         sessionId: 'saved-pressure-chat',
         message: 'continue the restored session',
         presetKey: 'codex',
@@ -1434,6 +1559,7 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        turnId: expect.any(String),
         sessionId: 'session-1',
         message: 'make the plan more detailed',
         presetKey: 'codex',
@@ -1479,15 +1605,17 @@ describe('Invoker terminal (component)', () => {
     render(<App />);
     await openPlanningTerminal();
 
-    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'omp+claude' } });
+    fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'omp' } });
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-model')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('invoker-terminal-model'), { target: { value: 'omp+claude' } });
     submitPlanningText('draft a plan');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' });
+      expect(vi.mocked(mock.api.planningChatSend)).toHaveBeenCalledWith({ turnId: expect.any(String), message: 'draft a plan', presetKey: 'omp+claude', confirmationMode: 'require' });
     });
   });
 
-  it('does not submit or send typed submit before a draft is ready', async () => {
+  it('sends typed submit as a draft request before a draft is ready', async () => {
     mock.api.planningChatList = vi.fn(async () => ({
       ok: true,
       sessions: [
@@ -1525,9 +1653,25 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('submit');
 
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
+        sessionId: 'session-1',
+        message: 'submit',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+    });
     expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
-    expect(mock.api.planningChatSend).not.toHaveBeenCalled();
     expect(mock.api.startReady).not.toHaveBeenCalled();
+  });
+
+  it('does not offer auto-submit in conversational planning', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    expect(screen.queryByRole('option', { name: 'Auto-submit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Ask first' })).toBeInTheDocument();
   });
 
   it('shows the bound repo and short commit sha in the planning context sidebar', async () => {
@@ -1599,7 +1743,7 @@ describe('Invoker terminal (component)', () => {
     );
   });
 
-  it('submits a draft and starts ready work when the user types submit', async () => {
+  it('submits a draft without starting staged work', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
@@ -1612,9 +1756,8 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('draft the full plan');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft ready · Mock Plan · 2 tasks');
-    });
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
 
     expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
     expect(mock.api.startReady).not.toHaveBeenCalled();
@@ -1623,11 +1766,11 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. No ready work to start.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review the graph, then Start ready work.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
@@ -1646,7 +1789,7 @@ describe('Invoker terminal (component)', () => {
         workflowCount: 2,
         steps: ['Workers Surface Contracts', 'Workers Surface UI'],
         taskGroups: [
-          { workflow: 'Workers Surface Contracts', tasks: ['Define contracts', 'Verify contracts'] },
+          { workflow: 'Workers Surface Contracts', tasks: ['Review claim: Define `contracts`\nReview lane: behavior\n\nFiles:\n- `src/a.ts`\n- `src/b.ts`', 'Verify contracts'] },
           { workflow: 'Workers Surface UI', tasks: ['Build UI', 'Verify UI'] },
         ],
       },
@@ -1664,23 +1807,25 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('draft the Workers Surface plan');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft ready · Workers Surface · 2 workflows · 4 tasks');
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
     await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('draft-task-group')).toHaveLength(2);
+    const multilineDescription = screen.getAllByTestId('draft-step-summary')[0];
+    expect(within(multilineDescription).getByText('contracts', { selector: 'code' })).toBeVisible();
+    expect(within(multilineDescription).getByRole('list')).toBeVisible();
+    expect(within(multilineDescription).getAllByRole('listitem')).toHaveLength(2);
+    expect(multilineDescription).toHaveTextContent('Review claim: Define contracts Review lane: behavior Files: src/a.ts src/b.ts');
     fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. No ready work to start.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review the graph, then Start ready work.',
     );
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
@@ -1705,10 +1850,9 @@ describe('Invoker terminal (component)', () => {
     await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
-    await screen.findByTestId('invoker-terminal-ready-bar');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
-    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('planning-create-workflow'));
 
     expect(screen.getByTestId('planning-create-workflow')).toBeInTheDocument();
     expect(mock.api.refreshTaskGraph).not.toHaveBeenCalled();
@@ -1718,11 +1862,11 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(2);
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. No ready work to start.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review the graph, then Start ready work.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
@@ -1766,9 +1910,9 @@ describe('Invoker terminal (component)', () => {
     await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
-    await screen.findByTestId('invoker-terminal-ready-bar');
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
-    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
+    await screen.findByTestId('planning-create-workflow');
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('planning-create-workflow'));
     await waitFor(() => expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' }));
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
@@ -2091,6 +2235,15 @@ describe('Invoker terminal (component)', () => {
     expect(within(sendButton).getByTestId('invoker-terminal-send-icon')).toBeInTheDocument();
   });
 
+  it('swaps the send icon for a pending spinner while a turn is running', () => {
+    render(<InvokerTerminal {...terminalProps({ busy: true })} />);
+
+    const sendButton = screen.getByRole('button', { name: 'Send' });
+    expect(sendButton).toBeDisabled();
+    expect(within(sendButton).getByTestId('invoker-terminal-send-spinner')).toBeInTheDocument();
+    expect(within(sendButton).queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
+  });
+
   it('uses the amber send-button styling in the enabled state', () => {
     render(<InvokerTerminal {...terminalProps({ value: 'draft a plan' })} />);
 
@@ -2172,7 +2325,7 @@ describe('Invoker terminal submit context (component)', () => {
     });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      fireEvent.click(screen.getByTestId('rf__node-task-a'));
+      fireEvent.click(await screen.findByTestId('rf__node-task-a'));
       await waitFor(() => {
         expect(
           screen

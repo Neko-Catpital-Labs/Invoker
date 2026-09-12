@@ -4,7 +4,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
+const { shouldWrapInDevelopmentProfile } = require('./electron-development-profile-guard.cjs');
+
 const repoRoot = path.resolve(__dirname, '..');
+if (require.main === module && shouldWrapInDevelopmentProfile(process.argv[2], process.env)) {
+  const launcher = path.join(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
+  const result = spawnSync(process.execPath, [launcher, '--', process.execPath, __filename, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}
 const ELECTRON_INSTALL_ATTEMPTS = 3;
 const MISSING_ELECTRON_MESSAGE =
   'Electron is not installed. Provision this machine before running Invoker: ' +
@@ -68,7 +77,24 @@ function getElectronPlatformPath() {
   }
 }
 
-async function repairElectronWithSystemUnzip(electronPackageDir) {
+function systemUnzipIsAvailable() {
+  const probe = spawnSync('unzip', ['-v'], { stdio: 'ignore' });
+  return !probe.error && probe.status === 0;
+}
+
+// extract-zip's yauzl-based streaming reader has been observed to hang indefinitely on
+// zipfile.openReadStream() for the first entry on some self-hosted CI filesystems, leaving
+// the postinstall process to exit early with nothing extracted and no error surfaced. System
+// unzip reliably extracts the same archive in seconds, so prefer it when present.
+function extractZipWithSystemUnzip(zipPath, destDir) {
+  if (!systemUnzipIsAvailable()) {
+    return false;
+  }
+  const result = spawnSync('unzip', ['-q', '-o', zipPath, '-d', destDir], { stdio: 'inherit' });
+  return !result.error && result.status === 0;
+}
+
+async function repairElectronWithPackageExtractor(electronPackageDir) {
   if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
     return null;
   }
@@ -78,6 +104,10 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
     paths: [electronPackageDir],
   });
   const { downloadArtifact } = require(electronGetPath);
+  const extractZipPath = require.resolve('extract-zip', {
+    paths: [electronPackageDir],
+  });
+  const extractZip = require(extractZipPath);
   const platformPath = getElectronPlatformPath();
   const platform = process.env.npm_config_platform || process.platform;
   const arch = process.env.npm_config_arch || process.arch;
@@ -94,20 +124,24 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
   });
 
   const distPath = path.join(electronPackageDir, 'dist');
-  fs.rmSync(distPath, { recursive: true, force: true });
-  fs.mkdirSync(distPath, { recursive: true });
+  const stagingPath = path.join(electronPackageDir, `dist.staging-${process.pid}`);
+  fs.rmSync(stagingPath, { recursive: true, force: true });
+  fs.mkdirSync(stagingPath, { recursive: true });
+  try {
+    if (!extractZipWithSystemUnzip(zipPath, stagingPath)) {
+      await extractZip(zipPath, { dir: stagingPath });
+    }
 
-  const unzip = spawnSync('unzip', ['-q', '-o', zipPath, '-d', distPath], {
-    cwd: electronPackageDir,
-    env: process.env,
-    stdio: 'inherit',
-  });
-  if (unzip.status !== 0) {
-    return null;
-  }
-  if (unzip.signal) {
-    process.kill(process.pid, unzip.signal);
-    return null;
+    const stagedBinary = path.join(stagingPath, platformPath);
+    if (!fs.existsSync(stagedBinary)) {
+      throw new Error(`extract-zip did not produce ${platformPath} in ${stagingPath}; extraction was interrupted or incomplete`);
+    }
+
+    fs.rmSync(distPath, { recursive: true, force: true });
+    fs.renameSync(stagingPath, distPath);
+  } catch (error) {
+    fs.rmSync(stagingPath, { recursive: true, force: true });
+    throw error;
   }
 
   const sourceTypeDefinitions = path.join(distPath, 'electron.d.ts');
@@ -119,6 +153,10 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
 }
 
 async function installElectronOrExit() {
+  if (process.env.INVOKER_SKIP_ELECTRON_INSTALL === '1') {
+    return null;
+  }
+
   const electronPackageDir = resolveElectronPackageDir();
   if (!electronPackageDir) {
     console.error('Electron package is not installed. Run pnpm install with network access.');
@@ -162,7 +200,7 @@ async function installElectronOrExit() {
     return installedBinary;
   }
 
-  const repairedBinary = await repairElectronWithSystemUnzip(electronPackageDir);
+  const repairedBinary = await repairElectronWithPackageExtractor(electronPackageDir);
   if (!repairedBinary) {
     console.error(
       'Electron is still unavailable after running its installer. ' +
@@ -253,7 +291,11 @@ async function main() {
   });
 }
 
+module.exports = { systemUnzipIsAvailable, extractZipWithSystemUnzip };
+
+if (require.main === module) {
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
+}

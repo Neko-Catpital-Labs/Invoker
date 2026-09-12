@@ -42,4 +42,15 @@ must_contain "$SKILL_MD" "Never report a workflow/task count, CI status, merge s
 must_contain "$SKILL_MD" "Run the query command again in the same turn" "skill must require a fresh query before reporting state"
 must_contain "$SKILL_MD" "skills/prove-it/SKILL.md" "skill must reference the shared prove-it evidence rule"
 
+must_contain "$SKILL_MD" "The stop reason is stored in \`execution.inputPrompt\`, and no headless query projection emits that field" "skill must name where the needs_input reason lives and that queries do not project it"
+must_contain "$SKILL_MD" 'say "not projected", not "empty"' "skill must distinguish an unprojected field from an empty one"
+must_contain "$SKILL_MD" "/Applications/Invoker.app/Contents/Resources/app.asar" "skill must point at the greppable owner bundle"
+must_contain "$SKILL_MD" "/Applications/Invoker.app/Contents/MacOS/Invoker --headless query task" "skill must call the app binary directly on macOS instead of the open -a wrapper"
+must_contain "$SKILL_MD" "before any \`retry-task\`, agent switch (\`set agent\`), or resubmit" "skill must order reason-reading before retry, agent switch, or resubmit"
+must_contain "$SKILL_MD" "do not also poll it with foreground \`sleep\`/\`seq\` loops" "skill must forbid foreground polling beside an armed invoker-cli wait"
+must_contain "$SKILL_MD" "delegate the digging" "skill must delegate stuck-workflow digging to a subagent when context is large"
+must_contain "$SKILL_MD" "Cancel downstream workflows first, then the head" "skill must cancel chained downstream workflows before the head"
+must_contain "$SKILL_MD" "until every task shows \`failed\`" "skill must re-query after cancel until every task is failed"
+must_contain "$SKILL_MD" "the app-binary cancel exit code is unreliable" "skill must not trust the app-binary cancel exit code"
+
 echo "OK: invoker-ops skill contract checks passed"

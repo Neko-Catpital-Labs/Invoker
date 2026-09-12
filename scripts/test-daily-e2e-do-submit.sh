@@ -8,6 +8,8 @@
 #      a valid single-task plan with onFinish: pull_request.
 #   B. Real run: submits exactly once for the failing suite and records a marker.
 #   C. Resubmit guard: a fresh marker makes the suite skip (no submit).
+#   D. Flaky-suite quarantine: a suite-kind registry entry is logged as
+#      excluded before the battery would run.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,8 +19,22 @@ WORKER="$REPO_ROOT/scripts/daily-e2e-do-submit.sh"
 FAIL_REL="required/20-e2e-dry-run.sh"
 FAIL_SLUG="20-e2e-dry-run"
 
+# D uses the real, checked-in registry file (the worker always resolves it
+# relative to REPO_ROOT) -- save and restore its exact bytes rather than
+# pointing it at a scratch path, matching flaky-test-registry.mjs's own test
+# convention.
+FLAKY_REGISTRY="$REPO_ROOT/scripts/flaky-test-registry.json"
+FLAKY_REGISTRY_BACKUP="$(mktemp "${TMPDIR:-/tmp}/flaky-test-registry-backup.XXXXXX")"
+cp "$FLAKY_REGISTRY" "$FLAKY_REGISTRY_BACKUP"
+
 SANDBOXES=()
-cleanup() { local d; for d in ${SANDBOXES[@]+"${SANDBOXES[@]}"}; do rm -rf "$d"; done; return 0; }
+cleanup() {
+  local d
+  for d in ${SANDBOXES[@]+"${SANDBOXES[@]}"}; do rm -rf "$d"; done
+  cp "$FLAKY_REGISTRY_BACKUP" "$FLAKY_REGISTRY"
+  rm -f "$FLAKY_REGISTRY_BACKUP"
+  return 0
+}
 trap cleanup EXIT
 
 fail() { echo "FAIL: $1" >&2; [ -n "${2:-}" ] && { echo "----- log -----" >&2; cat "$2" >&2; }; exit 1; }
@@ -107,5 +123,21 @@ grep -q "submitted within" "$sb/worker2.log" \
 grep -q "skipped=1" "$sb/worker2.log" || fail "C: summary should report skipped=1" "$sb/worker2.log"
 echo "  C ok: resubmit guard skips a recently submitted suite"
 
-echo "PASS: daily-e2e-do-submit.sh behavior verified (dry-run, submit, resubmit-guard)"
+# ── D. Flaky-suite quarantine: logged as excluded before the battery ──────────
+# This proves the worker computes and logs the exclude value from the real
+# registry -- not that run-all-tests.sh itself honors INVOKER_TEST_ALL_EXCLUDE
+# end-to-end. That exclusion mechanism is pre-existing and already relied on
+# by other callers; re-proving it here would mean running the real (and
+# destructive: git reset --hard / git clean -fd) battery path, which this
+# harness deliberately never does (see run_worker's INVOKER_DAILY_E2E_SKIP_BATTERY=1).
+node scripts/flaky-test-registry.mjs quarantine "optional/99-test-only.sh" \
+  --kind suite --reason "test: case D" >/dev/null
+export INVOKER_DAILY_E2E_DRY_RUN=1
+run_worker
+grep -q "excluding quarantined flaky suites: optional/99-test-only.sh" "$log" \
+  || fail "D: worker did not log the quarantined suite exclusion" "$log"
+cp "$FLAKY_REGISTRY_BACKUP" "$FLAKY_REGISTRY"
+echo "  D ok: a quarantined suite is logged as excluded before the battery runs"
+
+echo "PASS: daily-e2e-do-submit.sh behavior verified (dry-run, submit, resubmit-guard, flaky-suite quarantine)"
 exit 0
