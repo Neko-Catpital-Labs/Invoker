@@ -111,7 +111,7 @@ const EDGE_FIXING_STROKE = 'rgba(251,146,60,0.7)';
 const EDGE_FIXING_HOVER = 'rgba(253,186,116,0.95)';
 
 export function getEdgeStyle(sourceStatus: string, targetStatus: string): EdgeStyle {
-  if (sourceStatus === 'stale' || targetStatus === 'stale') {
+  if (sourceStatus === 'stale' || sourceStatus === 'skipped' || targetStatus === 'stale' || targetStatus === 'skipped') {
     return {
       stroke: EDGE_MUTED_STROKE,
       strokeWidth: 1.2,
@@ -167,6 +167,7 @@ export function formatStatusLabel(status: TaskStatus): string {
     closed: 'Closed',
     blocked: 'Blocked',
     stale: 'Stale',
+    skipped: 'Skipped',
     needs_input: 'Needs Input',
     fixing_with_ai: 'Fixing With AI',
   };

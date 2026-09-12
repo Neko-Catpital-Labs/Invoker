@@ -35,6 +35,7 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
   let reviewReady = 0;
   let awaitingApproval = 0;
   let blocked = 0;
+  let skipped = 0;
   let fixing = 0;
   let fixApproval = 0;
 
@@ -60,6 +61,9 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
         break;
       case 'closed':
         closed++;
+        break;
+      case 'skipped':
+        skipped++;
         break;
       case 'queued':
         if (!runningTaskIds.has(task.id)) {
@@ -154,6 +158,16 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
           onClick={(e) => onStatusClick?.('closed', e)}
         >
           Closed: <span className="font-medium">{closed}</span>
+        </span>
+      )}
+      {skipped > 0 && (
+        <span
+          data-testid="status-bar-pill-skipped"
+          data-status-key="skipped"
+          className={`${statusTextClass('skipped')} ${filterClass('skipped')}`}
+          onClick={(e) => onStatusClick?.('skipped', e)}
+        >
+          Skipped: <span className="font-medium">{skipped}</span>
         </span>
       )}
       <span
