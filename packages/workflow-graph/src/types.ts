@@ -278,7 +278,9 @@ export type SshInfraFailureClass =
 
 export type TransientFailureClass = 'ssh-transport-transient';
 
-export type FailureClass = 'liveness_stall' | SshInfraFailureClass | TransientFailureClass;
+export type AgentFailureClass = 'agent-usage-limit';
+
+export type FailureClass = 'liveness_stall' | SshInfraFailureClass | TransientFailureClass | AgentFailureClass;
 
 export function isLivenessFailureClass(failureClass: FailureClass | undefined): boolean {
   return failureClass === 'liveness_stall';
