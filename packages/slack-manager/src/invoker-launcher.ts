@@ -60,6 +60,21 @@ export interface InvokerLauncher {
 export type OwnerLaunchSpec = HeadlessOwnerLaunchSpec;
 export { resolveHeadlessOwnerLaunchSpec as resolveOwnerLaunch };
 
+export function buildOwnerSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  directoryExists: (path: string) => boolean = existsSync,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    LIBGL_ALWAYS_SOFTWARE: platform === 'linux' ? '1' : baseEnv.LIBGL_ALWAYS_SOFTWARE,
+    PATH: withoutMissingPathEntries(baseEnv.PATH, directoryExists),
+    INVOKER_PRODUCTION_OWNER_SERVICE: '1',
+  };
+  for (const key of SLACK_ENV_VARS) delete env[key];
+  return env;
+}
+
 export function createInvokerLauncher(options: InvokerLauncherOptions): InvokerLauncher {
   let child: ChildProcess | undefined;
 
@@ -74,12 +89,7 @@ export function createInvokerLauncher(options: InvokerLauncherOptions): InvokerL
         }
       }
 
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        LIBGL_ALWAYS_SOFTWARE: process.platform === 'linux' ? '1' : process.env.LIBGL_ALWAYS_SOFTWARE,
-        PATH: withoutMissingPathEntries(process.env.PATH),
-      };
-      for (const key of SLACK_ENV_VARS) delete env[key];
+      const env = buildOwnerSpawnEnv(process.env);
 
       const spec = resolveHeadlessOwnerLaunchSpec({ repoRoot: options.repoRoot });
       const out = openSync(options.logPath, 'a');

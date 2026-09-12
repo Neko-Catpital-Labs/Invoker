@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pr_duplicate_close_exec import _compute_patch_id
+from pr_duplicate_close_exec import _compute_patch_id, _merged_pr_number_by_title
 from pr_duplicate_close_git_facts import GitFactsClient
 from pr_duplicate_close_model import CandidatePr
 
@@ -133,6 +133,33 @@ class UnfetchableBase(ComputePatchIdTestCase):
         pr = candidate(base_ref_name="this-branch-does-not-exist", head_ref_oid=head)
 
         self.assertIsNone(_compute_patch_id(self.client, pr))
+
+
+class FakeGh:
+    def __init__(self, merged: list[dict]):
+        self.merged = merged
+
+    def list_merged_prs(self, repo: str) -> list[dict]:
+        return self.merged
+
+
+class MergedPrNumberByTitle(unittest.TestCase):
+    def test_maps_title_to_number(self):
+        gh = FakeGh([{"number": 10820, "title": "No-Mergify observed CI repair (2) Repair failed observed checks"}])
+        result = _merged_pr_number_by_title(gh, "owner/repo")
+        self.assertEqual(result, {"No-Mergify observed CI repair (2) Repair failed observed checks": 10820})
+
+    def test_first_seen_wins_on_title_collision_among_merged_prs(self):
+        gh = FakeGh([
+            {"number": 200, "title": "dup title"},
+            {"number": 100, "title": "dup title"},
+        ])
+        result = _merged_pr_number_by_title(gh, "owner/repo")
+        self.assertEqual(result["dup title"], 200)
+
+    def test_skips_entries_missing_title_or_number(self):
+        gh = FakeGh([{"number": 0, "title": "no number"}, {"number": 5, "title": ""}])
+        self.assertEqual(_merged_pr_number_by_title(gh, "owner/repo"), {})
 
 
 if __name__ == "__main__":

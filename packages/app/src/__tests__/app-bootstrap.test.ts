@@ -45,6 +45,7 @@ describe('app-bootstrap', () => {
       platform: 'linux',
       enableTestCompositor: false,
       isHeadless: false,
+      hideE2eWindow: false,
     });
 
     expect(disableHardwareAcceleration).toHaveBeenCalledTimes(1);
@@ -80,13 +81,43 @@ describe('app-bootstrap', () => {
       platform: 'darwin',
       enableTestCompositor: false,
       isHeadless: true,
+      hideE2eWindow: false,
     });
 
     expect(setActivationPolicy).toHaveBeenCalledWith('accessory');
     expect(hideDock).toHaveBeenCalledTimes(1);
   });
 
-  it('does not hide the Dock for macOS GUI mode', () => {
+  it.each([
+    {
+      mode: 'default-hidden macOS E2E',
+      platform: 'darwin',
+      hideE2eWindow: true,
+      expectedPresentation: 'accessory',
+    },
+    {
+      mode: 'explicit-visible macOS E2E',
+      platform: 'darwin',
+      hideE2eWindow: false,
+      expectedPresentation: 'regular',
+    },
+    {
+      mode: 'production macOS',
+      platform: 'darwin',
+      hideE2eWindow: false,
+      expectedPresentation: 'regular',
+    },
+    {
+      mode: 'default-hidden non-macOS E2E',
+      platform: 'linux',
+      hideE2eWindow: true,
+      expectedPresentation: 'regular',
+    },
+  ] as const)('$mode selects $expectedPresentation app presentation', ({
+    platform,
+    hideE2eWindow,
+    expectedPresentation,
+  }) => {
     const recorder = createCommandLineRecorder();
     const setActivationPolicy = vi.fn();
     const hideDock = vi.fn();
@@ -102,13 +133,19 @@ describe('app-bootstrap', () => {
 
     configureEarlyElectronApp({
       app,
-      platform: 'darwin',
-      enableTestCompositor: false,
+      platform,
+      enableTestCompositor: true,
       isHeadless: false,
+      hideE2eWindow,
     });
 
-    expect(setActivationPolicy).not.toHaveBeenCalled();
-    expect(hideDock).not.toHaveBeenCalled();
+    if (expectedPresentation === 'accessory') {
+      expect(setActivationPolicy).toHaveBeenCalledWith('accessory');
+      expect(hideDock).toHaveBeenCalledTimes(1);
+    } else {
+      expect(setActivationPolicy).not.toHaveBeenCalled();
+      expect(hideDock).not.toHaveBeenCalled();
+    }
   });
 
   it('uses explicit isolated Electron userData when provided', () => {

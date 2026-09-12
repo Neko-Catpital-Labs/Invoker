@@ -1,4 +1,4 @@
-import type { RunnerKind } from '@invoker/workflow-graph';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, type RunnerKind } from '@invoker/workflow-graph';
 
 /**
  * A single routing rule that validates task pool placement against command patterns.
@@ -162,19 +162,23 @@ export function resolveExecutorRouting(
   defaultPoolId: string | undefined,
   rules: ExecutorRoutingRule[],
   availablePoolIds: Set<string>,
-): { poolId?: string; reason: ExecutorRoutingReason } {
-  if (defaultPoolId && availablePoolIds.size > 0 && !availablePoolIds.has(defaultPoolId)) {
+): { poolId: string; reason: ExecutorRoutingReason } {
+  const configuredDefaultPoolId = defaultPoolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID;
+  if (!configuredDefaultPoolId.trim() || !availablePoolIds.has(configuredDefaultPoolId)) {
     throw new Error(
-      `Task "${taskId}" cannot use defaultPoolId="${defaultPoolId}" because it is not defined in executionPools.`,
+      `Task "${taskId}" cannot use defaultPoolId="${configuredDefaultPoolId}" because it is not defined in executionPools.`,
     );
   }
 
-  const initialPoolId = planPoolId ?? defaultPoolId;
-  const initialReason: ExecutorRoutingReason = initialPoolId
-    ? { type: 'poolId', poolId: initialPoolId }
-    : { type: 'defaultWorktree' };
+  const initialPoolId = planPoolId ?? configuredDefaultPoolId;
+  const initialReason: ExecutorRoutingReason = { type: 'poolId', poolId: initialPoolId };
 
   if (!command || rules.length === 0) {
+    if (!initialPoolId.trim() || !availablePoolIds.has(initialPoolId)) {
+      throw new Error(
+        `Task "${taskId}" cannot use poolId="${initialPoolId}" because it is not defined in executionPools.`,
+      );
+    }
     return {
       poolId: initialPoolId,
       reason: initialReason,
@@ -214,6 +218,12 @@ export function resolveExecutorRouting(
     enforcementRules,
   );
 
+  if (!effectivePoolId.trim() || !availablePoolIds.has(effectivePoolId)) {
+    throw new Error(
+      `Task "${taskId}" cannot use poolId="${effectivePoolId}" because it is not defined in executionPools.`,
+    );
+  }
+
   return {
     poolId: effectivePoolId,
     reason,
@@ -224,7 +234,6 @@ export type ExecutorRoutingReason =
   | { type: 'dockerImage' }
   | { type: 'poolId'; poolId: string }
   | { type: 'routingRule'; poolId: string; pattern?: string; regex?: string }
-  | { type: 'defaultWorktree' }
   | { type: 'scratch' };
 
 export function buildExecutorRoutedPayload(

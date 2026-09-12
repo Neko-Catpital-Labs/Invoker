@@ -140,4 +140,36 @@ describe('WorkerDetailControl', () => {
 
     expect(screen.getByTestId('worker-detail-start-stop')).toHaveAttribute('data-action', 'stop');
   });
+
+  it('rescans a running worker when onTickWorker is provided', async () => {
+    const onTickWorker = vi.fn(async () => {});
+    render(
+      <WorkerDetailControl
+        worker={makeWorker()}
+        onStartWorker={vi.fn()}
+        onStopWorker={vi.fn()}
+        onTickWorker={onTickWorker}
+      />,
+    );
+
+    const rescan = screen.getByTestId('worker-detail-rescan');
+    expect(rescan).toHaveTextContent('Rescan');
+
+    fireEvent.click(rescan);
+
+    await waitFor(() => expect(onTickWorker).toHaveBeenCalledWith('pr-status'));
+  });
+
+  it('hides the rescan button for stopped workers', () => {
+    render(
+      <WorkerDetailControl
+        worker={makeWorker({ lifecycle: 'stopped', startable: true, stoppable: false })}
+        onStartWorker={vi.fn()}
+        onStopWorker={vi.fn()}
+        onTickWorker={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('worker-detail-rescan')).not.toBeInTheDocument();
+  });
 });

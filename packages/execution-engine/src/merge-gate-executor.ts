@@ -7,6 +7,7 @@ import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import type { MergeRunnerHost, MergeGateLineage } from './merge-runner.js';
 import { runMergeGateActionImpl, updateMergeGateMetadataIfCurrent } from './merge-runner.js';
+import { isInvokerRepoUrl } from './pr-authoring.js';
 
 interface MergeGateEntry extends BaseEntry {
   killed?: boolean;
@@ -51,7 +52,7 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     }, this.heartbeatIntervalMs);
 
     setImmediate(() => {
-      void this.run(handle, task, launchWorkspacePath);
+      void this.run(handle, task, launchWorkspacePath, workflow?.repoUrl);
     });
 
     return handle;
@@ -145,7 +146,7 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     }
   }
 
-  private async run(handle: ExecutorHandle, task: TaskState, launchWorkspacePath: string): Promise<void> {
+  private async run(handle: ExecutorHandle, task: TaskState, launchWorkspacePath: string, repoUrl?: string): Promise<void> {
     const entry = this.getEntry(handle);
     if (!entry || entry.completed || entry.killed) return;
 
@@ -158,6 +159,9 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
         handle.executionId,
         `[merge] Preparing gate workspace (cloning/provisioning; this can take a while on large repos)…\n`,
       );
+      if (isInvokerRepoUrl(repoUrl)) {
+        this.emitOutput(handle.executionId, `[merge] review-stack publisher skill=invoker-make-pr\n`);
+      }
       // Capture launch lineage so a stale (relaunched) run's direct metadata
       // write is suppressed.
       const lineage: MergeGateLineage = {

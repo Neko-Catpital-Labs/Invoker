@@ -1,0 +1,8 @@
+jobs:
+  playwright:
+    strategy:
+      matrix:
+        include:
+          - name: 1-of-1
+            files: >-
+              e2e/top.spec.ts
