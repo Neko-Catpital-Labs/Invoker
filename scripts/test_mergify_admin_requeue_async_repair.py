@@ -83,7 +83,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
         for plan, expected_task_ids, expected_merge_mode, expected_on_finish in (
             (checks_plan, ["repair", "normalize", "safe-push"], "manual", "none"),
             (rebase_plan, ["repair", "safe-push"], "manual", "none"),
-            (bot_thread_plan, ["repair", "safe-push"], "external_review", "pull_request"),
+            (bot_thread_plan, ["repair", "safe-push", "resolve-thread"], "external_review", "pull_request"),
         ):
             with self.subTest(plan=plan.plan_name):
                 doc = yaml.safe_load(plan.yaml_text)
@@ -225,9 +225,15 @@ class AsyncRepairPlanTests(unittest.TestCase):
         plan = async_repair.build_repair_bot_thread_plan(
             pr(), "tbot", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
+        doc = yaml.safe_load(plan.yaml_text)
+        self.assertEqual([task["id"] for task in doc["tasks"]], ["repair", "safe-push", "resolve-thread"])
+        self.assertEqual(doc["tasks"][2]["dependencies"], ["safe-push"])
         self.assertNotIn("--record-json-ledger", plan.yaml_text)
         self.assertNotIn("--json-kind", plan.yaml_text)
         self.assertIn("Thread: tbot", plan.yaml_text)
+        self.assertIn("Do not resolve the GitHub review thread", doc["tasks"][0]["prompt"])
+        self.assertIn("resolveReviewThread", doc["tasks"][2]["command"])
+        self.assertIn("refusing to resolve review thread before a pushed head change", doc["tasks"][2]["command"])
         self.assertNotIn("executionAgent", plan.yaml_text)
 
     def test_remote_safe_push_never_embeds_macos_owner_ledger_path(self):
