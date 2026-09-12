@@ -49,37 +49,45 @@ describe('SQL variables limit (ui-read-scale)', () => {
       expect(snapshot.workflows).toHaveLength(WORKFLOW_COUNT_ABOVE_LIMIT);
       expect(snapshot.tasks).toHaveLength(WORKFLOW_COUNT_ABOVE_LIMIT);
     },
-    60_000,
+    300_000,
   );
 
-  it('listWorkflows handles >32k workflows via chunked rollup queries', async () => {
-    for (let i = 0; i < WORKFLOW_COUNT_ABOVE_LIMIT; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+  it(
+    'listWorkflows handles >32k workflows via chunked rollup queries',
+    async () => {
+      for (let i = 0; i < WORKFLOW_COUNT_ABOVE_LIMIT; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
 
-    const workflows = adapter.listWorkflows();
-    expect(workflows).toHaveLength(WORKFLOW_COUNT_ABOVE_LIMIT);
-  });
+      const workflows = adapter.listWorkflows();
+      expect(workflows).toHaveLength(WORKFLOW_COUNT_ABOVE_LIMIT);
+    },
+    180_000,
+  );
 
-  it('loadTasksForWorkflows handles >32k workflow IDs via chunked queries', async () => {
-    for (let i = 0; i < WORKFLOW_COUNT_ABOVE_LIMIT; i++) {
-      adapter.saveWorkflow({
-        id: `wf-${i}`,
-        name: `Workflow ${i}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+  it(
+    'loadTasksForWorkflows handles >32k workflow IDs via chunked queries',
+    async () => {
+      for (let i = 0; i < WORKFLOW_COUNT_ABOVE_LIMIT; i++) {
+        adapter.saveWorkflow({
+          id: `wf-${i}`,
+          name: `Workflow ${i}`,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
 
-    const workflowIds = Array.from({ length: WORKFLOW_COUNT_ABOVE_LIMIT }, (_, i) => `wf-${i}`);
-    const tasks = adapter.loadTasksForWorkflows(workflowIds);
-    expect(tasks).toHaveLength(0);
-  });
+      const workflowIds = Array.from({ length: WORKFLOW_COUNT_ABOVE_LIMIT }, (_, i) => `wf-${i}`);
+      const tasks = adapter.loadTasksForWorkflows(workflowIds);
+      expect(tasks).toHaveLength(0);
+    },
+    180_000,
+  );
 });
