@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 
 import type { Orchestrator } from '@invoker/workflow-core';
-import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
+import { FailureClassifier, OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { buildAgentExitFailureDetail, cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
 import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT, type ExecutionAgent } from './agent.js';
@@ -763,7 +763,11 @@ bash "$AGENT_CMD_FILE"
         driver.processOutput(effectiveSessionId, stdout);
       }
       if (code === 0) resolve({ stdout, sessionId: effectiveSessionId });
-      else reject(createSshRemoteScriptError(code, stdout, stderr, 'remote_agent_fix'));
+      else {
+        const error = createSshRemoteScriptError(code, stdout, stderr, 'remote_agent_fix');
+        const failureClass = FailureClassifier.classifyAgentQuotaRefusal(`${stdout}\n${stderr}`);
+        reject(Object.assign(error, failureClass ? { failureClass } : {}));
+      }
     });
     child.on('error', (err) => reject(err));
   });
@@ -809,8 +813,10 @@ export function spawnAgentFixViaRegistry(
         resolve({ stdout: displayStdout, sessionId: effectiveSessionId });
       } else {
         promptTransport.cleanup();
+        const failureDetail = buildAgentExitFailureDetail(stdout, stderr, displayStdout);
+        const failureClass = FailureClassifier.classifyAgentQuotaRefusal(failureDetail);
         reject(Object.assign(
-          new Error(`${agent.name} fix exited with code ${code}: ${buildAgentExitFailureDetail(stdout, stderr, displayStdout)}`),
+          new Error(`${agent.name} fix exited with code ${code}: ${failureDetail}`),
           {
             sessionId: effectiveSessionId,
             exitCode: code,
@@ -819,6 +825,7 @@ export function spawnAgentFixViaRegistry(
             stdoutTail: tailText(stdout),
             stderrTail: tailText(stderr),
             cwd,
+            ...(failureClass ? { failureClass } : {}),
           },
         ));
       }

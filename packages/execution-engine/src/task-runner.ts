@@ -11,8 +11,8 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
-import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, scopePlanTaskId } from '@invoker/workflow-core';
-import type { Orchestrator, TaskState, ExperimentVariant, Attempt } from '@invoker/workflow-core';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, FailureClassifier, scopePlanTaskId } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState, ExperimentVariant, Attempt, FailureClass } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
@@ -98,6 +98,20 @@ import type {
   SelectedExecutor,
   WorktreeTargetDisplay,
 } from './task-runner-pool.js';
+
+function failureClassFromThrownError(err: unknown): FailureClass | undefined {
+  if (err && typeof err === 'object' && 'failureClass' in err) {
+    const failureClass = err.failureClass;
+    if (FailureClassifier.isUsageLimit(failureClass as FailureClass | undefined)) {
+      return failureClass as FailureClass;
+    }
+  }
+  return undefined;
+}
+
+function errorWithFailureClass(message: string, failureClass: FailureClass | undefined): Error {
+  return Object.assign(new Error(message), failureClass ? { failureClass } : {});
+}
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
@@ -673,6 +687,7 @@ export class TaskRunner {
         outputs: {
           exitCode: 1,
           error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+          failureClass: failureClassFromThrownError(err),
         },
       };
       const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
@@ -1480,6 +1495,7 @@ export class TaskRunner {
     const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
 
     const errors: string[] = [];
+    let failureClass: FailureClass | undefined;
     for (const agent of orderedAgents) {
       const skillPath = resolveSkillPathViaAgent(agent, 'make-pr');
       if (!skillPath) {
@@ -1534,6 +1550,7 @@ export class TaskRunner {
         this.logger.info(`[pr-authoring] body authored agent=${agent.name} validated`);
         return { body: result.body, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
+        failureClass ??= failureClassFromThrownError(err);
         errors.push(
           `${agent.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -1541,16 +1558,18 @@ export class TaskRunner {
     }
 
     if (strictReviewStack) {
-      throw new Error(
+      throw errorWithFailureClass(
         '[pr-authoring] All AI agents failed to author a review-stack PR body for the Invoker repo; '
           + `refusing canonical fallback (it cannot pass scripts/validate-pr-body.mjs). Errors: ${errors.join(' | ')}`,
+        failureClass,
       );
     }
 
     if (hasRepoChecker) {
-      throw new Error(
+      throw errorWithFailureClass(
         '[pr-authoring] target repo checker rejected every PR body; refusing canonical fallback. '
           + `Errors: ${errors.join(' | ')}`,
+        failureClass,
       );
     }
 
@@ -1613,6 +1632,7 @@ export class TaskRunner {
     });
 
     const errors: string[] = [];
+    let failureClass: FailureClass | undefined;
 
     for (const agent of orderedAgents) {
       const skillPath = resolveSkillPathViaAgent(agent, 'make-pr');
@@ -1730,6 +1750,7 @@ export class TaskRunner {
         );
         return { artifacts, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
+        failureClass ??= failureClassFromThrownError(err);
         const message = err instanceof Error ? err.message : String(err);
         logProgress('warn', `${agent.name} make-pr agent failed`, {
           agentName: agent.name,
@@ -1739,8 +1760,9 @@ export class TaskRunner {
       }
     }
 
-    throw new Error(
+    throw errorWithFailureClass(
       `make-pr skill is required to publish Invoker review stacks${errors.length > 0 ? `: ${errors.join(' | ')}` : ''}`,
+      failureClass,
     );
   }
 
