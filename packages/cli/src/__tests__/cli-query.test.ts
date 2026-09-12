@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SQLiteAdapter, type WorkflowSaveInput } from '@invoker/data-store';
@@ -7,6 +7,14 @@ import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
+
+const tempDirs: string[] = [];
+
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function captureProcessOutput() {
   let stdout = '';
@@ -75,6 +83,9 @@ describe('invoker-cli query', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
     if (previousInvokerDbDir === undefined) {
       delete process.env.INVOKER_DB_DIR;
     } else {
@@ -106,8 +117,30 @@ describe('invoker-cli query', () => {
     output.restore();
   });
 
+  it('forwards --filter to a live owner', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const filter = JSON.stringify({ op: 'eq', key: 'status', value: 'failed' });
+    const queryHandler = vi.fn(async (request: unknown) => {
+      expect(request).toEqual({ kind: 'cli-query', args: ['query', 'tasks', '--filter', filter] });
+      return { output: '[]\n' };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', queryHandler);
+    expect(await main(['query', 'tasks', '--filter', filter], { createMessageBus: () => bus })).toBe(0);
+    expect(queryHandler).toHaveBeenCalledTimes(1);
+    output.restore();
+  });
+
+  it('rejects a bare --filter', async () => {
+    const output = captureProcessOutput();
+    expect(await main(['query', 'tasks', '--filter'], { createMessageBus: () => new LocalBus() })).toBe(1);
+    expect(output.stderr).toContain('Missing value for --filter');
+    output.restore();
+  });
+
   it('uses INVOKER_DB_DIR for standalone read-only workflow queries', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-query-env-'));
+    const dbDir = makeTempDir('invoker-cli-query-env-');
     await seedDb(dbDir);
     process.env.INVOKER_DB_DIR = dbDir;
     const output = captureProcessOutput();
@@ -127,7 +160,7 @@ describe('invoker-cli query', () => {
   });
 
   it('applies --status and --workflow filters for standalone task queries', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-query-filter-'));
+    const dbDir = makeTempDir('invoker-cli-query-filter-');
     await seedDb(dbDir);
     process.env.INVOKER_DB_DIR = dbDir;
     const output = captureProcessOutput();
@@ -150,7 +183,7 @@ describe('invoker-cli query', () => {
   });
 
   it('prints only parseable JSON on stdout for empty standalone databases', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-query-empty-'));
+    const dbDir = makeTempDir('invoker-cli-query-empty-');
     process.env.INVOKER_DB_DIR = dbDir;
     const output = captureProcessOutput();
     const bus = new LocalBus();
@@ -160,6 +193,41 @@ describe('invoker-cli query', () => {
     expect(code).toBe(0);
     expect(JSON.parse(output.stdout)).toEqual([]);
     expect(output.stdout).toBe('[]\n');
+    output.restore();
+  });
+
+  it('delegates a capacity query to a live owner with the cli-query request shape', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const queryHandler = vi.fn(async (request: unknown) => {
+      expect(request).toEqual({
+        kind: 'cli-query',
+        args: ['query', 'capacity', '--output', 'json'],
+      });
+      return { output: '{"pools":[]}\n' };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', queryHandler);
+
+    const code = await main(['query', 'capacity', '--output', 'json'], { createMessageBus: () => bus });
+
+    expect(code).toBe(0);
+    expect(queryHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toBe('{"pools":[]}\n');
+    output.restore();
+  });
+
+  it('refuses a standalone capacity query with a clear live-owner-required error', async () => {
+    const dbDir = makeTempDir('invoker-cli-query-capacity-standalone-');
+    await seedDb(dbDir);
+    process.env.INVOKER_DB_DIR = dbDir;
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+
+    const code = await main(['query', 'capacity'], { createMessageBus: () => bus });
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain('query capacity requires a live owner');
     output.restore();
   });
 });

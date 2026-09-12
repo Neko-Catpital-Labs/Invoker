@@ -55,6 +55,7 @@ const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
 const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+const EMPTY_GRAPH_CLEAR_DELAY_MS = 250;
 const PANE_PAN_DRAG_THRESHOLD_PX = 6;
 const PANE_PAN_IMMEDIATE_STEP = 0.65;
 
@@ -415,7 +416,7 @@ function WorkflowGraphInner({
         pendingGestureEdgesRef.current = null;
         setRfNodes([]);
         setRfEdges([]);
-      }, 1500);
+      }, EMPTY_GRAPH_CLEAR_DELAY_MS);
       return;
     }
     if (emptyGraphClearTimerRef.current) {

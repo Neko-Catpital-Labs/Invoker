@@ -31,9 +31,16 @@ export type DelegationOutcome =
   | { kind: 'no-handler' }
   | { kind: 'protocol-error'; message: string };
 
-/** Type guard: returns true when the delegation was accepted by the owner. */
 export function isDelegated(outcome: DelegationOutcome): outcome is DelegationOutcome & { kind: 'delegated' } {
   return outcome.kind === 'delegated';
+}
+
+export function isTimeout(outcome: DelegationOutcome): outcome is DelegationOutcome & { kind: 'timeout' } {
+  return outcome.kind === 'timeout';
+}
+
+export function isNoHandler(outcome: DelegationOutcome): outcome is DelegationOutcome & { kind: 'no-handler' } {
+  return outcome.kind === 'no-handler';
 }
 
 function delegationLog(message: string): void {
@@ -87,6 +94,7 @@ export async function tryDelegateResume(
 function usesExtendedDelegationTimeout(command: string): boolean {
   return command === 'rebase-retry'
     || command === 'rebase-recreate'
+    || command === 'retry-task'
     || command === 'restart'
     || command === 'start-ready';
 }
@@ -125,9 +133,11 @@ export async function resolveDelegationTimeoutMs(args: string[]): Promise<number
   if (!usesExtendedDelegationTimeout(command)) {
     return DEFAULT_DELEGATION_TIMEOUT_MS;
   }
-  // start-ready is global (no workflow arg) but recreates/starts many workflows.
   if (command === 'start-ready') {
     return startReadyDelegationTimeoutMs(args);
+  }
+  if (command === 'retry-task') {
+    return WORKFLOW_DELEGATION_TIMEOUT_MS;
   }
   return looksLikeWorkflowId(args[1])
     ? WORKFLOW_DELEGATION_TIMEOUT_MS

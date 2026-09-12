@@ -33,7 +33,6 @@ function makeWorkerDeps(repoRoot: string, token: string): unknown {
     persistence: { enqueueWorkflowMutationIntent: vi.fn(() => 1) },
     invokerConfig: {
       prMaintenance: {
-        enabled: true,
         repoRoot,
         lockPath: join(repoRoot, 'pr-crons.lock'),
         env: { INVOKER_PR_TEST_TOKEN: token },

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults, assertNoDuplicateTaskIds } from '../plan-parser.js';
+import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults, assertNoDuplicateTaskIds, assertRepoUrlCloneable } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -99,6 +99,49 @@ tasks:
     execFileSyncSpy.mockRestore();
   });
 
+  it('survives a single transient failure of the remote clone probe', () => {
+    // Matches the real incident: a momentary git/network blip made
+    // assertRepoUrlCloneable's one-shot probe permanently wedge a PR's
+    // repair claim, because the caller's own error-recovery path also
+    // depends on the same infra and silently swallowed its own failure.
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync');
+    execFileSyncSpy.mockImplementationOnce(() => {
+      const err = new Error('git ls-remote failed');
+      (err as { stderr?: Buffer }).stderr = Buffer.from('fatal: unable to access: transient network error');
+      throw err;
+    });
+    execFileSyncSpy.mockImplementationOnce(() => Buffer.from(''));
+
+    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).not.toThrow();
+    expect(execFileSyncSpy).toHaveBeenCalledTimes(2);
+    execFileSyncSpy.mockRestore();
+  });
+
+  it('allows a remote clone probe the same 30-second network budget as remote doctor', () => {
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockReturnValue(Buffer.from(''));
+
+    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).not.toThrow();
+    expect(execFileSyncSpy).toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', '--exit-code', '--', 'https://github.com/example/repo.git', 'HEAD'],
+      expect.objectContaining({ timeout: 30_000 }),
+    );
+    execFileSyncSpy.mockRestore();
+  });
+
+  it('surfaces the real git error after all retry attempts are exhausted', () => {
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+      const err = new Error('git ls-remote failed');
+      (err as { stderr?: Buffer }).stderr = Buffer.from('fatal: could not resolve host: github.com');
+      throw err;
+    });
+
+    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).toThrow(
+      'fatal: could not resolve host: github.com',
+    );
+    execFileSyncSpy.mockRestore();
+  });
+
   it('accepts a file:// checkout URL for the local workspace', async () => {
     vi.restoreAllMocks();
     const { pathToFileURL } = await import('node:url');
@@ -176,6 +219,22 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow('mergeMode: "no_op"');
   });
 
+  it('rejects the incident plan that pairs onFinish none with external review', () => {
+    const yaml = `
+name: Hidden Publication Incident
+repoUrl: git@github.com:test/repo.git
+baseBranch: master
+onFinish: none
+mergeMode: external_review
+tasks:
+  - id: reflect
+    description: Apply one accepted reflection item
+    command: echo "reflect"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/external_review.*onFinish: none/);
+  });
+
   it('rejects a scratch plan task that sets poolId', () => {
     const yaml = `
 name: Bad Scratch Pool Plan
@@ -188,6 +247,67 @@ tasks:
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow(/dockerImage.*poolId/);
+  });
+
+  it('parses and deterministically normalizes task freshness', () => {
+    const plan = parsePlan(`
+name: Freshness Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    freshness:
+      watchPaths: [" packages/z.ts ", packages/a.ts, packages/a.ts]
+      pathPreconditions:
+        - path: generated/output.json
+          expected: absent
+        - path: packages/a.ts
+          expected: present
+      guardedBehaviorIds: [z_guard, a-guard, a-guard]
+`);
+
+    expect(plan.tasks[0].freshness).toEqual({
+      watchPaths: ['packages/a.ts', 'packages/z.ts'],
+      pathPreconditions: [
+        { path: 'generated/output.json', expected: 'absent' },
+        { path: 'packages/a.ts', expected: 'present' },
+      ],
+      guardedBehaviorIds: ['a-guard', 'z_guard'],
+    });
+  });
+
+  it('keeps omitted task freshness omitted', () => {
+    const plan = parsePlan(`
+name: Legacy Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+`);
+
+    expect(plan.tasks[0]).not.toHaveProperty('freshness');
+  });
+
+  it.each([
+    ['unknown field', 'freshness: { unknown: true }', /unsupported field "unknown"/],
+    ['absolute watch path', 'freshness: { watchPaths: ["/tmp/out"] }', /repo-relative path/],
+    ['invalid expectation', 'freshness: { pathPreconditions: [{ path: out.txt, expected: maybe }] }', /present.*absent/],
+    ['invalid behavior id', 'freshness: { guardedBehaviorIds: ["bad id"] }', /identifier/],
+  ])('rejects invalid task freshness: %s', (_label, freshnessYaml, expected) => {
+    const yaml = `
+name: Bad Freshness Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    ${freshnessYaml}
+`;
+
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(expected);
   });
 
   it('does not require repoUrl to be cloneable when scratch: true is set', async () => {
