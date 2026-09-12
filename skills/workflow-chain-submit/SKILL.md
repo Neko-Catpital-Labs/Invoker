@@ -1,5 +1,6 @@
 ---
 name: workflow-chain-submit
+category: core
 description: >
   Submit a workflow chain headlessly, where each workflow is gated on the
   previous workflow's merge gate.
