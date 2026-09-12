@@ -11,7 +11,7 @@ import { SshExecutor } from '../ssh-executor.js';
 import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
-import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
+import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
 import { createAutoCompleteExecutor } from './helpers/task-runner-fixtures.js';
 
@@ -2203,6 +2203,26 @@ describe('TaskRunner', () => {
         /^\[pr-authoring\] target repo checker rejected every PR body; refusing canonical fallback/,
       );
       await expect(outcome).rejects.toThrow(/catstack checker: missing ## Why section/);
+    });
+
+    it('authorPrBodyWithSkill uses canonical fallback when the repo checker accepts the fallback body', async () => {
+      const cwd = createRepoCheckerWorkspace(
+        [
+          "import { readFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          "const body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');",
+          "const ok = body.includes('## Summary') && body.includes('## Test Plan') && body.includes('## Revert Plan');",
+          "process.exit(ok ? 0 : 1);",
+          '',
+        ].join('\n'),
+      );
+
+      const result = await authorNonInvokerBody('## Summary\n\nOnly summary', cwd);
+
+      expect(result.agentName).toBe('canonical');
+      expect(result.sessionId).toBe('canonical-fallback');
+      expect(result.body).toContain('## Test Plan');
+      expect(result.body).toContain('## Revert Plan');
     });
 
     it('authorPrBodyWithSkill returns the agent body when a non-Invoker repo checker accepts it', async () => {
@@ -5403,9 +5423,16 @@ describe('TaskRunner', () => {
       });
 
       expect(body).toContain('## Summary');
+      expect(body).toContain('## Review Claim');
+      expect(body).toContain('## Review Lane');
+      expect(body).toContain('## Review Unit');
+      expect(body).toContain('## Safety Invariant');
+      expect(body).toContain('## Slice Rationale');
+      expect(body).toContain('## Non-goals');
       expect(body).toContain('## Test Plan');
       expect(body).toContain('## Revert Plan');
       expect(validateCanonicalPrBody(body)).toEqual([]);
+      expect(validateReviewStackPrBody(body)).toEqual([]);
     });
 
     it('canonical fallback uses workflowDescription over workflowSummary when available', () => {
