@@ -40,6 +40,7 @@ import { basename, extname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import aws4 from 'aws4';
 import { syncStackCommentsForPr } from './sync-stack-comments.mjs';
 import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, validatePrBody } from './validate-pr-body.mjs';
@@ -468,6 +469,21 @@ function gitExitStatus(args) {
   } catch (error) {
     if (typeof error.status === 'number') return error.status;
     throw error;
+  }
+}
+
+function printSiblingPrOverlaps(baseRef) {
+  const scriptPath = fileURLToPath(new URL('./check-sibling-prs.mjs', import.meta.url));
+  try {
+    const output = execFileSync(process.execPath, [scriptPath, '--base', baseRef], {
+      encoding: 'utf-8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (output) process.stdout.write(output);
+  } catch (error) {
+    const stderr = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+    const reason = stderr ? stderr.split('\n')[0] : error.message;
+    console.log(`sibling-pr check could not run: ${reason}`);
   }
 }
 
@@ -1120,6 +1136,7 @@ async function main() {
   // injection, immediately before any push or GitHub PR mutation.
   await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles, diffText });
   printPrBodyWarnings(body, changedFiles, diffText);
+  printSiblingPrOverlaps(atomicityBaseRef);
 
   if (!nwo) {
     nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
