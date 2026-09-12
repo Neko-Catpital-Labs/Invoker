@@ -15,20 +15,46 @@ const AGENT_ENV_KEYS = new Set([
   'KIMI_API_KEY',
 ]);
 
+/** Linear keys always forwarded from secretsFile when present (independent of useApiKey). */
+export const LINEAR_ENV_KEYS = new Set([
+  'LINEAR_API_KEY',
+  'INVOKER_LINEAR_API_KEY',
+]);
+
 function shellQuote(value: string): string {
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
-export function loadRemoteAgentEnv(secretsFile: string | undefined, useApiKey: boolean): Record<string, string> {
-  if (!useApiKey) return {};
-
-  const env: Record<string, string> = {};
+function entriesFromSecretsFile(secretsFile: string | undefined): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
   for (const entry of loadSecretsFile(secretsFile)) {
     const eq = entry.indexOf('=');
     if (eq <= 0) continue;
-    const key = entry.slice(0, eq);
+    out.push([entry.slice(0, eq), entry.slice(eq + 1)]);
+  }
+  return out;
+}
+
+/**
+ * Load Linear API keys from secretsFile whenever the file is set.
+ * Independent of useApiKey so file-linear command tasks can run on any host.
+ */
+export function loadLinearEnv(secretsFile: string | undefined): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of entriesFromSecretsFile(secretsFile)) {
+    if (!LINEAR_ENV_KEYS.has(key)) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
+export function loadRemoteAgentEnv(secretsFile: string | undefined, useApiKey: boolean): Record<string, string> {
+  const env: Record<string, string> = { ...loadLinearEnv(secretsFile) };
+  if (!useApiKey) return env;
+
+  for (const [key, value] of entriesFromSecretsFile(secretsFile)) {
     if (!AGENT_ENV_KEYS.has(key)) continue;
-    env[key] = entry.slice(eq + 1);
+    env[key] = value;
   }
 
   return env;

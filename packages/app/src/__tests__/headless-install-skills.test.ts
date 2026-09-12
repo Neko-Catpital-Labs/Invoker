@@ -16,6 +16,9 @@ function makeStatus() {
     mcpTargets: [
       { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/mcp.json', available: true, installed: true, upToDate: true, serverName: 'invoker' },
     ],
+    instructionTargets: [
+      { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/rules/invoker-execution-precedence.mdc', available: true, installed: true, upToDate: true, installedInstructionNames: ['invoker-execution'] },
+    ],
   };
 }
 
@@ -39,8 +42,22 @@ describe('headless install-skills', () => {
     expect(output).toContain('Skill target (Codex): /tmp/.codex/skills');
     expect(output).toContain('Command target (OMP): /tmp/.omp/agent/commands');
     expect(output).toContain('MCP target (OMP): /tmp/.omp/agent/mcp.json');
+    expect(output).toContain('Instruction target (Cursor): /tmp/.cursor/rules/invoker-execution-precedence.mdc');
     expect(output).toContain('- invoker-plan-to-invoker');
     expect(output).toContain('- invoker-make-pr');
+  });
+
+  it('prints Uninstalled when install-skills uninstall runs', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const installBundledSkills = vi.fn(() => makeStatus());
+
+    await runHeadless(['install-skills', 'uninstall'], {
+      installBundledSkills,
+    } as unknown as HeadlessDeps);
+
+    expect(installBundledSkills).toHaveBeenCalledWith('uninstall');
+    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+    expect(output).toContain('Uninstalled 2 bundled AI helpers with prefix "invoker-".');
   });
 
   it('throws a clear error when helper installation is unavailable', async () => {
@@ -49,13 +66,48 @@ describe('headless install-skills', () => {
     );
   });
 
+  it('forwards a named category value to the dependency call', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const installBundledSkills = vi.fn(() => makeStatus());
+
+    await runHeadless(['install-skills', 'install', 'core'], {
+      installBundledSkills,
+    } as unknown as HeadlessDeps);
+
+    expect(installBundledSkills).toHaveBeenCalledWith('install', 'core');
+  });
+
+  it('forwards the other named category value to the dependency call', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const installBundledSkills = vi.fn(() => makeStatus());
+
+    await runHeadless(['install-skills', 'reinstall', 'optimization'], {
+      installBundledSkills,
+    } as unknown as HeadlessDeps);
+
+    expect(installBundledSkills).toHaveBeenCalledWith('reinstall', 'optimization');
+  });
+
+  it('omits the category argument when none is supplied, keeping prior call shape', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const installBundledSkills = vi.fn(() => makeStatus());
+
+    await runHeadless(['install-skills', 'install'], {
+      installBundledSkills,
+    } as unknown as HeadlessDeps);
+
+    expect(installBundledSkills).toHaveBeenCalledWith('install');
+    expect(installBundledSkills.mock.calls[0]).toHaveLength(1);
+  });
+
   it('documents helper installation and OMP agent selection in help output', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
     await runHeadless(['--help'], {} as HeadlessDeps);
 
     const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
-    expect(output).toContain('install-skills [install|update|reinstall]          Install bundled Invoker AI helpers');
+    expect(output).toContain('install-skills [install|update|reinstall');
+    expect(output).toMatch(/install-skills\s+uninstall/);
     expect(output).toContain('set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)');
   });
 });

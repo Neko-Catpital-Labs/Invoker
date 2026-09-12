@@ -32,7 +32,7 @@ export type ReconcileOrphanedInFlightTasksOptions = {
 
 export const OWNER_RESTART_REASON = 'Owner restart';
 
-function deriveOrphanReason(
+export function deriveOrphanReason(
   taskId: string,
   persistence: ShutdownDiagnosticDb | null | undefined,
   fallbackReason: string,

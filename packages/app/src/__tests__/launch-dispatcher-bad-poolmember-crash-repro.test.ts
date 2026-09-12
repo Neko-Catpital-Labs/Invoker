@@ -30,6 +30,7 @@ describe('LaunchDispatcher + real TaskRunner: bad poolMemberId does not crash th
       persistence: persistence as any,
       messageBus: new InMemoryBus(),
       maxConcurrency: 4,
+      availablePoolIds: ['mixed-local-ssh'],
     });
 
     orchestrator.loadPlan({

@@ -1,12 +1,17 @@
 ---
 name: plan-to-invoker
+category: core
 description: >
-  Convert a plan into an Invoker YAML plan file. Trigger: "convert to invoker",
-  "submit to invoker", "create invoker plan", "invoker-plan-to-invoker",
-  "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
-  Invoker tasks. For benchmark/direct-output prompts with "Required output path",
-  write a complete YAML document directly to that literal path; it must start
-  with top-level name, onFinish, mergeMode,
+  Convert a plan into an Invoker YAML plan file. After `install-skills`, this
+  routing is always on via Cursor `~/.cursor/rules/invoker-execution-precedence.mdc`,
+  a Codex AGENTS.md marked block, and a Claude UserPromptSubmit hook.
+  One-slice same-repo edits stay local; multi-layer or multi-PR work goes through this
+  skill (then chat-submit / auto_submit after the completeness gate) unless the user says "do it locally". Uninstall with `install-skills uninstall`. Trigger: "convert to invoker",
+  "submit to invoker", "create invoker plan",
+  "invoker-plan-to-invoker", "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
+  Invoker tasks. For benchmark/direct-output prompts with
+  "Required output path", write a complete YAML document directly
+  to that literal path; it must start with top-level name, onFinish, mergeMode,
   repoUrl (or scratch: true for no-repo mode), and tasks, never version or metadata wrappers,
   and must not scan, validate, submit, or discover env vars.
 ---
@@ -52,7 +57,7 @@ tasks:
     dependencies: []
 ```
 
-For implementation benchmark plans, switch `onFinish` and `mergeMode` only when the prompt clearly requires a PR/submission workflow, and include task metadata from the prompt itself rather than discovering local references.
+For implementation benchmark plans, use `onFinish: pull_request` with the target repository's normal merge mode. Use `onFinish: none` only for verification-only workflows; never silently downgrade an implementation plan to no PR.
 
 ## Harness handoff mode
 
@@ -60,16 +65,36 @@ Use this mode when invoked by the installed command or MCP prompt.
 
 > **Not this mode:** Slack `plan:` and agent threads use a separate, orchestrator-owned Slack plan submission path. Do not invoke the CLI or MCP handoff tools from those threads.
 
+### Local vs remote Invoker
+
+Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP, or SSH alias, follow [references/local-vs-remote-mcp.md](references/local-vs-remote-mcp.md) before prepare/submit: probe SSH, rewrite harness MCP only on success, never clobber local on failure. “Local” / “this machine” restores local MCP. Do not invent HTTP/SSE MCP.
+
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
+- Show `plans/invoker-handoff.md` (or the ordered step list, one line per workflow) in chat before the approval question. Never label more than one `AskUserQuestion` option "(Recommended)"; a question with two recommended options is not a review.
+- Pilot one head before fan-out: when more than one workflow is generated from one template or chain, submit ONE head workflow first, confirm with `invoker-cli query tasks --workflow <id>` that its implement task reaches `running` with an agent session, and only then submit the rest. A template defect replicates into every workflow submitted from it; reflect session 4db2ca74 approved 11 workflows in one 22-second question and had two template defects (`test -- --run` in 8 files, "existing" on create lines in 5 files) in all of them before any feedback.
+- Before prepare/submit, run `bash skills/plan-to-invoker/scripts/check-planning-completeness.sh <plan-file>` (also part of `skill-doctor`). Incomplete Goal / Motivation / Safety invariant / repoUrl / Verify, or leftover `REPLACE_ME`, must be clarified on the intake surface — do not submit. Any task whose description or prompt carries a `Safety invariant:` heading must also carry a real `Effectiveness measurement:` heading (how success is measured beyond fixture e2e) — missing or placeholder values fail the gate the same way.
+- **Baseline evidence claims:** the completeness gate rejects a present-tense claim that the current baseline, suite, tests, or checks are green unless the plan carries fresh evidence. Three authoring forms pass: (1) a trusted `verificationEvidence` receipt (`version: 2`, `trust: trusted`, with an `attestation`) whose `receipt` is a passed `deterministic_command` bound to the plan's `baseCommitSha`, recorded within 24 hours, with `exitCode: 0` and non-empty `output`; (2) a line that starts with `UNVERIFIED:` — the marker must begin the line, an inline `Note: UNVERIFIED: ...` does not qualify the claim; (3) wording that states future intent or a repair dependency instead of a present fact, such as `Keep the suite green after the change.` or `A baseline-repair task must run before the green baseline can be verified.` Planner-supplied receipts without trusted provenance never satisfy the gate.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
-- Plain approval stops after workflow handoff: treat approval of the Markdown/YAML plan as authorization to submit the reviewed workflow plan to Invoker only, then report the submitted workflow status and stop. Stop after `invoker_submit_plan` or the documented `invoker-cli run ... --live` fallback; do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
-- Later PR publication is a separate explicit action. When the user separately asks about creating, updating, publishing, or splitting pull requests or PR stacks after workflow handoff, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
+- Approval authorizes the reviewed plan's declared `onFinish` outcome. Generated implementation plans default to `onFinish: pull_request`, so approval includes pushing the prepared branch and creating or updating the GitHub PR/stack. Implementation workflows default to `onFinish: pull_request` with the target repository's normal merge mode. Verification-only workflows use `onFinish: none` and publish nothing. Never silently downgrade an implementation plan to no PR; `onFinish: merge` authorizes only the merge behavior shown in the reviewed plan, and never broaden beyond that reviewed outcome.
+- After `invoker_submit_plan` (or the documented `invoker-cli run ... --live` fallback), do **not** abandon the session: arm `invoker-cli wait <workflowId>` with `notify_on_output` on `^INVOKER_WAKE`, then **end the turn**. On wake, continue the parent job from Invoker status (ops on blockers; complete the reviewed `onFinish` outcome on success).
+- Before branch or PR/stack publication implied by `onFinish: pull_request` or `onFinish: merge`, read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available). This is the publication procedure, not a second authorization gate.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
+### Self-triggered delegation routing (agents and subagents)
+
+Use `confirmationMode` to distinguish who decided the hand-off should happen:
+
+- **Self-triggered delegation: confirmationMode: auto_submit** — the agent or subagent itself decided, mid-task and without a direct human instruction, that a chunk of work should be handed off to Invoker. No human message asked for this specific hand-off; it's the agent's own routing choice. In this case, skip the Slack review-card wait and call `invoker_submit_plan` once `invoker_prepare_plan_review` reports `confirmationMode: auto_submit` **and** `check-planning-completeness.sh` passed. Incomplete plans stay on the native surface (AskQuestion / Slack question / Linear comment).
+- **Human-triggered delegation: confirmationMode: require** — a human's message is the direct request to hand off or send work to Invoker. Today's `require` + human-approval flow is unchanged: show the ordered steps and `confirmationText`, and wait for explicit approval before calling `invoker_submit_plan`. Completeness still must pass first.
+
+In both paths, the delegating agent chooses `poolId` best-effort per `references/schema.md` (an existing field) — omit it for the local default when unsure. `skill-doctor.sh` still runs against the generated plan in both paths; self-triggered delegation changes who approves the submission, not the validation gate.
+
 ## Intended flow (do not skip steps)
+
+**Current auto-fix schema:** Never emit `autoFix` or `autoFixRetries` at the plan, workflow, or task level. Those YAML fields are obsolete. Auto-fix retries are configured only with `autoFixRetries` in `~/.invoker/config.json`. A draft containing either YAML field must be corrected and re-run through `skill-doctor.sh`; do not present or submit it.
 
 1. Discuss scope/risk with the user; before authoring YAML, propose each
    `Safety invariant:` and ask the user to confirm or correct it. If the work
@@ -77,13 +102,17 @@ Use this mode when invoked by the installed command or MCP prompt.
    acknowledgment: confirm with the user whether the plan should use
    `scratch: true` (tasks run in a plain temp directory, no git involved,
    `onFinish: none` + `mergeMode: no_op` required) or a real `repoUrl`.
-2. Phase 1a static analysis.
+2. Phase 1a static analysis, including the class-search below.
 3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts — prefer rendering a matching formula (`skills/plan-to-invoker/formulas/`) and specializing its slots over authoring the shape from scratch.
 5. Validate with deterministic scripts.
-6. Present plan and submit on confirmation. That confirmation authorizes workflow handoff only; later PR publication requires a separate explicit request.
+6. Present plan and submit on confirmation. That confirmation authorizes the reviewed `onFinish` outcome; implementation plans default to GitHub publication through `onFinish: pull_request` without a second approval prompt. For a chain or several template-derived workflows, the first submission is one head only; fan out after its implement task is `running` with an agent session.
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
+
+**Class-search (Phase 1a, required before any root-cause claim or premise):** run `git log --oneline --all --grep=<symptom>`, `git log --all -S <token>`, and `gh pr list --search <symptom> --state all` per the repo `CLAUDE.md` rule. Then, regardless of whether anything above looked relevant, report a separate heading:
+
+**Open PRs touching plan intake / validation / freshness / preflight** — the output of `gh pr list --search "<freshness|preflight|validate-plan|plan-parser>" --state open`, listed in full with one line each on what it means for this submission. These PRs change how the owner will process the plan, not whether the bug exists, so "zero relevant" is never a valid summary of them. Reflect session 4db2ca74 binned #11489 and the typed-freshness stack (#11557-#11561, #11579, #11594, #11631) as "zero relevant" and then spent 41 minutes rediscovering the prose freshness gate those PRs were replacing.
 
 **Deterministic validation gate:** Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface, backed by `bash scripts/test-plan-to-invoker-skill.sh` for regression coverage. Schema-only validation or ad hoc individual script checks are not sufficient as the review gate, because they can miss strict atomicity, zero-context prompt, policy coverage, and final-gate failures. Individual validator scripts remain fallback diagnostics only; they are not submission proof unless `skill-doctor.sh` has already passed or a waiver is explicitly recorded.
 
@@ -99,6 +128,18 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Delegated task hints (hard requirement for implementation plans):** For plans with `onFinish != none`, every prompt task must include `Files:`, `Change types:`, and `Acceptance criteria:` sections in `description`. Prompt text must be zero-context executable: assume no prior chat knowledge, include deterministic pass/fail expectations, and keep instructions self-contained. Verify-only plans (`onFinish: none`) keep delegation hints advisory.
 
+**Optional structured freshness:** Freshness metadata is optional. When explicit freshness data is available, add it under the task's `freshness` object with `watchPaths`, `pathPreconditions`, and/or `guardedBehaviorIds`; omit it otherwise. Keep task descriptions as authored prose: structured metadata supplements the prose and does not replace or rewrite it. Do not derive freshness from task prose through post-generation extraction or a semantic regex.
+
+```yaml
+tasks:
+  - id: implement
+    description: Preserve this task prose.
+    freshness:
+      watchPaths: [packages/app/src]
+      pathPreconditions: [{path: packages/app/src, expected: present}]
+      guardedBehaviorIds: [plan-authoring]
+```
+
 **File-count sizing guidance (soft):** Treat any "about 10 files" guidance as a reviewability heuristic, not a hard constraint. Prefer smaller slices when practical, but allow broader edits when correctness, shared wiring, or coupled refactors require it.
 
 **Dependency-first layered decomposition (required for implementation plans):** For plans whose `onFinish` is not `none`, every implementation task must include `Layer:` and `Feature state:` headings in `description`. Use normalized layer names (`persistence`, `domain`, `transport`, `api`, `contact_surface`, `app_bridge`, `owner_delegation`, `ui_activation`, `app_regression`, `e2e_regression`, `ui`, `docs`) and feature state values (`active` or `dormant`). `dormant` tasks must still include `Acceptance criteria:` in `description`. Verify-only plans (`onFinish: none`) are exempt from this hard requirement.
@@ -107,11 +148,15 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
 
+**Handoff absence gate (hard requirement for implementation plans):** For plans whose `onFinish` is not `none` and that do not set `scratch: true`, `tasks:` must include a shell command task with id exactly `scrub-handoff-artifacts`. That task must depend on every leaf task (any task nothing else depends on) so it runs after every implement/verify task completes, and its `command` must run `scripts/scrub-handoff-artifacts.sh` without `--apply` (or an equivalent read-only handoff-artifact check). The terminal gate may only fail when ephemeral inter-task files (e.g. `candidates.json`, `research-*.json`, `lens-*.json`, `plans/invoker-handoff.{md,yaml}`) remain; it must never delete files, alter the index, or commit caller work. Never point this task at the home Invoker `ledger.json`. `onFinish: none` and `scratch: true` plans are exempt. This is a hard requirement enforced by `lint-task-atomicity.sh`.
+
+**Inter-task file carry (hard):** Downstream Invoker tasks get fresh worktrees from **committed** history only. If task B must see files produced by task A, task A MUST `git add` / `git commit` those paths on the task branch (or both produce+consume must live in one command task). Uncommitted local paths under `work/`, `state/artifacts/`, caches, and similar do **not** flow across task dependencies. Object-store / remote artifact APIs are OK when the plan names them explicitly; silent "same machine path" handoff is not. Prefer a single command that both writes and reads ephemeral local state, or commit an allowed tracked path (for example under `docs/` / `outputs/`) before the dependent task. Enforced as a footgun lint in `lint-task-atomicity.sh` (carve-out: `scratch: true`). See `references/task-patterns.md` § *Inter-task file carry*.
+
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. Never reference local-only repo files unless they are already checked into the branch the plan will run on. Use repo-relative paths like `scripts/...`; do not use parent-directory paths like `../../..`. `skill-doctor` rejects repo-relative references to files that exist locally but are not in `HEAD`, rejects parent-directory references, and rejects missing shell scripts used by command tasks, instead of silently treating local-only proof as valid. See `references/task-patterns.md` § *Bugfix repro*.
 
 **Stateful bug lifecycle matrix:** When a bug involves conversation, session, file, cache, or workflow state, Phase 1a must enumerate the transitions that can lose or reuse state. The implementation plan must verify at least one non-happy-path sequence, such as plan creation → intervening message → summary-only reply → authorization/submit. If the state type is shared by multiple surfaces, include a verification case for each affected surface or record why it is unaffected.
 
-**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), be explicit that any later GitHub PR publishing should use **Mergify Stacks** after the work is ready: keep `onFinish: pull_request` + `mergeMode: external_review` during workflow handoff. PR publication still requires a separate explicit request; then publish/update the resulting commit stack with `mergify stack push`. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
+**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), approved implementation plans use **Mergify Stacks** for their declared GitHub publication outcome: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push`. Do not ask again after the work is ready. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
 
 **Review-gate artifact intent:** Plans may include optional top-level `reviewGate.artifacts` metadata to describe an ordered review PR stack. Each artifact needs a unique `id`; `required` defaults to `true` when omitted; the first artifact has no dependency; every later artifact must depend on exactly the immediately previous artifact. Do not use fixed PR-count fields or Mergify-specific fields in the plan YAML. This metadata does not affect scheduler readiness, task dependencies, or workflow `externalDependencies`.
 
@@ -162,9 +207,14 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so stack slices are validated with stack context. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings directly in prompt text, and cross-layer dependency-direction violations.
+  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so stack slices are validated with stack context. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings directly in prompt text, cross-layer dependency-direction violations, and (unless `scratch: true`) a missing `scrub-handoff-artifacts` terminal task per the Handoff absence gate above.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
+5a. `step-presubmit-traps` (required before any submit; not yet part of `skill-doctor`)
+   `node skills/plan-to-invoker/scripts/freshness-check.mjs --ref origin/<baseBranch> . <plan-file>` must print `current` for every prompt task; a `STALE -> needs_input` line is the owner's launch-time verdict, fix the clause before submitting.
+   `node skills/plan-to-invoker/scripts/unit-triggers.mjs <plan-file>` must exit 0; on a hit it prints the section line that trips each review unit.
+   `grep -n "test -- --run" <plan-file>` must print nothing.
+   See `references/task-patterns.md` § *Traps that cost a resubmit*.
 
 ### Workflow steps after validation
 
@@ -179,18 +229,21 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 10. `step-submit-standalone-waived` (exception path)
     Use only for verify-only plans, explicitly requested single-workflow plans, or implementation plans that satisfy the `Standalone workflow waiver:` rule.
     `./submit-plan.sh <plan-file>`
-    Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
+    Complete the reviewed `onFinish` outcome after workflow execution. For approved Invoker implementation plans, publish the prepared stack with `mergify stack push` from the working branch after the commits are ready.
 10a. `step-submit-stacked` (single plan with upstream dependency)
+     **Stacked onto WF-X** means both: `externalDependencies` on WF-X `__merge__` **and** `baseBranch == WF-X.featureBranch`. A concrete extDep alone is gate-only wait, not a branch stack.
      Use when the plan HAS `externalDependencies` with a concrete workflow ID (not `__UPSTREAM_WORKFLOW_ID__`).
      1. Query upstream workflow: `./run.sh --headless query workflows --output json | jq '.[] | select(.id == "<workflowId>")'`
      2. Extract the upstream workflow's `featureBranch`
      3. Rewrite baseBranch: `sed -E -i "s|^baseBranch:.*$|baseBranch: <featureBranch>|" <plan-file>`
      4. Submit: `./submit-plan.sh <plan-file>`
-     5. Stop after workflow handoff unless the user separately asks for PR publication. If the target repo is Invoker itself and that later request is explicit, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
+     5. Complete the reviewed `onFinish` outcome. For approved Invoker implementation plans, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
+     Prefer `./scripts/submit-workflow-chain.sh --onto-workflow <WF-X>` (or auto-detect) when submitting a chain whose head attaches to an already-running upstream.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
      Default path for implementation work with more than one review slice.
-     `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
-     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. Stop after workflow handoff unless the user separately asks for PR publication. For Invoker-on-Invoker work only, that later explicit publication action uses `mergify stack push` once the chain's commits are prepared.
+     `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] [--onto-workflow <id>] <plan1.yaml> <plan2.template.yaml> ...`
+     Submit the chain head alone first and confirm its implement task is `running` with an agent session before submitting later steps; a defect in the shared template otherwise lands in every step at once.
+     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. When plan[0] has a concrete externalDependency (or `--onto-workflow` is set), it rewrites plan[0] `baseBranch` to that upstream's `featureBranch` before submit — that is what makes the head stacked onto the prior workflow. After execution, complete the reviewed `onFinish` outcome. For approved Invoker-on-Invoker implementation work, publish the prepared chain with `mergify stack push` without another authorization prompt.
      Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: review_ready` for upstream workflow dependencies.
 
 ## Runtime verification (Phase 1b)
@@ -235,13 +288,14 @@ For clean PR history, run plan-to-invoker hardening as a dependent workflow chai
 
 Use `scripts/submit-workflow-chain.sh` to preserve dependency order and readable stacked PRs.
 
-When those hardening workflows target Invoker itself, the branch/PR publication layer should use Mergify Stacks (`mergify stack push`) after the commits are ready. Keep external target repos on their own normal PR workflow unless they independently opt into Mergify.
+When those hardening workflows target Invoker itself, their reviewed `onFinish: pull_request` outcome uses Mergify Stacks (`mergify stack push`) after the commits are ready. Keep external target repos on their own normal PR workflow unless they independently opt into Mergify.
 
 ## Routing (see playbook/references)
 
 - File/function-heavy plans: see playbook `playbooks/verify-then-build.md`
 - Schema and required fields: `references/schema.md`
-- Task decomposition and dependency patterns: `references/task-patterns.md`
+- Task decomposition and dependency patterns (code-change plans): `references/task-patterns.md`
+- Structured entity research plans (any plan whose deliverable is a fact about a real-world entity — a stock's filing quirk, a legal case's status, a product spec — not a code change): `references/entity-research-patterns.md`. Do not use `task-patterns.md`'s handoff/task-split conventions for these; use this file instead.
 - Review compression: `../review-compression/SKILL.md`
 - End-to-end examples: `references/examples.md`
 - Efficacy / soft scoring: `references/efficacy-rubric.md`
