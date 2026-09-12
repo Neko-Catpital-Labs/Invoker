@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository, PlanningDraft } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
@@ -982,7 +982,9 @@ export class PlanConversation {
 
   private plannerScratchFilePath(folder: string, extension: string): string | null {
     if (!this.threadTs) return null;
-    const root = this.plannerScratchRoot ?? (this.workingDir ? join(this.workingDir, '.invoker') : undefined);
+    const root = this.plannerScratchRoot
+      ? resolve(this.workingDir ?? process.cwd(), this.plannerScratchRoot)
+      : (this.workingDir ? resolve(this.workingDir, '.invoker') : undefined);
     if (!root) return null;
     const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
     return join(root, folder, `${safeId}.${extension}`);

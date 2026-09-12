@@ -466,6 +466,32 @@ describe('plan draft file - activation side', () => {
     }
   });
 
+  it('resolves relative plannerScratchRoot from the planner working folder', async () => {
+    const plannerScratchRoot = 'relative-plan-draft-scratch';
+    const conversation = new PlanConversation({
+      workingDir,
+      plannerScratchRoot,
+      threadTs: 'relative-scratch-123',
+      plannerRetryLimit: 0,
+    });
+    const expectedPath = join(workingDir, plannerScratchRoot, 'plan-drafts', 'relative-scratch-123.yaml');
+    expect(conversation.planDraftFilePath()).toBe(expectedPath);
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      'Drafted the plan.',
+      () => {
+        mkdirSync(dirname(expectedPath), { recursive: true });
+        writeFileSync(expectedPath, VALID_PLAN_YAML, 'utf8');
+      },
+    ));
+    await conversation.sendMessage('Create the plan');
+
+    expect(String(mockSpawn.mock.calls[0]?.[1])).toContain(`write the COMPLETE YAML to \`${expectedPath}\``);
+    expect(mockSpawn.mock.calls[0]?.[2]).toMatchObject({ cwd: workingDir });
+    expect(conversation.lastTurnDraftPlanText).toBe(VALID_PLAN_YAML.trim());
+    expect(conversation.lastTurnDraftFromSidecarFile).toBe(true);
+  });
+
   it('puts the plan-intent file under plannerScratchRoot when one is given', () => {
     const plannerScratchRoot = join(tmpdir(), 'plan-intent-scratch');
     const conversation = new PlanConversation({ workingDir, plannerScratchRoot, threadTs: 'intent-123' });
