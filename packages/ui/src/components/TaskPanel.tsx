@@ -518,7 +518,7 @@ export function TaskPanel({
         </div>
       )}
 
-      {task.config.prompt && onEditAgent && (
+      {(task.config.prompt || task.config.isMergeNode) && onEditAgent && (
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">Agent</span>
           <select

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow } from '../adapter.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 
 const RECOVERY_TYPES = [
   'recovery.worker.wakeup',
@@ -41,7 +41,7 @@ function makeTask(id: string): TaskState {
     status: 'pending',
     dependencies: [],
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
-    config: {},
+    config: resolveTaskConfig(),
     execution: {},
     taskStateVersion: 1,
   };

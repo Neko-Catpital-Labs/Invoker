@@ -5,30 +5,21 @@ export interface HeadlessCommandDefinition {
   readonly kind: HeadlessCommandKind;
 }
 
-export const HEADLESS_SET_SUBCOMMANDS = [
-  'command',
-  'prompt',
-  'pool',
-  'executor',
-  'agent',
-  'task-pool',
-  'merge-mode',
-  'fix-prompt',
-  'fix-context',
-  'gate-policy',
-  'workflow',
-  'task',
-] as const;
-
-export function formatHeadlessSetSubcommands(separator: string): string {
-  return HEADLESS_SET_SUBCOMMANDS.join(separator);
-}
+export {
+  HEADLESS_SET_SUBCOMMANDS,
+  findHeadlessSetSubcommandScope,
+  formatHeadlessSetSubcommands,
+  type HeadlessSetSubcommand,
+  type HeadlessSetSubcommandDefinition,
+  type HeadlessSetSubcommandScope,
+} from '@invoker/contracts';
 
 export const HEADLESS_COMMANDS = [
   { name: 'owner-serve', kind: 'special' },
   { name: 'query', kind: 'read' },
   { name: 'set', kind: 'special' },
   { name: 'migrate-compat', kind: 'write' },
+  { name: 'repair-filing', kind: 'write' },
   { name: 'install-skills', kind: 'special' },
   { name: 'watch', kind: 'read' },
   { name: 'run', kind: 'write' },
@@ -56,8 +47,10 @@ export const HEADLESS_COMMANDS = [
   { name: 'cancel', kind: 'write' },
   { name: 'cancel-workflow', kind: 'write' },
   { name: 'delete-task', kind: 'write' },
+  { name: 'close-task', kind: 'write' },
   { name: 'delete', kind: 'write' },
   { name: 'delete-all', kind: 'write' },
+  { name: 'reset-autofix-budget', kind: 'write' },
   { name: 'open-terminal', kind: 'read' },
   { name: 'query-select', kind: 'read' },
   { name: 'worker', kind: 'read' },

@@ -61,6 +61,13 @@ assert_not_test_only "$(printf '%s\n%s' "packages/foo/src/__tests__/bar.test.ts"
 assert_not_test_only "packages/foo/src/bar.ts"
 assert_not_test_only ""
 
+policy_line="$(grep -n 'guarded_bypass_is_eligible "$num"' "$REPO_ROOT/scripts/cron-pr-auto-label.sh" | cut -d: -f1)"
+label_line="$(grep -n -- '--add-label admin-bypass' "$REPO_ROOT/scripts/cron-pr-auto-label.sh" | cut -d: -f1)"
+if [ -z "$policy_line" ] || [ -z "$label_line" ] || [ "$policy_line" -ge "$label_line" ]; then
+  echo "[test] FAIL: guarded approval check must run before cron label submission" >&2
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

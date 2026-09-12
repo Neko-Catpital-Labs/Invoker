@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 
 import { describe, expect, it } from 'vitest';
 
-import { readDefaultSlackHarnessPreset, readSlackRuntimeConfig, resolveDefaultHarnessPreset } from '../runtime-config.js';
+import { readDefaultSlackHarnessPreset, readSlackRuntimeConfig, resolveDefaultHarnessPreset, resolveSlackAdminUserIds } from '../runtime-config.js';
 
 describe('runtime-config', () => {
   it('reads defaultSlackHarnessPreset from ~/.invoker/config.json shape', () => {
@@ -28,11 +28,22 @@ describe('runtime-config', () => {
         notarepo: 'https://github.com/EdbertChan/notarepo.git',
         invalid: 42,
       },
+      slackAdminUserIds: ['U_ADMIN', '', 42],
+      slackChannelRepos: {
+        C_INVOKER: 'https://github.com/Neko-Catpital-Labs/Invoker',
+        C_RIPS: 'https://github.com/EdbertChan/notarepo',
+        invalid: '',
+      },
     }));
 
     expect(readSlackRuntimeConfig(configPath)).toEqual({
       defaultRepoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
       repoAliases: { notarepo: 'https://github.com/EdbertChan/notarepo.git' },
+      adminUserIds: ['U_ADMIN'],
+      channelRepoBindings: {
+        C_INVOKER: 'https://github.com/Neko-Catpital-Labs/Invoker',
+        C_RIPS: 'https://github.com/EdbertChan/notarepo',
+      },
     });
   });
 
@@ -44,5 +55,9 @@ describe('runtime-config', () => {
   // INVOKER_SLACK_DEFAULT_PRESET in ~/.invoker/.slack-owner.env.
   it('prefers ~/.invoker/config.json over a stale owner env preset', () => {
     expect(resolveDefaultHarnessPreset('omp+codex', 'codex')).toBe('codex');
+  });
+
+  it('unions Slack admin user IDs from config and owner env', () => {
+    expect(resolveSlackAdminUserIds('U_ENV, U_ADMIN,', ['U_ADMIN', 'U_CFG'])).toEqual(['U_ADMIN', 'U_CFG', 'U_ENV']);
   });
 });

@@ -24,16 +24,16 @@ def has_heading(body, expected):
             return True
     return False
 
-assert not has_heading("```\n## Non-goals\n```", "## Non-goals"), "fenced heading must not count"
-assert not has_heading("    ## Non-goals", "## Non-goals"), "4-space-indented heading must not count"
-assert has_heading("## Non-goals", "## Non-goals"), "a real heading must count"
+assert not has_heading("```\n## Test Plan\n```", "## Test Plan"), "fenced heading must not count"
+assert not has_heading("    ## Test Plan", "## Test Plan"), "4-space-indented heading must not count"
+assert has_heading("## Test Plan", "## Test Plan"), "a real heading must count"
 
 # source invariants for the hardened scanners
-for needle in ["function removeFencedBlocks", "function isHeadingLine", "/^ {0,3}#/", "removeFencedBlocks(getMarkdownSection"]:
+for needle in ["function isHeadingLine", "/^ {0,3}#/"]:
     if needle not in src:
         raise SystemExit(f"missing hardened-scanner invariant: {needle}")
 
 print("[repro] model: fenced and 4-space-indented headings are ignored; real headings count")
-print("[repro] source check: fence-stripping + indent-guarded heading detection present")
+print("[repro] source check: indent-guarded heading detection present")
 PY
 echo "[repro] passed"

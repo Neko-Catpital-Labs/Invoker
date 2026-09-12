@@ -11,7 +11,12 @@ import { FailureClassifier } from '@invoker/workflow-core';
 import type { SshInfraFailureClass, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 import { isLivenessFailureTask, normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
-import { checkAutoFixRetryCap, recordAutoFixRetryConsumed } from '../auto-fix-retry-cap.js';
+import {
+  checkAutoFixRetryCap,
+  recordAutoFixRetryConsumed,
+  recordAutoFixRetryPending,
+  recordAutoFixRetryUnacknowledged,
+} from '../auto-fix-retry-cap.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import {
   resolveRemoteBranchOwnerPath,
@@ -27,6 +32,8 @@ import {
   execRemoteCapture,
   shellPosixSingleQuote,
 } from '../ssh-git-exec.js';
+import { cleanupRemoteInvokerHome, type DiskCleanupResult } from './disk-headroom-reclaim.js';
+import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
 
 function buildPortableBase64DecodeFunction(functionName = 'invoker_base64_decode'): string {
   return `${functionName}() {
@@ -91,7 +98,8 @@ export interface InfraRepairWorkerStore {
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   updateTask?(taskId: string, changes: TaskStateChanges): void;
-  getEvents?(taskId: string): TaskEvent[];
+  /** Bounded, newest-first lookup — see SQLiteAdapter.getRecentEventsOfType. */
+  getRecentEventsOfType?(taskId: string, eventType: string, limit: number): TaskEvent[];
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -129,6 +137,8 @@ export interface InfraRepairWorkerPolicyOptions {
   resolveRemoteBranchOwnerPathFn?: typeof resolveRemoteBranchOwnerPath;
   runRemoteProvisionRepairFn?: typeof runRemoteProvisionRepair;
   runRepoMirrorRepairFn?: typeof runRepoMirrorRepair;
+  runWorktreeCorruptRepairFn?: typeof runWorktreeCorruptRepair;
+  cleanupRemoteInvokerHomeFn?: (opts: { target: RemoteDiskTarget }) => Promise<DiskCleanupResult>;
 }
 
 export interface InfraRepairWorkerOptions {
@@ -357,15 +367,16 @@ export function listInfraRepairScanCandidates(
 }
 
 export function classifyGenericSshInfraFailure(errorText: unknown): InfraRepairReason | undefined {
-  return FailureClassifier.classifyError(typeof errorText === 'string' ? errorText : undefined);
+  const failureClass = FailureClassifier.classifyError(typeof errorText === 'string' ? errorText : undefined);
+  return FailureClassifier.isSshInfra(failureClass) ? failureClass : undefined;
 }
 
 function resolveRemoteTargetId(
-  store: Pick<InfraRepairWorkerStore, 'getEvents'>,
+  store: Pick<InfraRepairWorkerStore, 'getRecentEventsOfType'>,
   task: TaskState,
 ): string | undefined {
   return resolveSelectedRemoteTargetId(
-    { persistence: { getEvents: store.getEvents?.bind(store) } } as unknown as ConflictResolverHost,
+    { persistence: { getRecentEventsOfType: store.getRecentEventsOfType?.bind(store) } } as unknown as ConflictResolverHost,
     task.id,
     task,
   );
@@ -458,6 +469,199 @@ export function extractCorruptMirrorPath(errorText: string | undefined): string 
   return isSafeMirrorPath(candidate) ? candidate : undefined;
 }
 
+export interface CorruptWorktreeAdminPaths {
+  readonly adminPath: string;
+  readonly remoteClone: string;
+  readonly worktreeName: string;
+}
+
+/**
+ * Finalize-time publish errors embed the stale Git admin path:
+ * `<mirror>/.git/worktrees/<name>`. Require the `/repos/<hash>` shape so a
+ * truncated match can never resolve to `/`, `$HOME`, or an unrelated tree
+ * before a remote `rm -rf`.
+ */
+export function extractCorruptWorktreeAdminPath(
+  errorText: string | undefined,
+): CorruptWorktreeAdminPaths | undefined {
+  if (typeof errorText !== 'string') return undefined;
+  const marker = '/.git/worktrees/';
+  let searchFrom = 0;
+  while (searchFrom < errorText.length) {
+    const markerIdx = errorText.indexOf(marker, searchFrom);
+    if (markerIdx < 0) return undefined;
+
+    const nameStart = markerIdx + marker.length;
+    let nameEnd = nameStart;
+    while (nameEnd < errorText.length) {
+      const ch = errorText[nameEnd]!;
+      if (ch === '/' || ch === '\\' || /\s|[:'"]/.test(ch)) break;
+      nameEnd += 1;
+    }
+    const worktreeName = errorText.slice(nameStart, nameEnd);
+    if (!worktreeName || worktreeName.includes('..')) {
+      searchFrom = markerIdx + 1;
+      continue;
+    }
+
+    const before = errorText.slice(0, markerIdx);
+    const reposToken = '/repos/';
+    const reposIdx = before.lastIndexOf(reposToken);
+    if (reposIdx < 0) {
+      searchFrom = markerIdx + 1;
+      continue;
+    }
+    const hash = before.slice(reposIdx + reposToken.length);
+    if (!hash || hash.includes('/') || /\s|[:'"]/.test(hash)) {
+      searchFrom = markerIdx + 1;
+      continue;
+    }
+
+    let pathStart = reposIdx;
+    while (pathStart > 0) {
+      const prev = before[pathStart - 1]!;
+      if (/\s|[:'"]/.test(prev)) break;
+      pathStart -= 1;
+    }
+    if (before[pathStart] !== '/') {
+      searchFrom = markerIdx + 1;
+      continue;
+    }
+
+    const remoteClone = before.slice(pathStart);
+    if (!isSafeMirrorPath(remoteClone)) {
+      searchFrom = markerIdx + 1;
+      continue;
+    }
+
+    return {
+      adminPath: `${remoteClone}${marker}${worktreeName}`,
+      remoteClone,
+      worktreeName,
+    };
+  }
+  return undefined;
+}
+
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 1 && value[end - 1] === '/') end -= 1;
+  return value.slice(0, end);
+}
+
+function isPathUnderConfiguredRemoteHome(
+  path: string,
+  remoteInvokerHome: string | undefined,
+): boolean {
+  const home = remoteInvokerHome?.trim();
+  if (!home || home === '~' || home.startsWith('~/') || home.startsWith('~\\')) {
+    return path.includes('/.invoker/');
+  }
+  const normalizedHome = stripTrailingSlashes(home);
+  return path === normalizedHome || path.startsWith(`${normalizedHome}/`);
+}
+
+/**
+ * Fallback for git error text that doesn't embed the admin path (some git
+ * versions print `fatal: not a git repository: (null)` instead of the path).
+ * The managed worktree path is always `<remoteInvokerHome>/worktrees/<repoHash>/<name>`,
+ * which mirrors the mirror clone's `<remoteInvokerHome>/repos/<repoHash>` shape
+ * closely enough to derive the admin path directly, without relying on git's
+ * own error formatting.
+ */
+export function deriveCorruptWorktreeAdminPathFromWorkspace(
+  managedWorktreePath: string | undefined,
+  remoteInvokerHome: string | undefined,
+): CorruptWorktreeAdminPaths | undefined {
+  if (typeof managedWorktreePath !== 'string') return undefined;
+  if (!isPathUnderConfiguredRemoteHome(managedWorktreePath, remoteInvokerHome)) return undefined;
+
+  const marker = '/worktrees/';
+  const markerIdx = managedWorktreePath.lastIndexOf(marker);
+  if (markerIdx < 0) return undefined;
+
+  const rest = managedWorktreePath.slice(markerIdx + marker.length);
+  const segments = rest.split('/').filter(Boolean);
+  if (segments.length !== 2) return undefined;
+  const [hash, worktreeName] = segments;
+  if (!hash || hash.includes('..') || !worktreeName || worktreeName.includes('..')) return undefined;
+
+  const remoteClone = `${managedWorktreePath.slice(0, markerIdx)}/repos/${hash}`;
+  if (!isSafeMirrorPath(remoteClone)) return undefined;
+
+  return {
+    adminPath: `${remoteClone}/.git/worktrees/${worktreeName}`,
+    remoteClone,
+    worktreeName,
+  };
+}
+
+export function buildWorktreeCorruptRepairScript(options: {
+  remoteClone: string;
+  adminPath: string;
+  managedWorktreePath?: string;
+}): string {
+  const cloneB64 = base64Encode(options.remoteClone);
+  const adminB64 = base64Encode(options.adminPath);
+  const managedSection = options.managedWorktreePath
+    ? [
+      `MANAGED_WT=$(printf '%s' ${shellPosixSingleQuote(base64Encode(options.managedWorktreePath))} | invoker_base64_decode)`,
+      bashNormalizeTildePath('MANAGED_WT'),
+      `if [[ -n "$MANAGED_WT" && "$MANAGED_WT" != "/" && "$MANAGED_WT" != "$HOME" && "$MANAGED_WT" == */worktrees/* ]]; then`,
+      `  if [[ -e "$MANAGED_WT" ]]; then`,
+      `    echo "[infra-repair] Removing managed worktree path: $MANAGED_WT"`,
+      `    git -C "$CLONE" worktree remove --force "$MANAGED_WT" 2>/dev/null || true`,
+      `    rm -rf "$MANAGED_WT"`,
+      `    git -C "$CLONE" worktree prune 2>/dev/null || true`,
+      `  fi`,
+      `fi`,
+    ].join('\n')
+    : '';
+  return [
+    'set -euo pipefail',
+    buildPortableBase64DecodeFunction(),
+    `CLONE=$(printf '%s' ${shellPosixSingleQuote(cloneB64)} | invoker_base64_decode)`,
+    `ADMIN_PATH=$(printf '%s' ${shellPosixSingleQuote(adminB64)} | invoker_base64_decode)`,
+    bashNormalizeTildePath('CLONE'),
+    bashNormalizeTildePath('ADMIN_PATH'),
+    `if [[ -z "$CLONE" || "$CLONE" == "/" || "$CLONE" == "$HOME" || "$CLONE" != */repos/* ]]; then`,
+    `  echo "refusing to act on unsafe clone path: '$CLONE'" >&2`,
+    '  exit 1',
+    'fi',
+    `if [[ -z "$ADMIN_PATH" || "$ADMIN_PATH" != "$CLONE/.git/worktrees/"* ]]; then`,
+    `  echo "refusing to act on unsafe worktree admin path: '$ADMIN_PATH'" >&2`,
+    '  exit 1',
+    'fi',
+    'git -C "$CLONE" worktree prune 2>/dev/null || true',
+    `if [[ -e "$ADMIN_PATH" ]]; then`,
+    `  echo "[infra-repair] Removing stale worktree admin path: $ADMIN_PATH"`,
+    '  rm -rf "$ADMIN_PATH"',
+    '  git -C "$CLONE" worktree prune 2>/dev/null || true',
+    'fi',
+    managedSection,
+  ].filter(Boolean).join('\n') + '\n';
+}
+
+export async function runWorktreeCorruptRepair(options: {
+  target: InfraRepairRemoteTargetConfig;
+  remoteClone: string;
+  adminPath: string;
+  managedWorktreePath?: string;
+  targetKey?: string;
+  runRemoteScript?: typeof execRemoteCapture;
+}): Promise<string> {
+  const sshArgs = buildSshConnectionArgs(options.target, { batchMode: true });
+  return (options.runRemoteScript ?? execRemoteCapture)({
+    sshArgs,
+    script: buildWorktreeCorruptRepairScript({
+      remoteClone: options.remoteClone,
+      adminPath: options.adminPath,
+      managedWorktreePath: options.managedWorktreePath,
+    }),
+    phase: `infra-repair:${options.targetKey ?? options.target.host}`,
+  });
+}
+
 export function buildRepoMirrorRepairScript(options: { mirrorPath: string }): string {
   const mirrorPathB64 = base64Encode(options.mirrorPath);
   return `set -euo pipefail
@@ -547,7 +751,16 @@ async function submitFollowUpMutation(
     return;
   }
 
-  const intentId = options.submitter.submit(candidate.workflowId, 'normal', channel, args);
+  recordAutoFixRetryPending(options.store, candidate.taskId, { workflowId: candidate.workflowId });
+  let intentId: number;
+  try {
+    intentId = options.submitter.submit(candidate.workflowId, 'normal', channel, args);
+  } catch (error) {
+    recordAutoFixRetryUnacknowledged(options.store, candidate.taskId, error, {
+      workflowId: candidate.workflowId,
+    });
+    throw error;
+  }
   recordTaskDecision(options, candidate, reason, 'completed', summary, {
     channel,
     ...payload,
@@ -649,6 +862,150 @@ async function handleRepoMirrorCorruptRecovery(
       reusedRecentRepair: repair.kind === 'reused-success',
     },
     'Queued retry-task after removing the corrupt repo mirror (bootstrap re-clones on next attempt)',
+  );
+}
+
+async function handleWorktreeCorruptRecovery(
+  options: InfraRepairWorkerPolicyOptions,
+  candidate: ValidatedGenericSshInfraCandidate,
+): Promise<void> {
+  const errorText = candidate.task.execution.error;
+  // Only fall back to the task's own workspacePath when the error truly
+  // carries no admin path at all (e.g. git 2.55+'s pathless
+  // `fatal: not a git repository: (null)`). When a path IS present but
+  // fails validation, that is a distinct signal worth refusing on rather
+  // than silently reinterpreting via workspacePath.
+  const hasEmbeddedAdminPath = typeof errorText === 'string' && errorText.includes('/.git/worktrees/');
+  const parsed = extractCorruptWorktreeAdminPath(errorText)
+    ?? (hasEmbeddedAdminPath
+      ? undefined
+      : deriveCorruptWorktreeAdminPathFromWorkspace(
+        candidate.task.execution.workspacePath,
+        candidate.target.remoteInvokerHome,
+      ));
+  if (!parsed) {
+    recordTaskDecision(options, candidate, candidate.reason, 'failed', 'Could not determine the corrupt worktree admin path from the task error', {
+      targetId: candidate.targetId,
+    }, 'worktree-admin-path-unresolved');
+    return;
+  }
+  if (!isPathUnderConfiguredRemoteHome(parsed.adminPath, candidate.target.remoteInvokerHome)) {
+    recordTaskDecision(options, candidate, candidate.reason, 'failed', 'Corrupt worktree path is outside the configured remoteInvokerHome', {
+      targetId: candidate.targetId,
+      adminPath: parsed.adminPath,
+      remoteInvokerHome: candidate.target.remoteInvokerHome ?? null,
+    }, 'worktree-admin-path-unsafe');
+    return;
+  }
+
+  const managedWorktreePath = candidate.task.execution.workspacePath;
+  const safeManagedPath = typeof managedWorktreePath === 'string'
+    && managedWorktreePath.includes('/worktrees/')
+    && isPathUnderConfiguredRemoteHome(managedWorktreePath, candidate.target.remoteInvokerHome)
+    ? managedWorktreePath
+    : undefined;
+
+  const repair = await runTargetRepairWithCooldown(options, {
+    targetKey: `${candidate.targetId}:${parsed.adminPath}`,
+    reason: candidate.reason,
+    execute: () => (options.runWorktreeCorruptRepairFn ?? runWorktreeCorruptRepair)({
+      target: candidate.target,
+      remoteClone: parsed.remoteClone,
+      adminPath: parsed.adminPath,
+      managedWorktreePath: safeManagedPath,
+      targetKey: candidate.targetId,
+    }),
+  });
+
+  if (repair.kind === 'cooldown-skip') {
+    recordTaskDecision(options, candidate, candidate.reason, 'skipped', 'Skipped infra repair because target cooldown is active', {
+      targetId: candidate.targetId,
+      adminPath: parsed.adminPath,
+      repairStatus: repair.action.status,
+    }, 'repair-cooldown');
+    return;
+  }
+  if (repair.kind === 'failed') {
+    recordTaskDecision(options, candidate, candidate.reason, 'failed', `Infra repair failed: ${firstLine(repair.errorMessage) ?? 'unknown error'}`, {
+      targetId: candidate.targetId,
+      adminPath: parsed.adminPath,
+      error: repair.errorMessage,
+    }, 'repair-failed');
+    return;
+  }
+
+  await submitFollowUpMutation(
+    options,
+    candidate,
+    candidate.reason,
+    INFRA_REPAIR_RECREATE_TASK_CHANNEL,
+    buildInfraRepairRecreateTaskMutationArgs(candidate.taskId),
+    {
+      targetId: candidate.targetId,
+      adminPath: parsed.adminPath,
+      remoteClone: parsed.remoteClone,
+      managedWorktreePath: safeManagedPath ?? null,
+      reusedRecentRepair: repair.kind === 'reused-success',
+    },
+    'Queued recreate-task after cleaning stale managed-worktree admin metadata',
+  );
+}
+
+async function handleDiskFullRecovery(
+  options: InfraRepairWorkerPolicyOptions,
+  candidate: ValidatedGenericSshInfraCandidate,
+): Promise<void> {
+  const remoteDiskTarget: RemoteDiskTarget = {
+    name: candidate.targetId,
+    connection: {
+      host: candidate.target.host,
+      user: candidate.target.user,
+      sshKeyPath: candidate.target.sshKeyPath,
+      port: candidate.target.port,
+    },
+    remotePath: candidate.target.remoteInvokerHome ?? '~/.invoker',
+  };
+
+  const repair = await runTargetRepairWithCooldown(options, {
+    targetKey: candidate.targetId,
+    reason: candidate.reason,
+    execute: async () => {
+      const result = await (options.cleanupRemoteInvokerHomeFn ?? cleanupRemoteInvokerHome)({
+        target: remoteDiskTarget,
+      });
+      if (!result.ok) {
+        throw new Error(`Disk cleanup ${result.reason} for ${result.targetKey}${result.detail ? `: ${result.detail}` : ''}`);
+      }
+      return result.detail ?? 'cleaned';
+    },
+  });
+
+  if (repair.kind === 'cooldown-skip') {
+    recordTaskDecision(options, candidate, candidate.reason, 'skipped', 'Skipped infra repair because target cooldown is active', {
+      targetId: candidate.targetId,
+      repairStatus: repair.action.status,
+    }, 'repair-cooldown');
+    return;
+  }
+  if (repair.kind === 'failed') {
+    recordTaskDecision(options, candidate, candidate.reason, 'failed', `Infra repair failed: ${firstLine(repair.errorMessage) ?? 'unknown error'}`, {
+      targetId: candidate.targetId,
+      error: repair.errorMessage,
+    }, 'repair-failed');
+    return;
+  }
+
+  await submitFollowUpMutation(
+    options,
+    candidate,
+    candidate.reason,
+    INFRA_REPAIR_RETRY_TASK_CHANNEL,
+    buildInfraRepairRetryTaskMutationArgs(candidate.taskId),
+    {
+      targetId: candidate.targetId,
+      reusedRecentRepair: repair.kind === 'reused-success',
+    },
+    'Queued retry-task after reclaiming disk space on the remote target',
   );
 }
 
@@ -816,8 +1173,16 @@ async function handleValidatedGenericSshInfraCandidate(
     await handleRepoMirrorCorruptRecovery(options, candidate);
     return;
   }
+  if (candidate.reason === 'ssh-worktree-corrupt') {
+    await handleWorktreeCorruptRecovery(options, candidate);
+    return;
+  }
   if (candidate.reason === 'ssh-oauth-session-expired') {
     await handleOauthSessionExpiredRecovery(options, candidate);
+    return;
+  }
+  if (candidate.reason === 'ssh-disk-full') {
+    await handleDiskFullRecovery(options, candidate);
     return;
   }
   await handleInvalidReferenceRecovery(options, candidate);
@@ -893,6 +1258,7 @@ export function createInfraRepairWorker(options: InfraRepairWorkerOptions): Work
     start,
     wake: runtime.wake,
     tick: runtime.tick,
+    run: runtime.run,
     stop,
     isRunning: runtime.isRunning,
   };

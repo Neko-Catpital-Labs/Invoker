@@ -20,12 +20,12 @@ invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-t
 STA=$(invoker_e2e_task_status e2e-g227-taskA)
 STB=$(invoker_e2e_task_status e2e-g227-taskB)
 STC=$(invoker_e2e_task_status e2e-g227-taskC)
-if [ "$STA" != "failed" ] || [ "$STB" != "completed" ] || [ "$STC" != "pending" ]; then
-  echo "FAIL case 2.7: expected A=failed B=completed C=pending, got A='$STA' B='$STB' C='$STC'"
+if [ "$STA" != "failed" ] || [ "$STB" != "completed" ] || [ "$STC" != "skipped" ]; then
+  echo "FAIL case 2.7: expected A=failed B=completed C=skipped, got A='$STA' B='$STB' C='$STC'"
   invoker_e2e_dump_tasks
   exit 1
 fi
-echo "==> case 2.7: confirmed A=failed, B=completed, C=pending"
+echo "==> case 2.7: confirmed A=failed, B=completed, C=skipped"
 
 echo "==> case 2.7: fix A (claude-marker.sh runs)"
 invoker_e2e_run_headless fix e2e-g227-taskA
