@@ -550,7 +550,7 @@ function validateAutoFixCandidate(
     return undefined;
   }
 
-  if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.error)) {
+  if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.failureClass)) {
     tripAutoFixCircuitBreaker(options);
     skipAutoFixCandidate(options, candidate, 'usage-limit', { status: latest.status });
     return undefined;
