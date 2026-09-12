@@ -1,0 +1,15 @@
+.git
+node_modules
+**/node_modules
+release
+local-builds
+worktrees
+.claude
+.tmp
+.camera-*
+**/dist
+**/.turbo
+**/playwright-report
+**/test-results
+*.db
+*.log

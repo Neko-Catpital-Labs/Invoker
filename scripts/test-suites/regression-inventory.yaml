@@ -149,3 +149,18 @@ candidates:
       runs when a human sets INVOKER_FIX_CI_TOKEN_BUDGET_LIVE=1 by hand;
       without that variable it stands down and exits 0, and it is never wired
       into `pnpm test`, nightly tooling, or any CI job.
+
+  - id: e2e-cli-install-sandbox
+    tier: nightly
+    hermetic: true
+    description: >-
+      Runs the README one-liner (`npx @neko-catpital-labs/invoker-cli install`)
+      for real inside a throwaway sandbox, then asserts both halves: the
+      skills, MCP registrations, ~/.invoker config and worker toggles landed
+      under the sandbox HOME, and the real machine's harness roots and global
+      npm prefix are byte-for-byte unchanged. The two invoker packages are
+      served from a loopback fixture registry built from this checkout, so the
+      test covers the branch under review rather than the last release; only
+      npm-cli's own `yaml` dependency comes from the public registry.
+    script: scripts/e2e-cli-install/run.sh
+    command: bash scripts/e2e-cli-install/run.sh
