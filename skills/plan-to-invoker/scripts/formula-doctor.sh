@@ -30,7 +30,10 @@ if ! node "$SCRIPT_DIR/render-formula.mjs" "$FORMULA" --example --out "$TMP_DIR"
   exit 1
 fi
 
-mapfile -t RENDERED <"$LIST_FILE"
+RENDERED=()
+while IFS= read -r rendered_plan; do
+  RENDERED+=("$rendered_plan")
+done <"$LIST_FILE"
 if [[ ${#RENDERED[@]} -eq 0 ]]; then
   echo "formula-doctor: render produced no plans" >&2
   exit 1

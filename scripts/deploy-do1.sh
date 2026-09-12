@@ -7,7 +7,10 @@ REMOTE_REPO_ROOT="${INVOKER_DO1_REPO_ROOT:-}"
 
 [ -f "$CONFIG_PATH" ] || { echo "missing config: $CONFIG_PATH" >&2; exit 1; }
 
-mapfile -t target < <(
+target=()
+while IFS= read -r line; do
+  target+=("$line")
+done < <(
   node - "$CONFIG_PATH" "$TARGET_ID" <<'NODE'
 const fs = require('node:fs');
 const os = require('node:os');
