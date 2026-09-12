@@ -72,24 +72,24 @@ describe('pending pool selections held by unlaunchable tasks', () => {
     expect(hasCapacity(runner)).toBe(false);
   });
 
-  it('leaves a member wedged when every holder reached a terminal status', () => {
+  it('frees a member wedged when every holder reached a terminal status', () => {
     const runner = makeRunner([makeTask('wf-1/repair', 'failed'), makeTask('wf-2/repair', 'cancelled')]);
     reserve(runner, 'wf-1/repair');
     reserve(runner, 'wf-2/repair');
 
     reclaimOrphanedExecutionSlots(runner as never);
 
-    expect(hasCapacity(runner)).toBe(false);
-    expect(pendingSelections(runner).size).toBe(2);
+    expect(hasCapacity(runner)).toBe(true);
+    expect(pendingSelections(runner).size).toBe(0);
   });
 
-  it('keeps a reservation whose task no longer exists', () => {
+  it('frees a reservation whose task no longer exists', () => {
     const runner = makeRunner([makeTask('wf-live/repair', 'queued')]);
     reserve(runner, 'wf-deleted/repair');
 
     reclaimOrphanedExecutionSlots(runner as never);
 
-    expect(pendingSelections(runner).has('wf-deleted/repair')).toBe(true);
+    expect(pendingSelections(runner).has('wf-deleted/repair')).toBe(false);
   });
 
   it('never frees a reservation held by a task that can still launch', () => {
