@@ -15,6 +15,10 @@ export interface CodexExecutionAgentConfig {
 const CODEX_MODEL_DISCOVERY_TIMEOUT_MS = 3_000;
 const CODEX_MODEL_CACHE_MS = 5 * 60_000;
 
+type CodexModelDiscoveryResult =
+  | { kind: 'success'; models: readonly ExecutionModelOption[] }
+  | { kind: 'failed' };
+
 const CODEX_FALLBACK_MODELS: readonly ExecutionModelOption[] = [
   { id: 'gpt-5.5', label: 'GPT-5.5' },
   { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
@@ -123,7 +127,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
       return cached.models;
     }
     const discovered = this.discoverSupportedModels();
-    const models = discovered.length > 0 ? discovered : CODEX_FALLBACK_MODELS;
+    const models = discovered.kind === 'success' ? discovered.models : CODEX_FALLBACK_MODELS;
     this.supportedModelCache = {
       expiresAt: now + CODEX_MODEL_CACHE_MS,
       models,
@@ -131,16 +135,16 @@ export class CodexExecutionAgent implements ExecutionAgent {
     return models;
   }
 
-  private discoverSupportedModels(): readonly ExecutionModelOption[] {
+  private discoverSupportedModels(): CodexModelDiscoveryResult {
     const result = spawnSync(this.command, ['debug', 'models'], {
       encoding: 'utf8',
       timeout: CODEX_MODEL_DISCOVERY_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });
     if (result.error || result.status !== 0) {
-      return [];
+      return { kind: 'failed' };
     }
-    return parseDiscoveredCodexModels(result.stdout);
+    return { kind: 'success', models: parseDiscoveredCodexModels(result.stdout) };
   }
 
   private buildModelArgs(executionModel?: string): string[] {
