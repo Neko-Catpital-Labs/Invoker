@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import { collectGuardedBehaviorMarkers } from './validate-pr-body.mjs';
 
+const BOT_REVIEWER_TYPES = new Set(['bot', 'app']);
+
 function normalizeReview(review) {
   const login = String(review?.user?.login ?? review?.author?.login ?? '').trim();
   return {
@@ -13,7 +15,7 @@ function normalizeReview(review) {
     login,
     userType: String(review?.user?.type ?? review?.author?.type ?? ''),
     state: String(review?.state ?? '').toUpperCase(),
-    commitId: String(review?.commit_id ?? review?.commitId ?? review?.commit?.oid ?? ''),
+    commitId: String(review?.commit_id ?? review?.commitId ?? review?.headCommit?.oid ?? review?.headCommit ?? review?.commit?.oid ?? ''),
     submittedAt: String(review?.submitted_at ?? review?.submittedAt ?? ''),
   };
 }
@@ -21,7 +23,7 @@ function normalizeReview(review) {
 export function isBotReviewer(review) {
   const normalized = normalizeReview(review);
   const login = normalized.login.toLowerCase();
-  return normalized.userType.toLowerCase() === 'bot'
+  return BOT_REVIEWER_TYPES.has(normalized.userType.toLowerCase())
     || login.endsWith('[bot]')
     || login.endsWith('-bot')
     || login === 'mergify'
@@ -52,7 +54,11 @@ export function analyzeGuardedBehaviorApproval({ diffText = '', headSha = '', re
     return { eligible: false, guarded: true, markers, reason: 'missing-head-sha', approvingReviewers: [] };
   }
 
-  const latestHumanReviews = latestReviewsByHuman(Array.isArray(reviews) ? reviews : []);
+  const submittedReviews = Array.isArray(reviews) ? reviews : [];
+  const latestHumanReviews = latestReviewsByHuman(submittedReviews);
+  if (submittedReviews.length > 0 && latestHumanReviews.length === 0) {
+    return { eligible: false, guarded: true, markers, reason: 'bot-only-approval', approvingReviewers: [] };
+  }
   if (latestHumanReviews.some(review => review.state === 'CHANGES_REQUESTED')) {
     return { eligible: false, guarded: true, markers, reason: 'latest-human-changes-requested', approvingReviewers: [] };
   }

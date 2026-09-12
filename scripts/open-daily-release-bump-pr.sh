@@ -43,5 +43,10 @@ if [ -z "$pr_number" ]; then
   exit 1
 fi
 
+if ! approval_output="$(node scripts/guarded-behavior-approval.mjs --pr "$pr_number" --json 2>&1)"; then
+  echo "Refusing admin-bypass for PR #${pr_number}: guarded-behavior approval required: $approval_output" >&2
+  exit 1
+fi
+
 gh pr edit "$pr_number" --add-label admin-bypass
 echo "Opened bump PR #${pr_number}; the admin-bypass label queues it for merge."

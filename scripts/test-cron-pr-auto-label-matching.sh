@@ -68,6 +68,49 @@ if [ -z "$policy_line" ] || [ -z "$label_line" ] || [ "$policy_line" -ge "$label
   fail=1
 fi
 
+policy_tmp="$(mktemp -d)"
+trap 'rm -rf "$policy_tmp"' EXIT
+cat > "$policy_tmp/node" <<'NODE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "${NODE_ARGS_FILE:?NODE_ARGS_FILE required}"
+if [ "${GUARDED_APPROVAL_EXIT:-0}" = "0" ]; then
+  printf '{"eligible":true,"guarded":false,"reason":"unguarded-diff"}\n'
+  exit 0
+fi
+printf '{"eligible":false,"guarded":true,"reason":"missing-current-head-human-approval"}\n'
+exit 1
+NODE
+chmod +x "$policy_tmp/node"
+
+old_path="$PATH"
+PATH="$policy_tmp:$PATH"
+TARGET_REPO="owner/repo"
+NODE_ARGS_FILE="$policy_tmp/node.args"
+export NODE_ARGS_FILE
+
+GUARDED_APPROVAL_EXIT=0
+export GUARDED_APPROVAL_EXIT
+if ! guarded_bypass_is_eligible 42 >/dev/null; then
+  echo "[test] FAIL: unguarded central approval result should allow cron label submission" >&2
+  fail=1
+fi
+node_args="$(cat "$NODE_ARGS_FILE")"
+case "$node_args" in
+  *"scripts/guarded-behavior-approval.mjs --pr 42 --repo owner/repo --json"*) ;;
+  *)
+    echo "[test] FAIL: cron approval wrapper called unexpected args: $node_args" >&2
+    fail=1
+    ;;
+esac
+
+GUARDED_APPROVAL_EXIT=1
+export GUARDED_APPROVAL_EXIT
+if guarded_bypass_is_eligible 43 >/dev/null 2>&1; then
+  echo "[test] FAIL: guarded central approval denial should block cron label submission" >&2
+  fail=1
+fi
+PATH="$old_path"
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

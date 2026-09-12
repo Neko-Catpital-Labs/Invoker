@@ -40,12 +40,21 @@ assert.deepEqual(analyze([], 'diff --git a/README.md b/README.md\n+ordinary\n'),
 
 assert.equal(analyze([]).eligible, false, 'guarded diff without reviews must be denied');
 assert.equal(analyze([review({ login: 'review-bot[bot]', type: 'Bot' })]).eligible, false, 'bot approval must be denied');
+assert.equal(analyze([review({ login: 'release-automation', type: 'App' })]).eligible, false, 'app bot approval must be denied');
 assert.equal(analyze([review({ commitId: OLD_HEAD })]).eligible, false, 'stale-head approval must be denied');
 assert.equal(analyze([review({ state: 'DISMISSED' })]).eligible, false, 'dismissed approval must be denied');
 assert.equal(analyze([
   review({ state: 'APPROVED', id: 1 }),
   review({ state: 'CHANGES_REQUESTED', id: 2 }),
 ]).eligible, false, 'a later changes-requested review must deny');
+
+assert.equal(analyze([{
+  id: 1,
+  state: 'APPROVED',
+  headCommit: { oid: HEAD },
+  submitted_at: '2026-08-28T00:00:01Z',
+  user: { login: 'head-commit-reviewer', type: 'User' },
+}]).eligible, true, 'headCommit approval on current head must be allowed');
 
 assert.deepEqual(analyze([review({ state: 'APPROVED' })]), {
   eligible: true,
@@ -57,6 +66,7 @@ assert.deepEqual(analyze([review({ state: 'APPROVED' })]), {
 
 const landStackSource = readFileSync(new URL('./land-stack.mjs', import.meta.url), 'utf8');
 const cronSource = readFileSync(new URL('./cron-pr-auto-label.sh', import.meta.url), 'utf8');
+const dailyReleaseSource = readFileSync(new URL('./open-daily-release-bump-pr.sh', import.meta.url), 'utf8');
 assert.ok(
   landStackSource.indexOf('checkGuardedBehaviorApprovalForPr')
     < landStackSource.indexOf("labels[]=admin-bypass"),
@@ -66,6 +76,11 @@ assert.ok(
   cronSource.indexOf('guarded_bypass_is_eligible "$num"')
     < cronSource.indexOf('--add-label admin-bypass'),
   'cron must check guarded approval before generating its label task',
+);
+assert.ok(
+  dailyReleaseSource.indexOf('guarded-behavior-approval.mjs')
+    < dailyReleaseSource.indexOf('--add-label admin-bypass'),
+  'daily release bump must check guarded approval before its direct label add',
 );
 
 const directLabelFiles = execFileSync('rg', [
@@ -81,6 +96,7 @@ const directLabelFiles = execFileSync('rg', [
 assert.deepEqual(directLabelFiles, [
   'scripts/cron-pr-auto-label.sh',
   'scripts/land-stack.mjs',
+  'scripts/open-daily-release-bump-pr.sh',
 ]);
 
 console.log('guarded-behavior approval policy tests passed');

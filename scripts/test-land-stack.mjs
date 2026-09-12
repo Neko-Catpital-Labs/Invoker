@@ -201,10 +201,44 @@ test('execute labels every verified PR bottom-to-top', () => {
   ]);
 });
 
+test('execute labels an unguarded diff without approval', () => {
+  const { res, edits } = runCli(['2174', '2175'], {
+    diffs: {
+      2174: 'diff --git a/README.md b/README.md\n+ordinary\n',
+      2175: 'diff --git a/scripts/tool.mjs b/scripts/tool.mjs\n+ordinary\n',
+    },
+    reviews: {},
+  });
+  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
+  assert.deepEqual(edits, [
+    'api --silent --method POST repos/{owner}/{repo}/issues/2174/labels -f labels[]=admin-bypass',
+    'api --silent --method POST repos/{owner}/{repo}/issues/2175/labels -f labels[]=admin-bypass',
+  ]);
+});
+
 test('execute refuses a guarded diff without current-head human approval', () => {
   const guardedDiff = 'diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx\n--- a/packages/ui/src/App.tsx\n+++ b/packages/ui/src/App.tsx\n@@ -1,2 +1,2 @@\n // guarded-behavior: selection-camera-inert\n-old\n+new\n';
   const { res, edits } = runCli(['2174', '2175'], {
     diffs: { 2174: guardedDiff },
+  });
+  assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stderr, /refusing admin-bypass for guarded PR #2174/);
+  assert.deepEqual(edits, []);
+});
+
+test('execute refuses a guarded diff with bot-only approval', () => {
+  const guardedDiff = 'diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx\n--- a/packages/ui/src/App.tsx\n+++ b/packages/ui/src/App.tsx\n@@ -1,2 +1,2 @@\n // guarded-behavior: selection-camera-inert\n-old\n+new\n';
+  const { res, edits } = runCli(['2174', '2175'], {
+    diffs: { 2174: guardedDiff },
+    reviews: {
+      2174: [{
+        id: 1,
+        state: 'APPROVED',
+        commit_id: SHA_2174,
+        submitted_at: '2026-08-28T00:00:01Z',
+        user: { login: 'release-automation', type: 'App' },
+      }],
+    },
   });
   assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
   assert.match(res.stderr, /refusing admin-bypass for guarded PR #2174/);
