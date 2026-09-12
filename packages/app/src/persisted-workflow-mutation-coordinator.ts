@@ -141,6 +141,7 @@ export class PersistedWorkflowMutationCoordinator {
     this.enqueueStartedAtMs.set(intentId, Date.now());
     this.createTiming(workflowId, channel, intentId, args)
       .mark('PersistedWorkflowMutationCoordinator.enqueue', 'queued', { priority });
+    this.evictQueuedWorkflowIntentsForNewFence(workflowId, intentId);
     this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
       `enqueue intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
@@ -179,6 +180,7 @@ export class PersistedWorkflowMutationCoordinator {
         priority,
         deferDrain: Boolean(options?.deferDrain),
       });
+    this.evictQueuedWorkflowIntentsForNewFence(workflowId, intentId);
     this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
       `submit intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} defer=${Boolean(options?.deferDrain)} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
@@ -450,6 +452,14 @@ export class PersistedWorkflowMutationCoordinator {
         `[workflow-mutation-coordinator] evicted ${evictedIds.length} queued intent(s) before fence ${intent.channel}#${intent.id} for ${workflowId}\n`,
       );
     }
+  }
+
+  private evictQueuedWorkflowIntentsForNewFence(workflowId: string, intentId: number): void {
+    const intent = this.persistence.loadWorkflowMutationIntent(intentId);
+    if (!intent || intent.status !== 'queued') {
+      return;
+    }
+    this.evictQueuedWorkflowIntentsForFence(workflowId, intent);
   }
 
   private createRunningIntentInvalidation(intentId: number): InvalidationSignal {
