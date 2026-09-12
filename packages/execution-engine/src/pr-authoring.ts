@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
+import { FailureClassifier } from '@invoker/workflow-core';
+
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
@@ -862,7 +864,12 @@ export function spawnAgentPrAuthorViaRegistry(
             resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
             return;
           }
-          reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${buildAgentExitFailureDetail(stdout, stderr, displayStdout)}`));
+          const failureDetail = buildAgentExitFailureDetail(stdout, stderr, displayStdout);
+          const failureClass = FailureClassifier.classifyAgentQuotaRefusal(failureDetail);
+          reject(Object.assign(
+            new Error(`${agent.name} PR authoring exited with code ${code}: ${failureDetail}`),
+            failureClass ? { failureClass } : {},
+          ));
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
         }
