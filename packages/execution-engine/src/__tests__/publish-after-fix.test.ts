@@ -597,6 +597,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
         createdAt: new Date(),
         config: { isMergeNode: true, runnerKind: 'merge', workflowId: 'wf-int' } as any,
         execution: execution as any,
+        taskStateVersion: 1,
       };
     }
 
@@ -608,6 +609,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
       createdAt: new Date(),
       config: { workflowId: 'wf-int' } as any,
       execution: { branch: 'invoker/t1' } as any,
+      taskStateVersion: 1,
     };
 
     function patchConfigLikeOrchestrator(host: MergeRunnerHost, mergeTask: TaskState): () => unknown {
