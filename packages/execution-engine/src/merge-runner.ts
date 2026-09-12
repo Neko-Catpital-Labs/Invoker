@@ -10,7 +10,7 @@ import { normalize, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-import type { Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import type { FailureClass, Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
@@ -22,6 +22,12 @@ import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } 
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
+
+function attachedFailureClass(err: unknown): FailureClass | undefined {
+  if (!err || typeof err !== 'object' || !('failureClass' in err)) return undefined;
+  const failureClass = (err as { failureClass?: unknown }).failureClass;
+  return failureClass === 'agent-usage-limit' ? failureClass : undefined;
+}
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -1645,7 +1651,7 @@ export async function publishAfterFixImpl(
       actionId: task.id,
       executionGeneration: task.execution.generation ?? 0,
       status: 'failed',
-      outputs: { exitCode: 1, error: outputError },
+      outputs: { exitCode: 1, error: outputError, failureClass: attachedFailureClass(err) },
     };
     host.orchestrator.handleWorkerResponse(failedResponse);
   }

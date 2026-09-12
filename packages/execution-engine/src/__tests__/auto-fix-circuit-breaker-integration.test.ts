@@ -62,7 +62,7 @@ describe('auto-fix circuit breaker integration', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('reproduces the bug: a usage-limit failure on one task does not stop an UNRELATED failed task from being dispatched the same tick', async () => {
+  it('a typed usage-limit failure on one task stops an unrelated failed task in the same tick', async () => {
     // Before this fix, FailureClassifier had no usage-limit category and
     // auto-fix-recovery had no circuit breaker: this task would consume its
     // own attempt budget on a certain-to-fail retry, and every OTHER failed
@@ -74,6 +74,7 @@ describe('auto-fix circuit breaker integration', () => {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
           + 'to purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
+        failureClass: 'agent-usage-limit',
       },
     });
     const unrelatedTask = makeFailedTask({ id: 'wf-1/unrelated' });
@@ -99,6 +100,31 @@ describe('auto-fix circuit breaker integration', () => {
     const state = loadCircuitBreakerState(circuitBreakerPath);
     expect(state.reason).toBe('usage-limit');
     expect(isCircuitBreakerPaused(state, Date.now())).toBe(true);
+  });
+
+  it('does not trip the breaker for a CI check table with Review rate limited but no failureClass', async () => {
+    const mergeGateCheckTable = [
+      'quality / TypeScript Types\tpass\t42s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265672\t',
+      'CodeRabbit\tpass\t0\t\tReview rate limited',
+      'UI Vitest\tpass\t2m44s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265910\t',
+      '[worktree] Process exited: actionId=wf-1788249568173-6/land-verified-pr exitCode=1',
+    ].join('\n');
+    const ciFailureTask = makeFailedTask({
+      id: 'wf-1/merge-gate',
+      execution: {
+        generation: 2,
+        selectedAttemptId: 'a1',
+        branch: 'x',
+        error: mergeGateCheckTable,
+        failureClass: undefined,
+      },
+    });
+    const submitted: string[] = [];
+
+    await runTick([ciFailureTask], submitted);
+
+    expect(submitted).toContain('wf-1/merge-gate');
+    expect(isCircuitBreakerPaused(loadCircuitBreakerState(circuitBreakerPath), Date.now())).toBe(false);
   });
 
   it('an unrelated failed task dispatches normally once the pause window has elapsed', async () => {
@@ -147,6 +173,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: new Date(tripAt.getTime() - 1000),
       },
     });
@@ -171,6 +198,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: failedAt,
       },
     });
@@ -191,6 +219,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: new Date(Date.now() - 60 * 1000),
       },
     });

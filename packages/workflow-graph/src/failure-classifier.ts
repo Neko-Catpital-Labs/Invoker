@@ -24,9 +24,9 @@ export const SSH_INFRA_FAILURE_CLASSES: readonly SshInfraFailureClass[] = [
   'ssh-disk-full',
 ];
 
-const CI_CHECK_TABLE_ROW = /^[^\t]*\t(?:pass|fail|skipping|pending|cancelled|neutral|timed_out)\t/i;
+const CHECK_STATUS_TABLE_ROW = /^[^\t]*\t(?:pass|fail|skipping|pending|cancelled|neutral|timed_out)\t/i;
 
-const AGENT_QUOTA_REFUSAL = new RegExp([
+const QUOTA_REFUSAL_PATTERN = new RegExp([
   'usage limit',
   'rate[ _-]limit(?:_error|_exceeded)',
   'rate limit exceeded',
@@ -41,8 +41,8 @@ export class FailureClassifier {
     if (typeof agentOutput !== 'string') return undefined;
     return agentOutput
       .split('\n')
-      .filter((line) => !CI_CHECK_TABLE_ROW.test(line))
-      .some((line) => AGENT_QUOTA_REFUSAL.test(line))
+      .filter((line) => !CHECK_STATUS_TABLE_ROW.test(line))
+      .some((line) => QUOTA_REFUSAL_PATTERN.test(line))
       ? 'agent-usage-limit'
       : undefined;
   }
@@ -141,11 +141,7 @@ export class FailureClassifier {
    * immediately cannot succeed until the quota resets, so callers should
    * back off globally rather than spend a per-task auto-fix attempt on it.
    */
-  static isUsageLimit(errorText: unknown): boolean {
-    if (typeof errorText !== 'string') return false;
-    return errorText
-      .split('\n')
-      .filter((line) => !CI_CHECK_TABLE_ROW.test(line))
-      .some((line) => AGENT_QUOTA_REFUSAL.test(line));
+  static isUsageLimit(failureClass: FailureClass | undefined): boolean {
+    return failureClass === 'agent-usage-limit';
   }
 }

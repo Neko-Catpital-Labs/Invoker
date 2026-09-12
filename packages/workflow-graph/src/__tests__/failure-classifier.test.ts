@@ -143,39 +143,17 @@ describe('FailureClassifier predicates', () => {
     expect(FailureClassifier.isCancellation(undefined)).toBe(false);
   });
 
-  it('isUsageLimit matches both real agent-quota failure shapes seen in production', () => {
-    // Live incident text captured from a real failed task's execution.error.
-    expect(FailureClassifier.isUsageLimit(
-      '[Fix with Agent failed] SSH remote script failed (exit=1, phase=remote_agent_fix)\n'
-      + "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to "
-      + 'purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
-    )).toBe(true);
-    // Distinct phrasing this repo's own codex-driver tests already model.
-    expect(FailureClassifier.isUsageLimit(
-      'codex fix exited with code 1: [assistant] Model refused: usage limit reached',
-    )).toBe(true);
-    expect(FailureClassifier.isUsageLimit('AssertionError: expected 1 to be 2')).toBe(false);
+  it('isUsageLimit matches the typed agent quota failure class only', () => {
+    expect(FailureClassifier.isUsageLimit('agent-usage-limit')).toBe(true);
+    expect(FailureClassifier.isUsageLimit('ssh-transport-transient')).toBe(false);
+    expect(FailureClassifier.isUsageLimit('liveness_stall')).toBe(false);
     expect(FailureClassifier.isUsageLimit(undefined)).toBe(false);
   });
 
-  it('isUsageLimit ignores a third-party CI check row that reports its own rate limiting', () => {
-    // Live incident 2026-09-12: attempt wf-1788249568173-6/land-verified-pr-acbb90da0
-    // failed on CI, and its execution.error is the merge gate's check table. One row
-    // is CodeRabbit reporting its own review throttling on a PASSING check. That row
-    // tripped the fleet-wide auto-fix breaker for 6h even though no agent quota was hit.
-    const mergeGateCheckTable = [
-      'quality / TypeScript Types\tpass\t42s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265672\t',
-      'CodeRabbit\tpass\t0\t\tReview rate limited',
-      'UI Vitest\tpass\t2m44s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265910\t',
-      '[worktree] Process exited: actionId=wf-1788249568173-6/land-verified-pr exitCode=1',
-    ].join('\n');
-    expect(FailureClassifier.isUsageLimit(mergeGateCheckTable)).toBe(false);
-  });
-
-  it('isUsageLimit still matches a provider HTTP rate-limit refusal', () => {
-    expect(FailureClassifier.isUsageLimit(
-      'API error: 429 {"type":"error","error":{"type":"rate_limit_error",'
-      + '"message":"Number of request tokens has exceeded your per-minute rate limit"}}',
-    )).toBe(true);
+  it('isUsageLimit returns false for non-agent failure classes', () => {
+    for (const cls of SSH_INFRA_FAILURE_CLASSES) {
+      expect(FailureClassifier.isUsageLimit(cls)).toBe(false);
+    }
+    expect(FailureClassifier.isUsageLimit('ssh-transport-transient')).toBe(false);
   });
 });
