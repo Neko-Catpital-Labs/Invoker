@@ -5,6 +5,7 @@ description: >
   doctor, feature-map prove commands, isolated-Electron drive, visual-proof wrap,
   and owner query. Use for Invoker UI claims, before asserting done/shipped, or when
   the user asks to verify / control-invoker / prove a surface.
+category: optimization
 ---
 
 # verify

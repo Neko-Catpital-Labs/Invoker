@@ -3,6 +3,7 @@ name: visual-proof
 description: >
   Capture before/after UI screenshots and video for Invoker plans that modify
   the UI.
+category: optimization
 ---
 
 # visual-proof

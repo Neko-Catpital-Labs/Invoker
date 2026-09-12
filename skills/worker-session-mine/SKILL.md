@@ -5,6 +5,7 @@ description: >
   Mines terminal fire-and-forget agent sessions (Claude, Codex, OMP) for mechanical
   thrash and files a separate Invoker follow-up. Toggle via Workers UI / worker
   desired-state. Do not use for interactive /reflect — that stays in catstack.
+category: optimization
 ---
 
 # worker-session-mine

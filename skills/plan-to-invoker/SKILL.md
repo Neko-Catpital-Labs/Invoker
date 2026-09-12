@@ -13,6 +13,7 @@ description: >
   to that literal path; it must start with top-level name, onFinish, mergeMode,
   repoUrl (or scratch: true for no-repo mode), and tasks, never version or metadata wrappers,
   and must not scan, validate, submit, or discover env vars.
+category: core
 ---
 
 # plan-to-invoker

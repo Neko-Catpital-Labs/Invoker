@@ -8,6 +8,7 @@ description: >
   "Required output path", write the requested artifact directly to that literal
   path, do not ask clarifying questions, and do not validate, review-gate, or
   submit.
+category: optimization
 ---
 
 # loop-generator

@@ -4,6 +4,7 @@ description: >
   Land (queue/merge) a Mergify-managed PR stack safely. Trigger when asked to
   land, merge, ship, or queue a PR or PR stack with Mergify. Enforces that you
   act only on SHA-verified PR numbers — never a PR found by branch name.
+category: core
 ---
 
 # land-stack

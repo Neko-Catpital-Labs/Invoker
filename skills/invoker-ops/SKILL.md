@@ -4,6 +4,7 @@ description: >
   Safely operate existing Invoker workflows and tasks from natural-language requests.
   Trigger when asked to list, inspect, retry, restart, resume, cancel, approve,
   reject, or check pending/failed/running Invoker tasks or workflows.
+category: core
 ---
 
 # invoker-ops

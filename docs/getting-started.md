@@ -148,6 +148,8 @@ Either path writes `plans/invoker-handoff.md`, converts it to `plans/invoker-han
 
 Source checkouts can install the repo helpers with `bash scripts/setup-agent-skills.sh`.
 
+Set `INVOKER_SKILL_CATEGORY` before running that script to narrow the install to one named subset instead of every bundled skill — for example `INVOKER_SKILL_CATEGORY=core` installs only the core subset, and `INVOKER_SKILL_CATEGORY=optimization` installs only the optimization subset. Leave it unset to install everything, as before.
+
 ### Slack
 
 Install the Slack surface launcher with npm:

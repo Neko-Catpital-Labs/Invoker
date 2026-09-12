@@ -1,6 +1,7 @@
 ---
 name: remote-ci-verify
 description: Push the current branch and verify it against the CI-equivalent test surface on an available SSH remote target, including selecting a target not currently used by Invoker, creating a temporary remote worktree, and running `pnpm run test:all` with CI-style setup. Use when you need pre-merge confidence that mirrors `.github/workflows/ci.yml` more closely than local-only tests.
+category: optimization
 ---
 
 # remote-ci-verify

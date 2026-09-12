@@ -6,6 +6,7 @@ description: >
   when asked to make a PR, update a PR body, prepare PR text, publish a
   stacked PR branch, or whenever a branch/PR change means the GitHub PR
   metadata may now be stale.
+category: core
 ---
 
 # make-pr

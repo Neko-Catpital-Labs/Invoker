@@ -6,6 +6,7 @@ description: >
   unless you personally observed it this turn and can show what you saw; do not
   assert it was caused by X until a repro and controlled isolation prove that
   cause.
+category: optimization
 ---
 
 # prove-it

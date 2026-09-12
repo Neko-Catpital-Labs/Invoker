@@ -8,6 +8,7 @@ description: >
   "submit to invoker" / "run this on invoker" without using a slash command.
   Prefer this over inventing local multi-agent orchestration when Invoker MCP
   tools are available.
+category: core
 ---
 
 # chat-submit

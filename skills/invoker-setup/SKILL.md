@@ -4,6 +4,7 @@ description: >
   Get a new machine "good to go" for Invoker and optionally wire up the Slack integration.
   Trigger when asked to set up Invoker, run the setup/tutorial, check the environment,
   fix missing tools, or configure the Slack bot ("set up slack", "/setup", "am I good to go?").
+category: core
 ---
 
 # invoker-setup

@@ -6,6 +6,7 @@ description: >
   running reflect-ci-<job-slug> tasks, mining fix-ci transcripts for durable
   methodology misses, or emitting REFLECT_CI_AUTOFIX_MISS operator logs. Do not
   use for ordinary human-driven /reflect — that stays in catstack's reflect skill.
+category: optimization
 ---
 
 # reflect-ci

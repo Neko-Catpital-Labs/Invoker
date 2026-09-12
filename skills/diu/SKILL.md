@@ -9,6 +9,7 @@ description: >
   ELI5, Eli5, "ELI 5" with a space, or an explicit word cap like "< 40 words"),
   even with no other context. Fires most often on debugging "why" questions,
   architecture explanations, and PR summaries.
+category: optimization
 ---
 
 # diu
