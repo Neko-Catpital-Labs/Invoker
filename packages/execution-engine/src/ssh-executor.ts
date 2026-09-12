@@ -4,7 +4,7 @@ import { accessSync, constants } from 'node:fs';
 import { normalize } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
-import { BaseExecutor, type BaseEntry } from './base-executor.js';
+import { BaseExecutor, selectFailedTaskStoredError, type BaseEntry } from './base-executor.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import { planManagedWorktree } from './managed-worktree-controller.js';
@@ -1272,11 +1272,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
             if (cleanupFallbackError) {
               mappedError = cleanupFallbackError;
             } else {
-              const lines = allOutput.split('\n');
-              const tail = lines.slice(-50).join('\n').trim();
-              if (tail) {
-                mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
-              }
+              mappedError = selectFailedTaskStoredError(allOutput);
             }
           }
 
