@@ -800,6 +800,7 @@ jobs:
               e2e/persistence-lifecycle.spec.ts
               e2e/planning-review-scroll.spec.ts
               e2e/planning-submit-to-workflow-graph.spec.ts
+              e2e/codex-spend-gate-blocks-task.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts
