@@ -565,6 +565,7 @@ export function reclaimOrphanedExecutionSlots(host: TaskRunnerPoolHost & MergeRu
     if (allTasks.length === 0 || knownTaskIds.has(entry.taskId)) continue;
     releaseAndKillOrphanedExecution(host, attemptId, entry, 'orphaned');
   }
+  reclaimStalePoolSelections(host, getTask, allTasks, knownTaskIds);
 }
 
 function clearPendingPoolSelection(host: TaskRunnerPoolHost, taskId: string): void {
@@ -573,6 +574,55 @@ function clearPendingPoolSelection(host: TaskRunnerPoolHost, taskId: string): vo
     releasePoolSelectionLease(host, previous);
     host.pendingPoolSelections.delete(taskId);
   }
+}
+
+const UNLAUNCHABLE_TASK_STATUSES = new Set<string>([
+  'completed',
+  'failed',
+  'cancelled',
+  'skipped',
+  'closed',
+  'stale',
+]);
+
+function reclaimStalePoolSelections(
+  host: TaskRunnerPoolHost,
+  getTask: (taskId: string) => TaskState | null | undefined,
+  allTasks: readonly TaskState[],
+  knownTaskIds: ReadonlySet<string>,
+): void {
+  if (!host.pendingPoolSelections) return;
+  for (const [taskId, selection] of [...host.pendingPoolSelections.entries()]) {
+    const task = getTask(taskId);
+    if (task) {
+      if (!UNLAUNCHABLE_TASK_STATUSES.has(task.status)) continue;
+      releaseStalePoolSelection(host, taskId, selection, task.status);
+      continue;
+    }
+    if (allTasks.length === 0 || knownTaskIds.has(taskId)) continue;
+    releaseStalePoolSelection(host, taskId, selection, 'deleted');
+  }
+}
+
+function releaseStalePoolSelection(
+  host: TaskRunnerPoolHost,
+  taskId: string,
+  selection: PoolSelection,
+  reason: string,
+): void {
+  releasePoolSelectionLease(host, selection);
+  host.pendingPoolSelections.delete(taskId);
+  host.logger?.warn?.(
+    `[TaskRunner] reclaimed stale pool selection task=${taskId} member=${selection.memberKey} reason=${reason}; `
+      + 'the holder can never select an executor again',
+    {
+      taskId,
+      member: selection.memberKey,
+      poolId: selection.poolId,
+      reason,
+      module: 'task-runner',
+    },
+  );
 }
 
 function reservePoolMemberSelection(
