@@ -182,6 +182,56 @@ def _safe_push_task_yaml(
     )
 
 
+def _resolve_bot_thread_task_yaml(*, thread_id: str, start_head: str) -> str:
+    query = (
+        "query($id: ID!) { node(id: $id) { ... on PullRequestReviewThread "
+        "{ id isResolved pullRequest { state merged headRefOid } } } }"
+    )
+    mutation = (
+        "mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) "
+        "{ thread { id isResolved } } }"
+    )
+    command = (
+        "set -euo pipefail\n"
+        "python3 - <<'PY'\n"
+        "import json\n"
+        "import subprocess\n"
+        "import sys\n"
+        f"thread_id = {json.dumps(thread_id)}\n"
+        f"start_head = {json.dumps(start_head)}\n"
+        f"query = {json.dumps(query)}\n"
+        f"mutation = {json.dumps(mutation)}\n"
+        "view = subprocess.run(\n"
+        "    ['gh', 'api', 'graphql', '-f', f'id={thread_id}', '-f', f'query={query}'],\n"
+        "    check=True,\n"
+        "    capture_output=True,\n"
+        "    text=True,\n"
+        ")\n"
+        "node = (json.loads(view.stdout).get('data') or {}).get('node')\n"
+        "if not node:\n"
+        "    print(f'review thread not found: {thread_id}', file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+        "pr = node.get('pullRequest') or {}\n"
+        "if node.get('isResolved') or pr.get('state') != 'OPEN' or pr.get('merged'):\n"
+        "    sys.exit(0)\n"
+        "if pr.get('headRefOid') == start_head:\n"
+        "    print('refusing to resolve review thread before a pushed head change', file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+        "subprocess.run(\n"
+        "    ['gh', 'api', 'graphql', '-f', f'threadId={thread_id}', '-f', f'query={mutation}'],\n"
+        "    check=True,\n"
+        ")\n"
+        "PY\n"
+    )
+    return (
+        "  - id: resolve-thread\n"
+        f"    description: {_yaml_str(f'Resolve bot review thread {thread_id} after PR head changes')}\n"
+        "    dependencies: [safe-push]\n"
+        "    command: |\n"
+        f"{_indent_block(command, 6)}\n"
+    )
+
+
 def _shlex(value: str) -> str:
     # Minimal POSIX single-quote wrap; values here are SHAs, branch names, and
     # our own ledger paths/kinds -- none contain single quotes in practice, but
@@ -412,8 +462,9 @@ def build_repair_bot_thread_plan(
 ) -> AsyncRepairPlan:
     name = repair_bot_thread_plan_name(pr.number, start_head)
     prompt = (
-        f"Resolve the unresolved review thread {thread_id}. Address the reviewer's feedback with "
+        f"Address the unresolved review thread {thread_id}. Address the reviewer's feedback with "
         "real code changes, run the narrow proof for the fix, then commit locally. Do not push. "
+        "Do not resolve the GitHub review thread; the downstream resolve-thread task owns that after safe-push. "
         "If the thread is already resolved, or the PR is closed or merged, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {start_head}\nThread: {thread_id}\n"
     )
@@ -431,6 +482,7 @@ def build_repair_bot_thread_plan(
         skip_if_prereq=False,
         foreign=foreign,
     )
+    yaml_text += _resolve_bot_thread_task_yaml(thread_id=thread_id, start_head=start_head)
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
