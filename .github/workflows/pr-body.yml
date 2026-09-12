@@ -17,18 +17,33 @@ permissions:
   pull-requests: read
 
 env:
-  NODE_VERSION: '26'
+  NODE_VERSION: '24'
   PR_BODY_ENFORCE_ALL: ${{ vars.PR_BODY_ENFORCE_ALL || 'false' }}
   PR_BODY_ENFORCED_AUTHORS: ${{ vars.PR_BODY_ENFORCED_AUTHORS || 'EdbertChan' }}
 
 jobs:
   validate:
     name: PR Body
-    runs-on:
-      labels: Github_Runner
+    runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
+      - name: Reclaim runner paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          owner="$(id -u):$(id -g)"
+          sudo chown -R "${owner}" "$GITHUB_WORKSPACE"
+
+          if [[ -d "$RUNNER_TOOL_CACHE" ]]; then
+            sudo chown "${owner}" "$RUNNER_TOOL_CACHE"
+          fi
+
+          if [[ -d "$RUNNER_TOOL_CACHE/node" ]]; then
+            sudo chown -R "${owner}" "$RUNNER_TOOL_CACHE/node"
+          fi
+
       - name: Checkout trusted base
         uses: actions/checkout@v4
         with:
@@ -99,6 +114,71 @@ jobs:
       - name: Install pnpm
         if: steps.targets.outputs.enabled == 'true'
         uses: pnpm/action-setup@v4
+
+      - name: Install Node.js runtime dependency
+        if: steps.targets.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'; then
+            exit 0
+          fi
+
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::libatomic.so.1 is required for Node.js ${NODE_VERSION}, but apt-get is not available to install libatomic1."
+            exit 1
+          fi
+
+          apt_get=(apt-get)
+          if [[ "${EUID}" -ne 0 ]]; then
+            if ! sudo -n true 2>/dev/null; then
+              if ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'; then
+                exit 0
+              fi
+
+              echo "::error::libatomic.so.1 is required for Node.js ${NODE_VERSION}, but installing libatomic1 requires passwordless sudo on this runner."
+              exit 1
+            fi
+
+            apt_get=(sudo apt-get)
+          fi
+
+          "${apt_get[@]}" update
+          "${apt_get[@]}" install -y --no-install-recommends libatomic1
+
+      - name: Reclaim Node.js tool cache
+        if: steps.targets.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${RUNNER_TOOL_CACHE:-}" ]]; then
+            echo "::error::RUNNER_TOOL_CACHE is not set; cannot prepare the Node.js tool cache."
+            exit 1
+          fi
+
+          if ! sudo -n true 2>/dev/null; then
+            echo "::error::Making RUNNER_TOOL_CACHE writable requires passwordless sudo on this runner."
+            exit 1
+          fi
+
+          if ! sudo -n mkdir -p -- "${RUNNER_TOOL_CACHE}" ||
+            ! sudo -n chown "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}"; then
+            echo "::error::Could not assign RUNNER_TOOL_CACHE to the current runner account."
+            exit 1
+          fi
+
+          if [[ -e "${RUNNER_TOOL_CACHE}/node" || -L "${RUNNER_TOOL_CACHE}/node" ]] &&
+            ! sudo -n chown -R -h -P "$(id -u):$(id -g)" -- "${RUNNER_TOOL_CACHE}/node"; then
+            echo "::error::Could not assign the existing Node.js tool-cache subtree to the current runner account."
+            exit 1
+          fi
+
+          if [[ ! -d "${RUNNER_TOOL_CACHE}" || ! -w "${RUNNER_TOOL_CACHE}" ]]; then
+            echo "::error::RUNNER_TOOL_CACHE is not writable by the current runner account."
+            exit 1
+          fi
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         if: steps.targets.outputs.enabled == 'true'

@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   OWNER_SPLIT_BRAIN_PREFIX,
+  buildGuiLockConflictPrompt,
   isWriterLockHeldError,
   parseWriterLockHolderPid,
   probeLockHolderOwner,
   resolveOwnerServeLockFailure,
+  terminateAndAwaitExit,
   type ProbeBus,
 } from '../owner-split-brain.js';
 
@@ -41,6 +43,10 @@ describe('parseWriterLockHolderPid', () => {
 
   it('returns null when no pid is present', () => {
     expect(parseWriterLockHolderPid(new Error('[db-writer-lock] already held by PID unknown.'))).toBeNull();
+  });
+
+  it('returns null for PID 0', () => {
+    expect(parseWriterLockHolderPid(new Error('[db-writer-lock] already held by PID 0.'))).toBeNull();
   });
 });
 
@@ -104,5 +110,93 @@ describe('resolveOwnerServeLockFailure', () => {
     expect(resolution.message).toContain(OWNER_SPLIT_BRAIN_PREFIX);
     expect(resolution.message).toContain('PID 266663');
     expect(resolution.message).toContain('/tmp/ipc.sock');
+  });
+});
+
+describe('buildGuiLockConflictPrompt', () => {
+  it('offers a kill button naming the holder pid when one is parseable', () => {
+    const prompt = buildGuiLockConflictPrompt(HELD_ERROR);
+    expect(prompt.holderPid).toBe(266663);
+    expect(prompt.message).toContain('PID 266663');
+    expect(prompt.buttons).toEqual(['Quit Other Instance and Retry', 'Quit']);
+    expect(prompt.killButtonIndex).toBe(0);
+    expect(prompt.cancelId).toBe(1);
+    expect(prompt.buttons[prompt.cancelId]).toBe('Quit');
+  });
+
+  it('falls back to an informational-only prompt when no pid is parseable', () => {
+    const prompt = buildGuiLockConflictPrompt(new Error('[db-writer-lock] already held by PID unknown.'));
+    expect(prompt.holderPid).toBeNull();
+    expect(prompt.killButtonIndex).toBeNull();
+    expect(prompt.buttons).toEqual(['Quit']);
+    expect(prompt.cancelId).toBe(0);
+  });
+
+  it('does not offer to terminate PID 0', () => {
+    const prompt = buildGuiLockConflictPrompt(new Error('[db-writer-lock] already held by PID 0.'));
+    expect(prompt.holderPid).toBeNull();
+    expect(prompt.killButtonIndex).toBeNull();
+    expect(prompt.buttons).toEqual(['Quit']);
+  });
+});
+
+describe('terminateAndAwaitExit', () => {
+  it('rejects PID 0 without attempting to terminate it', async () => {
+    const terminatePid = vi.fn();
+
+    await expect(terminateAndAwaitExit(0, { terminatePid })).resolves.toBe(false);
+    expect(terminatePid).not.toHaveBeenCalled();
+  });
+
+  it('sends SIGTERM and resolves true once isPidAlive flips to false', async () => {
+    let aliveCalls = 0;
+    const sleepCalls: number[] = [];
+    const terminatePid = vi.fn();
+    const isPidAlive = vi.fn(() => {
+      aliveCalls++;
+      return aliveCalls < 3;
+    });
+    const sleep = vi.fn((ms: number) => {
+      sleepCalls.push(ms);
+      return Promise.resolve();
+    });
+
+    const exited = await terminateAndAwaitExit(4242, { terminatePid, isPidAlive, sleep, now: () => 0 });
+
+    expect(exited).toBe(true);
+    expect(terminatePid).toHaveBeenCalledWith(4242);
+    expect(sleepCalls).toEqual([200, 200]);
+  });
+
+  it('resolves false once the timeout elapses without the pid dying', async () => {
+    let elapsed = 0;
+    const isPidAlive = () => true;
+    const sleep = (ms: number) => {
+      elapsed += ms;
+      return Promise.resolve();
+    };
+
+    const exited = await terminateAndAwaitExit(4242, {
+      terminatePid: () => {},
+      isPidAlive,
+      sleep,
+      now: () => elapsed,
+      timeoutMs: 500,
+    });
+
+    expect(exited).toBe(false);
+  });
+
+  it('still checks liveness when terminatePid throws (e.g. already dead)', async () => {
+    const isPidAlive = vi.fn(() => false);
+    const exited = await terminateAndAwaitExit(4242, {
+      terminatePid: () => { throw new Error('ESRCH'); },
+      isPidAlive,
+      sleep: () => Promise.resolve(),
+      now: () => 0,
+    });
+
+    expect(exited).toBe(true);
+    expect(isPidAlive).toHaveBeenCalledWith(4242);
   });
 });

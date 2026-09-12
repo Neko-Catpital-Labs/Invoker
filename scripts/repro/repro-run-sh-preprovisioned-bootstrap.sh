@@ -99,6 +99,7 @@ run_fake_headless() {
   rm -f "$PNPM_CALLS" "$RUN_STDOUT" "$RUN_STDERR"
   status=0
   HOME="$TMP_DIR/home" \
+    INVOKER_DEVELOPMENT_PROFILE_ACTIVE=1 \
     INVOKER_FORCE_BOOTSTRAP="$force_bootstrap" \
     INVOKER_DB_DIR="$TMP_DIR/db" \
     INVOKER_REPO_CONFIG_PATH="$TMP_DIR/config.json" \

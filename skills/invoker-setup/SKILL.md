@@ -24,9 +24,12 @@ the config check, planning tools, and the default preset check.
 
 - `error` blocks "good to go" — surface the `remediation` verbatim.
 - `warn` is advisory (an optional tool / preset not installed) — mention it, don't block.
-- The `default-preset` and `planning-tools` checks are config-aware: an `error` there means the
-  configured `defaultSlackHarnessPreset` points at a CLI that is not installed. This is the most
-  common Slack failure ("spawn cursor ENOENT") — fix it before going further.
+- The `default-preset` and `planning-tools` checks are config-aware and PATH-based: an `error`
+  means the configured planner command is not available on Invoker's own `PATH`. Do not report
+  that command as uninstalled based on this probe alone. If it already works in a terminal,
+  restart Invoker to refresh its shell environment; otherwise install it or configure a preset
+  whose command is available. This is the most common Slack failure ("spawn cursor ENOENT") —
+  fix it before going further.
 
 Offer to auto-install missing installable tools:
 
@@ -112,6 +115,11 @@ app logs a one-line prerequisites summary, and the desktop System Setup panel re
 canonical tools, config, planning-tools, and default-preset readiness as `invoker-cli doctor`; if the
 default preset's tool is missing, the readiness check reports an error while startup still continues,
 and if Slack env is incomplete it logs exactly which variable is missing and to run `invoker-cli setup slack`.
+
+`invoker-cli setup` also writes Invoker-owned always-on harness instructions: a Cursor rule, a Codex
+AGENTS.md marked block, and a Claude UserPromptSubmit hook. Feature work then goes through the
+installed `invoker-plan-to-invoker` skill unless the user says "do it locally". Remove those helpers
+with `install-skills uninstall`. That does not delete the Invoker app or `~/.invoker`.
 
 ## Hard rules
 

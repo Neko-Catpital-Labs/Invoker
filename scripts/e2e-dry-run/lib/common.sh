@@ -73,7 +73,6 @@ invoker_e2e_init() {
   export INVOKER_HEADLESS_STANDALONE=1
   # Safety rail in app/headless: delete-all requires explicit opt-in.
   # E2E suites use isolated temp DB dirs, so enabling here is safe.
-  export INVOKER_ALLOW_DELETE_ALL=1
   # E2E tests run multiple standalone processes against the same DB (e.g.
   # submit-plan in background + cancel command). The writer lock would block
   # the second process. In production, IPC delegation handles this.
@@ -84,6 +83,7 @@ invoker_e2e_init() {
   # Isolate each e2e run from other local Invoker instances/tests to avoid API port collisions.
   export INVOKER_API_PORT="${INVOKER_API_PORT:-$((4300 + (RANDOM % 1000)))}"
   export INVOKER_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-db.XXXXXX")"
+  export INVOKER_CODEX_SPEND_GATE_PATH="$INVOKER_DB_DIR/codex-spend-gate.json"
   export INVOKER_IPC_SOCKET="${INVOKER_IPC_SOCKET:-$INVOKER_DB_DIR/ipc-transport.sock}"
   export INVOKER_E2E_MARKER_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-marker.XXXXXX")"
   # Template must end with XXXXXX (suffix after X breaks BSD mktemp and can flake).
@@ -198,8 +198,9 @@ invoker_e2e_stop_submit_plan_background() {
 invoker_e2e_cleanup() {
   invoker_e2e_stop_submit_plan_background
   invoker_e2e_kill_owned_headless_processes
-  # Clean up worktrees created during the test.
-  git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
+  if [ -d "$INVOKER_E2E_REPO_ROOT/.git" ]; then
+    git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
+  fi
   rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
   rm -f "${INVOKER_REPO_CONFIG_PATH:-}" 2>/dev/null || true
 
@@ -487,6 +488,9 @@ invoker_e2e_run_headless() {
     esac
     if [ -z "$retry_reason" ] && grep -Fq 'Read-only file open refused while WAL sidecars exist' "$stderr_file"; then
       retry_reason="owner-boundary WAL guard"
+    fi
+    if [ -z "$retry_reason" ] && grep -Fq 'headless electron exited with signal SIGTRAP' "$stderr_file"; then
+      retry_reason="interrupted (signal=SIGTRAP)"
     fi
     if [ -n "$retry_reason" ] && [ "$attempt" -lt "$max_attempts" ]; then
       echo "WARN: headless command hit ${retry_reason}, retrying once: $*" >&2

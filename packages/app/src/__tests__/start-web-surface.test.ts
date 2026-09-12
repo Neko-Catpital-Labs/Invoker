@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry, ExecutorRegistry } from '@invoker/execution-engine';
 import type { Orchestrator } from '@invoker/workflow-core';
+import { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 
 const mocks = vi.hoisted(() => {
   const bridgeClose = vi.fn(async () => undefined);
@@ -210,6 +211,27 @@ describe('startHeadlessWebSurface', () => {
         forced: true,
       }),
     );
+
+    await result?.close();
+  });
+
+  it('passes the shared owner registry to authenticated web dispatch', async () => {
+    const ownerCapabilities = new OwnerCapabilityRegistry();
+    const start = vi.fn(async () => ['started']);
+    ownerCapabilities.register('invoker:start', start);
+    const deps = makeDeps({
+      config: { webToken: 'secret' },
+      ownerCapabilities,
+    });
+
+    const result = startHeadlessWebSurface(deps);
+    const dispatch = mocks.startWebBridge.mock.calls[0]?.[0].dispatch as (
+      channel: string,
+      args: unknown[],
+    ) => Promise<unknown>;
+
+    await expect(dispatch('invoker:start', [])).resolves.toEqual(['started']);
+    expect(start).toHaveBeenCalledOnce();
 
     await result?.close();
   });

@@ -100,6 +100,7 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
   completed: GREEN,
   failed: RED,
   closed: DIM,
+  skipped: DIM,
   needs_input: BLUE,
   review_ready: CYAN,
   blocked: DIM,
@@ -115,6 +116,7 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
   completed: '✓',
   failed: '✗',
   closed: '◼',
+  skipped: '⏭',
   needs_input: '?',
   review_ready: '👀',
   blocked: '⊘',
@@ -437,6 +439,7 @@ export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
     ...(wf.externalDependencyChanges != null && { externalDependencyChanges: wf.externalDependencyChanges }),
     ...(wf.detachedExternalDependencies != null && { detachedExternalDependencies: wf.detachedExternalDependencies }),
     ...(wf.generation != null && { generation: wf.generation }),
+    staged: wf.staged === true,
   };
 }
 

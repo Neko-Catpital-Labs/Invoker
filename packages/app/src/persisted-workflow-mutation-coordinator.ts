@@ -8,6 +8,7 @@ import type { Logger, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { parseReviewGateCiRepairWorkflowMutationArgs } from '@invoker/execution-engine';
 import { resolveHeadlessTarget } from './headless-command-classification.js';
 import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
+import { findHeadlessSetSubcommandScope } from './headless-command-registry.js';
 import {
   resolveHeadlessExecCommand,
   summarizeMutationFailureMessage,
@@ -87,18 +88,6 @@ const TARGET_RESOLVED_HEADLESS_COMMANDS = new Set([
   'rebase-recreate',
 ]);
 
-const TASK_SCOPED_HEADLESS_SET_COMMANDS = new Set([
-  'command',
-  'prompt',
-  'pool',
-  'executor',
-  'agent',
-  'model',
-  'fix-prompt',
-  'fix-context',
-  'gate-policy',
-  'task',
-]);
 
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -431,6 +420,13 @@ export class PersistedWorkflowMutationCoordinator {
       `Evicted by workflow queue fence: ${intent.channel}#${intent.id}`,
     );
     if (evictedIds.length > 0) {
+      // Same conceptual event as invalidateSupersededRunningIntent's "Superseded by
+      // <kind> intent #N" — an earlier same-workflow mutation lost to a later
+      // recreate/delete/retry fence. Match that wording here too (this path only
+      // differs because the earlier intent hadn't started running yet), so callers
+      // that treat a fence preemption as a graceful, expected outcome recognize it
+      // regardless of which state the preempted intent was in.
+      const fenceKind = this.queueFenceKindLabel(intent.channel, intent.args);
       for (const evictedId of evictedIds) {
         const evictedIntent = this.persistence.loadWorkflowMutationIntent(evictedId);
         this.createTiming(
@@ -447,7 +443,7 @@ export class PersistedWorkflowMutationCoordinator {
           this.notifyIntentFailed(evictedIntent, evictedIntent.error ?? `Evicted by ${intent.channel}#${intent.id}`);
         }
         if (!deferred) continue;
-        deferred.reject(new Error(`Workflow mutation intent ${evictedId} was evicted by ${intent.channel}#${intent.id}`));
+        deferred.reject(new Error(`Superseded by ${fenceKind} intent #${intent.id}`));
         this.inFlightPromises.delete(evictedId);
       }
       process.stderr.write(
@@ -552,6 +548,29 @@ export class PersistedWorkflowMutationCoordinator {
     return null;
   }
 
+  /**
+   * Like {@link hardPreemptFenceKind}, but for the queue-fence eviction message,
+   * which also covers retry-workflow/rebase-retry fences that hardPreemptFenceKind
+   * intentionally excludes (those don't preempt a *running* intent, only queued ones).
+   */
+  private queueFenceKindLabel(channel: string, args: unknown[]): string {
+    const hardKind = this.hardPreemptFenceKind(channel, args);
+    if (hardKind) {
+      return hardKind;
+    }
+    if (channel === 'invoker:retry-workflow' || channel === 'invoker:rebase-retry') {
+      return 'retry';
+    }
+    if (channel === 'headless.exec') {
+      const payload = args[0] as { args?: unknown[] } | undefined;
+      const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
+      if (rawArgs[0] === 'retry' || rawArgs[0] === 'rebase-retry') {
+        return 'retry';
+      }
+    }
+    return 'reset';
+  }
+
   private notifyIntentFailed(intent: WorkflowMutationIntent, message: string): void {
     const headlessCommand = intent.channel === 'headless.exec'
       ? resolveHeadlessExecCommand(intent.args ?? [])
@@ -627,7 +646,7 @@ export class PersistedWorkflowMutationCoordinator {
     const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
     if (command === 'set') {
       const subCommand = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
-      return TASK_SCOPED_HEADLESS_SET_COMMANDS.has(subCommand) ? rawArgs[2] : undefined;
+      return findHeadlessSetSubcommandScope(subCommand) === 'task' ? rawArgs[2] : undefined;
     }
     return TASK_SCOPED_HEADLESS_COMMANDS.has(command) || TARGET_RESOLVED_HEADLESS_COMMANDS.has(command)
       ? rawArgs[1]
