@@ -93,7 +93,11 @@ export function hasFailedDependencyPath(
     seen.add(dependencyId);
     const dependency = tasksById.get(dependencyId);
     if (!dependency) continue;
-    if (dependency.status === 'failed' || dependency.status === 'closed') return true;
+    if (
+      dependency.status === 'failed' ||
+      dependency.status === 'closed' ||
+      dependency.status === 'skipped'
+    ) return true;
     if (hasFailedDependencyPath(dependency, tasksById, seen)) return true;
   }
   return false;

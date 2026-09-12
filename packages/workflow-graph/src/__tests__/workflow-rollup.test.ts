@@ -131,6 +131,12 @@ describe('hasFailedDependencyPath', () => {
     expect(hasFailedDependencyPath(child, mapOf(root, child))).toBe(true);
   });
 
+  it('is true when a direct dependency is skipped', () => {
+    const root = task('root', 'skipped');
+    const child = task('child', 'blocked', ['root']);
+    expect(hasFailedDependencyPath(child, mapOf(root, child))).toBe(true);
+  });
+
   it('is true transitively through an intermediate blocked task', () => {
     const root = task('root', 'failed');
     const mid = task('mid', 'blocked', ['root']);
