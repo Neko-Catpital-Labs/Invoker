@@ -1,5 +1,5 @@
 import type { SQLiteAdapter, Workflow, WorkerActionWrite } from '@invoker/data-store';
-import type { TaskState } from '@invoker/workflow-core';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, type TaskState } from '@invoker/workflow-core';
 import { ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS } from './worker-control.js';
 import {
   buildRecoveryWorkerAuditPayload,
@@ -52,7 +52,7 @@ function makeTask(id: string, status: TaskState['status']): TaskState {
     status,
     dependencies: [],
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
-    config: {},
+    config: { runnerKind: 'worktree', poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID },
     execution: status === 'completed'
       ? { exitCode: 0, completedAt: new Date('2026-07-01T00:00:01.000Z') }
       : {},

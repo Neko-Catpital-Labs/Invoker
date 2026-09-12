@@ -68,6 +68,19 @@ def duplicate_action(**kw) -> dm.CloseAction:
     return dm.CloseAction(**base)
 
 
+def flag_action(**kw) -> dm.CloseAction:
+    base = dict(
+        kind=dm.FLAG_DUPLICATE,
+        pr_number=11153,
+        expected_head_oid="bfc6",
+        reason=dm.DUPLICATE_TITLE_COLLISION_MERGED,
+        evidence="title exactly matches already-merged #10820",
+        kept_pr_number=10820,
+    )
+    base.update(kw)
+    return dm.CloseAction(**base)
+
+
 class ExecutorTestCase(unittest.TestCase):
     def _ledger(self):
         d = tempfile.mkdtemp()
@@ -131,6 +144,48 @@ class CasGuards(ExecutorTestCase):
             pr_number=5, repo="owner/repo", reason="duplicate of open PR #9",
             expected_head_oid="h5", kept_pr_number=9,
         )
+
+
+class FlagProbableDuplicate(ExecutorTestCase):
+    def test_flag_never_checks_the_merged_prs_state(self):
+        # #10820 is MERGED, not OPEN -- the CLOSE_DUPLICATE "kept PR must
+        # still be open" guard would wrongly block this. A flag only
+        # references an immutable merged PR, so that check must not apply.
+        gh = FakeGh({11153: {"state": "OPEN", "headRefOid": "bfc6"}})
+        executor = ex.PrDuplicateCloseExecutor(gh, self._ledger(), FakeLogger(), "owner/repo")
+
+        with patch.object(ex, "submit_flag_probable_duplicate") as submit:
+            performed = executor.execute(flag_action())
+
+        self.assertTrue(performed)
+        self.assertNotIn(10820, gh.calls)
+        submit.assert_called_once_with(
+            pr_number=11153, repo="owner/repo",
+            evidence="title exactly matches already-merged #10820",
+            expected_head_oid="bfc6", merged_pr_number=10820,
+        )
+
+    def test_flag_records_ledger_on_success(self):
+        gh = FakeGh({11153: {"state": "OPEN", "headRefOid": "bfc6"}})
+        ledger = self._ledger()
+        executor = ex.PrDuplicateCloseExecutor(gh, ledger, FakeLogger(), "owner/repo")
+
+        with patch.object(ex, "submit_flag_probable_duplicate"):
+            executor.execute(flag_action())
+
+        self.assertEqual(
+            ledger.count(dm.LEDGER_KIND_SUBMIT, 11153, "bfc6", dm.ledger_key(dm.DUPLICATE_TITLE_COLLISION_MERGED, 10820)), 1,
+        )
+
+    def test_flag_still_aborts_on_stale_head(self):
+        gh = FakeGh({11153: {"state": "OPEN", "headRefOid": "moved"}})
+        executor = ex.PrDuplicateCloseExecutor(gh, self._ledger(), FakeLogger(), "owner/repo")
+
+        with patch.object(ex, "submit_flag_probable_duplicate") as submit:
+            performed = executor.execute(flag_action())
+
+        self.assertFalse(performed)
+        submit.assert_not_called()
 
 
 class SuccessfulHandoff(ExecutorTestCase):
