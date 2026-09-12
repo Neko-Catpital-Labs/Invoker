@@ -24,7 +24,12 @@ import {
   type AutoFixAttemptLedger,
 } from './auto-fix-attempt-ledger.js';
 import { normalizeAutoFixRetryBudget } from './auto-fix-gating.js';
-import { checkAutoFixRetryCap, recordAutoFixRetryConsumed } from './auto-fix-retry-cap.js';
+import {
+  checkAutoFixRetryCap,
+  recordAutoFixRetryConsumed,
+  recordAutoFixRetryPending,
+  recordAutoFixRetryUnacknowledged,
+} from './auto-fix-retry-cap.js';
 import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
@@ -537,6 +542,9 @@ function recordCiRepairSubmitFailure(
   },
 ): ReviewGateCiRepairResult {
   options.attemptLedger.refund(input.attemptLedgerKey);
+  recordAutoFixRetryUnacknowledged(options.store, event.taskId, input.error, {
+    workflowId: event.workflowId,
+  });
   const errorMessage = input.error instanceof Error ? input.error.message : String(input.error);
   recordCiFailureAction(
     options,
@@ -729,6 +737,7 @@ export async function queueReviewGateCiRepair(
         members: candidate.members,
         triggering: singlePrPayload,
       });
+      recordAutoFixRetryPending(options.store, event.taskId, { workflowId: event.workflowId });
       let stackIntentId: number;
       try {
         stackIntentId = options.submitter.submit(
@@ -781,6 +790,7 @@ export async function queueReviewGateCiRepair(
   }
 
   const args = buildReviewGateCiRepairWorkflowMutationArgs(singlePrPayload);
+  recordAutoFixRetryPending(options.store, event.taskId, { workflowId: event.workflowId });
   let intentId: number;
   try {
     intentId = options.submitter.submit(

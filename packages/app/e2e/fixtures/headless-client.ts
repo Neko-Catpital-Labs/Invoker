@@ -4,9 +4,33 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { resolveRepoRoot } from '@invoker/contracts';
+import { resolveOwnerChildProfileEnv } from '../../src/headless-owner-bootstrap.js';
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolveRepoRoot(__dirname);
+
+export function e2eDevelopmentProfileEnv(
+  testDir: string,
+  electronUserDataDir: string,
+  configPath: string,
+  ipcSocketPath: string,
+): Record<string, string> {
+  return resolveOwnerChildProfileEnv({
+    INVOKER_RUNTIME_KIND: 'source-development',
+    INVOKER_DEVELOPMENT_PROFILE: '1',
+    INVOKER_DEVELOPMENT_PROFILE_ACTIVE: '1',
+    INVOKER_SOURCE_ROOT: repoRoot,
+    INVOKER_PROFILE_ID: path.basename(testDir),
+    INVOKER_DB_DIR: testDir,
+    INVOKER_USER_DATA_DIR: electronUserDataDir,
+    INVOKER_IPC_SOCKET: ipcSocketPath,
+    INVOKER_REPO_CONFIG_PATH: configPath,
+    INVOKER_ENV_PATH: path.join(testDir, '.env'),
+    INVOKER_LOG_PATH: path.join(testDir, 'invoker.log'),
+    INVOKER_API_PORT: '0',
+    INVOKER_WEB_PORT: '0',
+  });
+}
 
 type StandaloneOwnerProcess = {
   pid: number;
@@ -23,6 +47,12 @@ export function headlessTestEnv(testDir: string): NodeJS.ProcessEnv {
   const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
   return {
     ...process.env,
+    ...e2eDevelopmentProfileEnv(
+      testDir,
+      path.join(testDir, 'headless-electron-user-data'),
+      configPath,
+      ipcSocketPath,
+    ),
     NODE_ENV: 'test',
     INVOKER_TEST_WORKFLOW_IDS: '1',
     TZ: 'UTC',

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import {
@@ -27,7 +27,7 @@ import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
 import { installBundledSkills } from './bundled-skills.js';
 import { runRemoteDoctorChecks } from './remote-doctor.js';
-import { applyWorkerToggle, ONBOARDING_WORKER_TOGGLES, readWorkerToggleValue } from './worker-toggles.js';
+import { applyWorkerToggle, isDesiredStateWorkerToggle, isPolicyWorkerToggle, ONBOARDING_WORKER_TOGGLES, openWorkerDesiredStateStore, applyDesiredStateWorkerToggle, readDesiredStateWorkerToggleValue, readWorkerToggleValue, resolveCliInstanceProfile } from './worker-toggles.js';
 
 // ── Paths ────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ function experimentalPlannerServerSpec(packageSpec: string = EXPERIMENTAL_PLANNE
 }
 
 export function invokerHomeDir(): string {
-  return join(homedir(), '.invoker');
+  return resolveCliInstanceProfile().homeRoot;
 }
 export function defaultConfigPath(): string {
   return process.env.INVOKER_REPO_CONFIG_PATH ?? join(invokerHomeDir(), 'config.json');
@@ -1085,21 +1085,35 @@ async function runMachinesSetupJson(io: SetupIO, options: SetupDeps): Promise<nu
 async function runWorkerTogglesInteractive(io: SetupIO, assumeYes: boolean): Promise<void> {
   const configPath = defaultConfigPath();
   let config = readInvokerConfigFile(configPath);
-  let changed = false;
+  let configChanged = false;
   const summary: string[] = [];
+  const desiredStore = await openWorkerDesiredStateStore();
 
-  for (const spec of ONBOARDING_WORKER_TOGGLES) {
-    io.print(`\n${spec.label}: ${spec.description}`);
-    const current = readWorkerToggleValue(config, spec) ?? spec.defaultEnabled ?? false;
-    const enable = assumeYes ? current : await promptYes(io, `Enable ${spec.label}? [y/N] `);
-    if (enable !== current) {
-      config = applyWorkerToggle(config, spec, enable);
-      changed = true;
+  try {
+    for (const spec of ONBOARDING_WORKER_TOGGLES) {
+      io.print(`\n${spec.label}: ${spec.description}`);
+      let current: boolean;
+      if (isDesiredStateWorkerToggle(spec)) {
+        current = readDesiredStateWorkerToggleValue(desiredStore, spec) ?? spec.defaultEnabled ?? false;
+      } else {
+        current = readWorkerToggleValue(config, spec) ?? spec.defaultEnabled ?? false;
+      }
+      const enable = assumeYes ? current : await promptYes(io, `Enable ${spec.label}? [y/N] `);
+      if (enable !== current) {
+        if (isDesiredStateWorkerToggle(spec)) {
+          applyDesiredStateWorkerToggle(desiredStore, spec, enable);
+        } else if (isPolicyWorkerToggle(spec)) {
+          config = applyWorkerToggle(config, spec, enable);
+          configChanged = true;
+        }
+      }
+      summary.push(`${spec.label}: ${enable ? 'on' : 'off'}`);
     }
-    summary.push(`${spec.label}: ${enable ? 'on' : 'off'}`);
+  } finally {
+    desiredStore.close?.();
   }
 
-  if (changed) {
+  if (configChanged) {
     writeInvokerConfigFile(configPath, config);
   }
 
@@ -1127,7 +1141,7 @@ function resolveStandaloneSkillsRoot(): string | null {
   return existsSync(join(candidate, 'skills')) ? candidate : null;
 }
 
-function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
+export function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
   const resolveSkillsRepoRoot = options.resolveSkillsRepoRoot ?? resolveRepoRoot;
   const resolveStandaloneRoot = options.resolveStandaloneSkillsRoot ?? resolveStandaloneSkillsRoot;
   const install = options.bundledSkillsInstall ?? installBundledSkills;
@@ -1154,7 +1168,7 @@ function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
   }
 }
 
-async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<PrerequisiteCheck[]> {
+export async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<PrerequisiteCheck[]> {
   const isInstalled = options.isInstalled ?? commandExists;
   const commandRunner = options.commandRunner ?? defaultCommandRunner;
   const runGithubAuth = options.githubAuthCheck ?? checkGithubAuth;

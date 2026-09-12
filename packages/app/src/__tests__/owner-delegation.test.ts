@@ -85,6 +85,10 @@ describe('headless→owner delegation', () => {
       expect(delegationTimeoutMs(['rebase-retry', 'wf-123/task-1'], targetLookup)).toBe(5_000);
     });
 
+    it('uses 60s timeout for retry-task even though its target is a bare taskId', async () => {
+      await expect(resolveDelegationTimeoutMs(['retry-task', 'task-abc123'])).resolves.toBe(60_000);
+    });
+
     it('keeps non-matching workflow ids at the default timeout', () => {
       expect(delegationTimeoutMs(['restart', 'not-a-workflow-id'], targetLookup)).toBe(5_000);
     });
