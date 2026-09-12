@@ -36,6 +36,8 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { checkGuardedBehaviorApprovalForPr } from './guarded-behavior-approval.mjs';
+
 export const TRUNK_DEFAULT = 'master';
 export const STACK_PREFIX_DEFAULT = 'stack/';
 const ACTIVE_MERGIFY_QUEUE_STATUSES = new Set(['queued', 'waiting_for_merge']);
@@ -365,6 +367,27 @@ function main() {
   if (targets.length === 0) {
     console.error('\nerror: no open PRs to queue.');
     process.exit(1);
+  }
+
+  for (const pr of targets) {
+    let approval;
+    try {
+      approval = checkGuardedBehaviorApprovalForPr({
+        prNumber: pr.number,
+        headSha: pr.headRefOid,
+        runGh: gh,
+      });
+    } catch (e) {
+      console.error(`\nerror: guarded-behavior approval check failed for PR #${pr.number}: ${e.message}`);
+      process.exit(2);
+    }
+    if (!approval.eligible) {
+      console.error(
+        `\nerror: refusing admin-bypass for guarded PR #${pr.number}: ${approval.reason}. `
+        + 'A non-bot reviewer must approve the current head SHA.',
+      );
+      process.exit(1);
+    }
   }
 
   console.log(`\nExecuting: adding 'admin-bypass' to ${targets.length} verified PR(s), bottom-to-top.`);

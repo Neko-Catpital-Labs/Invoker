@@ -20,15 +20,28 @@ export const TASK_STATUSES = [
   'review_ready',
   'awaiting_approval',
   'stale',
+  'skipped',
 ] as const;
 
 export type TaskStatus = typeof TASK_STATUSES[number];
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config
 
+export interface TaskFreshnessSpec {
+  readonly watchPaths?: readonly string[];
+  readonly pathPreconditions?: readonly {
+    readonly path: string;
+    readonly expected: 'present' | 'absent';
+  }[];
+  readonly guardedBehaviorIds?: readonly string[];
+}
+
+export const BUILT_IN_LOCAL_EXECUTION_POOL_ID = 'local-worktree';
+
 export interface BaseTaskConfig {
   readonly workflowId?: string;
   readonly parentTask?: string;
+  readonly variantLocalId?: string;
   readonly command?: string;
   readonly prompt?: string;
   readonly experimentPrompt?: string;
@@ -47,12 +60,12 @@ export interface BaseTaskConfig {
   readonly executionAgent?: string;
   /** Agent-specific model selector passed through without central validation. */
   readonly executionModel?: string;
+  /** Finite agent turn budget (Claude `--max-turns`) when set. */
+  readonly maxTurns?: number;
+  readonly priority?: number;
+  readonly freshness?: TaskFreshnessSpec;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
-  /** Execution pool identifier for shared queue/drain scheduling across substrates. */
-  readonly poolId?: string;
-  /** Legacy direct SSH pool member selection used by editable runner controls. */
-  readonly poolMemberId?: string;
   /**
    * Fix-session prompt override carried on the failed task across the
    * `failed` → `fixing_with_ai` → `failed` cycle (Step 10 of the
@@ -69,34 +82,95 @@ export interface BaseTaskConfig {
   readonly fixContext?: string;
 }
 
-export interface WorktreeTaskConfig extends BaseTaskConfig {
-  readonly runnerKind?: 'worktree';
+interface PooledRepositoryTaskConfig extends BaseTaskConfig {
+  readonly poolId: string;
+  readonly poolMemberId?: string;
   readonly dockerImage?: never;
 }
 
-export interface DockerTaskConfig extends BaseTaskConfig {
+export interface WorktreeTaskConfig extends PooledRepositoryTaskConfig {
+  readonly runnerKind: 'worktree';
+}
+
+export interface SshTaskConfig extends PooledRepositoryTaskConfig {
+  readonly runnerKind: 'ssh';
+}
+
+interface NonPoolTaskConfig extends BaseTaskConfig {
+  readonly poolId?: never;
+  readonly poolMemberId?: never;
+}
+
+export interface DockerTaskConfig extends NonPoolTaskConfig {
   readonly runnerKind: 'docker';
   readonly dockerImage?: string;
 }
 
-export interface SshTaskConfig extends BaseTaskConfig {
-  readonly runnerKind: 'ssh';
-  readonly dockerImage?: never;
-}
-
 /** Internal-only config for merge gate nodes. */
-export interface MergeTaskConfig extends BaseTaskConfig {
+export interface MergeTaskConfig extends NonPoolTaskConfig {
   readonly runnerKind: 'merge';
   readonly dockerImage?: never;
 }
 
 /** No-repo config: task runs in a plain temp directory, no git involved. */
-export interface ScratchTaskConfig extends BaseTaskConfig {
+export interface ScratchTaskConfig extends NonPoolTaskConfig {
   readonly runnerKind: 'scratch';
   readonly dockerImage?: never;
 }
 
 export type TaskConfig = WorktreeTaskConfig | DockerTaskConfig | SshTaskConfig | MergeTaskConfig | ScratchTaskConfig;
+
+export type TaskConfigPatch = Partial<BaseTaskConfig> & {
+  readonly runnerKind?: TaskConfig['runnerKind'];
+  readonly poolId?: string;
+  readonly poolMemberId?: string;
+  readonly dockerImage?: string;
+};
+
+export function assertResolvedTaskConfig(config: unknown): asserts config is TaskConfig {
+  if (typeof config !== 'object' || config === null) {
+    throw new Error('Task config must be an object');
+  }
+  const candidate = config as Record<string, unknown>;
+  const runnerKind = candidate.runnerKind;
+  const poolId = candidate.poolId;
+  const hasConcretePool = typeof poolId === 'string' && poolId.trim().length > 0;
+
+  if (runnerKind === 'worktree' || runnerKind === 'ssh') {
+    if (!hasConcretePool) {
+      throw new Error(`Task config runnerKind=${runnerKind} requires a non-empty poolId`);
+    }
+    if (candidate.dockerImage !== undefined) {
+      throw new Error(`Task config runnerKind=${runnerKind} cannot declare dockerImage`);
+    }
+    return;
+  }
+
+  if (runnerKind === 'docker' || runnerKind === 'merge' || runnerKind === 'scratch') {
+    if (poolId !== undefined || candidate.poolMemberId !== undefined) {
+      throw new Error(`Task config runnerKind=${runnerKind} cannot declare poolId or poolMemberId`);
+    }
+    if (runnerKind !== 'docker' && candidate.dockerImage !== undefined) {
+      throw new Error(`Task config runnerKind=${runnerKind} cannot declare dockerImage`);
+    }
+    return;
+  }
+
+  throw new Error(`Task config has invalid runnerKind=${JSON.stringify(runnerKind)}`);
+}
+
+export function applyTaskConfigPatch(config: TaskConfig, patch: TaskConfigPatch | undefined): TaskConfig {
+  if (!patch) return config;
+  const candidate: unknown = { ...config, ...patch };
+  if ('isMergeNode' in patch || 'runnerKind' in patch) {
+    const merged = candidate as { isMergeNode?: boolean; runnerKind?: unknown };
+    if ((merged.isMergeNode === true) !== (merged.runnerKind === 'merge')) {
+      throw new Error(`Task config patch runnerKind=${JSON.stringify(merged.runnerKind)} must pair with isMergeNode=${merged.runnerKind === 'merge'}`);
+    }
+  }
+  assertResolvedTaskConfig(candidate);
+  return candidate;
+}
 
 export type ExternalGatePolicy = 'completed' | 'review_ready' | 'ci_failed';
 
@@ -198,12 +272,20 @@ export type SshInfraFailureClass =
   | 'ssh-worktree-missing'
   | 'ssh-invalid-reference'
   | 'ssh-repo-mirror-corrupt'
-  | 'ssh-oauth-session-expired';
+  | 'ssh-worktree-corrupt'
+  | 'ssh-oauth-session-expired'
+  | 'ssh-disk-full';
 
-export type FailureClass = 'liveness_stall' | SshInfraFailureClass;
+export type TransientFailureClass = 'ssh-transport-transient';
+
+export type FailureClass = 'liveness_stall' | SshInfraFailureClass | TransientFailureClass;
 
 export function isLivenessFailureClass(failureClass: FailureClass | undefined): boolean {
   return failureClass === 'liveness_stall';
+}
+
+export function isTransientFailureClass(failureClass: FailureClass | undefined): boolean {
+  return failureClass === 'ssh-transport-transient';
 }
 
 export interface TaskExecution {
@@ -297,7 +379,7 @@ export interface TaskStateChanges {
   readonly description?: string;
   readonly status?: TaskStatus;
   readonly dependencies?: readonly string[];
-  readonly config?: Partial<TaskConfig>;
+  readonly config?: TaskConfigPatch;
   readonly execution?: Partial<TaskExecution>;
 }
 
@@ -308,9 +390,27 @@ export type TaskDelta =
   | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number; readonly streamSequence?: number }
   | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number; readonly streamSequence?: number };
 
-// ── Task Create Options (alias for TaskConfig) ──────────────
+export type TaskCreateOptions = TaskConfigPatch;
 
-export type TaskCreateOptions = TaskConfig;
+export function resolveTaskConfig(options: TaskCreateOptions = {}): TaskConfig {
+  const runnerKind = (options.isMergeNode ? 'merge' : undefined)
+    ?? (options.runnerKind === 'scratch' ? 'scratch' : undefined)
+    ?? (options.dockerImage !== undefined ? 'docker' : undefined)
+    ?? options.runnerKind
+    ?? (options.poolId && options.poolId !== BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'ssh' : 'worktree');
+  let candidate: unknown;
+  if (runnerKind === 'worktree') {
+    candidate = { ...options, runnerKind, poolId: options.poolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID };
+  } else if (runnerKind === 'ssh') {
+    candidate = { ...options, runnerKind };
+  } else if (runnerKind === 'docker') {
+    candidate = { ...options, runnerKind, poolId: undefined, poolMemberId: undefined };
+  } else {
+    candidate = { ...options, runnerKind, poolId: undefined, poolMemberId: undefined, dockerImage: undefined };
+  }
+  assertResolvedTaskConfig(candidate);
+  return candidate;
+}
 
 function resolveInitialTaskTimestamp(): Date {
   if (process.env.NODE_ENV === 'test' && process.env.INVOKER_TEST_FIXED_NOW) {
@@ -327,13 +427,14 @@ export function createTaskState(
   dependencies: string[],
   options: TaskCreateOptions = {},
 ): TaskState {
+  const config = resolveTaskConfig(options);
   return {
     id,
     description,
     status: 'pending',
     dependencies: [...dependencies],
     createdAt: resolveInitialTaskTimestamp(),
-    config: { ...options },
+    config,
     execution: { generation: 0 },
     taskStateVersion: 1,
   };
@@ -352,6 +453,7 @@ export type AttemptStatus =
   | 'completed'
   | 'failed'
   | 'needs_input'
+  | 'stale'
   | 'superseded';
 
 // ── Attempt (immutable execution record) ────────────────────

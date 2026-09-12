@@ -13,6 +13,8 @@ assert(isUiImpactingPath('packages/app/src/window/window-lifecycle.ts'), 'Electr
 assert(isUiImpactingPath('packages/app/src/preload.ts'), 'preload bridge changes should require visual proof');
 assert(isUiImpactingPath('packages/app/src/main.ts'), 'main window wiring changes should require visual proof');
 assert(isUiImpactingPath('packages/app/src/app-menu.ts'), 'app menu changes should require visual proof');
+assert(isUiImpactingPath('packages/app/src/web/web-invoker-dispatch.ts'), 'web-surface changes should require visual proof');
+assert(isUiImpactingPath('packages/app/src/task-graph-event-publisher.ts'), 'task graph event publishing changes should require visual proof');
 assert(!isUiImpactingPath('packages/execution-engine/src/merge-runner.ts'), 'non-UI engine changes should not require visual proof');
 assert(!isUiImpactingPath('scripts/create-pr.mjs'), 'PR tooling changes should not require visual proof');
 

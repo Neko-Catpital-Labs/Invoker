@@ -18,9 +18,10 @@ fail() {
 
 export HOME="$TMP/home"
 WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
-mkdir -p "$WORK_PARENT" "$TMP/state"
+mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
 export PATH="$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
 import sys
@@ -43,12 +44,19 @@ SEED="$TMP/seed"
 WORK_ROOT="$WORK_PARENT/7727"
 
 # PR #7727 incident shape, with real git history: a required check ("PR
-# Body") is failing because the branch carries a pre-squash duplicate of
-# already-landed content, not because of anything a code change could fix.
-# Before this fix, the worker spent all of its repair-check attempts on it.
+# Body") is failing while the branch also carries a pre-squash duplicate of
+# already-landed content (base diverged per `gh api compare`). Since #10337
+# ("Stop blind rebase; unify onto master"), a named required-check failure
+# always goes to repair_check, even while the base is also stale/behind --
+# see test_failed_pr_body_with_stale_base_still_repairs_not_rebases in
+# scripts/test_mergify_admin_requeue_plan.py. A stale base must never divert
+# a named check failure away from repair_check and into a local force-push.
 git clone . "$SEED" >/dev/null
 (
   cd "$SEED"
+  # This repository is disposable and removed by the EXIT trap. Keep Git from
+  # racing that cleanup with a background auto-gc process.
+  git config gc.auto 0
   git config user.email repro@example.test
   git config user.name 'Repro Bot'
   git checkout -B master >/dev/null
@@ -110,6 +118,20 @@ Path(os.environ["STATE_PATH"]).write_text(json.dumps(state, indent=2), encoding=
 PY
 : > "$LEDGER_PATH"
 
+# Incident 2026-08-12: submit_async_repair_plan's default path shells out to a
+# live Invoker owner over IPC, which this hermetic repro never provides. Mock
+# it (same pattern as repro-babysit-pr-body-human-split.sh) -- this repro only
+# pins the routing decision (repair_check vs. rebase) and the resulting
+# ledger row, not what a real repair attempt does with the checked-out PR.
+cat > "$TMP/bin/submit-async.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path="${1:?plan path required}"
+test -f "$plan_path"
+EOF
+chmod +x "$TMP/bin/submit-async.sh"
+export INVOKER_ADMIN_BYPASS_ASYNC_REPAIR_SUBMIT_CMD="$TMP/bin/submit-async.sh"
+
 run_worker() {
   python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 7727 2>&1
 }
@@ -119,10 +141,11 @@ if ! out1="$(run_worker)"; then
 fi
 printf '%s\n' "$out1"
 
-echo "$out1" | grep -q 'rebase-onto-base PR #7727 onto=master' || fail 'tick 1 did not route the failing check to rebase-onto-base' "$out1"
-! echo "$out1" | grep -q 'repair-check PR #7727' || fail 'tick 1 spent an agent-repair attempt on a structural stale-base failure' "$out1"
+echo "$out1" | grep -q 'repair-check PR #7727 check="PR Body"' || fail 'tick 1 did not route the failing check to repair_check' "$out1"
+! echo "$out1" | grep -q 'rebase-onto-base PR #7727' || fail 'tick 1 planned a legacy local rebase-onto-base force-push for a named check failure' "$out1"
+! echo "$out1" | grep -q 'rebase-onto-master PR #7727' || fail 'tick 1 planned an Invoker rebase-onto-master job for a named check failure' "$out1"
 
-python3 - <<PY || fail 'expected a rebase-onto-base ledger row and zero repair-check rows' "$(cat "$LEDGER_PATH")"
+python3 - <<PY || fail 'expected a repair-check ledger row and zero rebase rows' "$(cat "$LEDGER_PATH")"
 import json
 from pathlib import Path
 
@@ -131,10 +154,10 @@ rows = [
     for line in Path("$LEDGER_PATH").read_text(encoding="utf-8").splitlines()
     if line.strip()
 ]
-if not any(row.get("kind") == "rebase-onto-base" and int(row.get("pr", 0)) == 7727 for row in rows):
-    raise SystemExit("missing rebase-onto-base ledger row for PR #7727")
-if any(row.get("kind") == "repair-check" and int(row.get("pr", 0)) == 7727 for row in rows):
-    raise SystemExit("repair-check must never be attempted for a structural stale-base failure")
+if not any(row.get("kind") == "repair-check" and int(row.get("pr", 0)) == 7727 for row in rows):
+    raise SystemExit("missing repair-check ledger row for PR #7727")
+if any(row.get("kind") in {"rebase-onto-base", "rebase-onto-master"} and int(row.get("pr", 0)) == 7727 for row in rows):
+    raise SystemExit("a rebase must not be filed for a named required-check failure, stale base or not")
 PY
 
 echo '[repro] passed'

@@ -2,8 +2,11 @@
  * UI type definitions.
  *
  * Re-declares the types from @invoker/core and @invoker/app to avoid
- * importing Electron dependencies into the renderer process.
+ * importing Electron dependencies into the renderer process. Complex leaf
+ * types shared with the runtime come from @invoker/workflow-graph (a pure
+ * types package that @invoker/contracts also imports from).
  */
+import type { FailureClass, ReviewGateState, TaskHeartbeatSource } from '@invoker/workflow-graph';
 
 // ── Task Status ─────────────────────────────────────────────
 
@@ -18,7 +21,8 @@ export type TaskStatus =
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
-  | 'stale';
+  | 'stale'
+  | 'queued';
 
 // ── Experiment Types ────────────────────────────────────────
 
@@ -110,14 +114,22 @@ export interface TaskExecution {
   readonly inputPrompt?: string;
   readonly exitCode?: number;
   readonly error?: string;
+  readonly failureClass?: FailureClass;
+  readonly protocolErrorCode?: string;
+  readonly protocolErrorMessage?: string;
   readonly startedAt?: Date;
   readonly completedAt?: Date;
   readonly lastHeartbeatAt?: Date;
+  readonly remoteHeartbeatAt?: Date;
+  readonly heartbeatSource?: TaskHeartbeatSource;
   readonly launchStartedAt?: Date;
   readonly launchCompletedAt?: Date;
   readonly actionRequestId?: string;
   readonly branch?: string;
   readonly commit?: string;
+  readonly fixedIntegrationSha?: string;
+  readonly fixedIntegrationRecordedAt?: Date;
+  readonly fixedIntegrationSource?: string;
   readonly agentSessionId?: string;
   readonly lastAgentSessionId?: string;
   readonly agentName?: string;
@@ -129,15 +141,22 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
+  readonly fixSessionEntryStatus?: TaskStatus;
   readonly isFixingWithAI?: boolean;
   readonly reviewUrl?: string;
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  readonly reviewGate?: ReviewGateState;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
+  readonly selectedAttemptId?: string;
+  readonly crashPreservedAt?: Date;
+  readonly crashPreservedOwnerPid?: number;
+  readonly crashPreservedReportPath?: string;
+  readonly crashPreservedDiagnosticSummary?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────
