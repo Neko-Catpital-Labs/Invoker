@@ -34,6 +34,7 @@ export interface WorkerTickContext {
   readonly tickNumber: number;
   /** Aborted when `stop()` is requested; ticks should check between units of work. */
   readonly signal: AbortSignal;
+  readonly args?: string[];
 }
 
 /** The unit of work a worker performs on each tick. */
@@ -94,6 +95,7 @@ export interface WorkerRuntime {
   wake(reason?: WorkerTickReason): void;
   /** Run a single tick now and await it (manual/test hook). */
   tick(reason?: WorkerTickReason): Promise<void>;
+  run(args?: string[]): Promise<void>;
   /**
    * Request stop: clear the timer, drop signal handlers, abort the tick
    * signal. Resolves promptly unless `settleTimeoutMs` is set for a bounded
@@ -142,8 +144,9 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let stopped = false;
   let interval: ReturnType<typeof setInterval> | null = null;
   let startDelayTimer: ReturnType<typeof setTimeout> | null = null;
-  let inFlight: Promise<void> | null = null;
+  let inFlight: Promise<boolean> | null = null;
   let pendingReason: WorkerTickReason | null = null;
+  let pendingArgs: string[] | undefined;
   let tickNumber = 0;
   let lastTickActivityAt = Date.now();
   let watchdogTimer: NodeJS.Timeout | null = null;
@@ -151,13 +154,14 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
   let abortController = new AbortController();
 
-  const runOnce = async (reason: WorkerTickReason): Promise<boolean> => {
+  const runOnce = async (reason: WorkerTickReason, args?: string[]): Promise<boolean> => {
     tickNumber += 1;
     const ctx: WorkerTickContext = {
       identity,
       reason,
       tickNumber,
       signal: abortController.signal,
+      args,
     };
     lastTickActivityAt = Date.now();
     try {
@@ -179,21 +183,27 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   // Coalescing scheduler: at most one tick runs at a time. Requests that arrive
   // while a tick is in flight collapse into a single follow-up (keeping the most
   // recent reason), so a burst of wakeups never queues a backlog of ticks.
-  const schedule = (reason: WorkerTickReason): Promise<void> => {
-    if (stopped) return Promise.resolve();
+  const schedule = (reason: WorkerTickReason, args?: string[]): Promise<boolean> => {
+    if (stopped) return Promise.resolve(true);
     if (inFlight) {
       pendingReason = reason;
+      pendingArgs = args;
       return inFlight;
     }
-    const drain = async (firstReason: WorkerTickReason): Promise<void> => {
+    const drain = async (firstReason: WorkerTickReason, firstArgs?: string[]): Promise<boolean> => {
       let nextReason: WorkerTickReason | null = firstReason;
+      let nextArgs: string[] | undefined = firstArgs;
       let consecutiveFailures = 0;
+      let succeeded = true;
       while (nextReason !== null && !stopped) {
         const current = nextReason;
+        const currentArgs = nextArgs;
         pendingReason = null;
-        const succeeded = await runOnce(current);
+        pendingArgs = undefined;
+        succeeded = await runOnce(current, currentArgs);
         consecutiveFailures = succeeded ? 0 : consecutiveFailures + 1;
         nextReason = pendingReason;
+        nextArgs = pendingArgs;
         if (nextReason !== null && !succeeded && !stopped) {
           const backoffMs = Math.min(
             (options.backoffBaseMs ?? 250) * 2 ** (consecutiveFailures - 1),
@@ -202,8 +212,9 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
           await delay(backoffMs);
         }
       }
+      return succeeded;
     };
-    inFlight = drain(reason).finally(() => {
+    inFlight = drain(reason, args).finally(() => {
       inFlight = null;
     });
     return inFlight;
@@ -214,7 +225,12 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     void schedule(reason);
   };
 
-  const tick = (reason: WorkerTickReason = 'manual'): Promise<void> => schedule(reason);
+  const tick = (reason: WorkerTickReason = 'manual'): Promise<void> => schedule(reason).then(() => {});
+
+  const run = (args?: string[]): Promise<void> =>
+    schedule('manual', args).then((ok) => {
+      if (!ok) throw new Error(`Worker ${identity.kind} run failed`);
+    });
 
   const beginStop = (): void => {
     if (stopped) return;
@@ -350,5 +366,5 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 
   const isRunning = (): boolean => started && !stopped;
 
-  return { identity, start, wake, tick, stop, isRunning };
+  return { identity, start, wake, tick, run, stop, isRunning };
 }

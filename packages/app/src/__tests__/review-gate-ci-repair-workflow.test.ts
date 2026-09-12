@@ -91,7 +91,7 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
   let h: TestHarness;
 
   beforeEach(() => {
-    h = createTestHarness();
+    h = createTestHarness({ availablePoolIds: ['remote_digital_ocean_1'] });
   });
 
   it('spawns one repair workflow and leaves the source merge gate untouched', async () => {
@@ -168,7 +168,7 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
   });
 
   it('throws explicit branch and base-branch errors', async () => {
-    const branchHarness = createTestHarness();
+    const branchHarness = createTestHarness({ availablePoolIds: ['remote_digital_ocean_1'] });
     const noBranchPlan: PlanDefinition = {
       ...SOURCE_PLAN,
       featureBranch: undefined,
@@ -209,7 +209,7 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
       logger,
     })).rejects.toThrow('Review-gate CI repair requires a branch to checkout.');
 
-    const baseHarness = createTestHarness();
+    const baseHarness = createTestHarness({ availablePoolIds: ['remote_digital_ocean_1'] });
     const noBasePlan: PlanDefinition = {
       ...SOURCE_PLAN,
       baseBranch: undefined,

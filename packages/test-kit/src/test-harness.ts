@@ -85,6 +85,7 @@ export interface TestHarness {
 export function createTestHarness(opts?: {
   maxConcurrency?: number;
   mergeGateProvider?: MergeGateProvider;
+  availablePoolIds?: string[];
 }): TestHarness {
   const persistence = new InMemoryPersistence();
   const bus = new InMemoryBus();
@@ -92,6 +93,7 @@ export function createTestHarness(opts?: {
     persistence,
     messageBus: bus,
     maxConcurrency: opts?.maxConcurrency ?? 10,
+    availablePoolIds: opts?.availablePoolIds,
   });
 
   const executorRegistry = new ExecutorRegistry();

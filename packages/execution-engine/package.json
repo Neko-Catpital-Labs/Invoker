@@ -21,6 +21,7 @@
   "dependencies": {
     "@invoker/contracts": "workspace:*",
     "@invoker/data-store": "workspace:*",
+    "@invoker/slack-bug-scan": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*"
   },

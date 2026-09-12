@@ -18,6 +18,7 @@ import {
   createE2eAutoFixTick,
   createE2eAutoFixWorker,
 } from '../workers/e2e-autofix-worker.js';
+import { createWorkerRuntime } from '../worker-runtime.js';
 
 type SpawnCall = {
   command: string;
@@ -75,6 +76,64 @@ function makeSpawnHarness(options: {
   });
 
   return { calls, spawnProcess: spawnProcess as unknown as typeof spawn };
+}
+
+/**
+ * Simulates a spawned child whose own process exits cleanly, but whose
+ * piped stdout/stderr never close — the real, proven failure mode when the
+ * shell entrypoint backgrounds a grandchild that inherits those fds (e.g.
+ * `something &`). `close` never fires in this scenario; only `exit` does.
+ */
+function makeExitWithoutCloseHarness(options: { exitCode?: number } = {}): {
+  calls: SpawnCall[];
+  spawnProcess: typeof spawn;
+} {
+  const calls: SpawnCall[] = [];
+  const spawnProcess = vi.fn((command: string, args: string[], spawnOptions: SpawnOptions) => {
+    calls.push({ command, args, options: spawnOptions });
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      stdin: null,
+      killed: false,
+      pid: 4242,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+
+    queueMicrotask(() => {
+      stdout.end('');
+      stderr.end('');
+      child.emit('exit', options.exitCode ?? 0, null);
+      // Deliberately never emits 'close' — the grandchild still holds the fds.
+    });
+
+    return child;
+  });
+
+  return { calls, spawnProcess: spawnProcess as unknown as typeof spawn };
+}
+
+function makeHangingSpawnHarness(): { calls: SpawnCall[]; spawnProcess: typeof spawn; child: ChildProcess & { kill: ReturnType<typeof vi.fn> } } {
+  const calls: SpawnCall[] = [];
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const child = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin: null,
+    killed: false,
+    pid: 4242,
+    kill: vi.fn(),
+  }) as unknown as ChildProcess & { kill: ReturnType<typeof vi.fn> };
+
+  const spawnProcess = vi.fn((command: string, args: string[], spawnOptions: SpawnOptions) => {
+    calls.push({ command, args, options: spawnOptions });
+    return child;
+  });
+
+  return { calls, spawnProcess: spawnProcess as unknown as typeof spawn, child };
 }
 
 describe('e2e auto-fix worker', () => {
@@ -195,6 +254,109 @@ describe('e2e auto-fix worker', () => {
     });
 
     await expect(tick(makeCtx())).rejects.toThrow('exited with code 1');
+  });
+
+  it('kills the spawned child when the tick is aborted mid-flight, instead of leaving it running past a worker disable', async () => {
+    const repoRoot = makeRepoRoot();
+    const harness = makeHangingSpawnHarness();
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      spawnProcess: harness.spawnProcess,
+    });
+    const controller = new AbortController();
+
+    const tickPromise = tick({
+      identity: { kind: E2E_AUTOFIX_WORKER_KIND, instanceId: `${E2E_AUTOFIX_WORKER_KIND}-test` },
+      reason: 'manual',
+      tickNumber: 1,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.calls).toHaveLength(1);
+    });
+
+    controller.abort();
+    await vi.waitFor(() => {
+      expect(harness.child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    harness.child.emit('close', null, 'SIGTERM');
+    await expect(tickPromise).resolves.toBeUndefined();
+  });
+
+  it('spawns the child detached so a process-group kill can reach its own grandchildren', async () => {
+    const repoRoot = makeRepoRoot();
+    const harness = makeSpawnHarness({ exitCode: 0 });
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      spawnProcess: harness.spawnProcess,
+    });
+
+    await tick(makeCtx());
+
+    expect(harness.calls[0]?.options.detached).toBe(process.platform !== 'win32');
+  });
+
+  it('resolves via exit when close never fires within the grace window, instead of hanging forever', async () => {
+    vi.useFakeTimers();
+    const repoRoot = makeRepoRoot();
+    const harness = makeExitWithoutCloseHarness({ exitCode: 0 });
+    const logger = makeLogger();
+    const tick = createE2eAutoFixTick({
+      logger,
+      repoRoot,
+      closeGraceMs: 500,
+      spawnProcess: harness.spawnProcess,
+    });
+
+    const tickPromise = tick(makeCtx());
+    let settled = false;
+    void tickPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(tickPromise).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('shell entrypoint exited but stdio did not close within 500ms'),
+      expect.objectContaining({ code: 0, source: 'exit' }),
+    );
+  });
+
+  it('does not permanently block future ticks when close never fires (the real production symptom)', async () => {
+    vi.useFakeTimers();
+    const repoRoot = makeRepoRoot();
+    const harness = makeExitWithoutCloseHarness({ exitCode: 0 });
+    const worker = createE2eAutoFixWorker({
+      logger: makeLogger(),
+      repoRoot,
+      intervalMs: 1000,
+      closeGraceMs: 100,
+      spawnProcess: harness.spawnProcess,
+      installSignalHandlers: false,
+    });
+
+    worker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.calls).toHaveLength(1);
+
+    // Let the first tick's exit-grace fallback settle it.
+    await vi.advanceTimersByTimeAsync(100);
+
+    // A worker stuck on the old close-only behavior would never reach this
+    // second poll tick — inFlight stays set forever and every subsequent
+    // setInterval firing silently no-ops.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(harness.calls).toHaveLength(2);
+
+    await worker.stop();
   });
 
   it('ticks on start and arms the default fifteen-minute interval', async () => {

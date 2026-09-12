@@ -49,12 +49,38 @@ describe('external worker registration', () => {
   });
 });
 
+function createShortLivedExternalWorker(): ExternalWorkerRuntime {
+  const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+  registerExternalWorkers(registry, [
+    {
+      kind: 'external-short-lived',
+      launch: {
+        executable: 'true',
+        args: [],
+      },
+    },
+  ]);
+
+  const definition = registry.get('external-short-lived');
+  expect(definition).toBeDefined();
+  return definition!.factory({} as WorkerRuntimeDependencies) as ExternalWorkerRuntime;
+}
+
 describe('external worker runtime', () => {
   it('returns from a manual tick after spawning the external process', async () => {
     const runtime = createSleepingExternalWorker();
 
     await runtime.tick();
     await runtime.stop();
+    await runtime.finished;
+  });
+
+  it('satisfies the WorkerRuntime run(args) contract by awaiting the spawned process to exit', async () => {
+    const runtime = createShortLivedExternalWorker();
+
+    await runtime.run(['ignored', 'args']);
+
+    expect(runtime.isRunning()).toBe(false);
     await runtime.finished;
   });
 });
