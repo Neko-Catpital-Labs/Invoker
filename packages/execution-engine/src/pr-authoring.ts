@@ -273,6 +273,10 @@ export function repoLocalPrBodyCheckerPath(cwd: string): string {
   return join(cwd, 'scripts', 'validate-pr-body-local.mjs');
 }
 
+export function resolvePrBodyValidatorNodeBinary(): string {
+  return process.env.INVOKER_PR_BODY_VALIDATOR_NODE?.trim() || 'node';
+}
+
 export function runRepoLocalPrBodyChecker(args: {
   body: string;
   cwd: string;
@@ -284,7 +288,7 @@ export function runRepoLocalPrBodyChecker(args: {
   try {
     writeFileSync(bodyFile, args.body, 'utf8');
     const result = spawnSync(
-      process.execPath,
+      resolvePrBodyValidatorNodeBinary(),
       [validatorPath, '--body-file', bodyFile, '--base', args.baseBranch],
       { cwd: args.cwd, encoding: 'utf8' },
     );
