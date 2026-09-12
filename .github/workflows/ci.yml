@@ -874,6 +874,7 @@ jobs:
           - name: planning-chat-restore
             files: >-
               e2e/planning-chat-restore-conversational-mode-repro.spec.ts
+              e2e/codex-spend-gate-blocks-task.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
