@@ -41,166 +41,189 @@ else
   trap 'rm -rf "$PLAN_DIR"' EXIT
 fi
 
-prs_json="$(gh_json pr list --repo "$TARGET_REPO" --author "$PR_AUTHOR" --state open \
-  --json number,title,url,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,labels \
-  --limit 100)" || {
-  log_line "could not list PRs; exiting"
-  exit 0
+scan_repo() {
+  local repo="$1"
+  local repo_plan_dir="$PLAN_DIR"
+  if [ "$repo" != "$TARGET_REPO" ]; then
+    repo_plan_dir="$PLAN_DIR/${repo//\//__}"
+    mkdir -p "$repo_plan_dir"
+  fi
+
+  prs_json="$(gh_json pr list --repo "$repo" --author "$PR_AUTHOR" --state open \
+    --json number,title,url,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,labels \
+    --limit 100)" || {
+    log_line "$repo: could not list PRs; skipping repo"
+    return 0
+  }
+
+  while IFS= read -r pr; do
+    [ -z "$pr" ] && continue
+    num="$(jq -r '.number' <<<"$pr")"
+    key="$num"
+    label="PR #$num"
+    if [ "$repo" != "$TARGET_REPO" ]; then
+      key="$repo#$num"
+      label="$repo PR #$num"
+    fi
+
+    if [ "$(jq -r '.isDraft' <<<"$pr")" = "true" ]; then
+      continue
+    fi
+
+    if jq -e '.labels[]? | select(.name == "admin-bypass")' <<<"$pr" >/dev/null; then
+      log_line "$label: admin-bypass labeled; admin-bypass-land owns it"
+      continue
+    fi
+
+    wf=""
+    if [ "$repo" = "$TARGET_REPO" ]; then
+      if ! rec="$(resolve_workflow_for_pr "$num")"; then
+        log_line "$label: workflow lookup failed; skipping"
+        continue
+      fi
+      wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
+    fi
+    if [ -n "$wf" ]; then
+      log_line "$label: mapped to workflow $wf; existing workers own it"
+      continue
+    fi
+
+    blockers=()
+    mergeable="$(jq -r '.mergeable // ""' <<<"$pr")"
+    merge_state="$(jq -r '.mergeStateStatus // ""' <<<"$pr")"
+    if [ "$mergeable" = "CONFLICTING" ] || [ "$merge_state" = "DIRTY" ]; then
+      blockers+=("conflict: GitHub reports a merge conflict against $(jq -r '.baseRefName' <<<"$pr")")
+    fi
+    failed_checks="$(jq -r '[.statusCheckRollup[]? | select((.conclusion // "") as $c
+      | $c == "FAILURE" or $c == "ERROR" or $c == "TIMED_OUT" or $c == "CANCELLED")
+      | .name] | unique | join(", ")' <<<"$pr")"
+    if [ -n "$failed_checks" ]; then
+      blockers+=("failed_checks: $failed_checks")
+    fi
+    if [ "$(jq -r '.reviewDecision // ""' <<<"$pr")" = "CHANGES_REQUESTED" ]; then
+      blockers+=("changes_requested: a reviewer requested changes; address the open feedback")
+    fi
+    if [ "${#blockers[@]}" -eq 0 ]; then
+      continue
+    fi
+
+    head_oid="$(jq -r '.headRefOid' <<<"$pr")"
+    fingerprint="$(printf '%s|%s' "$head_oid" "$(printf '%s;' "${blockers[@]}")" \
+      | shasum -a 256 2>/dev/null || printf '%s|%s' "$head_oid" "$(printf '%s;' "${blockers[@]}")" | sha256sum)"
+    fingerprint="${fingerprint%% *}"
+    fingerprint="${fingerprint:0:16}"
+
+    if ledger_marker_seen orphan-submitted "$key" "$fingerprint"; then
+      log_line "$label: repair already submitted for this head-state ($fingerprint); waiting"
+      continue
+    fi
+    if [ "$(ledger_count orphan-attempt "$key" "$fingerprint")" -ge "$MAX_ATTEMPTS" ]; then
+      if ! ledger_marker_seen orphan-exhausted "$key" "$fingerprint"; then
+        ledger_record orphan-exhausted "$key" "$fingerprint"
+        gh pr comment "$num" --repo "$repo" \
+          --body "Invoker orphan-repair gave up after $MAX_ATTEMPTS repair-task attempts for this head state. Blockers: $(printf '%s; ' "${blockers[@]}")" \
+          >/dev/null 2>&1 || true
+        log_line "$label: attempt cap reached ($MAX_ATTEMPTS); posted exhausted comment"
+      fi
+      continue
+    fi
+
+    title="$(jq -r '.title' <<<"$pr")"
+    url="$(jq -r '.url' <<<"$pr")"
+    head_ref="$(jq -r '.headRefName' <<<"$pr")"
+    base_ref="$(jq -r '.baseRefName' <<<"$pr")"
+    summary="$(printf '%s; ' "${blockers[@]}")"
+    q_head_ref="$(shell_quote "$head_ref")"
+    q_head_oid="$(shell_quote "$head_oid")"
+    q_state_file="$(shell_quote "$STATE_FILE")"
+    q_key="$(shell_quote "$key")"
+    q_fingerprint="$(shell_quote "$fingerprint")"
+    q_tsv_kind="$(shell_quote "orphan-attempt")"
+
+    plan_file="$repo_plan_dir/repair-pr-$num.yaml"
+    {
+      printf 'name: repair-pr-%s-%s\n' "$num" "$fingerprint"
+      printf 'onFinish: none\n'
+      printf 'repoUrl: https://github.com/%s.git\n' "$repo"
+      printf 'baseBranch: %s\n' "$base_ref"
+      printf 'tasks:\n'
+      printf '  - id: repair\n'
+      printf '    description: "Repair PR #%s: %s"\n' "$num" "$(printf '%s' "$summary" | tr '"' "'")"
+      printf '    prompt: |\n'
+      {
+        printf 'Repair the existing pull request #%s ("%s") on %s.\n' "$num" "$title" "$repo"
+        printf 'PR URL: %s\n' "$url"
+        printf 'Head branch: %s (at %s), base branch: %s\n\n' "$head_ref" "$head_oid" "$base_ref"
+        printf 'This PR has no Invoker workflow; work directly on its branch:\n'
+        printf '  git fetch origin %s && git checkout %s\n\n' "$head_ref" "$head_ref"
+        printf 'Blockers to clear, strictly in this order:\n'
+        i=1
+        for b in "${blockers[@]}"; do
+          printf '  %d. %s\n' "$i" "$b"
+          i=$((i + 1))
+        done
+        printf '\nRules:\n'
+        printf -- '- Resolve the merge conflict by rebasing onto origin/%s (or merging it) before anything else.\n' "$base_ref"
+        printf -- '- Reproduce and fix the failing checks locally.\n'
+        printf -- '- Address review feedback with real changes or a reasoned reply, never by dismissing.\n'
+        printf -- '- Commit locally if changes are needed.\n'
+        printf -- '- Do not push, do not open a new PR, and do not force-push. The safe-push task owns publication.\n'
+      } | sed 's/^/      /'
+      printf '  - id: safe-push\n'
+      printf '    description: "Safely push PR #%s only if its head did not move"\n' "$num"
+      printf '    dependencies: [repair]\n'
+      printf '    command: |\n'
+      {
+        printf 'set -euo pipefail\n'
+        printf 'branch=%s\n' "$q_head_ref"
+        printf 'expected=%s\n' "$q_head_oid"
+        printf 'ledger=%s\n' "$q_state_file"
+        printf 'kind=%s\n' "$q_tsv_kind"
+        printf 'key=%s\n' "$q_key"
+        printf 'marker=%s\n' "$q_fingerprint"
+        printf 'ref="refs/heads/$branch"\n'
+        printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
+        printf 'if [ "$live" != "$expected" ]; then\n'
+        printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
+        printf '  exit 20\n'
+        printf 'fi\n'
+        printf 'pushed="$(git rev-parse HEAD)"\n'
+        printf 'git push --force-with-lease="$ref:$expected" origin "HEAD:$ref"\n'
+        printf 'verified="$(git ls-remote origin "$ref" | cut -f1)"\n'
+        printf 'if [ "$verified" != "$pushed" ]; then\n'
+        printf '  echo "post-push verification failed: $ref is ${verified:-missing}; expected $pushed" >&2\n'
+        printf '  exit 22\n'
+        printf 'fi\n'
+        printf 'mkdir -p "$(dirname "$ledger")"\n'
+        printf 'printf '"'"'%%s\\t%%s\\t%%s\\t%%s\\n'"'"' "$kind" "$key" "$marker" "$(date +%%s)" >> "$ledger"\n'
+        printf 'echo "pr-worker-safe-push: pushed $ref to $pushed"\n'
+      } | sed 's/^/      /'
+    } > "$plan_file"
+
+    if [ "$DRY_RUN" = "1" ]; then
+      log_line "$label: DRY-RUN would submit repair task (blockers: $summary)"
+      continue
+    fi
+
+    if output="$(headless_mutation run "$plan_file" 2>&1)"; then
+      ledger_record orphan-submitted "$key" "$fingerprint"
+      submitted=$((submitted + 1))
+      log_line "$label: submitted repair task ($fingerprint; blockers: $summary)"
+    else
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        log_line "$label: submit failed: $line"
+      done <<<"$output"
+    fi
+  done < <(jq -c '.[]' <<<"$prs_json")
 }
 
 submitted=0
-while IFS= read -r pr; do
-  [ -z "$pr" ] && continue
-  num="$(jq -r '.number' <<<"$pr")"
-
-  if [ "$(jq -r '.isDraft' <<<"$pr")" = "true" ]; then
-    continue
-  fi
-
-  if jq -e '.labels[]? | select(.name == "admin-bypass")' <<<"$pr" >/dev/null; then
-    log_line "PR #$num: admin-bypass labeled; admin-bypass-land owns it"
-    continue
-  fi
-
-  # Mapped PRs belong to the existing per-symptom workers.
-  if ! rec="$(resolve_workflow_for_pr "$num")"; then
-    log_line "PR #$num: workflow lookup failed; skipping"
-    continue
-  fi
-  wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
-  if [ -n "$wf" ]; then
-    log_line "PR #$num: mapped to workflow $wf; existing workers own it"
-    continue
-  fi
-
-  # ── Classify blockers (conflict first, then CI, then review) ──
-  blockers=()
-  mergeable="$(jq -r '.mergeable // ""' <<<"$pr")"
-  merge_state="$(jq -r '.mergeStateStatus // ""' <<<"$pr")"
-  if [ "$mergeable" = "CONFLICTING" ] || [ "$merge_state" = "DIRTY" ]; then
-    blockers+=("conflict: GitHub reports a merge conflict against $(jq -r '.baseRefName' <<<"$pr")")
-  fi
-  failed_checks="$(jq -r '[.statusCheckRollup[]? | select((.conclusion // "") as $c
-    | $c == "FAILURE" or $c == "ERROR" or $c == "TIMED_OUT" or $c == "CANCELLED")
-    | .name] | unique | join(", ")' <<<"$pr")"
-  if [ -n "$failed_checks" ]; then
-    blockers+=("failed_checks: $failed_checks")
-  fi
-  if [ "$(jq -r '.reviewDecision // ""' <<<"$pr")" = "CHANGES_REQUESTED" ]; then
-    blockers+=("changes_requested: a reviewer requested changes; address the open feedback")
-  fi
-  if [ "${#blockers[@]}" -eq 0 ]; then
-    continue
-  fi
-
-  head_oid="$(jq -r '.headRefOid' <<<"$pr")"
-  fingerprint="$(printf '%s|%s' "$head_oid" "$(printf '%s;' "${blockers[@]}")" \
-    | shasum -a 256 2>/dev/null || printf '%s|%s' "$head_oid" "$(printf '%s;' "${blockers[@]}")" | sha256sum)"
-  fingerprint="${fingerprint%% *}"
-  fingerprint="${fingerprint:0:16}"
-
-  if ledger_marker_seen orphan-submitted "$num" "$fingerprint"; then
-    log_line "PR #$num: repair already submitted for this head-state ($fingerprint); waiting"
-    continue
-  fi
-  if [ "$(ledger_count orphan-attempt "$num" "$fingerprint")" -ge "$MAX_ATTEMPTS" ]; then
-    if ! ledger_marker_seen orphan-exhausted "$num" "$fingerprint"; then
-      ledger_record orphan-exhausted "$num" "$fingerprint"
-      gh pr comment "$num" --repo "$TARGET_REPO" \
-        --body "Invoker orphan-repair gave up after $MAX_ATTEMPTS repair-task attempts for this head state. Blockers: $(printf '%s; ' "${blockers[@]}")" \
-        >/dev/null 2>&1 || true
-      log_line "PR #$num: attempt cap reached ($MAX_ATTEMPTS); posted exhausted comment"
-    fi
-    continue
-  fi
-
-  title="$(jq -r '.title' <<<"$pr")"
-  url="$(jq -r '.url' <<<"$pr")"
-  head_ref="$(jq -r '.headRefName' <<<"$pr")"
-  base_ref="$(jq -r '.baseRefName' <<<"$pr")"
-  summary="$(printf '%s; ' "${blockers[@]}")"
-  q_head_ref="$(shell_quote "$head_ref")"
-  q_head_oid="$(shell_quote "$head_oid")"
-  q_state_file="$(shell_quote "$STATE_FILE")"
-  q_num="$(shell_quote "$num")"
-  q_fingerprint="$(shell_quote "$fingerprint")"
-  q_tsv_kind="$(shell_quote "orphan-attempt")"
-
-  plan_file="$PLAN_DIR/repair-pr-$num.yaml"
-  {
-    printf 'name: repair-pr-%s-%s\n' "$num" "$fingerprint"
-    printf 'onFinish: none\n'
-    printf 'repoUrl: https://github.com/%s.git\n' "$TARGET_REPO"
-    printf 'baseBranch: %s\n' "$base_ref"
-    printf 'tasks:\n'
-    printf '  - id: repair\n'
-    printf '    description: "Repair PR #%s: %s"\n' "$num" "$(printf '%s' "$summary" | tr '"' "'")"
-    printf '    prompt: |\n'
-    {
-      printf 'Repair the existing pull request #%s ("%s") on %s.\n' "$num" "$title" "$TARGET_REPO"
-      printf 'PR URL: %s\n' "$url"
-      printf 'Head branch: %s (at %s), base branch: %s\n\n' "$head_ref" "$head_oid" "$base_ref"
-      printf 'This PR has no Invoker workflow; work directly on its branch:\n'
-      printf '  git fetch origin %s && git checkout %s\n\n' "$head_ref" "$head_ref"
-      printf 'Blockers to clear, strictly in this order:\n'
-      i=1
-      for b in "${blockers[@]}"; do
-        printf '  %d. %s\n' "$i" "$b"
-        i=$((i + 1))
-      done
-      printf '\nRules:\n'
-      printf -- '- Resolve the merge conflict by rebasing onto origin/%s (or merging it) before anything else.\n' "$base_ref"
-      printf -- '- Reproduce and fix the failing checks locally.\n'
-      printf -- '- Address review feedback with real changes or a reasoned reply, never by dismissing.\n'
-      printf -- '- Commit locally if changes are needed.\n'
-      printf -- '- Do not push, do not open a new PR, and do not force-push. The safe-push task owns publication.\n'
-    } | sed 's/^/      /'
-    printf '  - id: safe-push\n'
-    printf '    description: "Safely push PR #%s only if its head did not move"\n' "$num"
-    printf '    dependencies: [repair]\n'
-    printf '    command: |\n'
-    {
-      printf 'set -euo pipefail\n'
-      printf 'branch=%s\n' "$q_head_ref"
-      printf 'expected=%s\n' "$q_head_oid"
-      printf 'ledger=%s\n' "$q_state_file"
-      printf 'kind=%s\n' "$q_tsv_kind"
-      printf 'key=%s\n' "$q_num"
-      printf 'marker=%s\n' "$q_fingerprint"
-      printf 'ref="refs/heads/$branch"\n'
-      printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
-      printf 'if [ "$live" != "$expected" ]; then\n'
-      printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
-      printf '  exit 20\n'
-      printf 'fi\n'
-      printf 'pushed="$(git rev-parse HEAD)"\n'
-      printf 'git push --force-with-lease="$ref:$expected" origin "HEAD:$ref"\n'
-      printf 'verified="$(git ls-remote origin "$ref" | cut -f1)"\n'
-      printf 'if [ "$verified" != "$pushed" ]; then\n'
-      printf '  echo "post-push verification failed: $ref is ${verified:-missing}; expected $pushed" >&2\n'
-      printf '  exit 22\n'
-      printf 'fi\n'
-      printf 'mkdir -p "$(dirname "$ledger")"\n'
-      printf 'printf '"'"'%%s\\t%%s\\t%%s\\t%%s\\n'"'"' "$kind" "$key" "$marker" "$(date +%%s)" >> "$ledger"\n'
-      printf 'echo "pr-worker-safe-push: pushed $ref to $pushed"\n'
-    } | sed 's/^/      /'
-  } > "$plan_file"
-
-  if [ "$DRY_RUN" = "1" ]; then
-    log_line "PR #$num: DRY-RUN would submit repair task (blockers: $summary)"
-    continue
-  fi
-
-  if output="$(headless_mutation run "$plan_file" 2>&1)"; then
-    ledger_record orphan-submitted "$num" "$fingerprint"
-    submitted=$((submitted + 1))
-    log_line "PR #$num: submitted repair task ($fingerprint; blockers: $summary)"
-  else
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      log_line "PR #$num: submit failed: $line"
-    done <<<"$output"
-  fi
-done < <(jq -c '.[]' <<<"$prs_json")
+IFS=',' read -r -a target_repos <<<"${INVOKER_GITHUB_TARGET_REPOS:-$TARGET_REPO}"
+for repo in "${target_repos[@]}"; do
+  repo="${repo//[[:space:]]/}"
+  [ -n "$repo" ] || continue
+  scan_repo "$repo"
+done
 
 log_line "orphan-repair scan complete; submitted $submitted repair task(s)"
