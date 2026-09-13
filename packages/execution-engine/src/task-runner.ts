@@ -52,6 +52,7 @@ import {
   isInvokerRepoUrl,
   buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
+  extractAgentReportedError,
   parseMakePrStackPublishResult,
   repoLocalPrBodyCheckerPath,
   resolveSkillPathViaAgent,
@@ -60,6 +61,7 @@ import {
   validateCanonicalPrBody,
   validateReviewStackPrBody,
   validateReviewStackPrBodyAgainstLocalDiff,
+  type MakePrStackArtifactOutput,
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { ensureRemoteUrl } from './git-config-mutation.js';
@@ -1681,7 +1683,22 @@ export class TaskRunner {
           agentName: agent.name,
           sessionId: result.sessionId,
         });
-        const parsedArtifacts = parseMakePrStackPublishResult(result.body);
+        let parsedArtifacts: MakePrStackArtifactOutput[];
+        try {
+          parsedArtifacts = parseMakePrStackPublishResult(result.body);
+        } catch (parseError) {
+          const reportedError = extractAgentReportedError(result.stdout);
+          logProgress('error', `${agent.name} make-pr agent produced no usable output`, {
+            agentName: agent.name,
+            sessionId: result.sessionId,
+            reportedError: reportedError ?? null,
+            bodyLength: result.body?.length ?? 0,
+          });
+          if (reportedError) {
+            throw new Error(`${agent.name} could not author the PR: ${reportedError}`);
+          }
+          throw parseError;
+        }
 
         // Enforce the make-pr review-stack schema on every published body. Prefer
         // the body actually published on the provider: a lazy agent could report a
