@@ -813,6 +813,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readonly workflowRepo: SqliteWorkflowRepository;
   private readonly slowQueryThresholdMs: number;
   private readonly onSlowQuery: ((info: SlowQueryInfo) => void) | null;
+  private debugEventBatchOpen = false;
+  private debugEventBatchFlush: ReturnType<typeof setImmediate> | undefined;
 
   /**
    * Non-null only when this adapter was opened via the corruption-recovery
@@ -1043,6 +1045,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
+    this.flushDebugEventBatch();
     const startedAt = performance.now();
     return runWithFreedStatement(this.db, sql, (stmt) => {
       const row = stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
@@ -1053,6 +1056,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
+    this.flushDebugEventBatch();
     const startedAt = performance.now();
     return runWithFreedStatement(this.db, sql, (stmt) => {
       const rows = stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
@@ -1070,6 +1074,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /** Run an INSERT/UPDATE/DELETE. File-backed durability is handled by SQLite/WAL. */
   private execRun(sql: string, params: unknown[] = []): void {
     this.ensureWritable();
+    this.flushDebugEventBatch();
     const startedAt = performance.now();
     this.db.run(sql, params as any[]);
     this.noteSlowQuery(startedAt, sql);
@@ -1078,6 +1083,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private runTransaction<T>(work: () => T): T {
     this.ensureWritable();
+    this.flushDebugEventBatch();
     if (this.writeTransactionDepth > 0) {
       return work();
     }
@@ -1962,10 +1968,74 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Events ────────────────────────────────────────────
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
-    this.execRun(`
+    const params = [taskId, eventType, payload ? JSON.stringify(payload) : null];
+    if (this.shouldBatchDebugEvent(eventType)) {
+      this.ensureWritable();
+      this.beginDebugEventBatch();
+      try {
+        this.insertEvent(params);
+      } catch (err) {
+        this.rollbackDebugEventBatch();
+        throw err;
+      }
+      this.scheduleDebugEventBatchFlush();
+      return;
+    }
+
+    this.flushDebugEventBatch();
+    this.insertEvent(params);
+  }
+
+  private shouldBatchDebugEvent(eventType: string): boolean {
+    return this.writeTransactionDepth === 0 && eventType.startsWith('debug.');
+  }
+
+  private beginDebugEventBatch(): void {
+    if (this.debugEventBatchOpen) return;
+    this.db.run('BEGIN IMMEDIATE');
+    this.debugEventBatchOpen = true;
+  }
+
+  private scheduleDebugEventBatchFlush(): void {
+    if (this.debugEventBatchFlush) return;
+    this.debugEventBatchFlush = setImmediate(() => {
+      this.debugEventBatchFlush = undefined;
+      this.flushDebugEventBatch();
+    });
+  }
+
+  private flushDebugEventBatch(): void {
+    if (!this.debugEventBatchOpen) return;
+    if (this.debugEventBatchFlush) {
+      clearImmediate(this.debugEventBatchFlush);
+      this.debugEventBatchFlush = undefined;
+    }
+    this.db.run('COMMIT');
+    this.debugEventBatchOpen = false;
+    this.dirty = true;
+  }
+
+  private rollbackDebugEventBatch(): void {
+    if (!this.debugEventBatchOpen) return;
+    if (this.debugEventBatchFlush) {
+      clearImmediate(this.debugEventBatchFlush);
+      this.debugEventBatchFlush = undefined;
+    }
+    try {
+      this.db.run('ROLLBACK');
+    } finally {
+      this.debugEventBatchOpen = false;
+    }
+  }
+
+  private insertEvent(params: unknown[]): void {
+    const startedAt = performance.now();
+    this.db.run(`
       INSERT INTO events (task_id, event_type, payload)
       VALUES (?, ?, ?)
-    `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+    `, params as any[]);
+    this.noteSlowQuery(startedAt, 'INSERT INTO events (task_id, event_type, payload) VALUES (?, ?, ?)');
+    this.dirty = true;
   }
 
   getEvents(taskId: string): TaskEvent[];
@@ -3331,6 +3401,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
+    this.flushDebugEventBatch();
     if (this.dbPath && !this.readOnly) {
       this.checkpointWal('PASSIVE');
     }

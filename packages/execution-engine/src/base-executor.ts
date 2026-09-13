@@ -36,6 +36,13 @@ const FAILED_TASK_ERROR_LINE_PATTERNS = [
   /\bELIFECYCLE\b.*\bCommand failed with exit code [1-9]\d*\b/i,
 ];
 
+const WORKER_ORIENTATION_PACK = [
+  'Worker orientation pack:',
+  '- Owning package: identify the nearest package or workspace named by the task before editing.',
+  '- Allowed files: start with files named by the task and files inside the owning package; widen scope only when the evidence requires it.',
+  '- Do not start with an unscoped repository walk; use the task text, package manifests, and targeted reads before the first edit.',
+].join('\n');
+
 function failedTaskErrorTail(output: string): string | undefined {
   const lines = output.split('\n');
   const tail = lines.slice(-FAILED_TASK_ERROR_TAIL_LINE_LIMIT).join('\n').trim();
@@ -1435,6 +1442,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    */
   protected buildFullPrompt(request: WorkRequest): string {
     let fullPrompt = request.inputs.prompt ?? '';
+    if (request.actionType === 'ai_task' && request.inputs.description) {
+      fullPrompt = `${WORKER_ORIENTATION_PACK}\n\n${fullPrompt}`;
+    }
     if (request.inputs.upstreamContext?.length) {
       const contextLines = request.inputs.upstreamContext.map(ctx => {
         let line = `[Upstream task: ${ctx.taskId}]\nDescription: ${ctx.description}\nSummary: ${ctx.summary ?? 'N/A'}`;
