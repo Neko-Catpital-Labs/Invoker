@@ -133,6 +133,37 @@ describe('delete-all-snapshot (adapter-backed backup)', () => {
       }),
     ).rejects.toThrow(/disk full/);
   });
+
+  it.fails('leaves no partial snapshot or journal behind when the backup fails partway', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+
+    await expect(
+      createHourlySnapshot(root, async (dest) => {
+        writeFileSync(dest, 'partial-backup-pages');
+        writeFileSync(`${dest}-journal`, 'rollback-journal');
+        throw new Error('database or disk is full');
+      }),
+    ).rejects.toThrow(/disk is full/);
+
+    expect(readdirSync(join(root, 'db-backups'))).toEqual([]);
+  });
+
+  it.fails('leaves no raw snapshot behind when compression fails', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    let rawPath = '';
+
+    await expect(
+      createHourlySnapshot(root, async (dest) => {
+        rawPath = dest;
+        writeFileSync(dest, 'complete-backup');
+        mkdirSync(`${dest}.gz`);
+      }),
+    ).rejects.toThrow();
+
+    expect(existsSync(rawPath)).toBe(false);
+  });
 });
 
 function seedHourly(backupDir: string, count: number, withSidecars = false): void {
