@@ -63,10 +63,11 @@ while IFS= read -r pr; do
   fi
 
   # Mapped PRs belong to the existing per-symptom workers.
-  wf=""
-  if rec="$(resolve_workflow_for_pr "$num")"; then
-    wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
+  if ! rec="$(resolve_workflow_for_pr "$num")"; then
+    log_line "PR #$num: workflow lookup failed; skipping"
+    continue
   fi
+  wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
   if [ -n "$wf" ]; then
     log_line "PR #$num: mapped to workflow $wf; existing workers own it"
     continue
