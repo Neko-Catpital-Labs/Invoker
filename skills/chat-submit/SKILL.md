@@ -1,5 +1,6 @@
 ---
 name: chat-submit
+category: core
 description: >
   Automatically route approved plans and durable/parallel execution work from
   normal chat into Invoker. Trigger when the user has a plan ready to run,
