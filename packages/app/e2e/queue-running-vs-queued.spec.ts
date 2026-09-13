@@ -26,7 +26,7 @@ const QUEUE_SPLIT_PLAN = {
     {
       id: 'slot-holder',
       description: 'Occupies the only runner slot',
-      command: 'sleep 30 && echo slot-holder-done',
+      command: 'sleep 120 && echo slot-holder-done',
       dependencies: [],
     },
     {
@@ -46,20 +46,20 @@ test.describe('queue running vs queued', () => {
     await startPlan(page);
 
     await expect.poll(async () => {
-      const status = await page.evaluate(async () => await window.invoker.getQueueStatus());
+      const status = await page.evaluate(async () => await window.invoker.getQueueStatus({ refresh: true }));
       return {
         slots: status?.runningCount ?? 0,
         active: status?.activeExecutionCount ?? 0,
         launching: status?.launchingCount ?? 0,
         queued: status?.queued?.length ?? 0,
       };
-    }, { timeout: 30000 }).toEqual({ slots: 1, active: 0, launching: 1, queued: 1 });
+    }, { timeout: 30000 }).toEqual({ slots: 1, active: 1, launching: 0, queued: 1 });
 
     // Stay on home — this is the live bottom bar surface.
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
-    await expect(page.getByTestId('queue-chip-running')).toHaveText('Executing (0/1)');
+    await expect(page.getByTestId('queue-chip-running')).toHaveText('Executing (1/1)');
     await expect(page.getByTestId('queue-chip-slots')).toHaveText('Slots (1/1)');
-    await expect(page.getByTestId('queue-chip-launching')).toHaveText('Launching (1)');
+    await expect(page.getByTestId('queue-chip-launching')).toHaveCount(0);
     await expect(page.getByTestId('queue-chip-queued')).toHaveText('Queued (1)');
     await captureScreenshot(page, 'home-queue-capacity-chips');
 

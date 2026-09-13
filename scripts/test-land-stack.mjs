@@ -131,7 +131,7 @@ test('queue targets include the whole open stack in order', () => {
   assert.deepEqual(targets.map((pr) => pr.number), [2174, 2175]);
 });
 
-function runCli(prNumbers) {
+function runCli(prNumbers, { diffs = {}, reviews = {} } = {}) {
   const tmp = mkdtempSync(join(tmpdir(), 'land-stack-test-'));
   const bin = join(tmp, 'bin');
   const log = join(tmp, 'gh.log');
@@ -144,8 +144,14 @@ const prs = {
   '2174': { number: 2174, headRefOid: ${JSON.stringify(SHA_2174)}, headRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, baseRefName: 'master', state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
   '2175': { number: 2175, headRefOid: ${JSON.stringify(SHA_2175)}, headRefName: ${JSON.stringify(STACK_BR_TOP)}, baseRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
 };
+const diffs = ${JSON.stringify(diffs)};
+const reviews = ${JSON.stringify(reviews)};
 if (process.argv[2] === 'pr' && process.argv[3] === 'view') {
   process.stdout.write(JSON.stringify(prs[process.argv[4]]));
+  process.exit(0);
+}
+if (process.argv[2] === 'pr' && process.argv[3] === 'diff') {
+  process.stdout.write(diffs[process.argv[4]] || 'diff --git a/README.md b/README.md\\n+ordinary\\n');
   process.exit(0);
 }
 if (process.argv[2] === 'pr' && process.argv[3] === 'list') {
@@ -153,6 +159,12 @@ if (process.argv[2] === 'pr' && process.argv[3] === 'list') {
   process.exit(0);
 }
 const ghArgs = process.argv.slice(2);
+if (ghArgs[0] === 'api' && ghArgs.some((arg) => arg.includes('/pulls/') && arg.endsWith('/reviews'))) {
+  const endpoint = ghArgs.find((arg) => arg.includes('/pulls/') && arg.endsWith('/reviews'));
+  const number = endpoint.split('/pulls/')[1].split('/')[0];
+  process.stdout.write(JSON.stringify([reviews[number] || []]));
+  process.exit(0);
+}
 if (ghArgs[0] === 'api' && ghArgs.includes('POST') && ghArgs.some((arg) => arg.startsWith('repos/{owner}/{repo}/issues/'))) {
   fs.appendFileSync(log, process.argv.slice(2).join(' ') + '\\n');
   process.exit(0);
@@ -187,6 +199,34 @@ test('execute labels every verified PR bottom-to-top', () => {
     'api --silent --method POST repos/{owner}/{repo}/issues/2174/labels -f labels[]=admin-bypass',
     'api --silent --method POST repos/{owner}/{repo}/issues/2175/labels -f labels[]=admin-bypass',
   ]);
+});
+
+test('execute refuses a guarded diff without current-head human approval', () => {
+  const guardedDiff = 'diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx\n--- a/packages/ui/src/App.tsx\n+++ b/packages/ui/src/App.tsx\n@@ -1,2 +1,2 @@\n // guarded-behavior: selection-camera-inert\n-old\n+new\n';
+  const { res, edits } = runCli(['2174', '2175'], {
+    diffs: { 2174: guardedDiff },
+  });
+  assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stderr, /refusing admin-bypass for guarded PR #2174/);
+  assert.deepEqual(edits, []);
+});
+
+test('execute labels a guarded diff after current-head human approval', () => {
+  const guardedDiff = 'diff --git a/packages/ui/src/App.tsx b/packages/ui/src/App.tsx\n--- a/packages/ui/src/App.tsx\n+++ b/packages/ui/src/App.tsx\n@@ -1,2 +1,2 @@\n // guarded-behavior: selection-camera-inert\n-old\n+new\n';
+  const { res, edits } = runCli(['2174', '2175'], {
+    diffs: { 2174: guardedDiff },
+    reviews: {
+      2174: [{
+        id: 1,
+        state: 'APPROVED',
+        commit_id: SHA_2174,
+        submitted_at: '2026-08-28T00:00:01Z',
+        user: { login: 'human-reviewer', type: 'User' },
+      }],
+    },
+  });
+  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
+  assert.equal(edits.length, 2);
 });
 
 console.log(`\n${passed} tests passed`);

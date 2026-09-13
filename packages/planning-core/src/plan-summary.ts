@@ -37,7 +37,7 @@ export function summarizePlanText(planText: string): PlanSummary | null {
       if (!tasks) return null;
       taskGroups.push({
         workflow: summarizeDescription(workflow.name),
-        tasks: topoSort(tasks).map((task) => summarizeDescription(task.description)),
+        tasks: topoSort(tasks).map((task) => task.description.trim()),
       });
     }
     return {
@@ -51,7 +51,7 @@ export function summarizePlanText(planText: string): PlanSummary | null {
 
   const tasks = parseTasks(parsed.tasks);
   if (!tasks) return null;
-  const steps = topoSort(tasks).map((task) => summarizeDescription(task.description));
+  const steps = topoSort(tasks).map((task) => task.description.trim());
   return { name: parsed.name, steps, taskCount: tasks.length, taskGroups: [{ workflow: null, tasks: steps }] };
 }
 

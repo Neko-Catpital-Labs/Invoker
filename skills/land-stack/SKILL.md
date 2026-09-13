@@ -1,5 +1,6 @@
 ---
 name: land-stack
+category: core
 description: >
   Land (queue/merge) a Mergify-managed PR stack safely. Trigger when asked to
   land, merge, ship, or queue a PR or PR stack with Mergify. Enforces that you

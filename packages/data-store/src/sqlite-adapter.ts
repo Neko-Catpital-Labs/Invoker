@@ -36,21 +36,28 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions, TaskFilterNode } from '@invoker/contracts';
 import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
+  RepairFiling,
+  RepairFilingInsertInput,
+  RepairFilingInsertResult,
   ReviewGateLookup,
   Workflow,
   WorkflowReadOptions,
+  WorkflowPagedOptions,
+  WorkflowPagedResult,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
   TaskEventListFilters,
   ActivityLogEntry,
+  ChatSurface,
   Conversation,
   ConversationMessage,
+  PlanningDraft,
   SlackLaunchContext,
   SlackPlanDraft,
   SlackPendingConfirmation,
@@ -64,14 +71,17 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from './adapter.js';
+import { DEFAULT_CHAT_SURFACE } from './adapter.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
 import {
+  mapRowToTask,
   mapRowToTaskLaunchDispatch,
   mapRowToWorkflowMutationIntent,
   mapRowToWorkflowMutationLease,
   mapRowToWorkerAction,
 } from './sqlite-row-mappers.js';
+import { compileTaskFilter } from './task-filter-sql.js';
 import {
   taskOutputFilePath,
   taskSpoolFilePath,
@@ -101,7 +111,8 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
-// activity_log is capped to its most recent rows so the DB file stays bounded; 0 disables.
+export const GET_EVENTS_DEFAULT_LIMIT = 10_000;
+
 const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
 const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000; // prune at most once per N writes
 
@@ -579,7 +590,7 @@ export type TaskLaunchDispatchState =
   | 'completed'
   | 'abandoned';
 
-export type TaskLaunchDispatchPriority = 'high' | 'normal' | 'low';
+export type TaskLaunchDispatchPriority = 1 | 2 | 3 | 4 | 5;
 
 export interface TaskLaunchDispatch {
   id: number;
@@ -632,6 +643,8 @@ type InAppPlanningSessionRow = {
   worktree_branch?: unknown;
   draft_plan_summary_json?: unknown;
   draft_plan_text?: unknown;
+  planning_draft_id?: unknown;
+  planning_draft_hash?: unknown;
   submitted_workflow_id?: unknown;
   submitted_plan_name?: unknown;
   terminal_mode?: unknown;
@@ -641,6 +654,9 @@ type InAppPlanningSessionRow = {
   terminal_output_snapshot?: unknown;
   terminal_updated_at?: unknown;
   pending_response?: unknown;
+  active_turn_id?: unknown;
+  active_turn_status?: unknown;
+  active_turn_error?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
 };
@@ -658,6 +674,7 @@ type InAppPlanningMessagePersistState = {
   count: number;
   maxMessageId: number;
   signature?: string;
+  messagesRef?: InAppPlanningChatLine[];
 };
 
 function parseTerminalArgsJson(value: unknown): string[] {
@@ -674,6 +691,7 @@ function isInAppPlanningSessionStatus(value: unknown): value is InAppPlanningSes
   return value === 'still_discussing'
     || value === 'waiting_for_answer'
     || value === 'draft_ready'
+    || value === 'planner_error'
     || value === 'submitted';
 }
 
@@ -690,6 +708,10 @@ function isInAppPlanningMessageRole(value: unknown): value is InAppPlanningChatL
 }
 function isPlanningConfirmationMode(value: unknown): value is PlanningConfirmationMode {
   return value === 'require' || value === 'auto_submit';
+}
+
+function surfaceFilter(surface: ChatSurface | undefined): { sql: string; params: ChatSurface[] } {
+  return surface === undefined ? { sql: '', params: [] } : { sql: ' AND surface = ?', params: [surface] };
 }
 
 function isInAppPlanningMessageTone(value: unknown): value is InAppPlanningChatLine['tone'] {
@@ -777,6 +799,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private dirty = false;
   private readonly inAppPlanningMessagePersistStates = new Map<string, InAppPlanningMessagePersistState>();
   private readonly inAppPlanningMessagePersistSignatures = new Map<string, string>();
+  private readonly inAppPlanningMessagePersistRefs = new Map<string, InAppPlanningChatLine[]>();
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private outputDir: string;
@@ -821,7 +844,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         : null);
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
-      updateTask: (taskId, changes) => this.updateTask(taskId, changes),
+      updateTask: (taskId, changes, opts) => this.updateTask(taskId, changes, opts),
       updateAttempt: (attemptId, changes) => this.updateAttempt(attemptId, changes),
     });
     this.workflowRepo = new SqliteWorkflowRepository(
@@ -991,11 +1014,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private resolveOutputDir(dbPath: string | null): string {
-    const invokerHome = process.env.INVOKER_DB_DIR ?? (dbPath ? dirname(dbPath) : join(homedir(), '.invoker'));
-    if (!dbPath && !process.env.INVOKER_DB_DIR) {
+    const isEphemeral = dbPath === null || dbPath === SQLITE_EPHEMERAL_DATABASE;
+    if (isEphemeral) {
       return join(tmpdir(), `invoker-output-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     }
-    return join(invokerHome, 'task-output');
+    return join(dirname(dbPath), 'task-output');
   }
 
   private configureConnection(fileBacked: boolean): void {
@@ -1055,6 +1078,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private runTransaction<T>(work: () => T): T {
     this.ensureWritable();
+    if (this.writeTransactionDepth > 0) {
+      return work();
+    }
     this.db.run(this.writeTransactionDepth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT invoker_nested_${this.writeTransactionDepth}`);
     this.writeTransactionDepth += 1;
     try {
@@ -1206,8 +1232,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.listWorkflows(options);
   }
 
-  findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
-    return this.workflowRepo.findReviewGateByPr(pr);
+  listWorkflowsPaged(options: WorkflowPagedOptions): WorkflowPagedResult {
+    return this.workflowRepo.listWorkflowsPaged(options);
+  }
+
+  findReviewGateByPr(pr: string, repo?: string): ReviewGateLookup | undefined {
+    return this.workflowRepo.findReviewGateByPr(pr, repo);
   }
 
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[] {
@@ -1224,12 +1254,44 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   // ── Tasks ─────────────────────────────────────────────
 
+  queryTasksByFilter(filter: TaskFilterNode, opts: { limit?: number; offset?: number } = {}): TaskState[] {
+    const compiled = compileTaskFilter(filter);
+    const limit = Math.min(500, Math.max(0, Math.floor(opts.limit ?? 100)));
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    const rows = this.queryAll(
+      `SELECT t.* FROM tasks t
+       JOIN workflows w ON w.id = t.workflow_id
+       WHERE w.deleted_at IS NULL AND (${compiled.where})
+       ORDER BY t.created_at ASC
+       LIMIT ? OFFSET ?`,
+      [...compiled.params, limit, offset],
+    );
+    return rows.map(mapRowToTask);
+  }
+
   saveTask(workflowId: string, task: TaskState): void {
     this.taskAttemptRepo.saveTask(workflowId, task);
   }
 
-  updateTask(taskId: string, changes: TaskStateChanges): void {
-    this.taskAttemptRepo.updateTask(taskId, changes);
+  updateTask(
+    taskId: string,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    this.taskAttemptRepo.updateTask(taskId, changes, opts);
+  }
+
+  updateTaskFromKnownState(
+    taskId: string,
+    beforeTask: TaskState,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): void {
+    this.taskAttemptRepo.updateTaskFromKnownState(taskId, beforeTask, changes, opts);
+  }
+
+  updateTaskLaunchState(taskId: string, changes: TaskStateChanges): void {
+    this.taskAttemptRepo.updateTaskLaunchState(taskId, changes);
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -1370,6 +1432,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
           worktree_branch,
           draft_plan_summary_json,
           draft_plan_text,
+          planning_draft_id,
+          planning_draft_hash,
           submitted_workflow_id,
           submitted_plan_name,
           terminal_mode,
@@ -1379,9 +1443,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
           terminal_output_snapshot,
           terminal_updated_at,
           pending_response,
+          active_turn_id,
+          active_turn_status,
+          active_turn_error,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
@@ -1394,6 +1461,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
           worktree_branch = excluded.worktree_branch,
           draft_plan_summary_json = excluded.draft_plan_summary_json,
           draft_plan_text = excluded.draft_plan_text,
+          planning_draft_id = excluded.planning_draft_id,
+          planning_draft_hash = excluded.planning_draft_hash,
           submitted_workflow_id = excluded.submitted_workflow_id,
           submitted_plan_name = excluded.submitted_plan_name,
           terminal_mode = excluded.terminal_mode,
@@ -1403,6 +1472,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           terminal_output_snapshot = excluded.terminal_output_snapshot,
           terminal_updated_at = excluded.terminal_updated_at,
           pending_response = excluded.pending_response,
+          active_turn_id = excluded.active_turn_id,
+          active_turn_status = excluded.active_turn_status,
+          active_turn_error = excluded.active_turn_error,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at`,
         [
@@ -1418,6 +1490,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.worktreeBranch ?? null,
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
           record.draftPlanText ?? null,
+          record.planningDraftId ?? null,
+          record.planningDraftHash ?? null,
           record.submittedWorkflowId ?? null,
           record.submittedPlanName ?? null,
           record.terminalMode ?? 'chat',
@@ -1427,6 +1501,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.terminalOutputSnapshot ?? '',
           record.terminalUpdatedAt ?? null,
           record.pendingResponse ? 1 : 0,
+          record.activeTurnId ?? null,
+          record.activeTurnStatus ?? null,
+          record.activeTurnError ?? null,
           record.createdAt,
           record.updatedAt,
         ],
@@ -1497,6 +1574,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
         setClauses.push('draft_plan_text = ?');
         values.push(patch.draftPlanText ?? null);
       }
+      if (Object.hasOwn(patch, 'planningDraftId')) {
+        setClauses.push('planning_draft_id = ?');
+        values.push(patch.planningDraftId ?? null);
+      }
+      if (Object.hasOwn(patch, 'planningDraftHash')) {
+        setClauses.push('planning_draft_hash = ?');
+        values.push(patch.planningDraftHash ?? null);
+      }
       if (Object.hasOwn(patch, 'submittedWorkflowId')) {
         setClauses.push('submitted_workflow_id = ?');
         values.push(patch.submittedWorkflowId ?? null);
@@ -1533,6 +1618,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
         setClauses.push('pending_response = ?');
         values.push(patch.pendingResponse ? 1 : 0);
       }
+      if (Object.hasOwn(patch, 'activeTurnId')) {
+        setClauses.push('active_turn_id = ?');
+        values.push(patch.activeTurnId ?? null);
+      }
+      if (Object.hasOwn(patch, 'activeTurnStatus')) {
+        setClauses.push('active_turn_status = ?');
+        values.push(patch.activeTurnStatus ?? null);
+      }
+      if (Object.hasOwn(patch, 'activeTurnError')) {
+        setClauses.push('active_turn_error = ?');
+        values.push(patch.activeTurnError ?? null);
+      }
       if (Object.hasOwn(patch, 'updatedAt')) {
         setClauses.push('updated_at = ?');
         values.push(patch.updatedAt ?? null);
@@ -1562,6 +1659,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
       this.inAppPlanningMessagePersistStates.delete(sessionId);
       this.inAppPlanningMessagePersistSignatures.delete(sessionId);
+      this.inAppPlanningMessagePersistRefs.delete(sessionId);
     });
   }
 
@@ -1654,6 +1752,51 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadAllHistoryTasks(): Array<TaskState & { workflowName: string; lastEventAt: string | null; eventCount: number }> {
     return this.taskAttemptRepo.loadAllHistoryTasks();
+  }
+
+  pruneOldEvents(retentionDays: number): number {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+    const cutoff = `-${Math.floor(retentionDays)} days`;
+    this.db.run(
+      `DELETE FROM events
+        WHERE created_at < datetime('now', ?)
+          AND task_id IN (
+            SELECT id FROM tasks
+             WHERE status IN ('completed', 'failed', 'closed', 'review_ready', 'stale')
+          )`,
+      [cutoff],
+    );
+    return this.db.getRowsModified();
+  }
+
+  pruneOldSyncJournal(retentionDays: number): number {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+    const cutoff = `-${Math.floor(retentionDays)} days`;
+    this.db.run(
+      `DELETE FROM sync_journal
+        WHERE created_at < datetime('now', ?)
+          AND (
+            NOT EXISTS (SELECT 1 FROM sync_cursors)
+            OR seq <= (SELECT MIN(last_sent_seq) FROM sync_cursors)
+          )`,
+      [cutoff],
+    );
+    return this.db.getRowsModified();
+  }
+
+  getFreelistPageCount(): number {
+    const row = this.nativeDb.prepare('PRAGMA freelist_count').get() as { freelist_count?: number } | undefined;
+    return Number(row?.freelist_count ?? 0);
+  }
+
+  runIncrementalVacuum(maxPages: number): number {
+    if (!Number.isFinite(maxPages) || maxPages <= 0) return 0;
+    const autoVacuumRow = this.nativeDb.prepare('PRAGMA auto_vacuum').get() as { auto_vacuum?: number } | undefined;
+    if (Number(autoVacuumRow?.auto_vacuum ?? 0) === 0) return 0;
+    const before = this.getFreelistPageCount();
+    this.nativeDb.exec(`PRAGMA incremental_vacuum(${Math.floor(maxPages)})`);
+    const after = this.getFreelistPageCount();
+    return Math.max(0, before - after);
   }
 
   deleteTask(taskId: string): void {
@@ -1834,15 +1977,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     beforeId?: number,
   ): TaskEvent[] {
     const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
-    if (limit === undefined) {
-      const rows = this.queryAll(
-        `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy}`,
-        [taskId],
-      );
-      return rows.map((row: any) => this.rowToTaskEvent(row));
-    }
-    if (limit <= 0) return [];
-    const pageLimit = Math.floor(limit);
+    const effectiveLimit = limit ?? GET_EVENTS_DEFAULT_LIMIT;
+    if (effectiveLimit <= 0) return [];
+    const pageLimit = Math.floor(effectiveLimit);
     if (beforeId !== undefined) {
       const rows = this.queryAll(
         `SELECT * FROM events WHERE task_id = ? AND id < ? ORDER BY id ${orderBy} LIMIT ?`,
@@ -1853,6 +1990,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const rows = this.queryAll(
       `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy} LIMIT ?`,
       [taskId, pageLimit],
+    );
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
+  getEventsSlim(
+    taskId: string,
+    sortBy: 'asc' | 'desc',
+    limit: number,
+    payloadMaxChars: number,
+  ): TaskEvent[] {
+    if (limit <= 0) return [];
+    const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
+    const pageLimit = Math.floor(limit);
+    const maxChars = Math.max(0, Math.floor(payloadMaxChars));
+    const rows = this.queryAll(
+      `SELECT id, task_id, event_type, created_at,
+              CASE WHEN LENGTH(payload) > ? THEN SUBSTR(payload, 1, ?) ELSE payload END AS payload
+       FROM events
+       WHERE task_id = ?
+       ORDER BY id ${orderBy}
+       LIMIT ?`,
+      [maxChars, maxChars, taskId, pageLimit],
+    );
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
+  getRecentEventsOfType(taskId: string, eventType: string, limit: number): TaskEvent[] {
+    if (limit <= 0) return [];
+    const rows = this.queryAll(
+      'SELECT * FROM events WHERE task_id = ? AND event_type = ? ORDER BY id DESC LIMIT ?',
+      [taskId, eventType, Math.floor(limit)],
     );
     return rows.map((row: any) => this.rowToTaskEvent(row));
   }
@@ -1966,6 +2134,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
       return [];
     }
 
+    const orderBy = filters.sortBy === 'asc' ? 'ASC' : 'DESC';
+    if (filters.eventTypes && !filters.taskId && filters.limit !== undefined) {
+      const pageLimit = Math.floor(filters.limit);
+      const merged: TaskEvent[] = [];
+      for (const eventType of filters.eventTypes) {
+        const rows = this.queryAll(
+          `SELECT * FROM events
+           WHERE event_type = ?
+           ORDER BY id ${orderBy}
+           LIMIT ?`,
+          [eventType, pageLimit],
+        );
+        for (const row of rows) {
+          merged.push(this.rowToTaskEvent(row));
+        }
+      }
+      merged.sort((a, b) => (orderBy === 'ASC' ? a.id - b.id : b.id - a.id));
+      return merged.slice(0, pageLimit);
+    }
+
     const where: string[] = [];
     const params: unknown[] = [];
     if (filters.taskId) {
@@ -1977,7 +2165,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       params.push(...filters.eventTypes);
     }
 
-    const orderBy = filters.sortBy === 'asc' ? 'ASC' : 'DESC';
     let limitSql = '';
     if (filters.limit !== undefined) {
       limitSql = ' LIMIT ?';
@@ -2205,23 +2392,38 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      conversation.threadTs,
-      conversation.channelId,
-      conversation.userId,
-      conversation.mode ?? 'plan',
-      conversation.extractedPlan,
-      conversation.planSubmitted ? 1 : 0,
-      conversation.createdAt,
-      conversation.updatedAt,
-    ]);
+    const surface = conversation.surface ?? DEFAULT_CHAT_SURFACE;
+    this.runTransaction(() => {
+      this.assertRowOwnedBySurface('conversations', 'thread_ts', conversation.threadTs, surface);
+      this.execRun(`
+        INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at, surface)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        conversation.threadTs,
+        conversation.channelId,
+        conversation.userId,
+        conversation.mode ?? 'plan',
+        conversation.extractedPlan,
+        conversation.planSubmitted ? 1 : 0,
+        conversation.createdAt,
+        conversation.updatedAt,
+        surface,
+      ]);
+    });
   }
 
-  loadConversation(threadTs: string): Conversation | undefined {
-    const row = this.queryOne('SELECT * FROM conversations WHERE thread_ts = ?', [threadTs]);
+  private assertRowOwnedBySurface(table: string, keyColumn: string, key: string, surface: ChatSurface): void {
+    const existing = this.queryOne(`SELECT surface FROM ${table} WHERE ${keyColumn} = ?`, [key]);
+    if (existing && existing.surface !== surface) {
+      throw new Error(
+        `${table} row ${key} belongs to surface '${String(existing.surface)}'; refusing to overwrite it from surface '${surface}'.`,
+      );
+    }
+  }
+
+  loadConversation(threadTs: string, surface?: ChatSurface): Conversation | undefined {
+    const filter = surfaceFilter(surface);
+    const row = this.queryOne(`SELECT * FROM conversations WHERE thread_ts = ?${filter.sql}`, [threadTs, ...filter.params]);
     if (!row) return undefined;
     return {
       threadTs: row.thread_ts as string,
@@ -2232,6 +2434,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
+      surface: row.surface as ChatSurface,
     };
   }
 
@@ -2266,13 +2469,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
       this.db.run('DELETE FROM slack_pending_confirmations WHERE thread_ts = ?', [threadTs]);
       this.db.run('DELETE FROM conversation_messages WHERE thread_ts = ?', [threadTs]);
+      this.db.run('DELETE FROM planning_drafts WHERE conversation_id = ?', [threadTs]);
       this.db.run('DELETE FROM conversations WHERE thread_ts = ?', [threadTs]);
     });
   }
 
-  listActiveConversations(): Conversation[] {
+  listActiveConversations(surface?: ChatSurface): Conversation[] {
+    const filter = surfaceFilter(surface);
     const rows = this.queryAll(
-      'SELECT * FROM conversations WHERE plan_submitted = 0 ORDER BY updated_at DESC',
+      `SELECT * FROM conversations WHERE plan_submitted = 0${filter.sql} ORDER BY updated_at DESC`,
+      filter.params,
     );
     return rows.map((row: any) => ({
       threadTs: row.thread_ts as string,
@@ -2283,15 +2489,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
+      surface: row.surface as ChatSurface,
     }));
   }
 
-  listActivePlanConversations(channelId: string, userId: string): Conversation[] {
+  listActivePlanConversations(channelId: string, userId: string, surface?: ChatSurface): Conversation[] {
+    const filter = surfaceFilter(surface);
     const rows = this.queryAll(`
       SELECT * FROM conversations
-      WHERE channel_id = ? AND user_id = ? AND mode = 'plan' AND plan_submitted = 0
+      WHERE channel_id = ? AND user_id = ? AND mode = 'plan' AND plan_submitted = 0${filter.sql}
       ORDER BY updated_at DESC
-    `, [channelId, userId]);
+    `, [channelId, userId, ...filter.params]);
     return rows.map((row: any) => ({
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
@@ -2301,6 +2509,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
+      surface: row.surface as ChatSurface,
     }));
   }
 
@@ -2321,12 +2530,106 @@ export class SQLiteAdapter implements PersistenceAdapter {
           SELECT thread_ts FROM conversations WHERE updated_at < ?
         )
       `, [cutoffIso]);
+      this.db.run(`
+        DELETE FROM planning_drafts WHERE conversation_id IN (
+          SELECT thread_ts FROM conversations WHERE updated_at < ?
+        )
+      `, [cutoffIso]);
       this.db.run(
         'DELETE FROM conversations WHERE updated_at < ?',
         [cutoffIso],
       );
       return this.db.getRowsModified();
     });
+  }
+
+  private mapPlanningDraftRow(row: Record<string, unknown>): PlanningDraft {
+    return {
+      id: row.id as string,
+      conversationId: row.conversation_id as string,
+      version: Number(row.version),
+      planText: row.plan_text as string,
+      contentHash: row.content_hash as string,
+      status: row.status as PlanningDraft['status'],
+      createdAt: row.created_at as string,
+      ...(typeof row.superseded_at === 'string' ? { supersededAt: row.superseded_at } : {}),
+      ...(typeof row.submitted_at === 'string' ? { submittedAt: row.submitted_at } : {}),
+    };
+  }
+
+  createCurrentPlanningDraft(
+    input: Omit<PlanningDraft, 'version' | 'status' | 'supersededAt' | 'submittedAt'>,
+  ): PlanningDraft {
+    return this.runTransaction(() => {
+      const previous = this.queryOne(
+        `SELECT COALESCE(MAX(version), 0) AS version
+         FROM planning_drafts
+         WHERE conversation_id = ?`,
+        [input.conversationId],
+      );
+      const version = Number(previous?.version ?? 0) + 1;
+      this.execRun(
+        `UPDATE planning_drafts
+         SET status = 'superseded', superseded_at = ?
+         WHERE conversation_id = ? AND status = 'current'`,
+        [input.createdAt, input.conversationId],
+      );
+      this.execRun(
+        `INSERT INTO planning_drafts (
+           id, conversation_id, version, plan_text, content_hash, status, created_at
+         ) VALUES (?, ?, ?, ?, ?, 'current', ?)`,
+        [
+          input.id,
+          input.conversationId,
+          version,
+          input.planText,
+          input.contentHash,
+          input.createdAt,
+        ],
+      );
+      return { ...input, version, status: 'current' };
+    });
+  }
+
+  loadCurrentPlanningDraft(conversationId: string): PlanningDraft | undefined {
+    const row = this.queryOne(
+      `SELECT * FROM planning_drafts
+       WHERE conversation_id = ? AND status = 'current'`,
+      [conversationId],
+    );
+    return row ? this.mapPlanningDraftRow(row) : undefined;
+  }
+
+  loadPlanningDraft(id: string): PlanningDraft | undefined {
+    const row = this.queryOne('SELECT * FROM planning_drafts WHERE id = ?', [id]);
+    return row ? this.mapPlanningDraftRow(row) : undefined;
+  }
+
+  supersedePlanningDraft(id: string, supersededAt: string): void {
+    this.execRun(
+      `UPDATE planning_drafts
+       SET status = 'superseded', superseded_at = ?
+       WHERE id = ? AND status = 'current'`,
+      [supersededAt, id],
+    );
+  }
+
+  supersedeCurrentPlanningDraft(conversationId: string, supersededAt: string): void {
+    this.execRun(
+      `UPDATE planning_drafts
+       SET status = 'superseded', superseded_at = ?
+       WHERE conversation_id = ? AND status = 'current'`,
+      [supersededAt, conversationId],
+    );
+  }
+
+  markPlanningDraftSubmitted(id: string, submittedAt: string): void {
+    this.execRun(
+      `UPDATE planning_drafts
+       SET status = 'submitted', submitted_at = ?
+       WHERE id = ? AND status = 'current'`,
+      [submittedAt, id],
+    );
   }
 
   // ── Conversation Messages ──────────────────────────────
@@ -2370,26 +2673,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Slack Plan Submission Session State ─────────────────
 
   saveSlackLaunchContext(context: SlackLaunchContext): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO slack_launch_contexts
-        (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, confirmation_mode, harness_session_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      context.threadTs,
-      context.repoUrl,
-      context.harnessPreset,
-      context.workingDir,
-      context.requestedBy,
-      context.lobbyChannelId,
-      context.confirmationMode ?? 'require',
-      context.harnessSessionId ?? null,
-    ]);
+    const surface = context.surface ?? DEFAULT_CHAT_SURFACE;
+    this.runTransaction(() => {
+      this.assertRowOwnedBySurface('slack_launch_contexts', 'thread_ts', context.threadTs, surface);
+      this.execRun(`
+        INSERT OR REPLACE INTO slack_launch_contexts
+          (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, confirmation_mode, harness_session_id, surface)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        context.threadTs,
+        context.repoUrl,
+        context.harnessPreset,
+        context.workingDir,
+        context.requestedBy,
+        context.lobbyChannelId,
+        context.confirmationMode ?? 'require',
+        context.harnessSessionId ?? null,
+        surface,
+      ]);
+    });
   }
 
-  loadSlackLaunchContext(threadTs: string): SlackLaunchContext | undefined {
+  loadSlackLaunchContext(threadTs: string, surface?: ChatSurface): SlackLaunchContext | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(
-      'SELECT * FROM slack_launch_contexts WHERE thread_ts = ?',
-      [threadTs],
+      `SELECT * FROM slack_launch_contexts WHERE thread_ts = ?${filter.sql}`,
+      [threadTs, ...filter.params],
     ) as Record<string, unknown> | undefined;
     if (!row) return undefined;
     return {
@@ -2401,22 +2710,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
       lobbyChannelId: row.lobby_channel_id as string,
       confirmationMode: isPlanningConfirmationMode(row.confirmation_mode) ? row.confirmation_mode : 'require',
       harnessSessionId: typeof row.harness_session_id === 'string' ? row.harness_session_id : undefined,
+      surface: row.surface as ChatSurface,
     };
   }
 
-  deleteSlackLaunchContext(threadTs: string): void {
-    this.execRun('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
+  deleteSlackLaunchContext(threadTs: string, surface?: ChatSurface): void {
+    const filter = surfaceFilter(surface);
+    this.execRun(`DELETE FROM slack_launch_contexts WHERE thread_ts = ?${filter.sql}`, [threadTs, ...filter.params]);
   }
 
   saveSlackPlanDraft(draft: SlackPlanDraft): void {
     this.execRun(`
       INSERT OR REPLACE INTO slack_plan_drafts
-        (draft_id, version, channel_id, thread_ts, message_ts, slack_file_id, plan_text, content_hash, summary_json,
-         status, repo_url, harness_preset, working_dir, requested_by, confirmation_mode, created_at, decided_at, decided_by, execution_key, workflow_ids_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (draft_id, version, planning_draft_id, channel_id, thread_ts, message_ts, slack_file_id, plan_text, content_hash, summary_json,
+         status, repo_url, harness_preset, working_dir, requested_by, confirmation_mode, created_at, decided_at, decided_by, execution_key, workflow_ids_json, surface)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       draft.draftId,
       draft.version,
+      draft.planningDraftId ?? null,
       draft.channelId,
       draft.threadTs,
       draft.messageTs ?? null,
@@ -2435,6 +2747,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       draft.decidedBy ?? null,
       draft.executionKey ?? null,
       draft.workflowIdsJson ?? null,
+      draft.surface ?? DEFAULT_CHAT_SURFACE,
     ]);
   }
 
@@ -2446,13 +2759,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return row ? this.toSlackPlanDraft(row) : undefined;
   }
 
-  loadReadySlackPlanDraft(channelId: string, threadTs: string): SlackPlanDraft | undefined {
+  loadReadySlackPlanDraft(channelId: string, threadTs: string, surface?: ChatSurface): SlackPlanDraft | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(`
       SELECT * FROM slack_plan_drafts
-      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'
+      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'${filter.sql}
       ORDER BY version DESC
       LIMIT 1
-    `, [channelId, threadTs]) as Record<string, unknown> | undefined;
+    `, [channelId, threadTs, ...filter.params]) as Record<string, unknown> | undefined;
     return row ? this.toSlackPlanDraft(row) : undefined;
   }
 
@@ -2513,18 +2827,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
   }
 
-  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string): void {
+  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string, surface?: ChatSurface): void {
+    const filter = surfaceFilter(surface);
     this.execRun(`
       UPDATE slack_plan_drafts
       SET status = 'superseded', decided_at = ?
-      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'
-    `, [decidedAt, channelId, threadTs]);
+      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'${filter.sql}
+    `, [decidedAt, channelId, threadTs, ...filter.params]);
   }
 
   private toSlackPlanDraft(row: Record<string, unknown>): SlackPlanDraft {
     return {
       draftId: row.draft_id as string,
       version: Number(row.version),
+      planningDraftId: typeof row.planning_draft_id === 'string' ? row.planning_draft_id : undefined,
       channelId: row.channel_id as string,
       threadTs: row.thread_ts as string,
       messageTs: typeof row.message_ts === 'string' ? row.message_ts : undefined,
@@ -2543,38 +2859,46 @@ export class SQLiteAdapter implements PersistenceAdapter {
       decidedBy: typeof row.decided_by === 'string' ? row.decided_by : undefined,
       executionKey: typeof row.execution_key === 'string' ? row.execution_key : undefined,
       workflowIdsJson: typeof row.workflow_ids_json === 'string' ? row.workflow_ids_json : undefined,
+      surface: row.surface as ChatSurface,
     };
   }
 
   saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO slack_pending_confirmations
-        (confirm_key, thread_ts, channel_id, user_id, kind, payload_json, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      confirmation.confirmKey,
-      confirmation.threadTs,
-      confirmation.channelId,
-      confirmation.userId,
-      confirmation.kind,
-      confirmation.payloadJson,
-      confirmation.createdAt,
-      confirmation.expiresAt,
-    ]);
+    const surface = confirmation.surface ?? DEFAULT_CHAT_SURFACE;
+    this.runTransaction(() => {
+      this.assertRowOwnedBySurface('slack_pending_confirmations', 'confirm_key', confirmation.confirmKey, surface);
+      this.execRun(`
+        INSERT OR REPLACE INTO slack_pending_confirmations
+          (confirm_key, thread_ts, channel_id, user_id, kind, payload_json, created_at, expires_at, surface)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        confirmation.confirmKey,
+        confirmation.threadTs,
+        confirmation.channelId,
+        confirmation.userId,
+        confirmation.kind,
+        confirmation.payloadJson,
+        confirmation.createdAt,
+        confirmation.expiresAt,
+        surface,
+      ]);
+    });
   }
 
-  loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined {
+  loadSlackPendingConfirmation(confirmKey: string, surface?: ChatSurface): SlackPendingConfirmation | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(
-      'SELECT * FROM slack_pending_confirmations WHERE confirm_key = ?',
-      [confirmKey],
+      `SELECT * FROM slack_pending_confirmations WHERE confirm_key = ?${filter.sql}`,
+      [confirmKey, ...filter.params],
     ) as Record<string, unknown> | undefined;
     return row ? this.mapSlackPendingConfirmation(row) : undefined;
   }
 
-  loadLatestSlackPendingConfirmationByThread(threadTs: string): SlackPendingConfirmation | undefined {
+  loadLatestSlackPendingConfirmationByThread(threadTs: string, surface?: ChatSurface): SlackPendingConfirmation | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(
-      'SELECT * FROM slack_pending_confirmations WHERE thread_ts = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
-      [threadTs],
+      `SELECT * FROM slack_pending_confirmations WHERE thread_ts = ?${filter.sql} ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      [threadTs, ...filter.params],
     ) as Record<string, unknown> | undefined;
     return row ? this.mapSlackPendingConfirmation(row) : undefined;
   }
@@ -2589,11 +2913,79 @@ export class SQLiteAdapter implements PersistenceAdapter {
       payloadJson: row.payload_json as string,
       createdAt: row.created_at as string,
       expiresAt: row.expires_at as string,
+      surface: row.surface as ChatSurface,
     };
   }
 
   deleteSlackPendingConfirmation(confirmKey: string): void {
     this.execRun('DELETE FROM slack_pending_confirmations WHERE confirm_key = ?', [confirmKey]);
+  }
+
+  // ── Repair Filings (cross-system CI/PR repair dedup ledger) ──
+
+  private mapRepairFilingRow(row: any): RepairFiling {
+    return {
+      id: row.id as number,
+      kind: row.kind as string,
+      subject: row.subject as string,
+      stateSha: row.state_sha as string,
+      metadata: row.metadata ? (JSON.parse(row.metadata as string) as Record<string, unknown>) : null,
+      createdAt: row.created_at as string,
+    };
+  }
+
+  insertRepairFiling(input: RepairFilingInsertInput): RepairFilingInsertResult {
+    return this.runTransaction(() => {
+      this.execRun(
+        `INSERT INTO repair_filings (kind, subject, state_sha, metadata)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(kind, subject, state_sha) DO NOTHING`,
+        [input.kind, input.subject, input.stateSha, input.metadata ? JSON.stringify(input.metadata) : null],
+      );
+      const inserted = this.db.getRowsModified() > 0;
+      const row = this.queryOne(
+        'SELECT * FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+        [input.kind, input.subject, input.stateSha],
+      );
+      if (!row) {
+        throw new Error('insertRepairFiling: row missing immediately after INSERT ... ON CONFLICT DO NOTHING');
+      }
+      return { inserted, row: this.mapRepairFilingRow(row) };
+    });
+  }
+
+  getRepairFiling(kind: string, subject: string, stateSha: string): RepairFiling | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+      [kind, subject, stateSha],
+    );
+    return row ? this.mapRepairFilingRow(row) : undefined;
+  }
+
+  listRepairFilings(kind?: string, subject?: string): RepairFiling[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (kind !== undefined) {
+      conditions.push('kind = ?');
+      params.push(kind);
+    }
+    if (subject !== undefined) {
+      conditions.push('subject = ?');
+      params.push(subject);
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const rows = this.queryAll(`SELECT * FROM repair_filings${where} ORDER BY created_at DESC`, params);
+    return rows.map((row: any) => this.mapRepairFilingRow(row));
+  }
+
+  deleteRepairFiling(kind: string, subject: string, stateSha: string): boolean {
+    return this.runTransaction(() => {
+      this.execRun(
+        'DELETE FROM repair_filings WHERE kind = ? AND subject = ? AND state_sha = ?',
+        [kind, subject, stateSha],
+      );
+      return this.db.getRowsModified() > 0;
+    });
   }
 
   // ── Workflow Channels (Slack workflow↔channel mapping) ──
@@ -2994,6 +3386,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (state.signature !== undefined) {
       this.inAppPlanningMessagePersistSignatures.set(sessionId, state.signature);
     }
+    this.inAppPlanningMessagePersistRefs.set(sessionId, messages);
   }
 
   private persistInAppPlanningMessages(
@@ -3010,11 +3403,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     for (const message of messages.slice(persistedState.count)) {
       this.insertInAppPlanningMessage(sessionId, message, fallbackCreatedAt);
     }
-    const state = this.stateForInAppPlanningMessages(messages);
+    const state = this.stateForAppendedInAppPlanningMessages(messages, persistedState);
     this.inAppPlanningMessagePersistStates.set(sessionId, state);
     if (state.signature !== undefined) {
       this.inAppPlanningMessagePersistSignatures.set(sessionId, state.signature);
     }
+    this.inAppPlanningMessagePersistRefs.set(sessionId, messages);
   }
 
   private getInAppPlanningMessagePersistState(sessionId: string): InAppPlanningMessagePersistState {
@@ -3031,6 +3425,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       count: Number(row?.message_count ?? 0),
       maxMessageId: Number(row?.max_message_id ?? 0),
       signature: this.inAppPlanningMessagePersistSignatures.get(sessionId),
+      messagesRef: this.inAppPlanningMessagePersistRefs.get(sessionId),
     };
     this.inAppPlanningMessagePersistStates.set(sessionId, state);
     return state;
@@ -3042,8 +3437,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   ): boolean {
     if (persistedState.count > messages.length) return false;
 
-    let previousMessageId = 0;
-    for (const message of messages) {
+    let previousMessageId = persistedState.count > 0 ? persistedState.maxMessageId : 0;
+    const firstUnseenIndex = persistedState.count > 0 ? persistedState.count : 0;
+    for (let index = firstUnseenIndex; index < messages.length; index += 1) {
+      const message = messages[index];
       if (!Number.isSafeInteger(message.id) || message.id <= previousMessageId) {
         return false;
       }
@@ -3053,6 +3450,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (persistedState.count === 0) return true;
     if (messages[persistedState.count - 1]?.id !== persistedState.maxMessageId) {
       return false;
+    }
+    if (persistedState.messagesRef === messages) {
+      return true;
     }
     if (persistedState.signature === undefined) {
       return messages.length > persistedState.count;
@@ -3065,12 +3465,36 @@ export class SQLiteAdapter implements PersistenceAdapter {
       count: messages.length,
       maxMessageId: messages.reduce((maxMessageId, message) => Math.max(maxMessageId, message.id), 0),
       signature: this.signatureForInAppPlanningMessages(messages),
+      messagesRef: messages,
     };
   }
 
-  private signatureForInAppPlanningMessages(messages: InAppPlanningChatLine[], count = messages.length): string {
+  private stateForAppendedInAppPlanningMessages(
+    messages: InAppPlanningChatLine[],
+    persistedState: InAppPlanningMessagePersistState,
+  ): InAppPlanningMessagePersistState {
+    const lastMessage = messages[messages.length - 1];
+    return {
+      count: messages.length,
+      maxMessageId: lastMessage ? lastMessage.id : persistedState.maxMessageId,
+      signature: persistedState.signature === undefined
+        ? undefined
+        : persistedState.signature + this.signatureForInAppPlanningMessages(
+          messages,
+          messages.length,
+          persistedState.count,
+        ),
+      messagesRef: messages,
+    };
+  }
+
+  private signatureForInAppPlanningMessages(
+    messages: InAppPlanningChatLine[],
+    count = messages.length,
+    startIndex = 0,
+  ): string {
     let signature = '';
-    for (let index = 0; index < count; index += 1) {
+    for (let index = startIndex; index < count; index += 1) {
       const message = messages[index];
       if (!message) break;
       signature += `${message.id}\x1f${message.role}\x1f${message.tone ?? ''}\x1f${message.createdAt ?? ''}\x1f${message.text.length}\x1f${message.text}\x1e`;
@@ -3167,6 +3591,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         });
       }
       this.inAppPlanningMessagePersistSignatures.set(id, this.signatureForInAppPlanningMessages(messages));
+      this.inAppPlanningMessagePersistRefs.set(id, messages);
 
       return {
         id,
@@ -3182,6 +3607,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         messages,
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
         ...(typeof row.draft_plan_text === 'string' ? { draftPlanText: row.draft_plan_text } : {}),
+        ...(typeof row.planning_draft_id === 'string' ? { planningDraftId: row.planning_draft_id } : {}),
+        ...(typeof row.planning_draft_hash === 'string' ? { planningDraftHash: row.planning_draft_hash } : {}),
         ...(typeof row.submitted_workflow_id === 'string' ? { submittedWorkflowId: row.submitted_workflow_id } : {}),
         ...(typeof row.submitted_plan_name === 'string' ? { submittedPlanName: row.submitted_plan_name } : {}),
         terminalMode,
@@ -3190,6 +3617,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ...(typeof row.terminal_exit_code === 'number' ? { terminalExitCode: row.terminal_exit_code } : {}),
         terminalOutputSnapshot: typeof row.terminal_output_snapshot === 'string' ? row.terminal_output_snapshot : '',
         ...(typeof row.terminal_updated_at === 'string' ? { terminalUpdatedAt: row.terminal_updated_at } : {}),
+        ...(typeof row.active_turn_id === 'string' ? { activeTurnId: row.active_turn_id } : {}),
+        ...(row.active_turn_status === 'running' || row.active_turn_status === 'failed'
+          ? { activeTurnStatus: row.active_turn_status }
+          : {}),
+        ...(typeof row.active_turn_error === 'string' ? { activeTurnError: row.active_turn_error } : {}),
         pendingResponse: row.pending_response === 1,
         createdAt,
         updatedAt,
@@ -3205,11 +3637,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     args: unknown[],
     priority: WorkflowMutationPriority,
   ): number {
+    const createdAt = new Date().toISOString();
     this.execRun(
       `INSERT INTO workflow_mutation_intents (
-        workflow_id, channel, args_json, priority, status
-      ) VALUES (?, ?, ?, ?, 'queued')`,
-      [workflowId, channel, JSON.stringify(args), priority],
+        workflow_id, channel, args_json, priority, status, created_at
+      ) VALUES (?, ?, ?, ?, 'queued', ?)`,
+      [workflowId, channel, JSON.stringify(args), priority, createdAt],
     );
     const row = this.queryOne('SELECT MAX(id) AS id FROM workflow_mutation_intents');
     return Number(row?.id ?? 0);
@@ -3721,43 +4154,41 @@ export class SQLiteAdapter implements PersistenceAdapter {
     workflowId: string;
     priority?: TaskLaunchDispatchPriority;
     generation: number;
+    suppressEvent?: boolean;
   }): TaskLaunchDispatch {
-    const priority: TaskLaunchDispatchPriority = input.priority ?? 'normal';
+    const priority: TaskLaunchDispatchPriority = input.priority ?? 2;
     return this.runTransaction(() => {
-      const existing = this.queryOne(
-        `SELECT * FROM task_launch_dispatch
-           WHERE attempt_id = ?
-             AND state IN ('enqueued', 'leased')
-           LIMIT 1`,
-        [input.attemptId],
-      );
-      if (existing) {
-        return this.rowToTaskLaunchDispatch(existing);
-      }
-      this.execRun(
-        `INSERT INTO task_launch_dispatch (
+      const inserted = this.queryOne(
+        `INSERT OR IGNORE INTO task_launch_dispatch (
           task_id, attempt_id, workflow_id, state, priority, generation
-        ) VALUES (?, ?, ?, 'enqueued', ?, ?)`,
+        ) VALUES (?, ?, ?, 'enqueued', ?, ?)
+        RETURNING *`,
         [input.taskId, input.attemptId, input.workflowId, priority, input.generation],
       );
-      const inserted = this.queryOne(
-        `SELECT * FROM task_launch_dispatch
-           WHERE attempt_id = ?
-             AND state IN ('enqueued', 'leased')
-           LIMIT 1`,
-        [input.attemptId],
-      );
       if (!inserted) {
+        const existing = this.queryOne(
+          `SELECT * FROM task_launch_dispatch
+             WHERE attempt_id = ?
+               AND state IN ('enqueued', 'leased')
+             LIMIT 1`,
+          [input.attemptId],
+        );
+        if (existing) {
+          return this.rowToTaskLaunchDispatch(existing);
+        }
         throw new Error('Failed to read back inserted task_launch_dispatch row');
       }
+      this.dirty = true;
       const dispatch = this.rowToTaskLaunchDispatch(inserted);
-      this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
-        dispatchId: dispatch.id,
-        attemptId: input.attemptId,
-        workflowId: input.workflowId,
-        generation: input.generation,
-        priority,
-      });
+      if (!input.suppressEvent) {
+        this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
+          dispatchId: dispatch.id,
+          attemptId: input.attemptId,
+          workflowId: input.workflowId,
+          generation: input.generation,
+          priority,
+        });
+      }
       return dispatch;
     });
   }
@@ -3850,11 +4281,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
            FROM task_launch_dispatch d
            LEFT JOIN tasks t ON t.id = d.task_id
            WHERE d.state = 'enqueued'
-           ORDER BY CASE d.priority
-             WHEN 'high' THEN 0
-             WHEN 'normal' THEN 1
-             ELSE 2
-           END, d.id
+           ORDER BY CAST(d.priority AS INTEGER) ASC, d.id ASC
            LIMIT 1`,
         );
         if (!candidate || candidate.id == null) return undefined;

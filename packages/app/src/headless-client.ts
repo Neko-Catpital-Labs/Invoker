@@ -117,6 +117,13 @@ export function isSharedMutationOwnerTimeoutError(error: unknown): error is Shar
   return error instanceof SharedMutationOwnerTimeoutError;
 }
 
+export class OwnerBuildMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OwnerBuildMismatchError';
+  }
+}
+
 const STALE_OWNER_NO_TRACK_TASK_COMMANDS = new Set([
   'retry-task',
   'recreate-task',
@@ -354,7 +361,7 @@ async function delegateReadOnlyQuery(
   if (ownerResult.resolved) {
     messageBus = ownerResult.bus;
   } else if (
-    !isQueue ||
+    (!isQueue && !isActionGraph) ||
     !hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))
   ) {
     if (isQueue || isActionGraph) return false;
@@ -536,7 +543,7 @@ export interface HeadlessClientDeps {
   runElectronHeadless: (args: string[]) => Promise<number>;
 }
 
-async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void> {
+export async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
   const startedAt = Date.now();
@@ -544,13 +551,26 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
   try {
     if (bootstrapLock) {
       delegationClientLog('bootstrap spawning detached standalone owner');
-      spawnDetachedStandaloneOwner(repoRoot);
+      try {
+        spawnDetachedStandaloneOwner(repoRoot);
+      } catch (err) {
+        delegationClientLog(
+          `bootstrap refused to spawn detached standalone owner: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw err;
+      }
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
     let attempts = 0;
     while (Date.now() < deadline) {
       attempts += 1;
       const owner = await discoverOwner(bus, 1500);
+      if (owner?.buildMismatchReason) {
+        delegationClientLog(
+          `bootstrap build mismatch attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}: ${owner.buildMismatchReason}`,
+        );
+        throw new OwnerBuildMismatchError(owner.buildMismatchReason);
+      }
       if (isStandaloneCapable(owner)) {
         delegationClientLog(
           `bootstrap owner ready attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}`,

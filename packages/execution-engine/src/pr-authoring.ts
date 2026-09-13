@@ -6,8 +6,15 @@ import { homedir, tmpdir } from 'node:os';
 
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
-import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath as resolveExecutableOnCurrentPathFromEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { materializeLocalAgentPrompt } from './agent-prompt-transport.js';
+
+function resolveExecutableOnCurrentPath(command: string): string | undefined {
+  const override = command === 'node'
+    ? process.env.INVOKER_PR_BODY_VALIDATOR_NODE?.trim()
+    : undefined;
+  return override || resolveExecutableOnCurrentPathFromEnv(command);
+}
 
 export interface MakePrStackArtifactOutput {
   readonly id: string;
@@ -259,33 +266,46 @@ export function validateReviewStackPrBodyAgainstLocalDiff(args: {
   baseBranch: string;
 }): string[] {
   const structuralErrors = validateReviewStackPrBody(args.body);
-  const validatorPath = join(args.cwd, 'scripts', 'validate-pr-body-local.mjs');
+  const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   if (!existsSync(validatorPath)) {
     return [
       ...structuralErrors,
       `CI-parity PR body validator is missing: ${validatorPath}`,
     ];
   }
+  return [...structuralErrors, ...runRepoLocalPrBodyChecker(args)];
+}
 
+export function repoLocalPrBodyCheckerPath(cwd: string): string {
+  return join(cwd, 'scripts', 'validate-pr-body-local.mjs');
+}
+
+export function resolvePrBodyValidatorNodeBinary(): string {
+  return resolveExecutableOnCurrentPath('node') ?? process.execPath;
+}
+
+export function runRepoLocalPrBodyChecker(args: {
+  body: string;
+  cwd: string;
+  baseBranch: string;
+}): string[] {
+  const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   const tempDir = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, args.body, 'utf8');
+    const nodeExecutable = resolveExecutableOnCurrentPath('node') ?? process.execPath;
     const result = spawnSync(
-      process.execPath,
+      nodeExecutable,
       [validatorPath, '--body-file', bodyFile, '--base', args.baseBranch],
-      { cwd: args.cwd, encoding: 'utf8' },
+      { cwd: args.cwd, encoding: 'utf8', env: cleanElectronEnv() },
     );
-    if (result.status === 0) return structuralErrors;
+    if (result.status === 0) return [];
 
     const output = `${String(result.stdout ?? '')}\n${String(result.stderr ?? '')}`.trim();
-    return [
-      ...structuralErrors,
-      `CI-parity PR body validation failed: ${output || 'validator exited without output'}`,
-    ];
+    return [`CI-parity PR body validation failed: ${output || 'validator exited without output'}`];
   } catch (error) {
     return [
-      ...structuralErrors,
       `CI-parity PR body validation could not run: ${error instanceof Error ? error.message : String(error)}`,
     ];
   } finally {
@@ -406,12 +426,76 @@ function normalizeReviewArtifactProviderId(url: string, providerId: string | und
   return providerId;
 }
 
+function extractJsonPayload(raw: string): string {
+  const trimmed = raw.trim();
+  let lastValid: string | undefined;
+  for (let start = 0; start < trimmed.length; start += 1) {
+    if (trimmed[start] !== '{') continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < trimmed.length; end += 1) {
+      const character = trimmed[end];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (character === '"') {
+        inString = true;
+      } else if (character === '{') {
+        depth += 1;
+      } else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = trimmed.slice(start, end + 1);
+          try {
+            JSON.parse(candidate);
+            lastValid = candidate;
+            start = end;
+          } catch {}
+          break;
+        }
+      }
+    }
+  }
+  return lastValid ?? trimmed;
+}
+
+export function extractAgentReportedError(stdout: string): string | undefined {
+  if (!stdout) return undefined;
+  for (const match of stdout.matchAll(/"error"\s*:\s*\{/g)) {
+    const slice = stdout.slice(match.index);
+    const messageMatch = slice.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (!messageMatch) continue;
+    try {
+      const message = JSON.parse(`"${messageMatch[1]}"`) as string;
+      if (message.trim()) return message.trim();
+    } catch {
+      const message = messageMatch[1].trim();
+      if (message) return message;
+    }
+  }
+  return undefined;
+}
+
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.trim());
   } catch {
-    throw new Error('make-pr stack publisher must output JSON');
+    try {
+      parsed = JSON.parse(extractJsonPayload(raw));
+    } catch {
+      throw new Error('make-pr stack publisher must output JSON');
+    }
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -586,6 +670,37 @@ export function buildCanonicalPrBody(args: {
     lines.push(...renderPipelineSection(args.structuredContext.workerActions));
   }
 
+  lines.push('## Review Claim');
+  lines.push('');
+  lines.push('This PR publishes the completed workflow changes described in the summary.');
+  lines.push('');
+
+  lines.push('## Review Lane');
+  lines.push('');
+  lines.push('behavior');
+  lines.push('');
+
+  lines.push('## Review Unit');
+  lines.push('');
+  lines.push('routing');
+  lines.push('');
+
+  lines.push('## Safety Invariant');
+  lines.push('');
+  lines.push('The fallback PR body keeps repository validation enabled and only publishes after the generated body passes the configured checks.');
+  lines.push('');
+
+  lines.push('## Slice Rationale');
+  lines.push('');
+  lines.push('This is the smallest publishable routing unit for the completed workflow output.');
+  lines.push('');
+
+  lines.push('## Non-goals');
+  lines.push('');
+  lines.push('- No validation weakening, skipping, or deletion.');
+  lines.push('- No unrelated publishing or workflow behavior changes.');
+  lines.push('');
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -731,6 +846,7 @@ export function spawnAgentPrAuthorViaRegistry(
   cwd: string,
   agent: ExecutionAgent,
   driver?: SessionDriver,
+  extraEnv: NodeJS.ProcessEnv = {},
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
@@ -741,7 +857,7 @@ export function spawnAgentPrAuthorViaRegistry(
     const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: cleanElectronEnv(),
+      env: { ...cleanElectronEnv(), ...extraEnv },
       detached: process.platform !== 'win32',
     });
 

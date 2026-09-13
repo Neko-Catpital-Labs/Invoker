@@ -3,6 +3,9 @@
 # checkout to origin/master, run the FULL extended e2e battery, and for every
 # still-failing suite submit ONE single-task Invoker plan.
 #
+# Related DO1 cron (Linear → Invoker intake, not e2e):
+#   scripts/install-linear-ticket-intake-cron.sh  (docs/linear-ticket-intake.md)
+#
 # This script does NOT fix anything or open PRs itself. It hands each failing
 # suite to Invoker as a plan with `onFinish: pull_request`. Invoker's own
 # auto-fix then repairs the suite with the configured agent and opens exactly
@@ -16,6 +19,11 @@
 # Test seams: INVOKER_DAILY_E2E_SKIP_BATTERY=1 skips the refresh+battery and
 # reuses a pre-seeded state file; INVOKER_DAILY_E2E_SUBMIT_CMD overrides the
 # submit binary; INVOKER_DAILY_E2E_DRY_RUN=1 logs intended submissions only.
+#
+# Suites quarantined via `node scripts/flaky-test-registry.mjs quarantine
+# <suite-relpath> --kind suite` are excluded from the battery entirely (they
+# never run and never get a state-file row), so no fix plan is ever filed for
+# them.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,6 +41,11 @@ RESUBMIT_GUARD_MIN="${INVOKER_DAILY_E2E_RESUBMIT_GUARD_MIN:-1200}"
 
 log() { printf '[daily-e2e-do %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 
+FLAKY_SUITE_EXCLUDE="$(node scripts/flaky-test-registry.mjs exclude-suites-env 2>/dev/null || true)"
+if [ -n "$FLAKY_SUITE_EXCLUDE" ]; then
+  log "excluding quarantined flaky suites: $FLAKY_SUITE_EXCLUDE"
+fi
+
 # 1. Refresh to latest master and rebuild the app (the extended battery's
 #    Playwright suite needs the built app), then run the battery.
 if [ "${INVOKER_DAILY_E2E_SKIP_BATTERY:-0}" != "1" ]; then
@@ -48,7 +61,8 @@ if [ "${INVOKER_DAILY_E2E_SKIP_BATTERY:-0}" != "1" ]; then
   mkdir -p "$(dirname "$STATE_FILE")"
   log "running extended e2e battery"
   set +e
-  env INVOKER_TEST_ALL_EXTENDED=1 INVOKER_TEST_ALL_STATE_FILE="$STATE_FILE" bash scripts/run-all-tests.sh
+  env INVOKER_TEST_ALL_EXTENDED=1 INVOKER_TEST_ALL_STATE_FILE="$STATE_FILE" \
+      INVOKER_TEST_ALL_EXCLUDE="$FLAKY_SUITE_EXCLUDE" bash scripts/run-all-tests.sh
   log "battery finished (exit $?)"
   set -e
 else

@@ -165,7 +165,7 @@ describe('Parity — Feature Coverage', () => {
       makeResponse({ actionId: 't-fail', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
     );
     expect(orchestrator.getTask('t-fail')!.status).toBe('failed');
-    expect(orchestrator.getTask('t-blocked')!.status).toBe('pending');
+    expect(orchestrator.getTask('t-blocked')!.status).toBe('skipped');
 
     // needs_input
     orchestrator.handleWorkerResponse(
@@ -191,8 +191,8 @@ describe('Parity — Feature Coverage', () => {
       makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
     );
 
-    expect(orchestrator.getTask('B')!.status).toBe('pending');
-    expect(orchestrator.getTask('C')!.status).toBe('pending');
+    expect(orchestrator.getTask('B')!.status).toBe('skipped');
+    expect(orchestrator.getTask('C')!.status).toBe('skipped');
   });
 
   // ── Test 3: Experiment spawning ───────────────────────────

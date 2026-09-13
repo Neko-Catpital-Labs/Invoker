@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { mkdirSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import { backupPlan } from '../plan-backup.js';
 import type { PlanDefinition } from '@invoker/workflow-core';
 
-const backupDir = join(homedir(), '.invoker', 'plans');
+const backupDir = join(resolveInvokerHomeRoot(), 'plans');
 
 function cleanupBackups(): void {
   if (existsSync(backupDir)) {
@@ -29,7 +29,7 @@ describe('backupPlan', () => {
     ],
   };
 
-  it('creates a YAML file in ~/.invoker/plans/', () => {
+  it('creates a YAML file in the active Invoker profile', () => {
     const filepath = backupPlan(plan);
     expect(existsSync(filepath)).toBe(true);
     expect(filepath).toContain(backupDir);

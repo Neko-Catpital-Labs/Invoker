@@ -7,7 +7,9 @@
  */
 
 import type { PlanDefinition } from '@invoker/workflow-core';
-import type { PersistenceAdapter, Conversation, ConversationMessage, ConversationMode } from './adapter.js';
+import type { PersistenceAdapter, ChatSurface, Conversation, ConversationMessage, ConversationMode } from './adapter.js';
+import { DEFAULT_CHAT_SURFACE } from './adapter.js';
+import { PlanningDraftRepository } from './planning-draft-repository.js';
 
 // ── Public Types ─────────────────────────────────────────────
 
@@ -21,6 +23,7 @@ export interface ConversationEntry {
   planSubmitted: boolean;
   createdAt: string;
   updatedAt: string;
+  surface: ChatSurface;
 }
 
 export interface ConversationMessageEntry {
@@ -47,10 +50,12 @@ const defaultLogger: Logger = {
 export class ConversationRepository {
   private adapter: PersistenceAdapter;
   private log: Logger;
+  readonly planningDrafts: PlanningDraftRepository;
 
   constructor(adapter: PersistenceAdapter, logger?: Logger) {
     this.adapter = adapter;
     this.log = logger ?? defaultLogger;
+    this.planningDrafts = new PlanningDraftRepository(adapter);
   }
 
   /**
@@ -65,10 +70,11 @@ export class ConversationRepository {
     channelId?: string,
     userId?: string,
     mode?: ConversationMode,
+    surface: ChatSurface = DEFAULT_CHAT_SURFACE,
   ): void {
     const now = new Date().toISOString();
 
-    const existing = this.adapter.loadConversation(threadTs);
+    const existing = this.adapter.loadConversation(threadTs, surface);
 
     const planJson = extractedPlan ? JSON.stringify(extractedPlan) : null;
 
@@ -89,11 +95,21 @@ export class ConversationRepository {
         planSubmitted: planSubmitted ?? false,
         createdAt: now,
         updatedAt: now,
+        surface,
       });
     }
 
     // Determine how many messages already exist without reading the transcript.
     const existingMessageCount = this.adapter.countMessages(threadTs);
+    if (messages.length < existingMessageCount) {
+      this.log.error(
+        `Diverged conversation ${threadTs}: memory holds ${messages.length} message(s), `
+        + `the stored row holds ${existingMessageCount}. The in-memory transcript is not an `
+        + 'extension of the stored one, so these messages are NOT persisted. Reconcile the '
+        + 'row (reload the thread, or clear it if the thread id was reused) before saving again.',
+      );
+      return;
+    }
     const newMessages = messages.slice(existingMessageCount);
 
     for (const msg of newMessages) {
@@ -112,8 +128,8 @@ export class ConversationRepository {
    * Load a conversation with all its messages, deserializing JSON fields.
    * Returns null if the conversation does not exist.
    */
-  loadConversation(threadTs: string): ConversationEntry | null {
-    const conv = this.adapter.loadConversation(threadTs);
+  loadConversation(threadTs: string, surface?: ChatSurface): ConversationEntry | null {
+    const conv = this.adapter.loadConversation(threadTs, surface);
     if (!conv) return null;
 
     const rawMessages = this.adapter.loadMessages(threadTs);
@@ -131,6 +147,7 @@ export class ConversationRepository {
       planSubmitted: conv.planSubmitted,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
+      surface: conv.surface ?? DEFAULT_CHAT_SURFACE,
     };
   }
 
@@ -146,8 +163,8 @@ export class ConversationRepository {
    * List all active (non-submitted) conversations.
    * Returns conversation metadata without messages for efficiency.
    */
-  listActiveConversations(): Array<Omit<ConversationEntry, 'messages'>> {
-    const conversations = this.adapter.listActiveConversations();
+  listActiveConversations(surface?: ChatSurface): Array<Omit<ConversationEntry, 'messages'>> {
+    const conversations = this.adapter.listActiveConversations(surface);
     return conversations.map((conv) => ({
       threadTs: conv.threadTs,
       channelId: conv.channelId,
@@ -157,6 +174,7 @@ export class ConversationRepository {
       planSubmitted: conv.planSubmitted,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
+      surface: conv.surface ?? DEFAULT_CHAT_SURFACE,
     }));
   }
 
@@ -187,12 +205,18 @@ export class ConversationRepository {
   }
 
   private parseJson(json: string, context: string): unknown {
+    let parsed: unknown;
     try {
-      return JSON.parse(json);
+      parsed = JSON.parse(json);
     } catch {
       // Content may be a plain string, not JSON — return as-is
       this.log.warn(`Non-JSON content in ${context}, returning raw string`);
       return json;
     }
+    return isMessageContent(parsed) ? parsed : json;
   }
+}
+
+function isMessageContent(value: unknown): value is string | object {
+  return typeof value === 'string' || (typeof value === 'object' && value !== null);
 }

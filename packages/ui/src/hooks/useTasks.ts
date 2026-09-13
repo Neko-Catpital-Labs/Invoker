@@ -559,9 +559,9 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       }
 
       graphEventPipelineRef.current?.push(event);
-      if (delta.type === 'removed') {
-        // Removals are rare, user-initiated, and destructive: flush the batch
-        // window so the graph reflects them immediately instead of ~100ms later.
+      if (delta.type === 'removed' || (delta.type === 'updated' && delta.changes.status !== undefined)) {
+        // Status changes drive the visible execution counters; flush them like
+        // removals so the task map and queue chips move in the same paint turn.
         graphEventPipelineRef.current?.flushNow();
       }
     };

@@ -4,6 +4,7 @@ import type { MessageBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationAcceptedResult } from '@invoker/contracts';
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
+import type { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
 
 export interface GuiMutationPayload {
   channel: string;
@@ -21,7 +22,7 @@ export interface GuiMutationRegistrationContext {
   refreshOwnerRoute?: () => Promise<void>;
   onMutationOwnerUnavailable?: (reason: string) => void;
   translateGuiMutationToHeadless: (payload: GuiMutationPayload) => TranslatedGuiMutation;
-  guiMutationHandlers?: Map<string, (...args: unknown[]) => Promise<unknown>>;
+  guiMutationHandlers: OwnerCapabilityRegistry;
 }
 
 function throwMutationOwnerUnavailable(
@@ -37,10 +38,10 @@ export function registerGuiMutationHandler<TResult = unknown>(
   channel: string,
   handler: (...args: unknown[]) => Promise<TResult>,
 ): void {
-  context.guiMutationHandlers?.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
+  context.guiMutationHandlers.register(channel, handler);
   context.ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
     if (context.getOwnerMode()) {
-      return handler(...args);
+      return context.guiMutationHandlers.invoke<TResult>(channel, args);
     }
     const translated = context.translateGuiMutationToHeadless({ channel, args });
     if (!translated) {
@@ -166,8 +167,20 @@ export interface BootstrapStateIpcContext {
 }
 
 export function registerBootstrapStateIpc(context: BootstrapStateIpcContext): void {
-  context.ipcMain.on('invoker:get-bootstrap-state-sync', (event) => {
+  context.ipcMain.on('invoker:get-bootstrap-state-sync', (event, options?: { light?: boolean }) => {
     const startedAtMs = Date.now();
+    if (options?.light) {
+      const payload = { appStartedAtEpochMs: context.appStartedAtEpochMs };
+      const jsonSizeBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+      context.recordStartupDuration('bootstrap-ipc.serialize-return', startedAtMs, {
+        taskCount: 0,
+        workflowCount: 0,
+        jsonSizeBytes,
+        light: true,
+      });
+      event.returnValue = payload;
+      return;
+    }
     const tasks = context.getTasks();
     const workflows = context.getWorkflows();
     const streamSequence = context.getTaskDeltaStreamSequence();

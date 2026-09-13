@@ -1,0 +1,9 @@
+name: "Hidden publication incident"
+onFinish: none
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: reflect
+    description: "Apply one accepted reflection item"
+    command: "echo reflect"
+    dependencies: []
