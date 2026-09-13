@@ -625,7 +625,7 @@ describe('SlackSurface', () => {
       const say2 = vi.fn().mockResolvedValue({ ts: '2222.001' });
       await mentionHandler({ event: { text: '<@U_BOT> /plan', ts: '2222', thread_ts: '1111' }, say: say2 });
       expect(receivedCommands).toHaveLength(0);
-      expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+      expect(say2).toHaveBeenCalledWith(expect.objectContaining({
         blocks: expect.arrayContaining([expect.objectContaining({
           type: 'actions',
           elements: expect.arrayContaining([expect.objectContaining({ action_id: 'plan_draft_approve' })]),
@@ -637,12 +637,16 @@ describe('SlackSurface', () => {
 
       await approveHandler({
         action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
-        body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' } },
+        body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' }, user: { id: 'unknown' } },
         ack: vi.fn().mockResolvedValue(undefined),
         respond: vi.fn().mockResolvedValue(undefined),
       });
       expect(receivedCommands).toEqual([
-        expect.objectContaining({ type: 'start_plan', planText }),
+        expect.objectContaining({
+          type: 'start_plan',
+          repoUrl: 'https://github.com/example/repo.git',
+          planText: expect.stringContaining('repoUrl: https://github.com/example/repo.git'),
+        }),
       ]);
     });
 

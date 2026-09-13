@@ -6,12 +6,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, readdirSync, copyFileSync, rmSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, readdirSync, copyFileSync, rmSync, mkdtempSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
-import { scopePlanTaskId } from '@invoker/workflow-core';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, Attempt } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
@@ -52,12 +52,16 @@ import {
   isInvokerRepoUrl,
   buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
+  extractAgentReportedError,
   parseMakePrStackPublishResult,
+  repoLocalPrBodyCheckerPath,
   resolveSkillPathViaAgent,
+  runRepoLocalPrBodyChecker,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
   validateReviewStackPrBody,
   validateReviewStackPrBodyAgainstLocalDiff,
+  type MakePrStackArtifactOutput,
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { ensureRemoteUrl } from './git-config-mutation.js';
@@ -374,9 +378,19 @@ export class TaskRunner {
     this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
     this.reviewGateMergeConflictPublisher = config.reviewGateMergeConflictPublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
-    this.getWorktreeTargets = config.worktreeTargetsProvider ?? (() => ({}));
+    const configuredWorktreeTargets = config.worktreeTargetsProvider ?? (() => ({}));
+    this.getWorktreeTargets = () => ({
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {},
+      ...configuredWorktreeTargets(),
+    });
     this.getRepoProvisionCommands = config.repoProvisionCommandsProvider ?? (() => ({}));
-    this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
+    const configuredExecutionPools = config.executionPoolsProvider ?? (() => ({}));
+    this.getExecutionPools = () => ({
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID]: {
+        members: [{ type: 'worktree', id: BUILT_IN_LOCAL_EXECUTION_POOL_ID }],
+      },
+      ...configuredExecutionPools(),
+    });
     this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
@@ -1441,6 +1455,7 @@ export class TaskRunner {
     repoUrl?: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }> {
     const strictReviewStack = isInvokerRepoUrl(args.repoUrl);
+    const hasRepoChecker = !strictReviewStack && existsSync(repoLocalPrBodyCheckerPath(args.cwd));
     if (!this.executionAgentRegistry) {
       if (strictReviewStack) {
         throw new Error(
@@ -1498,7 +1513,16 @@ export class TaskRunner {
             cwd: args.cwd,
             baseBranch: args.baseBranch,
           })
-          : validateCanonicalPrBody(result.body);
+          : hasRepoChecker
+            ? [
+              ...validateCanonicalPrBody(result.body),
+              ...runRepoLocalPrBodyChecker({
+                body: result.body,
+                cwd: args.cwd,
+                baseBranch: args.baseBranch,
+              }),
+            ]
+            : validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
           this.logger.warn(
             `[pr-authoring] body validation failed agent=${agent.name} `
@@ -1525,15 +1549,38 @@ export class TaskRunner {
       );
     }
 
-    // No AI agent succeeded — emit deterministic canonical PR body
-    this.logger.warn(
-      `[pr-authoring] All AI agents failed for PR authoring, using canonical fallback. Errors: ${errors.join(' | ')}`,
-    );
     const canonicalBody = buildCanonicalPrBody({
       title: args.title,
       workflowSummary: args.workflowSummary,
       structuredContext: args.structuredContext,
     });
+
+    if (hasRepoChecker) {
+      const canonicalErrors = [
+        ...validateCanonicalPrBody(canonicalBody),
+        ...runRepoLocalPrBodyChecker({
+          body: canonicalBody,
+          cwd: args.cwd,
+          baseBranch: args.baseBranch,
+        }),
+      ];
+      if (canonicalErrors.length === 0) {
+        this.logger.warn(
+          `[pr-authoring] All AI agents failed for PR authoring; using validated canonical fallback. `
+            + `Errors: ${errors.join(' | ')}`,
+        );
+        return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
+      }
+      throw new Error(
+        '[pr-authoring] target repo checker rejected every PR body; refusing canonical fallback. '
+          + `Errors: ${[...errors, `canonical: ${canonicalErrors.join('; ')}`].join(' | ')}`,
+      );
+    }
+
+    // No AI agent succeeded — emit deterministic canonical PR body
+    this.logger.warn(
+      `[pr-authoring] All AI agents failed for PR authoring, using canonical fallback. Errors: ${errors.join(' | ')}`,
+    );
     return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
   }
 
@@ -1547,14 +1594,15 @@ export class TaskRunner {
     cwd: string;
     expectedGeneration: number;
     reviewGate?: ReviewGateState;
+    recordedFixCommit?: string;
   }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }> {
     if (!this.executionAgentRegistry) {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
     }
 
-    const preferredName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
-    const prCapableAgents = this.executionAgentRegistry.listWithCapability('make-pr');
-    const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
+    const preferredAgentName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
+    const preferredAgent = this.executionAgentRegistry.get(preferredAgentName);
+    const orderedAgents = preferredAgent ? [preferredAgent] : [];
     const logProgress = (
       level: 'debug' | 'info' | 'warn' | 'error',
       message: string,
@@ -1607,16 +1655,50 @@ export class TaskRunner {
           agentName: agent.name,
           cwd: args.cwd,
         });
-        this.logger.info(
+        const skillLine =
           `[pr-authoring] review-stack publish starting agent=${agent.name} `
-            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
-        );
-        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`;
+        this.logger.info(skillLine);
+        if (args.mergeNodeTaskId) {
+          const outputLine = `${skillLine}\n`;
+          try {
+            this.callbacks.onOutput?.(args.mergeNodeTaskId, outputLine);
+            this.persistence.appendTaskOutput?.(args.mergeNodeTaskId, outputLine);
+          } catch (error) {
+            this.logger.warn('[pr-authoring] failed to persist task output', {
+              taskId: args.mergeNodeTaskId,
+              error,
+            });
+          }
+        }
+        const repairPublicationEnv = args.recordedFixCommit
+          ? {
+            INVOKER_REPAIR_PUBLICATION: '1',
+            INVOKER_REPAIR_TASK_CHAIN_ID: args.workflowId ?? args.mergeNodeTaskId ?? '',
+            INVOKER_REPAIR_SESSION_COMMIT: args.recordedFixCommit,
+          }
+          : {};
+        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver, repairPublicationEnv);
         logProgress('info', `${agent.name} make-pr agent finished; validating output`, {
           agentName: agent.name,
           sessionId: result.sessionId,
         });
-        const parsedArtifacts = parseMakePrStackPublishResult(result.body);
+        let parsedArtifacts: MakePrStackArtifactOutput[];
+        try {
+          parsedArtifacts = parseMakePrStackPublishResult(result.body);
+        } catch (parseError) {
+          const reportedError = extractAgentReportedError(result.stdout);
+          logProgress('error', `${agent.name} make-pr agent produced no usable output`, {
+            agentName: agent.name,
+            sessionId: result.sessionId,
+            reportedError: reportedError ?? null,
+            bodyLength: result.body?.length ?? 0,
+          });
+          if (reportedError) {
+            throw new Error(`${agent.name} could not author the PR: ${reportedError}`);
+          }
+          throw parseError;
+        }
 
         // Enforce the make-pr review-stack schema on every published body. Prefer
         // the body actually published on the provider: a lazy agent could report a
@@ -1726,6 +1808,13 @@ export class TaskRunner {
 
   private resolvePrAuthoringAgentName(workflowId?: string, mergeNodeTaskId?: string): string {
     const allTasks = this.orchestrator.getAllTasks();
+    if (mergeNodeTaskId) {
+      const ownMergeTask = allTasks.find((task) => task.id === mergeNodeTaskId && task.config.isMergeNode);
+      const ownAgent = ownMergeTask?.config.executionAgent?.trim();
+      if (ownAgent) {
+        return ownAgent;
+      }
+    }
     let candidateTasks = allTasks.filter((task) => !task.config.isMergeNode);
     if (workflowId) {
       candidateTasks = candidateTasks.filter((task) => task.config.workflowId === workflowId);

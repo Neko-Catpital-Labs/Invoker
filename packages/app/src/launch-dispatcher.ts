@@ -61,8 +61,8 @@ export interface LaunchDispatcherOrchestrator {
    * Optional: when startExecution leaves free slots idle with ready work that
    * has no launching phase (lost outbox after cancel/recreate), mint attempts.
    */
-  getExecutableReadyTasks?(): TaskState[];
-  getQueueStatus?(): { runningCount: number; maxConcurrency: number };
+  getExecutableReadyTasks?(opts?: { alreadyRefreshed?: boolean }): TaskState[];
+  getQueueStatus?(opts?: { refresh?: boolean }): { runningCount: number; maxConcurrency: number };
   isLaunchParked?(taskId: string, now?: number): boolean;
   startExecution?(opts?: { limit?: number }): TaskState[];
 }
@@ -351,13 +351,13 @@ export class LaunchDispatcher {
         && typeof this.orchestrator?.getExecutableReadyTasks === 'function'
         && typeof this.orchestrator.prepareTaskForNewAttempt === 'function'
       ) {
-        const queue = this.orchestrator.getQueueStatus?.();
+        const queue = this.orchestrator.getQueueStatus?.({ refresh: false });
         const freeSlots = queue
           ? Math.max(0, queue.maxConcurrency - queue.runningCount)
           : 0;
         if (freeSlots > 0) {
           const now = Date.now();
-          const stranded = this.orchestrator.getExecutableReadyTasks().filter((task) => {
+          const stranded = this.orchestrator.getExecutableReadyTasks?.({ alreadyRefreshed: true })?.filter((task) => {
             if (task.status !== 'pending' || task.execution.phase === 'launching') return false;
             if (this.orchestrator?.isLaunchParked?.(task.id, now)) return false;
             return true;

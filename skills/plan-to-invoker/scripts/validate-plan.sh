@@ -6,17 +6,14 @@ set -euo pipefail
 
 file="${1:?Usage: validate-plan.sh <plan.yaml>}"
 
-# Call typed validator (ESM .mjs - no compilation needed)
-# Run from packages/app directory so ESM can resolve 'yaml' from local node_modules
+# Call typed validator (ESM .mjs - no compilation needed).
 # Resolve to the physical script dir so this works via canonical path or symlink.
 script_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-# Resolve repo root from git so this works across layouts/worktrees.
-repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "$repo_root" ]]; then
-  echo "Error: could not determine repository root from $script_dir" >&2
-  exit 1
-fi
 abs_file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
 
-cd "$repo_root/packages/app"
+# validate-plan.mjs resolves its own `yaml` runtime (a plain 'yaml' import,
+# which works when this script is running from inside the invoker-cli npm
+# install -- see packages/npm-cli/package.json's real dependency on yaml --
+# falling back to a resolvable Invoker checkout otherwise). No cwd change
+# or repo-root resolution needed here at all.
 exec node "$script_dir/validate-plan.mjs" "$abs_file"

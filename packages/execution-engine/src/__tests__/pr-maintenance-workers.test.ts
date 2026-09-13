@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -12,11 +12,14 @@ import type { Logger } from '@invoker/contracts';
 import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
 
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
+import { createWorkerRegistry } from '../worker-registry.js';
+import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_AUTO_LABEL_WORKER_KIND,
   PR_DUPLICATE_CLOSE_WORKER_KIND,
+  PR_JAILBREAK_LAND_WORKER_KIND,
   PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   buildPrMaintenanceEnv,
@@ -24,8 +27,11 @@ import {
   createPrAutoLabelWorker,
   createPrDuplicateCloseWorker,
   createPrOrphanRepairWorker,
+  probePrMaintenanceLock,
+  registerPrMaintenanceWorkers,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
+import { chmodSync } from 'node:fs';
 
 type SpawnCall = {
   command: string;
@@ -126,6 +132,37 @@ describe('PR maintenance workers', () => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'invoker-pr-maintenance-test-'));
     return tmpRoot;
   }
+
+  it(
+    'probePrMaintenanceLock treats a spawnSync timeout as not-held, not as a genuine lock holder',
+    async () => {
+      // Real repro, no mocking: `flock -n` is non-blocking and always returns
+      // immediately regardless of the lock's state, so the only way the probe's
+      // spawnSync call can hit its own timeout is if the child process itself
+      // never got scheduled (e.g. the owner is under heavy CPU load) -- which
+      // says nothing about whether the lock is actually held. This installs a
+      // real, slow `flock` shim ahead of the real one on PATH so the probe's
+      // spawnSync call genuinely times out, then asserts it does not falsely
+      // report the lock as held.
+      const repoRoot = makeRepoRoot();
+      const lockPath = join(repoRoot, 'pr-crons.lock');
+      const fakeBinDir = join(repoRoot, 'fake-bin');
+      const { mkdirSync, writeFileSync: writeFile } = await import('node:fs');
+      mkdirSync(fakeBinDir, { recursive: true });
+      const fakeFlockPath = join(fakeBinDir, 'flock');
+      writeFile(fakeFlockPath, '#!/bin/bash\nsleep 5\n');
+      chmodSync(fakeFlockPath, 0o755);
+
+      const result = probePrMaintenanceLock({
+        lockPath,
+        env: { ...process.env, PATH: `${fakeBinDir}:${process.env.PATH ?? ''}` },
+      });
+
+      expect(result.held).toBe(false);
+      expect(result.reason).toBe('probe-timeout');
+    },
+    8_000,
+  );
 
   it('spawns the admin-bypass shell entrypoint with the configured cwd and env', async () => {
     const repoRoot = makeRepoRoot();
@@ -265,6 +302,35 @@ describe('PR maintenance workers', () => {
     }));
   });
 
+  it('registers the jailbreak-land worker with its shell entrypoint', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    const registry = registerPrMaintenanceWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+    const definition = registry.get(PR_JAILBREAK_LAND_WORKER_KIND);
+
+    expect(definition?.kind).toBe(PR_JAILBREAK_LAND_WORKER_KIND);
+
+    const worker = definition!.factory({
+      logger,
+      store: {} as WorkerRuntimeDependencies['store'],
+      submitter: { submit: vi.fn(() => 0) } as WorkerRuntimeDependencies['submitter'],
+      prMaintenance: {
+        repoRoot,
+        spawnProcess: spawnHarness.spawnProcess,
+        lockProbe: () => ({ held: false }),
+      },
+    } as WorkerRuntimeDependencies);
+
+    await worker.tick();
+
+    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
+      command: 'bash',
+      args: [resolve(repoRoot, 'scripts/cron-pr-jailbreak-land.sh')],
+      options: expect.objectContaining({ cwd: repoRoot }),
+    }));
+  });
+
   it('staggers the duplicate-close worker 2/4 of the interval after the other workers', async () => {
     vi.useFakeTimers();
     expect(PR_MAINTENANCE_WORKER_STAGGER_STEP_MS).toBe(DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 4);
@@ -323,6 +389,57 @@ describe('PR maintenance workers', () => {
     await worker.stop();
   });
 
+  it('waits for the shared PR-maintenance lock to free up instead of skipping the tick', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    let probes = 0;
+    const worker = createPrAdminBypassLandWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => {
+        probes += 1;
+        return probes <= 2 ? { held: true, reason: 'test-lock-held' } : { held: false };
+      },
+      lockPollMs: 1,
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(probes).toBe(3);
+    expect(spawnHarness.calls).toHaveLength(1);
+  });
+
+  it('skips the tick only after the lock stays held past the wait limit', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    let probes = 0;
+    const worker = createPrAdminBypassLandWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => {
+        probes += 1;
+        return { held: true, reason: 'test-lock-held' };
+      },
+      lockWaitMs: 30,
+      lockPollMs: 5,
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(probes).toBeGreaterThan(1);
+    expect(spawnHarness.calls).toEqual([]);
+    expect(logger.info).toHaveBeenCalledWith(
+      `[worker:${PR_ADMIN_BYPASS_LAND_WORKER_KIND}] shared PR maintenance lock held; skipping tick`,
+      expect.objectContaining({ worker: PR_ADMIN_BYPASS_LAND_WORKER_KIND, reason: 'test-lock-held' }),
+    );
+  });
+
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();
@@ -332,6 +449,7 @@ describe('PR maintenance workers', () => {
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
       lockProbe: () => ({ held: true, reason: 'test-lock-held' }),
+      lockWaitMs: 0,
       installSignalHandlers: false,
     });
 
@@ -356,6 +474,7 @@ describe('PR maintenance workers', () => {
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
       lockProbe: () => ({ held: true, reason: 'test-lock-held' }),
+      lockWaitMs: 0,
       installSignalHandlers: false,
     });
 
@@ -399,6 +518,7 @@ describe('PR maintenance workers', () => {
       lockProbe: () => ({ held: false }),
       installSignalHandlers: false,
       store,
+      env: { INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: join(repoRoot, 'mergify-admin-requeue-state.jsonl') },
     });
 
     await worker.tick();
@@ -413,6 +533,55 @@ describe('PR maintenance workers', () => {
     });
   });
 
+  it('ignores admin-bypass blocked ledger rows with malformed PR numbers', async () => {
+    const repoRoot = makeRepoRoot();
+    const ledgerPath = join(repoRoot, 'mergify-admin-requeue-state.jsonl');
+    writeFileSync(ledgerPath, [
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: '12invalid',
+        headSha: 'bad-trailing',
+        key: 'review-thread',
+        meta: { detail: 'would be the wrong PR' },
+      }),
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: '3.5',
+        headSha: 'bad-fraction',
+        key: 'review-thread',
+        meta: { detail: 'would truncate to the wrong PR' },
+      }),
+      JSON.stringify({
+        kind: 'comment-blocked',
+        pr: ' 14 ',
+        headSha: 'good',
+        key: 'review-thread',
+        meta: { detail: 'valid blocked PR' },
+      }),
+    ].join('\n'));
+    const store = {
+      getWorkerAction: vi.fn(() => undefined),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => write as WorkerActionRecord),
+    };
+    const worker = createPrAdminBypassLandWorker({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: ledgerPath },
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      store,
+    });
+
+    await worker.tick();
+
+    const prWrites = store.upsertWorkerAction.mock.calls
+      .map((call) => call[0] as WorkerActionWrite)
+      .filter((write) => write.subjectType === 'pr');
+    expect(prWrites.map((write) => write.subjectId)).toEqual(['14', '14']);
+    expect(prWrites.map((write) => write.actionType)).toEqual(['mergify-blocked-pr', 'alert-send']);
+  });
+
   it('does not record a decision row when the lock is held', async () => {
     const repoRoot = makeRepoRoot();
     const store = {
@@ -424,6 +593,7 @@ describe('PR maintenance workers', () => {
       repoRoot,
       spawnProcess: makeSpawnHarness().spawnProcess,
       lockProbe: () => ({ held: true, reason: 'lock-held' }),
+      lockWaitMs: 0,
       installSignalHandlers: false,
       store,
     });

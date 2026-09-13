@@ -26,6 +26,8 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-m-refactor-plus-fields.yaml"
   "anti-pattern-n-broad-autofix-policy-review-unit.yaml"
   "anti-pattern-o-all-in-one-autofix-review-unit.yaml"
+  "anti-pattern-p-inter-task-ephemeral-carry.yaml"
+  "anti-pattern-q-behavior-plus-unrelated-docs.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -121,6 +123,13 @@ test_doctor_negative_fixture() {
   local expected_failed_step="lint-task-atomicity"
   if [[ "$fixture_name" == "anti-pattern-n-broad-autofix-policy-review-unit.yaml" || "$fixture_name" == "anti-pattern-o-all-in-one-autofix-review-unit.yaml" ]]; then
     expected_failed_step="lint-review-units"
+  elif [[ "$fixture_name" == "anti-pattern-k-missing-review-compression.yaml" ]]; then
+    # This fixture's intentional defect (missing Safety invariant) is also
+    # required unconditionally by check-planning-completeness, which runs
+    # before lint-task-atomicity, so the doctor now fails there first.
+    # The direct lint assertions for this fixture still run separately in
+    # test_lint_requires_review_compression_sections below.
+    expected_failed_step="check-planning-completeness"
   fi
   local output
   local stderr_file
@@ -259,9 +268,9 @@ test_unrendered_template_placeholder() {
   return 0
 }
 
-# Specific test for edge-stacked-basebranch-master
-test_stacked_basebranch_master() {
-  local fixture="$NEGATIVE_DIR/edge-stacked-basebranch-master.yaml"
+# Specific test for edge-stacked-basebranch-master / -main
+test_stacked_basebranch_trunk() {
+  local fixture="$1"
   local output
   set +e
   output=$(bash "$VALIDATE_SCRIPT" "$fixture" 2>&1)
@@ -269,7 +278,31 @@ test_stacked_basebranch_master() {
 
   # Should contain stacked_basebranch_default error
   if ! echo "$output" | jq -e '[.[] | select(.errorType == "stacked_basebranch_default")] | length > 0' &>/dev/null; then
-    echo "Expected stacked_basebranch_default error" >&2
+    echo "Expected stacked_basebranch_default error for $fixture" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+test_stacked_basebranch_master() {
+  test_stacked_basebranch_trunk "$NEGATIVE_DIR/edge-stacked-basebranch-master.yaml"
+}
+
+test_stacked_basebranch_main() {
+  test_stacked_basebranch_trunk "$NEGATIVE_DIR/edge-stacked-basebranch-main.yaml"
+}
+
+test_onfinish_none_stack_base() {
+  local fixture="$NEGATIVE_DIR/edge-onfinish-none-stack-base.yaml"
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$fixture" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "onfinish_none_stack_base_risk")] | length > 0' &>/dev/null; then
+    echo "Expected onfinish_none_stack_base_risk error" >&2
     echo "Output: $output" >&2
     return 1
   fi
@@ -291,6 +324,45 @@ test_runner_kind_is_unsupported() {
   fi
 
   return 0
+}
+
+test_legacy_autofix_fields_are_unsupported() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+  cat > "$temp_plan" <<'EOF'
+name: "Legacy auto-fix fields"
+onFinish: none
+repoUrl: git@github.com:example-org/acme-repo.git
+autoFixRetries: 2
+tasks:
+  - id: legacy-task
+    description: "Exercise obsolete task metadata"
+    command: "echo ok"
+    dependencies: []
+    autoFix: true
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected legacy auto-fix fields to fail validation" >&2
+    return 1
+  fi
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsupported_field" and .field == "autoFixRetries")] | length == 1' &>/dev/null; then
+    echo "Expected plan-level autoFixRetries diagnostic" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsupported_field" and .field == "autoFix" and .taskId == "legacy-task")] | length == 1' &>/dev/null; then
+    echo "Expected task-level autoFix diagnostic" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
 }
 
 test_lint_allows_focused_verification_without_test_all() {
@@ -449,6 +521,33 @@ tasks:
       Feature state: active
     command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface, add-regression-tests]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-surface]
 EOF
 
   bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
@@ -652,6 +751,33 @@ tasks:
       Feature state: active
     command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-surface]
 EOF
 
   cat > "$second_plan" <<'EOF'
@@ -751,6 +877,33 @@ tasks:
       Feature state: active
     command: "test -f packages/foo/src/terminal-surface.ts"
     dependencies: [implement-terminal-surface]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-terminal-surface]
 EOF
 
   cat > "$stack_manifest" <<EOF
@@ -955,6 +1108,33 @@ tasks:
       Feature state: active
     command: "cd packages/app && pnpm test"
     dependencies: [implement-bridge]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-bridge]
 EOF
 
   bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
@@ -1124,6 +1304,33 @@ tasks:
       Feature state: active
     command: "cd packages/execution-engine && pnpm test"
     dependencies: [implement-runtime-flow]
+  - id: scrub-handoff-artifacts
+    description: |
+      Review claim:
+      - Scrub ephemeral inter-task handoff files before the PR merge gate.
+      Review lane:
+      - cleanup
+      Safety invariant:
+      - Do not touch the home Invoker ledger.json; only remove ephemeral handoff files in the worktree.
+      Slice rationale:
+      - Handoff scrub is a required terminal leaf after implementation and verification.
+      Architectural effect:
+      - No architecture change; removes ephemeral handoff artifacts only.
+      Goal:
+      - Remove ephemeral inter-task handoff files before merge.
+      Motivation:
+      - Handoff artifacts must not ship in the PR.
+      Alternative considerations:
+      - Option A (chosen): dedicated scrub script and terminal task.
+      - Option B: rely on .gitignore only.
+      Implementation details:
+      - Run scripts/scrub-handoff-artifacts.sh and fail if handoff files remain.
+      Non-goals:
+      - No feature edits.
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/scrub-handoff-artifacts.sh"
+    dependencies: [verify-runtime-flow]
 EOF
 
   bash "$LINT_SCRIPT" --strict-delegation "$temp_plan" >/dev/null
@@ -1326,6 +1533,39 @@ test_lint_rejects_behavior_plus_proof_files() {
   fi
 }
 
+test_lint_accepts_hook_readme_beside_detect_py() {
+  local fixture="$POSITIVE_DIR/12-hook-plan-with-readme.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected lint to accept a hook README beside its detect.py and non-Invoker file paths, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_rejects_behavior_plus_unrelated_docs() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-q-behavior-plus-unrelated-docs.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject a behavior lane that edits a README outside the hook directory" >&2
+    return 1
+  fi
+
+  if ! grep -q 'mixes Review lane "behavior" with policy/docs/proof files' <<<"$output"; then
+    echo "Expected behavior-plus-docs lint error, got: $output" >&2
+    return 1
+  fi
+}
+
 test_lint_rejects_refactor_plus_fields() {
   local fixture="$NEGATIVE_DIR/anti-pattern-m-refactor-plus-fields.yaml"
   local output
@@ -1341,6 +1581,80 @@ test_lint_rejects_refactor_plus_fields() {
 
   if ! grep -q 'mixes Review lane refactor with new field/schema/behavior language' <<<"$output"; then
     echo "Expected refactor-plus-fields lint error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_rejects_inter_task_ephemeral_carry_without_commit() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-p-inter-task-ephemeral-carry.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject inter-task ephemeral carry without commit" >&2
+    return 1
+  fi
+
+  if ! grep -q 'inter-task file carry must be via git commit' <<<"$output"; then
+    echo "Expected commit-to-carry lint error, got: $output" >&2
+    return 1
+  fi
+
+  local temp_scratch
+  temp_scratch="$(mktemp)"
+  cat >"$temp_scratch" <<'EOF'
+name: "Scratch exempt ephemeral carry"
+scratch: true
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: regenerate-citr-report
+    description: "Write CITR research report markdown under work/company-claims-dagster/state/artifacts/citr."
+    command: "mkdir -p work/company-claims-dagster/state/artifacts/citr && echo report > work/company-claims-dagster/state/artifacts/citr/research_report.md"
+    dependencies: []
+  - id: export-citr-pdf
+    description: "Export PDF from the CITR research report under work/company-claims-dagster/state/artifacts/citr."
+    command: "test -f work/company-claims-dagster/state/artifacts/citr/research_report.md"
+    dependencies: [regenerate-citr-report]
+EOF
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_scratch" 2>&1)
+  exit_code=$?
+  set -e
+  rm -f "$temp_scratch"
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected scratch:true plan to pass commit-to-carry lint, got: $output" >&2
+    return 1
+  fi
+
+  local temp_commit
+  temp_commit="$(mktemp)"
+  cat >"$temp_commit" <<'EOF'
+name: "Committed ephemeral carry is allowed"
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: regenerate-citr-report
+    description: "Write CITR research report under work/artifacts/citr and git commit the carry path."
+    command: "echo report > work/artifacts/citr.md && git add work/artifacts/citr.md && git commit -m carry"
+    dependencies: []
+  - id: export-citr-pdf
+    description: "Export PDF from the committed CITR research report under work/artifacts/citr."
+    command: "test -f work/artifacts/citr.md"
+    dependencies: [regenerate-citr-report]
+EOF
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_commit" 2>&1)
+  exit_code=$?
+  set -e
+  rm -f "$temp_commit"
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected producer with git commit to pass commit-to-carry lint, got: $output" >&2
     return 1
   fi
 }
@@ -1406,8 +1720,11 @@ run_test "Edge: missing_required_field for name" test_edge_missing_name
 run_test "Edge: empty_required_field for tasks" test_edge_empty_tasks
 run_test "Edge: invalid_dependency_reference" test_edge_invalid_dependency
 run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeholder
-run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
+run_test "Edge: stacked_basebranch_default (master)" test_stacked_basebranch_master
+run_test "Edge: stacked_basebranch_default (main)" test_stacked_basebranch_main
+run_test "Edge: onfinish_none_stack_base_risk" test_onfinish_none_stack_base
 run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
+run_test "Edge: unsupported legacy auto-fix fields" test_legacy_autofix_fields_are_unsupported
 run_test "Lint: allow focused verification without test:all" test_lint_allows_focused_verification_without_test_all
 run_test "Lint: reject multi-prompt standalone without waiver" test_lint_rejects_multi_prompt_standalone_without_waiver
 run_test "Lint: allow stack workflows with focused verification" test_lint_allows_nonterminal_stack_workflow_without_test_all
@@ -1415,7 +1732,10 @@ run_test "Lint: reject missing design sections for prompt tasks" test_lint_requi
 run_test "Lint: reject missing review-compression sections" test_lint_requires_review_compression_sections
 run_test "Lint: reject missing review lane" test_lint_requires_review_lane
 run_test "Lint: reject behavior lane mixed with proof files" test_lint_rejects_behavior_plus_proof_files
+run_test "Lint: accept hook README beside detect.py" test_lint_accepts_hook_readme_beside_detect_py
+run_test "Lint: reject behavior lane mixed with unrelated docs" test_lint_rejects_behavior_plus_unrelated_docs
 run_test "Lint: reject refactor lane mixed with field additions" test_lint_rejects_refactor_plus_fields
+run_test "Lint: reject inter-task ephemeral carry without commit" test_lint_rejects_inter_task_ephemeral_carry_without_commit
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
 run_test "Lint: reject missing design sections for command tasks" test_lint_requires_design_sections_for_command_tasks
 run_test "Lint strict: accept zero-context prompt contract" test_lint_strict_accepts_zero_context_prompt_contract

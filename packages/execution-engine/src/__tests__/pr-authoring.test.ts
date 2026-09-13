@@ -7,8 +7,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   buildCanonicalPrBody,
   buildMakePrStackPublishPrompt,
+  extractAgentReportedError,
   parseMakePrStackPublishResult,
+  resolvePrBodyValidatorNodeBinary,
   resolveSkillPathViaAgent,
+  runRepoLocalPrBodyChecker,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
   validateReviewStackPrBody,
@@ -32,6 +35,8 @@ function makeAgent(name: string, opts?: {
 }
 
 const tempDirs: string[] = [];
+const originalElectronRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+const originalPrBodyValidatorNode = process.env.INVOKER_PR_BODY_VALIDATOR_NODE;
 function createTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'pr-authoring-test-'));
   tempDirs.push(dir);
@@ -39,6 +44,11 @@ function createTempDir(): string {
 }
 
 afterEach(() => {
+  if (originalElectronRunAsNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+  else process.env.ELECTRON_RUN_AS_NODE = originalElectronRunAsNode;
+  if (originalPrBodyValidatorNode === undefined) delete process.env.INVOKER_PR_BODY_VALIDATOR_NODE;
+  else process.env.INVOKER_PR_BODY_VALIDATOR_NODE = originalPrBodyValidatorNode;
+
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -341,6 +351,40 @@ describe('validateReviewStackPrBody', () => {
   });
 });
 
+// ── runRepoLocalPrBodyChecker ────────────────────────────
+
+describe('runRepoLocalPrBodyChecker', () => {
+  it('honors an explicit validator Node binary override', () => {
+    process.env.INVOKER_PR_BODY_VALIDATOR_NODE = process.execPath;
+
+    expect(resolvePrBodyValidatorNodeBinary()).toBe(process.execPath);
+  });
+
+  it('runs the repo checker with Electron process vars removed', () => {
+    const cwd = createTempDir();
+    mkdirSync(join(cwd, 'scripts'));
+    writeFileSync(
+      join(cwd, 'scripts', 'validate-pr-body-local.mjs'),
+      [
+        "if (process.env.ELECTRON_RUN_AS_NODE) {",
+        "  console.error('leaked ELECTRON_RUN_AS_NODE');",
+        '  process.exit(1);',
+        '}',
+        'process.exit(0);',
+        '',
+      ].join('\n'),
+    );
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    process.env.INVOKER_PR_BODY_VALIDATOR_NODE = process.execPath;
+
+    expect(runRepoLocalPrBodyChecker({
+      body: '## Summary\n\nok\n\n## Test Plan\n\nok\n\n## Revert Plan\n\nok',
+      cwd,
+      baseBranch: 'master',
+    })).toEqual([]);
+  });
+});
+
 // ── make-pr stack publish prompt + parsing ───────────────
 
 describe('make-pr stack publish body contract', () => {
@@ -380,9 +424,91 @@ describe('make-pr stack publish body contract', () => {
     // The caller validates this empty body and falls through to the next agent.
     expect(validateReviewStackPrBody(parsed[0]?.body ?? '').length).toBeGreaterThan(0);
   });
+
+  it('parses JSON wrapped in a ```json fenced code block despite the no-fences instruction', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = '```json\n' + payload + '\n```';
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('parses JSON wrapped in a bare ``` fenced code block', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = '```\n' + payload + '\n```';
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('extracts a JSON object surrounded by commentary the agent added despite instructions', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = `Here is the published review stack:\n${payload}\nLet me know if you need anything else.`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('extracts balanced JSON when surrounding commentary and quoted strings contain braces', () => {
+    const title = 'Keep } inside an escaped "quote" and { inside the string';
+    const payload = JSON.stringify({
+      artifacts: [{ id: 'a', url: 'https://x/1', title }],
+    });
+    const raw = `Preparing {draft} output.\n${payload}\nFinished with } commentary.`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.title).toBe(title);
+  });
+
+  it('does not let a valid-JSON decoy in leading commentary shadow the real artifacts payload', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    // "{}" is itself valid, parseable JSON -- a naive first-match scanner
+    // would stop here and never reach the real payload below it.
+    const raw = `Status: {}\nHere is the published review stack:\n${payload}`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('extracts nested artifact JSON from an invalid enclosing brace span', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = `Note: {payload follows: ${payload}}`;
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
+  it('still throws "must output JSON" for genuinely non-JSON output', () => {
+    expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
+      'make-pr stack publisher must output JSON',
+    );
+  });
 });
 
 // ── resolveSkillPathViaAgent ─────────────────────────────
+
+describe('extractAgentReportedError', () => {
+  it('surfaces the usage-limit message a zero-exit agent reported instead of a body', () => {
+    const stdout = JSON.stringify({
+      type: 'task_complete',
+      last_agent_message: null,
+      error: { message: "You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now." },
+    });
+    expect(extractAgentReportedError(stdout)).toBe(
+      "You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now.",
+    );
+  });
+
+  it('returns undefined when the agent reported no error', () => {
+    const stdout = JSON.stringify({ type: 'task_complete', last_agent_message: '{"artifacts":[]}' });
+    expect(extractAgentReportedError(stdout)).toBeUndefined();
+  });
+
+  it('skips an error object that carries no message', () => {
+    const stdout = '{"error":{"code":429}} {"error":{"message":"rate limited"}}';
+    expect(extractAgentReportedError(stdout)).toBe('rate limited');
+  });
+});
 
 describe('resolveSkillPathViaAgent', () => {
   it('resolves skill from agent bundledSkillRoot when SKILL.md exists', () => {
