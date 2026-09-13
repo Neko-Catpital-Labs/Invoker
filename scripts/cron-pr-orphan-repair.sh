@@ -130,6 +130,7 @@ while IFS= read -r pr; do
   {
     printf 'name: repair-pr-%s-%s\n' "$num" "$fingerprint"
     printf 'onFinish: none\n'
+    printf 'repoUrl: https://github.com/%s.git\n' "$TARGET_REPO"
     printf 'baseBranch: %s\n' "$base_ref"
     printf 'tasks:\n'
     printf '  - id: repair\n'
