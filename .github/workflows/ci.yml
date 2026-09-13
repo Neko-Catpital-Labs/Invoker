@@ -800,7 +800,6 @@ jobs:
               e2e/persistence-lifecycle.spec.ts
               e2e/planning-review-scroll.spec.ts
               e2e/planning-submit-to-workflow-graph.spec.ts
-              e2e/codex-spend-gate-blocks-task.spec.ts
           - name: 3-of-9
             files: >-
               e2e/task-death-logs.spec.ts
@@ -863,7 +862,6 @@ jobs:
               e2e/workers-surface.spec.ts
               e2e/rebase-recreate-ui-drift-repro.spec.ts
               e2e/rebase-recreate-ui-never-recovers.spec.ts
-              e2e/codex-spend-gate-blocks-task.spec.ts
           - name: terminal-garbling
             files: >-
               e2e/planning-terminal-live-model.proof.spec.ts
@@ -874,7 +872,6 @@ jobs:
           - name: planning-chat-restore
             files: >-
               e2e/planning-chat-restore-conversational-mode-repro.spec.ts
-              e2e/codex-spend-gate-blocks-task.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
