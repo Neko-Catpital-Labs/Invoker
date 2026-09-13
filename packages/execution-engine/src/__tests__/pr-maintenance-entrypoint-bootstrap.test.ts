@@ -150,3 +150,48 @@ describe('PR maintenance entrypoints bootstrap', () => {
     ].join('\n'));
   });
 });
+
+describe('cron_lock shared PR-maintenance lock', () => {
+  let workDir: string;
+
+  beforeEach(() => {
+    workDir = mkdtempSync(join(tmpdir(), 'pr-maintenance-lock-wait-'));
+  });
+
+  afterEach(() => {
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it('waits for a lock held by another operation and then takes it', () => {
+    const lockPath = join(workDir, 'pr-crons.lock');
+    const script = [
+      'source scripts/cron-pr-lib.sh',
+      'if command -v flock >/dev/null 2>&1; then',
+      '  flock "$INVOKER_PR_CRON_LOCK" sleep 1 &',
+      '  until ! flock -n "$INVOKER_PR_CRON_LOCK" true; do :; done',
+      'else',
+      '  mkdir "$INVOKER_PR_CRON_LOCK.d"',
+      '  echo "$$" > "$INVOKER_PR_CRON_LOCK.d/pid"',
+      '  ( sleep 1; rm -rf "$INVOKER_PR_CRON_LOCK.d" ) &',
+      'fi',
+      'cron_lock',
+      'echo lock-acquired',
+    ].join('\n');
+
+    const result = spawnSync('bash', ['-c', script], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        INVOKER_PR_CRON_LOCK: lockPath,
+        INVOKER_PR_CRON_LOCK_WAIT_SECS: '10',
+      },
+    });
+
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    expect(output).not.toContain('another PR cron operation in progress');
+    expect(result.stdout).toContain('lock-acquired');
+    expect(result.status).toBe(0);
+  });
+});

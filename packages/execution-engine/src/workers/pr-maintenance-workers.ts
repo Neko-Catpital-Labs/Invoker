@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 
@@ -38,6 +39,8 @@ export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORK
  * it. Override via INVOKER_PR_MAINTENANCE_TICK_TIMEOUT_MS.
  */
 export const DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS = 4 * 60_000;
+export const DEFAULT_PR_MAINTENANCE_LOCK_WAIT_MS = 4 * 60_000;
+export const DEFAULT_PR_MAINTENANCE_LOCK_POLL_MS = 5_000;
 
 export type PrMaintenanceWorkerKind =
   | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
@@ -99,6 +102,8 @@ export interface PrMaintenanceWorkerConfig {
   startDelayMs?: number;
   /** Shared cron lock path. Defaults to the shell script's `INVOKER_PR_CRON_LOCK` behavior. */
   lockPath?: string;
+  lockWaitMs?: number;
+  lockPollMs?: number;
   /** Per-tick wall-clock cap for the spawned child. See DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS. */
   tickTimeoutMs?: number;
   /** Shell executable used to run the existing entrypoint. Defaults to `bash`. */
@@ -323,6 +328,8 @@ function createPrMaintenanceWorker(
       env: options.env,
       intervalMs: options.intervalMs,
       lockPath: options.lockPath,
+      lockWaitMs: options.lockWaitMs,
+      lockPollMs: options.lockPollMs,
       tickTimeoutMs: options.tickTimeoutMs,
       shell: options.shell,
       spawnProcess: options.spawnProcess,
@@ -345,13 +352,33 @@ async function runPrMaintenanceEntrypoint(
   const lockPath = options.lockPath ?? env.INVOKER_PR_CRON_LOCK ?? defaultPrCronLockPath(env);
   env.INVOKER_PR_CRON_LOCK = lockPath;
   const lockProbe = options.lockProbe ?? probePrMaintenanceLock;
-  const lock = await lockProbe({
+  const probeOptions: PrMaintenanceLockProbeOptions = {
     lockPath,
     env,
     staleLockSeconds: parsePositiveInteger(env.INVOKER_PR_CRON_LOCK_STALE_SECS),
-  });
-
+  };
+  const envLockWaitSecs = parsePositiveInteger(env.INVOKER_PR_CRON_LOCK_WAIT_SECS);
+  const lockWaitMs = options.lockWaitMs
+    ?? (envLockWaitSecs !== undefined ? envLockWaitSecs * 1000 : DEFAULT_PR_MAINTENANCE_LOCK_WAIT_MS);
+  const lockPollMs = options.lockPollMs ?? DEFAULT_PR_MAINTENANCE_LOCK_POLL_MS;
+  const lockWaitDeadline = Date.now() + lockWaitMs;
+  let lock = await lockProbe(probeOptions);
   signal?.throwIfAborted();
+
+  if (lock.held && lockWaitMs > 0) {
+    options.logger.info(`[worker:${options.entrypoint.kind}] shared PR maintenance lock held; waiting for it`, {
+      module: 'pr-maintenance-worker',
+      worker: options.entrypoint.kind,
+      lockPath,
+      reason: lock.reason ?? 'lock-held',
+      lockWaitMs,
+    });
+  }
+  while (lock.held && Date.now() < lockWaitDeadline) {
+    await sleep(Math.min(lockPollMs, Math.max(0, lockWaitDeadline - Date.now())), undefined, { signal });
+    lock = await lockProbe(probeOptions);
+    signal?.throwIfAborted();
+  }
 
   if (lock.held) {
     options.logger.info(`[worker:${options.entrypoint.kind}] shared PR maintenance lock held; skipping tick`, {

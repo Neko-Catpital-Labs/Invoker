@@ -389,6 +389,57 @@ describe('PR maintenance workers', () => {
     await worker.stop();
   });
 
+  it('waits for the shared PR-maintenance lock to free up instead of skipping the tick', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    let probes = 0;
+    const worker = createPrAdminBypassLandWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => {
+        probes += 1;
+        return probes <= 2 ? { held: true, reason: 'test-lock-held' } : { held: false };
+      },
+      lockPollMs: 1,
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(probes).toBe(3);
+    expect(spawnHarness.calls).toHaveLength(1);
+  });
+
+  it('skips the tick only after the lock stays held past the wait limit', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    let probes = 0;
+    const worker = createPrAdminBypassLandWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => {
+        probes += 1;
+        return { held: true, reason: 'test-lock-held' };
+      },
+      lockWaitMs: 30,
+      lockPollMs: 5,
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(probes).toBeGreaterThan(1);
+    expect(spawnHarness.calls).toEqual([]);
+    expect(logger.info).toHaveBeenCalledWith(
+      `[worker:${PR_ADMIN_BYPASS_LAND_WORKER_KIND}] shared PR maintenance lock held; skipping tick`,
+      expect.objectContaining({ worker: PR_ADMIN_BYPASS_LAND_WORKER_KIND, reason: 'test-lock-held' }),
+    );
+  });
+
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();
@@ -398,6 +449,7 @@ describe('PR maintenance workers', () => {
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
       lockProbe: () => ({ held: true, reason: 'test-lock-held' }),
+      lockWaitMs: 0,
       installSignalHandlers: false,
     });
 
@@ -422,6 +474,7 @@ describe('PR maintenance workers', () => {
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
       lockProbe: () => ({ held: true, reason: 'test-lock-held' }),
+      lockWaitMs: 0,
       installSignalHandlers: false,
     });
 
@@ -540,6 +593,7 @@ describe('PR maintenance workers', () => {
       repoRoot,
       spawnProcess: makeSpawnHarness().spawnProcess,
       lockProbe: () => ({ held: true, reason: 'lock-held' }),
+      lockWaitMs: 0,
       installSignalHandlers: false,
       store,
     });
