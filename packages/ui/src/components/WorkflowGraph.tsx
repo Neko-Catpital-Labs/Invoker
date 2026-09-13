@@ -232,6 +232,26 @@ function mergeMeasuredNodeState(
   });
 }
 
+function applyWorkflowSelectionToNodes(
+  nodes: Node<WorkflowNodeData>[],
+  selectedWorkflowId: string | null,
+): Node<WorkflowNodeData>[] {
+  let changed = false;
+  const nextNodes = nodes.map((node) => {
+    const selected = selectedWorkflowId === node.id;
+    if (node.data.selected === selected) return node;
+    changed = true;
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        selected,
+      },
+    };
+  });
+  return changed ? nextNodes : nodes;
+}
+
 function workflowEdgeVisual(kind: WorkflowGraphEdge['kind']): {
   stroke: string;
   strokeWidth: number;
@@ -317,6 +337,7 @@ function WorkflowGraphInner({
   const pendingPanePointerPanRef = useRef<PanePointerPan | null>(null);
   const paneMousePanRef = useRef<PanePan | null>(null);
   const pendingPaneMousePanRef = useRef<PanePan | null>(null);
+  const selectedWorkflowIdRef = useRef(selectedWorkflowId);
 
   const getViewportElement = useCallback(
     () => graphRootRef.current?.querySelector<HTMLElement>('.react-flow__viewport') ?? null,
@@ -388,7 +409,7 @@ function WorkflowGraphInner({
         zIndex: 2,
         data: {
           workflow: node.workflow,
-          selected: selectedWorkflowId === node.id,
+          selected: selectedWorkflowIdRef.current === node.id,
           dimmed,
           coreActivity: coreActivityByWorkflow?.get(node.id),
           onSelect: () => onSelectWorkflow(node.id),
@@ -397,8 +418,20 @@ function WorkflowGraphInner({
     });
     graphMetricsRef.current.objectsMs = performance.now() - startedAt;
     return nextNodes;
-  }, [coreActivityByWorkflow, graph.nodes, onSelectWorkflow, positions, selectedWorkflowId, statusFilters]);
+  }, [coreActivityByWorkflow, graph.nodes, onSelectWorkflow, positions, statusFilters]);
   const [rfNodes, setRfNodes] = useState<Node<WorkflowNodeData>[]>([]);
+
+  useEffect(() => {
+    if (selectedWorkflowIdRef.current === selectedWorkflowId) return;
+    selectedWorkflowIdRef.current = selectedWorkflowId;
+    setRfNodes((prev) => applyWorkflowSelectionToNodes(prev, selectedWorkflowId));
+    if (pendingGestureNodesRef.current) {
+      pendingGestureNodesRef.current = applyWorkflowSelectionToNodes(
+        pendingGestureNodesRef.current,
+        selectedWorkflowId,
+      );
+    }
+  }, [selectedWorkflowId]);
 
   useEffect(() => {
     if (nodes.length === 0) {
