@@ -82,7 +82,9 @@ scan_repo() {
     if [ "$mergeable" = "CONFLICTING" ] || [ "$merge_state" = "DIRTY" ]; then
       blockers+=("conflict: GitHub reports a merge conflict against $(jq -r '.baseRefName' <<<"$pr")")
     fi
-    failed_checks="$(jq -r '[.statusCheckRollup[]? | select((.conclusion // "") as $c
+    failed_checks="$(jq -r '[.statusCheckRollup // [] | group_by(.name // .context)[]
+      | max_by(.completedAt // .startedAt // "")
+      | select((.conclusion // "") as $c
       | $c == "FAILURE" or $c == "ERROR" or $c == "TIMED_OUT" or $c == "CANCELLED")
       | .name] | unique | join(", ")' <<<"$pr")"
     if [ -n "$failed_checks" ]; then
