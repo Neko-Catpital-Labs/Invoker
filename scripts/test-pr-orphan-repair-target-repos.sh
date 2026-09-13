@@ -69,7 +69,7 @@ runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 [ "$runs" -eq 4 ] || fail "expected 2 submissions per repo (801 and 803), got $runs" "$(cat "$NODE_LOG")"
 
 lookups="$(wc -l < "$RG_LOG" | tr -d ' ')"
-[ "$lookups" -eq 3 ] || fail "only the primary repo's PRs may hit review-gate; got $lookups lookups" "$(cat "$RG_LOG")"
+[ "$lookups" -eq 2 ] || fail "only the primary repo's broken PRs may hit review-gate; got $lookups lookups" "$(cat "$RG_LOG")"
 
 out="$(run_cron)" || fail "second tick exited non-zero" "$out"
 runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
