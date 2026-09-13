@@ -100,7 +100,9 @@ onFinish: none
 mergeMode: automatic
 ```
 
-`automatic` plus `none` lets this local-only tutorial finish as completed. `manual` plus `none` intentionally stops at `review_ready` for human inspection and has no merge action. A task may instead reach terminal `skipped` when an upstream task fails; retrying the upstream task can resurrect it.
+`automatic` plus `none` lets this local-only tutorial finish as completed. `manual` plus `none` intentionally stops at `review_ready` for human inspection and has no merge action.
+
+A task can also reach the terminal `skipped` status when an upstream task fails; retrying the upstream task resurrects the skipped task for execution.
 
 ## Create and review the workflow
 
