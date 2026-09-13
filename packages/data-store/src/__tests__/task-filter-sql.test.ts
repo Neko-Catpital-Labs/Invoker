@@ -72,6 +72,8 @@ describe('task filter SQL read path', () => {
     };
     const compiled = compileTaskFilter(filter);
     expect(compiled.where).toContain("ESCAPE '\\'");
+    expect(compiled.where).not.toContain('Alpha');
+    expect(compiled.where).toContain('t.status = ?');
     expect(compiled.params).toEqual(['running', 'completed', 'nope', '%Alpha%', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:03.000Z']);
     expect(adapter.queryTasksByFilter(filter).map((row) => row.id)).toEqual(['first']);
   });
@@ -81,6 +83,8 @@ describe('task filter SQL read path', () => {
     expect(adapter.queryTasksByFilter({ op: 'eq', key: 'is_merge_node', value: true }).map((row) => row.id)).toEqual(['first']);
     expect(adapter.queryTasksByFilter({ op: 'eq', key: 'execution_agent', value: 'codex' }).map((row) => row.id)).toEqual(['first']);
     expect(adapter.queryTasksByFilter({ op: 'in', key: 'status', values: ['completed', 'running'] }).map((row) => row.id)).toEqual(['first', 'second']);
+    const escaped = compileTaskFilter({ op: 'contains', key: 'description', value: '%_\\' });
+    expect(escaped.params).toEqual(['%\\%\\_\\\\%']);
     expect(adapter.queryTasksByFilter({ op: 'contains', key: 'description', value: '%' }).map((row) => row.id)).toEqual([]);
     expect(adapter.queryTasksByFilter({ op: 'time_range', key: 'created_at', start: '2026-01-01T00:00:03.000Z' }).map((row) => row.id)).toEqual(['second']);
   });
