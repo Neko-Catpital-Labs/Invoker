@@ -1,5 +1,6 @@
 ---
 name: worker-session-mine
+category: optimization
 description: >
   Invoker-owned adapter for the off-by-default worker-session-mine owner worker.
   Mines terminal fire-and-forget agent sessions (Claude, Codex, OMP) for mechanical

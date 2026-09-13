@@ -1,5 +1,6 @@
 ---
 name: route-delegation
+category: core
 description: >
   Decide between a subagent swarm and an Invoker submission before fanning
   out. Trigger when about to spawn several subagents, forks, background
