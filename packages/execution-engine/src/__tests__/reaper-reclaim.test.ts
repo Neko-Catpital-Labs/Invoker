@@ -23,7 +23,9 @@ import {
   reapStaleInvokerCliTempDirs,
   reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
+  reapStaleMergeClones,
   reapStaleWorktrees,
+  STALE_MERGE_CLONE_MIN_AGE_HOURS,
   STALE_WORKTREE_GIT_TIMEOUT_MS,
   STALE_WORKTREE_MIN_AGE_HOURS,
   trimOversizedLogs,
@@ -265,6 +267,71 @@ describe('reapStaleAutomationCheckouts', () => {
   it('returns nothing when the locations are absent', () => {
     const { root, home } = makeHome();
     expect(reapStaleAutomationCheckouts({ invokerHome: home, userHome: root })).toEqual([]);
+  });
+});
+
+describe('reapStaleMergeClones', () => {
+  function taskStore(tasks: Array<{ status: string; workspacePath: string }>) {
+    return {
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: () => tasks.map((task, index) => ({
+        id: `t-${index}`,
+        status: task.status,
+        execution: { workspacePath: task.workspacePath },
+      })) as any,
+    };
+  }
+
+  it('removes stale clones, keeps fresh ones, and keeps a stale clone an unfinished task still uses', async () => {
+    const { root, home } = makeHome();
+    const staleAge = (STALE_MERGE_CLONE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000;
+    for (const name of ['gate-old-Aa1', 'gate-done-Bb2', 'gate-running-Cc3']) {
+      mkdirSync(join(home, 'merge-clones', name, '.git'), { recursive: true });
+      backdate(join(home, 'merge-clones', name), staleAge);
+    }
+    mkdirSync(join(home, 'merge-clones', 'gate-fresh-Dd4'), { recursive: true });
+
+    const result = await reapStaleMergeClones({
+      invokerHome: home,
+      userHome: root,
+      taskStore: taskStore([
+        { status: 'completed', workspacePath: join(home, 'merge-clones', 'gate-done-Bb2') },
+        { status: 'running', workspacePath: join(home, 'merge-clones', 'gate-running-Cc3') },
+      ]),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.removed.sort()).toEqual([
+      join(home, 'merge-clones', 'gate-done-Bb2'),
+      join(home, 'merge-clones', 'gate-old-Aa1'),
+    ]);
+    expect(existsSync(join(home, 'merge-clones', 'gate-running-Cc3'))).toBe(true);
+    expect(existsSync(join(home, 'merge-clones', 'gate-fresh-Dd4'))).toBe(true);
+  });
+
+  it('removes nothing and reports why when task state cannot be read', async () => {
+    const { root, home } = makeHome();
+    mkdirSync(join(home, 'merge-clones', 'gate-old-Aa1'), { recursive: true });
+    backdate(join(home, 'merge-clones', 'gate-old-Aa1'), (STALE_MERGE_CLONE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+    const unreadable = await reapStaleMergeClones({
+      invokerHome: home,
+      userHome: root,
+      logger,
+      taskStore: {
+        listWorkflows: () => {
+          throw new Error('database is locked');
+        },
+        loadTasks: () => [],
+      },
+    });
+    const missing = await reapStaleMergeClones({ invokerHome: home, userHome: root });
+
+    expect(unreadable).toEqual({ ok: false, removed: [], reason: 'task-store-error: database is locked' });
+    expect(missing).toEqual({ ok: false, removed: [], reason: 'no-task-store' });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database is locked'), expect.anything());
+    expect(existsSync(join(home, 'merge-clones', 'gate-old-Aa1'))).toBe(true);
   });
 });
 
