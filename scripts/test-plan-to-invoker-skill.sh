@@ -281,6 +281,8 @@ STANDALONE_INSTALL_DIR="$(mktemp -d)"
 STANDALONE_INVOKER_HOME="$(mktemp -d)"
 trap 'rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"' EXIT
 cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.sh "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.mjs "$STANDALONE_INSTALL_DIR/"
+mkdir -p "$STANDALONE_INSTALL_DIR/vendor"
+cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/vendor/*.mjs "$STANDALONE_INSTALL_DIR/vendor/"
 STANDALONE_DOCTOR="$STANDALONE_INSTALL_DIR/skill-doctor.sh"
 STANDALONE_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
 
@@ -404,6 +406,32 @@ rm -rf "$TOTALLY_BARE_DIR"
 trap - EXIT
 
 echo "OK: a totally bare skills/plan-to-invoker/ copy fails informatively, not with a raw crash"
+
+PACKAGED_INSTALL_DIR="$(mktemp -d)"
+PACKAGED_INVOKER_HOME="$(mktemp -d)"
+trap 'rm -rf "$PACKAGED_INSTALL_DIR" "$PACKAGED_INVOKER_HOME"' EXIT
+cp -R "$SKILL_DIR" "$PACKAGED_INSTALL_DIR/plan-to-invoker"
+cat > "$PACKAGED_INVOKER_HOME/bundled-skills.json" <<'MANIFEST'
+{"bundledHash": "x", "bundledSkillNames": ["plan-to-invoker"], "installedAt": "now", "targets": {}}
+MANIFEST
+mkdir -p "$PACKAGED_INSTALL_DIR/yamlhome/node_modules"
+cp -RL "$REPO_ROOT/packages/app/node_modules/yaml" "$PACKAGED_INSTALL_DIR/yamlhome/node_modules/yaml"
+cat > "$PACKAGED_INVOKER_HOME/bundled-skills.json" <<MANIFEST
+{"bundledHash": "x", "bundledSkillNames": ["plan-to-invoker"], "installedAt": "now", "targets": {}, "yamlModuleRoot": "$PACKAGED_INSTALL_DIR/yamlhome"}
+MANIFEST
+for PACKAGED_SCRIPT in unit-triggers validate-plan lint-review-units check-planning-completeness freshness-check; do
+  PACKAGED_OUT="$(cd /tmp && env -u INVOKER_REPO_ROOT INVOKER_DB_DIR="$PACKAGED_INVOKER_HOME" \
+    node "$PACKAGED_INSTALL_DIR/plan-to-invoker/scripts/$PACKAGED_SCRIPT.mjs" /dev/null 2>&1 || true)"
+  case "$PACKAGED_OUT" in
+    *"Unable to resolve yaml runtime"*)
+      fail "Packaged install recording yamlModuleRoot must resolve yaml for $PACKAGED_SCRIPT; got: $PACKAGED_OUT" ;;
+  esac
+done
+
+rm -rf "$PACKAGED_INSTALL_DIR" "$PACKAGED_INVOKER_HOME"
+trap - EXIT
+
+echo "OK: a packaged install resolves yaml through bundled-skills.json yamlModuleRoot"
 
 # Playbook — Phase 1a / 1b focused lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"

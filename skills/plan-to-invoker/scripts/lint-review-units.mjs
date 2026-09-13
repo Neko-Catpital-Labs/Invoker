@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { importYaml } from './vendor/resolve-yaml.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -70,28 +71,6 @@ function resolveInvokerRepoRoot(scriptDir) {
  * copied via `installBundledSkills()`, which has no such node_modules
  * anywhere nearby.
  */
-async function importYaml(scriptDir) {
-  try {
-    return await import('yaml');
-  } catch {
-    // Fall through to the checkout-based lookup below.
-  }
-
-  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
-  if (invokerRepoRoot) {
-    const repoYamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-    if (existsSync(repoYamlPath)) return import(repoYamlPath);
-  }
-
-  throw new Error(
-    "Unable to resolve yaml runtime. Checked a plain 'yaml' import (present if this script is "
-    + 'running from inside the invoker-cli npm install, which declares it as a real dependency) '
-    + 'and packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout '
-    + '(INVOKER_REPO_ROOT, a live git checkout, or ~/.invoker/bundled-skills.json). Set '
-    + 'INVOKER_REPO_ROOT to an Invoker checkout if neither applies.',
-  );
-}
-
 /**
  * Primary path: a copy vendored directly under this script's own directory
  * (./vendor/review-unit-rules.mjs), re-synced by
