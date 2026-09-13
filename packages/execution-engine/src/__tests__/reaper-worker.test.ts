@@ -73,6 +73,11 @@ describe('reaper worker', () => {
       ok: true,
       removed: ['/tmp/invoker-home/merge-clones/gate-a', '/tmp/invoker-home/merge-clones/gate-b'],
     }));
+    const reapDevHomes = vi.fn(async () => ({
+      ok: true,
+      removed: ['/tmp/invoker-home/dev/aaaa000001'],
+      unchecked: ['/tmp/invoker-home/dev/bbbb000002'],
+    }));
     const taskStore = { listWorkflows: () => [], loadTasks: () => [] };
     const upsertWorkerAction = vi.fn((row: any) => row);
 
@@ -91,6 +96,7 @@ describe('reaper worker', () => {
       enforceRetention,
       trimLogs,
       reapMergeClones,
+      reapDevHomes,
     });
 
     await runtime.tick('manual');
@@ -132,6 +138,9 @@ describe('reaper worker', () => {
     expect(reapMergeClones).toHaveBeenCalledTimes(1);
     expect(reapMergeClones.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home', taskStore });
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('merge clones removed 2');
+    expect(reapDevHomes).toHaveBeenCalledTimes(1);
+    expect(reapDevHomes.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
+    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('dev homes removed 1, dev homes unchecked 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].payload).toMatchObject({
       tempDirsRemoved: ['/tmp/invoker-cli-prompt-old'],
       worktreesRemoved: 5,
