@@ -46,7 +46,7 @@ if [ -n "${INVOKER_PLAYWRIGHT_FILES:-}" ]; then
   PLAYWRIGHT_ARGS+=( "${PLAYWRIGHT_FILES[@]}" )
 fi
 
-ARTIFACT_ROOT="$(git rev-parse --path-format=absolute --git-path "playwright-artifacts/$RUN_LABEL")"
+ARTIFACT_ROOT="$ROOT/.playwright-artifacts/$RUN_LABEL"
 mkdir -p "$ARTIFACT_ROOT"
 
 export INVOKER_E2E_BARE_REPO="${INVOKER_E2E_BARE_REPO:-/tmp/invoker-e2e-repo-${RUN_LABEL}.git}"
