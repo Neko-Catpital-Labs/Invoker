@@ -469,6 +469,23 @@ function extractJsonPayload(raw: string): string {
   return lastValid ?? trimmed;
 }
 
+export function extractAgentReportedError(stdout: string): string | undefined {
+  if (!stdout) return undefined;
+  for (const match of stdout.matchAll(/"error"\s*:\s*\{/g)) {
+    const slice = stdout.slice(match.index);
+    const messageMatch = slice.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (!messageMatch) continue;
+    try {
+      const message = JSON.parse(`"${messageMatch[1]}"`) as string;
+      if (message.trim()) return message.trim();
+    } catch {
+      const message = messageMatch[1].trim();
+      if (message) return message;
+    }
+  }
+  return undefined;
+}
+
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
   let parsed: unknown;
   try {
