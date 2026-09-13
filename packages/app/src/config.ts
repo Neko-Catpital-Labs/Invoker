@@ -15,6 +15,7 @@ import type {
   E2eAutoFixWorkerConfig,
   PrMaintenanceWorkerConfig,
   SpendCircuitBreakerWorkerConfig,
+  ThrashDetectorWorkerConfig,
 } from '@invoker/execution-engine';
 import { DEFAULT_CODEX_DAILY_TOKEN_BUDGET } from '@invoker/execution-engine';
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
@@ -234,6 +235,25 @@ export interface CatstackDeployConfig {
 
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
+
+/**
+ * Thrash detector worker settings. Process on/off is SQLite
+ * `worker_desired_states`; `enabled: false` makes a started worker skip.
+ */
+export interface ThrashDetectorConfig {
+  /** Whether a started worker should evaluate recurrence. Default: true. */
+  enabled?: boolean;
+  /** Poll cadence in minutes. Default: 15. */
+  intervalMinutes?: number;
+  /** Distinct task count required to emit a signal. Default: 3. */
+  thresholdCount?: number;
+  /** Lookback window in hours. Default: 24. */
+  windowHours?: number;
+}
+
+export const DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES = 15;
+export const DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT = 3;
+export const DEFAULT_THRASH_DETECTOR_WINDOW_HOURS = 24;
 
 export interface SelfDeployConfig {
   intervalMinutes?: number;
@@ -639,6 +659,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  thrashDetector?: ThrashDetectorConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
   dbReaper?: DbReaperConfig;
@@ -925,6 +946,18 @@ export function resolveSpendCircuitBreakerWorkerConfig(
         },
       })),
     },
+  };
+}
+
+export function resolveThrashDetectorWorkerConfig(
+  invokerConfig: InvokerConfig,
+): ThrashDetectorWorkerConfig {
+  const configured = invokerConfig.thrashDetector;
+  return {
+    enabled: configured?.enabled,
+    intervalMs: (configured?.intervalMinutes ?? DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES) * 60_000,
+    thresholdCount: configured?.thresholdCount ?? DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+    windowMs: (configured?.windowHours ?? DEFAULT_THRASH_DETECTOR_WINDOW_HOURS) * 60 * 60_000,
   };
 }
 

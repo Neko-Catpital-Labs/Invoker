@@ -22,6 +22,7 @@ import type { DiskHeadroomWorkerStore } from './workers/disk-headroom-reclaim.js
 import type { SlackBugScanWorkerConfig } from './workers/slack-bug-scan-worker.js';
 import type { CrossRepoResearchWorkerConfig } from './workers/cross-repo-research-worker.js';
 import type { CatstackDeployWorkerConfig } from './workers/catstack-deploy-worker.js';
+import type { ThrashDetectorWorkerConfig, ThrashDetectorWorkerStore } from './workers/thrash-detector-worker.js';
 import type { SelfDeployWorkerConfig } from './workers/self-deploy-worker.js';
 import type { MergifyQueueResearchWorkerConfig } from './workers/mergify-queue-research-worker.js';
 import type {
@@ -65,7 +66,8 @@ export interface WorkerRuntimeDependencies {
     & DiskHeadroomWorkerStore
     & IdleTaskCleanupWorkerStore
     & DbReaperWorkerStore
-    & SpendCircuitBreakerWorkerStore;
+    & SpendCircuitBreakerWorkerStore
+    & Partial<ThrashDetectorWorkerStore>;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & ReviewGateCiRepairSubmitter
@@ -107,6 +109,8 @@ export interface WorkerRuntimeDependencies {
   crossRepoResearch?: CrossRepoResearchWorkerConfig;
   /** Catstack deploy worker configuration (local + remoteTargets clone/pull/install). */
   catstackDeploy?: CatstackDeployWorkerConfig;
+  /** Thrash detector worker configuration (debug.auto-fix aggregation). */
+  thrashDetector?: ThrashDetectorWorkerConfig;
   selfDeploy?: SelfDeployWorkerConfig;
   /** Mergify queue research worker configuration. */
   mergifyQueueResearch?: MergifyQueueResearchWorkerConfig;

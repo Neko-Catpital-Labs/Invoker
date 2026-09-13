@@ -21,6 +21,7 @@ import {
   resolvePrMaintenanceWorkerConfig,
   resolveE2eAutoFixTargetRepos,
   resolveE2eAutoFixWorkerConfig,
+  resolveThrashDetectorWorkerConfig,
   DEFAULT_PR_MAINTENANCE_TARGET_REPO,
   DEFAULT_E2E_AUTOFIX_TARGET_REPO,
   resolveSpendCircuitBreakerWorkerConfig,
@@ -1013,6 +1014,50 @@ describe('catstackDeploy config', () => {
     expect(() => validateInvokerConfig({
       catstackDeploy: { intervalMinutes: 1.5 },
     })).toThrow(/catstackDeploy.intervalMinutes must be an integer > 0/);
+  });
+});
+
+describe('thrashDetector config', () => {
+  it('accepts omitted thrashDetector block and resolves defaults', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+    expect(resolveThrashDetectorWorkerConfig({})).toMatchObject({
+      intervalMs: 15 * 60_000,
+      thresholdCount: 3,
+      windowMs: 24 * 60 * 60_000,
+    });
+  });
+
+  it('accepts enabled, intervalMinutes, thresholdCount, and windowHours', () => {
+    const config = validateInvokerConfig({
+      thrashDetector: {
+        enabled: false,
+        intervalMinutes: 5,
+        thresholdCount: 4,
+        windowHours: 12,
+      },
+    });
+
+    expect(config.thrashDetector).toEqual({
+      enabled: false,
+      intervalMinutes: 5,
+      thresholdCount: 4,
+      windowHours: 12,
+    });
+    expect(resolveThrashDetectorWorkerConfig(config)).toMatchObject({
+      enabled: false,
+      intervalMs: 5 * 60_000,
+      thresholdCount: 4,
+      windowMs: 12 * 60 * 60_000,
+    });
+  });
+
+  it.each([
+    ['enabled', { enabled: 'yes' }, /thrashDetector.enabled must be a boolean/],
+    ['intervalMinutes', { intervalMinutes: 0 }, /thrashDetector.intervalMinutes must be an integer > 0/],
+    ['thresholdCount', { thresholdCount: 1.5 }, /thrashDetector.thresholdCount must be an integer > 0/],
+    ['windowHours', { windowHours: -1 }, /thrashDetector.windowHours must be an integer > 0/],
+  ])('rejects invalid %s', (_field, thrashDetector, message) => {
+    expect(() => validateInvokerConfig({ thrashDetector })).toThrow(message);
   });
 });
 

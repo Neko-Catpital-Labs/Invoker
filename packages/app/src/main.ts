@@ -131,8 +131,10 @@ import {
   resolveE2eAutoFixWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
   resolveSpendCircuitBreakerWorkerConfig,
+  resolveThrashDetectorWorkerConfig,
   type InvokerConfig,
 } from './config.js';
+import { classifyAutoFixRecoveryPhase } from './recovery-worker-observability.js';
 import {
   resolveAutoApproveAIFixes,
   resolveAutoFixRetries,
@@ -485,6 +487,10 @@ function buildRegisteredOwnerWorkerDeps(
         name: target.name,
         connection: target.connection,
       })),
+    },
+    thrashDetector: {
+      ...resolveThrashDetectorWorkerConfig(invokerConfig),
+      classifyAutoFixRecoveryPhase,
     },
     selfDeploy: {
       intervalMs: (invokerConfig.selfDeploy?.intervalMinutes ?? 30) * 60_000,

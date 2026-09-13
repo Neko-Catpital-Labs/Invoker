@@ -10,6 +10,7 @@ import {
   type MergifyQueueResearchConfig,
   type MergifyQueueResearchSource,
   type SelfDeployConfig,
+  type ThrashDetectorConfig,
   DEFAULT_CROSS_REPO_RESEARCH_LOOKBACK_DAYS,
   DEFAULT_MERGIFY_QUEUE_RESEARCH_LOOKBACK_DAYS,
 } from './config.js';
@@ -258,6 +259,33 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validatePositiveInteger(value: unknown, path: string): void {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${path} must be an integer > 0`);
+  }
+}
+
+function validateThrashDetectorConfig(config: InvokerConfig): void {
+  const thrashDetector = config.thrashDetector;
+  if (thrashDetector === undefined) return;
+  if (typeof thrashDetector !== 'object' || thrashDetector === null || Array.isArray(thrashDetector)) {
+    throw new Error('thrashDetector must be an object');
+  }
+  const typed = thrashDetector as ThrashDetectorConfig;
+  if (typed.enabled !== undefined && typeof typed.enabled !== 'boolean') {
+    throw new Error('thrashDetector.enabled must be a boolean when set');
+  }
+  if (typed.intervalMinutes !== undefined) {
+    validatePositiveInteger(typed.intervalMinutes, 'thrashDetector.intervalMinutes');
+  }
+  if (typed.thresholdCount !== undefined) {
+    validatePositiveInteger(typed.thresholdCount, 'thrashDetector.thresholdCount');
+  }
+  if (typed.windowHours !== undefined) {
+    validatePositiveInteger(typed.windowHours, 'thrashDetector.windowHours');
+  }
+}
+
 function validateSelfDeployConfig(config: InvokerConfig): void {
   const selfDeploy = config.selfDeploy;
   if (selfDeploy === undefined) return;
@@ -404,6 +432,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateThrashDetectorConfig(config);
   validateSelfDeployConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);

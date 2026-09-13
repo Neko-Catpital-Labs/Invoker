@@ -4,6 +4,7 @@ import {
   PR_ORPHAN_REPAIR_WORKER_KIND,
   WORKER_SESSION_MINE_WORKER_KIND,
   SELF_DEPLOY_WORKER_KIND,
+  THRASH_DETECTOR_WORKER_KIND,
   createWorkerRegistry,
   registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
@@ -29,6 +30,11 @@ const noopSubmitter: WorkerRuntimeDependencies['submitter'] = {
   submit: () => 0,
 };
 
+const defaultPrMaintenanceEnv = {
+  INVOKER_GITHUB_TARGET_REPOS: 'Neko-Catpital-Labs/Invoker',
+  INVOKER_GITHUB_TARGET_REPO: 'Neko-Catpital-Labs/Invoker',
+};
+
 /** Mirror of the owner-startup PR-maintenance dependency construction. */
 function buildOwnerWorkerDeps(config: InvokerConfig): WorkerRuntimeDependencies {
   return {
@@ -49,7 +55,7 @@ describe('resolvePrMaintenanceWorkerConfig', () => {
       resolvePrMaintenanceWorkerConfig({
         prMaintenance: { repoRoot: '/srv/invoker', intervalMs: 60000 },
       }),
-    ).toEqual({ repoRoot: '/srv/invoker', intervalMs: 60000 });
+    ).toEqual({ repoRoot: '/srv/invoker', intervalMs: 60000, env: defaultPrMaintenanceEnv });
   });
 
   it('builds the launch config from present fields', () => {
@@ -64,7 +70,7 @@ describe('resolvePrMaintenanceWorkerConfig', () => {
     });
     expect(resolved).toEqual({
       repoRoot: '/srv/invoker',
-      env: { INVOKER_PR_CRON_LOCK: '/tmp/pr.lock' },
+      env: { ...defaultPrMaintenanceEnv, INVOKER_PR_CRON_LOCK: '/tmp/pr.lock' },
       intervalMs: 120000,
       lockPath: '/tmp/pr.lock',
       shell: '/bin/bash',
@@ -72,8 +78,8 @@ describe('resolvePrMaintenanceWorkerConfig', () => {
     expect(resolved).not.toHaveProperty('enabled');
   });
 
-  it('returns an empty launch object when the block has no launch fields', () => {
-    expect(resolvePrMaintenanceWorkerConfig({ prMaintenance: {} })).toEqual({});
+  it('returns the default target-repo env when the block has no launch fields', () => {
+    expect(resolvePrMaintenanceWorkerConfig({ prMaintenance: {} })).toEqual({ env: defaultPrMaintenanceEnv });
   });
 });
 
@@ -86,7 +92,7 @@ describe('registered owner PR-maintenance worker dependencies', () => {
     const deps = buildOwnerWorkerDeps({
       prMaintenance: { intervalMs: 90000, shell: '/bin/bash' },
     });
-    expect(deps.prMaintenance).toEqual({ intervalMs: 90000, shell: '/bin/bash' });
+    expect(deps.prMaintenance).toEqual({ intervalMs: 90000, shell: '/bin/bash', env: defaultPrMaintenanceEnv });
   });
 
   it('builds the surviving PR-maintenance workers from the owner deps without starting them', () => {
@@ -140,5 +146,29 @@ describe('registered self-deploy worker', () => {
     expect(runtime.isRunning()).toBe(false);
     expect([...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS]).not.toContain(SELF_DEPLOY_WORKER_KIND);
     expect(BUILT_IN_WORKER_KINDS.has(SELF_DEPLOY_WORKER_KIND)).toBe(true);
+  });
+});
+
+describe('registered thrash-detector worker', () => {
+  it('registers the off-by-default audit detector and builds a stopped runtime', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+    const entry = registry.get(THRASH_DETECTOR_WORKER_KIND);
+    expect(entry).toBeDefined();
+
+    const runtime = entry!.factory({
+      store: {
+        ...emptyStore,
+        listTaskEvents: () => [],
+        getTaskOutput: () => '',
+        logEvent: () => {},
+      },
+      submitter: noopSubmitter,
+      logger: silentLogger,
+      thrashDetector: { tickOnStart: false },
+    });
+    expect(runtime.identity.kind).toBe(THRASH_DETECTOR_WORKER_KIND);
+    expect(runtime.isRunning()).toBe(false);
+    expect([...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS]).not.toContain(THRASH_DETECTOR_WORKER_KIND);
+    expect(BUILT_IN_WORKER_KINDS.has(THRASH_DETECTOR_WORKER_KIND)).toBe(true);
   });
 });
