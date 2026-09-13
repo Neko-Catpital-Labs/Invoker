@@ -104,6 +104,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   const leg = makeLeg('pr-admin-bypass-land-conflict');
   console.log('\n=== leg 1: conflicted PR (pr-dirty.json) -> pr-admin-bypass-land ===');
   const err = await tickWorker(leg, createPrAdminBypassLandWorker, {
+    INVOKER_GITHUB_TARGET_REPO: 'Neko-Catpital-Labs/Invoker',
+    INVOKER_GITHUB_TARGET_REPOS: 'Neko-Catpital-Labs/Invoker',
     INVOKER_PR_CRON_DRY_RUN: '1',
     FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
   }, 'pr-dirty.json');
@@ -121,6 +123,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   const leg = makeLeg('pr-admin-bypass-land-failed-ci');
   console.log('\n=== leg 2: CI-failed PR (pr-ci-failed.json) -> pr-admin-bypass-land ===');
   const err = await tickWorker(leg, createPrAdminBypassLandWorker, {
+    INVOKER_GITHUB_TARGET_REPO: 'Neko-Catpital-Labs/Invoker',
+    INVOKER_GITHUB_TARGET_REPOS: 'Neko-Catpital-Labs/Invoker',
     INVOKER_PR_CRON_DRY_RUN: '1',
     FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
   }, 'pr-ci-failed.json');
@@ -140,6 +144,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   const leg = makeLeg('pr-admin-bypass-land-landable');
   console.log('\n=== leg 3: dequeued landable stack (stack-landable.json) -> pr-admin-bypass-land ===');
   const err = await tickWorker(leg, createPrAdminBypassLandWorker, {
+    INVOKER_GITHUB_TARGET_REPO: 'Neko-Catpital-Labs/Invoker',
+    INVOKER_GITHUB_TARGET_REPOS: 'Neko-Catpital-Labs/Invoker',
     INVOKER_PR_CRON_DRY_RUN: '1',
     FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
   }, 'stack-landable.json');
@@ -201,6 +207,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
     repoRoot: ROOT,
     env: {
       ...leg.baseEnv,
+      INVOKER_GITHUB_TARGET_REPO: 'Neko-Catpital-Labs/Invoker',
+      INVOKER_GITHUB_TARGET_REPOS: 'Neko-Catpital-Labs/Invoker',
       INVOKER_PR_CRON_DRY_RUN: '1',
       FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
     },
@@ -237,6 +245,7 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   );
   console.log('\n=== leg 5: unmapped broken PR (pr-orphan-broken.json) -> pr-orphan-repair ===');
   const err = await tickWorker(leg, createPrOrphanRepairWorker, {
+    INVOKER_GITHUB_TARGET_REPOS: 'fake/repo',
     INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
     INVOKER_PR_ORPHAN_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
     INVOKER_PR_ORPHAN_PLAN_DIR: join(leg.legDir, 'plans'),
