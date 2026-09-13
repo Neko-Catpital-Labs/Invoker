@@ -5,6 +5,7 @@ import {
   lstatSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   rmSync,
   statSync,
@@ -33,6 +34,8 @@ import {
 export const DELETING_ORPHAN_MIN_AGE_MINUTES = 30;
 
 export const STALE_MERGE_CLONE_MIN_AGE_HOURS = 48;
+
+export const STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS = 7;
 
 export const AUTOMATION_CHECKOUT_DIRS = [
   'mergify-admin-requeue-work',
@@ -611,6 +614,134 @@ export async function reapStaleMergeClones(opts: {
     return { ok: false, removed, reason: `cleanup-error: ${errors.slice(0, 3).join('; ')}` };
   }
   return { ok: true, removed };
+}
+
+export interface StaleDevelopmentHomeReapResult {
+  ok: boolean;
+  removed: string[];
+  unchecked: string[];
+  reason?: string;
+}
+
+function defaultIsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+type NewestMtime = { ok: true; ms: number } | { ok: false; detail: string };
+
+function newestMtimeMs(dir: string): NewestMtime {
+  let newest: number;
+  let names: string[];
+  try {
+    newest = statSync(dir).mtimeMs;
+    names = readdirSync(dir);
+  } catch (err) {
+    return { ok: false, detail: `${dir}: ${errorDetail(err)}` };
+  }
+  for (const name of names) {
+    const child = join(dir, name);
+    try {
+      newest = Math.max(newest, lstatSync(child).mtimeMs);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return { ok: false, detail: `${child}: ${errorDetail(err)}` };
+    }
+  }
+  return { ok: true, ms: newest };
+}
+
+type LockHolder = { state: 'none' } | { state: 'alive'; pid: number; lock: string } | { state: 'unreadable'; detail: string };
+
+function findLockHolder(devHome: string, isProcessAlive: (pid: number) => boolean): LockHolder {
+  let names: string[];
+  try {
+    names = readdirSync(devHome);
+  } catch (err) {
+    return { state: 'unreadable', detail: `${devHome}: ${errorDetail(err)}` };
+  }
+  for (const name of names) {
+    if (!name.endsWith('.lock') || !isDirectory(join(devHome, name))) continue;
+    const pidPath = join(devHome, name, 'pid');
+    if (!existsSync(pidPath)) continue;
+    let raw: string;
+    try {
+      raw = readFileSync(pidPath, 'utf8');
+    } catch (err) {
+      return { state: 'unreadable', detail: `${pidPath}: ${errorDetail(err)}` };
+    }
+    const pid = Number.parseInt(raw.trim(), 10);
+    if (!Number.isNaN(pid) && isProcessAlive(pid)) return { state: 'alive', pid, lock: name };
+  }
+  return { state: 'none' };
+}
+
+export async function reapStaleDevelopmentHomes(opts: {
+  invokerHome: string;
+  logger?: Logger;
+  userHome?: string;
+  nowMs?: number;
+  isProcessAlive?: (pid: number) => boolean;
+}): Promise<StaleDevelopmentHomeReapResult> {
+  const userHome = opts.userHome ?? homedir();
+  const home = expandTildeHome(opts.invokerHome, userHome);
+  if (!isSafeInvokerHome(home, userHome)) return { ok: false, removed: [], unchecked: [], reason: 'path-guard' };
+
+  const devRoot = join(home, 'dev');
+  if (!isDirectory(devRoot)) return { ok: true, removed: [], unchecked: [] };
+  let entries: string[];
+  try {
+    entries = readdirSync(devRoot);
+  } catch (err) {
+    const detail = errorDetail(err);
+    opts.logger?.error?.(`[reaper] could not list ${devRoot}: ${detail}`, { module: 'reaper' });
+    return { ok: false, removed: [], unchecked: [], reason: `cleanup-error: ${detail}` };
+  }
+
+  const nowMs = opts.nowMs ?? Date.now();
+  const minAgeMs = STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS * 24 * 60 * 60 * 1000;
+  const isProcessAlive = opts.isProcessAlive ?? defaultIsProcessAlive;
+  const removed: string[] = [];
+  const unchecked: string[] = [];
+  const errors: string[] = [];
+  for (const name of entries) {
+    const devHome = join(devRoot, name);
+    if (!isDirectory(devHome)) continue;
+    const newest = newestMtimeMs(devHome);
+    if (!newest.ok) {
+      unchecked.push(devHome);
+      opts.logger?.warn?.(`[reaper] kept dev home, age unreadable: ${newest.detail}`, { module: 'reaper' });
+      continue;
+    }
+    if (nowMs - newest.ms < minAgeMs) continue;
+
+    const holder = findLockHolder(devHome, isProcessAlive);
+    if (holder.state === 'unreadable') {
+      unchecked.push(devHome);
+      opts.logger?.warn?.(`[reaper] kept dev home, lock unreadable: ${holder.detail}`, { module: 'reaper' });
+      continue;
+    }
+    if (holder.state === 'alive') {
+      opts.logger?.info?.(`[reaper] kept dev home ${devHome}, ${holder.lock} held by running pid ${holder.pid}`, { module: 'reaper' });
+      continue;
+    }
+    try {
+      await rm(devHome, { recursive: true, force: true });
+      removed.push(devHome);
+      opts.logger?.info?.(`[reaper] removed stale dev home ${devHome}`, { module: 'reaper' });
+    } catch (err) {
+      errors.push(`${devHome}: ${errorDetail(err)}`);
+      opts.logger?.warn?.(`[reaper] failed to remove dev home ${devHome}: ${errorDetail(err)}`, { module: 'reaper' });
+    }
+  }
+  if (errors.length > 0) {
+    return { ok: false, removed, unchecked, reason: `cleanup-error: ${errors.slice(0, 3).join('; ')}` };
+  }
+  return { ok: true, removed, unchecked };
 }
 
 export async function reapStaleInvokerCliTempDirs(opts: {
