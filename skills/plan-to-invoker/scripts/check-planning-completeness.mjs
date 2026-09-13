@@ -11,34 +11,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { importYaml } from './vendor/resolve-yaml.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-async function importYaml(scriptDir) {
-  try {
-    return await import('yaml');
-  } catch {}
-  const candidates = [
-    process.env.INVOKER_REPO_ROOT,
-    resolve(scriptDir, '../../..'),
-  ].filter(Boolean);
-  try {
-    const manifest = join(homedir(), '.invoker', 'bundled-skills.json');
-    if (existsSync(manifest)) {
-      const parsed = JSON.parse(readFileSync(manifest, 'utf8'));
-      if (parsed.sourceRepoRoot) candidates.push(parsed.sourceRepoRoot);
-    }
-  } catch {
-    // ignore
-  }
-  for (const root of candidates) {
-    const repoYamlPath = resolve(root, 'packages/app/node_modules/yaml/dist/index.js');
-    if (existsSync(repoYamlPath)) return import(repoYamlPath);
-  }
-  throw new Error('Unable to resolve yaml runtime for check-planning-completeness.');
-}
 
 const { parse: parseYaml } = await importYaml(__dirname);
 
