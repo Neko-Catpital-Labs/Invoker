@@ -27,6 +27,9 @@ if (!/Bump nightly patch version/.test(decideJob)) {
   if (!/bump-release-version\.mjs --type patch/.test(bumpStep)) {
     fail('the patch-bump step must invoke bump-release-version.mjs --type patch');
   }
+  if (!/git add -A/.test(bumpStep) || !/git commit -m/.test(bumpStep) || !/git push origin HEAD:master/.test(bumpStep)) {
+    fail('the patch-bump step must commit all changed files and push the bumped commit to master');
+  }
   const decideIndex = decideJob.indexOf('Decide daily cut');
   const bumpIndex = decideJob.indexOf('Bump nightly patch version');
   if (decideIndex === -1 || bumpIndex === -1 || bumpIndex < decideIndex) {

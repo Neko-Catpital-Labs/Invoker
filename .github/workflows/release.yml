@@ -16,18 +16,21 @@ env:
 
 jobs:
   guard-version:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           fetch-tags: true
 
       - name: Guard release is exactly a minor bump
         run: |
           CURRENT_REF="${{ github.sha }}"
-          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname --merged "$CURRENT_REF^" | head -1)
+          PREVIOUS_TAG=$(git describe --tags --match 'v*' --abbrev=0 "$CURRENT_REF^" 2>/dev/null || true)
           if [ -z "$PREVIOUS_TAG" ]; then
             echo "No previous v* release tag found; skipping guard for the first release."
             exit 0
