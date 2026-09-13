@@ -4,6 +4,7 @@ import * as childProcess from 'node:child_process';
 import { ConversationRepository, SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 interface MockHandler {
   pattern: string | RegExp;
@@ -130,6 +131,7 @@ describe('Slack plan-intent confirmation repro', () => {
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     await surface.start(async (command) => { commands.push(command); });
   });
@@ -239,6 +241,7 @@ describe('Slack plan-intent confirmation repro', () => {
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     await surface.start(async (command) => { commands.push(command); });
 
