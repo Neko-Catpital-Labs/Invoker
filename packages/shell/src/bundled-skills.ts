@@ -1003,12 +1003,14 @@ export function installBundledSkills(
     throw new Error('Bundled skills are not available in this app build.');
   }
 
+  const previousManifest = readManifest(invokerHomeRoot);
   const bundledSkillNames = listBundledSkillNames(sourceRoot, category);
   for (const skillName of bundledSkillNames) {
     assertSkillSourceValid(path.join(sourceRoot, skillName), skillName);
   }
   const bundledHash = hashDirectory(sourceRoot);
   const installedNames = prefixedSkillNames(bundledSkillNames);
+  const currentBundledSkillNames = new Set(prefixedSkillNames(listBundledSkillNames(sourceRoot, 'all')));
   const targets = resolveManagedTargets();
   const commandTargets = resolveManagedCommandTargets();
   const mcpTargets = resolveManagedMcpTargets(isInstalled);
@@ -1018,6 +1020,11 @@ export function installBundledSkills(
 
   for (const target of targets) {
     mkdirSync(target.path, { recursive: true });
+    const previouslyInstalledNames = previousManifest?.targets?.[target.id]?.installedSkillNames ?? [];
+    const droppedSkillNames = previouslyInstalledNames.filter((name) =>
+      name.startsWith(MANAGED_PREFIX) && !currentBundledSkillNames.has(name),
+    );
+    removeManagedSkillDirs(target.path, droppedSkillNames);
     for (const skillName of bundledSkillNames) {
       const sourceDir = path.join(sourceRoot, skillName);
       const targetDir = path.join(target.path, managedSkillName(skillName));
@@ -1032,8 +1039,14 @@ export function installBundledSkills(
 
   const commandSourceRoot = commandSourceDir(sourceRoot);
   const commandFiles = listCommandNames(sourceRoot);
+  const currentCommandNames = new Set(commandFiles.map(commandDisplayName));
   for (const target of commandTargets) {
     mkdirSync(target.path, { recursive: true });
+    const previouslyInstalledNames = previousManifest?.commandTargets?.[target.id]?.installedCommandNames ?? [];
+    const droppedCommandFiles = previouslyInstalledNames
+      .filter((name) => name.startsWith(MANAGED_PREFIX) && !currentCommandNames.has(name))
+      .map((name) => name.endsWith('.md') ? name : `${name}.md`);
+    removeManagedCommandFiles(target.path, droppedCommandFiles);
     for (const fileName of commandFiles) {
       copyFileSync(path.join(commandSourceRoot, fileName), path.join(target.path, fileName));
     }
