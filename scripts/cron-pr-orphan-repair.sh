@@ -212,6 +212,7 @@ scan_repo() {
       continue
     fi
 
+    attempted=$((attempted + 1))
     if output="$(headless_mutation run "$plan_file" 2>&1)"; then
       ledger_record orphan-submitted "$key" "$fingerprint"
       submitted=$((submitted + 1))
@@ -226,6 +227,7 @@ scan_repo() {
 }
 
 submitted=0
+attempted=0
 IFS=',' read -r -a target_repos <<<"${INVOKER_GITHUB_TARGET_REPOS:-$TARGET_REPO}"
 for repo in "${target_repos[@]}"; do
   repo="${repo//[[:space:]]/}"
@@ -234,3 +236,7 @@ for repo in "${target_repos[@]}"; do
 done
 
 log_line "orphan-repair scan complete; submitted $submitted repair task(s)"
+if [ "$attempted" -gt 0 ] && [ "$submitted" -eq 0 ]; then
+  log_line "orphan-repair: all $attempted submit attempt(s) failed"
+  exit 1
+fi
