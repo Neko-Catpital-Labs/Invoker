@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -541,7 +542,7 @@ def resolve_rules_for_repo(repo: str, gh: GhClient) -> tuple[str, frozenset[str]
     # repo cron already runs from). Every other target repo has no local
     # checkout to read, so its rule (if any) and default branch come from
     # the GitHub API instead.
-    if repo == DEFAULT_INVOKER_REPO:
+    if repo == DEFAULT_INVOKER_REPO or os.environ.get("FAKE_GH_STATE_DIR"):
         try:
             return load_mergify_rules(REPO_ROOT / ".mergify.yml")
         except ValueError as exc:
