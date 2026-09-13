@@ -13,11 +13,12 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, openSync } from 'node:fs';
-import { delimiter } from 'node:path';
+import { existsSync, mkdirSync, openSync, writeFileSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
 import {
   resolveHeadlessOwnerLaunchSpec,
+  resolveProductionOwnerServiceMarkerPath,
   type HeadlessOwnerLaunchSpec,
 } from '@invoker/contracts';
 
@@ -75,6 +76,15 @@ export function buildOwnerSpawnEnv(
   return env;
 }
 
+export function writeProductionOwnerServiceMarkerFile(
+  markerPath: string = resolveProductionOwnerServiceMarkerPath(),
+  makeDirectory: (path: string, options: { recursive: boolean }) => unknown = mkdirSync,
+  writeFile: (path: string, data: string) => void = writeFileSync,
+): void {
+  makeDirectory(join(markerPath, '..'), { recursive: true });
+  writeFile(markerPath, new Date().toISOString());
+}
+
 export function createInvokerLauncher(options: InvokerLauncherOptions): InvokerLauncher {
   let child: ChildProcess | undefined;
 
@@ -87,6 +97,12 @@ export function createInvokerLauncher(options: InvokerLauncherOptions): InvokerL
         } catch {
           /* already gone */
         }
+      }
+
+      try {
+        writeProductionOwnerServiceMarkerFile();
+      } catch (error) {
+        options.log('warn', `failed to write production owner service marker: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       const env = buildOwnerSpawnEnv(process.env);
