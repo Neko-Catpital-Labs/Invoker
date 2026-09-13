@@ -45,6 +45,12 @@ describe('failed task cascade', () => {
     expect(orchestrator.getTask(b.id)!.execution.blockedBy).toContain('task "a" failed');
     expect(orchestrator.getTask(c.id)!.execution.blockedBy).toContain('task "a" failed');
     expect(orchestrator.getTask(d.id)!.status).not.toBe('skipped');
+    expect(orchestrator.getTask(d.id)!.execution.blockedBy).toBeUndefined();
+    const skippedEventTaskIds = persistence.events
+      .filter((event) => event.eventType === 'task.skipped')
+      .map((event) => event.taskId);
+    expect(skippedEventTaskIds).toEqual(expect.arrayContaining([b.id, c.id]));
+    expect(skippedEventTaskIds).not.toContain(d.id);
     expect([b.id, c.id].map((id) => orchestrator.getTask(id)!.status).filter((status) =>
       status === 'running' || status === 'queued',
     )).toEqual([]);
