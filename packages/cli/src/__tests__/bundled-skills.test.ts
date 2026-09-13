@@ -611,6 +611,74 @@ describe('bundled-skills', () => {
     }
   });
 
+  it('records yamlModuleRoot for a packaged install, pointing at a directory that holds node_modules/yaml', () => {
+    const packageRoot = makeTempRoot('invoker-bundled-package-');
+    const resourcesRoot = join(packageRoot, 'vendor', 'Invoker.app', 'Contents', 'Resources');
+    mkdirSync(resourcesRoot, { recursive: true });
+    mkdirSync(join(packageRoot, 'node_modules', 'yaml', 'dist'), { recursive: true });
+    writeFileSync(join(packageRoot, 'node_modules', 'yaml', 'dist', 'index.js'), 'export const parse = () => {};');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const codexHome = makeTempRoot('invoker-codex-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = codexHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      writePlanToInvokerCommands(resourcesRoot);
+
+      installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+        isInstalled: allHarnessesInstalled,
+      });
+
+      const manifest = JSON.parse(readFileSync(join(invokerHomeRoot, 'bundled-skills.json'), 'utf-8'));
+      expect(manifest.sourceRepoRoot).toBeUndefined();
+      expect(manifest.yamlModuleRoot).toBe(packageRoot);
+      expect(existsSync(join(manifest.yamlModuleRoot, 'node_modules', 'yaml', 'dist', 'index.js'))).toBe(true);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('omits yamlModuleRoot when no reachable node_modules/yaml exists', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const codexHome = makeTempRoot('invoker-codex-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = codexHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      writePlanToInvokerCommands(resourcesRoot);
+
+      installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+        isInstalled: allHarnessesInstalled,
+      });
+
+      const manifest = JSON.parse(readFileSync(join(invokerHomeRoot, 'bundled-skills.json'), 'utf-8'));
+      expect(manifest.yamlModuleRoot).toBeUndefined();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
   it('omits sourceRepoRoot for packaged Electron installs, whose resources dir is not a real Invoker checkout', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
