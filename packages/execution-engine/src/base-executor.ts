@@ -21,6 +21,7 @@ const DEFAULT_MAX_BUFFER_BYTES = 5 * 1024 * 1024; // 5MB
 const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
 const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
 const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
+const PROMPT_PATH_RE = /\b(?:packages|apps|src|scripts|tools|\.github)\/[A-Za-z0-9._~:@%+=,/-]+/g;
 
 /**
  * Canonicalizes a repoUrl for `repoProvisionCommands` lookups so
@@ -112,6 +113,52 @@ export interface SemanticFailure {
   code: string;
   message: string;
   syntheticExitCode?: number;
+}
+
+function uniqueInOrder(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function extractPromptPaths(prompt: string): string[] {
+  return uniqueInOrder(
+    Array.from(prompt.matchAll(PROMPT_PATH_RE), match => match[0].replace(/[),.;:]+$/g, '')),
+  );
+}
+
+function inferOwningPackage(paths: string[]): string {
+  const packageRoots = uniqueInOrder(
+    paths
+      .map(path => {
+        const match = /^packages\/[^/\s]+/.exec(path);
+        return match?.[0];
+      })
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (packageRoots.length === 1) return packageRoots[0];
+  if (packageRoots.length > 1) return packageRoots.join(', ');
+  return 'infer from the task prompt before editing';
+}
+
+function buildWorkerOrientationPack(request: WorkRequest): string | undefined {
+  if (request.actionType !== 'ai_task') return undefined;
+  const prompt = request.inputs.prompt?.trim();
+  if (!prompt) return undefined;
+  const allowedFiles = extractPromptPaths(prompt);
+  if (allowedFiles.length === 0) return undefined;
+  return [
+    'Worker orientation:',
+    `Owning package: ${inferOwningPackage(allowedFiles)}`,
+    `Allowed files: ${allowedFiles.join(', ')}`,
+    'Do not start with an unscoped repository walk.',
+    'Start from the owning package and named files; expand scope only when the evidence points there.',
+  ].join('\n');
 }
 
 const TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS = [
@@ -1391,7 +1438,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * Build the full prompt by prepending upstream context from completed dependencies.
    */
   protected buildFullPrompt(request: WorkRequest): string {
-    let fullPrompt = request.inputs.prompt ?? '';
+    const promptParts = [
+      buildWorkerOrientationPack(request),
+      request.inputs.prompt ?? '',
+    ].filter((part): part is string => Boolean(part));
+    let fullPrompt = promptParts.join('\n\n');
     if (request.inputs.upstreamContext?.length) {
       const contextLines = request.inputs.upstreamContext.map(ctx => {
         let line = `[Upstream task: ${ctx.taskId}]\nDescription: ${ctx.description}\nSummary: ${ctx.summary ?? 'N/A'}`;
