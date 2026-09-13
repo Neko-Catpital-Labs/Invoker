@@ -200,7 +200,7 @@ describe('invoker-cli query respects an explicit db-dir location', () => {
     const bus = new LocalBus();
     const output = captureProcessOutput();
 
-    const code = await main(['query', 'workflows', '--output', 'json'], { createMessageBus: () => bus });
+    const code = await main(['query', 'workflows', '--output', 'json', '--standalone'], { createMessageBus: () => bus });
     output.restore();
 
     expect(code).toBe(0);
