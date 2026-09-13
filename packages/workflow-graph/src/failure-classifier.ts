@@ -1,4 +1,4 @@
-import type { FailureClass, SshInfraFailureClass } from './types.js';
+import type { AgentFailureClass, FailureClass, SshInfraFailureClass } from './types.js';
 
 /**
  * Single source of truth for categorizing task failures from their error text.
@@ -37,6 +37,16 @@ const AGENT_QUOTA_REFUSAL = new RegExp([
 ].join('|'), 'i');
 
 export class FailureClassifier {
+  static classifyAgentQuotaRefusal(agentOutput: string | undefined): AgentFailureClass | undefined {
+    if (typeof agentOutput !== 'string') return undefined;
+    return agentOutput
+      .split('\n')
+      .filter((line) => !CI_CHECK_TABLE_ROW.test(line))
+      .some((line) => AGENT_QUOTA_REFUSAL.test(line))
+      ? 'agent-usage-limit'
+      : undefined;
+  }
+
   /**
    * Map a failed task's `execution.error` to a persisted infra failure class,
    * or `undefined` when the text does not match a known machine-owned bucket.
