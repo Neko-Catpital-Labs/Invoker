@@ -387,6 +387,18 @@ async function runPrMaintenanceEntrypoint(
       lockPath,
       reason: lock.reason ?? 'lock-held',
     });
+    recordPrMaintenanceRun(
+      options,
+      `${options.entrypoint.kind}:${repoRoot}:lock-held`,
+      repoRoot,
+      'skipped',
+      'Shared PR maintenance lock held; tick not run',
+      {
+        reason: lock.reason ?? 'lock-held',
+        lockPath,
+      },
+      true,
+    );
     return;
   }
 
@@ -562,6 +574,7 @@ function recordPrMaintenanceRun(
   status: WorkerActionStatus,
   summary: string,
   payload?: Record<string, unknown>,
+  incrementAttempt?: boolean,
 ): void {
   if (!options.store) return;
   recordWorkerDecisionRow(options.store, {
@@ -572,7 +585,7 @@ function recordPrMaintenanceRun(
     subjectId: repoRoot,
     status,
     summary,
-    incrementAttempt: status === 'running',
+    incrementAttempt: incrementAttempt ?? status === 'running',
     ...(payload ? { payload } : {}),
   });
 }
