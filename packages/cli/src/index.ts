@@ -1,14 +1,16 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, resolve, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+  listHeadlessSetSubcommandsForScope,
   readInvokerConfigFile,
   resolveHeadlessOwnerLaunchSpec,
   resolveInvokerHomeRoot,
   resolveRepoRoot,
+  validateTaskFilter,
   updateInvokerConfigFile,
   type HeadlessOwnerLaunchSpec,
   type Logger,
@@ -35,11 +37,13 @@ import {
 } from '@invoker/execution-engine';
 import { type MessageBus } from '@invoker/transport';
 import {
+  ALREADY_TERMINAL_TASK_STATUSES,
   Orchestrator,
   parsePlanFile,
   type OrchestratorMessageBus,
   type PlanDefinition,
   type TaskState,
+  type TaskStatus,
 } from '@invoker/workflow-core';
 import { logCaughtException } from './logging.js';
 import {
@@ -49,16 +53,34 @@ import {
   withTimeout,
   type LiveOwnerInfo,
 } from './live-owner-bus.js';
-import { runMcpServer } from './mcp-server.js';
-import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
 import {
+  assertInvokerWakeLineWithinBudget,
+  formatInvokerWakeLine,
+} from './invoker-wake.js';
+import { runMcpServer } from './mcp-server.js';
+import {
+  normalizeTaskSnapshots,
+  waitForWorkflowTasks,
+} from './mcp-workflow-status.js';
+import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
+import { runInstall } from './quick-install.js';
+import {
+  applyDesiredStateWorkerToggle,
   applyWorkerToggle,
   findWorkerToggle,
+  isDesiredStateWorkerToggle,
+  isPolicyWorkerToggle,
   ONBOARDING_WORKER_TOGGLES,
+  WORKER_TOGGLES,
+  openWorkerDesiredStateStore,
+  readDesiredStateWorkerToggleValue,
   readWorkerToggleValue,
+  resolveCliInstanceProfile,
 } from './worker-toggles.js';
+import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
+import { runSpendGateCommand } from './spend-gate-command.js';
 
-const VERSION = '0.0.12';
+const VERSION = '0.1.4';
 
 type CliOptions = {
   dbDir?: string;
@@ -134,13 +156,14 @@ type CliRuntimeConfig = {
   externalWorkers?: ExternalWorkerConfig[];
 };
 
-type QueryResource = 'workflows' | 'tasks';
+type QueryResource = 'workflows' | 'tasks' | 'capacity';
 type QueryOutput = 'text' | 'json';
 
 type QueryOptions = {
   resource: QueryResource;
   workflowId?: string;
   status?: string;
+  filter?: string;
   output: QueryOutput;
   forwardedFlags: string[];
 };
@@ -155,6 +178,33 @@ type RetryTaskRow = {
   id: string;
   status?: string;
 };
+
+type SetOptions = {
+  field: string;
+  taskId: string;
+  values: string[];
+  force: boolean;
+};
+
+type ExecutorRouting = {
+  runnerKind?: string;
+  poolId?: string;
+  poolMemberId?: string;
+};
+
+type SetTargetTask = {
+  id: string;
+  status: string;
+  isMergeNode: boolean;
+  routing: ExecutorRouting;
+};
+
+export const CLI_SET_FIELDS: readonly string[] = listHeadlessSetSubcommandsForScope('task');
+
+const LAUNCHED_TASK_STATUSES = new Set<string>(['running', 'fixing_with_ai']);
+const RUNNER_KINDS_REQUIRING_POOL = new Set<string>(['worktree', 'ssh']);
+const RUNNER_KINDS_FORBIDDING_POOL = new Set<string>(['docker', 'merge', 'scratch']);
+const ROUTING_CONFIG_FIELD_PATH = /^(?:raw\.)?config\.(runnerKind|poolId|poolMemberId)$/;
 
 const silentLogger: Logger = {
   debug() {},
@@ -174,34 +224,48 @@ function usage(): string {
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli query workflows [--status <status>] [--output text|json]',
     '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
+    '  invoker-cli query capacity [--output text|json]',
+    '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
     '  invoker-cli retry-task <taskId>',
     '  invoker-cli retry <workflowId>',
     '  invoker-cli resume <workflowId>',
     '  invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]',
+    '  invoker-cli set <field> <taskId> <value...> [--force] [-- <value...>]',
+    '  invoker-cli delete <workflowId>',
     '  invoker-cli delete-all',
     '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli install [--demo]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli worker toggles [--enable <id>|--disable <id> ...]',
+    '  invoker-cli run-worker <kind> -- <args...>',
+    '  invoker-cli spend-gate [status|reset]',
+    '  invoker-cli auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
     '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
+    '  query capacity  Show live pool/member slot usage, queue depth by workflow, and the oldest-waiting task. Requires a live owner.',
+    '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
     '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
     '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
-    '  delete-all      Ask a live Invoker owner to delete all workflows, after the production DB guard passes.',
+    `  set <field> <taskId> <value...>  Edit one task field through a live owner. Fields: ${CLI_SET_FIELDS.join(', ')}. Refuses terminal tasks, running tasks without --force, and pool or executor changes the task's runner kind cannot take.`,
+    '  delete-all      Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
+    '  install         Quick-install: global cli+ui, doctor --fix, skills+MCP, default workers. Skips Slack/machines.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
-    '  worker toggles      Show or set the on/off state of optional owner workers (PR maintenance, e2e auto-fix, auto-approve, disk-headroom cleanup).',
+    '  worker toggles      Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, worker-session-mine, codex-spend-clamp, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
+    '  spend-gate      Show or clear the Codex daily-spend shutoff. While tripped, every Codex request fails; `reset` reopens it after you review the sessions.',
+    '  auto-approve-authors  Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
     '',
     'Options:',
     '  --planner-url <url>   Planner service URL for `setup planner`.',
@@ -216,8 +280,12 @@ function usage(): string {
     '  --json           Emit only a machine-readable result summary on stdout.',
     '  --workflow <id>  Restrict `query tasks` to one workflow.',
     '  --status <status>  Restrict `query workflows` or `query tasks` to one status.',
+    '  --max-wait-ms <ms>  Maximum park time for `wait`. Defaults to 86400000 (24h).',
+    '  --poll-interval-ms <ms>  Query interval for `wait`. Defaults to 5000.',
     '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
     '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
+    '  --force         Let `set` edit a running task; the owner cancels the launched attempt first.',
+    '  --              End `set` options; later arguments are passed as values even if they start with --.',
     '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
     '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
     '  --fix            Best-effort install of missing doctor tools.',
@@ -268,8 +336,8 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
 
 function parseQueryArgs(argv: string[]): QueryOptions {
   const resource = argv[0];
-  if (resource !== 'workflows' && resource !== 'tasks') {
-    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks>');
+  if (resource !== 'workflows' && resource !== 'tasks' && resource !== 'capacity') {
+    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks|capacity>');
   }
 
   const options: QueryOptions = {
@@ -290,6 +358,12 @@ function parseQueryArgs(argv: string[]): QueryOptions {
       const value = argv[++i];
       if (!value) throw new Error('Missing value for --status');
       options.status = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--filter') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --filter');
+      if (resource !== 'tasks') throw new Error('--filter is only supported for `query tasks`');
+      options.filter = value;
       options.forwardedFlags.push(arg, value);
     } else if (arg === '--output') {
       const value = argv[++i];
@@ -375,50 +449,7 @@ async function queryLiveOwner(
 }
 
 function resolveQueryDbDir(): string {
-  return resolve(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
-}
-
-function expandHomePath(raw: string): string {
-  if (raw === '~') return homedir();
-  if (raw.startsWith('~/')) return join(homedir(), raw.slice(2));
-  return raw;
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function normalizeDeleteAllGuardPath(raw: string): string {
-  let expanded = expandHomePath(raw);
-  expanded = expanded.endsWith('/') ? expanded.slice(0, -1) : expanded;
-  if (expanded.length === 0) expanded = '/';
-
-  if (isDirectory(expanded)) {
-    return realpathSync(expanded);
-  }
-
-  const parent = dirname(expanded);
-  if (isDirectory(parent)) {
-    return join(realpathSync(parent), basename(expanded));
-  }
-
-  return expanded;
-}
-
-function checkDeleteAllProductionGuard(): number | undefined {
-  const dbRoot = normalizeDeleteAllGuardPath(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
-  const prodRoot = normalizeDeleteAllGuardPath(join(homedir(), '.invoker'));
-  if (process.env.INVOKER_ALLOW_PRODUCTION_DELETE_ALL !== '1' && dbRoot === prodRoot) {
-    process.stderr.write(`ERROR: Refusing to run 'delete-all' against production DB root: ${dbRoot}\n`);
-    process.stderr.write('Set INVOKER_DB_DIR to an isolated temp directory for tests.\n');
-    process.stderr.write('Override only if intentional: INVOKER_ALLOW_PRODUCTION_DELETE_ALL=1\n');
-    return 64;
-  }
-  return undefined;
+  return resolve(resolveCliInstanceProfile().homeRoot);
 }
 
 function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> {
@@ -498,6 +529,23 @@ function renderWorkflowText(workflows: Workflow[]): string {
   )).join('\n')}\n`;
 }
 
+const TASK_FILTER_PAGE_SIZE = 500;
+
+function queryAllTasksByFilter(
+  persistence: Pick<SQLiteAdapter, 'queryTasksByFilter'>,
+  filter: import('@invoker/contracts').TaskFilterNode,
+): TaskState[] {
+  const all: TaskState[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = persistence.queryTasksByFilter(filter, { limit: TASK_FILTER_PAGE_SIZE, offset });
+    all.push(...page);
+    if (page.length < TASK_FILTER_PAGE_SIZE) break;
+    offset += TASK_FILTER_PAGE_SIZE;
+  }
+  return all;
+}
+
 function renderTaskText(tasks: TaskState[]): string {
   if (tasks.length === 0) return 'No tasks found.\n';
   return `${tasks.map((task) => (
@@ -506,6 +554,21 @@ function renderTaskText(tasks: TaskState[]): string {
 }
 
 async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
+  if (options.resource === 'capacity') {
+    throw new Error('query capacity requires a live owner: start the Invoker app or run `invoker-cli owner serve`.');
+  }
+  let parsedFilter: import('@invoker/contracts').TaskFilterNode | undefined;
+  if (options.filter !== undefined) {
+    let rawFilter: unknown;
+    try {
+      rawFilter = JSON.parse(options.filter);
+    } catch (error) {
+      throw new Error(`Invalid --filter JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const validation = validateTaskFilter(rawFilter);
+    if (!validation.valid) throw new Error(validation.error);
+    parsedFilter = rawFilter as import('@invoker/contracts').TaskFilterNode;
+  }
   const dbDir = resolveQueryDbDir();
   const dbPath = join(dbDir, 'invoker.db');
   if (!existsSync(dbPath)) {
@@ -529,6 +592,9 @@ async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
     }
 
     let tasks = snapshot.tasks;
+    if (parsedFilter) {
+      tasks = queryAllTasksByFilter(persistence, parsedFilter);
+    }
     if (options.workflowId) {
       tasks = tasks.filter((task) => task.config.workflowId === options.workflowId);
     }
@@ -561,6 +627,89 @@ async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
 
   process.stdout.write(await queryStandaloneDatabase(options));
   return 0;
+}
+
+type WaitOptions = {
+  workflowId: string;
+  maxWaitMs: number;
+  pollIntervalMs: number;
+};
+
+const DEFAULT_WAIT_MAX_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_WAIT_POLL_MS = 5_000;
+
+function parsePositiveIntFlag(flag: string, value: string | undefined): number {
+  if (!value) throw new Error(`Missing value for ${flag}`);
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== value) {
+    throw new Error(`Invalid ${flag} value. Expected a positive integer.`);
+  }
+  return parsed;
+}
+
+export function parseWaitArgs(argv: string[]): WaitOptions {
+  let workflowId: string | undefined;
+  let maxWaitMs = DEFAULT_WAIT_MAX_MS;
+  let pollIntervalMs = DEFAULT_WAIT_POLL_MS;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--max-wait-ms') {
+      maxWaitMs = parsePositiveIntFlag('--max-wait-ms', argv[++i]);
+    } else if (arg === '--poll-interval-ms') {
+      pollIntervalMs = parsePositiveIntFlag('--poll-interval-ms', argv[++i]);
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown wait option: ${arg}`);
+    } else if (!workflowId) {
+      workflowId = arg;
+    } else {
+      throw new Error(`Unexpected wait argument: ${arg}`);
+    }
+  }
+
+  if (!workflowId) {
+    throw new Error('Missing workflowId. Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+  }
+
+  return { workflowId, maxWaitMs, pollIntervalMs };
+}
+
+async function runWait(options: WaitOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) {
+      throw new Error(REQUIRED_OWNER_MESSAGE);
+    }
+    const activeBus = bus;
+    const result = await waitForWorkflowTasks({
+      workflowId: options.workflowId,
+      maxWaitMs: options.maxWaitMs,
+      pollIntervalMs: options.pollIntervalMs,
+      loadTasks: async () => {
+        const raw = await withTimeout(
+          activeBus.request('headless.query', {
+            kind: 'cli-query',
+            args: ['query', 'tasks', '--workflow', options.workflowId, '--output', 'json'],
+          }),
+          15_000,
+        );
+        return normalizeTaskSnapshots(JSON.parse(validateLiveQueryResponse(raw)));
+      },
+    });
+    const line = formatInvokerWakeLine(result);
+    assertInvokerWakeLineWithinBudget(line);
+    process.stdout.write(`${line}\n`);
+    return result.settled ? 0 : 1;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
 }
 
 const REQUIRED_OWNER_MESSAGE = 'No running Invoker owner is reachable; start the Invoker app or run `invoker-cli owner serve`.';
@@ -613,7 +762,7 @@ async function sendHeadlessExec(bus: MessageBus, args: string[]): Promise<void> 
   );
 }
 
-async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume', targetId: string | undefined, deps: CliDeps): Promise<number> {
+async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume' | 'delete', targetId: string | undefined, deps: CliDeps): Promise<number> {
   if (!targetId) {
     const target = command === 'retry-task' ? 'taskId' : 'workflowId';
     throw new Error(`Missing ${target}. Usage: invoker-cli ${command} <${target}>`);
@@ -634,15 +783,178 @@ async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume', tar
 }
 
 async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
-  const guardExitCode = checkDeleteAllProductionGuard();
-  if (guardExitCode !== undefined) return guardExitCode;
-
   let bus: MessageBus | undefined;
   try {
     bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
     await requireLiveOwnerForMutation(bus);
     await sendHeadlessExec(bus, ['delete-all']);
     process.stdout.write('delete-all accepted by live owner.\n');
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+function setUsage(field = `<${CLI_SET_FIELDS.join('|')}>`, taskId = '<taskId>'): string {
+  return `Usage: invoker-cli set ${field} ${taskId} <value...> [--force]`;
+}
+
+function parseSetArgs(argv: string[]): SetOptions {
+  const positional: string[] = [];
+  let force = false;
+  let optionsEnded = false;
+  for (const arg of argv) {
+    if (optionsEnded) {
+      positional.push(arg);
+    } else if (arg === '--') {
+      optionsEnded = true;
+    } else if (arg === '--force') {
+      force = true;
+    } else if (arg === '--help') {
+      throw new Error(setUsage());
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown set option: ${arg}. Put -- before values that start with --.`);
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  const [field, taskId, ...values] = positional;
+  if (!field) {
+    throw new Error(`Missing set field. ${setUsage()}`);
+  }
+  if (!CLI_SET_FIELDS.includes(field)) {
+    throw new Error(`Unknown set field: "${field}". Task fields: ${CLI_SET_FIELDS.join(', ')}`);
+  }
+  if (!taskId) {
+    throw new Error(`Missing taskId. ${setUsage(field)}`);
+  }
+  if (values.length === 0) {
+    throw new Error(`Missing value. ${setUsage(field, taskId)}`);
+  }
+  return { field, taskId, values, force };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+function parseMetadataArg(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function parseSetTargetTask(output: string, taskId: string): SetTargetTask {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch (err) {
+    throw new Error(`Could not parse task query JSON for "${taskId}": ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const record = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
+  if (typeof record.id !== 'string' || typeof record.status !== 'string') {
+    throw new Error(`Live owner returned an invalid task for "${taskId}": missing id or status`);
+  }
+  const config = (record.config && typeof record.config === 'object' ? record.config : {}) as Record<string, unknown>;
+  return {
+    id: record.id,
+    status: record.status,
+    isMergeNode: config.isMergeNode === true || config.runnerKind === 'merge',
+    routing: {
+      runnerKind: optionalString(config.runnerKind),
+      poolId: optionalString(config.poolId),
+      poolMemberId: optionalString(config.poolMemberId),
+    },
+  };
+}
+
+async function querySetTargetTask(bus: MessageBus, taskId: string): Promise<SetTargetTask> {
+  const raw = await withTimeout(
+    bus.request('headless.query', {
+      kind: 'cli-query',
+      args: ['query', 'task', taskId, '--output', 'json'],
+    }),
+    15_000,
+  );
+  return parseSetTargetTask(validateLiveQueryResponse(raw), taskId);
+}
+
+function describeExecutorRoutingViolation(routing: ExecutorRouting): string | undefined {
+  const { runnerKind } = routing;
+  if (!runnerKind) return undefined;
+  if (RUNNER_KINDS_REQUIRING_POOL.has(runnerKind) && !routing.poolId) {
+    return `${runnerKind} tasks require a non-empty pool`;
+  }
+  if (RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind) && (routing.poolId || routing.poolMemberId)) {
+    return `${runnerKind} tasks cannot have a pool or pool member`;
+  }
+  return undefined;
+}
+
+function findExecutorRoutingRefusal(options: SetOptions, task: SetTargetTask): string | undefined {
+  const { field, values } = options;
+  const routingKey = field === 'task' ? values[0]?.match(ROUTING_CONFIG_FIELD_PATH)?.[1] : undefined;
+  const changesRouting = field === 'pool' || field === 'executor' || field === 'task-pool' || routingKey !== undefined;
+  if (!changesRouting) {
+    return undefined;
+  }
+  if (task.isMergeNode) {
+    return 'merge nodes run on the merge executor and cannot take a pool, pool member, or executor change';
+  }
+  if (field === 'pool' || field === 'executor') {
+    const [runnerKind, poolMemberId] = values;
+    if (runnerKind === 'merge') {
+      return 'the merge executor is reserved for merge nodes';
+    }
+    if (RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind) && poolMemberId) {
+      return `${runnerKind} tasks cannot take a pool member`;
+    }
+    return undefined;
+  }
+  if (field === 'task-pool') {
+    const { runnerKind } = task.routing;
+    return runnerKind && RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind)
+      ? `${runnerKind} tasks cannot take a pool`
+      : undefined;
+  }
+  if (!routingKey) {
+    return undefined;
+  }
+  const requested = optionalString(parseMetadataArg(values.slice(1).join(' ')));
+  const violation = describeExecutorRoutingViolation({ ...task.routing, [routingKey]: requested });
+  return violation
+    ? `${violation}; use \`invoker-cli set executor\` or \`invoker-cli set task-pool\` to change routing`
+    : undefined;
+}
+
+function findSetRefusal(options: SetOptions, task: SetTargetTask): string | undefined {
+  if (ALREADY_TERMINAL_TASK_STATUSES.includes(task.status as TaskStatus)) {
+    return `it is ${task.status}, a terminal state`;
+  }
+  if (LAUNCHED_TASK_STATUSES.has(task.status) && !options.force) {
+    return `it is ${task.status} and its launched attempt has already resolved its configuration; re-run with --force to cancel that attempt and apply the change`;
+  }
+  return findExecutorRoutingRefusal(options, task);
+}
+
+async function runSetMutation(options: SetOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    const task = await querySetTargetTask(bus, options.taskId);
+    const refusal = findSetRefusal(options, task);
+    if (refusal) {
+      throw new Error(`Cannot set ${options.field} on task "${task.id}": ${refusal}.`);
+    }
+    await sendHeadlessExec(bus, ['set', options.field, options.taskId, ...options.values]);
+    process.stdout.write(`set ${options.field} accepted by live owner.\n`);
     return 0;
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
@@ -959,11 +1271,11 @@ function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
 
 /**
  * `invoker-cli worker toggles [--enable <id>|--disable <id> ...]`
- * With no flags, prints each toggle's current state. Each flag applies
- * immediately, writing to ~/.invoker/config.json (or INVOKER_REPO_CONFIG_PATH).
+ * Start presets write SQLite desired state; policy toggles write config.
+ * When an owner is live, start presets also request live start/stop.
  */
-function runWorkerTogglesCommand(args: string[]): number {
-  const changes: Array<{ spec: ReturnType<typeof findWorkerToggle>; enabled: boolean }> = [];
+async function runWorkerTogglesCommand(args: string[]): Promise<number> {
+  const changes: Array<{ spec: NonNullable<ReturnType<typeof findWorkerToggle>>; enabled: boolean }> = [];
   for (let i = 0; i < args.length; i += 1) {
     const flag = args[i];
     if (flag !== '--enable' && flag !== '--disable') {
@@ -972,7 +1284,7 @@ function runWorkerTogglesCommand(args: string[]): number {
     const id = args[++i];
     const spec = id ? findWorkerToggle(id) : undefined;
     if (!spec) {
-      const knownIds = ONBOARDING_WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
+      const knownIds = WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
       throw new Error(`Unknown worker toggle id: "${id ?? ''}". Known ids: ${knownIds}`);
     }
     changes.push({ spec, enabled: flag === '--enable' });
@@ -980,26 +1292,78 @@ function runWorkerTogglesCommand(args: string[]): number {
 
   if (changes.length > 0) {
     const configPath = defaultConfigPath();
-    updateInvokerConfigFile(configPath, (config) => {
-      for (const { spec, enabled } of changes) {
-        Object.assign(config, applyWorkerToggle(config, spec!, enabled));
+    const policyChanges = changes.filter((change) => isPolicyWorkerToggle(change.spec));
+    const desiredChanges = changes.filter((change) => isDesiredStateWorkerToggle(change.spec));
+
+    if (policyChanges.length > 0) {
+      updateInvokerConfigFile(configPath, (config) => {
+        for (const { spec, enabled } of policyChanges) {
+          Object.assign(config, applyWorkerToggle(config, spec, enabled));
+        }
+      });
+    }
+
+    if (desiredChanges.length > 0) {
+      const store = await openWorkerDesiredStateStore();
+      try {
+        for (const { spec, enabled } of desiredChanges) {
+          applyDesiredStateWorkerToggle(store, spec, enabled);
+        }
+      } finally {
+        store.close?.();
       }
-    });
+      await tryLiveDesiredStateWorkerControl(desiredChanges);
+    }
+
     for (const { spec, enabled } of changes) {
-      process.stdout.write(`${spec!.label}: ${enabled ? 'on' : 'off'}\n`);
+      process.stdout.write(`${spec.label}: ${enabled ? 'on' : 'off'}\n`);
     }
     return 0;
   }
 
   const config = readInvokerConfigFile(defaultConfigPath());
-  process.stdout.write('Worker toggles\n');
-  for (const spec of ONBOARDING_WORKER_TOGGLES) {
-    const value = readWorkerToggleValue(config, spec);
-    const enabled = value ?? spec.defaultEnabled ?? false;
-    const state = enabled ? 'on' : 'off';
-    process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+  const store = await openWorkerDesiredStateStore();
+  try {
+    process.stdout.write('Worker toggles\n');
+    for (const spec of WORKER_TOGGLES) {
+      let value: boolean | undefined;
+      if (isDesiredStateWorkerToggle(spec)) {
+        value = readDesiredStateWorkerToggleValue(store, spec);
+      } else {
+        value = readWorkerToggleValue(config, spec);
+      }
+      const enabled = value ?? spec.defaultEnabled ?? false;
+      const state = enabled ? 'on' : 'off';
+      process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+    }
+  } finally {
+    store.close?.();
   }
   return 0;
+}
+
+async function tryLiveDesiredStateWorkerControl(
+  changes: ReadonlyArray<{ spec: Extract<NonNullable<ReturnType<typeof findWorkerToggle>>, { workerKinds: readonly string[] }>; enabled: boolean }>,
+): Promise<void> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await createDefaultMessageBus();
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) return;
+    for (const { spec, enabled } of changes) {
+      for (const kind of spec.workerKinds) {
+        await bus.request('headless.gui-mutation', {
+          channel: enabled ? 'invoker:start-worker' : 'invoker:stop-worker',
+          args: [kind],
+        });
+      }
+    }
+  } catch {
+    // Desired state is already persisted; live apply is best-effort.
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) disconnect.call(bus);
+  }
 }
 
 function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorkerRuntime {
@@ -1081,6 +1445,53 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
   process.stdout.write(`${workerDisplayName(definition.kind)} worker stopped.\n`);
   return 0;
 }
+
+async function runWorkerOnce(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus, runArgs: string[]): Promise<number> {
+  const homeRoot = resolveInvokerHomeRoot();
+  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+
+  let lock;
+  let persistence;
+  let worker: WorkerRuntime | undefined;
+  let autoFixAttemptLedger;
+  try {
+    lock = acquireWorkerLock({ kind: definition.kind, homeRoot, logger: silentLogger });
+    persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
+      outputDir: join(homeRoot, 'outputs'),
+    });
+    autoFixAttemptLedger = createAutoFixAttemptLedger();
+    worker = definition.factory({
+      logger: silentLogger,
+      messageBus: bus,
+      store: persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, mutationArgs) =>
+          persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+      },
+      autoFix: {
+        defaultAutoFixRetries: autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
+        getAutoFixAgent: () => autoFixAgent,
+      },
+    });
+
+    process.stdout.write(`${workerDisplayName(definition.kind)} worker running.\n`);
+    await worker.run(runArgs);
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      process.stderr.write(`${err.message}\n`);
+      return 1;
+    }
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  } finally {
+    await worker?.stop({ settleTimeoutMs: 5_000 });
+    lock?.release();
+    persistence?.close();
+  }
+  process.stdout.write(`${workerDisplayName(definition.kind)} worker finished.\n`);
+  return 0;
+}
 async function runHeadlessOwnerServe(deps: CliDeps): Promise<number> {
   const repoRoot = resolveRepoRoot(__dirname, { fallback: resolve(__dirname, '../../../..') });
   const launchSpec = (deps.resolveOwnerLaunchSpec ?? resolveHeadlessOwnerLaunchSpec)(repoRoot);
@@ -1110,12 +1521,21 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
     }
+    if (argv[0] === 'install') {
+      return await runInstall(argv.slice(1));
+    }
     if (argv[0] === 'setup') {
       return await runSetup(argv.slice(1));
     }
     if (argv[0] === 'mcp') {
       await (deps.runMcpServer ?? runMcpServer)();
       return 0;
+    }
+    if (argv[0] === 'spend-gate') {
+      return runSpendGateCommand(argv.slice(1));
+    }
+    if (argv[0] === 'auto-approve-authors') {
+      return await runAutoApproveAuthorsCommand(argv.slice(1), { configPath: defaultConfigPath() });
     }
     if (argv[0] === 'owner') {
       if (argv[1] !== 'serve') {
@@ -1126,7 +1546,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       if (subcommand === 'toggles') {
-        return runWorkerTogglesCommand(argv.slice(2));
+        return await runWorkerTogglesCommand(argv.slice(2));
       }
       const registry = registerExternalWorkers(
         registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
@@ -1144,10 +1564,32 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
       return await runWorker(definition, bus);
     }
+    if (argv[0] === 'run-worker') {
+      const kind = argv[1];
+      if (!kind) {
+        throw new Error('Missing worker kind. Usage: invoker-cli run-worker <kind> -- <args...>');
+      }
+      const dashDash = argv.indexOf('--', 2);
+      const workerArgs = dashDash === -1 ? [] : argv.slice(dashDash + 1);
+      const registry = registerExternalWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
+      );
+      const definition = registry.get(kind);
+      if (!definition) {
+        const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+        throw new Error(`Unknown worker kind: "${kind}". Usage: invoker-cli run-worker <${knownKinds}>`);
+      }
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      return await runWorkerOnce(definition, bus, workerArgs);
+    }
     if (argv[0] === 'query') {
       return await runQuery(parseQueryArgs(argv.slice(1)), deps);
     }
-    if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume') {
+    if (argv[0] === 'wait') {
+      return await runWait(parseWaitArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume' || argv[0] === 'delete') {
       if (argv.length > 2) {
         throw new Error(`Unexpected argument: ${argv[2]}`);
       }
@@ -1161,6 +1603,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
         throw new Error(`Unexpected argument: ${argv[1]}`);
       }
       return await runDeleteAllMutation(deps);
+    }
+    if (argv[0] === 'set') {
+      return await runSetMutation(parseSetArgs(argv.slice(1)), deps);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {

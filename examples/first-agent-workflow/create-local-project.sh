@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$ROOT/template"
-TARGET_DIR="${1:-${TMPDIR:-/tmp}/invoker-first-agent-workflow}"
+TMP_ROOT="${TMPDIR:-/tmp}"
+TARGET_DIR="${1:-${TMP_ROOT%/}/invoker-first-agent-workflow}"
 PLAN_DIR="$TARGET_DIR/invoker-plans"
 
 if [ -e "$TARGET_DIR" ] && [ -n "$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then

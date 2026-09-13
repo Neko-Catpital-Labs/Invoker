@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { SlackSurface } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 interface MockHandler {
   pattern: string | RegExp;
@@ -112,6 +113,7 @@ describe('E2E: real SlackSurface + real persistence — multi-channel isolation'
       channelId: 'C-BOT-DEFAULT-HOME',
       cursorCommand: 'cursor',
       conversationRepo: repo,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     await surface.start(async (cmd) => { receivedCommands.push(cmd); });
   });
@@ -196,6 +198,7 @@ describe('E2E: real SlackSurface + real persistence — multi-channel isolation'
       channelId: 'C-BOT-DEFAULT-HOME',
       cursorCommand: 'cursor',
       conversationRepo: repo,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     await restarted.start(async (cmd) => { receivedCommands.push(cmd); });
     await flushAsync(); // let background recoverActiveConversations() settle
@@ -216,6 +219,8 @@ describe('E2E: real SlackSurface + real persistence — multi-channel isolation'
     // channel's turn — i.e. it must never be spawned as part of the CLI
     // invocation's args (which embed the full prompt, history included).
     expect(mockSpawn).toHaveBeenCalledTimes(1);
+    // Proves the default harness preset really spawned a codex session.
+    expect(mockSpawn.mock.calls[0][0]).toBe('codex');
     const spawnedArgs = mockSpawn.mock.calls[0][1] as string[];
     const spawnedCommandText = spawnedArgs.join(' ');
     expect(spawnedCommandText).not.toContain('unrelated pre-fix conversation content');

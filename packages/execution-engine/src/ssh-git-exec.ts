@@ -102,6 +102,14 @@ export interface GitMirrorCloneOpts {
   baseRef: string;
   /** Remote invoker home directory (e.g., ~/.invoker). Default: $HOME/.invoker */
   invokerHome?: string;
+  /**
+   * A specific commit (typically a dependency task's just-pushed result)
+   * that must be resolvable in the shared mirror clone after fetching.
+   * The shared clone is reused across tasks, so a single `fetch --all` can
+   * race a dependency's push; when the commit isn't resolvable yet, the
+   * script retries the fetch with backoff before giving up.
+   */
+  requiredCommit?: string;
 }
 
 /**
@@ -121,12 +129,30 @@ export interface GitMirrorCloneOpts {
  *   __INVOKER_FETCH_FAILED__=1
  *   [WARNING] messages to stderr
  *
+ * When `requiredCommit` is set and isn't resolvable after the initial
+ * fetch, retries fetching with backoff before giving up. Exits 33 (and
+ * prints REQUIRED_COMMIT_UNRESOLVED=<sha> to stderr) if it's still
+ * unresolvable after retries.
+ *
  * Exits 128 if base ref and fallback both missing.
+ *
+ * This shared/reused clone (one per repo hash, fetched once at task start,
+ * never recreated) has repeatedly produced "downstream task can't resolve
+ * a commit" incidents since the design was introduced: 2026-04-07
+ * (4df97a3d0c, fetch failures silently swallowed from day one), 2026-04-08
+ * (ed5f9d0552, made visible via warnings but kept non-blocking), 2026-04-17
+ * (56eb3e872c, a different symptom of the same drifted mirror), 2026-07-30
+ * (#6836, a wrong-ref-selected-for-push variant), 2026-08-15 (this
+ * `requiredCommit` retry, the first fix that actually verifies and retries
+ * instead of trusting or warning). If a new instance of this symptom shows
+ * up, it is very likely the same architectural hazard again -- check here
+ * first before re-deriving the history from `git log`.
  */
 export function buildMirrorCloneScript(opts: GitMirrorCloneOpts): string {
   const repoB64 = base64Encode(opts.repoUrl);
   const branchRepoB64 = base64Encode(opts.branchRepoUrl?.trim() ?? '');
   const baseB64 = base64Encode(opts.baseRef);
+  const requiredCommitB64 = base64Encode(opts.requiredCommit?.trim() ?? '');
   const { repoHash, invokerHome = '$HOME/.invoker' } = opts;
   const homeB64 = base64Encode(invokerHome);
 
@@ -135,6 +161,7 @@ ${buildPortableBase64DecodeFunction()}
 REPO=$(printf '%s' ${shellPosixSingleQuote(repoB64)} | invoker_base64_decode)
 BRANCH_REPO=$(printf '%s' ${shellPosixSingleQuote(branchRepoB64)} | invoker_base64_decode)
 BASE=$(printf '%s' ${shellPosixSingleQuote(baseB64)} | invoker_base64_decode)
+REQUIRED_COMMIT=$(printf '%s' ${shellPosixSingleQuote(requiredCommitB64)} | invoker_base64_decode)
 H="${repoHash}"
 INVOKER_HOME=$(printf '%s' ${shellPosixSingleQuote(homeB64)} | invoker_base64_decode)
 if [[ "$INVOKER_HOME" == '~' ]]; then
@@ -162,6 +189,20 @@ if [ -n "$BRANCH_REPO" ]; then
     echo "BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO" >&2
     exit 32
   fi
+fi
+if [ -n "$REQUIRED_COMMIT" ]; then
+  ATTEMPT=1
+  MAX_ATTEMPTS=4
+  while ! git -C "$CLONE" rev-parse --verify "$REQUIRED_COMMIT^{commit}" >/dev/null 2>&1; do
+    if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+      echo "REQUIRED_COMMIT_UNRESOLVED=$REQUIRED_COMMIT" >&2
+      exit 33
+    fi
+    echo "[WARNING] Required commit $REQUIRED_COMMIT not yet resolvable in $CLONE; retrying fetch (attempt $ATTEMPT/$MAX_ATTEMPTS)" >&2
+    sleep $((ATTEMPT * 2))
+    git -C "$CLONE" fetch --all --prune >/dev/null 2>&1 || true
+    ATTEMPT=$((ATTEMPT + 1))
+  done
 fi
 RESOLVED_BASE="$BASE"
 ORIGIN_HEAD=$(git -C "$CLONE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)

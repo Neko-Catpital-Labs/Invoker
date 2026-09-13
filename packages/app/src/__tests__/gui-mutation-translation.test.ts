@@ -17,15 +17,15 @@ function getTranslatorSource(): string {
 }
 
 function getStandaloneClassifierSource(): string {
-  const start = mainSource.indexOf('const classifyStandaloneHeadlessExecMutation =');
-  const end = mainSource.indexOf('        const standaloneWorkflowIdForTaskArg', start);
+  const start = guiMutationHandlersSource.indexOf('function classifyHeadlessExecMutation');
+  const end = guiMutationHandlersSource.indexOf('  async function runWorkflowMutation', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return guiMutationHandlersSource.slice(start, end);
 }
 
-function getStandaloneGuiMutationSource(): string {
-  const start = mainSource.indexOf('const executeStandaloneGuiMutation = async');
+function getStandaloneCapabilityRegistrySource(): string {
+  const start = mainSource.indexOf('const standaloneOwnerCapabilities = new OwnerCapabilityRegistry()');
   const end = mainSource.indexOf('      // In standalone owner mode, serve delegated requests from peer headless processes.', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -111,22 +111,24 @@ describe('GUI mutation translation', () => {
 
   it('classifies delegated standalone workflow delete and detach as workflow-scoped', () => {
     const classifierSource = getStandaloneClassifierSource();
-    expect(classifierSource).toMatch(
-      /case 'delete':\s*case 'delete-workflow':\s*case 'detach-workflow':\s*return \{ workflowId: arg0 === undefined \? undefined : String\(arg0\), priority: 'high' \};/,
+    expect(classifierSource).toContain("case 'delete':");
+    expect(classifierSource).toContain("case 'delete-workflow':");
+    expect(classifierSource).toContain("case 'detach-workflow':");
+    expect(classifierSource).toContain('workflowId: arg0');
+    expect(classifierSource).toContain("priority: 'high'");
+  });
+
+  it('registers start-ready in the standalone owner capability registry', () => {
+    const standaloneCapabilitySource = getStandaloneCapabilityRegistrySource();
+    expect(standaloneCapabilitySource).toMatch(
+      /registerStandaloneOwnerCapability\('invoker:start-ready',[\s\S]*workflowMutationDispatcher\.get\('invoker:start-ready'\)[\s\S]*return handler\(payload\.args\[0\] as StartReadyRequest \| undefined\);/,
     );
   });
 
-  it('handles start-ready in the standalone owner GUI mutation switch', () => {
-    const standaloneGuiMutationSource = getStandaloneGuiMutationSource();
-    expect(standaloneGuiMutationSource).toMatch(
-      /case 'invoker:start-ready':\s*\{[\s\S]*workflowMutationDispatcher\.get\('invoker:start-ready'\)[\s\S]*return handler\(payload\.args\[0\] as StartReadyRequest \| undefined\);/,
-    );
-  });
-
-  it('handles edit-task-pool in the standalone owner GUI mutation switch', () => {
-    const standaloneGuiMutationSource = getStandaloneGuiMutationSource();
-    expect(standaloneGuiMutationSource).toMatch(
-      /case 'invoker:edit-task-pool':\s*\{[\s\S]*commandService\.editTaskPool\(envelope\)[\s\S]*dispatchStartedTasksWithGlobalTopup\(/,
+  it('registers edit-task-pool in the standalone owner capability registry', () => {
+    const standaloneCapabilitySource = getStandaloneCapabilityRegistrySource();
+    expect(standaloneCapabilitySource).toMatch(
+      /registerStandaloneOwnerCapability\('invoker:edit-task-pool',[\s\S]*commandService\.editTaskPool\(envelope\)[\s\S]*dispatchStartedTasksWithGlobalTopup\(/,
     );
   });
 
@@ -156,4 +158,65 @@ describe('GUI mutation translation', () => {
     expect(retryTaskSource).not.toContain('preemptTaskSubgraph(taskId)');
     expect(retryTaskSource).toContain('commandService.retryTask(envelope)');
   });
+
+  it('gives every production GUI mutation registration a follower translator case', () => {
+    const testOnlyBlock = extractBalancedBlock(
+      guiMutationHandlersSource,
+      "if (process.env.NODE_ENV === 'test')",
+    );
+    const productionHandlersSource = testOnlyBlock
+      ? guiMutationHandlersSource.replace(testOnlyBlock, '')
+      : guiMutationHandlersSource;
+    const registered = new Set([
+      ...channelRegistrations(productionHandlersSource),
+      ...channelRegistrations(mainSource),
+    ]);
+    const routed = new Set([
+      ...casesIn(getTranslatorSource()),
+      ...wrapperChannels(getMainTranslatorWrapperSource()),
+    ]);
+    if (/case SPAWN_REPAIR_WORKFLOW_CHANNEL:/.test(getTranslatorSource())) {
+      routed.add('invoker:spawn-repair-workflow');
+    }
+    const missing = [...registered].filter((channel) => !routed.has(channel)).sort();
+    expect(missing).toEqual([]);
+  });
 });
+
+function extractBalancedBlock(source: string, marker: string): string {
+  const markerIdx = source.indexOf(marker);
+  if (markerIdx < 0) return '';
+  const openIdx = source.indexOf('{', markerIdx);
+  let depth = 0;
+  for (let idx = openIdx; idx < source.length; idx += 1) {
+    if (source[idx] === '{') depth += 1;
+    else if (source[idx] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(openIdx, idx + 1);
+    }
+  }
+  return '';
+}
+
+function channelRegistrations(source: string): string[] {
+  return [
+    ...source.matchAll(/register(?:WorkflowScoped)?GuiMutationHandler\(\s*'([^']+)'/g),
+    ...source.matchAll(/registrars\.registerGuiMutationHandler\(\s*'([^']+)'/g),
+  ].map((match) => match[1]);
+}
+
+function casesIn(block: string): string[] {
+  return [...block.matchAll(/case '([^']+)':/g)].map((match) => match[1]);
+}
+
+function wrapperChannels(block: string): string[] {
+  return [...block.matchAll(/payload\.channel === '([^']+)'/g)].map((match) => match[1]);
+}
+
+function getMainTranslatorWrapperSource(): string {
+  const start = mainSource.indexOf('translateGuiMutationToHeadless: (payload) => {');
+  const end = mainSource.indexOf('ownerCapabilities,', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return mainSource.slice(start, end);
+}

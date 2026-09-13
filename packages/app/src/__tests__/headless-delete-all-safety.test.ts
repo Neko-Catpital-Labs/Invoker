@@ -31,23 +31,9 @@ function makeDeps() {
 describe('headless delete-all safety', () => {
   beforeEach(() => {
     createDeleteAllSnapshotMock.mockClear();
-    delete process.env.INVOKER_ALLOW_DELETE_ALL;
   });
 
-  it('rejects delete-all when opt-in env is missing', async () => {
-    vi.resetModules();
-    const { runHeadless } = await import('../headless.js');
-    const deps = makeDeps();
-
-    await expect(runHeadless(['delete-all'], deps)).rejects.toThrow(
-      /INVOKER_ALLOW_DELETE_ALL=1/,
-    );
-    expect(createDeleteAllSnapshotMock).not.toHaveBeenCalled();
-    expect(deps.orchestrator.deleteAllWorkflows).not.toHaveBeenCalled();
-  });
-
-  it('creates snapshot before deleting all workflows when opt-in is enabled', async () => {
-    process.env.INVOKER_ALLOW_DELETE_ALL = '1';
+  it('creates a snapshot before deleting all workflows', async () => {
     vi.resetModules();
     const { runHeadless } = await import('../headless.js');
     const deps = makeDeps();

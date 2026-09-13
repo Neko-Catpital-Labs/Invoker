@@ -18,6 +18,14 @@ describe('resolveWorkerControlMutation', () => {
     });
   });
 
+  it('maps `worker tick <kind>` to the tick-worker gui mutation', () => {
+    expect(resolveWorkerControlMutation(['worker', 'tick', 'autofix'])).toEqual({
+      action: 'tick',
+      channel: 'invoker:tick-worker',
+      kind: 'autofix',
+    });
+  });
+
   it('returns null for worker read subcommands so they run locally', () => {
     expect(resolveWorkerControlMutation(['worker'])).toBeNull();
     expect(resolveWorkerControlMutation(['worker', 'list'])).toBeNull();

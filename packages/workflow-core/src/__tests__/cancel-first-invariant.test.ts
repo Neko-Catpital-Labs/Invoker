@@ -12,7 +12,7 @@ import {
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '../orchestrator.js';
-import { computeWorkflowRollup, type TaskState, type TaskStateChanges, type Attempt } from '../task-types.js';
+import { applyTaskConfigPatch, computeWorkflowRollup, resolveTaskConfig, type TaskState, type TaskStateChanges, type Attempt } from '../task-types.js';
 
 // ── In-memory fixtures (focused, mirrors orchestrator.test.ts) ──
 
@@ -50,7 +50,10 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return wf ? { repoUrl: wf.repoUrl } : undefined;
   }
   saveTask(workflowId: string, task: TaskState): void {
-    this.tasks.set(task.id, { workflowId, task });
+    this.tasks.set(task.id, {
+      workflowId,
+      task: { ...task, config: resolveTaskConfig(task.config) },
+    });
   }
   getTaskEntry(taskId: string): { workflowId: string; task: TaskState } | undefined {
     return this.tasks.get(taskId);
@@ -62,9 +65,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
       ...entry.task,
       ...(changes.status !== undefined ? { status: changes.status } : {}),
       ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
-      config: { ...entry.task.config, ...changes.config },
+      config: applyTaskConfigPatch(entry.task.config, changes.config),
       execution: { ...entry.task.execution, ...changes.execution },
-    } as TaskState;
+    };
   }
   listWorkflows() { return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status })); }
   loadTasks(workflowId: string): TaskState[] {

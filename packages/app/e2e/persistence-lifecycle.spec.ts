@@ -42,10 +42,7 @@ async function waitForWorkflowCompletion(page: Page) {
   const tasks = await getTasks(page);
   const mergeNode = tasks.find((task: any) => task.config?.isMergeNode);
   expect(mergeNode).toBeTruthy();
-  await expect.poll(async () => {
-    const currentTasks = await getTasks(page);
-    return currentTasks.find((task: any) => task.id === mergeNode.id)?.status;
-  }).toBe('review_ready');
+  await waitForTaskStatus(page, mergeNode.id, 'review_ready');
   await page.evaluate((id) => window.invoker.approve(id), mergeNode.id);
   await expect.poll(async () => {
     const workflows = await page.evaluate(() => window.invoker.listWorkflows());
@@ -58,10 +55,7 @@ async function waitForWorkflowReviewReady(page: Page) {
   const tasks = await getTasks(page);
   const mergeNode = tasks.find((task: any) => task.config?.isMergeNode);
   expect(mergeNode).toBeTruthy();
-  await expect.poll(async () => {
-    const currentTasks = await getTasks(page);
-    return currentTasks.find((task: any) => task.id === mergeNode.id)?.status;
-  }).toBe('review_ready');
+  await waitForTaskStatus(page, mergeNode.id, 'review_ready');
   return mergeNode.id as string;
 }
 

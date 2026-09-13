@@ -37,6 +37,7 @@ function runOrThrow(command, args, options = {}) {
 async function main() {
   const { targetsFile } = parseArgs(process.argv.slice(2));
   const targets = JSON.parse(readFileSync(targetsFile, 'utf8'));
+  const fetchDepth = process.env.FETCH_PR_DIFF_BASE_DEPTH || '1000';
 
   const failures = [];
 
@@ -45,7 +46,7 @@ async function main() {
 
     try {
       runOrThrow('git', [
-        'fetch', '--no-tags', '--depth=1', 'origin',
+        'fetch', '--no-tags', `--depth=${fetchDepth}`, 'origin',
         `+refs/pull/${target.number}/head:refs/remotes/pull/${target.number}/head`,
       ], { stdio: 'inherit' });
       const fetchedHeadSha = runOrThrow('git', ['rev-parse', `refs/remotes/pull/${target.number}/head^{commit}`]).stdout.trim();

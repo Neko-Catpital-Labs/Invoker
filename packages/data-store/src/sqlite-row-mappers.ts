@@ -15,7 +15,7 @@ import type {
   ExternalDependencyChange,
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
-import { normalizeRunnerKind } from '@invoker/workflow-core';
+import { assertResolvedTaskConfig, normalizeRunnerKind } from '@invoker/workflow-core';
 import type { WorkerActionRecord, Workflow } from './adapter.js';
 import type {
   TaskLaunchDispatch,
@@ -47,6 +47,7 @@ export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
     externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
     detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) as DetachedExternalDependency[] : undefined,
     generation: row.generation ?? 0,
+    staged: row.staged === 1,
     deletedAt: row.deleted_at === null || row.deleted_at === undefined ? undefined : Number(row.deleted_at),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -55,39 +56,60 @@ export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
 
 export function mapRowToTask(row: any): TaskState {
   const normalizedStatus = row.status as TaskStatus;
+  const runnerKind = normalizeRunnerKind(row.runner_kind ?? undefined);
+  const baseConfig = {
+    workflowId: row.workflow_id ?? undefined,
+    parentTask: row.parent_task ?? undefined,
+    command: row.command ?? undefined,
+    prompt: row.prompt ?? undefined,
+    ...(row.freshness ? { freshness: JSON.parse(row.freshness) } : {}),
+    externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
+    experimentPrompt: row.experiment_prompt ?? undefined,
+    pivot: row.pivot === 1 ? true : undefined,
+    experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,
+    isReconciliation: row.is_reconciliation === 1 ? true : undefined,
+    requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
+    featureBranch: row.feature_branch ?? undefined,
+    executionModel: row.execution_model ?? undefined,
+    isMergeNode: row.is_merge_node === 1 ? true : undefined,
+    summary: row.summary ?? undefined,
+    problem: row.problem ?? undefined,
+    approach: row.approach ?? undefined,
+    testPlan: row.test_plan ?? undefined,
+    reproCommand: row.repro_command ?? undefined,
+    fixPrompt: row.fix_prompt ?? undefined,
+    fixContext: row.fix_context ?? undefined,
+    executionAgent: row.execution_agent ?? undefined,
+  } as const;
+  let config: unknown;
+  switch (runnerKind) {
+    case 'worktree':
+    case 'ssh':
+      config = {
+        ...baseConfig,
+        runnerKind,
+        poolId: row.pool_id ?? undefined,
+        ...((row.pool_member_id ?? undefined) ? { poolMemberId: row.pool_member_id } : {}),
+      };
+      break;
+    case 'docker':
+      config = { ...baseConfig, runnerKind, dockerImage: row.docker_image ?? undefined };
+      break;
+    case 'merge':
+    case 'scratch':
+      config = { ...baseConfig, runnerKind };
+      break;
+    default:
+      config = { ...baseConfig, runnerKind };
+  }
+  assertResolvedTaskConfig(config);
   return {
     id: row.id,
     description: row.description,
     status: normalizedStatus,
     dependencies: JSON.parse(row.dependencies || '[]'),
     createdAt: new Date(row.created_at),
-    config: {
-      workflowId: row.workflow_id ?? undefined,
-      parentTask: row.parent_task ?? undefined,
-      command: row.command ?? undefined,
-      prompt: row.prompt ?? undefined,
-      externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
-      experimentPrompt: row.experiment_prompt ?? undefined,
-      pivot: row.pivot === 1 ? true : undefined,
-      experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,
-      isReconciliation: row.is_reconciliation === 1 ? true : undefined,
-      requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
-      featureBranch: row.feature_branch ?? undefined,
-      poolId: row.pool_id ?? undefined,
-      runnerKind: normalizeRunnerKind(row.runner_kind ?? undefined),
-      ...((row.pool_member_id ?? undefined) ? { poolMemberId: row.pool_member_id } : {}),
-      dockerImage: row.docker_image ?? undefined,
-      executionModel: row.execution_model ?? undefined,
-      isMergeNode: row.is_merge_node === 1 ? true : undefined,
-      summary: row.summary ?? undefined,
-      problem: row.problem ?? undefined,
-      approach: row.approach ?? undefined,
-      testPlan: row.test_plan ?? undefined,
-      reproCommand: row.repro_command ?? undefined,
-      fixPrompt: row.fix_prompt ?? undefined,
-      fixContext: row.fix_context ?? undefined,
-      executionAgent: row.execution_agent ?? undefined,
-    },
+    config,
     execution: {
       blockedBy: row.blocked_by ?? undefined,
       inputPrompt: row.input_prompt ?? undefined,
@@ -170,9 +192,11 @@ export function mapRowToAttempt(row: any): Attempt {
 }
 
 export function mapRowToTaskLaunchDispatch(row: Record<string, unknown>): TaskLaunchDispatch {
-  const priorityRaw = String(row.priority ?? 'normal');
+  const priorityParsed = Number.parseInt(String(row.priority ?? '2'), 10);
   const priority: TaskLaunchDispatchPriority =
-    priorityRaw === 'high' || priorityRaw === 'low' ? priorityRaw : 'normal';
+    Number.isInteger(priorityParsed) && priorityParsed >= 1 && priorityParsed <= 5
+      ? (priorityParsed as TaskLaunchDispatchPriority)
+      : 2;
   return {
     id: Number(row.id),
     taskId: String(row.task_id),

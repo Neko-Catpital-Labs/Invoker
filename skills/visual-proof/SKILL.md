@@ -1,5 +1,6 @@
 ---
 name: visual-proof
+category: optimization
 description: >
   Capture before/after UI screenshots and video for Invoker plans that modify
   the UI.
@@ -14,6 +15,10 @@ Capture before/after UI screenshots and video for Invoker plans that modify the 
 - Any plan sets `visualProof: true` (i.e. it modifies `packages/ui/`)
 - User asks for visual proof, before/after screenshots, or UI regression screenshots
 - Reviewing a UI change and wanting to see what changed visually
+
+To choose which surface/spec to prove before capture, use `skills/verify/SKILL.md`
+(`node skills/verify/control-invoker.mjs prove <feature>` or `visual-proof …`). This skill
+still owns before/after capture and the Manually inspected gate.
 
 ## Never reuse an unrelated or stale asset as proof
 

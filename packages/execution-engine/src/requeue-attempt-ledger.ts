@@ -34,6 +34,7 @@ export interface RequeueAttemptLedger {
     backoffMs: number,
     nowMs: number,
   ): RequeueDecision;
+  refund(key: RequeueLedgerKey): number;
   hasEscalated(key: RequeueLedgerKey): boolean;
   markEscalated(key: RequeueLedgerKey): void;
 }
@@ -93,6 +94,13 @@ export function createRequeueAttemptLedger(): RequeueAttemptLedger {
         attemptsAfter: entry.attempts,
         budget,
       };
+    },
+    refund(key) {
+      const entry = entries.get(ledgerMapKey(key));
+      if (!entry || entry.attempts === 0) return 0;
+      entry.attempts -= 1;
+      entry.lastRequeueAtMs = undefined;
+      return entry.attempts;
     },
     hasEscalated(key) {
       return entries.get(ledgerMapKey(key))?.escalated ?? false;
