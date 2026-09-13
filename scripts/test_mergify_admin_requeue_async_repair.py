@@ -275,6 +275,37 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertEqual(acknowledgement.workflow_id, "wf-ack")
         self.assertFalse(written_paths[0].exists())
 
+    def test_submit_async_repair_plan_stops_workflow_id_at_an_escaped_newline(self):
+        """An id capture must not run past an escaped newline into the next field.
+
+        Observed on PR #11576: the submit stdout carried the id and the failing
+        job name separated by a literal backslash-n, and `wf-[^\\s]+` swallowed
+        both -- backslash and `n` are not whitespace. The stored id
+        (`wf-1788334466115-1\\nrequired-fast`) then matched no workflow, so the
+        settle loop re-queried it on every cron tick forever.
+        """
+        plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout="Workflow ID: wf-1788334466115-1\\nrequired-fast / Guardrails\n",
+            stderr="",
+        )
+        with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", return_value=completed):
+            acknowledgement = async_repair.submit_async_repair_plan(plan)
+        self.assertEqual(acknowledgement.workflow_id, "wf-1788334466115-1")
+
+    def test_submit_async_repair_plan_keeps_non_numeric_workflow_ids(self):
+        """`wf-stress-1` / `wf-hitch-fat` are real ids (stress-fixture.ts,
+        main-process-hitch-fixture.ts), and the app's own predicate is
+        `/^wf-[^/]+$/` -- so the capture must not be narrowed to digits."""
+        plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="Workflow ID: wf-stress-1\n", stderr="",
+        )
+        with mock.patch("scripts.mergify_admin_requeue_async_repair.run_headless", return_value=completed):
+            acknowledgement = async_repair.submit_async_repair_plan(plan)
+        self.assertEqual(acknowledgement.workflow_id, "wf-stress-1")
+
     def test_submit_async_repair_plan_honors_submit_test_seam(self):
         plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")

@@ -158,6 +158,40 @@ class FastpathSettleObserver(unittest.TestCase):
                 self.assertEqual(f.settle_workflow_fastpath_rows(ledger, 200), 0)
                 status.assert_not_called()
 
+    def test_malformed_workflow_id_is_settled_without_a_status_query(self):
+        """A row whose id can never resolve must not be re-queried every tick.
+
+        Observed on the DO1 owner: 15 rows for merged PR #11576 held
+        `wf-1788334466115-1\\nrequired-fast`. `workflow_status` answered "not
+        found" for ~20s each, the row never reached a terminal status, and the
+        cron tick blew its 240s budget before it ever scanned the second repo.
+        Unresolvable is a third outcome -- it is settled as an infra
+        non-acknowledgement, not retried and not reported clean.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            ledger.record("repair-check", 11576, "head1", "UI Vitest", 100,
+                          meta={"workflowId": "wf-1788334466115-1\\nrequired-fast"})
+            with mock.patch.object(f, "workflow_status") as status:
+                settled = f.settle_workflow_fastpath_rows(ledger, 200)
+                status.assert_not_called()
+            self.assertEqual(settled, 1)
+            row = ledger.latest("repair-check-settled", 11576, "head1", "UI Vitest")
+            self.assertIsNotNone(row)
+            self.assertEqual(row["meta"]["outcomeClass"], "infra")
+            self.assertEqual(row["meta"]["dispatchState"], "not-acknowledged")
+
+    def test_well_formed_id_still_reaches_the_status_query(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            ledger.record("repair-check", 7055, "head2", "pr-body", 100,
+                          meta={"workflowId": "wf-stress-1"})
+            with mock.patch.object(f, "workflow_status", return_value="running") as status:
+                self.assertEqual(f.settle_workflow_fastpath_rows(ledger, 200), 0)
+                status.assert_called_once()
+
     def test_unreadable_status_leaves_row_for_ttl_backstop(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
