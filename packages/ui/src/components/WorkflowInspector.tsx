@@ -705,7 +705,7 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task && !task.config.isMergeNode && onEditPool && (
+        {task && onEditPool && (
           <section className="rounded border border-border bg-secondary/70 p-3">
             <label className="flex items-center justify-between gap-3">
               <span className="text-xs uppercase tracking-wide text-muted-foreground">Executor Pool</span>
