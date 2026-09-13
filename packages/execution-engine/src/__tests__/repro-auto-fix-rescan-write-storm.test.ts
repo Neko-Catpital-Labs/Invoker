@@ -58,7 +58,7 @@ function makeStore() {
 }
 
 describe('auto-fix recovery rescan write storm (beachball incident 2026-09-12)', () => {
-  it.fails('does not re-write skip rows for failed tasks whose state has not changed', async () => {
+  it('does not re-write skip rows for failed tasks whose state has not changed', async () => {
     const store = makeStore();
     const tick = createAutoFixRecoveryTick({
       store,
@@ -89,7 +89,7 @@ describe('auto-fix recovery rescan write storm (beachball incident 2026-09-12)',
     expect(store.upsertWorkerAction.mock.calls.length).toBe(upsertsAfterFirstScan);
   });
 
-  it.fails('records the skip again once the failed task changes', async () => {
+  it('records the skip again once the failed task changes', async () => {
     const store = makeStore();
     const tick = createAutoFixRecoveryTick({
       store,
@@ -112,7 +112,7 @@ describe('auto-fix recovery rescan write storm (beachball incident 2026-09-12)',
     expect(newCalls.map(([taskId]) => taskId)).toEqual([changed.id, changed.id]);
   });
 
-  it.fails('lists workflows a bounded number of times per scan, not once per failed task', async () => {
+  it('lists workflows a bounded number of times per scan, not once per failed task', async () => {
     const store = makeStore();
     const tick = createAutoFixRecoveryTick({
       store,
