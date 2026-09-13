@@ -11,17 +11,13 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, join, basename, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { importYaml } from './vendor/resolve-yaml.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, '../../..');
 
-function resolveYamlModulePath(scriptDir) {
-  const localYamlPath = resolve(scriptDir, '../../..', 'packages/app/node_modules/yaml/dist/index.js');
-  if (existsSync(localYamlPath)) return localYamlPath;
-  return 'yaml';
-}
-const { parse: parseYaml } = await import(resolveYamlModulePath(__dirname));
+const { parse: parseYaml } = await importYaml(__dirname);
 
 function die(msg) {
   console.error(`render-formula: ${msg}`);
