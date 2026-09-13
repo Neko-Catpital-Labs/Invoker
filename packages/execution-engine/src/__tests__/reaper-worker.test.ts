@@ -69,6 +69,11 @@ describe('reaper worker', () => {
     const reapTempDirs = vi.fn(async () => ['/tmp/invoker-cli-prompt-old']);
     const enforceRetention = vi.fn(() => 2);
     const trimLogs = vi.fn(() => ['/tmp/invoker-home/invoker.log']);
+    const reapMergeClones = vi.fn(async () => ({
+      ok: true,
+      removed: ['/tmp/invoker-home/merge-clones/gate-a', '/tmp/invoker-home/merge-clones/gate-b'],
+    }));
+    const taskStore = { listWorkflows: () => [], loadTasks: () => [] };
     const upsertWorkerAction = vi.fn((row: any) => row);
 
     const runtime = createReaperWorker({
@@ -78,12 +83,14 @@ describe('reaper worker', () => {
       intervalMs: 0,
       tickOnStart: false,
       store: { upsertWorkerAction },
+      taskStore,
       reapOrphans,
       reapCheckouts,
       reapWorktrees,
       reapTempDirs,
       enforceRetention,
       trimLogs,
+      reapMergeClones,
     });
 
     await runtime.tick('manual');
@@ -122,6 +129,9 @@ describe('reaper worker', () => {
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('snapshots pruned 2');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('logs trimmed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('worktrees removed 5');
+    expect(reapMergeClones).toHaveBeenCalledTimes(1);
+    expect(reapMergeClones.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home', taskStore });
+    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('merge clones removed 2');
     expect(upsertWorkerAction.mock.calls[0]?.[0].payload).toMatchObject({
       tempDirsRemoved: ['/tmp/invoker-cli-prompt-old'],
       worktreesRemoved: 5,
@@ -155,6 +165,7 @@ describe('reaper worker', () => {
       reapTempDirs: vi.fn(async () => []),
       enforceRetention: vi.fn(() => 0),
       trimLogs: vi.fn(() => []),
+      reapMergeClones: vi.fn(async () => ({ ok: true, removed: [] })),
     });
 
     await runtime.tick('manual');
@@ -167,5 +178,33 @@ describe('reaper worker', () => {
     expect(upsertWorkerAction.mock.calls[0]?.[0].payload).toMatchObject({
       reason: 'cleanup-error',
     });
+  });
+
+  it('records a failed pass when merge clones are skipped because task state is unreadable', async () => {
+    const upsertWorkerAction = vi.fn((row: any) => row);
+
+    const runtime = createReaperWorker({
+      logger: makeLogger(),
+      invokerHome: '/tmp/invoker-home',
+      intervalMs: 0,
+      tickOnStart: false,
+      store: { upsertWorkerAction },
+      reapOrphans: vi.fn(async () => [okResult('local /tmp/invoker-home')]),
+      reapCheckouts: vi.fn(() => []),
+      reapWorktrees: vi.fn(async () => []),
+      reapTempDirs: vi.fn(async () => []),
+      enforceRetention: vi.fn(() => 0),
+      trimLogs: vi.fn(() => []),
+      reapMergeClones: vi.fn(async () => ({ ok: false, removed: [], reason: 'no-task-store' })),
+    });
+
+    await runtime.tick('manual');
+
+    expect(upsertWorkerAction.mock.calls[0]?.[0]).toMatchObject({
+      workerKind: REAPER_WORKER_KIND,
+      status: 'failed',
+    });
+    expect(upsertWorkerAction.mock.calls[0]?.[0].payload).toMatchObject({ reason: 'no-task-store' });
+    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('merge clone reap failed: no-task-store');
   });
 });
