@@ -582,25 +582,55 @@ describe('PR maintenance workers', () => {
     expect(prWrites.map((write) => write.actionType)).toEqual(['mergify-blocked-pr', 'alert-send']);
   });
 
-  it('does not record a decision row when the lock is held', async () => {
+  it('records one skipped decision row per lock-held tick', async () => {
     const repoRoot = makeRepoRoot();
+    const lockPath = join(repoRoot, 'locks', 'pr-crons.lock');
+    const spawnHarness = makeSpawnHarness();
+    const actions = new Map<string, WorkerActionRecord>();
     const store = {
-      getWorkerAction: vi.fn(() => undefined),
-      upsertWorkerAction: vi.fn(),
+      getWorkerAction: vi.fn((kind: string, key: string) => actions.get(`${kind}:${key}`)),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+        const mapKey = `${write.workerKind}:${write.externalKey}`;
+        const existing = actions.get(mapKey);
+        const saved = {
+          ...write,
+          attemptCount: write.attemptCount ?? 0,
+          id: existing?.id ?? write.id,
+          createdAt: existing?.createdAt ?? 'now',
+          updatedAt: 'now',
+        } as WorkerActionRecord;
+        actions.set(mapKey, saved);
+        return saved;
+      }),
     };
     const worker = createPrOrphanRepairWorker({
       logger: makeLogger(),
       repoRoot,
-      spawnProcess: makeSpawnHarness().spawnProcess,
-      lockProbe: () => ({ held: true, reason: 'lock-held' }),
+      lockPath,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: true, reason: 'test-lock-held' }),
       lockWaitMs: 0,
       installSignalHandlers: false,
       store,
     });
 
     await worker.tick();
+    await worker.tick();
 
-    expect(store.upsertWorkerAction).not.toHaveBeenCalled();
+    expect(spawnHarness.calls).toEqual([]);
+    expect(store.upsertWorkerAction).toHaveBeenCalledTimes(2);
+    expect(actions).toHaveLength(1);
+    expect([...actions.values()][0]).toMatchObject({
+      workerKind: PR_ORPHAN_REPAIR_WORKER_KIND,
+      actionType: 'pr-maintenance-run',
+      externalKey: `${PR_ORPHAN_REPAIR_WORKER_KIND}:${repoRoot}:lock-held`,
+      subjectType: 'repo',
+      subjectId: repoRoot,
+      status: 'skipped',
+      summary: 'Shared PR maintenance lock held; tick not run',
+      attemptCount: 2,
+      payload: { reason: 'test-lock-held', lockPath },
+    });
   });
 
   it('polls on the five-minute default interval without ticking on start', async () => {
