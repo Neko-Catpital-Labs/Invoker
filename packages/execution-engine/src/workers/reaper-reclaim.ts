@@ -21,14 +21,18 @@ import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
 import {
+  computeProtectedLocalPaths,
   expandTildeHome,
   isDeletingOrphanName,
   isSafeInvokerHome,
   isSafeRemoteInvokerHomePath,
   type DiskCleanupResult,
+  type DiskHeadroomWorkerStore,
 } from './disk-headroom-reclaim.js';
 
 export const DELETING_ORPHAN_MIN_AGE_MINUTES = 30;
+
+export const STALE_MERGE_CLONE_MIN_AGE_HOURS = 48;
 
 export const AUTOMATION_CHECKOUT_DIRS = [
   'mergify-admin-requeue-work',
@@ -525,6 +529,88 @@ export function reapStaleAutomationCheckouts(opts: {
     }
   }
   return removed;
+}
+
+export interface StaleMergeCloneReapResult {
+  ok: boolean;
+  removed: string[];
+  reason?: string;
+}
+
+function readInUseWorkspacePaths(store: DiskHeadroomWorkerStore): Set<string> {
+  const workflows = store.listWorkflows();
+  const tasksByWorkflowId = new Map(workflows.map((workflow) => [workflow.id, store.loadTasks(workflow.id)]));
+  return computeProtectedLocalPaths({
+    listWorkflows: () => workflows,
+    loadTasks: (workflowId) => tasksByWorkflowId.get(workflowId) ?? [],
+  });
+}
+
+function overlapsInUsePath(candidate: string, inUse: ReadonlySet<string>): boolean {
+  const resolved = resolve(candidate);
+  for (const path of inUse) {
+    if (resolved === path || path.startsWith(`${resolved}/`) || resolved.startsWith(`${path}/`)) return true;
+  }
+  return false;
+}
+
+export async function reapStaleMergeClones(opts: {
+  invokerHome: string;
+  taskStore?: DiskHeadroomWorkerStore;
+  logger?: Logger;
+  userHome?: string;
+  nowMs?: number;
+}): Promise<StaleMergeCloneReapResult> {
+  const userHome = opts.userHome ?? homedir();
+  const home = expandTildeHome(opts.invokerHome, userHome);
+  if (!isSafeInvokerHome(home, userHome)) return { ok: false, removed: [], reason: 'path-guard' };
+  if (!opts.taskStore) return { ok: false, removed: [], reason: 'no-task-store' };
+
+  let inUse: Set<string>;
+  try {
+    inUse = readInUseWorkspacePaths(opts.taskStore);
+  } catch (err) {
+    const detail = errorDetail(err);
+    opts.logger?.error?.(`[reaper] skipped merge-clone reap, task state unreadable: ${detail}`, { module: 'reaper' });
+    return { ok: false, removed: [], reason: `task-store-error: ${detail}` };
+  }
+
+  const root = join(home, 'merge-clones');
+  if (!isDirectory(root)) return { ok: true, removed: [] };
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch (err) {
+    const detail = errorDetail(err);
+    opts.logger?.error?.(`[reaper] could not list ${root}: ${detail}`, { module: 'reaper' });
+    return { ok: false, removed: [], reason: `cleanup-error: ${detail}` };
+  }
+
+  const nowMs = opts.nowMs ?? Date.now();
+  const minAgeMs = STALE_MERGE_CLONE_MIN_AGE_HOURS * 60 * 60 * 1000;
+  const removed: string[] = [];
+  const errors: string[] = [];
+  for (const name of entries) {
+    const path = join(root, name);
+    const ageMs = entryAgeMs(path, nowMs);
+    if (ageMs === null || ageMs < minAgeMs) continue;
+    if (overlapsInUsePath(path, inUse)) {
+      opts.logger?.info?.(`[reaper] kept in-use merge clone ${path}`, { module: 'reaper' });
+      continue;
+    }
+    try {
+      await rm(path, { recursive: true, force: true });
+      removed.push(path);
+      opts.logger?.info?.(`[reaper] removed stale merge clone ${path}`, { module: 'reaper' });
+    } catch (err) {
+      errors.push(`${path}: ${errorDetail(err)}`);
+      opts.logger?.warn?.(`[reaper] failed to remove merge clone ${path}: ${errorDetail(err)}`, { module: 'reaper' });
+    }
+  }
+  if (errors.length > 0) {
+    return { ok: false, removed, reason: `cleanup-error: ${errors.slice(0, 3).join('; ')}` };
+  }
+  return { ok: true, removed };
 }
 
 export async function reapStaleInvokerCliTempDirs(opts: {
