@@ -589,6 +589,27 @@ def resolve_rules_for_repo(repo: str, gh: GhClient) -> tuple[str, frozenset[str]
         raise RuntimeError(f"failed to resolve admin-bypass rules for {repo}") from exc
 
 
+def rotate_target_repos(target_repos: Sequence[str], rotation_path: Path) -> list[str]:
+    repos = list(target_repos)
+    if len(repos) < 2:
+        return repos
+    offset = 0
+    try:
+        offset = int(rotation_path.read_text().strip() or "0")
+    except FileNotFoundError:
+        offset = 0
+    except (OSError, ValueError) as exc:
+        print(f"WARN: unreadable repo rotation state {rotation_path}: {exc}; starting from the first repo", file=sys.stderr)
+        offset = 0
+    start = offset % len(repos)
+    try:
+        rotation_path.parent.mkdir(parents=True, exist_ok=True)
+        rotation_path.write_text(str((start + 1) % len(repos)))
+    except OSError as exc:
+        print(f"WARN: could not write repo rotation state {rotation_path}: {exc}", file=sys.stderr)
+    return repos[start:] + repos[:start]
+
+
 def run_cron_target_repos(
     args: argparse.Namespace,
     target_repos: Sequence[str],
@@ -604,7 +625,8 @@ def run_cron_target_repos(
     # logged and skipped rather than aborting the whole cron tick.
     gh = gh or GhClient()
     had_failure = False
-    for repo in target_repos:
+    ordered_repos = rotate_target_repos(target_repos, Path(args.state_file).expanduser().with_suffix(".repo-rotation"))
+    for repo in ordered_repos:
         repo_args = copy.copy(args)
         repo_args.repo = repo
         try:
