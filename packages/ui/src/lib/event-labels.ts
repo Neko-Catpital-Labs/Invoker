@@ -13,6 +13,7 @@ const RAW_TO_FRIENDLY: Record<string, string> = {
   'task.cancelled': 'Cancelled',
   'task.blocked': 'Blocked',
   'task.stale': 'Marked stale',
+  'task.skipped': 'Skipped',
   'task.deferred': 'Deferred',
   'task.needs_input': 'Needs input',
   'task.awaiting_approval': 'Awaiting approval',
@@ -44,6 +45,7 @@ const TERMINAL_STATUS_LIKE = new Set<string>([
   'task.failed',
   'task.cancelled',
   'task.stale',
+  'task.skipped',
   'completed',
 ]);
 
