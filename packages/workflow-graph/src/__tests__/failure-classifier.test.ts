@@ -91,6 +91,36 @@ describe('FailureClassifier.classifyError', () => {
   });
 });
 
+describe('FailureClassifier.classifyAgentQuotaRefusal', () => {
+  it('classifies both real agent-quota failure shapes seen in production', () => {
+    expect(FailureClassifier.classifyAgentQuotaRefusal(
+      '[Fix with Agent failed] SSH remote script failed (exit=1, phase=remote_agent_fix)\n'
+      + "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to "
+      + 'purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
+    )).toBe('agent-usage-limit');
+    expect(FailureClassifier.classifyAgentQuotaRefusal(
+      'codex fix exited with code 1: [assistant] Model refused: usage limit reached',
+    )).toBe('agent-usage-limit');
+  });
+
+  it('ignores a third-party CI check row that reports its own rate limiting', () => {
+    const mergeGateCheckTable = [
+      'quality / TypeScript Types\tpass\t42s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265672\t',
+      'CodeRabbit\tpass\t0\t\tReview rate limited',
+      'UI Vitest\tpass\t2m44s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265910\t',
+      '[worktree] Process exited: actionId=wf-1788249568173-6/land-verified-pr exitCode=1',
+    ].join('\n');
+    expect(FailureClassifier.classifyAgentQuotaRefusal(mergeGateCheckTable)).toBeUndefined();
+  });
+
+  it('classifies a provider HTTP rate-limit refusal', () => {
+    expect(FailureClassifier.classifyAgentQuotaRefusal(
+      'API error: 429 {"type":"error","error":{"type":"rate_limit_error",'
+      + '"message":"Number of request tokens has exceeded your per-minute rate limit"}}',
+    )).toBe('agent-usage-limit');
+  });
+});
+
 describe('FailureClassifier predicates', () => {
   it('isLiveness only matches liveness_stall', () => {
     expect(FailureClassifier.isLiveness('liveness_stall')).toBe(true);
