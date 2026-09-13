@@ -2,7 +2,13 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
+import type {
+  ExecutionAgent,
+  AgentCommandSpec,
+  AgentCommandBuildOptions,
+  ExecutionModelOption,
+  SupportedModelsProvenance,
+} from '../agent.js';
 import { createCodexSpendGateReader, type CodexSpendGateReader } from '../codex-spend-gate.js';
 
 export interface CodexExecutionAgentConfig {
@@ -75,7 +81,11 @@ export class CodexExecutionAgent implements ExecutionAgent {
   private readonly fullAuto: boolean;
   private readonly bypassApprovalsAndSandbox: boolean;
   private readonly spendGate: CodexSpendGateReader;
-  private supportedModelCache?: { expiresAt: number; models: readonly ExecutionModelOption[] };
+  private supportedModelCache?: {
+    expiresAt: number;
+    models: readonly ExecutionModelOption[];
+    provenance: SupportedModelsProvenance;
+  };
 
   constructor(config: CodexExecutionAgentConfig = {}) {
     this.command = config.command ?? 'codex';
@@ -86,6 +96,10 @@ export class CodexExecutionAgent implements ExecutionAgent {
   }
   get supportedModels(): readonly ExecutionModelOption[] {
     return this.getSupportedModels();
+  }
+  get supportedModelsProvenance(): SupportedModelsProvenance {
+    this.getSupportedModels();
+    return this.supportedModelCache!.provenance;
   }
 
 
@@ -131,6 +145,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
     this.supportedModelCache = {
       expiresAt: now + CODEX_MODEL_CACHE_MS,
       models,
+      provenance: discovered.kind === 'success' ? 'agent' : 'built-in',
     };
     return models;
   }
