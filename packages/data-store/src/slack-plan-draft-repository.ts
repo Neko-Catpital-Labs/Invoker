@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { PersistenceAdapter, SlackPlanDraft } from './adapter.js';
+import type { ChatSurface, PersistenceAdapter, SlackPlanDraft } from './adapter.js';
+import { DEFAULT_CHAT_SURFACE } from './adapter.js';
 import { PlanningDraftRepository } from './planning-draft-repository.js';
 
 export interface CreateSlackPlanDraft {
@@ -13,6 +14,7 @@ export interface CreateSlackPlanDraft {
   workingDir: string;
   requestedBy: string;
   confirmationMode: SlackPlanDraft['confirmationMode'];
+  surface?: ChatSurface;
 }
 
 export class SlackPlanDraftRepository {
@@ -35,9 +37,10 @@ export class SlackPlanDraftRepository {
         throw new Error('Slack review must reference the exact current doctor-approved planning draft.');
       }
     }
-    const previous = this.adapter.loadReadySlackPlanDraft(input.channelId, input.threadTs);
+    const surface = input.surface ?? DEFAULT_CHAT_SURFACE;
+    const previous = this.adapter.loadReadySlackPlanDraft(input.channelId, input.threadTs, surface);
     const version = (previous?.version ?? 0) + 1;
-    this.adapter.supersedeReadySlackPlanDrafts(input.channelId, input.threadTs, now);
+    this.adapter.supersedeReadySlackPlanDrafts(input.channelId, input.threadTs, now, surface);
     const draft: SlackPlanDraft = {
       draftId: randomUUID(),
       version,
@@ -54,6 +57,7 @@ export class SlackPlanDraftRepository {
       requestedBy: input.requestedBy,
       confirmationMode: input.confirmationMode,
       createdAt: now,
+      surface,
     };
     this.adapter.saveSlackPlanDraft(draft);
     return draft;
@@ -63,8 +67,8 @@ export class SlackPlanDraftRepository {
     return this.adapter.loadSlackPlanDraft(draftId, version);
   }
 
-  getReady(channelId: string, threadTs: string): SlackPlanDraft | undefined {
-    return this.adapter.loadReadySlackPlanDraft(channelId, threadTs);
+  getReady(channelId: string, threadTs: string, surface?: ChatSurface): SlackPlanDraft | undefined {
+    return this.adapter.loadReadySlackPlanDraft(channelId, threadTs, surface);
   }
 
   bindMessage(draft: SlackPlanDraft, messageTs: string): void {

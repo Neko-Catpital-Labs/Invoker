@@ -54,6 +54,7 @@ import type {
   TaskEvent,
   TaskEventListFilters,
   ActivityLogEntry,
+  ChatSurface,
   Conversation,
   ConversationMessage,
   PlanningDraft,
@@ -70,6 +71,7 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from './adapter.js';
+import { DEFAULT_CHAT_SURFACE } from './adapter.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
 import {
@@ -706,6 +708,10 @@ function isInAppPlanningMessageRole(value: unknown): value is InAppPlanningChatL
 }
 function isPlanningConfirmationMode(value: unknown): value is PlanningConfirmationMode {
   return value === 'require' || value === 'auto_submit';
+}
+
+function surfaceFilter(surface: ChatSurface | undefined): { sql: string; params: ChatSurface[] } {
+  return surface === undefined ? { sql: '', params: [] } : { sql: ' AND surface = ?', params: [surface] };
 }
 
 function isInAppPlanningMessageTone(value: unknown): value is InAppPlanningChatLine['tone'] {
@@ -2386,23 +2392,38 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      conversation.threadTs,
-      conversation.channelId,
-      conversation.userId,
-      conversation.mode ?? 'plan',
-      conversation.extractedPlan,
-      conversation.planSubmitted ? 1 : 0,
-      conversation.createdAt,
-      conversation.updatedAt,
-    ]);
+    const surface = conversation.surface ?? DEFAULT_CHAT_SURFACE;
+    this.runTransaction(() => {
+      this.assertRowOwnedBySurface('conversations', 'thread_ts', conversation.threadTs, surface);
+      this.execRun(`
+        INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at, surface)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        conversation.threadTs,
+        conversation.channelId,
+        conversation.userId,
+        conversation.mode ?? 'plan',
+        conversation.extractedPlan,
+        conversation.planSubmitted ? 1 : 0,
+        conversation.createdAt,
+        conversation.updatedAt,
+        surface,
+      ]);
+    });
   }
 
-  loadConversation(threadTs: string): Conversation | undefined {
-    const row = this.queryOne('SELECT * FROM conversations WHERE thread_ts = ?', [threadTs]);
+  private assertRowOwnedBySurface(table: string, keyColumn: string, key: string, surface: ChatSurface): void {
+    const existing = this.queryOne(`SELECT surface FROM ${table} WHERE ${keyColumn} = ?`, [key]);
+    if (existing && existing.surface !== surface) {
+      throw new Error(
+        `${table} row ${key} belongs to surface '${String(existing.surface)}'; refusing to overwrite it from surface '${surface}'.`,
+      );
+    }
+  }
+
+  loadConversation(threadTs: string, surface?: ChatSurface): Conversation | undefined {
+    const filter = surfaceFilter(surface);
+    const row = this.queryOne(`SELECT * FROM conversations WHERE thread_ts = ?${filter.sql}`, [threadTs, ...filter.params]);
     if (!row) return undefined;
     return {
       threadTs: row.thread_ts as string,
@@ -2413,6 +2434,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
+      surface: row.surface as ChatSurface,
     };
   }
 
@@ -2452,9 +2474,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
   }
 
-  listActiveConversations(): Conversation[] {
+  listActiveConversations(surface?: ChatSurface): Conversation[] {
+    const filter = surfaceFilter(surface);
     const rows = this.queryAll(
-      'SELECT * FROM conversations WHERE plan_submitted = 0 ORDER BY updated_at DESC',
+      `SELECT * FROM conversations WHERE plan_submitted = 0${filter.sql} ORDER BY updated_at DESC`,
+      filter.params,
     );
     return rows.map((row: any) => ({
       threadTs: row.thread_ts as string,
@@ -2465,15 +2489,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
+      surface: row.surface as ChatSurface,
     }));
   }
 
-  listActivePlanConversations(channelId: string, userId: string): Conversation[] {
+  listActivePlanConversations(channelId: string, userId: string, surface?: ChatSurface): Conversation[] {
+    const filter = surfaceFilter(surface);
     const rows = this.queryAll(`
       SELECT * FROM conversations
-      WHERE channel_id = ? AND user_id = ? AND mode = 'plan' AND plan_submitted = 0
+      WHERE channel_id = ? AND user_id = ? AND mode = 'plan' AND plan_submitted = 0${filter.sql}
       ORDER BY updated_at DESC
-    `, [channelId, userId]);
+    `, [channelId, userId, ...filter.params]);
     return rows.map((row: any) => ({
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
@@ -2483,6 +2509,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
+      surface: row.surface as ChatSurface,
     }));
   }
 
@@ -2646,26 +2673,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Slack Plan Submission Session State ─────────────────
 
   saveSlackLaunchContext(context: SlackLaunchContext): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO slack_launch_contexts
-        (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, confirmation_mode, harness_session_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      context.threadTs,
-      context.repoUrl,
-      context.harnessPreset,
-      context.workingDir,
-      context.requestedBy,
-      context.lobbyChannelId,
-      context.confirmationMode ?? 'require',
-      context.harnessSessionId ?? null,
-    ]);
+    const surface = context.surface ?? DEFAULT_CHAT_SURFACE;
+    this.runTransaction(() => {
+      this.assertRowOwnedBySurface('slack_launch_contexts', 'thread_ts', context.threadTs, surface);
+      this.execRun(`
+        INSERT OR REPLACE INTO slack_launch_contexts
+          (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, confirmation_mode, harness_session_id, surface)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        context.threadTs,
+        context.repoUrl,
+        context.harnessPreset,
+        context.workingDir,
+        context.requestedBy,
+        context.lobbyChannelId,
+        context.confirmationMode ?? 'require',
+        context.harnessSessionId ?? null,
+        surface,
+      ]);
+    });
   }
 
-  loadSlackLaunchContext(threadTs: string): SlackLaunchContext | undefined {
+  loadSlackLaunchContext(threadTs: string, surface?: ChatSurface): SlackLaunchContext | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(
-      'SELECT * FROM slack_launch_contexts WHERE thread_ts = ?',
-      [threadTs],
+      `SELECT * FROM slack_launch_contexts WHERE thread_ts = ?${filter.sql}`,
+      [threadTs, ...filter.params],
     ) as Record<string, unknown> | undefined;
     if (!row) return undefined;
     return {
@@ -2677,19 +2710,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
       lobbyChannelId: row.lobby_channel_id as string,
       confirmationMode: isPlanningConfirmationMode(row.confirmation_mode) ? row.confirmation_mode : 'require',
       harnessSessionId: typeof row.harness_session_id === 'string' ? row.harness_session_id : undefined,
+      surface: row.surface as ChatSurface,
     };
   }
 
-  deleteSlackLaunchContext(threadTs: string): void {
-    this.execRun('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
+  deleteSlackLaunchContext(threadTs: string, surface?: ChatSurface): void {
+    const filter = surfaceFilter(surface);
+    this.execRun(`DELETE FROM slack_launch_contexts WHERE thread_ts = ?${filter.sql}`, [threadTs, ...filter.params]);
   }
 
   saveSlackPlanDraft(draft: SlackPlanDraft): void {
     this.execRun(`
       INSERT OR REPLACE INTO slack_plan_drafts
         (draft_id, version, planning_draft_id, channel_id, thread_ts, message_ts, slack_file_id, plan_text, content_hash, summary_json,
-         status, repo_url, harness_preset, working_dir, requested_by, confirmation_mode, created_at, decided_at, decided_by, execution_key, workflow_ids_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         status, repo_url, harness_preset, working_dir, requested_by, confirmation_mode, created_at, decided_at, decided_by, execution_key, workflow_ids_json, surface)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       draft.draftId,
       draft.version,
@@ -2712,6 +2747,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       draft.decidedBy ?? null,
       draft.executionKey ?? null,
       draft.workflowIdsJson ?? null,
+      draft.surface ?? DEFAULT_CHAT_SURFACE,
     ]);
   }
 
@@ -2723,13 +2759,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return row ? this.toSlackPlanDraft(row) : undefined;
   }
 
-  loadReadySlackPlanDraft(channelId: string, threadTs: string): SlackPlanDraft | undefined {
+  loadReadySlackPlanDraft(channelId: string, threadTs: string, surface?: ChatSurface): SlackPlanDraft | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(`
       SELECT * FROM slack_plan_drafts
-      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'
+      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'${filter.sql}
       ORDER BY version DESC
       LIMIT 1
-    `, [channelId, threadTs]) as Record<string, unknown> | undefined;
+    `, [channelId, threadTs, ...filter.params]) as Record<string, unknown> | undefined;
     return row ? this.toSlackPlanDraft(row) : undefined;
   }
 
@@ -2790,12 +2827,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
   }
 
-  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string): void {
+  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string, surface?: ChatSurface): void {
+    const filter = surfaceFilter(surface);
     this.execRun(`
       UPDATE slack_plan_drafts
       SET status = 'superseded', decided_at = ?
-      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'
-    `, [decidedAt, channelId, threadTs]);
+      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'${filter.sql}
+    `, [decidedAt, channelId, threadTs, ...filter.params]);
   }
 
   private toSlackPlanDraft(row: Record<string, unknown>): SlackPlanDraft {
@@ -2821,38 +2859,46 @@ export class SQLiteAdapter implements PersistenceAdapter {
       decidedBy: typeof row.decided_by === 'string' ? row.decided_by : undefined,
       executionKey: typeof row.execution_key === 'string' ? row.execution_key : undefined,
       workflowIdsJson: typeof row.workflow_ids_json === 'string' ? row.workflow_ids_json : undefined,
+      surface: row.surface as ChatSurface,
     };
   }
 
   saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO slack_pending_confirmations
-        (confirm_key, thread_ts, channel_id, user_id, kind, payload_json, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      confirmation.confirmKey,
-      confirmation.threadTs,
-      confirmation.channelId,
-      confirmation.userId,
-      confirmation.kind,
-      confirmation.payloadJson,
-      confirmation.createdAt,
-      confirmation.expiresAt,
-    ]);
+    const surface = confirmation.surface ?? DEFAULT_CHAT_SURFACE;
+    this.runTransaction(() => {
+      this.assertRowOwnedBySurface('slack_pending_confirmations', 'confirm_key', confirmation.confirmKey, surface);
+      this.execRun(`
+        INSERT OR REPLACE INTO slack_pending_confirmations
+          (confirm_key, thread_ts, channel_id, user_id, kind, payload_json, created_at, expires_at, surface)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        confirmation.confirmKey,
+        confirmation.threadTs,
+        confirmation.channelId,
+        confirmation.userId,
+        confirmation.kind,
+        confirmation.payloadJson,
+        confirmation.createdAt,
+        confirmation.expiresAt,
+        surface,
+      ]);
+    });
   }
 
-  loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined {
+  loadSlackPendingConfirmation(confirmKey: string, surface?: ChatSurface): SlackPendingConfirmation | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(
-      'SELECT * FROM slack_pending_confirmations WHERE confirm_key = ?',
-      [confirmKey],
+      `SELECT * FROM slack_pending_confirmations WHERE confirm_key = ?${filter.sql}`,
+      [confirmKey, ...filter.params],
     ) as Record<string, unknown> | undefined;
     return row ? this.mapSlackPendingConfirmation(row) : undefined;
   }
 
-  loadLatestSlackPendingConfirmationByThread(threadTs: string): SlackPendingConfirmation | undefined {
+  loadLatestSlackPendingConfirmationByThread(threadTs: string, surface?: ChatSurface): SlackPendingConfirmation | undefined {
+    const filter = surfaceFilter(surface);
     const row = this.queryOne(
-      'SELECT * FROM slack_pending_confirmations WHERE thread_ts = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
-      [threadTs],
+      `SELECT * FROM slack_pending_confirmations WHERE thread_ts = ?${filter.sql} ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      [threadTs, ...filter.params],
     ) as Record<string, unknown> | undefined;
     return row ? this.mapSlackPendingConfirmation(row) : undefined;
   }
@@ -2867,6 +2913,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       payloadJson: row.payload_json as string,
       createdAt: row.created_at as string,
       expiresAt: row.expires_at as string,
+      surface: row.surface as ChatSurface,
     };
   }
 

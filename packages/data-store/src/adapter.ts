@@ -11,6 +11,8 @@ import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
 export type ConversationMode = 'agent' | 'plan';
+export type ChatSurface = string;
+export const DEFAULT_CHAT_SURFACE: ChatSurface = 'slack';
 // ── Conversation Types ─────────────────────────────────────
 
 export interface Conversation {
@@ -22,6 +24,7 @@ export interface Conversation {
   planSubmitted: boolean;
   createdAt: string;
   updatedAt: string;
+  surface?: ChatSurface;
 }
 
 export interface ConversationMessage {
@@ -56,6 +59,7 @@ export interface SlackLaunchContext {
   lobbyChannelId: string;
   confirmationMode: PlanningConfirmationMode;
   harnessSessionId?: string;
+  surface?: ChatSurface;
 }
 
 export type SlackPlanDraftStatus =
@@ -89,6 +93,7 @@ export interface SlackPlanDraft {
   decidedBy?: string;
   executionKey?: string;
   workflowIdsJson?: string;
+  surface?: ChatSurface;
 }
 
 export interface SlackPendingConfirmation {
@@ -100,6 +105,7 @@ export interface SlackPendingConfirmation {
   payloadJson: string;
   createdAt: string;
   expiresAt: string;
+  surface?: ChatSurface;
 }
 
 // ── Workflow Channel Types (Slack workflow↔channel mapping) ─
@@ -469,13 +475,13 @@ export interface PersistenceAdapter {
 
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;
-  loadConversation(threadTs: string): Conversation | undefined;
+  loadConversation(threadTs: string, surface?: ChatSurface): Conversation | undefined;
   updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void;
   deleteConversation(threadTs: string): void;
 
   // Conversation queries
-  listActiveConversations(): Conversation[];
-  listActivePlanConversations(channelId: string, userId: string): Conversation[];
+  listActiveConversations(surface?: ChatSurface): Conversation[];
+  listActivePlanConversations(channelId: string, userId: string, surface?: ChatSurface): Conversation[];
   deleteConversationsOlderThan(cutoffIso: string): number;
 
   // Conversation messages
@@ -493,17 +499,17 @@ export interface PersistenceAdapter {
 
   // Slack plan submission session state
   saveSlackLaunchContext(context: SlackLaunchContext): void;
-  loadSlackLaunchContext(threadTs: string): SlackLaunchContext | undefined;
-  deleteSlackLaunchContext(threadTs: string): void;
+  loadSlackLaunchContext(threadTs: string, surface?: ChatSurface): SlackLaunchContext | undefined;
+  deleteSlackLaunchContext(threadTs: string, surface?: ChatSurface): void;
   saveSlackPlanDraft(draft: SlackPlanDraft): void;
   loadSlackPlanDraft(draftId: string, version: number): SlackPlanDraft | undefined;
-  loadReadySlackPlanDraft(channelId: string, threadTs: string): SlackPlanDraft | undefined;
+  loadReadySlackPlanDraft(channelId: string, threadTs: string, surface?: ChatSurface): SlackPlanDraft | undefined;
   updateSlackPlanDraft(draftId: string, version: number, changes: Partial<Pick<SlackPlanDraft, 'messageTs' | 'slackFileId' | 'status' | 'decidedAt' | 'decidedBy' | 'executionKey' | 'workflowIdsJson'>>): void;
   claimSlackPlanDraft(draftId: string, version: number, executionKey: string): boolean;
-  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string): void;
+  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string, surface?: ChatSurface): void;
   saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void;
-  loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined;
-  loadLatestSlackPendingConfirmationByThread(threadTs: string): SlackPendingConfirmation | undefined;
+  loadSlackPendingConfirmation(confirmKey: string, surface?: ChatSurface): SlackPendingConfirmation | undefined;
+  loadLatestSlackPendingConfirmationByThread(threadTs: string, surface?: ChatSurface): SlackPendingConfirmation | undefined;
   deleteSlackPendingConfirmation(confirmKey: string): void;
 
   // Repair filings (cross-system CI/PR repair dedup ledger)

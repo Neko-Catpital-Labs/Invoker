@@ -7,7 +7,8 @@
  */
 
 import type { PlanDefinition } from '@invoker/workflow-core';
-import type { PersistenceAdapter, Conversation, ConversationMessage, ConversationMode } from './adapter.js';
+import type { PersistenceAdapter, ChatSurface, Conversation, ConversationMessage, ConversationMode } from './adapter.js';
+import { DEFAULT_CHAT_SURFACE } from './adapter.js';
 import { PlanningDraftRepository } from './planning-draft-repository.js';
 
 // ── Public Types ─────────────────────────────────────────────
@@ -22,6 +23,7 @@ export interface ConversationEntry {
   planSubmitted: boolean;
   createdAt: string;
   updatedAt: string;
+  surface: ChatSurface;
 }
 
 export interface ConversationMessageEntry {
@@ -68,10 +70,11 @@ export class ConversationRepository {
     channelId?: string,
     userId?: string,
     mode?: ConversationMode,
+    surface: ChatSurface = DEFAULT_CHAT_SURFACE,
   ): void {
     const now = new Date().toISOString();
 
-    const existing = this.adapter.loadConversation(threadTs);
+    const existing = this.adapter.loadConversation(threadTs, surface);
 
     const planJson = extractedPlan ? JSON.stringify(extractedPlan) : null;
 
@@ -92,6 +95,7 @@ export class ConversationRepository {
         planSubmitted: planSubmitted ?? false,
         createdAt: now,
         updatedAt: now,
+        surface,
       });
     }
 
@@ -124,8 +128,8 @@ export class ConversationRepository {
    * Load a conversation with all its messages, deserializing JSON fields.
    * Returns null if the conversation does not exist.
    */
-  loadConversation(threadTs: string): ConversationEntry | null {
-    const conv = this.adapter.loadConversation(threadTs);
+  loadConversation(threadTs: string, surface?: ChatSurface): ConversationEntry | null {
+    const conv = this.adapter.loadConversation(threadTs, surface);
     if (!conv) return null;
 
     const rawMessages = this.adapter.loadMessages(threadTs);
@@ -143,6 +147,7 @@ export class ConversationRepository {
       planSubmitted: conv.planSubmitted,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
+      surface: conv.surface ?? DEFAULT_CHAT_SURFACE,
     };
   }
 
@@ -158,8 +163,8 @@ export class ConversationRepository {
    * List all active (non-submitted) conversations.
    * Returns conversation metadata without messages for efficiency.
    */
-  listActiveConversations(): Array<Omit<ConversationEntry, 'messages'>> {
-    const conversations = this.adapter.listActiveConversations();
+  listActiveConversations(surface?: ChatSurface): Array<Omit<ConversationEntry, 'messages'>> {
+    const conversations = this.adapter.listActiveConversations(surface);
     return conversations.map((conv) => ({
       threadTs: conv.threadTs,
       channelId: conv.channelId,
@@ -169,6 +174,7 @@ export class ConversationRepository {
       planSubmitted: conv.planSubmitted,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
+      surface: conv.surface ?? DEFAULT_CHAT_SURFACE,
     }));
   }
 
