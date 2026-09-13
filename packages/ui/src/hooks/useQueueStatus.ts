@@ -16,6 +16,7 @@ function isTerminalOrIdleStatus(status: unknown): boolean {
     status === 'awaiting_approval' ||
     status === 'review_ready' ||
     status === 'stale' ||
+    status === 'skipped' ||
     status === 'pending' ||
     status === 'queued';
 }
