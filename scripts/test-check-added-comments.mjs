@@ -5,9 +5,16 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collectAddedCommentViolations } from './check-added-comments.mjs';
+import { collectAddedCommentViolations, commentIndexForCodeLine } from './check-added-comments.mjs';
 
 const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.meta.url));
+
+{
+  assert.equal(commentIndexForCodeLine("const entry = packages.get(path.replace(/^\\//, ''));"), -1);
+  assert.equal(commentIndexForCodeLine('const matcher = /[//]/;'), -1);
+  assert.equal(commentIndexForCodeLine('const value = true; // explains the obvious'), 20);
+  assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
+}
 
 {
   const diff = [

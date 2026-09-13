@@ -199,9 +199,12 @@ function buildMarkdownFenceExtensionMap(content) {
   return map;
 }
 
-function commentIndexForCodeLine(line) {
+export function commentIndexForCodeLine(line) {
   let quote = '';
   let escaped = false;
+  let regexLiteral = false;
+  let regexEscaped = false;
+  let regexCharacterClass = false;
 
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
@@ -218,8 +221,31 @@ function commentIndexForCodeLine(line) {
       continue;
     }
 
+    if (regexLiteral) {
+      if (regexEscaped) {
+        regexEscaped = false;
+      } else if (char === '\\') {
+        regexEscaped = true;
+      } else if (regexCharacterClass) {
+        if (char === ']') {
+          regexCharacterClass = false;
+        }
+      } else if (char === '[') {
+        regexCharacterClass = true;
+      } else if (char === '/') {
+        regexLiteral = false;
+      }
+      continue;
+    }
+
     if (char === '"' || char === "'" || char === '`') {
       quote = char;
+      continue;
+    }
+    if (char === '/' && next !== '/' && next !== '*' && canStartRegexLiteral(line, index)) {
+      regexLiteral = true;
+      regexEscaped = false;
+      regexCharacterClass = false;
       continue;
     }
     if (char === '/' && (next === '/' || next === '*')) {
@@ -231,6 +257,28 @@ function commentIndexForCodeLine(line) {
   }
 
   return -1;
+}
+
+const REGEX_LITERAL_PREFIX_CHARS = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^', '<', '>']);
+const REGEX_LITERAL_PREFIX_KEYWORDS = new Set(['return', 'typeof', 'throw', 'void', 'delete', 'yield', 'await', 'case', 'new', 'in', 'instanceof']);
+
+function canStartRegexLiteral(line, slashIndex) {
+  const prefix = line.slice(0, slashIndex).trimEnd();
+  if (!prefix) {
+    return true;
+  }
+
+  const previous = prefix[prefix.length - 1];
+  if (REGEX_LITERAL_PREFIX_CHARS.has(previous)) {
+    return true;
+  }
+
+  const keywordMatch = /[A-Za-z_$][\w$]*$/.exec(prefix);
+  if (!keywordMatch || !REGEX_LITERAL_PREFIX_KEYWORDS.has(keywordMatch[0])) {
+    return false;
+  }
+
+  return prefix[keywordMatch.index - 1] !== '.';
 }
 
 function scanHashCommentLine(line, initialQuote = '') {
