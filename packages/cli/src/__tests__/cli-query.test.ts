@@ -147,7 +147,7 @@ describe('invoker-cli query', () => {
     const createSpy = vi.spyOn(SQLiteAdapter, 'create');
     const bus = new LocalBus();
 
-    const code = await main(['query', 'workflows', '--output', 'json'], { createMessageBus: () => bus });
+    const code = await main(['query', 'workflows', '--output', 'json', '--standalone'], { createMessageBus: () => bus });
 
     expect(code).toBe(0);
     const parsed = JSON.parse(output.stdout) as Array<{ id: string }>;
@@ -167,7 +167,7 @@ describe('invoker-cli query', () => {
     const bus = new LocalBus();
 
     const code = await main(
-      ['query', 'tasks', '--workflow', 'wf-env', '--status', 'failed', '--output', 'json'],
+      ['query', 'tasks', '--workflow', 'wf-env', '--status', 'failed', '--output', 'json', '--standalone'],
       { createMessageBus: () => bus },
     );
 
@@ -188,11 +188,27 @@ describe('invoker-cli query', () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
 
-    const code = await main(['query', 'workflows', '--output', 'json'], { createMessageBus: () => bus });
+    const code = await main(['query', 'workflows', '--output', 'json', '--standalone'], { createMessageBus: () => bus });
 
     expect(code).toBe(0);
     expect(JSON.parse(output.stdout)).toEqual([]);
     expect(output.stdout).toBe('[]\n');
+    output.restore();
+  });
+
+  it('fails instead of printing standalone rows when no live owner is reachable', async () => {
+    const dbDir = makeTempDir('invoker-cli-query-no-owner-');
+    await seedDb(dbDir);
+    process.env.INVOKER_DB_DIR = dbDir;
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+
+    const code = await main(['query', 'tasks', '--output', 'json'], { createMessageBus: () => bus });
+
+    expect(code).toBe(1);
+    expect(output.stdout).toBe('');
+    expect(output.stderr).toContain('No running Invoker owner is reachable');
+    expect(output.stderr).toContain('--standalone');
     output.restore();
   });
 
@@ -224,7 +240,7 @@ describe('invoker-cli query', () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
 
-    const code = await main(['query', 'capacity'], { createMessageBus: () => bus });
+    const code = await main(['query', 'capacity', '--standalone'], { createMessageBus: () => bus });
 
     expect(code).toBe(1);
     expect(output.stderr).toContain('query capacity requires a live owner');

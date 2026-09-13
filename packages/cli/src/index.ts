@@ -165,6 +165,7 @@ type QueryOptions = {
   status?: string;
   filter?: string;
   output: QueryOutput;
+  mode: 'live' | 'standalone';
   forwardedFlags: string[];
 };
 
@@ -222,8 +223,8 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
-    '  invoker-cli query workflows [--status <status>] [--output text|json]',
-    '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
+    '  invoker-cli query workflows [--status <status>] [--output text|json] [--standalone]',
+    '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json] [--standalone]',
     '  invoker-cli query capacity [--output text|json]',
     '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
     '  invoker-cli retry-task <taskId>',
@@ -248,7 +249,7 @@ function usage(): string {
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
-    '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
+    '  query workflows|tasks  Read workflows or tasks from a live owner, or from a read-only database view with --standalone.',
     '  query capacity  Show live pool/member slot usage, queue depth by workflow, and the oldest-waiting task. Requires a live owner.',
     '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
@@ -274,7 +275,7 @@ function usage(): string {
     '  --target <path>       MCP config path for planner setup. Defaults to ~/.invoker/mcp.json.',
     '  --uninstall           Remove the experimental planner MCP entry and disable its Invoker flag.',
     '  --live           Require a running Invoker owner and submit over IPC.',
-    '  --standalone     Skip IPC and run with an isolated CLI database.',
+    '  --standalone     Skip IPC for `run` or `query` and use an isolated/configured CLI database.',
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
     '  --json           Emit only a machine-readable result summary on stdout.',
@@ -343,6 +344,7 @@ function parseQueryArgs(argv: string[]): QueryOptions {
   const options: QueryOptions = {
     resource,
     output: 'text',
+    mode: 'live',
     forwardedFlags: [],
   };
 
@@ -373,8 +375,10 @@ function parseQueryArgs(argv: string[]): QueryOptions {
       }
       options.output = value;
       options.forwardedFlags.push(arg, value);
+    } else if (arg === '--standalone') {
+      options.mode = 'standalone';
     } else if (arg === '--help' || arg === '-h') {
-      throw new Error('Usage: invoker-cli query <workflows|tasks> [--workflow <id>] [--status <status>] [--output text|json]');
+      throw new Error('Usage: invoker-cli query <workflows|tasks> [--workflow <id>] [--status <status>] [--output text|json] [--standalone]');
     } else if (arg.startsWith('--')) {
       throw new Error(`Unknown query option: ${arg}`);
     } else {
@@ -610,6 +614,11 @@ async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
 }
 
 async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
+  if (options.mode === 'standalone') {
+    process.stdout.write(await queryStandaloneDatabase(options));
+    return 0;
+  }
+
   let bus: MessageBus | undefined;
   try {
     bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
@@ -618,15 +627,13 @@ async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
       process.stdout.write(await queryLiveOwner(options, bus));
       return 0;
     }
+    throw new Error(`${REQUIRED_OWNER_MESSAGE} Use \`--standalone\` to read the configured CLI database directly.`);
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
     if (disconnect) {
       disconnect.call(bus);
     }
   }
-
-  process.stdout.write(await queryStandaloneDatabase(options));
-  return 0;
 }
 
 type WaitOptions = {
@@ -719,6 +726,7 @@ function mutationQueryOptions(status: string): QueryOptions {
     resource: 'tasks',
     status,
     output: 'json',
+    mode: 'live',
     forwardedFlags: ['--status', status, '--output', 'json'],
   };
 }
