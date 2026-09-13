@@ -21,6 +21,7 @@ import {
   type PlanningConfirmationMode,
 } from '@invoker/planning-core';
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress } from '../surface.js';
+import { resolveChannelRepo } from '../channel-repo-resolver.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus, clampMrkdwnText } from './slack-formatter.js';
@@ -265,6 +266,7 @@ const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
 const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
 const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
+const CHANNEL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
 const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
 const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
 
@@ -647,6 +649,7 @@ export class SlackSurface implements Surface {
   private defaultRepoUrl?: string;
   private channelRepoBindings: Record<string, string>;
   private workflowChannelRepo?: WorkflowChannelRepository;
+  private channelMetadataCache = new Map<string, { fetchedAt: number; topic?: string; purpose?: string }>();
   private gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   private runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
   private onRestartInvoker?: () => Promise<void>;
@@ -1206,7 +1209,7 @@ export class SlackSurface implements Surface {
       ? this.findMentionedRepoAlias(parsed.text)
       : undefined;
     const mentionedRepoResolution = mentionedRepoAlias ? this.resolveRepoUrl(mentionedRepoAlias) : {};
-    const channelDefaultRepoUrl = this.resolveChannelDefaultRepoUrl(channel);
+    const channelDefaultRepoUrl = await this.resolveChannelDefaultRepoUrl(channel);
     const routeRepoUrl = explicitRepoResolution.url
       ?? detectedRepoResolution.url
       ?? mentionedRepoResolution.url
@@ -2421,15 +2424,34 @@ ${text}`;
     );
   }
 
-  private resolveChannelDefaultRepoUrl(channelId: string | undefined): string | undefined {
-    if (!channelId) return undefined;
-    const configured = this.channelRepoBindings[channelId];
-    if (configured) return this.normalizeRepositoryUrl(configured);
-    const mapping = this.workflowChannelRepo?.getByChannelId(channelId);
-    if (isChannelRepoBinding(mapping) && mapping?.repoUrl) {
-      return this.normalizeRepositoryUrl(mapping.repoUrl);
+  private async resolveChannelDefaultRepoUrl(channelId: string | undefined): Promise<string | undefined> {
+    const resolution = await resolveChannelRepo({ surface: this.type, channelId }, {
+      configBinding: (key) => this.channelRepoBindings[key.channelId],
+      persistedBinding: (key) => {
+        const mapping = this.workflowChannelRepo?.getByChannelId(key.channelId);
+        return isChannelRepoBinding(mapping) ? mapping?.repoUrl : undefined;
+      },
+      channelTopic: async (key) => (await this.fetchChannelMetadata(key.channelId)).topic,
+      channelPurpose: async (key) => (await this.fetchChannelMetadata(key.channelId)).purpose,
+      normalizeRepoUrl: (raw) => this.normalizeRepositoryUrl(raw),
+      sameRepoUrl,
+      log: this.log,
+    });
+    return resolution.repoUrl;
+  }
+
+  private async fetchChannelMetadata(channelId: string): Promise<{ topic?: string; purpose?: string }> {
+    const cached = this.channelMetadataCache.get(channelId);
+    if (cached && Date.now() - cached.fetchedAt < CHANNEL_METADATA_CACHE_TTL_MS) return cached;
+    let metadata: { topic?: string; purpose?: string } = {};
+    try {
+      const info = await this.app.client.conversations.info({ channel: channelId });
+      metadata = { topic: info.channel?.topic?.value, purpose: info.channel?.purpose?.value };
+    } catch {
+      metadata = {};
     }
-    return undefined;
+    this.channelMetadataCache.set(channelId, { ...metadata, fetchedAt: Date.now() });
+    return metadata;
   }
 
   private async handleChannelRepoSetup(
