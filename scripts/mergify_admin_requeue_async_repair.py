@@ -90,7 +90,14 @@ class RepairSubmissionAcknowledgement:
     workflow_id: str | None = None
 
 
-_WORKFLOW_ID_RE = re.compile(r"(?:Workflow ID:|workflow:)\s*(wf-[^\s]+)")
+# A workflow id is one bare token. `[^\s]+` was too permissive: a backslash is
+# not whitespace, so an escaped newline in the submit stdout let the capture run
+# on into the next field (observed: `wf-1788334466115-1\\nrequired-fast`, which
+# matches no workflow and so never settles). Exclude the quoting/escaping
+# characters an id can never contain; stay permissive about the rest, because
+# real ids are not all numeric (`wf-stress-1`, `wf-hitch-fat`) and the app's own
+# predicate is `/^wf-[^/]+$/` (persisted-workflow-mutation-coordinator.ts).
+_WORKFLOW_ID_RE = re.compile(r"(?:Workflow ID:|workflow:)\s*(wf-[^\s\\'\",]+)")
 
 
 def _write_plan_header(

@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -204,6 +205,20 @@ def workflow_status(workflow_id: str) -> str | None:
     return str(status) if status else None
 
 
+def is_resolvable_workflow_id(value: object) -> bool:
+    """True when `value` could name a real workflow.
+
+    The app's own predicate is `/^wf-[^/]+$/`
+    (persisted-workflow-mutation-coordinator.ts), and ids are not all numeric
+    (`wf-stress-1`, `wf-hitch-fat`), so this stays deliberately loose. It only
+    rejects what a capture bug produces: whitespace, an escape sequence, or a
+    quote spliced in from the surrounding output.
+    """
+    if not isinstance(value, str) or not value.startswith("wf-") or len(value) <= 3:
+        return False
+    return not any(ch in value for ch in " \t\n\r\\\"'/")
+
+
 def settle_workflow_fastpath_rows(ledger, now: int) -> int:
     """Write `<kind>-settled` rows for fast-path submissions whose workflow
     reached a terminal status. Returns how many rows were settled. Rows whose
@@ -223,6 +238,30 @@ def settle_workflow_fastpath_rows(ledger, now: int) -> int:
         key = str(row.get("key") or "")
         existing = ledger.latest(f"{kind}-settled", pr, head, key)
         if existing is not None and int(existing.get("epoch", 0) or 0) >= int(row.get("epoch", 0) or 0):
+            continue
+        if not is_resolvable_workflow_id(workflow_id):
+            # Unresolvable is a third outcome, not "still running". Querying it
+            # costs a full headless round trip and can only ever answer "not
+            # found", so the row would be retried on every tick forever and the
+            # tick would keep spending its budget before reaching later repos.
+            print(
+                f"WARN: settle_workflow_fastpath_rows: PR #{pr} {kind} {key!r} stored an "
+                f"unresolvable workflowId {workflow_id!r}; settling it as an infra "
+                f"non-acknowledgement instead of re-querying it.",
+                file=sys.stderr,
+            )
+            ledger.record(
+                f"{kind}-settled", pr, head, key, now,
+                meta={
+                    "workflowId": workflow_id,
+                    "dispatchState": "not-acknowledged",
+                    "failurePhase": "submission",
+                    "outcomeClass": "infra",
+                    "settledBy": "fastpath-observer",
+                    "reason": "unresolvable-workflow-id",
+                },
+            )
+            settled += 1
             continue
         status = workflow_status(str(workflow_id))
         if status in _TERMINAL_WORKFLOW_STATUSES:
