@@ -23,8 +23,10 @@ import {
   reapStaleInvokerCliTempDirs,
   reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
+  reapStaleDevelopmentHomes,
   reapStaleMergeClones,
   reapStaleWorktrees,
+  STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS,
   STALE_MERGE_CLONE_MIN_AGE_HOURS,
   STALE_WORKTREE_GIT_TIMEOUT_MS,
   STALE_WORKTREE_MIN_AGE_HOURS,
@@ -332,6 +334,134 @@ describe('reapStaleMergeClones', () => {
     expect(missing).toEqual({ ok: false, removed: [], reason: 'no-task-store' });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database is locked'), expect.anything());
     expect(existsSync(join(home, 'merge-clones', 'gate-old-Aa1'))).toBe(true);
+  });
+});
+
+describe('reapStaleDevelopmentHomes', () => {
+  const staleAge = (STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS + 1) * 24 * 60 * 60 * 1000;
+
+  function makeDevHome(home: string, id: string, opts: { lockPid?: string; ageMs?: number } = {}): string {
+    const devHome = join(home, 'dev', id);
+    mkdirSync(join(devHome, 'db-backups'), { recursive: true });
+    writeFileSync(join(devHome, 'invoker.db'), 'dev-db');
+    writeFileSync(join(devHome, 'invoker.log'), 'log');
+    if (opts.lockPid !== undefined) {
+      mkdirSync(join(devHome, 'invoker.db.lock'), { recursive: true });
+      writeFileSync(join(devHome, 'invoker.db.lock', 'pid'), `${opts.lockPid}\n`);
+      if (opts.ageMs !== undefined) {
+        backdate(join(devHome, 'invoker.db.lock', 'pid'), opts.ageMs);
+        backdate(join(devHome, 'invoker.db.lock'), opts.ageMs);
+      }
+    }
+    if (opts.ageMs !== undefined) {
+      for (const name of ['db-backups', 'invoker.db', 'invoker.log']) backdate(join(devHome, name), opts.ageMs);
+      backdate(devHome, opts.ageMs);
+    }
+    return devHome;
+  }
+
+  it('removes an old dev home whose recorded process is gone and keeps fresh or still-running ones', async () => {
+    const { root, home } = makeHome();
+    writeFileSync(join(home, 'invoker.db'), 'production-db');
+    const abandoned = makeDevHome(home, 'aaaa000001', { lockPid: '11111', ageMs: staleAge });
+    const running = makeDevHome(home, 'bbbb000002', { lockPid: '22222', ageMs: staleAge });
+    const fresh = makeDevHome(home, 'cccc000003', { lockPid: '33333' });
+    const recentlyLogged = makeDevHome(home, 'dddd000004', { ageMs: staleAge });
+    writeFileSync(join(recentlyLogged, 'invoker.log'), 'written today');
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: (pid) => pid === 22222,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [abandoned], unchecked: [] });
+    expect(existsSync(running)).toBe(true);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(recentlyLogged)).toBe(true);
+    expect(readFileSync(join(home, 'invoker.db'), 'utf8')).toBe('production-db');
+  });
+
+  it('keeps an old dev home whose lock cannot be read and reports it as unchecked', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'eeee000005', { ageMs: staleAge });
+    mkdirSync(join(devHome, 'gui-window.lock', 'pid'), { recursive: true });
+    backdate(join(devHome, 'gui-window.lock', 'pid'), staleAge);
+    backdate(join(devHome, 'gui-window.lock'), staleAge);
+    backdate(devHome, staleAge);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      logger,
+      isProcessAlive: () => false,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [devHome] });
+    expect(existsSync(devHome)).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('gui-window.lock'), expect.anything());
+  });
+
+  it('keeps an old dev home when a file deep inside it changed recently', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'ffff000006', { ageMs: staleAge });
+    mkdirSync(join(devHome, 'agent-sessions', 'session-1'), { recursive: true });
+    writeFileSync(join(devHome, 'agent-sessions', 'session-1', 'transcript.jsonl'), 'written today');
+    backdate(join(devHome, 'agent-sessions', 'session-1'), staleAge);
+    backdate(join(devHome, 'agent-sessions'), staleAge);
+    backdate(devHome, staleAge);
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: () => false,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [] });
+    expect(existsSync(devHome)).toBe(true);
+  });
+
+  it('keeps an old dev home whose worker lock file names a running process', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'aaaa000007', { ageMs: staleAge });
+    mkdirSync(join(devHome, 'locks'), { recursive: true });
+    writeFileSync(join(devHome, 'locks', 'worker-reaper.lock'), JSON.stringify({ kind: 'reaper', pid: 44444 }));
+    backdate(join(devHome, 'locks', 'worker-reaper.lock'), staleAge);
+    backdate(join(devHome, 'locks'), staleAge);
+    backdate(devHome, staleAge);
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: (pid) => pid === 44444,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [] });
+    expect(existsSync(devHome)).toBe(true);
+  });
+
+  it('keeps an old dev home whose lock pid is not a plain positive number and reports it as unchecked', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'bbbb000008', { lockPid: '123abc', ageMs: staleAge });
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: () => false,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [devHome] });
+    expect(existsSync(devHome)).toBe(true);
+  });
+
+  it('does nothing when there is no dev folder', async () => {
+    const { root, home } = makeHome();
+    expect(await reapStaleDevelopmentHomes({ invokerHome: home, userHome: root })).toEqual({
+      ok: true,
+      removed: [],
+      unchecked: [],
+    });
   });
 });
 

@@ -5,6 +5,7 @@ import {
   lstatSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   rmSync,
   statSync,
@@ -33,6 +34,8 @@ import {
 export const DELETING_ORPHAN_MIN_AGE_MINUTES = 30;
 
 export const STALE_MERGE_CLONE_MIN_AGE_HOURS = 48;
+
+export const STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS = 7;
 
 export const AUTOMATION_CHECKOUT_DIRS = [
   'mergify-admin-requeue-work',
@@ -611,6 +614,196 @@ export async function reapStaleMergeClones(opts: {
     return { ok: false, removed, reason: `cleanup-error: ${errors.slice(0, 3).join('; ')}` };
   }
   return { ok: true, removed };
+}
+
+export interface StaleDevelopmentHomeReapResult {
+  ok: boolean;
+  removed: string[];
+  unchecked: string[];
+  reason?: string;
+}
+
+function defaultIsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+type PathKind = { state: 'directory' } | { state: 'missing' } | { state: 'other' } | { state: 'error'; detail: string };
+
+function pathKind(path: string): PathKind {
+  try {
+    return statSync(path).isDirectory() ? { state: 'directory' } : { state: 'other' };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
+    return { state: 'error', detail: `${path}: ${errorDetail(err)}` };
+  }
+}
+
+function parsePid(raw: string): number | null {
+  const value = raw.trim();
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const pid = Number(value);
+  return Number.isSafeInteger(pid) ? pid : null;
+}
+
+type NewestMtime = { ok: true; ms: number } | { ok: false; detail: string };
+
+function newestMtimeMs(dir: string): NewestMtime {
+  let newest = 0;
+  const pending = [dir];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (err) {
+      if (current !== dir && (err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return { ok: false, detail: `${current}: ${errorDetail(err)}` };
+    }
+    newest = Math.max(newest, stat.mtimeMs);
+    if (!stat.isDirectory()) continue;
+    let names: string[];
+    try {
+      names = readdirSync(current);
+    } catch (err) {
+      return { ok: false, detail: `${current}: ${errorDetail(err)}` };
+    }
+    for (const name of names) pending.push(join(current, name));
+  }
+  return { ok: true, ms: newest };
+}
+
+type LockHolder = { state: 'none' } | { state: 'alive'; pid: number; lock: string } | { state: 'unreadable'; detail: string };
+
+function findLockHolder(devHome: string, isProcessAlive: (pid: number) => boolean): LockHolder {
+  let names: string[];
+  try {
+    names = readdirSync(devHome);
+  } catch (err) {
+    return { state: 'unreadable', detail: `${devHome}: ${errorDetail(err)}` };
+  }
+  for (const name of names) {
+    if (!name.endsWith('.lock')) continue;
+    const kind = pathKind(join(devHome, name));
+    if (kind.state === 'error') return { state: 'unreadable', detail: kind.detail };
+    if (kind.state !== 'directory') continue;
+    const pidPath = join(devHome, name, 'pid');
+    if (!existsSync(pidPath)) continue;
+    let raw: string;
+    try {
+      raw = readFileSync(pidPath, 'utf8');
+    } catch (err) {
+      return { state: 'unreadable', detail: `${pidPath}: ${errorDetail(err)}` };
+    }
+    const pid = parsePid(raw);
+    if (pid === null) return { state: 'unreadable', detail: `${pidPath}: invalid pid` };
+    if (isProcessAlive(pid)) return { state: 'alive', pid, lock: name };
+  }
+
+  const locksDir = join(devHome, 'locks');
+  const locksKind = pathKind(locksDir);
+  if (locksKind.state === 'error') return { state: 'unreadable', detail: locksKind.detail };
+  if (locksKind.state !== 'directory') return { state: 'none' };
+  let lockNames: string[];
+  try {
+    lockNames = readdirSync(locksDir);
+  } catch (err) {
+    return { state: 'unreadable', detail: `${locksDir}: ${errorDetail(err)}` };
+  }
+  for (const lockName of lockNames) {
+    if (!lockName.endsWith('.lock')) continue;
+    const lockPath = join(locksDir, lockName);
+    let pid: unknown;
+    try {
+      pid = (JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: unknown }).pid;
+    } catch (err) {
+      return { state: 'unreadable', detail: `${lockPath}: ${errorDetail(err)}` };
+    }
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) {
+      return { state: 'unreadable', detail: `${lockPath}: invalid pid` };
+    }
+    if (isProcessAlive(pid)) return { state: 'alive', pid, lock: `locks/${lockName}` };
+  }
+  return { state: 'none' };
+}
+
+export async function reapStaleDevelopmentHomes(opts: {
+  invokerHome: string;
+  logger?: Logger;
+  userHome?: string;
+  nowMs?: number;
+  isProcessAlive?: (pid: number) => boolean;
+}): Promise<StaleDevelopmentHomeReapResult> {
+  const userHome = opts.userHome ?? homedir();
+  const home = expandTildeHome(opts.invokerHome, userHome);
+  if (!isSafeInvokerHome(home, userHome)) return { ok: false, removed: [], unchecked: [], reason: 'path-guard' };
+
+  const devRoot = join(home, 'dev');
+  const rootKind = pathKind(devRoot);
+  if (rootKind.state === 'error') {
+    opts.logger?.error?.(`[reaper] could not check ${rootKind.detail}`, { module: 'reaper' });
+    return { ok: false, removed: [], unchecked: [], reason: `cleanup-error: ${rootKind.detail}` };
+  }
+  if (rootKind.state !== 'directory') return { ok: true, removed: [], unchecked: [] };
+  let entries: string[];
+  try {
+    entries = readdirSync(devRoot);
+  } catch (err) {
+    const detail = errorDetail(err);
+    opts.logger?.error?.(`[reaper] could not list ${devRoot}: ${detail}`, { module: 'reaper' });
+    return { ok: false, removed: [], unchecked: [], reason: `cleanup-error: ${detail}` };
+  }
+
+  const nowMs = opts.nowMs ?? Date.now();
+  const minAgeMs = STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS * 24 * 60 * 60 * 1000;
+  const isProcessAlive = opts.isProcessAlive ?? defaultIsProcessAlive;
+  const removed: string[] = [];
+  const unchecked: string[] = [];
+  const errors: string[] = [];
+  for (const name of entries) {
+    const devHome = join(devRoot, name);
+    const homeKind = pathKind(devHome);
+    if (homeKind.state === 'error') {
+      unchecked.push(devHome);
+      opts.logger?.warn?.(`[reaper] kept dev home, could not check ${homeKind.detail}`, { module: 'reaper' });
+      continue;
+    }
+    if (homeKind.state !== 'directory') continue;
+    const newest = newestMtimeMs(devHome);
+    if (!newest.ok) {
+      unchecked.push(devHome);
+      opts.logger?.warn?.(`[reaper] kept dev home, age unreadable: ${newest.detail}`, { module: 'reaper' });
+      continue;
+    }
+    if (nowMs - newest.ms < minAgeMs) continue;
+
+    const holder = findLockHolder(devHome, isProcessAlive);
+    if (holder.state === 'unreadable') {
+      unchecked.push(devHome);
+      opts.logger?.warn?.(`[reaper] kept dev home, lock unreadable: ${holder.detail}`, { module: 'reaper' });
+      continue;
+    }
+    if (holder.state === 'alive') {
+      opts.logger?.info?.(`[reaper] kept dev home ${devHome}, ${holder.lock} held by running pid ${holder.pid}`, { module: 'reaper' });
+      continue;
+    }
+    try {
+      await rm(devHome, { recursive: true, force: true });
+      removed.push(devHome);
+      opts.logger?.info?.(`[reaper] removed stale dev home ${devHome}`, { module: 'reaper' });
+    } catch (err) {
+      errors.push(`${devHome}: ${errorDetail(err)}`);
+      opts.logger?.warn?.(`[reaper] failed to remove dev home ${devHome}: ${errorDetail(err)}`, { module: 'reaper' });
+    }
+  }
+  if (errors.length > 0) {
+    return { ok: false, removed, unchecked, reason: `cleanup-error: ${errors.slice(0, 3).join('; ')}` };
+  }
+  return { ok: true, removed, unchecked };
 }
 
 export async function reapStaleInvokerCliTempDirs(opts: {
