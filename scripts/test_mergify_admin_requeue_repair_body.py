@@ -122,5 +122,55 @@ class RebaseOntoBaseTests(unittest.TestCase):
         self.assertEqual(status, "")
 
 
+PR_10742_LIVE_VALIDATION = {
+    # Captured verbatim from the real wf-1787861446614-2/normalize task
+    # failure on PR #10742 (2026-08-27): a "routing"-lane repair that fixed
+    # scripts/with-invoker-development-profile.mjs (tooling-policy) plus its
+    # test and docs/getting-started.md (docs). See
+    # docs/incidents/2026-08-16-mergify-admin-bypass-thrash-review-followups.md
+    # for the review context this class of failure belongs to.
+    "valid": False,
+    "errors": [
+        "Review lane behavior cannot ship with docs, policy files in the same "
+        "PR. Split behavior or cleanup from docs, policy, repro, and "
+        "benchmark slices.",
+        'PR body Review Unit "routing" cannot ship with tooling-policy, docs '
+        "files in the same PR. Split this into one Review Unit per PR.",
+    ],
+    "reviewLane": "behavior",
+    "reviewUnit": "routing",
+    "reviewUnits": ["routing", "tooling-policy", "docs"],
+    "scopeKinds": ["docs", "policy"],
+}
+
+
+class PrereqSplitValidationTests(unittest.TestCase):
+    def test_live_pr_10742_shape_is_prereq_splittable_on_trunk(self) -> None:
+        self.assertTrue(
+            repair_body.is_incidental_tooling_docs_addition(PR_10742_LIVE_VALIDATION)
+        )
+        self.assertTrue(
+            repair_body.is_prereq_split_validation(PR_10742_LIVE_VALIDATION, "master")
+        )
+
+    def test_non_trunk_base_still_blocks_for_human_split(self) -> None:
+        self.assertFalse(
+            repair_body.is_prereq_split_validation(PR_10742_LIVE_VALIDATION, "stack/base")
+        )
+
+    def test_extra_unit_outside_tooling_or_docs_is_not_auto_splittable(self) -> None:
+        genuinely_mixed = {
+            **PR_10742_LIVE_VALIDATION,
+            "reviewUnits": ["routing", "tooling-policy", "write-path"],
+        }
+        self.assertFalse(repair_body.is_incidental_tooling_docs_addition(genuinely_mixed))
+        self.assertFalse(repair_body.is_prereq_split_validation(genuinely_mixed, "master"))
+
+    def test_valid_body_is_never_prereq_splittable(self) -> None:
+        self.assertFalse(
+            repair_body.is_incidental_tooling_docs_addition({"valid": True, "errors": []})
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

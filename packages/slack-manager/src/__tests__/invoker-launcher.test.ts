@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import { LINUX_HEADLESS_ELECTRON_FLAGS } from '@invoker/contracts';
 
-import { resolveOwnerLaunch, withoutMissingPathEntries } from '../invoker-launcher.js';
+import { buildOwnerSpawnEnv, resolveOwnerLaunch, withoutMissingPathEntries } from '../invoker-launcher.js';
 
 describe('withoutMissingPathEntries', () => {
   const exists = (path: string) => path !== '/snap/bin' && path !== '/gone';
@@ -100,5 +100,28 @@ describe('resolveOwnerLaunch', () => {
         existsSync: () => false,
       }),
     ).toThrow(/Cannot launch Invoker headless owner/);
+  });
+});
+
+describe('buildOwnerSpawnEnv', () => {
+  it('declares the spawn as the real production owner service', () => {
+    // Regression: scripts/electron.cjs wraps every launch into an isolated
+    // source-development database unless this flag says otherwise. Confirmed
+    // live on DigitalOcean 1 (a source-checkout host with no packaged
+    // invoker-ui on PATH): production's invoker.db stopped being written
+    // while a fresh ~/.invoker/dev/<hash>/ sandbox was written instead.
+    const env = buildOwnerSpawnEnv({}, 'linux');
+    expect(env.INVOKER_PRODUCTION_OWNER_SERVICE).toBe('1');
+  });
+
+  it('still strips Slack credentials and normalizes PATH/LIBGL as before', () => {
+    const env = buildOwnerSpawnEnv(
+      { SLACK_BOT_TOKEN: 'xoxb-test', PATH: '/usr/bin:/snap/bin' },
+      'linux',
+      (path) => path !== '/snap/bin',
+    );
+    expect(env.SLACK_BOT_TOKEN).toBeUndefined();
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.LIBGL_ALWAYS_SOFTWARE).toBe('1');
   });
 });

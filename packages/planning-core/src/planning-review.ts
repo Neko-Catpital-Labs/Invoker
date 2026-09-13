@@ -8,6 +8,8 @@ export interface PlanningReviewDraft {
   summary: PlanSummary;
   confirmationMode: PlanningConfirmationMode;
   confirmationText: string;
+  /** Opaque token binding this review to exact plan content. Required by invoker_submit_plan. */
+  reviewToken?: string;
 }
 
 export interface PreparePlanningReviewInput {

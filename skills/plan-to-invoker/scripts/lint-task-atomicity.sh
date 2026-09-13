@@ -69,6 +69,41 @@ function first_experiment_artifact(s,    pattern) {
   }
   return ""
 }
+function has_work_path(s) {
+  return (tolower(s) ~ /(^|[^a-z0-9_-])work\//)
+}
+function has_state_artifacts_path(s) {
+  return (tolower(s) ~ /state\/artifacts\//)
+}
+function mentions_ephemeral_local(s) {
+  return (has_work_path(s) || has_state_artifacts_path(s))
+}
+function ephemeral_families_overlap(a, b) {
+  return ((has_work_path(a) && has_work_path(b)) || (has_state_artifacts_path(a) && has_state_artifacts_path(b)))
+}
+function mentions_ephemeral_write(s,    lower) {
+  lower = tolower(s)
+  if (!mentions_ephemeral_local(lower)) return 0
+  if (lower ~ /(write|writes|writing|wrote|create|creates|creating|created|save|saves|saving|saved|output|outputs|generate|generates|generating|generated|emit|emits|export|exports)/) return 1
+  if (lower ~ />[ \t]*["'\''`]?(work\/|state\/artifacts\/)/) return 1
+  if (lower ~ /tee[ \t]+["'\''`]?(work\/|state\/artifacts\/)/) return 1
+  return 0
+}
+function mentions_commit_carry(s,    lower) {
+  lower = tolower(s)
+  if (lower ~ /git[ \t]+add/) return 1
+  if (lower ~ /git[ \t]+commit/) return 1
+  if (lower ~ /(^|[^a-z0-9])commit([^a-z0-9]|$)/) return 1
+  return 0
+}
+function mentions_remote_artifact_api(s,    lower) {
+  lower = tolower(s)
+  if (lower ~ /object[-_ ]?store/) return 1
+  if (lower ~ /company_claims_object_store/) return 1
+  if (lower ~ /sync_outputs_jsonl/) return 1
+  if (lower ~ /upload.*artifact|artifact.*upload|upload.*object|download.*artifact/) return 1
+  return 0
+}
 function task_suffix(task_id, prefix,    n) {
   n = length(prefix)
   if (substr(task_id, 1, n) == prefix) {
@@ -92,12 +127,26 @@ function reset_file_buckets() {
   file_has_policy = 0
   file_has_docs = 0
 }
+function collect_hook_dirs(s,    after) {
+  while (match(s, /[a-z0-9_.\/-]+\/detect\.py/)) {
+    after = substr(s, RSTART + RLENGTH, 1)
+    if (after !~ /[a-z0-9_]/) {
+      hook_dirs[substr(s, RSTART, RLENGTH - length("/detect.py"))] = 1
+    }
+    s = substr(s, RSTART + RLENGTH)
+  }
+}
+function is_hook_readme(path) {
+  if (path !~ /\/readme\.md$/) return 0
+  return ((substr(path, 1, length(path) - length("/readme.md"))) in hook_dirs)
+}
 function classify_file_path(path) {
   if (path == "") return
   if (path ~ /^scripts\/repro\//) {
     file_has_proof = 1
     return
   }
+  if (is_hook_readme(path)) return
   if (path ~ /^skills\// || path ~ /^docs\// || path ~ /\.md$/) {
     file_has_docs = 1
     return
@@ -244,7 +293,7 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
     if (length(prompt_text) < 120) {
       errors[++errn] = "Task \"" id "\" prompt too short (<120 chars); include file paths + explicit acceptance criteria"
     }
-    if (prompt_text !~ /(packages\/|scripts\/|docs\/|skills\/|\.ts|\.tsx|\.js|\.jsx|\.json|\.md|\.sh|\.yaml|\.yml)/) {
+    if (prompt_text !~ /(packages\/|scripts\/|docs\/|skills\/|\.ts|\.tsx|\.js|\.jsx|\.json|\.md|\.sh|\.yaml|\.yml|[A-Za-z0-9_-]\/[A-Za-z0-9_.\/-]*[A-Za-z0-9_-]\.[A-Za-z])/) {
       errors[++errn] = "Task \"" id "\" prompt missing concrete file paths or file extensions"
     }
     if (tolower(prompt_text) !~ /(acceptance criteria|must|ensure|verify|expected|should)/) {
@@ -397,6 +446,7 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   task_dependencies[idx] = dependencies_csv
   task_has_command[idx] = has_command
   task_command_line[idx] = normalize_command(command_line)
+  task_body[idx] = desc "\n" prompt_text "\n" command_line
   task_id_to_index[id] = idx
 
   artifact_path = first_experiment_artifact(desc " " prompt_text)
@@ -448,6 +498,12 @@ BEGIN {
   standalone_workflow_waiver = 0
   on_finish = "pull_request"
   enforce_layering = 1
+  is_scratch = 0
+}
+
+FNR == NR {
+  collect_hook_dirs(tolower($0))
+  next
 }
 
 {
@@ -462,6 +518,14 @@ BEGIN {
     sub(/^[[:space:]]*onFinish:[[:space:]]*/, "", on_finish)
     on_finish = trim(strip_quotes(on_finish))
     enforce_layering = (tolower(on_finish) != "none")
+    next
+  }
+
+  if (!in_task && line ~ /^[[:space:]]*scratch:[[:space:]]*/) {
+    scratch_val = line
+    sub(/^[[:space:]]*scratch:[[:space:]]*/, "", scratch_val)
+    scratch_val = trim(strip_quotes(scratch_val))
+    is_scratch = (tolower(scratch_val) == "true")
     next
   }
 
@@ -647,6 +711,68 @@ END {
     }
   }
 
+  if (enforce_layering == 1 && is_scratch == 0) {
+    scrub_idx = task_id_to_index["scrub-handoff-artifacts"]
+    if (scrub_idx == 0) {
+      errors[++errn] = "Plan with onFinish != none requires a task with id \"scrub-handoff-artifacts\" that checks for ephemeral inter-task handoff files before the PR merge gate"
+    } else {
+      if (task_has_command[scrub_idx] != 1) {
+        errors[++errn] = "Task \"scrub-handoff-artifacts\" must define a shell \"command\" (not a prompt task)"
+      } else if (tolower(task_command_line[scrub_idx]) !~ /scrub[-_a-z]*handoff[-_a-z]*artifacts[-_a-z]*\.sh/) {
+        errors[++errn] = "Task \"scrub-handoff-artifacts\" command must run scripts/scrub-handoff-artifacts.sh (or an equivalent handoff-scrub script)"
+      } else if (tolower(task_command_line[scrub_idx]) ~ /--apply/) {
+        errors[++errn] = "Task \"scrub-handoff-artifacts\" must be a read-only absence check and cannot pass --apply"
+      }
+
+      for (idx = 1; idx <= taskn; idx++) {
+        has_dependent[idx] = 0
+      }
+      for (idx = 1; idx <= taskn; idx++) {
+        if (idx == scrub_idx) continue
+        deps_csv2 = task_dependencies[idx]
+        if (deps_csv2 == "") continue
+        split(deps_csv2, dep_ids2, /,/)
+        for (didx2 in dep_ids2) {
+          dep_id2 = trim(dep_ids2[didx2])
+          if (dep_id2 == "") continue
+          dep_index2 = task_id_to_index[dep_id2]
+          if (dep_index2 > 0) has_dependent[dep_index2] = 1
+        }
+      }
+
+      scrub_deps_csv = task_dependencies[scrub_idx]
+      for (idx = 1; idx <= taskn; idx++) {
+        if (idx == scrub_idx) continue
+        if (has_dependent[idx] == 1) continue
+        if (!csv_has(scrub_deps_csv, task_ids[idx])) {
+          errors[++errn] = "Task \"scrub-handoff-artifacts\" must depend on leaf task \"" task_ids[idx] "\" so handoff artifacts are checked after every implement/verify task completes"
+        }
+      }
+    }
+  }
+
+  if (is_scratch == 0) {
+    for (idx = 1; idx <= taskn; idx++) {
+      cons_body = task_body[idx]
+      if (!mentions_ephemeral_local(cons_body)) continue
+      deps_csv3 = task_dependencies[idx]
+      if (deps_csv3 == "") continue
+      split(deps_csv3, dep_ids3, /,/)
+      for (didx3 in dep_ids3) {
+        dep_id3 = trim(dep_ids3[didx3])
+        if (dep_id3 == "") continue
+        dep_index3 = task_id_to_index[dep_id3]
+        if (dep_index3 == 0) continue
+        prod_body = task_body[dep_index3]
+        if (!mentions_ephemeral_write(prod_body)) continue
+        if (!ephemeral_families_overlap(prod_body, cons_body)) continue
+        if (mentions_commit_carry(prod_body)) continue
+        if (mentions_remote_artifact_api(prod_body)) continue
+        errors[++errn] = "Task \"" task_ids[idx] "\" reads work/** or state/artifacts/** while dependency \"" dep_id3 "\" writes those paths without git add/git commit/commit (inter-task file carry must be via git commit on the task branch; uncommitted local paths do not flow across Invoker worktrees; use one produce+consume command, commit a tracked path, or an explicit object-store/remote artifact API; scratch:true plans are exempt)"
+      }
+    }
+  }
+
   for (w = 1; w <= warnn; w++) {
     print "Atomicity lint warning: " warnings[w] > "/dev/stderr"
   }
@@ -659,4 +785,4 @@ END {
   }
   print "Atomicity lint passed: " ARGV[1]
 }
-' "$file"
+' "$file" "$file"
