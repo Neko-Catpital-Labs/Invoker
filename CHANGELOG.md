@@ -4,9 +4,9 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
-- Document the terminal `skipped` task status: a task is `skipped` when an
-  upstream task failed before it ever started, and retrying that upstream
-  task resurrects the skipped dependents back to `pending`.
+- Document the new terminal `skipped` task status: it marks tasks skipped
+  because an upstream task failed, and retrying that upstream task resurrects
+  the skipped task for execution.
 
 ## 0.1.0
 
