@@ -409,10 +409,13 @@ export function getPrBodyWarnings(body, options = {}) {
 export async function validatePrBody(body, options = {}) {
   const errors = [];
   const trimmed = body.trim();
+  if (Array.isArray(options.changedFiles) && options.changedFiles.length === 0) {
+    errors.push('PR has no file changes; close it instead of merging it.');
+  }
+
   if (!trimmed) {
-    return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, and ## Test Plan and ## Revert Plan with collapsed details blocks.',
-    ];
+    errors.push('PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, and ## Test Plan and ## Revert Plan with collapsed details blocks.');
+    return errors;
   }
 
   for (const heading of REQUIRED_SECTIONS) {
