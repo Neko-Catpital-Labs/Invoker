@@ -7,13 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { collectGuardedBehaviorMarkers } from './validate-pr-body.mjs';
 
 function normalizeReview(review) {
-  const login = String(review?.user?.login ?? review?.author?.login ?? '').trim();
+  const actor = review?.user ?? review?.author ?? review?.actor ?? {};
+  const login = String(actor?.login ?? review?.author_login ?? '').trim();
   return {
     id: Number(review?.id ?? 0),
     login,
-    userType: String(review?.user?.type ?? review?.author?.type ?? ''),
+    userType: String(actor?.type ?? review?.actor_type ?? review?.author_type ?? ''),
     state: String(review?.state ?? '').toUpperCase(),
-    commitId: String(review?.commit_id ?? review?.commitId ?? review?.commit?.oid ?? ''),
+    commitId: String(review?.commit_id ?? review?.commitId ?? review?.headCommit ?? review?.commit?.oid ?? ''),
     submittedAt: String(review?.submitted_at ?? review?.submittedAt ?? ''),
   };
 }
@@ -31,7 +32,7 @@ export function isBotReviewer(review) {
 function latestReviewsByHuman(reviews) {
   const sorted = reviews
     .map(normalizeReview)
-    .filter(review => review.login && !isBotReviewer({
+    .filter(review => review.login && review.submittedAt && !isBotReviewer({
       user: { login: review.login, type: review.userType },
     }))
     .sort((left, right) => {
