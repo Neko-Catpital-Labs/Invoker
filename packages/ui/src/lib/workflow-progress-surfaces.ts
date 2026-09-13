@@ -13,7 +13,7 @@ export interface WorkflowTaskEntry {
   workflow: WorkflowMeta | null;
 }
 
-const WORKFLOW_STATUS_PRIORITY: Record<WorkflowStatus, number> = {
+export const WORKFLOW_STATUS_PRIORITY: Record<WorkflowStatus | 'skipped', number> = {
   failed: 0,
   blocked: 1,
   awaiting_approval: 2,
@@ -22,6 +22,7 @@ const WORKFLOW_STATUS_PRIORITY: Record<WorkflowStatus, number> = {
   fixing_with_ai: 5,
   pending: 6,
   stale: 7,
+  skipped: 8,
   completed: 8,
   closed: 9,
 };
@@ -34,13 +35,13 @@ const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
   needs_input: 4,
 };
 
-const RUNNING_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
+export const RUNNING_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
   queued: true,
   running: true,
   fixing_with_ai: true,
 };
 
-const ATTENTION_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
+export const ATTENTION_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
   failed: true,
   blocked: true,
   needs_input: true,

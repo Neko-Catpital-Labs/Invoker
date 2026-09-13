@@ -62,11 +62,12 @@ export function TaskNode({ data }: TaskNodeProps) {
   const statusLabel = getTaskNodeStatusLabel(task, visualStatus);
 
   const isStale = task.status === 'stale';
+  const isSkipped = task.status === 'skipped';
   const dotClass = `${colors.dot} ${isAnimated ? 'pulse-strong' : ''}`;
 
   return (
     <div
-      className={`relative w-[167px] overflow-hidden rounded-xl border px-2 py-2 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
+      className={`relative w-[167px] overflow-hidden rounded-xl border px-2 py-2 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isSkipped ? 'opacity-50 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
       title={task.id}
       data-selected={selected ? 'true' : 'false'}
     >

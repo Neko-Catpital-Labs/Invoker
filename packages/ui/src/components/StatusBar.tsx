@@ -19,6 +19,7 @@ interface StatusBarProps {
 
 export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey, onStatusClick }: StatusBarProps) {
   let completed = 0;
+  let skipped = 0;
   const runningEntries = queueStatus?.running ?? [];
   const runningTaskIds = new Set(runningEntries.map((entry) => entry.taskId));
   const assigningTaskIds = new Set(
@@ -42,6 +43,9 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
     switch (task.status) {
       case 'completed':
         completed++;
+        break;
+      case 'skipped':
+        skipped++;
         break;
       case 'running':
         if (task.execution.isFixingWithAI) {
@@ -118,6 +122,16 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
         <span data-testid="workflow-status-pill-completed" className="sr-only" />
         Completed: <span className="font-medium">{completed}</span>
       </span>
+      {skipped > 0 && (
+        <span
+          data-testid="status-bar-pill-skipped"
+          data-status-key="skipped"
+          className={`${statusTextClass('skipped')} ${filterClass('skipped')}`}
+          onClick={(e) => onStatusClick?.('skipped', e)}
+        >
+          Skipped: <span className="font-medium">{skipped}</span>
+        </span>
+      )}
       <span
         data-testid="status-bar-pill-running"
         data-status-key="running"
