@@ -1,5 +1,34 @@
 import { test, expect, captureScreenshot } from './fixtures/electron-app.js';
 
+test.use({
+  repoConfig: {
+    autoFixRetries: 0,
+    infraRepair: { enabled: true },
+  },
+});
+
+test('workers surface shows db-reaper registered', async ({ page }) => {
+  await page.getByTestId('sidebar-workers').click();
+  await expect(page.getByTestId('worker-process-list')).toBeVisible();
+  await expect(page.getByTestId('worker-row-db-reaper')).toBeVisible();
+
+  await page.getByTestId('worker-row-db-reaper').click();
+  await expect(page.getByTestId('worker-detail-start-stop')).toBeVisible();
+
+  await captureScreenshot(page, 'workers-db-reaper-registered');
+});
+
+test('workers surface shows admin-bypass-e2e-babysit registered', async ({ page }) => {
+  await page.getByTestId('sidebar-workers').click();
+  await expect(page.getByTestId('worker-process-list')).toBeVisible();
+  await expect(page.getByTestId('worker-row-admin-bypass-e2e-babysit')).toBeVisible();
+
+  await page.getByTestId('worker-row-admin-bypass-e2e-babysit').click();
+  await expect(page.getByTestId('worker-detail-start-stop')).toBeVisible();
+
+  await captureScreenshot(page, 'workers-admin-bypass-e2e-babysit-registered');
+});
+
 test('workers surface shows the worker control in the details panel', async ({ page }) => {
   await page.getByTestId('sidebar-workers').click();
 

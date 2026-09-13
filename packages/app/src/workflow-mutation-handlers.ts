@@ -2,20 +2,25 @@ import {
   AUTO_APPROVE_COMMAND_CHANNEL,
   AUTO_FIX_BARE_RETRY_CHANNEL,
   AUTO_FIX_COMMAND_CHANNEL,
+  AUTO_FIX_RECREATE_CHANNEL,
   buildHeadlessFixArgs,
+  decideWorkflowRetirement,
+  IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL,
   INFRA_REPAIR_RECREATE_TASK_CHANNEL,
   INFRA_REPAIR_RETRY_TASK_CHANNEL,
   parseFixWithAgentMutationArgs,
   parseInfraRepairRecreateTaskMutationArgs,
   parseInfraRepairRetryTaskMutationArgs,
+  parseIdleTaskCleanupRetireWorkflowMutationArgs,
   parseRequeueMutationArgs,
   REQUEUE_COMMAND_CHANNEL,
   REQUEUE_ESCALATE_CHANNEL,
   WORKER_SUBMITTED_MUTATION_CHANNELS,
+  type IdleTaskCleanupWorkerStore,
   type TaskRunner,
 } from '@invoker/execution-engine';
 
-import type { Logger } from '@invoker/contracts';
+import { makeEnvelope, type Logger } from '@invoker/contracts';
 import type { CommandService, Orchestrator } from '@invoker/workflow-core';
 
 import { executeApproveTaskMutation } from './standalone-approve-task-dispatcher.js';
@@ -46,6 +51,11 @@ export interface WorkerMutationHandlerDeps {
   getTaskExecutor: () => TaskRunner;
   /** Read fresh per dispatch — both modes track this as a mutable local variable. */
   getMutationTiming: () => WorkflowMutationTiming | undefined;
+  idleTaskCleanup: {
+    store: IdleTaskCleanupWorkerStore;
+    now: () => number;
+    idleThresholdMs: number;
+  };
   /** `'standalone'` or `'owner'` — only used for log/context strings. */
   contextLabel: string;
 }
@@ -65,7 +75,16 @@ export interface WorkerMutationHandlerDeps {
  * so completeness checks still cover it.
  */
 export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Map<string, WorkflowMutationHandler> {
-  const { orchestrator, commandService, logger, runHeadlessCommand, getTaskExecutor, getMutationTiming, contextLabel } = deps;
+  const {
+    orchestrator,
+    commandService,
+    logger,
+    runHeadlessCommand,
+    getTaskExecutor,
+    getMutationTiming,
+    idleTaskCleanup,
+    contextLabel,
+  } = deps;
   const handlers = new Map<string, WorkflowMutationHandler>();
 
   handlers.set(AUTO_FIX_COMMAND_CHANNEL, async (...fixArgs: unknown[]) => {
@@ -75,6 +94,10 @@ export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Ma
 
   handlers.set(AUTO_FIX_BARE_RETRY_CHANNEL, async (...retryArgs: unknown[]) => {
     return runHeadlessCommand(['retry-task', String(retryArgs[0])]);
+  });
+
+  handlers.set(AUTO_FIX_RECREATE_CHANNEL, async (...recreateArgs: unknown[]) => {
+    return runHeadlessCommand(['recreate-task', String(recreateArgs[0])]);
   });
 
   handlers.set(REQUEUE_COMMAND_CHANNEL, async (...requeueArgs: unknown[]) => {
@@ -90,6 +113,29 @@ export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Ma
   handlers.set(INFRA_REPAIR_RECREATE_TASK_CHANNEL, async (...recreateArgs: unknown[]) => {
     const { taskId } = parseInfraRepairRecreateTaskMutationArgs(recreateArgs);
     return runHeadlessCommand(['recreate-task', taskId]);
+  });
+
+  handlers.set(IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL, async (...retireArgs: unknown[]) => {
+    const { workflowId } = parseIdleTaskCleanupRetireWorkflowMutationArgs(retireArgs);
+    const workflow = idleTaskCleanup.store.listWorkflows().find((candidate) => candidate.id === workflowId);
+    const decision = workflow
+      ? decideWorkflowRetirement(workflow, idleTaskCleanup.store.loadTasks(workflowId), {
+          now: idleTaskCleanup.now(),
+          idleThresholdMs: idleTaskCleanup.idleThresholdMs,
+        })
+      : { kind: 'retain' as const };
+    if (decision.kind === 'retain') {
+      logger.info(
+        `[idle-task-cleanup] skipped stale workflow retirement for ${workflowId}`,
+        { module: 'idle-task-cleanup', workflowId },
+      );
+      return { ok: true };
+    }
+    const result = await commandService.deleteWorkflow(
+      makeEnvelope('idle-task-cleanup-retire-workflow', 'surface', 'workflow', { workflowId }),
+    );
+    if (!result.ok) throw new Error(result.error.message);
+    return { ok: true };
   });
 
   handlers.set(AUTO_APPROVE_COMMAND_CHANNEL, async (...args: unknown[]) => {

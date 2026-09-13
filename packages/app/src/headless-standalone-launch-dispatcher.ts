@@ -12,6 +12,7 @@ interface StandaloneLaunchDispatcherOptions {
   createTaskExecutor: () => TaskRunner;
   setLatestTaskExecutor: (executor: TaskRunner) => void;
   topUpReadyLaunchesEnabled?: () => boolean;
+  deferFirstPollUntil?: Promise<unknown>;
 }
 
 export function startStandaloneLaunchDispatcher(
@@ -51,13 +52,22 @@ export function startStandaloneLaunchDispatcher(
     }
   };
 
-  poll();
-  const pollInterval = setInterval(poll, 2_000);
-  pollInterval.unref?.();
+  let pollInterval: ReturnType<typeof setInterval> | undefined;
+  const startPolling = (): void => {
+    poll();
+    pollInterval = setInterval(poll, 2_000);
+    pollInterval.unref?.();
+  };
+
+  if (options.deferFirstPollUntil) {
+    void options.deferFirstPollUntil.then(startPolling).catch(() => startPolling());
+  } else {
+    startPolling();
+  }
 
   return {
     stop(): void {
-      clearInterval(pollInterval);
+      if (pollInterval) clearInterval(pollInterval);
       headlessDeps.ownerTaskRunnerProvider = originalProvider;
     },
   };

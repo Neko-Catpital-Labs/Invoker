@@ -1,5 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 
@@ -16,8 +18,10 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
 export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const PR_DUPLICATE_CLOSE_WORKER_KIND = 'pr-duplicate-close';
+export const PR_JAILBREAK_LAND_WORKER_KIND = 'pr-jailbreak-land';
 export const PR_AUTO_LABEL_WORKER_KIND = 'pr-auto-label';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_MERGIFY_ADMIN_REQUEUE_LEDGER_RELATIVE_PATH = '.invoker/mergify-admin-requeue-state.jsonl';
 /**
  * Even spacing between each PR-maintenance worker's first tick, so the 4
  * workers sharing the cron lock (scripts/cron-pr-lib.sh) don't all wake on
@@ -35,11 +39,14 @@ export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORK
  * it. Override via INVOKER_PR_MAINTENANCE_TICK_TIMEOUT_MS.
  */
 export const DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS = 4 * 60_000;
+export const DEFAULT_PR_MAINTENANCE_LOCK_WAIT_MS = 4 * 60_000;
+export const DEFAULT_PR_MAINTENANCE_LOCK_POLL_MS = 5_000;
 
 export type PrMaintenanceWorkerKind =
   | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
   | typeof PR_ORPHAN_REPAIR_WORKER_KIND
   | typeof PR_DUPLICATE_CLOSE_WORKER_KIND
+  | typeof PR_JAILBREAK_LAND_WORKER_KIND
   | typeof PR_AUTO_LABEL_WORKER_KIND;
 
 type EnvOverrides = Record<string, string | undefined>;
@@ -65,6 +72,11 @@ const PR_DUPLICATE_CLOSE_ENTRYPOINT: PrMaintenanceEntrypoint = {
   scriptRelativePath: 'scripts/cron-pr-duplicate-close.sh',
   note: 'Closes open PRs already landed on master or duplicating another open PR, via one Invoker close task per PR.',
 };
+const PR_JAILBREAK_LAND_ENTRYPOINT: PrMaintenanceEntrypoint = {
+  kind: PR_JAILBREAK_LAND_WORKER_KIND,
+  scriptRelativePath: 'scripts/cron-pr-jailbreak-land.sh',
+  note: 'Force-merges eligible jailbreak PRs via the admin-bypass land script under manual worker scheduling.',
+};
 const PR_AUTO_LABEL_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_AUTO_LABEL_WORKER_KIND,
   scriptRelativePath: 'scripts/cron-pr-auto-label.sh',
@@ -76,6 +88,7 @@ export interface PrMaintenanceWorkerConfig {
   repoRoot?: string;
   /** Environment overrides passed to the shell entrypoint. `undefined` removes a variable. */
   env?: EnvOverrides;
+  jailbreakLive?: boolean;
   /** Poll cadence for PR-maintenance workers. Defaults to five minutes. */
   intervalMs?: number;
   /**
@@ -89,6 +102,8 @@ export interface PrMaintenanceWorkerConfig {
   startDelayMs?: number;
   /** Shared cron lock path. Defaults to the shell script's `INVOKER_PR_CRON_LOCK` behavior. */
   lockPath?: string;
+  lockWaitMs?: number;
+  lockPollMs?: number;
   /** Per-tick wall-clock cap for the spawned child. See DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS. */
   tickTimeoutMs?: number;
   /** Shell executable used to run the existing entrypoint. Defaults to `bash`. */
@@ -137,6 +152,7 @@ export function registerPrMaintenanceWorkers(
   registerPrAdminBypassLandWorker(registry);
   registerPrOrphanRepairWorker(registry);
   registerPrDuplicateCloseWorker(registry);
+  registerPrJailbreakLandWorker(registry);
   registerPrAutoLabelWorker(registry);
   return registry;
 }
@@ -192,6 +208,29 @@ export function registerPrDuplicateCloseWorker(
   return registry;
 }
 
+export function registerPrJailbreakLandWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: PR_JAILBREAK_LAND_WORKER_KIND,
+    note: PR_JAILBREAK_LAND_ENTRYPOINT.note,
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrJailbreakLandWorker({
+        logger: deps.logger,
+        ...deps.prMaintenance,
+        env: {
+          ...deps.prMaintenance?.env,
+          INVOKER_JAILBREAK_LIVE: deps.prMaintenance?.jailbreakLive
+            ? '1'
+            : deps.prMaintenance?.env?.INVOKER_JAILBREAK_LIVE,
+        },
+        store: deps.store,
+        startDelayMs: 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+      }),
+  });
+  return registry;
+}
+
 export function registerPrAutoLabelWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -221,6 +260,10 @@ export function createPrDuplicateCloseWorker(options: PrMaintenanceWorkerOptions
   return createPrMaintenanceWorker(PR_DUPLICATE_CLOSE_ENTRYPOINT, options);
 }
 
+export function createPrJailbreakLandWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
+  return createPrMaintenanceWorker(PR_JAILBREAK_LAND_ENTRYPOINT, options);
+}
+
 export function createPrAutoLabelWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(PR_AUTO_LABEL_ENTRYPOINT, options);
 }
@@ -239,6 +282,9 @@ export function probePrMaintenanceLock(options: PrMaintenanceLockProbeOptions): 
     timeout: 3_000,
     killSignal: 'SIGKILL',
   });
+  if (flockProbe.signal === 'SIGKILL' || (flockProbe.error && (flockProbe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')) {
+    return { held: false, reason: 'probe-timeout' };
+  }
   if (!flockProbe.error || (flockProbe.error as NodeJS.ErrnoException).code !== 'ENOENT') {
     return flockProbe.status === 0
       ? { held: false }
@@ -282,6 +328,8 @@ function createPrMaintenanceWorker(
       env: options.env,
       intervalMs: options.intervalMs,
       lockPath: options.lockPath,
+      lockWaitMs: options.lockWaitMs,
+      lockPollMs: options.lockPollMs,
       tickTimeoutMs: options.tickTimeoutMs,
       shell: options.shell,
       spawnProcess: options.spawnProcess,
@@ -304,13 +352,33 @@ async function runPrMaintenanceEntrypoint(
   const lockPath = options.lockPath ?? env.INVOKER_PR_CRON_LOCK ?? defaultPrCronLockPath(env);
   env.INVOKER_PR_CRON_LOCK = lockPath;
   const lockProbe = options.lockProbe ?? probePrMaintenanceLock;
-  const lock = await lockProbe({
+  const probeOptions: PrMaintenanceLockProbeOptions = {
     lockPath,
     env,
     staleLockSeconds: parsePositiveInteger(env.INVOKER_PR_CRON_LOCK_STALE_SECS),
-  });
-
+  };
+  const envLockWaitSecs = parsePositiveInteger(env.INVOKER_PR_CRON_LOCK_WAIT_SECS);
+  const lockWaitMs = options.lockWaitMs
+    ?? (envLockWaitSecs !== undefined ? envLockWaitSecs * 1000 : DEFAULT_PR_MAINTENANCE_LOCK_WAIT_MS);
+  const lockPollMs = options.lockPollMs ?? DEFAULT_PR_MAINTENANCE_LOCK_POLL_MS;
+  const lockWaitDeadline = Date.now() + lockWaitMs;
+  let lock = await lockProbe(probeOptions);
   signal?.throwIfAborted();
+
+  if (lock.held && lockWaitMs > 0) {
+    options.logger.info(`[worker:${options.entrypoint.kind}] shared PR maintenance lock held; waiting for it`, {
+      module: 'pr-maintenance-worker',
+      worker: options.entrypoint.kind,
+      lockPath,
+      reason: lock.reason ?? 'lock-held',
+      lockWaitMs,
+    });
+  }
+  while (lock.held && Date.now() < lockWaitDeadline) {
+    await sleep(Math.min(lockPollMs, Math.max(0, lockWaitDeadline - Date.now())), undefined, { signal });
+    lock = await lockProbe(probeOptions);
+    signal?.throwIfAborted();
+  }
 
   if (lock.held) {
     options.logger.info(`[worker:${options.entrypoint.kind}] shared PR maintenance lock held; skipping tick`, {
@@ -462,6 +530,7 @@ async function runPrMaintenanceEntrypoint(
         if (code === 0) {
           options.logger.info(`[worker:${options.entrypoint.kind}] shell entrypoint completed`, fields);
           recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'completed', 'PR maintenance run completed');
+          recordAdminBypassBlockedPrRows(options, env);
           resolvePromise();
           return;
         }
@@ -506,6 +575,179 @@ function recordPrMaintenanceRun(
     incrementAttempt: status === 'running',
     ...(payload ? { payload } : {}),
   });
+}
+
+interface MergifyCommentBlockedLedgerRow {
+  pr: number;
+  headSha: string;
+  key: string;
+  detail: string;
+  repo?: string;
+}
+
+function recordAdminBypassBlockedPrRows(
+  options: PrMaintenanceTickOptions,
+  env: NodeJS.ProcessEnv,
+): void {
+  if (!options.store || options.entrypoint.kind !== PR_ADMIN_BYPASS_LAND_WORKER_KIND) return;
+
+  const ledgerPath = resolveMergifyAdminRequeueLedgerPath(env);
+  for (const row of readCommentBlockedLedgerRows(options, ledgerPath)) {
+    recordBlockedPrDecisionRow(options, row, ledgerPath);
+    recordBlockedPrAlertSend(options, row, ledgerPath);
+  }
+}
+
+function recordBlockedPrDecisionRow(
+  options: PrMaintenanceTickOptions,
+  row: MergifyCommentBlockedLedgerRow,
+  ledgerPath: string,
+): void {
+  if (!options.store) return;
+  const subjectId = row.repo ? `${row.repo}#${row.pr}` : String(row.pr);
+  recordWorkerDecisionRow(options.store, {
+    workerKind: options.entrypoint.kind,
+    actionType: 'mergify-blocked-pr',
+    externalKey: blockedPrDecisionExternalKey(row),
+    subjectType: 'pr',
+    subjectId,
+    status: 'needs_input',
+    summary: row.detail,
+    payload: {
+      pr: row.pr,
+      ...(row.repo ? { repo: row.repo } : {}),
+      ledgerKey: row.key,
+      headSha: row.headSha,
+      ledgerPath,
+    },
+  });
+}
+
+function recordBlockedPrAlertSend(
+  options: PrMaintenanceTickOptions,
+  row: MergifyCommentBlockedLedgerRow,
+  ledgerPath: string,
+): void {
+  if (!options.store) return;
+  const subjectId = row.repo ? `${row.repo}#${row.pr}` : String(row.pr);
+  recordWorkerDecisionRow(options.store, {
+    workerKind: options.entrypoint.kind,
+    actionType: 'alert-send',
+    externalKey: blockedPrAlertExternalKey(row),
+    subjectType: 'pr',
+    subjectId,
+    status: 'completed',
+    summary: row.detail,
+    payload: {
+      message: row.detail,
+      pr: row.pr,
+      ...(row.repo ? { repo: row.repo } : {}),
+      ledgerKey: row.key,
+      headSha: row.headSha,
+      ledgerPath,
+    },
+  });
+}
+
+function readCommentBlockedLedgerRows(
+  options: PrMaintenanceTickOptions,
+  ledgerPath: string,
+): MergifyCommentBlockedLedgerRow[] {
+  if (!existsSync(ledgerPath)) return [];
+
+  const rowsByKey = new Map<string, MergifyCommentBlockedLedgerRow>();
+  let raw: string;
+  try {
+    raw = readFileSync(ledgerPath, 'utf8');
+  } catch (err) {
+    options.logger.warn(`[worker:${options.entrypoint.kind}] could not read Mergify admin-bypass ledger`, {
+      module: 'pr-maintenance-worker',
+      worker: options.entrypoint.kind,
+      ledgerPath,
+      err,
+    });
+    return [];
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const row = parseCommentBlockedLedgerRow(parsed);
+    if (!row) continue;
+    rowsByKey.set(blockedPrLedgerExternalKey(row), row);
+  }
+
+  return [...rowsByKey.values()];
+}
+
+function parseCommentBlockedLedgerRow(value: unknown): MergifyCommentBlockedLedgerRow | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const row = value as Record<string, unknown>;
+  if (row.kind !== 'comment-blocked') return undefined;
+
+  const pr = parseLedgerPrNumber(row.pr);
+  const headSha = typeof row.headSha === 'string' ? row.headSha.trim() : '';
+  const key = typeof row.key === 'string' ? row.key.trim() : '';
+  if (pr === undefined || !headSha || !key) return undefined;
+
+  const meta = row.meta && typeof row.meta === 'object'
+    ? row.meta as Record<string, unknown>
+    : {};
+  const detail = typeof meta.detail === 'string' && meta.detail.trim().length > 0
+    ? meta.detail.trim()
+    : `Mergify repair stopped for PR #${pr}: ${key}`;
+
+  const repo = typeof row.repo === 'string' && row.repo.trim().length > 0
+    ? row.repo.trim()
+    : undefined;
+
+  return { pr, headSha, key, detail, ...(repo ? { repo } : {}) };
+}
+
+function parseLedgerPrNumber(value: unknown): number | undefined {
+  const pr = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\d+$/.test(value.trim())
+      ? Number(value.trim())
+      : Number.NaN;
+  return Number.isSafeInteger(pr) && pr > 0 ? pr : undefined;
+}
+
+function resolveMergifyAdminRequeueLedgerPath(env: NodeJS.ProcessEnv): string {
+  const configured = env.INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE
+    ?? env.MERGIFY_ADMIN_REQUEUE_STATE_FILE;
+  if (configured && configured.trim().length > 0) {
+    return resolveHomePath(configured.trim(), env);
+  }
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  return resolve(home, DEFAULT_MERGIFY_ADMIN_REQUEUE_LEDGER_RELATIVE_PATH);
+}
+
+function resolveHomePath(path: string, env: NodeJS.ProcessEnv): string {
+  if (path === '~' || path.startsWith('~/')) {
+    const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+    return resolve(home, path.slice(2));
+  }
+  return resolve(path);
+}
+
+function blockedPrLedgerExternalKey(row: MergifyCommentBlockedLedgerRow): string {
+  const repoPart = row.repo ? `repo:${row.repo}:` : '';
+  return `${repoPart}pr:${row.pr}:ledger:${row.key}:head:${row.headSha}`;
+}
+
+function blockedPrDecisionExternalKey(row: MergifyCommentBlockedLedgerRow): string {
+  return `mergify-blocked:${blockedPrLedgerExternalKey(row)}`;
+}
+
+function blockedPrAlertExternalKey(row: MergifyCommentBlockedLedgerRow): string {
+  return `alert-send:${blockedPrLedgerExternalKey(row)}`;
 }
 
 function attachChildStreamLogger(

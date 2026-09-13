@@ -55,16 +55,11 @@ switch (command) {
     process.stdout.write(String(intentNode(args[0])?.status ?? ''));
     break;
   }
-  case 'task-event-count-since-intent': {
-    const [taskId, eventType, intentId] = args;
+  case 'task-event-count': {
+    const [taskId, eventType] = args;
     const task = taskNode(taskId);
-    const intent = intentNode(intentId);
-    const since = intent?.createdAt ? Date.parse(intent.createdAt) : NaN;
     const history = Array.isArray(task?.history) ? task.history : [];
-    const count = history.filter((entry) => {
-      const timestamp = entry?.timestamp ? Date.parse(entry.timestamp) : NaN;
-      return entry?.source === eventType && Number.isFinite(timestamp) && Number.isFinite(since) && timestamp >= since;
-    }).length;
+    const count = history.filter((entry) => entry?.source === eventType).length;
     process.stdout.write(String(count));
     break;
   }

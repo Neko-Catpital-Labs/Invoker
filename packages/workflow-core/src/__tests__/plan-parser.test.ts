@@ -179,6 +179,22 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(/mergeMode: "no_op"/);
   });
 
+  it('rejects the incident plan that pairs onFinish none with external review', () => {
+    const yaml = `
+name: Hidden Publication Incident
+repoUrl: git@github.com:test/repo.git
+baseBranch: master
+onFinish: none
+mergeMode: external_review
+tasks:
+  - id: reflect
+    description: Apply one accepted reflection item
+    command: echo "reflect"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/external_review.*onFinish: none/);
+  });
+
   it('rejects a scratch plan task that sets dockerImage', () => {
     const yaml = `
 name: Bad Scratch Docker Plan
@@ -191,5 +207,113 @@ tasks:
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow(/dockerImage.*poolId/);
+  });
+
+  it('parses and deterministically normalizes task freshness', () => {
+    const plan = parsePlan(`
+name: Freshness Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    freshness:
+      watchPaths: [" packages/z.ts ", packages/a.ts, packages/a.ts]
+      pathPreconditions:
+        - path: generated/output.json
+          expected: absent
+        - path: packages/a.ts
+          expected: present
+      guardedBehaviorIds: [z_guard, a-guard, a-guard]
+`);
+
+    expect(plan.tasks[0].freshness).toEqual({
+      watchPaths: ['packages/a.ts', 'packages/z.ts'],
+      pathPreconditions: [
+        { path: 'generated/output.json', expected: 'absent' },
+        { path: 'packages/a.ts', expected: 'present' },
+      ],
+      guardedBehaviorIds: ['a-guard', 'z_guard'],
+    });
+  });
+
+  it('keeps omitted task freshness omitted', () => {
+    const plan = parsePlan(`
+name: Legacy Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+`);
+
+    expect(plan.tasks[0]).not.toHaveProperty('freshness');
+  });
+
+  it.each([
+    ['unknown field', 'freshness: { unknown: true }', /unsupported field "unknown"/],
+    ['absolute watch path', 'freshness: { watchPaths: ["/tmp/out"] }', /repo-relative path/],
+    ['invalid expectation', 'freshness: { pathPreconditions: [{ path: out.txt, expected: maybe }] }', /present.*absent/],
+    ['invalid behavior id', 'freshness: { guardedBehaviorIds: ["bad id"] }', /identifier/],
+  ])('rejects invalid task freshness: %s', (_label, freshnessYaml, expected) => {
+    const yaml = `
+name: Bad Freshness Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    ${freshnessYaml}
+`;
+
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(expected);
+  });
+
+  it('threads an explicit task-level priority through to the parsed task', () => {
+    const yaml = `
+name: Priority Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: urgent
+    description: Do it now
+    command: echo ok
+    priority: 1
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].priority).toBe(1);
+  });
+
+  it('a task priority overrides the plan-level priority', () => {
+    const yaml = `
+name: Priority Override Plan
+repoUrl: git@github.com:test/repo.git
+priority: 4
+tasks:
+  - id: overridden
+    description: Overridden
+    command: echo ok
+    priority: 1
+  - id: inherits
+    description: Inherits plan default
+    command: echo ok
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].priority).toBe(1);
+    expect(plan.tasks[1].priority).toBe(4);
+  });
+
+  it.each([0, 6, 1.5])('rejects a task priority outside 1-5: %s', (badPriority) => {
+    const yaml = `
+name: Bad Priority Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: work
+    description: Do work
+    command: echo ok
+    priority: ${badPriority}
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/priority.*1.*5/i);
   });
 });

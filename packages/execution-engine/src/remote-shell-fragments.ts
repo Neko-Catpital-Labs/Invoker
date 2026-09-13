@@ -11,6 +11,19 @@ export function buildPortableBase64DecodeFunction(functionName = 'invoker_base64
 }`;
 }
 
+export function buildRemotePathNormalizeFunction(): string {
+  return `normalize_remote_path() {
+  local path="$1"
+  if [[ "$path" == '~' ]]; then
+    printf '%s\\n' "$HOME"
+  elif [[ "\${path:0:2}" == '~/' ]]; then
+    printf '%s/%s\\n' "$HOME" "\${path:2}"
+  else
+    printf '%s\\n' "$path"
+  fi
+}`;
+}
+
 export function buildSourceInvokerEnvScript(remoteInvokerHome = '~/.invoker', varName = 'INVOKER_RUNTIME_HOME'): string {
   return `${varName}='${remoteInvokerHome.replace(/'/g, `'\\''`)}'
 if [[ "$${varName}" == '~' ]]; then

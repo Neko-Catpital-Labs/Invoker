@@ -1,0 +1,10 @@
+{
+  "name": "@invoker-fixture/tiny-failing-repo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Fixture package with one deliberately failing test, used as the repair target for the fix-ci poll-loop token bench.",
+  "scripts": {
+    "verify": "node verify.mjs"
+  }
+}
