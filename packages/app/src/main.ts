@@ -936,7 +936,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
             // the ring with the corrupt file, so the next boot has no clean
             // candidate for `SQLiteAdapter.create`'s auto-restore invariant. A
             // failed quick_check MUST skip that hour and log loudly.
-            if (!persistence.quickCheck()) {
+            if (!(await persistence.quickCheckInBackground())) {
               logger.error(
                 'hourly snapshot skipped: source DB failed PRAGMA quick_check. ' +
                   'The snapshot ring is preserved so the next boot can auto-restore from the last clean image.',
