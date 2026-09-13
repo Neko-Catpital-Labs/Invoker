@@ -93,7 +93,7 @@ export function hasFailedDependencyPath(
     seen.add(dependencyId);
     const dependency = tasksById.get(dependencyId);
     if (!dependency) continue;
-    if (dependency.status === 'failed' || dependency.status === 'closed') return true;
+    if (dependency.status === 'failed' || dependency.status === 'closed' || dependency.status === 'skipped') return true;
     if (hasFailedDependencyPath(dependency, tasksById, seen)) return true;
   }
   return false;
@@ -104,7 +104,7 @@ function computeWorkflowStatusFromTaskGraph(
   counts: WorkflowTaskStatusCounts,
 ): WorkflowDerivedStatus {
   const countedStatus = computeWorkflowStatusFromCounts(counts);
-  if (countedStatus !== 'running' || (counts.failed === 0 && counts.closed === 0) || counts.pending === 0) {
+  if (countedStatus !== 'running' || (counts.failed === 0 && counts.closed === 0 && counts.skipped === 0) || counts.pending === 0) {
     return countedStatus;
   }
 

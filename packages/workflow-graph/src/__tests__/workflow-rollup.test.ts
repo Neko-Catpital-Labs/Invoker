@@ -81,6 +81,15 @@ describe('workflow rollup', () => {
     expect(rollup.status).toBe('closed');
   });
 
+  it('closes a workflow when pending work is blocked by a skipped dependency', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('alpha', 'skipped'),
+      task('beta', 'pending', ['alpha']),
+    ]);
+
+    expect(rollup.status).toBe('closed');
+  });
+
   it('does not report closed tasks as failed issues', () => {
     const rollup = computeWorkflowRollupFromSummaries([
       task('alpha', 'closed'),
