@@ -1,5 +1,6 @@
 ---
 name: loop-generator
+category: optimization
 description: >
   Generate a reusable loop instruction doc, loop driver script, and Invoker
   workflow from an interview. Trigger: "loop generator", "generate a loop",
