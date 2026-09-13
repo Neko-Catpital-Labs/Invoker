@@ -184,8 +184,13 @@ gh_json() {
 
 resolve_workflow_for_pr() {
   local pr="$1"
+  local repo="${2:-$TARGET_REPO}"
   if [ -n "${INVOKER_PR_CRON_REVIEW_GATE_CMD:-}" ]; then
-    "$INVOKER_PR_CRON_REVIEW_GATE_CMD" "$pr"
+    "$INVOKER_PR_CRON_REVIEW_GATE_CMD" "$pr" "$repo"
+    return
+  fi
+  if [ "$repo" != "$TARGET_REPO" ]; then
+    headless_query query review-gate "https://github.com/$repo/pull/$pr" --output json
     return
   fi
   headless_query query review-gate "$pr" --output json
