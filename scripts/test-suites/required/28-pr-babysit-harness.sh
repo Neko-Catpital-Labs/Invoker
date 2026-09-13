@@ -11,4 +11,5 @@ bash scripts/repro/repro-pr-orphan-repair.sh
 bash scripts/test-pr-orphan-repair-submit-failure.sh
 bash scripts/test-pr-orphan-repair-lookup-failure.sh
 bash scripts/test-pr-orphan-repair-plan-repo-url.sh
+bash scripts/test-pr-orphan-repair-target-repos.sh
 bash scripts/repro/repro-pr-orphan-admin-bypass-race.sh
