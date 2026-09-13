@@ -1,5 +1,6 @@
 ---
 name: invoker-ops
+category: core
 description: >
   Safely operate existing Invoker workflows and tasks from natural-language requests.
   Trigger when asked to list, inspect, retry, restart, resume, cancel, approve,
