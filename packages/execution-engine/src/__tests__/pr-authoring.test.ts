@@ -7,6 +7,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   buildCanonicalPrBody,
   buildMakePrStackPublishPrompt,
+  extractAgentReportedError,
   parseMakePrStackPublishResult,
   resolvePrBodyValidatorNodeBinary,
   resolveSkillPathViaAgent,
@@ -485,6 +486,29 @@ describe('make-pr stack publish body contract', () => {
 });
 
 // ── resolveSkillPathViaAgent ─────────────────────────────
+
+describe('extractAgentReportedError', () => {
+  it('surfaces the usage-limit message a zero-exit agent reported instead of a body', () => {
+    const stdout = JSON.stringify({
+      type: 'task_complete',
+      last_agent_message: null,
+      error: { message: "You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now." },
+    });
+    expect(extractAgentReportedError(stdout)).toBe(
+      "You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now.",
+    );
+  });
+
+  it('returns undefined when the agent reported no error', () => {
+    const stdout = JSON.stringify({ type: 'task_complete', last_agent_message: '{"artifacts":[]}' });
+    expect(extractAgentReportedError(stdout)).toBeUndefined();
+  });
+
+  it('skips an error object that carries no message', () => {
+    const stdout = '{"error":{"code":429}} {"error":{"message":"rate limited"}}';
+    expect(extractAgentReportedError(stdout)).toBe('rate limited');
+  });
+});
 
 describe('resolveSkillPathViaAgent', () => {
   it('resolves skill from agent bundledSkillRoot when SKILL.md exists', () => {
