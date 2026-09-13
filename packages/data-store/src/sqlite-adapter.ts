@@ -27,6 +27,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
+import { Worker } from 'node:worker_threads';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type {
   TaskState,
@@ -387,6 +388,27 @@ export interface CorruptionRecovery {
 
 /** Prefix produced by `createHourlySnapshot` in `packages/app/src/delete-all-snapshot.ts`. */
 const HOURLY_SNAPSHOT_LABEL = 'hourly-auto-';
+
+function runQuickCheckOnWorkerThread(
+  workerScriptPath: string,
+  dbPath: string,
+): Promise<Array<{ quick_check?: unknown }>> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerScriptPath, { workerData: { dbPath } });
+    let settled = false;
+    worker.once('message', (rows: Array<{ quick_check?: unknown }>) => {
+      settled = true;
+      resolve(rows);
+    });
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) reject(new Error(`quick_check worker for ${dbPath} exited with code ${code} before reporting`));
+    });
+  });
+}
 
 /** Gunzip `gzPath` to `destPath`, streamed so large snapshots never fully buffer in memory. */
 async function gunzipToFile(gzPath: string, destPath: string): Promise<void> {
@@ -1011,6 +1033,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     } catch {
       return false;
     }
+  }
+
+  async quickCheckInBackground(workerScriptPath: string): Promise<boolean> {
+    if (!this.dbPath || this.exclusiveLocking) return this.quickCheck();
+    const rows = await runQuickCheckOnWorkerThread(workerScriptPath, this.dbPath);
+    return rows.length === 1 && rows[0]?.quick_check === 'ok';
   }
 
   private resolveOutputDir(dbPath: string | null): string {
