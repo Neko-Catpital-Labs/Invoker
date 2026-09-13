@@ -33,7 +33,6 @@ export function resolveInvokerRepoRoot(scriptDir) {
     const sharedRepoRoot = resolve(scriptDir, gitCommonDir, '..');
     if (hasWorkspaceMarker(sharedRepoRoot)) return sharedRepoRoot;
   } catch {
-    // no git checkout around this script
   }
 
   const manifest = readManifest();
@@ -48,7 +47,6 @@ export async function importYaml(scriptDir) {
   try {
     return await import('yaml');
   } catch {
-    // not running inside an install that declares yaml; fall through
   }
 
   const repoRoot = resolveInvokerRepoRoot(scriptDir);

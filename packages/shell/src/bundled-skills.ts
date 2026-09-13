@@ -45,13 +45,6 @@ interface BundledSkillsManifest {
    * and can't resolve their own Invoker checkout via git.
    */
   sourceRepoRoot?: string;
-  /**
-   * Directory holding a resolvable `node_modules/yaml`, recorded for packaged
-   * installs whose `sourceRepoRoot` is unset. Read by installed doctor scripts
-   * (skills/plan-to-invoker/scripts/) as the last-resort fallback when they run
-   * from a machine-level skill copy with no checkout and no sibling
-   * node_modules of their own.
-   */
   yamlModuleRoot?: string;
 }
 
