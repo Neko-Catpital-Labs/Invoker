@@ -21,6 +21,53 @@ const DEFAULT_MAX_BUFFER_BYTES = 5 * 1024 * 1024; // 5MB
 const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
 const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
 const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
+const FAILED_TASK_ERROR_TAIL_LINE_LIMIT = 50;
+const FAILED_TASK_ERROR_CHAR_LIMIT = 3000;
+
+const FAILED_TASK_ERROR_LINE_PATTERNS = [
+  /^Traceback \(most recent call last\):$/,
+  /^\s*(?:error|fatal error):\s+\S/i,
+  /^\s*(?:AssertionError|SyntaxError|TypeError|ReferenceError|RangeError|ValueError|RuntimeError|ModuleNotFoundError|ImportError|KeyError|Exception):\s*\S/i,
+  /^\s*(?:FAIL|FAILED)\s+\S/i,
+  /^\s*\S.*\berror\s+TS\d+:/i,
+  /^\s*\S.*:\d+:\d+:\s+(?:error|fatal error):\s+\S/i,
+  /^\s*(?:command failed|error command failed|failed with|exited with).*\b(?:exit code|exit status|code|status)\s*[=:]?\s*[1-9]\d*\b/i,
+  /^\s*(?:exit code|exit status)\s*[=:]?\s*[1-9]\d*\b/i,
+  /\bELIFECYCLE\b.*\bCommand failed with exit code [1-9]\d*\b/i,
+];
+
+function failedTaskErrorTail(output: string): string | undefined {
+  const lines = output.split('\n');
+  const tail = lines.slice(-FAILED_TASK_ERROR_TAIL_LINE_LIMIT).join('\n').trim();
+  if (!tail) return undefined;
+  return tail.length > FAILED_TASK_ERROR_CHAR_LIMIT
+    ? tail.slice(-FAILED_TASK_ERROR_CHAR_LIMIT)
+    : tail;
+}
+
+function findFirstErrorShapedLineStart(output: string): number | undefined {
+  let lineStart = 0;
+  for (const line of output.split('\n')) {
+    const matchLine = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (FAILED_TASK_ERROR_LINE_PATTERNS.some((pattern) => pattern.test(matchLine))) {
+      return lineStart;
+    }
+    lineStart += line.length + 1;
+  }
+  return undefined;
+}
+
+export function selectFailedTaskStoredError(output: string): string | undefined {
+  const errorStart = findFirstErrorShapedLineStart(output);
+  if (errorStart !== undefined) {
+    const errorSpan = output.slice(errorStart).trim();
+    if (!errorSpan) return undefined;
+    return errorSpan.length > FAILED_TASK_ERROR_CHAR_LIMIT
+      ? errorSpan.slice(0, FAILED_TASK_ERROR_CHAR_LIMIT)
+      : errorSpan;
+  }
+  return failedTaskErrorTail(output);
+}
 
 /**
  * Canonicalizes a repoUrl for `repoProvisionCommands` lookups so
@@ -1317,11 +1364,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     let error: string | undefined;
     if (effectiveExitCode !== 0 && entry) {
       const allOutput = entry.outputBuffer.join('');
-      const lines = allOutput.split('\n');
-      const tail = lines.slice(-50).join('\n').trim();
-      if (tail) {
-        error = tail.length > 3000 ? tail.slice(-3000) : tail;
-      }
+      error = selectFailedTaskStoredError(allOutput);
     }
     if (semanticFailure) {
       error = semanticFailure.message;
