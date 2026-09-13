@@ -17,17 +17,29 @@ env:
 jobs:
   guard-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref }}
           fetch-depth: 0
           fetch-tags: true
 
       - name: Guard release is exactly a minor bump
         run: |
-          CURRENT_REF="${{ github.sha }}"
-          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname --merged "$CURRENT_REF^" | head -1)
+          CURRENT_COMMIT="$(git rev-parse HEAD)"
+          PREVIOUS_TAG="$(
+            git for-each-ref --merged "$CURRENT_COMMIT" --sort=-creatordate --format='%(refname:short)' 'refs/tags/v*' |
+              while read -r tag; do
+                tag_commit="$(git rev-list -n 1 "$tag")"
+                if [ "$tag_commit" != "$CURRENT_COMMIT" ]; then
+                  echo "$tag"
+                  break
+                fi
+              done
+          )"
           if [ -z "$PREVIOUS_TAG" ]; then
             echo "No previous v* release tag found; skipping guard for the first release."
             exit 0
@@ -42,7 +54,8 @@ jobs:
           echo "Release version guard passed: $PREVIOUS_VERSION -> $CURRENT_VERSION"
 
   build:
-    needs: guard-version
+    needs:
+      - guard-version
     uses: ./.github/workflows/reusable-release-build.yml
 
   publish-release:
