@@ -33,6 +33,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/headless-lib.sh"
 TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
 PR_AUTHOR="${INVOKER_PR_CRON_AUTHOR:-EdbertChan}"
 CRON_LOCK="${INVOKER_PR_CRON_LOCK:-${TMPDIR:-/tmp}/invoker-pr-crons.lock}"
+CRON_LOCK_WAIT_SECS="${INVOKER_PR_CRON_LOCK_WAIT_SECS:-60}"
 DRY_RUN="${INVOKER_PR_CRON_DRY_RUN:-0}"
 
 # ---------------------------------------------------------------------------
@@ -82,7 +83,7 @@ _cron_lock_reap_stale() {
 cron_lock() {
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$CRON_LOCK"
-    if ! flock -n 9; then
+    if ! flock -w "$CRON_LOCK_WAIT_SECS" 9; then
       log_line "another PR cron operation in progress; exiting"
       exit 0
     fi
@@ -91,11 +92,16 @@ cron_lock() {
 
   # Portable fallback: atomic mkdir lock, reaped only on a dead holder PID.
   local lockdir="${CRON_LOCK}.d"
+  local deadline=$(( $(date +%s) + CRON_LOCK_WAIT_SECS ))
   [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
-  if ! mkdir "$lockdir" 2>/dev/null; then
-    log_line "another PR cron operation in progress; exiting"
-    exit 0
-  fi
+  until mkdir "$lockdir" 2>/dev/null; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      log_line "another PR cron operation in progress; exiting"
+      exit 0
+    fi
+    sleep 1
+    [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
+  done
   printf '%s\n' "$$" > "$lockdir/pid"
   CRON_LOCK_DIR="$lockdir"
   # shellcheck disable=SC2064
