@@ -182,6 +182,19 @@ assert((await validatePrBody(validMinimal)).length === 0, 'valid minimal body sh
 assert((await validatePrBody(validArchitecture)).length === 0, 'valid architecture body should pass');
 assert(getPrBodyWarnings(validMinimal).length === 0, 'short summary should produce no warnings');
 
+const noChangedFilesError = 'PR has no file changes; close it instead of merging it.';
+const emptyChangedFilesErrors = await validatePrBody(validMinimal, { changedFiles: [] });
+assert(
+  emptyChangedFilesErrors.includes(noChangedFilesError),
+  'explicit empty changed-file array should fail validation',
+);
+
+const changedFilesErrors = await validatePrBody(validMinimal, { changedFiles: ['packages/workflow-core/src/router.ts'] });
+assert(
+  !changedFilesErrors.includes(noChangedFilesError),
+  'non-empty changed-file array should not report the no-file-changes error',
+);
+
 const dependencyLiteTmp = mkdtempSync(join(tmpdir(), 'pr-body-validator-lite-'));
 try {
   const bodyPath = join(dependencyLiteTmp, 'body.md');
