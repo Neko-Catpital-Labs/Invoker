@@ -1008,6 +1008,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:stop-worker':
         return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:tick-worker':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
         const workflows = persistence.listWorkflows();
         const firstWorkflow = workflows[0] as { id?: unknown } | undefined;

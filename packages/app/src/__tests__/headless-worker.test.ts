@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { E2E_AUTOFIX_WORKER_KIND, INFRA_REPAIR_WORKER_KIND } from '@invoker/execution-engine';
+import { E2E_AUTOFIX_WORKER_KIND, INFRA_REPAIR_WORKER_KIND, THRASH_DETECTOR_WORKER_KIND } from '@invoker/execution-engine';
 import {
   resolveHeadlessDiskHeadroomConfig,
   resolveHeadlessInfraRepairConfig,
   resolveHeadlessCatstackDeployConfig,
+  resolveHeadlessThrashDetectorConfig,
   resolveHeadlessSelfDeployConfig,
   runHeadless,
 } from '../headless.js';
@@ -25,6 +26,7 @@ describe('headless worker registry', () => {
     expect(stdout).toContain('Worker kinds');
     expect(stdout).not.toContain('pr-summary-refresh');
     expect(stdout).toContain(INFRA_REPAIR_WORKER_KIND);
+    expect(stdout).toContain(THRASH_DETECTOR_WORKER_KIND);
     expect(stdout).toContain('admin-bypass-e2e-babysit');
   });
 
@@ -146,6 +148,24 @@ describe('headless worker registry', () => {
     const config = resolveHeadlessCatstackDeployConfig({});
     expect(config.intervalMs).toBe(15 * 60_000);
     expect(config.remoteTargets).toEqual([]);
+  });
+
+  it('maps configured thrash-detector fields into worker dependencies', () => {
+    const config = resolveHeadlessThrashDetectorConfig({
+      thrashDetector: {
+        enabled: false,
+        intervalMinutes: 10,
+        thresholdCount: 4,
+        windowHours: 12,
+      },
+    });
+
+    expect(config).toEqual({
+      enabled: false,
+      intervalMs: 10 * 60_000,
+      thresholdCount: 4,
+      windowHours: 12,
+    });
   });
 
   it('maps configured intervalMinutes and paths into self-deploy worker dependencies', () => {
