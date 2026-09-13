@@ -4,6 +4,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { importYaml } from './vendor/resolve-yaml.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,19 +30,6 @@ function resolveInvokerRepoRoot(scriptDir) {
     return null;
   }
   return null;
-}
-
-async function importYaml(scriptDir) {
-  try {
-    return await import('yaml');
-  } catch {
-    const repoRoot = resolveInvokerRepoRoot(scriptDir);
-    for (const candidate of ['packages/app/node_modules/yaml/dist/index.js', 'node_modules/yaml/dist/index.js']) {
-      const yamlPath = repoRoot ? resolve(repoRoot, candidate) : null;
-      if (yamlPath && existsSync(yamlPath)) return import(yamlPath);
-    }
-    throw new Error('Unable to resolve yaml runtime. Set INVOKER_REPO_ROOT to an Invoker checkout with installed dependencies.');
-  }
 }
 
 function uniqueSorted(values) {
