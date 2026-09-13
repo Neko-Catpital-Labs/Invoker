@@ -46,9 +46,13 @@ run_cron() {
   bash "$ROOT/scripts/cron-pr-orphan-repair.sh" 2>&1
 }
 
-out="$(run_cron)" || fail "submit-failure tick exited non-zero" "$out"
+if out="$(run_cron)"; then
+  fail "a tick whose submits all failed must exit non-zero" "$out"
+fi
 echo "$out" | grep -q "PR #801: submit failed: simulated ipc failure" \
   || fail "expected owner IPC failure to be logged" "$out"
+echo "$out" | grep -q "orphan-repair: all 1 submit attempt(s) failed" \
+  || fail "expected all-failed summary to be logged" "$out"
 grep -q "require=1" "$NODE_LOG" \
   || fail "worker IPC dispatch must require an existing owner" "$(cat "$NODE_LOG")"
 grep -q "exec -- run .*repair-pr-801" "$NODE_LOG" \
