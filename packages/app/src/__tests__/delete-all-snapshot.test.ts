@@ -134,7 +134,7 @@ describe('delete-all-snapshot (adapter-backed backup)', () => {
     ).rejects.toThrow(/disk full/);
   });
 
-  it.fails('leaves no partial snapshot or journal behind when the backup fails partway', async () => {
+  it('leaves no partial snapshot or journal behind when the backup fails partway', async () => {
     const root = makeDbRoot();
     writeFileSync(join(root, 'invoker.db'), 'db-main');
 
@@ -149,7 +149,7 @@ describe('delete-all-snapshot (adapter-backed backup)', () => {
     expect(readdirSync(join(root, 'db-backups'))).toEqual([]);
   });
 
-  it.fails('leaves no raw snapshot behind when compression fails', async () => {
+  it('leaves no raw snapshot behind when compression fails', async () => {
     const root = makeDbRoot();
     writeFileSync(join(root, 'invoker.db'), 'db-main');
     let rawPath = '';
