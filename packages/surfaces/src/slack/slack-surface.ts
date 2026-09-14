@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { extractMessageRepoCandidates, extractRepositoryUrls, looksLikePreset, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
+import { extractRepositoryUrls, extractRepoUrlFromMessage, looksLikePreset, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -189,7 +189,7 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
 
-export { parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+export { extractRepoUrlFromMessage, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 export type { LocalRequest } from './mention-parsers.js';
 
 export { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
@@ -246,10 +246,6 @@ const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
 const CHANNEL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
 const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
 const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
-
-export function extractRepoUrlFromMessage(text: string): string | undefined {
-  return extractMessageRepoCandidates(text)[0];
-}
 
 type RepoParts = {
   host: string;
