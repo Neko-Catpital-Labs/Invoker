@@ -276,7 +276,6 @@ export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean;
 export type StartExecutionOptions = { limit?: number };
 
 export interface OrchestratorPersistence {
-  /** Run a group of persistence writes atomically when the adapter supports it. */
   runInTransaction?<T>(work: () => T): T;
   saveWorkflow(workflow: {
     id: string;
