@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTRY = join(REPO_ROOT, 'packages/app/src/headless-command-registry.ts');
-const CLI = join(REPO_ROOT, 'packages/cli/src/index.ts');
+const CLI_SOURCES = [
+  join(REPO_ROOT, 'packages/cli/src/index.ts'),
+  join(REPO_ROOT, 'packages/cli/src/cli-runtime.ts'),
+];
 const DEBT = join(REPO_ROOT, 'scripts/cli-headless-parity-debt.txt');
 
 const SPECIAL_CLI_SPELLINGS = new Map([
@@ -63,7 +66,7 @@ function isExposed(command, verbs) {
 }
 
 const commands = headlessCommands(read(REGISTRY));
-const verbs = cliVerbs(read(CLI));
+const verbs = cliVerbs(CLI_SOURCES.map(read).join('\n'));
 const debt = debtList(read(DEBT));
 
 if (process.argv.includes('--list')) {
