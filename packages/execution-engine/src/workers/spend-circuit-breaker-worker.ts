@@ -20,6 +20,7 @@ import {
 import {
   DEFAULT_CODEX_DAILY_TOKEN_BUDGET,
   buildRemoteCodexTallyScript,
+  codexSpendGateBlockMessage,
   codexSpendGateDayKey,
   defaultCodexSessionRoot,
   defaultCodexSpendGatePath,
@@ -31,6 +32,7 @@ import {
 } from '../codex-spend-gate.js';
 import { buildSshConnectionArgs, type SshTargetConnection } from '../ssh-transport-options.js';
 import { execRemoteCapture } from '../ssh-git-exec.js';
+import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
 
 export const SPEND_CIRCUIT_BREAKER_WORKER_KIND = 'spend-circuit-breaker';
 
@@ -43,7 +45,7 @@ export interface SpendCircuitBreakerWorkflowRow {
   readonly description?: string;
 }
 
-export interface SpendCircuitBreakerWorkerStore {
+export interface SpendCircuitBreakerWorkerStore extends WorkerDecisionStore {
   listWorkflows(): ReadonlyArray<SpendCircuitBreakerWorkflowRow>;
   setWorkerDesiredState(workerKind: string, desiredEnabled: boolean): unknown;
 }
@@ -275,6 +277,7 @@ export function createSpendCircuitBreakerWorker(options: SpendCircuitBreakerWork
       ctx.signal?.throwIfAborted();
 
       await runCodexDailySpendGateTick(codexDailyGate, options.logger, now());
+      recordCodexSpendGateAlert(options.store, codexDailyGate.statePath ?? defaultCodexSpendGatePath());
       ctx.signal?.throwIfAborted();
 
       if (!enabled || Object.keys(tokenBudgetByWorkerKind).length === 0) return;
@@ -313,6 +316,31 @@ export function createSpendCircuitBreakerWorker(options: SpendCircuitBreakerWork
           { module: 'spend-circuit-breaker', workerKind: decision.workerKind, windowTokens: decision.windowTokens, tokenBudget: decision.tokenBudget },
         );
       }
+    },
+  });
+}
+
+function recordCodexSpendGateAlert(store: WorkerDecisionStore, gatePath: string): void {
+  const trip = loadCodexSpendGateTrip(gatePath);
+  if (!trip) return;
+  const externalKey = `alert-send:codex-spend-gate:${trip.trippedAt}`;
+  if (store.getWorkerAction?.(SPEND_CIRCUIT_BREAKER_WORKER_KIND, externalKey)) return;
+  const message = codexSpendGateBlockMessage(trip, gatePath);
+  recordWorkerDecisionRow(store, {
+    workerKind: SPEND_CIRCUIT_BREAKER_WORKER_KIND,
+    actionType: 'alert-send',
+    externalKey,
+    subjectType: 'codex-spend-gate',
+    subjectId: trip.dayKey,
+    status: 'completed',
+    summary: message,
+    payload: {
+      message,
+      trippedAt: trip.trippedAt,
+      dayKey: trip.dayKey,
+      observedTokens: trip.observedTokens,
+      tokenBudget: trip.tokenBudget,
+      statePath: gatePath,
     },
   });
 }
