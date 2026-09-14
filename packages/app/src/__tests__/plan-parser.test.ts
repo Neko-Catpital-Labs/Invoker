@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults, assertNoDuplicateTaskIds, assertRepoUrlCloneable } from '../plan-parser.js';
+import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults, assertNoDuplicateTaskIds, assertRepoUrlCloneable, assertRemoteRepoUrlCloneable } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -7,7 +7,7 @@ import * as childProcess from 'node:child_process';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
-  return { ...actual, execSync: vi.fn(actual.execSync) };
+  return { ...actual, execFile: vi.fn(actual.execFile), execSync: vi.fn(actual.execSync) };
 });
 import { execFileSync, execSync } from 'node:child_process';
 
@@ -79,7 +79,7 @@ tasks:
     );
   });
 
-  it('rejects an unreachable remote during plan file validation', async () => {
+  it('accepts a remote during plan file validation without synchronously probing the network', async () => {
     const planPath = join(tmpdir(), `invoker-unreachable-repo-${process.pid}.yaml`);
     writeFileSync(planPath, `
 name: Unreachable Repo
@@ -93,53 +93,74 @@ tasks:
       throw new Error('unreachable');
     });
 
-    await expect(parsePlanFile(planPath)).rejects.toThrow(
-      'repoUrl "https://example.invalid/repo.git" is not a readable git repository',
-    );
+    await expect(parsePlanFile(planPath)).resolves.toMatchObject({
+      repoUrl: 'https://example.invalid/repo.git',
+    });
+    expect(execFileSyncSpy).not.toHaveBeenCalled();
     execFileSyncSpy.mockRestore();
   });
 
-  it('survives a single transient failure of the remote clone probe', () => {
+  it('survives a single transient failure of the async remote clone probe', async () => {
     // Matches the real incident: a momentary git/network blip made
-    // assertRepoUrlCloneable's one-shot probe permanently wedge a PR's
+    // the one-shot probe permanently wedge a PR's
     // repair claim, because the caller's own error-recovery path also
     // depends on the same infra and silently swallowed its own failure.
-    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync');
-    execFileSyncSpy.mockImplementationOnce(() => {
+    const execFileSpy = vi.spyOn(childProcess, 'execFile');
+    execFileSpy.mockImplementationOnce(((_file, _args, _options, callback) => {
       const err = new Error('git ls-remote failed');
       (err as { stderr?: Buffer }).stderr = Buffer.from('fatal: unable to access: transient network error');
-      throw err;
-    });
-    execFileSyncSpy.mockImplementationOnce(() => Buffer.from(''));
+      callback?.(err, '', '');
+      return {} as ReturnType<typeof childProcess.execFile>;
+    }) as typeof childProcess.execFile);
+    execFileSpy.mockImplementationOnce(((_file, _args, _options, callback) => {
+      callback?.(null, '', '');
+      return {} as ReturnType<typeof childProcess.execFile>;
+    }) as typeof childProcess.execFile);
 
-    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).not.toThrow();
-    expect(execFileSyncSpy).toHaveBeenCalledTimes(2);
-    execFileSyncSpy.mockRestore();
+    await expect(assertRemoteRepoUrlCloneable('https://github.com/example/repo.git')).resolves.toBeUndefined();
+    expect(execFileSpy).toHaveBeenCalledTimes(2);
+    execFileSpy.mockRestore();
   });
 
-  it('allows a remote clone probe the same 30-second network budget as remote doctor', () => {
-    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockReturnValue(Buffer.from(''));
+  it('allows an async remote clone probe the same 30-second network budget as remote doctor', async () => {
+    const execFileSpy = vi.spyOn(childProcess, 'execFile').mockImplementation(((_file, _args, _options, callback) => {
+      callback?.(null, '', '');
+      return {} as ReturnType<typeof childProcess.execFile>;
+    }) as typeof childProcess.execFile);
 
-    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).not.toThrow();
-    expect(execFileSyncSpy).toHaveBeenCalledWith(
+    await expect(assertRemoteRepoUrlCloneable('https://github.com/example/repo.git')).resolves.toBeUndefined();
+    expect(execFileSpy).toHaveBeenCalledWith(
       'git',
       ['ls-remote', '--exit-code', '--', 'https://github.com/example/repo.git', 'HEAD'],
+      expect.objectContaining({ timeout: 30_000 }),
+      expect.any(Function),
+    );
+    execFileSpy.mockRestore();
+  });
+
+  it('does not run the remote probe from the synchronous repoUrl check', () => {
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockReturnValue(Buffer.from(''));
+    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).not.toThrow();
+    expect(execFileSyncSpy).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['ls-remote']),
       expect.objectContaining({ timeout: 30_000 }),
     );
     execFileSyncSpy.mockRestore();
   });
 
-  it('surfaces the real git error after all retry attempts are exhausted', () => {
-    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+  it('surfaces the real git error after all async retry attempts are exhausted', async () => {
+    const execFileSpy = vi.spyOn(childProcess, 'execFile').mockImplementation(((_file, _args, _options, callback) => {
       const err = new Error('git ls-remote failed');
       (err as { stderr?: Buffer }).stderr = Buffer.from('fatal: could not resolve host: github.com');
-      throw err;
-    });
+      callback?.(err, '', '');
+      return {} as ReturnType<typeof childProcess.execFile>;
+    }) as typeof childProcess.execFile);
 
-    expect(() => assertRepoUrlCloneable('https://github.com/example/repo.git')).toThrow(
+    await expect(assertRemoteRepoUrlCloneable('https://github.com/example/repo.git')).rejects.toThrow(
       'fatal: could not resolve host: github.com',
     );
-    execFileSyncSpy.mockRestore();
+    execFileSpy.mockRestore();
   });
 
   it('accepts a file:// checkout URL for the local workspace', async () => {
