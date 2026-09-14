@@ -9,11 +9,13 @@ import {
   IpcBus,
   DEFAULT_REQUEST_DEADLINE_MS,
   MALFORMED_FRAME_RATE_LIMIT_MS,
+  channelHasLongRequestDeadline,
   resolveDefaultSocketPath,
   isServeRecoveryEligible,
   shouldForwardRelayedErrorResponse,
   type MalformedFrameEvent,
 } from '../ipc-bus.js';
+import { IpcChannels } from '@invoker/contracts/ipc-channels';
 import { TransportError, TransportErrorCode } from '../transport-error.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -487,6 +489,92 @@ describe('IpcBus', () => {
     // invoker:plan-from-goal) is not on that list, so it should behave the same
     // way but currently does not.
     expect(winner).toBe(stillPending);
+  });
+
+  it('REGRESSION: a slow invoker:planning-chat-submit delegated over headless.gui-mutation does not report failure while the owner is still submitting', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest('headless.gui-mutation', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(client);
+    await client.ready();
+    await sleep(20);
+
+    const pending = client.request('headless.gui-mutation', {
+      channel: 'invoker:planning-chat-submit',
+      args: [{ sessionId: 'session-1' }],
+    });
+
+    const stillPending = Symbol('still-pending');
+    const winner = await Promise.race([pending, sleep(300).then(() => stillPending)]);
+
+    expect(winner).toBe(stillPending);
+  });
+
+  it('REGRESSION: a slow invoker:planning-chat-rebind-repo delegated over headless.gui-mutation is killed by the default deadline instead of getting the long-deadline protection planning-chat-send gets', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest('headless.gui-mutation', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(client);
+    await client.ready();
+    await sleep(20);
+
+    const pending = client.request('headless.gui-mutation', {
+      channel: 'invoker:planning-chat-rebind-repo',
+      args: [{ sessionId: 'session-1', repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/' }],
+    });
+
+    const stillPending = Symbol('still-pending');
+    const winner = await Promise.race([pending, sleep(300).then(() => stillPending)]);
+
+    expect(winner).toBe(stillPending);
+  });
+
+  it('REGRESSION: a slow invoker:planning-chat-create delegated over headless.gui-mutation gets the long deadline without being listed in LONG_REQUEST_DEADLINE_CHANNELS', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest('headless.gui-mutation', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(client);
+    await client.ready();
+    await sleep(20);
+
+    const pending = client.request('headless.gui-mutation', {
+      channel: 'invoker:planning-chat-create',
+      args: [{}],
+    });
+
+    const stillPending = Symbol('still-pending');
+    const winner = await Promise.race([pending, sleep(300).then(() => stillPending)]);
+
+    expect(winner).toBe(stillPending);
+  });
+
+  it('gives every invoker:planning-chat-* IpcChannels key the long deadline', () => {
+    const planningChannels = Object.keys(IpcChannels).filter((channel) =>
+      channel.startsWith('invoker:planning-chat-'),
+    );
+    expect(planningChannels.length).toBeGreaterThan(0);
+    for (const channel of planningChannels) {
+      expect(channelHasLongRequestDeadline(channel), channel).toBe(true);
+    }
+    expect(channelHasLongRequestDeadline('invoker:get-status')).toBe(false);
   });
 
   it('REGRESSION: a slow invoker:start-ready delegated over headless.gui-mutation is killed by the default deadline instead of getting the long-deadline protection headless.exec gets', async () => {

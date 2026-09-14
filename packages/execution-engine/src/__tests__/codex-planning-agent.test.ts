@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { CodexPlanningAgent } from '../agents/codex-planning-agent.js';
 
 describe('CodexPlanningAgent', () => {
-  it('builds a sandboxed full-auto codex exec command and ignores model', () => {
+  it('builds a workspace-write sandboxed codex exec command and ignores model', () => {
     const agent = new CodexPlanningAgent({ command: 'codex-test' });
-    expect(agent.buildPlanningCommand('p', { model: 'ignored' })).toEqual({
+    const command = agent.buildPlanningCommand('p', { model: 'ignored' });
+    expect(command).toEqual({
       command: 'codex-test',
-      args: ['exec', '--json', '--full-auto', 'p'],
+      args: ['exec', '--json', '--sandbox', 'workspace-write', 'p'],
     });
+    expect(command.args).not.toContain('--full-auto');
   });
 
   it('defaults the command to codex', () => {
