@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { rm as rmAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { Logger } from '@invoker/contracts';
@@ -18,6 +18,11 @@ import type { TaskState } from '@invoker/workflow-core';
 
 import { computeRepoCacheHash } from '../git-utils.js';
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
+import {
+  hasFreshInUseMark,
+  IN_USE_MARK_DIR,
+  IN_USE_MARK_MAX_AGE_SECONDS,
+} from '../workspace-in-use-mark.js';
 import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
@@ -176,6 +181,7 @@ remove_path "$INVOKER_HOME/pr-cron-work"`;
   const mkdirArgs = DISK_RECLAIMABLE_DIRS
     .map((name) => `"$INVOKER_HOME/${name}"`)
     .join(' ');
+  const inUseMarkMaxAgeMinutes = Math.ceil(IN_USE_MARK_MAX_AGE_SECONDS / 60);
   const tmpGlobList = TMP_SCRATCH_GLOBS.join(' ');
   const transientTestGlobList = TMP_TRANSIENT_TEST_GLOBS.join(' ');
   // stale-only (warn-paced) never kills provision grinders, wipes Invoker's own
@@ -230,6 +236,14 @@ is_preserved() {
   done
   return 1
 }
+# A task sent by another Invoker owner is invisible to PRESERVE above; its
+# running task refreshes this mark on the host, so a fresh mark is never deleted.
+IN_USE_MARK_ROOT="$INVOKER_HOME/${IN_USE_MARK_DIR}/worktrees"
+has_fresh_in_use_mark() {
+  local base="$1"
+  [ -e "$IN_USE_MARK_ROOT/$base" ] || return 1
+  find "$IN_USE_MARK_ROOT/$base" -type f -mmin -${inUseMarkMaxAgeMinutes} -print -quit 2>/dev/null | grep -q .
+}
 sweep_children_preserving() {
   local dir="$1"
   local prefix="$2"
@@ -241,6 +255,14 @@ sweep_children_preserving() {
       echo "[disk-headroom-cleanup] preserve $child (in-use)"
       continue
     fi
+    case "$prefix" in
+      worktrees|repos)
+        if has_fresh_in_use_mark "$base"; then
+          echo "[disk-headroom-cleanup] preserve $child (fresh in-use mark)"
+          continue
+        fi
+        ;;
+    esac
     remove_path "$child"
   done
 }
@@ -463,6 +485,37 @@ function approximateTreeBytes(path: string, capEntries: number): ApproximateTree
   return { bytes, truncated };
 }
 
+function recordProtectedSkip(
+  path: string,
+  protectedSkips: ProtectedSkipAccounting,
+  reason: string,
+  logger?: Logger,
+  targetKey?: string,
+): void {
+  const approximateBytes = approximateTreeBytes(path, PROTECTED_SKIP_BYTE_WALK_ENTRY_CAP);
+  protectedSkips.paths.push(path);
+  protectedSkips.count += 1;
+  protectedSkips.bytes += approximateBytes.bytes;
+  protectedSkips.truncated ||= approximateBytes.truncated;
+  logger?.warn?.(`[disk-headroom-cleanup] skip ${path}: ${reason}`, {
+    module: 'disk-headroom',
+    targetKey,
+    path,
+    protectedSkipBytes: approximateBytes.bytes,
+    protectedSkipBytesTruncated: approximateBytes.truncated,
+  });
+}
+
+function inUseMarkKeepsChild(home: string, name: string, errors: string[]): boolean {
+  try {
+    return hasFreshInUseMark(home, name, Date.now());
+  } catch (err) {
+    const markPath = join(home, IN_USE_MARK_DIR, 'worktrees', name);
+    errors.push(`in-use mark ${markPath}: ${err instanceof Error ? err.message : String(err)}`);
+    return true;
+  }
+}
+
 async function removeLocalDir(
   path: string,
   errors: string[],
@@ -470,21 +523,15 @@ async function removeLocalDir(
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
+  markGuard?: (name: string) => boolean,
 ): Promise<void> {
   if (!existsSync(path)) return;
   if (pathIsProtected(path, protectedPaths)) {
-    const approximateBytes = approximateTreeBytes(path, PROTECTED_SKIP_BYTE_WALK_ENTRY_CAP);
-    protectedSkips.paths.push(path);
-    protectedSkips.count += 1;
-    protectedSkips.bytes += approximateBytes.bytes;
-    protectedSkips.truncated ||= approximateBytes.truncated;
-    logger?.warn?.(`[disk-headroom-cleanup] skip ${path}: protected-path-in-use`, {
-      module: 'disk-headroom',
-      targetKey,
-      path,
-      protectedSkipBytes: approximateBytes.bytes,
-      protectedSkipBytesTruncated: approximateBytes.truncated,
-    });
+    recordProtectedSkip(path, protectedSkips, 'protected-path-in-use', logger, targetKey);
+    return;
+  }
+  if (markGuard?.(basename(path))) {
+    recordProtectedSkip(path, protectedSkips, 'fresh-in-use-mark', logger, targetKey);
     return;
   }
   await eraseLocalPath(path, errors);
@@ -556,6 +603,7 @@ async function sweepReclaimableChildren(
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
+  markGuard?: (name: string) => boolean,
 ): Promise<void> {
   if (!existsSync(dirPath)) return;
   let entries: string[];
@@ -566,7 +614,15 @@ async function sweepReclaimableChildren(
     return;
   }
   for (const name of entries) {
-    await removeLocalDir(join(dirPath, name), errors, protectedSkips, protectedPaths, logger, targetKey);
+    await removeLocalDir(
+      join(dirPath, name),
+      errors,
+      protectedSkips,
+      protectedPaths,
+      logger,
+      targetKey,
+      markGuard,
+    );
   }
 }
 
@@ -584,6 +640,7 @@ async function sweepRepoChildren(
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
+  markGuard?: (name: string) => boolean,
 ): Promise<void> {
   if (!existsSync(dirPath)) return;
   let entries: string[];
@@ -596,18 +653,11 @@ async function sweepRepoChildren(
   for (const name of entries) {
     const childPath = join(dirPath, name);
     if (protectedRepoHashes.has(name) || pathIsProtected(childPath, protectedPaths)) {
-      const approximateBytes = approximateTreeBytes(childPath, PROTECTED_SKIP_BYTE_WALK_ENTRY_CAP);
-      protectedSkips.paths.push(childPath);
-      protectedSkips.count += 1;
-      protectedSkips.bytes += approximateBytes.bytes;
-      protectedSkips.truncated ||= approximateBytes.truncated;
-      logger?.warn?.(`[disk-headroom-cleanup] skip ${childPath}: protected-path-in-use`, {
-        module: 'disk-headroom',
-        targetKey,
-        path: childPath,
-        protectedSkipBytes: approximateBytes.bytes,
-        protectedSkipBytesTruncated: approximateBytes.truncated,
-      });
+      recordProtectedSkip(childPath, protectedSkips, 'protected-path-in-use', logger, targetKey);
+      continue;
+    }
+    if (markGuard?.(name)) {
+      recordProtectedSkip(childPath, protectedSkips, 'fresh-in-use-mark', logger, targetKey);
       continue;
     }
     await eraseLocalPath(childPath, errors);
@@ -622,6 +672,7 @@ async function sweepStaleReclaimableChildren(
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
+  markGuard?: (name: string) => boolean,
 ): Promise<void> {
   if (!existsSync(dirPath)) return;
   let entries: string[];
@@ -641,7 +692,15 @@ async function sweepStaleReclaimableChildren(
       errors.push(`lstat ${childPath}: ${err instanceof Error ? err.message : String(err)}`);
       continue;
     }
-    await removeLocalDir(childPath, errors, protectedSkips, protectedPaths, logger, targetKey);
+    await removeLocalDir(
+      childPath,
+      errors,
+      protectedSkips,
+      protectedPaths,
+      logger,
+      targetKey,
+      markGuard,
+    );
   }
 }
 
@@ -683,6 +742,10 @@ export async function cleanupLocalInvokerHome(
       bytes: 0,
       truncated: false,
     };
+    const markGuardFor = (dirName: string): ((name: string) => boolean) | undefined =>
+      dirName === 'worktrees' || dirName === 'repos'
+        ? (name: string) => inUseMarkKeepsChild(home, name, errors)
+        : undefined;
     if (mode === 'stale-only') {
       const minAgeMinutes = Math.max(
         opts.minAgeMinutes ?? TMP_SCRATCH_MIN_AGE_MINUTES,
@@ -697,6 +760,7 @@ export async function cleanupLocalInvokerHome(
           protectedPaths,
           opts.logger,
           targetKey,
+          markGuardFor(name),
         );
       }
     } else {
@@ -709,9 +773,18 @@ export async function cleanupLocalInvokerHome(
         protectedPaths,
         opts.logger,
         targetKey,
+        markGuardFor('repos'),
       );
       for (const name of ['runtime', 'worktrees', 'merge-clones', 'merge-launches'] as const) {
-        await sweepReclaimableChildren(join(home, name), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
+        await sweepReclaimableChildren(
+          join(home, name),
+          errors,
+          protectedSkips,
+          protectedPaths,
+          opts.logger,
+          targetKey,
+          markGuardFor(name),
+        );
       }
       // pr-cron-work: PR #6632 retired its only producer, so there is nothing there to preserve.
       await removeLocalDir(join(home, 'pr-cron-work'), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
