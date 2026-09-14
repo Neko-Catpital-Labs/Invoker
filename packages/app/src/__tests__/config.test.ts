@@ -1016,6 +1016,48 @@ describe('catstackDeploy config', () => {
   });
 });
 
+describe('thrashDetector config', () => {
+  it('accepts omitted thrashDetector block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts valid enabled, intervalMinutes, thresholdCount, and windowHours fields', () => {
+    const config = validateInvokerConfig({
+      thrashDetector: {
+        enabled: true,
+        intervalMinutes: 10,
+        thresholdCount: 4,
+        windowHours: 12,
+      },
+    });
+
+    expect(config.thrashDetector).toEqual({
+      enabled: true,
+      intervalMinutes: 10,
+      thresholdCount: 4,
+      windowHours: 12,
+    });
+  });
+
+  it('rejects invalid numeric fields', () => {
+    expect(() => validateInvokerConfig({
+      thrashDetector: { intervalMinutes: 0 },
+    })).toThrow(/thrashDetector.intervalMinutes must be an integer > 0/);
+    expect(() => validateInvokerConfig({
+      thrashDetector: { thresholdCount: 1.5 },
+    })).toThrow(/thrashDetector.thresholdCount must be an integer > 0/);
+    expect(() => validateInvokerConfig({
+      thrashDetector: { windowHours: -1 },
+    })).toThrow(/thrashDetector.windowHours must be an integer > 0/);
+  });
+
+  it('rejects non-boolean enabled', () => {
+    expect(() => validateInvokerConfig({
+      thrashDetector: { enabled: 'yes' as never },
+    })).toThrow(/thrashDetector.enabled must be a boolean when set/);
+  });
+});
+
 describe('selfDeploy config', () => {
   it('accepts omitted selfDeploy block', () => {
     expect(validateInvokerConfig({})).toEqual({});

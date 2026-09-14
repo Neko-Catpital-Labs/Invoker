@@ -486,6 +486,12 @@ function buildRegisteredOwnerWorkerDeps(
         connection: target.connection,
       })),
     },
+    thrashDetector: {
+      enabled: invokerConfig.thrashDetector?.enabled,
+      intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 60) * 60_000,
+      thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+      windowHours: invokerConfig.thrashDetector?.windowHours,
+    },
     selfDeploy: {
       intervalMs: (invokerConfig.selfDeploy?.intervalMinutes ?? 30) * 60_000,
       repoPath: invokerConfig.selfDeploy?.repoPath,
