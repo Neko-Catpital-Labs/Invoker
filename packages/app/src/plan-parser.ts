@@ -5,9 +5,10 @@
  * Uses the `yaml` npm package for parsing.
  */
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execFile, execFileSync, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
 import { normalizeWorkflowBaseBranch, parseTaskFreshnessSpec, planPublicationAuthorityViolation } from '@invoker/workflow-core';
@@ -245,6 +246,71 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
       lastError = err;
       if (attempt < REMOTE_CLONE_PROBE_ATTEMPTS) {
         sleepSyncMs(REMOTE_CLONE_PROBE_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw new PlanParseError(
+    `repoUrl "${repoUrl}" is not a readable git repository. Check network reachability, its clone URL, and credentials. (${describeCloneProbeError(lastError)}, after ${REMOTE_CLONE_PROBE_ATTEMPTS} attempts)`,
+  );
+}
+
+const execFileAsync = promisify(execFile);
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function assertLocalGitRepoReadableAsync(localPath: string): Promise<void> {
+  if (!existsSync(localPath)) throw new Error('Path does not exist');
+  await execFileAsync('git', ['-c', 'safe.directory=*', '-C', localPath, 'rev-parse', '--git-dir'], {
+    timeout: 10_000,
+  });
+}
+
+export async function assertRepoUrlCloneableAsync(repoUrl: string): Promise<void> {
+  const trimmed = repoUrl.trim();
+  const isLocalPath = trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../');
+  const isFileUrl = trimmed.startsWith('file://');
+  const isRemoteUrl = /^(?:git@|https?:\/\/|ssh:\/\/)/.test(trimmed);
+
+  if (!isLocalPath && !isFileUrl && !isRemoteUrl) {
+    throw new PlanParseError(
+      `repoUrl "${repoUrl}" is not a valid git repository. Use a full clone URL or a configured Slack alias.`,
+    );
+  }
+
+  if (isLocalPath) {
+    try {
+      await assertLocalGitRepoReadableAsync(trimmed);
+      return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
+    }
+  }
+  if (isFileUrl) {
+    try {
+      await assertLocalGitRepoReadableAsync(fileURLToPath(trimmed));
+      return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
+    }
+  }
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= REMOTE_CLONE_PROBE_ATTEMPTS; attempt += 1) {
+    try {
+      await execFileAsync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
+        timeout: REMOTE_CLONE_PROBE_TIMEOUT_MS,
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < REMOTE_CLONE_PROBE_ATTEMPTS) {
+        await sleepMs(REMOTE_CLONE_PROBE_RETRY_DELAY_MS);
       }
     }
   }
@@ -682,7 +748,7 @@ export async function parsePlanFile(filePath: string): Promise<PlanDefinition> {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(filePath, 'utf-8');
   const plan = parsePlan(content);
-  if (!plan.scratch) assertRepoUrlCloneable(plan.repoUrl!);
+  if (!plan.scratch) await assertRepoUrlCloneableAsync(plan.repoUrl!);
   return plan;
 }
 
@@ -691,7 +757,7 @@ export async function parsePlanSubmissionBundleFile(filePath: string): Promise<P
   const content = await readFile(filePath, 'utf-8');
   const submission = parsePlanSubmissionBundle(content);
   for (const plan of submission.plans) {
-    if (!plan.scratch) assertRepoUrlCloneable(plan.repoUrl!);
+    if (!plan.scratch) await assertRepoUrlCloneableAsync(plan.repoUrl!);
   }
   return submission;
 }

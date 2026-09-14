@@ -23,10 +23,12 @@ function makeDeps() {
       orchestrator: {
         loadPlan: vi.fn((plan: PlanDefinition, _opts: { allowGraphMutation?: boolean; staged?: boolean }) => {
           loadedPlans.push(plan);
+          const id = `wf-${loadedPlans.length}`;
           workflows.push({
-            id: `wf-${loadedPlans.length}`,
+            id,
             featureBranch: plan.featureBranch,
           });
+          return id;
         }),
       },
       allowGraphMutation: true,
