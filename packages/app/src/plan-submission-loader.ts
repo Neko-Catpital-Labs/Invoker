@@ -11,10 +11,11 @@ export interface PlanSubmissionLoadResult {
 
 export interface PlanSubmissionLoadDeps {
   persistence: {
+    loadWorkflow?(workflowId: string): { id: string; featureBranch?: string; staged?: boolean } | undefined;
     listWorkflows(): Array<{ id: string; featureBranch?: string; staged?: boolean }>;
     updateWorkflow(workflowId: string, changes: { staged: boolean }): void;
   };
-  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean; staged?: boolean }): void };
+  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean; staged?: boolean }): string };
   allowGraphMutation?: boolean;
   logger?: Logger;
 }
@@ -39,7 +40,6 @@ export async function loadPlanSubmissionBundle(
     parsePlanSubmissionBundle,
   } = await import('./plan-parser.js');
   const submission = parsePlanSubmissionBundle(planText);
-  const existingWorkflowIds = new Set(deps.persistence.listWorkflows().map((workflow) => workflow.id));
   const loadedWorkflowIds: string[] = [];
   let upstream: { workflowId: string; featureBranch: string } | undefined;
 
@@ -80,15 +80,15 @@ export async function loadPlanSubmissionBundle(
       };
     }
     backupPlan(plan, undefined, deps.logger);
-    deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
-    const workflow = deps.persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+    const loadedWorkflowId = deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
+    const workflow = deps.persistence.loadWorkflow?.(loadedWorkflowId)
+      ?? deps.persistence.listWorkflows().find((candidate) => candidate.id === loadedWorkflowId);
     if (!workflow) {
       throw new Error('Loaded plan did not create a workflow.');
     }
     if (options?.staged && workflow.staged !== true) {
       deps.persistence.updateWorkflow(workflow.id, { staged: true });
     }
-    existingWorkflowIds.add(workflow.id);
     loadedWorkflowIds.push(workflow.id);
     upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
   }
