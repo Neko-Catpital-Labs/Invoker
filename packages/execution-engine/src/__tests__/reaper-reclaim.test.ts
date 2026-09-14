@@ -30,7 +30,6 @@ import {
   STALE_MERGE_CLONE_MIN_AGE_HOURS,
   STALE_WORKTREE_GIT_TIMEOUT_MS,
   STALE_WORKTREE_MIN_AGE_HOURS,
-  trimOversizedLogs,
 } from '../workers/reaper-reclaim.js';
 
 const tempDirs: string[] = [];
@@ -530,39 +529,3 @@ describe('enforceHourlySnapshotRetention', () => {
   });
 });
 
-describe('trimOversizedLogs', () => {
-  it('rewrites an oversized log in place keeping only its most recent portion', () => {
-    const { root, home } = makeHome();
-    const big = 'a'.repeat(90) + '0123456789';
-    writeFileSync(join(home, 'invoker.log'), big);
-    writeFileSync(join(home, 'other-worker.log'), big);
-
-    const trimmed = trimOversizedLogs({
-      invokerHome: home,
-      userHome: root,
-      maxBytes: 50,
-      keepBytes: 10,
-    });
-
-    expect(trimmed.sort()).toEqual([join(home, 'invoker.log'), join(home, 'other-worker.log')]);
-    expect(readFileSync(join(home, 'invoker.log'), 'utf8')).toBe('0123456789');
-    expect(readFileSync(join(home, 'other-worker.log'), 'utf8')).toBe('0123456789');
-  });
-
-  it('leaves a small log and non-log files alone', () => {
-    const { root, home } = makeHome();
-    writeFileSync(join(home, 'gui.log'), 'small');
-    writeFileSync(join(home, 'invoker.db'), 'x'.repeat(100));
-
-    const trimmed = trimOversizedLogs({
-      invokerHome: home,
-      userHome: root,
-      maxBytes: 50,
-      keepBytes: 10,
-    });
-
-    expect(trimmed).toEqual([]);
-    expect(readFileSync(join(home, 'gui.log'), 'utf8')).toBe('small');
-    expect(readFileSync(join(home, 'invoker.db'), 'utf8')).toBe('x'.repeat(100));
-  });
-});

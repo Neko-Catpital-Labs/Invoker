@@ -17,7 +17,6 @@ import {
   reapStaleDevelopmentHomes,
   reapStaleMergeClones,
   reapStaleWorktrees,
-  trimOversizedLogs,
 } from './reaper-reclaim.js';
 
 export const REAPER_WORKER_KIND = 'reaper';
@@ -52,8 +51,6 @@ export interface ReaperWorkerOptions {
   reapTempDirs?: typeof reapStaleInvokerCliTempDirs;
   /** Test seam: override snapshot-retention enforcement. */
   enforceRetention?: typeof enforceHourlySnapshotRetention;
-  /** Test seam: override oversized-log trimming. */
-  trimLogs?: typeof trimOversizedLogs;
   /** Test seam: wrap the worker tick for observability. */
   onTick?: WorkerTick;
 }
@@ -64,7 +61,6 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
   const reapWorktrees = options.reapWorktrees ?? reapStaleWorktrees;
   const reapTempDirs = options.reapTempDirs ?? reapStaleInvokerCliTempDirs;
   const enforceRetention = options.enforceRetention ?? enforceHourlySnapshotRetention;
-  const trimLogs = options.trimLogs ?? trimOversizedLogs;
   const reapMergeClones = options.reapMergeClones ?? reapStaleMergeClones;
   const reapDevHomes = options.reapDevHomes ?? reapStaleDevelopmentHomes;
 
@@ -95,10 +91,6 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
       });
       if (ctx.signal?.aborted) return;
       const snapshotsPruned = enforceRetention(options.invokerHome);
-      const logsTrimmed = trimLogs({
-        invokerHome: options.invokerHome,
-        logger: options.logger,
-      });
       const worktreeResults = await reapWorktrees({
         invokerHome: options.invokerHome,
         remoteTargets: options.remoteTargets ?? [],
@@ -129,7 +121,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         `Reaper pass: orphan targets ${orphanResults.length - orphanFailed.length}/${orphanResults.length} ok, `
         + `checkouts removed ${checkoutsRemoved.length}, CLI temp dirs removed ${tempDirsRemoved.length}, `
         + `snapshots pruned ${snapshotsPruned}, `
-        + `logs trimmed ${logsTrimmed.length}, worktrees removed ${worktreesRemoved}, `
+        + `worktrees removed ${worktreesRemoved}, `
         + `merge clones removed ${mergeCloneResult.removed.length}`
         + (mergeCloneResult.ok ? '' : ` (merge clone reap failed: ${mergeCloneResult.reason})`)
         + `, dev homes removed ${devHomeResult.removed.length}, dev homes unchecked ${devHomeResult.unchecked.length}`
@@ -150,7 +142,6 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
             checkoutsRemoved,
             tempDirsRemoved,
             snapshotsPruned,
-            logsTrimmed,
             worktreeResults,
             worktreesRemoved,
             mergeCloneResult,
@@ -170,7 +161,7 @@ export function registerReaperWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: REAPER_WORKER_KIND,
-    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, stale CLI temp dirs, stale task worktrees, stale merge clones no unfinished task uses, week-old dev homes with no running process, excess hourly snapshots, and oversized logs on an interval.',
+    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, stale CLI temp dirs, stale task worktrees, stale merge clones no unfinished task uses, week-old dev homes with no running process, and excess hourly snapshots on an interval.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createReaperWorker({
         logger: deps.logger,
