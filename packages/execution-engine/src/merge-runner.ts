@@ -18,7 +18,7 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import { isInvokerRepoUrl, reviewClaimSlices, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -458,7 +458,7 @@ async function authorPrBodyForMerge(
   );
   return authored.body;
 }
-async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
+export async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
   workflowId?: string;
   mergeNodeTaskId: string;
   workflowName: string;
@@ -476,6 +476,7 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
   reviewStatus: 'Awaiting review';
   reviewGate: ReviewGateState;
 }> {
+  const reviewClaims = args.workflowId ? workflowReviewClaims(host, args.workflowId) : [];
   if (isInvokerRepoUrl(args.repoUrl)) {
     if (!host.publishReviewStackWithMakePrSkill) {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
@@ -495,6 +496,11 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
       reviewGate: args.reviewGate,
       recordedFixCommit: args.recordedFixCommit,
     });
+    if (reviewClaims.length > published.artifacts.length) {
+      throw new Error(
+        `review stack for workflow ${args.workflowId} has ${published.artifacts.length} PR(s) for ${reviewClaims.length} review claims; publish one PR per claim: ${reviewClaims.map((claim) => `"${claim}"`).join('; ')}`,
+      );
+    }
     logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Review stack published', {
       agentName: published.agentName,
       artifactCount: published.artifacts.length,
@@ -527,6 +533,11 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
 
   if (!host.mergeGateProvider) {
     throw new Error('merge review publication requires a configured review provider');
+  }
+  if (reviewClaims.length > 1) {
+    throw new Error(
+      `workflow ${args.workflowId} carries ${reviewClaims.length} review claims, but it would publish as one PR; split the plan into a workflow chain with one claim per workflow: ${reviewClaims.map((claim) => `"${claim}"`).join('; ')}`,
+    );
   }
 
   logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Authoring PR body', {
@@ -580,6 +591,13 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
     reviewStatus: 'Awaiting review',
     reviewGate,
   };
+}
+
+function workflowReviewClaims(host: MergeRunnerHost, workflowId: string): string[] {
+  const tasks = host.orchestrator.getAllTasks().filter(
+    (t) => t.config.workflowId === workflowId && !t.config.isMergeNode,
+  );
+  return reviewClaimSlices(tasks.map((t) => ({ description: t.description, command: t.config.command ?? undefined })));
 }
 
 /**

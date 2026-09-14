@@ -75,7 +75,42 @@ export interface PrAuthoringContext {
   visualProofMarkdown?: string;
 }
 
-const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'] as const;
+function stripBullet(value: string): string | undefined {
+  const text = value.startsWith('-') ? value.slice(1).trim() : value.trim();
+  return text || undefined;
+}
+
+function headingValue(description: string, heading: string): string | undefined {
+  const lines = description.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim().toLowerCase().startsWith(`${heading}:`));
+  if (start < 0) return undefined;
+  const inline = lines[start].trim().slice(heading.length + 1).trim();
+  if (inline) return stripBullet(inline);
+  for (const line of lines.slice(start + 1)) {
+    const value = line.trim();
+    if (!value) continue;
+    return value.startsWith('-') ? stripBullet(value) : undefined;
+  }
+  return undefined;
+}
+
+export function reviewClaimSlices(
+  tasks: readonly { description: string; command?: string }[],
+): string[] {
+  const claims = new Map<string, string>();
+  for (const task of tasks) {
+    if (task.command) continue;
+    const lane = headingValue(task.description, 'review lane')?.toLowerCase();
+    if (lane === 'proof' || lane === 'cleanup') continue;
+    const claim = headingValue(task.description, 'review claim');
+    if (!claim) continue;
+    const key = claim.toLowerCase().replace(/\s+/g, ' ');
+    if (!claims.has(key)) claims.set(key, claim);
+  }
+  return [...claims.values()];
+}
+
+const REQUIRED_SECTIONS =['## Summary', '## Test Plan', '## Revert Plan'] as const;
 const REVIEW_STACK_REQUIRED_SECTIONS = [
   '## Summary',
   '## Non-goals',
