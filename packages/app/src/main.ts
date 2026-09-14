@@ -486,6 +486,12 @@ function buildRegisteredOwnerWorkerDeps(
         connection: target.connection,
       })),
     },
+    hookMetricsCollect: invokerConfig.hookMetricsCollect
+      ? {
+          intervalMs: (invokerConfig.hookMetricsCollect.intervalMinutes ?? 60) * 60_000,
+          catstackRepoPath: invokerConfig.hookMetricsCollect.catstackRepoPath,
+        }
+      : undefined,
     selfDeploy: {
       intervalMs: (invokerConfig.selfDeploy?.intervalMinutes ?? 30) * 60_000,
       repoPath: invokerConfig.selfDeploy?.repoPath,

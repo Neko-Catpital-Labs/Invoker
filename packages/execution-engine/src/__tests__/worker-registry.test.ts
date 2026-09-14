@@ -32,6 +32,7 @@ import { SLACK_BUG_SCAN_WORKER_KIND } from '../workers/slack-bug-scan-worker.js'
 import { IDLE_TASK_CLEANUP_WORKER_KIND } from '../workers/idle-task-cleanup-worker.js';
 import { CROSS_REPO_RESEARCH_WORKER_KIND } from '../workers/cross-repo-research-worker.js';
 import { CATSTACK_DEPLOY_WORKER_KIND } from '../workers/catstack-deploy-worker.js';
+import { HOOK_METRICS_COLLECT_WORKER_KIND } from '../workers/hook-metrics-collect-worker.js';
 import { SELF_DEPLOY_WORKER_KIND } from '../workers/self-deploy-worker.js';
 import { ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND } from '../workers/admin-bypass-e2e-babysit-worker.js';
 import { MERGIFY_QUEUE_RESEARCH_WORKER_KIND } from '../workers/mergify-queue-research-worker.js';
@@ -103,6 +104,7 @@ describe('worker registry', () => {
       IDLE_TASK_CLEANUP_WORKER_KIND,
       CROSS_REPO_RESEARCH_WORKER_KIND,
       CATSTACK_DEPLOY_WORKER_KIND,
+      HOOK_METRICS_COLLECT_WORKER_KIND,
       SELF_DEPLOY_WORKER_KIND,
       ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
       MERGIFY_QUEUE_RESEARCH_WORKER_KIND,

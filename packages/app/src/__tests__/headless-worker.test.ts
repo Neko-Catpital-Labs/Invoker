@@ -4,6 +4,7 @@ import {
   resolveHeadlessDiskHeadroomConfig,
   resolveHeadlessInfraRepairConfig,
   resolveHeadlessCatstackDeployConfig,
+  resolveHeadlessHookMetricsCollectConfig,
   resolveHeadlessSelfDeployConfig,
   runHeadless,
 } from '../headless.js';
@@ -146,6 +147,24 @@ describe('headless worker registry', () => {
     const config = resolveHeadlessCatstackDeployConfig({});
     expect(config.intervalMs).toBe(15 * 60_000);
     expect(config.remoteTargets).toEqual([]);
+  });
+
+  it('leaves hook-metrics-collect unconfigured when its config block is omitted', () => {
+    expect(resolveHeadlessHookMetricsCollectConfig({})).toBeUndefined();
+  });
+
+  it('maps configured intervalMinutes and path into hook-metrics-collect worker dependencies', () => {
+    const config = resolveHeadlessHookMetricsCollectConfig({
+      hookMetricsCollect: {
+        intervalMinutes: 90,
+        catstackRepoPath: '~/src/catstack',
+      },
+    });
+
+    expect(config).toEqual({
+      intervalMs: 90 * 60_000,
+      catstackRepoPath: '~/src/catstack',
+    });
   });
 
   it('maps configured intervalMinutes and paths into self-deploy worker dependencies', () => {

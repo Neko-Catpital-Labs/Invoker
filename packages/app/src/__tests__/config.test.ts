@@ -1016,6 +1016,34 @@ describe('catstackDeploy config', () => {
   });
 });
 
+describe('hookMetricsCollect config', () => {
+  it('accepts omitted hookMetricsCollect block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts a valid intervalMinutes and catstack repo path', () => {
+    const config = validateInvokerConfig({
+      hookMetricsCollect: {
+        intervalMinutes: 60,
+        catstackRepoPath: '~/Documents/GitHub/catstack',
+      },
+    });
+    expect(config.hookMetricsCollect?.intervalMinutes).toBe(60);
+  });
+
+  it('rejects intervalMinutes of 0', () => {
+    expect(() => validateInvokerConfig({
+      hookMetricsCollect: { intervalMinutes: 0 },
+    })).toThrow(/hookMetricsCollect.intervalMinutes must be an integer > 0/);
+  });
+
+  it('rejects an empty catstackRepoPath', () => {
+    expect(() => validateInvokerConfig({
+      hookMetricsCollect: { catstackRepoPath: '   ' },
+    })).toThrow(/hookMetricsCollect.catstackRepoPath must be a non-empty string/);
+  });
+});
+
 describe('selfDeploy config', () => {
   it('accepts omitted selfDeploy block', () => {
     expect(validateInvokerConfig({})).toEqual({});
