@@ -84,7 +84,7 @@ describe('Codex spend gate failures are explicit (repro)', () => {
     expect(response.outputs.failureClass).toBe(SPEND_GATE_FAILURE_CLASS);
   });
 
-  it.fails('keeps auto-fix away from a task that failed because the spend gate is tripped', () => {
+  it('keeps auto-fix away from a task that failed because the spend gate is tripped', () => {
     const task = {
       id: 'wf-gate/repair',
       description: 'Rebase PR #12103 onto master',

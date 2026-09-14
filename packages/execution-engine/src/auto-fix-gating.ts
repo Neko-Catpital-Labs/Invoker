@@ -23,3 +23,7 @@ export function isLivenessFailureTask(task: Pick<TaskState, 'execution'>): boole
 export function isSshInfraFailureTask(task: Pick<TaskState, 'execution'>): boolean {
   return FailureClassifier.isSshInfra(task.execution.failureClass);
 }
+
+export function isSpendGateFailureTask(task: Pick<TaskState, 'execution'>): boolean {
+  return FailureClassifier.isSpendGate(task.execution.failureClass);
+}
