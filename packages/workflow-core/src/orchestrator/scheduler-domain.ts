@@ -29,6 +29,10 @@ import type {
 } from '../orchestrator.js';
 
 const TASK_DELTA_CHANNEL = 'task.delta';
+type PendingLaunchQueueOptions = LaunchReadinessOptions & {
+  alreadyRefreshed?: boolean;
+  candidateTopologyOnly?: boolean;
+};
 
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
@@ -129,7 +133,7 @@ function hasPendingLaunchRuntimeState(task: TaskState): boolean {
 function planPendingLaunchQueue(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
-  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+  opts?: PendingLaunchQueueOptions,
 ): TaskJob[] {
   // Refresh once for the whole batch, not once per candidate job below --
   // readiness for every job in this pass is evaluated against the same
@@ -158,8 +162,14 @@ function planPendingLaunchQueue(
 
   let topologyIndex: Map<string, number> | undefined;
   try {
+    const candidateTasks = opts?.candidateTopologyOnly
+      ? [...mergedJobs.keys()]
+        .map((taskId) => host.stateGetTask(taskId))
+        .filter((task): task is TaskState => task !== undefined)
+        .sort(byCreatedAtThenId)
+      : [...host.stateMachine.getAllTasks()].sort(byCreatedAtThenId);
     topologyIndex = new Map(
-      topologicalSort([...host.stateMachine.getAllTasks()].sort(byCreatedAtThenId))
+      topologicalSort(candidateTasks)
         .map((task, index) => [task.id, index]),
     );
   } catch (error) {
@@ -209,7 +219,7 @@ export function getPendingLaunchQueueSnapshotImpl(
 function rebuildPendingLaunchQueue(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
-  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+  opts?: PendingLaunchQueueOptions,
 ): void {
   const orderedJobs: TaskJob[] = [];
   for (const job of planPendingLaunchQueue(host, candidateJobs, opts)) {
@@ -237,7 +247,7 @@ export function autoStartReadyTasksImpl(
   host: SchedulerDomainHost,
   taskIds: string[],
   priority: number = 0,
-  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+  opts?: PendingLaunchQueueOptions,
 ): TaskState[] {
   const candidateJobs: TaskJob[] = [];
   for (const taskId of taskIds) {
