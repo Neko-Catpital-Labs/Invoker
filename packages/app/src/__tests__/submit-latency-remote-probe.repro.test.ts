@@ -17,6 +17,7 @@ import type { InvokerConfig } from '../config.js';
 
 const ACK_BUDGET_MS = 200;
 const SAMPLE_COUNT = 5;
+const CONTROLLED_REPRO_RUN = process.env.INVOKER_REPRO_EXPECT === 'bug' || process.env.INVOKER_REPRO_EXPECT === 'fixed';
 const ORIGINAL_ENV = {
   HOME: process.env.HOME,
   INVOKER_DB_DIR: process.env.INVOKER_DB_DIR,
@@ -236,7 +237,7 @@ async function measureSample(): Promise<LatencySample> {
   }
 }
 
-describe('remote repoUrl probe intake latency repro', () => {
+describe.skipIf(!CONTROLLED_REPRO_RUN)('remote repoUrl probe intake latency repro', () => {
   afterEach(() => {
     restoreEnv();
   });
