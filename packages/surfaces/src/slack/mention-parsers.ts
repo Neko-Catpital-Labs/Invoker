@@ -3,6 +3,8 @@ export type LocalRequest =
   | { kind: 'agent'; text: string }
   | { kind: 'change'; text: string };
 
+export const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
+
 export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
   const trimmed = text.trim();
   if (/\n/.test(trimmed)) return null;
