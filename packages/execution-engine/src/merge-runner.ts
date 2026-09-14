@@ -5,7 +5,7 @@
  * capabilities) as its first parameter, avoiding circular imports.
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url';
 import type { Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { WorkResponse } from '@invoker/contracts';
+import { appendRotatingLogLine, type WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
@@ -30,7 +30,7 @@ export const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log')
 export function mergeTrace(tag: string, data: Record<string, unknown>): void {
   try {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
-    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:runner] ${tag} ${JSON.stringify(data)}\n`);
+    appendRotatingLogLine(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:runner] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
 }
 

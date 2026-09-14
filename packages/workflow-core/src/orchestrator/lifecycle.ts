@@ -13,7 +13,7 @@
  * preserved exactly.
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type {
@@ -24,7 +24,7 @@ import type {
   TaskStatus,
 } from '@invoker/workflow-graph';
 import { getTransitiveDependents } from '@invoker/workflow-graph';
-import type { Logger } from '@invoker/contracts';
+import { appendRotatingLogLine, type Logger } from '@invoker/contracts';
 import {
   OrchestratorError,
   OrchestratorErrorCode,
@@ -56,7 +56,7 @@ const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
   try {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
-    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
+    appendRotatingLogLine(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
 }
 

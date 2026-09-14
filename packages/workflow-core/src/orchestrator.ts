@@ -12,7 +12,7 @@
  *   4. publish delta    — notify UI
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { TaskStateMachine } from './state-machine.js';
@@ -24,7 +24,7 @@ import type { RunnerKind } from '@invoker/workflow-graph';
 import { applyTaskConfigPatch, BUILT_IN_LOCAL_EXECUTION_POOL_ID, createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass, computeWorkflowRollup } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
-import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
+import { ATTEMPT_LEASE_MS, appendRotatingLogLine } from '@invoker/contracts';
 import { normalizeRunnerKind } from '@invoker/workflow-graph';
 import {
   buildExecutorRoutedPayload,
@@ -42,7 +42,7 @@ const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
   try {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
-    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
+    appendRotatingLogLine(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
 }
 
