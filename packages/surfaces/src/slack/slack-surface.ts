@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { extractMessageRepoCandidates, looksLikePreset, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
+import { extractMessageRepoCandidates, extractRepositoryUrls, looksLikePreset, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -359,10 +359,6 @@ export function parsePlanningRequest(
     ...(autoSubmitRequested ? { autoSubmitRequested } : {}),
     ...(unknownPreset ? { unknownPreset } : {}),
   };
-}
-
-function extractRepositoryUrls(text: string): string[] {
-  return extractMessageRepoCandidates(text);
 }
 function repositoryIdentity(repoUrl: string): string {
   const parts = parseRepoParts(repoUrl);
