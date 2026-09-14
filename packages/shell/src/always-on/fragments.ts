@@ -9,6 +9,7 @@ When Invoker MCP (\`invoker_prepare_plan_review\` / \`invoker_submit_plan\`) or 
 - Announce the route in one line so the user can interrupt with “do it locally.”
 - Explicit “do it locally” / “don’t use Invoker” in the current message wins.
 - Dirty working tree alone does **not** force Invoker.
+- About to fan out subagents? Read \`invoker-route-delegation\` first: units that commit, open a PR, tag, merge, or deploy go to Invoker, never a subagent swarm; read-only units may fan out.
 - If MCP and CLI are both missing: stay local.
 
 Slash commands \`/invoker-plan-to-invoker\` and \`/plan-to-invoker\` always enter the skill.
@@ -32,6 +33,7 @@ When Invoker MCP (\`invoker_prepare_plan_review\` / \`invoker_submit_plan\`) or 
 - Announce the route in one line so the user can interrupt with “do it locally.”
 - Explicit “do it locally” / “don’t use Invoker” in the current message wins.
 - Dirty working tree alone does **not** force Invoker.
+- About to fan out subagents? Read \`invoker-route-delegation\` first: units that commit, open a PR, tag, merge, or deploy go to Invoker, never a subagent swarm; read-only units may fan out.
 - If MCP and CLI are both missing: stay local.
 
 Slash commands \`/invoker-plan-to-invoker\` and \`/plan-to-invoker\` always enter the skill.
