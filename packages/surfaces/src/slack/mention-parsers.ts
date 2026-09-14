@@ -131,6 +131,10 @@ export function normalizeSupportedRepoCandidate(candidate: string): string | und
   return url.pathname.endsWith('.git') ? candidate : undefined;
 }
 
+export function normalizePublicChannelName(name: string): string {
+  return name.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
 export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
   const trimmed = text.trim();
   if (/\n/.test(trimmed)) return null;
