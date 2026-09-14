@@ -1,4 +1,4 @@
-import type { Logger } from '@invoker/contracts';
+import type { InAppPlanningRepoBinding, Logger } from '@invoker/contracts';
 import { PINNED_WORKFLOW_BASE_BRANCH, type PlanDefinition } from '@invoker/workflow-core';
 import { backupPlan } from './plan-backup.js';
 
@@ -10,8 +10,11 @@ export interface PlanSubmissionLoadResult {
 }
 
 export interface PlanSubmissionLoadDeps {
-  persistence: { listWorkflows(): Array<{ id: string; featureBranch?: string }> };
-  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean }): void };
+  persistence: {
+    listWorkflows(): Array<{ id: string; featureBranch?: string; staged?: boolean }>;
+    updateWorkflow(workflowId: string, changes: { staged: boolean }): void;
+  };
+  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean; staged?: boolean }): void };
   allowGraphMutation?: boolean;
   logger?: Logger;
 }
@@ -19,7 +22,10 @@ export interface PlanSubmissionLoadDeps {
 export interface PlanSubmissionLoadOptions {
   logLabel?: string;
   preserveTaskHandles?: boolean;
+  repositoryBinding?: InAppPlanningRepoBinding;
   taskHandles?: { clear(): void };
+  staged?: boolean;
+  submittedBy?: 'worker' | 'human';
 }
 
 export async function loadPlanSubmissionBundle(
@@ -27,7 +33,11 @@ export async function loadPlanSubmissionBundle(
   deps: PlanSubmissionLoadDeps,
   options?: PlanSubmissionLoadOptions,
 ): Promise<PlanSubmissionLoadResult> {
-  const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+  const {
+    applyConfiguredPlanDefaults,
+    applyWorkerSubmittedTaskPriorityDefault,
+    parsePlanSubmissionBundle,
+  } = await import('./plan-parser.js');
   const submission = parsePlanSubmissionBundle(planText);
   const existingWorkflowIds = new Set(deps.persistence.listWorkflows().map((workflow) => workflow.id));
   const loadedWorkflowIds: string[] = [];
@@ -44,7 +54,13 @@ export async function loadPlanSubmissionBundle(
   }
 
   for (const parsedPlan of submission.plans) {
-    let plan = applyConfiguredPlanDefaults(parsedPlan);
+    const resolvedPlan = parsedPlan.repoUrl === '.' && options?.repositoryBinding
+      ? { ...parsedPlan, repoUrl: options.repositoryBinding.repoUrl }
+      : parsedPlan;
+    let plan = applyConfiguredPlanDefaults(resolvedPlan);
+    if (options?.submittedBy === 'worker') {
+      plan = applyWorkerSubmittedTaskPriorityDefault(plan);
+    }
     if (!submission.isStack) {
       plan = { ...plan, baseBranch: PINNED_WORKFLOW_BASE_BRANCH };
     }
@@ -64,10 +80,13 @@ export async function loadPlanSubmissionBundle(
       };
     }
     backupPlan(plan, undefined, deps.logger);
-    deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation });
+    deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
     const workflow = deps.persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
     if (!workflow) {
       throw new Error('Loaded plan did not create a workflow.');
+    }
+    if (options?.staged && workflow.staged !== true) {
+      deps.persistence.updateWorkflow(workflow.id, { staged: true });
     }
     existingWorkflowIds.add(workflow.id);
     loadedWorkflowIds.push(workflow.id);

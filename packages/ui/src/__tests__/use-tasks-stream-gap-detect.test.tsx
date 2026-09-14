@@ -113,6 +113,36 @@ describe('useTasks stream-sequence gap-detect', () => {
     expect(reportUiPerfMock.mock.calls.filter((c) => c[0] === 'ui_delta_stream_gap_detected')).toHaveLength(0);
   });
 
+  it('flushes status deltas before the batch timer', async () => {
+    const t1 = makeUITask({ id: 't1', status: 'pending' });
+
+    const { getTasksMock, onTaskGraphEventMock, fireDelta } = installInvoker({
+      bootstrap: { tasks: [t1], streamSequence: 0 },
+      responses: [{ tasks: [t1], workflows: [], streamSequence: 0 }],
+    });
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(onTaskGraphEventMock).toHaveBeenCalledTimes(1);
+    });
+    expect(getTasksMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireDelta({
+        type: 'updated',
+        taskId: 't1',
+        changes: { status: 'running' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+        streamSequence: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(result.current.tasks.get('t1')?.status).toBe('running');
+  });
+
   it('detects a 1,2,4 gap and triggers exactly one re-sync via refreshTaskGraph', async () => {
     const initial = [
       makeUITask({ id: 't1', status: 'pending' }),

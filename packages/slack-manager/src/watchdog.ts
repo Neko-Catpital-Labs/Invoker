@@ -4,9 +4,20 @@
  * Every `intervalMs` it checks `isHealthy()` (IPC ping, HTTP `/api/health`
  * fallback). After `failuresBeforeRelaunch` consecutive failures it calls
  * `launch()`. Relaunch attempts are spaced by an exponential backoff
- * (`baseBackoffMs` → `maxBackoffMs`); after `maxAttempts` it posts an alert and
- * stops auto-restarting until Invoker is healthy again (e.g. via a manual
- * `restart`). This backoff is the load-bearing guard against restart storms.
+ * (`baseBackoffMs` → `maxBackoffMs`); after `maxAttempts` it posts an alert.
+ * This backoff is the load-bearing guard against restart storms.
+ *
+ * After giving up, the watchdog does not stay silent forever: every
+ * `giveUpRetryIntervalMs` it makes one more relaunch attempt (without
+ * resetting the fast-retry attempt counter or spamming additional alerts
+ * beyond the existing cooldown). This recovers a case observed in production
+ * (2026-08-29): a genuine split-brain (a stray owner process alive but not
+ * answering IPC) blocked the final fast-retry attempt, then that stray
+ * process died on its own ~11 minutes later — but nothing ever tried again,
+ * leaving Invoker down for over 10 hours until a human noticed and manually
+ * replied `@Invoker restart`. A blocking condition that resolves itself
+ * after the fast-retry budget is exhausted must not require a human to
+ * notice a Slack alert to recover.
  *
  * A single healthy ping after relaunch does not clear attempt state. Invoker
  * must stay healthy for `stableHealthyPolls` consecutive ticks before the
@@ -31,6 +42,7 @@ export interface WatchdogDeps {
   stableHealthyPolls?: number;
   /** Minimum time between lobby/operator alerts while still down. */
   alertCooldownMs?: number;
+  giveUpRetryIntervalMs?: number;
   now?: () => number;
 }
 
@@ -49,6 +61,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   const maxBackoffMs = deps.maxBackoffMs ?? 300_000;
   const stableHealthyPolls = deps.stableHealthyPolls ?? 3;
   const alertCooldownMs = deps.alertCooldownMs ?? 30 * 60_000;
+  const giveUpRetryIntervalMs = deps.giveUpRetryIntervalMs ?? 20 * 60_000;
   const now = deps.now ?? (() => Date.now());
 
   let consecutiveFailures = 0;
@@ -57,6 +70,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   let backoffMs = baseBackoffMs;
   let nextAttemptAt = 0;
   let gaveUp = false;
+  let nextGiveUpRetryAt = 0;
   let lastAlertAt: number | null = null;
   let lastLaunchFailure: LaunchResult | null = null;
   let busy = false;
@@ -84,6 +98,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     backoffMs = baseBackoffMs;
     nextAttemptAt = 0;
     gaveUp = false;
+    nextGiveUpRetryAt = 0;
   };
 
   const inRecovery = (): boolean =>
@@ -128,6 +143,22 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
             `:rotating_light: Invoker is still down after ${maxAttempts} relaunch attempts.${splitBrainDetail()} Reply \`@Invoker restart\` to retry.`,
           );
         }
+        if (now() < nextGiveUpRetryAt) return;
+        nextGiveUpRetryAt = now() + giveUpRetryIntervalMs;
+        deps.log(
+          'warn',
+          `Invoker still down after giving up — making one periodic recovery attempt (next in ${giveUpRetryIntervalMs}ms if this fails)`,
+        );
+        const retryResult = await deps.client.launch();
+        if (retryResult.healthy) {
+          consecutiveFailures = 0;
+          consecutiveHealthy = 0;
+          nextAttemptAt = 0;
+          lastLaunchFailure = null;
+          deps.log('info', 'watchdog periodic recovery attempt succeeded — confirming stable health');
+          return;
+        }
+        lastLaunchFailure = retryResult;
         return;
       }
 
@@ -148,6 +179,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
       lastLaunchFailure = result;
       if (attempts >= maxAttempts) {
         gaveUp = true;
+        nextGiveUpRetryAt = now() + giveUpRetryIntervalMs;
         if (canAlert()) {
           lastAlertAt = now();
           await deps.alert(

@@ -17,6 +17,9 @@ describe('BundledSkillsStatus contract', () => {
       mcpTargets: [
         { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/mcp.json', available: true, installed: true, upToDate: true, serverName: 'invoker' },
       ],
+      instructionTargets: [
+        { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/rules/invoker-execution-precedence.mdc', available: true, installed: true, upToDate: true, installedInstructionNames: ['invoker-execution'] },
+      ],
     } satisfies BundledSkillsStatus;
 
     const diagnostics = {
@@ -30,5 +33,6 @@ describe('BundledSkillsStatus contract', () => {
 
     expect(diagnostics.bundledSkills.commandTargets[0]?.installedCommandNames).toEqual(['invoker-plan-to-invoker']);
     expect(diagnostics.bundledSkills.mcpTargets[0]?.serverName).toBe('invoker');
+    expect(diagnostics.bundledSkills.instructionTargets?.[0]?.installedInstructionNames).toEqual(['invoker-execution']);
   });
 });

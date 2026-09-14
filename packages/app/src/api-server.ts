@@ -44,6 +44,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Logger } from '@invoker/contracts';
+import { resolveInvokerInstanceProfile, validateTaskFilter, type TaskFilterNode } from '@invoker/contracts';
 import {
   OrchestratorError,
   OrchestratorErrorCode,
@@ -80,6 +81,7 @@ export interface ApiMutationFacade {
   editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult>;
   editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): Promise<MutationResult>;
   editTaskAgent(taskId: string, agentName: string): Promise<MutationResult>;
+  editTaskModel(taskId: string, executionModel: string | null): Promise<MutationResult>;
   setTaskExternalGatePolicies(
     taskId: string,
     updates: ExternalGatePolicyUpdate[],
@@ -209,6 +211,21 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// An explicit INVOKER_API_PORT is a synthetic override and always wins; otherwise the
+// selected profile decides, so a source-development launch never falls back to the
+// production port.
+function resolveApiPort(): number {
+  if (process.env.INVOKER_API_PORT !== undefined) {
+    return parseInt(process.env.INVOKER_API_PORT, 10);
+  }
+  const profile = resolveInvokerInstanceProfile({
+    kind: process.env.INVOKER_RUNTIME_KIND ?? 'packaged',
+    sourceRoot: process.env.INVOKER_SOURCE_ROOT,
+    env: process.env,
+  });
+  return profile.ports.apiPort;
+}
+
 export function startApiServer(deps: ApiServerDeps): ApiServer {
   const {
     logger: apiLogger,
@@ -218,7 +235,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     deleteWorkflow,
     detachWorkflow,
   } = deps;
-  const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
+  const port = resolveApiPort();
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -418,6 +435,41 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const type = query.type === 'workflows' || query.type === 'tasks' ? query.type : 'all';
         const limit = query.limit ? Math.min(parseInt(query.limit, 10), 50) : 20;
         const offset = query.offset ? parseInt(query.offset, 10) : 0;
+        if (type === 'tasks' && query.filter !== undefined) {
+          if (!Number.isFinite(limit) || limit < 0 || !Number.isFinite(offset) || offset < 0) {
+            json(res, 400, { error: 'limit and offset must be non-negative integers' });
+            return;
+          }
+          let parsedFilter: unknown;
+          try {
+            parsedFilter = JSON.parse(query.filter);
+          } catch (error) {
+            json(res, 400, { error: `filter: invalid JSON (${error instanceof Error ? error.message : String(error)})` });
+            return;
+          }
+          const validation = validateTaskFilter(parsedFilter);
+          if (!validation.valid) {
+            json(res, 400, { error: `filter: ${validation.error}` });
+            return;
+          }
+          const tasks = persistence.queryTasksByFilter(parsedFilter as TaskFilterNode, { limit, offset });
+          const results = tasks.map((task) => {
+            const workflowId = task.config.workflowId;
+            const workflow = workflowId ? persistence.loadWorkflow(workflowId) : undefined;
+            const workflowName = workflow?.name || 'Unnamed workflow';
+            return {
+              kind: 'task' as const,
+              id: task.id,
+              workflowId: workflowId || undefined,
+              title: task.description || 'Unnamed task',
+              subtitle: `Task · ${workflowName}`,
+              status: task.status,
+              createdAt: task.createdAt instanceof Date ? task.createdAt.toISOString() : task.createdAt,
+            };
+          });
+          json(res, 200, results);
+          return;
+        }
         const results = persistence.searchWorkflowsAndTasks(q, { type, limit, offset });
         json(res, 200, results);
         return;

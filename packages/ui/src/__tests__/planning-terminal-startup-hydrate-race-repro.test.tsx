@@ -151,6 +151,7 @@ describe('planning terminal startup hydrate race repro', () => {
     submitPlanningText('start a local plan before restore');
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        turnId: expect.any(String),
         message: 'start a local plan before restore',
         presetKey: 'codex',
         confirmationMode: 'require',

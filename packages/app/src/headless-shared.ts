@@ -11,6 +11,7 @@
  */
 
 import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@invoker/contracts';
+import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
 import { makeEnvelope } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Orchestrator, CommandService, TaskState } from '@invoker/workflow-core';
@@ -36,6 +37,9 @@ import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
+import type { WorkerRuntimeController } from './worker-control.js';
+import type { TaskHandleMap } from './execution/task-runner-wiring.js';
+import { LaunchDispatcher } from './launch-dispatcher.js';
 
 
 export interface HeadlessDeps {
@@ -67,7 +71,7 @@ export interface HeadlessDeps {
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
-  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode, category?: BundledSkillCategory) => BundledSkillsStatus;
   repairReviewGateCi?: (prArg: string) => Promise<ReviewGateCiRepairCommandResult>;
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
@@ -87,6 +91,15 @@ export interface HeadlessDeps {
   ownerTaskRunnerProvider?: () => TaskRunner | null;
   /** Main process dist directory (`__dirname` of main.js); used to locate the built web UI. */
   appRootDir?: string;
+  /**
+   * Accessor for the owner's live `WorkerRuntimeController`, used by
+   * `--headless worker start/stop <kind>` to control an already-running
+   * persistent worker in this process. A getter (not the controller itself)
+   * because it is constructed after `headlessDeps`; `null` when there is no
+   * live owner worker runtime in this process (e.g. a bare CLI command that
+   * only delegated here to run one command and exit).
+   */
+  getWorkerRuntimeController?: () => WorkerRuntimeController | null;
 }
 
 export const RESET = '\x1b[0m';
@@ -214,18 +227,44 @@ export function createHeadlessExecutor(
   return executor;
 }
 
-export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
-  deps.orchestrator.setBeforeApproveHook(async (task) => {
-    if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
-      const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
-      if (workflow?.mergeMode === "external_review") return;
-      await te.approveMerge(task.config.workflowId);
-    }
-  });
+/**
+ * Tracked variant of {@link createHeadlessExecutor}: registers every spawned
+ * task handle in `taskHandles` so surfaces that need live process handles
+ * (web task terminals) can reach running tasks. Strips
+ * `ownerTaskRunnerProvider` because an owner-provided TaskRunner ignores
+ * callback overrides.
+ */
+export function createTrackedHeadlessExecutor(
+  deps: HeadlessDeps,
+  taskHandles: TaskHandleMap,
+): TaskRunner {
+  return createHeadlessExecutor(
+    {
+      ...deps,
+      ownerTaskRunnerProvider: undefined,
+    },
+    {
+      onSpawned: (taskId, handle, executor) => {
+        taskHandles.set(taskId, { handle, executor });
+      },
+      onComplete: (taskId) => {
+        taskHandles.delete(taskId);
+      },
+    },
+  );
 }
+
+export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void { deps.orchestrator.setBeforeApproveHook(async (task) => {
+  if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
+    const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
+    if (workflow?.mergeMode === "external_review") return;
+    await te.approveMerge(task.config.workflowId);
+  }
+}); }
 
 export interface QueryFlags {
   output: 'text' | 'label' | 'json' | 'jsonl';
+  filter?: string;
   status?: string;
   workflow?: string;
   noMerge?: boolean;
@@ -250,6 +289,10 @@ export function parseQueryFlags(args: string[]): QueryFlags {
       i += 2;
     } else if (arg === '--status' && i + 1 < args.length) {
       flags.status = args[i + 1];
+      i += 2;
+    } else if (arg === '--filter') {
+      if (i + 1 >= args.length) throw new Error('Missing value for --filter');
+      flags.filter = args[i + 1];
       i += 2;
     } else if (arg === '--workflow' && i + 1 < args.length) {
       flags.workflow = args[i + 1];
@@ -281,6 +324,48 @@ export function parseQueryFlags(args: string[]): QueryFlags {
     }
   }
   return flags;
+}
+
+export async function dispatchHeadlessRunnableTasks(
+  deps: HeadlessDeps,
+  taskExecutor: TaskRunner,
+  runnable: TaskState[],
+  context: string,
+): Promise<void> {
+  if (runnable.length === 0) return;
+
+  const dispatcher = new LaunchDispatcher({
+    persistence: deps.persistence,
+    orchestrator: {
+      prepareTaskForNewAttempt: (taskId, reason) =>
+        deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
+      failTask: (taskId, reason) => deps.orchestrator.failTask(taskId, reason),
+      syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
+      getTask: (taskId) => deps.orchestrator.getTask(taskId),
+      getTaskLaunchReadiness: (taskId) => deps.orchestrator.getTaskLaunchReadiness(taskId),
+    },
+    taskRunnerProvider: () => taskExecutor,
+    ownerId: `headless-${process.pid}`,
+    logger: deps.logger,
+  });
+  deps.logger?.debug?.(
+    `[headless] ${context}: polling local launch dispatcher for ${runnable.length} runnable task(s)`,
+    { module: 'headless' },
+  );
+  const poll = (): void => {
+    try {
+      dispatcher.poll();
+    } catch (err) {
+      deps.logger?.warn?.(
+        `[headless] ${context}: local launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'headless' },
+      );
+    }
+  };
+  poll();
+  const timer = setInterval(poll, 250);
+  timer.unref?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 export async function trackHeadlessWorkflow(
@@ -458,11 +543,11 @@ export async function preemptWorkflowExecution(workflowId: string, deps: Headles
   if (deps.preemptWorkflowExecution) {
     return deps.preemptWorkflowExecution(workflowId);
   }
-  if (typeof deps.commandService.cancelWorkflow !== 'function') {
+  if (typeof deps.commandService.preemptWorkflow !== 'function') {
     return { cancelled: [], runningCancelled: [] };
   }
-  const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
-  const result = await deps.commandService.cancelWorkflow(envelope);
+  const envelope = makeEnvelope('preempt-workflow', 'headless', 'workflow', { workflowId });
+  const result = await deps.commandService.preemptWorkflow(envelope);
   if (!result.ok) {
     if (preemptSkipCodes.has(result.error.code)) return { cancelled: [], runningCancelled: [] };
     if (isRaceLostForeignKeyConstraintFailure(result.error.message, workflowId, deps)) {
