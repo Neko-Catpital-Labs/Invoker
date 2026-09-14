@@ -1,10 +1,14 @@
 import { resolvePlanningSubmitAction } from '@invoker/planning-core';
 import type { PlanDraftRecord } from '../approval/chat-transport.js';
+import type { WorkflowOp } from '../surface.js';
+import { parseLobbyControl } from '../slack/lobby-control.js';
 import {
   parseChannelRepoSetupRequest,
+  parseLocalRequest,
   parsePlanningRequest,
+  parseWorkflowStatusQuery,
 } from '../slack/mention-parsers.js';
-import type { ChannelRepoSetupPair } from '../slack/mention-parsers.js';
+import type { ChannelRepoSetupPair, LocalRequest } from '../slack/mention-parsers.js';
 import { parseWorkflowControl } from '../slack/workflow-assistant.js';
 import type { WorkflowControl } from '../slack/workflow-assistant.js';
 
@@ -41,6 +45,20 @@ export interface PlanningMention {
   route: PlanningMentionRoute;
 }
 
+export interface RepoScopedRoutingContext {
+  allowsLobbyControls: boolean;
+  hasPendingConfirm: () => boolean;
+}
+
+export type RepoScopedMentionRoute =
+  | { kind: 'plan_intent'; requestText: string }
+  | { kind: 'confirm_reply' }
+  | { kind: 'control_rejected' }
+  | { kind: 'workflow_op'; op: WorkflowOp }
+  | { kind: 'restart' }
+  | { kind: 'local_command'; request: LocalRequest }
+  | { kind: 'conversation_turn'; requestText: string; explicitLocalAgent: boolean };
+
 export function routeWorkflowMention(rawText: string): WorkflowMentionRoute {
   const text = rawText.replace(/<@[A-Z0-9]+>/g, '').trim();
   if (!text) return { kind: 'workflow_help' };
@@ -56,6 +74,43 @@ export function routePlanningMention(message: MentionMessage, context: MentionRo
     && route.kind !== 'unknown_preset'
     && route.kind !== 'greeting';
   return { parsed, announceAutoSubmitUnavailable, route };
+}
+
+export function routeRepoScopedMention(
+  parsed: ParsedPlanningRequest,
+  context: RepoScopedRoutingContext,
+): RepoScopedMentionRoute {
+  if (/^\/plan\s+.+/i.test(parsed.text)) {
+    return { kind: 'plan_intent', requestText: parsed.text.replace(/^\/plan\s+/i, '') };
+  }
+  if (context.hasPendingConfirm()) return { kind: 'confirm_reply' };
+
+  const ctrl = parseLobbyControl(parsed.text);
+  if (ctrl?.kind === 'op' || ctrl?.kind === 'restart') {
+    if (!context.allowsLobbyControls) return { kind: 'control_rejected' };
+    return ctrl.kind === 'op'
+      ? { kind: 'workflow_op', op: { operation: ctrl.operation, target: ctrl.target } }
+      : { kind: 'restart' };
+  }
+
+  const localRequest = parseLocalRequest(parsed.text);
+  if (localRequest?.kind === 'command') {
+    return context.allowsLobbyControls ? { kind: 'local_command', request: localRequest } : { kind: 'control_rejected' };
+  }
+
+  const statusQuery = parseWorkflowStatusQuery(localRequest?.kind === 'agent' ? localRequest.text : parsed.text);
+  if (statusQuery?.intent === 'command') {
+    return context.allowsLobbyControls
+      ? { kind: 'workflow_op', op: { operation: statusQuery.operation, target: statusQuery.target } }
+      : { kind: 'control_rejected' };
+  }
+
+  const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
+  return {
+    kind: 'conversation_turn',
+    requestText: explicitLocalAgent ? localRequest.text : parsed.text,
+    explicitLocalAgent,
+  };
 }
 
 export function choosePlanningRoute(
