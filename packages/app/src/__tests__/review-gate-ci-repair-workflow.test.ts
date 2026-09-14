@@ -140,6 +140,11 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
         poolId: 'remote_digital_ocean_1',
       },
     });
+    expect(repairTasks[0].config.prompt).toEqual(
+      expect.stringContaining(
+        "- Check the backgrounded verify/CI command's status no more than once every ~180 seconds; if it has not finished after about 15 such checks, stop polling and report the situation instead of continuing to poll indefinitely.",
+      ),
+    );
 
     const sourceAfter = h.getTask(mergeId)!;
     expect(sourceAfter.status).toBe('review_ready');

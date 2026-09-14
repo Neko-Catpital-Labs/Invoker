@@ -144,6 +144,7 @@ function buildRepairPrompt(
     `- Push your changes to the same branch (${branch}).`,
     '- Never open a new PR.',
     '- Do not recreate the source workflow.',
+    '- Check the backgrounded verify/CI command\'s status no more than once every ~180 seconds; if it has not finished after about 15 such checks, stop polling and report the situation instead of continuing to poll indefinitely.',
   ].join('\n');
 }
 
