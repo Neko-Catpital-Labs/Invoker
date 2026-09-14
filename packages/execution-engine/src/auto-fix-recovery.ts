@@ -146,6 +146,21 @@ export interface AutoFixRecoveryPolicyOptions {
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
   circuitBreakerPath?: string;
   circuitBreakerPauseMs?: number;
+  scanScope?: AutoFixRecoveryScanScope;
+}
+
+export interface AutoFixRecoveryScanScope {
+  workflows?: ReturnType<AutoFixRecoveryStore['listWorkflows']>;
+  readonly recordedSkipKeys: Map<string, string>;
+}
+
+function listWorkflowsForScan(
+  options: Pick<AutoFixRecoveryPolicyOptions, 'store' | 'scanScope'>,
+): ReturnType<AutoFixRecoveryStore['listWorkflows']> {
+  const scope = options.scanScope;
+  if (!scope) return options.store.listWorkflows();
+  scope.workflows ??= options.store.listWorkflows();
+  return scope.workflows;
 }
 /** Register the built-in auto-fix worker. */
 export function registerAutoFixWorker(
@@ -207,10 +222,10 @@ function workflowIdForTask(task: TaskState): string | undefined {
 }
 
 function workflowNameForId(
-  options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
+  options: Pick<AutoFixRecoveryPolicyOptions, 'store' | 'scanScope'>,
   workflowId: string,
 ): string | undefined {
-  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  const listed = listWorkflowsForScan(options).find((workflow) => workflow.id === workflowId);
   if (typeof listed?.name === 'string' && listed.name.length > 0) return listed.name;
   const loaded = options.store.loadWorkflow?.(workflowId);
   if (typeof loaded?.name === 'string' && loaded.name.length > 0) return loaded.name;
@@ -218,10 +233,10 @@ function workflowNameForId(
 }
 
 function workflowRepoUrlForId(
-  options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
+  options: Pick<AutoFixRecoveryPolicyOptions, 'store' | 'scanScope'>,
   workflowId: string,
 ): string | undefined {
-  const listed = options.store.listWorkflows().find((workflow) => workflow.id === workflowId);
+  const listed = listWorkflowsForScan(options).find((workflow) => workflow.id === workflowId);
   if (typeof listed?.repoUrl === 'string' && listed.repoUrl.length > 0) return listed.repoUrl;
   const loaded = options.store.loadWorkflow?.(workflowId);
   if (typeof loaded?.repoUrl === 'string' && loaded.repoUrl.length > 0) return loaded.repoUrl;
@@ -250,10 +265,10 @@ function candidateFromTask(task: TaskState): AutoFixRecoveryCandidate | undefine
 }
 
 export function listAutoFixRecoveryScanCandidates(
-  options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
+  options: Pick<AutoFixRecoveryPolicyOptions, 'store' | 'scanScope'>,
 ): AutoFixRecoveryCandidate[] {
   const candidates: AutoFixRecoveryCandidate[] = [];
-  const workflows = options.store.listWorkflows();
+  const workflows = listWorkflowsForScan(options);
   const tasksByWorkflow = options.store.loadTasksForWorkflows
     ? groupTasksByWorkflowId(options.store.loadTasksForWorkflows(workflows.map((workflow) => workflow.id)))
     : undefined;
@@ -459,6 +474,10 @@ function skipAutoFixCandidate(
   reason: string,
   details: Record<string, unknown> = {},
 ): void {
+  const recordedSkipKeys = options.scanScope?.recordedSkipKeys;
+  const skipKey = `${reason}:${candidate.generation}:${candidate.taskStateVersion}:${candidate.attemptId ?? ''}`;
+  if (recordedSkipKeys?.get(candidate.taskId) === skipKey) return;
+  recordedSkipKeys?.set(candidate.taskId, skipKey);
   logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-skip', {
     reason,
     source: candidate.source,
@@ -613,9 +632,11 @@ function tripAutoFixCircuitBreaker(options: AutoFixRecoveryPolicyOptions): void 
   });
 }
 
-export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
+export function createAutoFixRecoveryTick(baseOptions: AutoFixRecoveryPolicyOptions): WorkerTick {
+  const recordedSkipKeys = new Map<string, string>();
   return async (ctx) => {
     ctx.signal?.throwIfAborted();
+    const options: AutoFixRecoveryPolicyOptions = { ...baseOptions, scanScope: { recordedSkipKeys } };
     const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
     if (isCircuitBreakerPaused(breakerState, Date.now())) {
       options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] worker-autofix-circuit-breaker-paused`, {
@@ -630,6 +651,10 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
     options.drainWakeupHints?.();
     const candidates = listAutoFixRecoveryScanCandidates(options);
     const submittedThisTick = new Set<string>();
+    const candidateTaskIds = new Set(candidates.map((candidate) => candidate.taskId));
+    for (const taskId of recordedSkipKeys.keys()) {
+      if (!candidateTaskIds.has(taskId)) recordedSkipKeys.delete(taskId);
+    }
 
     for (const candidate of collectValidatedAutoFixRecoveryCandidates(options, candidates)) {
       // Re-check per candidate, not just once at tick start: candidate
