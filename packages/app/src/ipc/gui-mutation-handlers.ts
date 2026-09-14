@@ -707,7 +707,6 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
     const submission = await parsePlanSubmissionBundleFile(payload.planPath);
     taskHandles.clear();
-    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
     const workflowIds: string[] = [];
     let upstream: { workflowId: string; featureBranch: string } | undefined;
 
@@ -729,12 +728,11 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         };
       }
       backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+      const loadedWorkflowId = orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const workflow = persistence.loadWorkflow(loadedWorkflowId);
       if (!workflow) {
         throw new Error('Loaded plan did not create a workflow.');
       }
-      existingWorkflowIds.add(workflow.id);
       workflowIds.push(workflow.id);
       upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
     }
@@ -743,7 +741,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     if (!workflowId) {
       throw new Error('Loaded plan did not create a workflow.');
     }
-    const started = orchestrator.startExecution();
+    const started = orchestrator.startWorkflowExecution(workflowId);
     logger.info(
       `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
       { module: 'ipc-delegate' },
