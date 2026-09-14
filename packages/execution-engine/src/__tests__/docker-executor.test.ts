@@ -259,6 +259,11 @@ describe('DockerExecutor', () => {
       computeContentHash('action-1', 'echo hello', undefined, [], upstreamBaseCommit),
     );
 
+    const execRemoteCaptureMock = (executor as any).execRemoteCapture as ReturnType<typeof vi.fn>;
+    execRemoteCaptureMock.mockImplementation(async (_containerId: string, script: string) => (
+      script.includes('--verify') ? upstreamBaseCommit : ''
+    ));
+
     await executor.start(makeRequest({
       inputs: {
         command: 'echo hello',

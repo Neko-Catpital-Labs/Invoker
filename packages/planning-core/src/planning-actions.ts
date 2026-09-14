@@ -47,6 +47,7 @@ export async function appendPlanningTurn({
     assistantReply: reply,
     immediateDraftPlanText,
     requireDraftAuthorization,
+    hasExistingDraft: Boolean(state.draftPlanText),
   });
 
   const nextMessages: PlanningMessage[] = [
@@ -59,7 +60,7 @@ export async function appendPlanningTurn({
     return {
       reply,
       state: { ...state, messages: nextMessages, draftPlanText: turn.planText, status: 'draft_ready' },
-      draftingAuthorized: true,
+      draftingAuthorized: turn.draftingAuthorized,
       draftPlanText: turn.planText,
       summary: turn.summary,
     };
@@ -71,4 +72,3 @@ export async function appendPlanningTurn({
     draftingAuthorized: turn.draftingAuthorized,
   };
 }
-

@@ -237,7 +237,7 @@ export function classifyScopeKind(filePath) {
   if (path.startsWith('scripts/repro/')) return 'proof';
   if (path.startsWith('packages/app/e2e/visual-proof/')) return 'product-test';
   if (path.startsWith('skills/') || path.startsWith('docs/') || path.endsWith('.md')) return 'docs';
-  if (path.startsWith('scripts/')) return 'policy';
+  if (path.startsWith('scripts/') || path.startsWith('.github/')) return 'policy';
   if (
     path.includes('/e2e/')
     || path.includes('/__tests__/')
@@ -348,7 +348,9 @@ export function validateGuardedBehaviorMarkers({ diffText = '', body = '' } = {}
   const claimedIds = `${getSectionBody(body, '## Safety Invariant')}\n${getSectionBody(body, '## Non-goals')}`;
   const errors = [];
   for (const marker of markers) {
-    if (!claimedIds.includes(marker.id)) {
+    const escapedId = marker.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const claimedIdPattern = new RegExp(`(?:^|[^A-Za-z0-9_-])${escapedId}(?=$|[^A-Za-z0-9_-])`);
+    if (!claimedIdPattern.test(claimedIds)) {
       errors.push(
         `Guarded behavior "${marker.id}" at ${marker.path}:${marker.line} is touched by this diff but not mentioned in ## Safety Invariant or ## Non-goals. Name it explicitly so reviewers know this decision is intentional.`,
       );
@@ -407,10 +409,13 @@ export function getPrBodyWarnings(body, options = {}) {
 export async function validatePrBody(body, options = {}) {
   const errors = [];
   const trimmed = body.trim();
+  if (Array.isArray(options.changedFiles) && options.changedFiles.length === 0) {
+    errors.push('PR has no file changes; close it instead of merging it.');
+  }
+
   if (!trimmed) {
-    return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, and ## Test Plan and ## Revert Plan with collapsed details blocks.',
-    ];
+    errors.push('PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, and ## Test Plan and ## Revert Plan with collapsed details blocks.');
+    return errors;
   }
 
   for (const heading of REQUIRED_SECTIONS) {

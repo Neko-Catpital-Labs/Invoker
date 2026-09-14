@@ -1,4 +1,5 @@
 import type { ExternalDependency, ExternalDependencyChange, TaskState } from '@invoker/workflow-graph';
+import { assertResolvedTaskConfig } from '@invoker/workflow-graph';
 
 export interface WorkflowInvariantLike {
   readonly id?: unknown;
@@ -151,4 +152,5 @@ export function assertTaskConsistent(task: TaskState): void {
   if (!nonEmptyString(task.id)) {
     throw new Error('task.id must be a non-empty string');
   }
+  assertResolvedTaskConfig(task.config);
 }

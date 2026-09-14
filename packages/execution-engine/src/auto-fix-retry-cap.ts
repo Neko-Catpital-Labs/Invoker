@@ -55,8 +55,8 @@ export interface AutoFixRetryCapDecision {
 /**
  * Decide whether a worker may submit one more automatic retry for `taskId`
  * without exceeding the configured budget. Read-only: callers must invoke
- * {@link recordAutoFixRetryConsumed} after a submission actually happens so the
- * durable counter advances.
+ * {@link recordAutoFixRetryConsumed} after the queue acknowledges submission so
+ * the durable counter advances.
  */
 export function checkAutoFixRetryCap(
   store: WorkerDecisionStore,
@@ -69,7 +69,51 @@ export function checkAutoFixRetryCap(
   return { allowed, consumed, budget };
 }
 
-/** Advance the durable per-task retry counter by one after a submission. */
+export function recordAutoFixRetryPending(
+  store: WorkerDecisionStore,
+  taskId: string,
+  fields: { workflowId?: string; summary?: string } = {},
+): void {
+  recordWorkerDecisionRow(store, {
+    workerKind: RETRY_CAP_WORKER_KIND,
+    actionType: AUTO_FIX_RETRY_CAP_ACTION_TYPE,
+    externalKey: autoFixRetryCapExternalKey(taskId),
+    subjectType: 'task',
+    subjectId: taskId,
+    ...(fields.workflowId !== undefined ? { workflowId: fields.workflowId } : {}),
+    taskId,
+    status: 'pending',
+    summary: fields.summary ?? 'Automatic retry request awaiting queue acknowledgement',
+    incrementAttempt: false,
+    payload: { dispatchState: 'pending' },
+  });
+}
+
+export function recordAutoFixRetryUnacknowledged(
+  store: WorkerDecisionStore,
+  taskId: string,
+  error: unknown,
+  fields: { workflowId?: string; summary?: string } = {},
+): void {
+  recordWorkerDecisionRow(store, {
+    workerKind: RETRY_CAP_WORKER_KIND,
+    actionType: AUTO_FIX_RETRY_CAP_ACTION_TYPE,
+    externalKey: autoFixRetryCapExternalKey(taskId),
+    subjectType: 'task',
+    subjectId: taskId,
+    ...(fields.workflowId !== undefined ? { workflowId: fields.workflowId } : {}),
+    taskId,
+    status: 'failed',
+    summary: fields.summary ?? 'Automatic retry request was not acknowledged',
+    incrementAttempt: false,
+    payload: {
+      dispatchState: 'not-acknowledged',
+      failurePhase: 'submission',
+      error: error instanceof Error ? error.message : String(error),
+    },
+  });
+}
+
 export function recordAutoFixRetryConsumed(
   store: WorkerDecisionStore,
   taskId: string,
@@ -86,6 +130,7 @@ export function recordAutoFixRetryConsumed(
     status: 'queued',
     summary: fields.summary ?? 'Durable per-task auto-fix retry counter',
     incrementAttempt: true,
+    payload: { dispatchState: 'acknowledged' },
   });
 }
 

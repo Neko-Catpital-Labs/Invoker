@@ -75,16 +75,47 @@ export function assertNoSecretPrinted(printedLines: readonly string[], secretVal
 }
 
 /**
- * Guards the disk-headroom-cleanup regression: a worker toggle's configPath
- * must look like a real dotted InvokerConfig field, never a bare env var
- * name. This is what would have caught `INVOKER_DISK_CLEANUP_ENABLED` being
- * used as a toggle's source of truth instead of a config field.
+ * Guards worker-toggle source-of-truth: start presets declare worker kinds
+ * (SQLite desired state), policy toggles declare a real InvokerConfig path —
+ * never a bare env var and never a config start boolean like
+ * `prMaintenance.enabled`.
  */
+export function assertWorkerToggleHasSingleSource(spec: {
+  id: string;
+  workerKinds?: readonly string[];
+  configPath?: string;
+}): void {
+  const hasKinds = Array.isArray(spec.workerKinds) && spec.workerKinds.length > 0;
+  const hasPath = typeof spec.configPath === 'string' && spec.configPath.length > 0;
+  if (hasKinds === hasPath) {
+    throw new Error(
+      `worker toggle "${spec.id}" must declare exactly one of workerKinds (desired-state start) or configPath (policy)`,
+    );
+  }
+  if (hasKinds) {
+    for (const workerKind of spec.workerKinds!) {
+      if (typeof workerKind !== 'string' || workerKind.trim().length === 0) {
+        throw new Error(`worker toggle "${spec.id}" has an empty workerKinds entry`);
+      }
+    }
+    return;
+  }
+  const configPath = spec.configPath!;
+  if (/^[A-Z][A-Z0-9_]*$/.test(configPath)) {
+    throw new Error(`worker toggle "${spec.id}" is backed by what looks like a bare env var name ("${configPath}") instead of an InvokerConfig field`);
+  }
+  if (!/^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)?$/.test(configPath)) {
+    throw new Error(`worker toggle "${spec.id}" has a malformed configPath "${configPath}"`);
+  }
+  const leaf = configPath.split('.').pop() ?? configPath;
+  if (leaf === 'enabled' || leaf === 'e2eAutoFixEnabled' || leaf === 'requeueEnabled') {
+    throw new Error(
+      `worker toggle "${spec.id}" configPath "${configPath}" looks like a worker start flag; start toggles must use workerKinds`,
+    );
+  }
+}
+
+/** @deprecated Use assertWorkerToggleHasSingleSource. */
 export function assertWorkerToggleHasSingleConfigSource(spec: { id: string; configPath: string }): void {
-  if (/^[A-Z][A-Z0-9_]*$/.test(spec.configPath)) {
-    throw new Error(`worker toggle "${spec.id}" is backed by what looks like a bare env var name ("${spec.configPath}") instead of an InvokerConfig field`);
-  }
-  if (!/^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)?$/.test(spec.configPath)) {
-    throw new Error(`worker toggle "${spec.id}" has a malformed configPath "${spec.configPath}"`);
-  }
+  assertWorkerToggleHasSingleSource(spec);
 }
