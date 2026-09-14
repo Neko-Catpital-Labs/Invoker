@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createSpendCircuitBreakerWorker, planSpendCircuitBreakerTrips } from '../workers/spend-circuit-breaker-worker.js';
+import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
+
+import {
+  SPEND_CIRCUIT_BREAKER_WORKER_KIND,
+  createSpendCircuitBreakerWorker,
+  planSpendCircuitBreakerTrips,
+} from '../workers/spend-circuit-breaker-worker.js';
+import { recordCodexSpendGateTrip } from '../codex-spend-gate.js';
 import { loadSpendCircuitBreakerState } from '../spend-circuit-breaker-state.js';
 import { E2E_AUTOFIX_WORKER_KIND } from '../workers/e2e-autofix-worker.js';
 import { PR_ADMIN_BYPASS_LAND_WORKER_KIND } from '../workers/pr-maintenance-workers.js';
@@ -202,5 +209,84 @@ describe('createSpendCircuitBreakerWorker', () => {
     await worker.tick('manual');
 
     expect(setWorkerDesiredState).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSpendCircuitBreakerWorker Codex spend gate alert', () => {
+  const TRIP = {
+    trippedAt: '2026-09-13T16:35:24.179Z',
+    dayKey: '2026-09-13',
+    tokenBudget: 600_000_000,
+    observedTokens: 610_323_524,
+    tokensByHost: { owner: 559_935_118 },
+  };
+
+  function makeAlertStore() {
+    const rows = new Map<string, WorkerActionRecord>();
+    const upsertWorkerAction = vi.fn((write: WorkerActionWrite): WorkerActionRecord => {
+      const record = {
+        ...write,
+        attemptCount: write.attemptCount ?? 0,
+        createdAt: '2026-09-14T00:00:00.000Z',
+        updatedAt: write.updatedAt ?? '2026-09-14T00:00:00.000Z',
+      } as WorkerActionRecord;
+      rows.set(`${write.workerKind}:${write.externalKey}`, record);
+      return record;
+    });
+    return {
+      rows,
+      upsertWorkerAction,
+      store: {
+        listWorkflows: () => [],
+        setWorkerDesiredState: vi.fn(),
+        getWorkerAction: (workerKind: string, externalKey: string) => rows.get(`${workerKind}:${externalKey}`),
+        upsertWorkerAction,
+      },
+    };
+  }
+
+  it('records one alert with the reset command while the gate is tripped', async () => {
+    const gatePath = join(makeTempDir(), 'codex-spend-gate.json');
+    recordCodexSpendGateTrip(gatePath, TRIP);
+    const { rows, upsertWorkerAction, store } = makeAlertStore();
+    const worker = createSpendCircuitBreakerWorker({
+      logger: makeLogger(),
+      store,
+      codexDailyGate: { statePath: gatePath },
+      statePath: join(makeTempDir(), 'state.json'),
+      now: () => NOW,
+      tickOnStart: false,
+      intervalMs: 0,
+    });
+
+    await worker.tick('manual');
+    await worker.tick('manual');
+
+    expect(upsertWorkerAction).toHaveBeenCalledTimes(1);
+    const [alert] = [...rows.values()];
+    expect(alert).toMatchObject({
+      workerKind: SPEND_CIRCUIT_BREAKER_WORKER_KIND,
+      actionType: 'alert-send',
+      status: 'completed',
+    });
+    expect(alert?.summary).toContain('Codex is shut off by the daily spend gate');
+    expect(alert?.summary).toContain('invoker-cli spend-gate reset');
+  });
+
+  it('records no alert while the gate is open', async () => {
+    const { upsertWorkerAction, store } = makeAlertStore();
+    const worker = createSpendCircuitBreakerWorker({
+      logger: makeLogger(),
+      store,
+      codexDailyGate: { statePath: join(makeTempDir(), 'codex-spend-gate.json') },
+      statePath: join(makeTempDir(), 'state.json'),
+      now: () => NOW,
+      tickOnStart: false,
+      intervalMs: 0,
+    });
+
+    await worker.tick('manual');
+
+    expect(upsertWorkerAction).not.toHaveBeenCalled();
   });
 });
