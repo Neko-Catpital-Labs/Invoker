@@ -94,7 +94,7 @@ import { SlowQueryAggregator, type SlowQueryShapeStats } from './slow-query-aggr
 import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
-import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { SQLITE_MAX_VARIABLE_NUMBER, SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
 import { appendJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
@@ -528,8 +528,18 @@ class NativeStatementCompat {
 
 class NativeDatabaseCompat {
   private lastChanges = 0;
+  private readonly statementCache = new Map<string, StatementSync>();
 
   constructor(private readonly db: DatabaseSync) {}
+
+  private getStatement(sql: string): StatementSync {
+    let stmt = this.statementCache.get(sql);
+    if (!stmt) {
+      stmt = this.db.prepare(sql);
+      this.statementCache.set(sql, stmt);
+    }
+    return stmt;
+  }
 
   run(sql: string, params: SQLiteParams = []): void {
     const trimmed = sql.trim();
@@ -538,12 +548,12 @@ class NativeDatabaseCompat {
       this.lastChanges = 0;
       return;
     }
-    const result = this.db.prepare(sql).run(...(paramsToArgs(params) as any[]));
+    const result = this.getStatement(sql).run(...(paramsToArgs(params) as any[]));
     this.lastChanges = Number(result.changes);
   }
 
   prepare(sql: string): NativeStatementCompat {
-    return new NativeStatementCompat(this.db.prepare(sql));
+    return new NativeStatementCompat(this.getStatement(sql));
   }
 
   exec(sql: string): Array<{ columns: string[]; values: unknown[][] }> {
@@ -564,6 +574,7 @@ class NativeDatabaseCompat {
   }
 
   close(): void {
+    this.statementCache.clear();
     this.db.close();
   }
 }
@@ -1301,6 +1312,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.taskAttemptRepo.saveTask(workflowId, task);
   }
 
+  saveTasks(workflowId: string, tasks: TaskState[]): void {
+    this.taskAttemptRepo.saveTasks(workflowId, tasks);
+  }
+
   updateTask(
     taskId: string,
     changes: TaskStateChanges,
@@ -1994,6 +2009,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
       INSERT INTO events (task_id, event_type, payload)
       VALUES (?, ?, ?)
     `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+  }
+
+  logEvents(events: Array<{ taskId: string; eventType: string; payload?: unknown }>): void {
+    if (events.length === 0) return;
+    const rowsPerInsert = Math.max(1, Math.floor(SQLITE_MAX_VARIABLE_NUMBER / 3));
+    this.runTransaction(() => {
+      for (let offset = 0; offset < events.length; offset += rowsPerInsert) {
+        const chunk = events.slice(offset, offset + rowsPerInsert);
+        const placeholders = chunk.map(() => '(?, ?, ?)').join(', ');
+        const params = chunk.flatMap((event) => [
+          event.taskId,
+          event.eventType,
+          event.payload ? JSON.stringify(event.payload) : null,
+        ]);
+        this.execRun(
+          `INSERT INTO events (task_id, event_type, payload) VALUES ${placeholders}`,
+          params,
+        );
+      }
+    });
   }
 
   getEvents(taskId: string): TaskEvent[];
