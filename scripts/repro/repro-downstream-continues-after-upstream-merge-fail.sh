@@ -40,7 +40,6 @@ mkdir -p "$DB_DIR" "$PLAN_DIR" "$LOG_DIR"
 
 export INVOKER_HEADLESS_STANDALONE=1
 export INVOKER_DB_DIR="$DB_DIR"
-export INVOKER_ALLOW_DELETE_ALL=1
 
 extract_json_stream() {
   awk '

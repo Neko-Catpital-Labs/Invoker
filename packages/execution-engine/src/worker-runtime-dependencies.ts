@@ -15,8 +15,15 @@ import type {
 } from './workers/auto-approve-worker.js';
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
+import type { WorkerSessionMineWorkerConfig } from './workers/worker-session-mine-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
+import type { ClaudeOauthRefreshWorkerConfig } from './workers/claude-oauth-refresh-worker.js';
 import type { DiskHeadroomWorkerStore } from './workers/disk-headroom-reclaim.js';
+import type { SlackBugScanWorkerConfig } from './workers/slack-bug-scan-worker.js';
+import type { CrossRepoResearchWorkerConfig } from './workers/cross-repo-research-worker.js';
+import type { CatstackDeployWorkerConfig } from './workers/catstack-deploy-worker.js';
+import type { SelfDeployWorkerConfig } from './workers/self-deploy-worker.js';
+import type { MergifyQueueResearchWorkerConfig } from './workers/mergify-queue-research-worker.js';
 import type {
   InfraRepairWorkerConfig,
   InfraRepairWorkerStore,
@@ -29,6 +36,23 @@ import type {
   WorkflowResumeWorkerStore,
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
+import type {
+  IdleTaskCleanupWorkerConfig,
+  IdleTaskCleanupWorkerStore,
+  IdleTaskCleanupWorkerSubmitter,
+} from './workers/idle-task-cleanup-worker.js';
+import type { DbReaperWorkerConfig, DbReaperWorkerStore } from './workers/db-reaper-worker.js';
+import type {
+  SpendCircuitBreakerWorkerConfig,
+  SpendCircuitBreakerWorkerStore,
+} from './workers/spend-circuit-breaker-worker.js';
+import type {
+  AdminBypassE2eBabysitWorkerConfig,
+  InvestigativePlanSubmitter,
+  RepairFilingStore,
+  WorkerLifecycleReader,
+  WorkerLifecycleStarter,
+} from './workers/admin-bypass-e2e-babysit-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -38,14 +62,18 @@ export interface WorkerRuntimeDependencies {
     & AutoApproveWorkerStore
     & InfraRepairWorkerStore
     & WorkflowResumeWorkerStore
-    & DiskHeadroomWorkerStore;
+    & DiskHeadroomWorkerStore
+    & IdleTaskCleanupWorkerStore
+    & DbReaperWorkerStore
+    & SpendCircuitBreakerWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & ReviewGateCiRepairSubmitter
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
     & InfraRepairWorkerSubmitter
-    & WorkflowResumeWorkerSubmitter;
+    & WorkflowResumeWorkerSubmitter
+    & IdleTaskCleanupWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
@@ -62,6 +90,8 @@ export interface WorkerRuntimeDependencies {
   prMaintenance?: PrMaintenanceWorkerConfig;
   /** Disk-headroom worker configuration (local/remote paths and thresholds). */
   diskHeadroom?: DiskHeadroomWorkerConfig;
+  /** Claude OAuth refresh worker configuration (local credentials path and SSH pool distribution targets). */
+  claudeOauthRefresh?: ClaudeOauthRefreshWorkerConfig;
   /** Infra-repair worker configuration (owner/local repo plus remote SSH repair targets). */
   infraRepair?: InfraRepairWorkerConfig;
   /** Auto-approval tuning for worker-owned AI fix approvals. */
@@ -70,4 +100,22 @@ export interface WorkerRuntimeDependencies {
   workflowResume?: WorkflowResumeWorkerConfig;
   /** e2e auto-fix/default-branch CI watcher configuration. */
   e2eAutoFix?: E2eAutoFixWorkerConfig;
+  /** Worker session thrash miner (off by default; enable on DO1). */
+  workerSessionMine?: WorkerSessionMineWorkerConfig;
+  slackBugScan?: SlackBugScanWorkerConfig;
+  /** Cross-repo research worker configuration. */
+  crossRepoResearch?: CrossRepoResearchWorkerConfig;
+  /** Catstack deploy worker configuration (local + remoteTargets clone/pull/install). */
+  catstackDeploy?: CatstackDeployWorkerConfig;
+  selfDeploy?: SelfDeployWorkerConfig;
+  /** Mergify queue research worker configuration. */
+  mergifyQueueResearch?: MergifyQueueResearchWorkerConfig;
+  /** Idle-task-cleanup worker configuration (dry-run only; see the worker's own docs). */
+  idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
+  dbReaper?: DbReaperWorkerConfig;
+  spendCircuitBreaker?: SpendCircuitBreakerWorkerConfig;
+  adminBypassE2eBabysit?: AdminBypassE2eBabysitWorkerConfig;
+  workerLifecycleStarter?: WorkerLifecycleReader & WorkerLifecycleStarter;
+  repairFilingStore?: RepairFilingStore;
+  investigativePlanSubmitter?: InvestigativePlanSubmitter;
 }
