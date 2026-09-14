@@ -47,45 +47,26 @@ if (files.length === 0) {
 }
 
 const { parse } = await importYaml(__dirname);
-const { detectReviewUnits, getLabelSection, validateSingleReviewUnitFocus } = await import(resolveReviewUnitRulesModulePath(__dirname));
-
-function scannedTexts(text) {
-  return SCANNED_SECTIONS.map((label) => [label, getLabelSection(text, label)]).filter(([, section]) => section);
-}
-
-function triggerLines(text) {
-  const hits = new Map();
-  for (const [label, section] of scannedTexts(text)) {
-    for (const line of section.split('\n')) {
-      if (!line.trim() || EXCLUDED_LINE_PATTERN.test(line)) continue;
-      for (const unit of detectReviewUnits(line)) {
-        if (!hits.has(unit)) hits.set(unit, []);
-        hits.get(unit).push(`${label}: ${line.trim().slice(0, 120)}`);
-      }
-    }
-  }
-  return hits;
-}
+const { getLabelSection, parseFileListItems, classifyReviewUnitsForPath, validateSingleReviewUnitFiles } = await import(resolveReviewUnitRulesModulePath(__dirname));
 
 let anyFailure = false;
 for (const file of files) {
   const plan = parse(readFileSync(file, 'utf8'));
   for (const task of plan?.tasks ?? []) {
-    for (const field of ['description', 'prompt']) {
-      const text = String(task[field] ?? '');
-      if (!text) continue;
-      const errors = validateSingleReviewUnitFocus({
-        context: `${field}`,
-        texts: scannedTexts(text).map(([, section]) => section),
-      });
-      if (errors.length === 0) continue;
-      anyFailure = true;
-      console.log(`== ${file} :: ${task.id} (${field})`);
-      for (const error of errors) console.log(`  ${error}`);
-      for (const [unit, lines] of triggerLines(text)) {
-        console.log(`  [${unit}]`);
-        for (const line of lines.slice(0, 3)) console.log(`     ${line}`);
-      }
+    const description = String(task.description ?? '');
+    const listed = parseFileListItems(getLabelSection(description, 'Files'));
+    if (listed.length === 0) {
+      if (String(task.prompt ?? '')) console.log(`== ${file} :: ${task.id}\n  no Files list, so this task's review unit is unchecked`);
+      continue;
+    }
+    const errors = validateSingleReviewUnitFiles({ files: listed, context: 'description' });
+    if (errors.length === 0) continue;
+    anyFailure = true;
+    console.log(`== ${file} :: ${task.id}`);
+    for (const error of errors) console.log(`  ${error}`);
+    for (const listedFile of listed) {
+      const units = classifyReviewUnitsForPath(listedFile);
+      if (units.length > 0) console.log(`  [${units.join(', ')}] ${listedFile}`);
     }
   }
 }

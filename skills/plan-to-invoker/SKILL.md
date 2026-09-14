@@ -212,7 +212,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 5a. `step-presubmit-traps` (required before any submit; not yet part of `skill-doctor`)
    `node skills/plan-to-invoker/scripts/freshness-check.mjs --ref origin/<baseBranch> . <plan-file>` must print `current` for every prompt task; a `STALE -> needs_input` line is the owner's launch-time verdict, fix the clause before submitting.
-   `node skills/plan-to-invoker/scripts/unit-triggers.mjs <plan-file>` must exit 0; on a hit it prints the section line that trips each review unit.
+   `node skills/plan-to-invoker/scripts/unit-triggers.mjs <plan-file>` must exit 0; on a hit it prints each listed file with the review unit it belongs to.
    `grep -n "test -- --run" <plan-file>` must print nothing.
    See `references/task-patterns.md` § *Traps that cost a resubmit*.
 

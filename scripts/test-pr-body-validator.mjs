@@ -653,10 +653,20 @@ Durable-state scan behavior is reviewable separately from lifecycle wakeup routi
 
 </details>
 `;
-const broad1574Errors = await validatePrBody(broad1574Body);
+const spanningChangedFiles = [
+  'packages/app/src/autofix-policy.ts',
+  'packages/execution-engine/src/task-runner.ts',
+  'packages/ui/src/App.tsx',
+];
+const broad1574ProseOnlyErrors = await validatePrBody(broad1574Body);
 assert(
-  broad1574Errors.some((error) => error.includes('mentions multiple review units')),
-  'broad #1574-shaped PR body should fail review-unit focus',
+  !broad1574ProseOnlyErrors.some((error) => error.includes('review unit')),
+  'broad #1574-shaped PR body with no changed files must not fail on its wording',
+);
+const broad1574Errors = await validatePrBody(broad1574Body, { changedFiles: spanningChangedFiles });
+assert(
+  broad1574Errors.some((error) => error.includes('cannot ship with')),
+  'broad #1574-shaped PR whose changed files span review units should fail',
 );
 
 const originalAllInOneBody = `## Summary
@@ -710,10 +720,10 @@ The complete auto-fix recovery path lands together for one rollout.
 
 </details>
 `;
-const originalAllInOneErrors = await validatePrBody(originalAllInOneBody);
+const originalAllInOneErrors = await validatePrBody(originalAllInOneBody, { changedFiles: spanningChangedFiles });
 assert(
-  originalAllInOneErrors.some((error) => error.includes('mentions multiple review units')),
-  'original all-in-one auto-fix PR body should fail review-unit focus',
+  originalAllInOneErrors.some((error) => error.includes('cannot ship with')),
+  'original all-in-one auto-fix PR whose changed files span review units should fail',
 );
 
 const longSummary = `## Summary

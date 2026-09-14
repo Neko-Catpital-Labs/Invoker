@@ -24,98 +24,6 @@ const PRODUCT_REVIEW_UNITS = new Set([
   'cleanup',
 ]);
 
-const UNIT_PATTERNS = [
-  ['contract', [
-    /\bcontracts?\b/,
-    /\binterfaces?\b/,
-    /\btypes?\b/,
-    /\bports?\b/,
-    /\bschemas?\b/,
-  ]],
-  ['ownership-refactor', [
-    /\bownership\b/,
-    /\brefactor\b/,
-    /\bextract(?:s|ed|ing)?\b/,
-    /\bsplit(?:s|ting)?\b/,
-    /\bmove(?:s|d)?\b/,
-    /\bmoved\b/,
-  ]],
-  ['read-path', [
-    /\bscan(?:s|ned|ning)?\b/,
-    /\benumerat(?:e|es|ed|ing)\b/,
-    /\blist(?:s|ed|ing)?\b/,
-    /\bdiscover(?:s|ed|ing)?\b/,
-  ]],
-  ['validation-policy', [
-    /\bvalidat(?:e|es|ed|ing|ion)\b/,
-    /\beligib(?:le|ility)\b/,
-    /\bineligible\b/,
-    /\bstale\b/,
-    /\bretr(?:y|ies)\b/,
-    /\bdedupe\b/,
-    /\bdeduplicat(?:e|es|ed|ing|ion)\b/,
-    /\bduplicates?\b/,
-    /\bsuppress(?:es|ed|ing)?\b/,
-    /\bskip(?:s|ped|ping)?\b/,
-    /\breject(?:s|ed|ing)?\b/,
-    /\balready queued\b/,
-    /\bopen fix intents?\b/,
-  ]],
-  ['write-path', [
-    /\bsubmit(?:s|ted|ting)?\b/,
-    /\benqueue(?:s|d|ing)?\b/,
-    /\bcreate(?:s|d|ing)?\s+(?:a\s+)?(?:workflow\s+)?mutation intents?\b/,
-    /\bfix-with-agent\b/,
-  ]],
-  ['routing', [
-    /\broute(?:s|d|ing)?\b/,
-    /\brouting\b/,
-    /\bwakeups?\b/,
-    /\bmessage bus\b/,
-    /\bsubscriptions?\b/,
-    /\blifecycle events?\b/,
-  ]],
-  ['activation-surface', [
-    /\bactivate(?:s|d|ing)?\b/,
-    /\bactivation\b/,
-    /\bexpose(?:s|d|ing)?\b/,
-    /\bheadless\b/,
-    /\bcli\b/,
-    /\bcommands?\b/,
-  ]],
-  ['tooling-policy', [
-    /\bskill-doctor\b/,
-    /\bplan-to-invoker\b/,
-    /\bvalidators?\b/,
-    /\blint(?:er|ing)?\b/,
-    /\bpr bod(?:y|ies)\b/,
-    /\bcreate-pr\b/,
-    /\bmergify\b/,
-    /\bci policy\b/,
-  ]],
-  ['proof', [
-    /\btests?\b/,
-    /\bregression\b/,
-    /\brepros?\b/,
-    /\bbenchmarks?\b/,
-    /\bproof\b/,
-    /\bverification\b/,
-    /\bvisual proof\b/,
-  ]],
-  ['docs', [
-    /\bdocs?\b/,
-    /\bdocumentation\b/,
-    /\breadme\b/,
-    /\bskill\.md\b/,
-  ]],
-  ['cleanup', [
-    /\bcleanup\b/,
-    /\bdelete(?:s|d|ing)?\b/,
-    /\bremove(?:s|d|ing)?\b/,
-    /\bdead code\b/,
-  ]],
-];
-
 const ALLOWED_CHANGE_OPERATIONS = new Set([
   'create',
   'modify',
@@ -129,7 +37,7 @@ const ALLOWED_CHANGE_OPERATIONS = new Set([
   'none',
 ]);
 
-const PATH_LIKE = /^(?:packages|scripts|skills|docs|plans|\.github|[A-Za-z0-9_.-]+\/)[^:]+/;
+const PATH_LIKE = /^(?:packages|scripts|skills|docs|plans|\.github|[A-Za-z0-9_.-]+\/)[^:]+|^[A-Za-z0-9_.-]+\.[A-Za-z0-9]+$/;
 const APP_SRC_PREFIX = 'packages/app/src/';
 const REVIEW_GATE_PUBLICATION_PATH = 'packages/execution-engine/src/merge-runner.ts';
 const REVIEW_GATE_POLLING_PATH = 'packages/execution-engine/src/task-runner.ts';
@@ -171,87 +79,6 @@ export function normalizeReviewUnit(value = '') {
   return firstMeaningfulLine(value).replace(/^[-*]\s*/, '').trim().toLowerCase();
 }
 
-const TOKEN_WRAPPER = /^[`'"([{<]+|[`'")\]}>.,;:!?]+$/g;
-const FILE_EXTENSION = /[^./]\.[a-z][a-z0-9]{0,5}$/i;
-const SLASH_JOINED_WORDS = /^[a-z]+(?:\/[a-z]+)+$/i;
-const BLANKED_PATH = '\u0000';
-
-function isPathLikeToken(token) {
-  const bare = token.replace(TOKEN_WRAPPER, '');
-  if (FILE_EXTENSION.test(bare)) return true;
-  return bare.includes('/') && !SLASH_JOINED_WORDS.test(bare);
-}
-
-export function blankPathLikeTokens(text) {
-  return String(text).replace(/\S+/g, (token) => (isPathLikeToken(token) ? BLANKED_PATH : token));
-}
-
-export function detectReviewUnitTriggers(text) {
-  const haystack = blankPathLikeTokens(text).toLowerCase();
-  const triggers = new Map();
-  for (const [unit, patterns] of UNIT_PATTERNS) {
-    const words = new Set();
-    for (const pattern of patterns) {
-      for (const match of haystack.matchAll(new RegExp(pattern.source, 'g'))) {
-        words.add(match[0].replace(/\s+/g, ' '));
-      }
-    }
-    if (words.size > 0) triggers.set(unit, Array.from(words));
-  }
-  return triggers;
-}
-
-export function detectReviewUnits(text) {
-  return new Set(detectReviewUnitTriggers(text).keys());
-}
-
-function mergeReviewUnitTriggers(texts) {
-  const merged = new Map();
-  for (const text of texts) {
-    for (const [unit, words] of detectReviewUnitTriggers(includedWorkText(text))) {
-      const known = merged.get(unit) ?? new Set();
-      for (const word of words) known.add(word);
-      merged.set(unit, known);
-    }
-  }
-  return merged;
-}
-
-function formatTriggerWords(triggers, units) {
-  const unitSet = new Set(units);
-  const parts = VALID_REVIEW_UNITS
-    .filter((unit) => unitSet.has(unit) && triggers.has(unit))
-    .map((unit) => `${unit} [${Array.from(triggers.get(unit)).join(', ')}]`);
-  return parts.length > 0 ? ` Matched words: ${parts.join('; ')}.` : '';
-}
-
-function includedWorkText(text) {
-  return String(text)
-    .split(/\r?\n/)
-    .filter((line) => !/\b(separate|non-goals?|do not|does not|without|no\s+)\b/i.test(line))
-    .join('\n');
-}
-
-export function validateSingleReviewUnitFocus({ texts = [], context }) {
-  const errors = [];
-
-  const triggers = mergeReviewUnitTriggers(texts);
-  const detectedProductUnits = Array.from(triggers.keys()).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
-  if (detectedProductUnits.length > 1) {
-    errors.push(
-      `${context} mentions multiple review units (${formatReviewUnits(detectedProductUnits)}); split into one conceptual unit per diff/task.${formatTriggerWords(triggers, detectedProductUnits)}`,
-    );
-  }
-
-  if (triggers.has('docs') && detectedProductUnits.length > 0) {
-    errors.push(
-      `${context} mixes docs language with product-unit language; split docs from implementation policy.${formatTriggerWords(triggers, ['docs', ...detectedProductUnits])}`,
-    );
-  }
-
-  return errors;
-}
-
 export function validateReviewUnitValue(reviewUnit, context) {
   if (!reviewUnit) return [];
   if (VALID_REVIEW_UNIT_SET.has(reviewUnit)) return [];
@@ -279,21 +106,6 @@ export function validateReviewLaneUnitCompatibility({ reviewLane = '', reviewUni
   if (reviewLane === 'docs' && reviewUnit === 'docs') return [];
 
   return [`${context} Review Lane "${reviewLane}" is not compatible with Review Unit "${reviewUnit}".`];
-}
-
-export function validateReviewUnitFocus({ declaredReviewUnit, texts = [], context }) {
-  const errors = validateSingleReviewUnitFocus({ texts, context });
-  if (!VALID_REVIEW_UNIT_SET.has(declaredReviewUnit)) return errors;
-
-  const triggers = mergeReviewUnitTriggers(texts);
-  const detectedProductUnits = Array.from(triggers.keys()).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
-  if (detectedProductUnits.length === 1 && PRODUCT_REVIEW_UNITS.has(declaredReviewUnit) && detectedProductUnits[0] !== declaredReviewUnit) {
-    errors.push(
-      `${context} Review Unit "${declaredReviewUnit}" does not match the described ${detectedProductUnits[0]} work.${formatTriggerWords(triggers, detectedProductUnits)}`,
-    );
-  }
-
-  return errors;
 }
 
 export function classifyReviewUnitsForPath(filePath) {
@@ -455,12 +267,9 @@ export function validateChangeTypeItems(section, context) {
     const pathWithOperation = PATH_LIKE.test(pathPart) && ALLOWED_CHANGE_OPERATIONS.has(operation);
     if (directOperation || pathWithOperation) continue;
 
-    const detectedUnits = Array.from(detectReviewUnits(item)).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
-    if (detectedUnits.length > 0 || /\b(add|implement|wire|route|validate|submit|scan)\b/i.test(item)) {
-      errors.push(
-        `${context} Change types entry "${item}" is conceptual work, not a per-file operation. Use entries like "packages/app/src/file.ts: modify" and keep conceptual work in Review Claim or Slice Rationale.`,
-      );
-    }
+    errors.push(
+      `${context} Change types entry "${item}" is conceptual work, not a per-file operation. Use entries like "packages/app/src/file.ts: modify" and keep conceptual work in Review Claim or Slice Rationale.`,
+    );
   }
   return errors;
 }

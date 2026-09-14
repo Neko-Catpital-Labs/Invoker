@@ -571,7 +571,7 @@ else
 fi
 
 # Pre-submit trap checks: freshness-check reproduces the owner's prose
-# freshness gate; unit-triggers names the line behind a review-unit lint hit.
+# freshness gate; unit-triggers names the files behind a review-unit lint hit.
 FRESHNESS_CHECK="$SKILL_DIR/scripts/freshness-check.mjs"
 UNIT_TRIGGERS="$SKILL_DIR/scripts/unit-triggers.mjs"
 [[ -f "$FRESHNESS_CHECK" ]] || fail "expected $FRESHNESS_CHECK"
@@ -612,7 +612,7 @@ tasks:
     description: |
       Review claim: Add a helper.
       Implementation details:
-      - Reuse the existing `detectReviewUnits` export in scripts/review-unit-rules.mjs.
+      - Reuse the existing `classifyReviewUnitsForPath` export in scripts/review-unit-rules.mjs.
     prompt: |
       Create packages/nope/src/new-helper.ts.
       Import from the existing scripts/review-unit-rules.mjs.
@@ -621,10 +621,31 @@ YAML
 FRESHNESS_CURRENT_OUTPUT="$(node "$FRESHNESS_CHECK" "$REPO_ROOT" "$TRAP_FIXTURE_DIR/current.yaml" 2>&1)" \
   || fail "freshness-check must exit 0 for a plan whose anchors all exist: $FRESHNESS_CURRENT_OUTPUT"
 must_output_contain "$FRESHNESS_CURRENT_OUTPUT" "current  current.yaml :: implement-current-anchor" "freshness-check must print current for a plan whose anchors all exist"
-UNIT_TRIGGERS_OUTPUT="$(node "$UNIT_TRIGGERS" "$TRAP_FIXTURE_DIR/stale.yaml" 2>&1 || true)"
-must_output_contain "$UNIT_TRIGGERS_OUTPUT" "description mentions multiple review units (validation-policy, routing)" "unit-triggers must report the same verdict as lint-review-units"
-must_output_contain "$UNIT_TRIGGERS_OUTPUT" "Implementation details: - Extend the existing \`$TRAP_MISSING_SYMBOL\` and validate the routing." "unit-triggers must print the scanned line that tripped each review unit"
-must_output_contain "$UNIT_TRIGGERS_OUTPUT" "[routing]" "unit-triggers must label the tripped unit"
+cat > "$TRAP_FIXTURE_DIR/spanning.yaml" <<'YAML'
+name: spanning-files-fixture
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+tasks:
+  - id: implement-spanning-files
+    description: |
+      Review claim: Add a helper.
+      Files:
+      - packages/execution-engine/src/task-runner.ts
+      - packages/ui/src/App.tsx
+    prompt: |
+      Change both files.
+    dependencies: []
+YAML
+UNIT_TRIGGERS_OUTPUT="$(node "$UNIT_TRIGGERS" "$TRAP_FIXTURE_DIR/spanning.yaml" 2>&1 || true)"
+must_output_contain "$UNIT_TRIGGERS_OUTPUT" "description lists files from routing, activation-surface; split into one review unit per task." "unit-triggers must report the same verdict as lint-review-units"
+must_output_contain "$UNIT_TRIGGERS_OUTPUT" "[routing] packages/execution-engine/src/task-runner.ts" "unit-triggers must print each listed file with its review unit"
+if node "$UNIT_TRIGGERS" "$TRAP_FIXTURE_DIR/spanning.yaml" >/dev/null 2>&1; then
+  fail "unit-triggers must exit non-zero when a task's files span review units"
+fi
+UNIT_TRIGGERS_NO_FILES="$(node "$UNIT_TRIGGERS" "$TRAP_FIXTURE_DIR/stale.yaml" 2>&1)" \
+  || fail "unit-triggers must exit 0 for a task with no Files list: $UNIT_TRIGGERS_NO_FILES"
+must_output_contain "$UNIT_TRIGGERS_NO_FILES" "no Files list, so this task's review unit is unchecked" "unit-triggers must say a task without Files was not checked"
 if node "$UNIT_TRIGGERS" "$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml" >/dev/null 2>&1; then
   :
 else
