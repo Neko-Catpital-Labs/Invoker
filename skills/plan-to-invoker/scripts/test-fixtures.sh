@@ -28,6 +28,7 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-o-all-in-one-autofix-review-unit.yaml"
   "anti-pattern-p-inter-task-ephemeral-carry.yaml"
   "anti-pattern-q-behavior-plus-unrelated-docs.yaml"
+  "anti-pattern-r-waiver-spans-review-lanes.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -651,6 +652,41 @@ EOF
   fi
 }
 
+
+test_lint_rejects_waiver_spanning_review_lanes() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-r-waiver-spans-review-lanes.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject a waiver over prompt tasks in two review lanes" >&2
+    return 1
+  fi
+  if ! grep -q 'prompt tasks span 2 lanes (behavior, policy)' <<<"$output"; then
+    echo "Expected waiver review-lane lint error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_accepts_waiver_within_one_review_lane() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+  sed 's/^      - policy$/      - behavior/' "$NEGATIVE_DIR/anti-pattern-r-waiver-spans-review-lanes.yaml" > "$temp_plan"
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$temp_plan" 2>&1)
+  set -e
+
+  if grep -q 'prompt tasks span' <<<"$output"; then
+    echo "Expected a waiver over one review lane to pass the lane check, got: $output" >&2
+    return 1
+  fi
+}
 
 test_lint_allows_nonterminal_stack_workflow_without_test_all() {
   local temp_dir first_plan second_plan stack_manifest
@@ -1727,6 +1763,8 @@ run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
 run_test "Edge: unsupported legacy auto-fix fields" test_legacy_autofix_fields_are_unsupported
 run_test "Lint: allow focused verification without test:all" test_lint_allows_focused_verification_without_test_all
 run_test "Lint: reject multi-prompt standalone without waiver" test_lint_rejects_multi_prompt_standalone_without_waiver
+run_test "Lint: reject waiver spanning review lanes" test_lint_rejects_waiver_spanning_review_lanes
+run_test "Lint: allow waiver within one review lane" test_lint_accepts_waiver_within_one_review_lane
 run_test "Lint: allow stack workflows with focused verification" test_lint_allows_nonterminal_stack_workflow_without_test_all
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
 run_test "Lint: reject missing review-compression sections" test_lint_requires_review_compression_sections
