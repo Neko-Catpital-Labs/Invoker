@@ -67,10 +67,14 @@ export async function discoverLiveOwner(bus: MessageBus, timeoutMs = 10_000): Pr
 }
 
 export async function createDefaultMessageBus(): Promise<MessageBus> {
-  const profileEnv = resolveActiveInvokerProfileEnv();
-  const mergedEnv = { ...process.env, ...profileEnv };
-  const socketPath = resolveInvokerIpcSocketPath(mergedEnv);
+  const socketPath = resolveDefaultMessageBusSocketPath();
   const bus = new IpcBus(socketPath, { allowServe: false });
   await bus.ready();
   return bus;
+}
+
+export function resolveDefaultMessageBusSocketPath(): string {
+  const profileEnv = resolveActiveInvokerProfileEnv();
+  const mergedEnv = { ...profileEnv, ...process.env };
+  return resolveInvokerIpcSocketPath(mergedEnv);
 }
