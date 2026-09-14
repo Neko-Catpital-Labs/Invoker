@@ -113,7 +113,7 @@ export function routeRepoScopedMention(
   };
 }
 
-export function choosePlanningRoute(
+function choosePlanningRoute(
   parsed: ParsedPlanningRequest,
   userId: string | undefined,
   context: MentionRoutingContext,
