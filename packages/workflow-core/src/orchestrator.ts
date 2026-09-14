@@ -269,6 +269,8 @@ export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean;
 export type StartExecutionOptions = { limit?: number };
 
 export interface OrchestratorPersistence {
+  /** Run a group of persistence writes atomically when the adapter supports it. */
+  runInTransaction?<T>(work: () => T): T;
   saveWorkflow(workflow: {
     id: string;
     name: string;
@@ -1618,46 +1620,57 @@ export class Orchestrator {
       },
     );
 
-    // ── Pass 2: all validation passed — persist everything ──
-    this.activeWorkflowIds.add(workflowId);
+    // ── Pass 2: all validation passed — persist everything atomically ──
     const createdAt = workflowTimestamp().toISOString();
-
-    this.persistence.saveWorkflow({
-      id: workflowId,
-      name: plan.name,
-      description: plan.description,
-      visualProof: plan.visualProof,
-      repoUrl: plan.repoUrl,
-      intermediateRepoUrl: plan.intermediateRepoUrl,
-      onFinish: plan.onFinish,
-      baseBranch: plan.baseBranch,
-      featureBranch: plan.featureBranch,
-      mergeMode: plan.mergeMode,
-      externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
-      staged: opts?.staged === true,
-      createdAt,
-      updatedAt: createdAt,
-    });
-
     const deltas: TaskDelta[] = [];
-    for (const task of validatedTasks) {
-      this.createAndSync(task);
-      this.persistence.logEvent?.(task.id, 'task.created');
-      const routingReason = resolvedRoutingByTaskId.get(task.id);
-      if (!routingReason) {
-        throw new Error(`Task "${task.id}" is missing resolved executor routing`);
+    const persist = () => {
+      this.persistence.saveWorkflow({
+        id: workflowId,
+        name: plan.name,
+        description: plan.description,
+        visualProof: plan.visualProof,
+        repoUrl: plan.repoUrl,
+        intermediateRepoUrl: plan.intermediateRepoUrl,
+        onFinish: plan.onFinish,
+        baseBranch: plan.baseBranch,
+        featureBranch: plan.featureBranch,
+        mergeMode: plan.mergeMode,
+        externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
+        staged: opts?.staged === true,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      for (const task of validatedTasks) {
+        const routingReason = resolvedRoutingByTaskId.get(task.id);
+        if (!routingReason) {
+          throw new Error(`Task "${task.id}" is missing resolved executor routing`);
+        }
+        this.persistence.saveTask(workflowId, task);
+        this.persistence.logEvent?.(task.id, 'task.created');
+        this.persistence.logEvent?.(task.id, 'task.executor.routed', buildExecutorRoutedPayload(
+          task.config.runnerKind,
+          task.config.poolId,
+          routingReason,
+        ));
+        deltas.push({ type: 'created', task });
       }
-      this.persistence.logEvent?.(task.id, 'task.executor.routed', buildExecutorRoutedPayload(
-        task.config.runnerKind,
-        task.config.poolId,
-        routingReason,
-      ));
-      deltas.push({ type: 'created', task });
+
+      this.persistence.saveTask(workflowId, mergeTask);
+      this.persistence.logEvent?.(mergeTask.id, 'task.created');
+      deltas.push({ type: 'created', task: mergeTask });
+    };
+    if (this.persistence.runInTransaction) {
+      this.persistence.runInTransaction(persist);
+    } else {
+      persist();
     }
 
-    this.createAndSync(mergeTask);
-    this.persistence.logEvent?.(mergeTask.id, 'task.created');
-    deltas.push({ type: 'created', task: mergeTask });
+    this.activeWorkflowIds.add(workflowId);
+    for (const task of [...validatedTasks, mergeTask]) {
+      this.stateMachine.restoreTask(task);
+    }
+    this.queueStatusUiCache = null;
 
     for (const delta of deltas) {
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
