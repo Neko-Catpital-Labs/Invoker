@@ -1,0 +1,143 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { performance } from 'node:perf_hooks';
+import { afterEach, describe, expect, it } from 'vitest';
+import { SQLiteAdapter } from '@invoker/data-store';
+import { PersistedWorkflowMutationCoordinator } from '../persisted-workflow-mutation-coordinator.js';
+
+const ADD_COUNT = 1_000;
+const WORKFLOW_COUNT = 50;
+const ADD_P95_BUDGET_MS = 200;
+const DRAIN_BUDGET_MS = 5_000;
+const KNOWN_DISPATCH_ERROR = 'known mutation storm dispatch failure';
+
+function percentile(values: number[], percent: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * percent / 100) - 1)] ?? 0;
+}
+
+function makeLogger() {
+  const calls: string[] = [];
+  return {
+    calls,
+    logger: {
+      debug: (message: string) => calls.push(`debug:${message}`),
+      info: (message: string) => calls.push(`info:${message}`),
+      warn: (message: string) => calls.push(`warn:${message}`),
+      error: (message: string) => calls.push(`error:${message}`),
+      child: () => makeLogger().logger,
+    },
+  };
+}
+
+async function waitForDrain(adapter: SQLiteAdapter, intentIds: number[]): Promise<void> {
+  const deadline = Date.now() + DRAIN_BUDGET_MS;
+  while (Date.now() < deadline) {
+    const terminal = intentIds.filter((id) => {
+      const status = adapter.loadWorkflowMutationIntent(id)?.status;
+      return status === 'completed' || status === 'failed';
+    });
+    if (terminal.length === intentIds.length) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+describe('submit latency under a workflow mutation queue storm (repro)', () => {
+  const adapters: SQLiteAdapter[] = [];
+  const tempDirs: string[] = [];
+  const originalHome = process.env.HOME;
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    for (const adapter of adapters.splice(0)) adapter.close();
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('measures add latency, drain completion, and dispatch-error attribution', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-mutation-storm-home-'));
+    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-mutation-storm-db-'));
+    tempDirs.push(home, dbDir);
+    process.env.HOME = home;
+
+    const adapter = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), { ownerCapability: true });
+    adapters.push(adapter);
+    const workflowIds = Array.from({ length: WORKFLOW_COUNT }, (_, index) => `wf-storm-${index}`);
+    for (const workflowId of workflowIds) {
+      adapter.saveWorkflow({
+        id: workflowId,
+        name: workflowId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    const { calls, logger } = makeLogger();
+    let failingIntentId: number | undefined;
+    let releaseFailure: (() => void) | undefined;
+    const failureStarted = new Promise<void>((resolve) => { releaseFailure = resolve; });
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'throwaway-storm-owner',
+      async (channel, _args, context) => {
+        if (channel === 'storm-failing-dispatch') {
+          failingIntentId = context.intentId;
+          await failureStarted;
+          throw new Error(KNOWN_DISPATCH_ERROR);
+        }
+      },
+      { logger },
+    );
+
+    const addLatencies: number[] = [];
+    const intentIds: number[] = [];
+    const add = (workflowId: string, channel: string, args: unknown[]): number => {
+      const started = performance.now();
+      const intentId = coordinator.submit(workflowId, 'normal', channel, args);
+      addLatencies.push(performance.now() - started);
+      intentIds.push(intentId);
+      return intentId;
+    };
+
+    // Start the one known failure, then fence it while dispatch is pending.
+    const firstFailureId = add(workflowIds[0]!, 'storm-failing-dispatch', []);
+    while (failingIntentId === undefined) await new Promise((resolve) => setTimeout(resolve, 0));
+    const fenceId = add(workflowIds[0]!, 'invoker:recreate-workflow', [workflowIds[0]!]);
+    releaseFailure?.();
+    while (adapter.loadWorkflowMutationIntent(fenceId)?.status !== 'completed') {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    await Promise.all(workflowIds.slice(1).map(async (workflowId) => {
+      for (let index = 0; index < ADD_COUNT / WORKFLOW_COUNT; index += 1) {
+        add(workflowId, 'storm-normal-dispatch', [index]);
+      }
+    }));
+    for (let index = 0; index < ADD_COUNT / WORKFLOW_COUNT - 2; index += 1) {
+      add(workflowIds[0]!, 'storm-normal-dispatch', [index]);
+    }
+
+    await waitForDrain(adapter, intentIds);
+    const p95 = percentile(addLatencies, 95);
+    const undrainedIds = intentIds.filter((id) => {
+      const status = adapter.loadWorkflowMutationIntent(id)?.status;
+      return status !== 'completed' && status !== 'failed';
+    });
+    const failedDispatchRecorded = adapter.listWorkflowMutationIntents(undefined, ['failed'])
+      .some((intent) => intent.id === firstFailureId && intent.error?.includes(KNOWN_DISPATCH_ERROR));
+    const dispatchErrorLogged = calls.some((call) => call.includes(KNOWN_DISPATCH_ERROR));
+    const missingErrorIds = failedDispatchRecorded || dispatchErrorLogged ? [] : [firstFailureId];
+    const defectIds = [...new Set([...undrainedIds, ...missingErrorIds])];
+    const measured = `p95=${p95.toFixed(1)}ms budget=${ADD_P95_BUDGET_MS}ms drainBudget=${DRAIN_BUDGET_MS}ms undrainedIds=${undrainedIds.join(',') || 'none'} missingDispatchErrorIds=${missingErrorIds.join(',') || 'none'}`;
+
+    if (process.env.INVOKER_REPRO_EXPECT === 'bug') {
+      expect(defectIds.length, measured).toBeGreaterThan(0);
+      return;
+    }
+
+    expect(p95, measured).toBeLessThan(ADD_P95_BUDGET_MS);
+    expect(undrainedIds, measured).toEqual([]);
+    expect(missingErrorIds, measured).toEqual([]);
+  }, DRAIN_BUDGET_MS + 2_000);
+});
