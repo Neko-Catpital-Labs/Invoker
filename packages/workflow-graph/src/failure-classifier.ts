@@ -136,4 +136,8 @@ export class FailureClassifier {
   static isUsageLimit(failureClass: FailureClass | undefined): boolean {
     return failureClass === 'agent-usage-limit';
   }
+
+  static isSpendGate(failureClass: FailureClass | undefined): boolean {
+    return failureClass === 'agent-spend-gate';
+  }
 }
