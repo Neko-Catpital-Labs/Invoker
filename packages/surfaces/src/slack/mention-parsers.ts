@@ -5,14 +5,14 @@ export type LocalRequest =
   | { kind: 'agent'; text: string }
   | { kind: 'change'; text: string };
 
-export const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
-export const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
-export const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
-export const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
-export const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
-export const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
+const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
+const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
+const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
+const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
+const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
+const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
 
-export function looksLikePreset(normalized: string): boolean {
+function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
 }
 
@@ -86,11 +86,11 @@ export function parsePlanningRequest(
   };
 }
 
-export function extractRepositoryUrls(text: string): string[] {
+function extractRepositoryUrls(text: string): string[] {
   return extractMessageRepoCandidates(text);
 }
 
-export function extractMessageRepoCandidates(text: string): string[] {
+function extractMessageRepoCandidates(text: string): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
   for (const match of text.matchAll(MESSAGE_REPO_TOKEN_RE)) {
@@ -131,7 +131,7 @@ export function normalizeSupportedRepoCandidate(candidate: string): string | und
   return url.pathname.endsWith('.git') ? candidate : undefined;
 }
 
-export function normalizePublicChannelName(name: string): string {
+function normalizePublicChannelName(name: string): string {
   return name.trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
 }
 
