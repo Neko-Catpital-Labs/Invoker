@@ -7,7 +7,7 @@ import { CodexSpendGateTrippedError, codexSpendGateBlockMessage, type CodexSpend
 import { collectValidatedAutoFixRecoveryCandidates } from '../auto-fix-recovery.js';
 import { createAutoFixAttemptLedger } from '../auto-fix-attempt-ledger.js';
 
-const SPEND_GATE_FAILURE_CLASS = 'agent-spend-gate' as unknown as FailureClass;
+const SPEND_GATE_FAILURE_CLASS: FailureClass = 'agent-spend-gate';
 
 const DO1_TRIP: CodexSpendGateTrip = {
   trippedAt: '2026-09-13T16:35:24.179Z',
@@ -61,7 +61,7 @@ function runnerWhoseStartThrows(task: TaskState, startError: Error) {
 }
 
 describe('Codex spend gate failures are explicit (repro)', () => {
-  it.fails('labels a Codex task that could not start because the spend gate is tripped', async () => {
+  it('labels a Codex task that could not start because the spend gate is tripped', async () => {
     const task: TaskState = {
       id: 'wf-gate/repair',
       description: 'Rebase PR #12103 onto master',
