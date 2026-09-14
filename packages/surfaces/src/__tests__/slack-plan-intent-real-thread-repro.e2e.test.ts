@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { ConversationRepository, SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import { SlackSurface, DEFAULT_HARNESS_PRESET } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 // Replays the real Slack thread that motivated this feature: a long
 // multi-turn investigation ("why did so many fail" -> repro scripts -> a
@@ -148,6 +149,7 @@ describe('Slack real-thread replay: the original "submit it" incident', () => {
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     await surface.start(async (command) => { commands.push(command); });
   });
@@ -197,6 +199,10 @@ describe('Slack real-thread replay: the original "submit it" incident', () => {
 
     // None of the investigative/design turns should have staged anything.
     expect(mockSpawn).toHaveBeenCalledTimes(3);
+    // Proves the default harness preset really spawned codex sessions.
+    for (const call of mockSpawn.mock.calls) {
+      expect(call[0]).toBe('codex');
+    }
     expect(tryButtonValue(say, 'lobby_plan_for_execution')).toBeUndefined();
     expect(slackSessionRepo.getPendingConfirmation(threadTs)).toBeNull();
 

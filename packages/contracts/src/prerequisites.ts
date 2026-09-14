@@ -111,8 +111,8 @@ export function checkDefaultPresetTool(
       id: 'default-preset',
       name: 'Default planning preset',
       status: 'error',
-      detail: `Default preset "${defaultPresetKey}" needs "${preset.tool}", which is not on PATH`,
-      remediation: `Install ${preset.tool}, or set defaultSlackHarnessPreset to a preset whose tool is installed`,
+      detail: `Default preset "${defaultPresetKey}" needs "${preset.tool}", which is not on Invoker's PATH`,
+      remediation: `Make ${preset.tool} available on Invoker's PATH (restart Invoker if it already works in a terminal), or set defaultSlackHarnessPreset to a preset whose tool is available`,
     };
   }
   return {
@@ -131,15 +131,15 @@ export function checkPlanningToolsPresent(
   const tools = [...new Set(Object.values(presets).map((p) => p.tool))];
   const installed = tools.filter(isInstalled);
   if (installed.length > 0) {
-    return { id: 'planning-tools', name: 'Planning tools', status: 'ok', detail: `Installed: ${installed.join(', ')}` };
+    return { id: 'planning-tools', name: 'Planning tools', status: 'ok', detail: `Available on Invoker's PATH: ${installed.join(', ')}` };
   }
   const wanted = tools.length ? tools.join(', ') : 'cursor, omp, codex';
   return {
     id: 'planning-tools',
     name: 'Planning tools',
     status: 'error',
-    detail: `No planning tool installed (need one of: ${wanted})`,
-    remediation: `Install at least one of: ${wanted}`,
+    detail: `Planning unavailable: none of the configured planner commands are on Invoker's PATH (${wanted})`,
+    remediation: `Make one of these commands available on Invoker's PATH: ${wanted}. If it already works in a terminal, restart Invoker to refresh its shell environment; otherwise install it or configure another planning preset.`,
   };
 }
 

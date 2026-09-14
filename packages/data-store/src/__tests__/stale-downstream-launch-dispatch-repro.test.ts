@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow } from '../adapter.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 
 const WORKFLOW_ID = 'wf-stale-downstream-dispatch';
 const UPSTREAM_ID = `${WORKFLOW_ID}/verify`;
@@ -38,10 +38,10 @@ function makeTask(
     createdAt: new Date('2026-06-03T00:00:00.000Z'),
     taskStateVersion: 1,
     ...rest,
-    config: {
+    config: resolveTaskConfig({
       workflowId: WORKFLOW_ID,
       ...overrideConfig,
-    },
+    }),
     execution: {
       ...overrideExecution,
     },
