@@ -180,6 +180,26 @@ describe('startWebBridge', () => {
     expect(JSON.parse(res.body)).toEqual({ ok: false, error: { message: 'request failed', code: 'unknown_channel' } });
   });
 
+  it('preserves deployment-policy error codes while redacting details', async () => {
+    const dispatch = vi.fn(async () => {
+      const err = new Error('Execution agent "claude" is disabled') as Error & { code: string };
+      err.code = 'execution_agent_disabled';
+      throw err;
+    });
+    const { port } = await startBridge(dispatch);
+    const res = await request(port, '/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: `invoker_web=${TOKEN}` },
+      body: JSON.stringify({ channel: 'invoker:fix-with-agent', args: ['task-1', 'claude'] }),
+    });
+
+    expect(JSON.parse(res.body)).toEqual({
+      ok: false,
+      error: { message: 'request failed', code: 'execution_agent_disabled' },
+    });
+    expect(res.body).not.toContain('claude');
+  });
+
   it('hides unexpected dispatch failure details from web responses', async () => {
     const dispatch = vi.fn(async () => {
       throw new Error('stack trace shaped internal failure');
