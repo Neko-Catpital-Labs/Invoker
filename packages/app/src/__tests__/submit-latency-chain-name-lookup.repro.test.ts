@@ -16,8 +16,7 @@ const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
 const SCRIPT_PATH = join(REPO_ROOT, 'scripts', 'submit-workflow-chain.sh');
 const STEP_ONE_NAME = 'repeated-chain-name';
 const STEP_TWO_NAME = 'downstream-chain-name';
-const EXPECTED_FIXED_WORKFLOW_ID = 'wf-A';
-const EXPECTED_BUG_WORKFLOW_ID = 'wf-B';
+const EXPECTED_UPSTREAM_WORKFLOW_ID = 'wf-A';
 const WORKFLOW_DUMP_BUDGET = 2;
 
 let tempDir: string | undefined;
@@ -217,21 +216,13 @@ describe('submit-workflow-chain workflow id resolution repro', () => {
 
     expect(result.status, `chain script should complete so the repro can measure it; ${measured}`).toBe(0);
 
-    if (process.env.INVOKER_REPRO_EXPECT === 'bug') {
-      expect(
-        injectedWorkflowId,
-        `bug mode should observe the repeated-name misattach; ${measured}`,
-      ).toBe(EXPECTED_BUG_WORKFLOW_ID);
-      return;
-    }
-
     expect(
       injectedWorkflowId,
-      `fixed mode should inject the workflow id printed by the upstream run; ${measured}`,
-    ).toBe(EXPECTED_FIXED_WORKFLOW_ID);
+      `chain script should inject the workflow id printed by the upstream run; ${measured}`,
+    ).toBe(EXPECTED_UPSTREAM_WORKFLOW_ID);
     expect(
       workflowDumpCount,
-      `fixed mode should stay within one full workflows dump per chain step; ${measured}`,
+      `chain script should stay within one full workflows dump per chain step; ${measured}`,
     ).toBeLessThanOrEqual(WORKFLOW_DUMP_BUDGET);
   });
 });
