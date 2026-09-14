@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { looksLikePreset, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+import { GITHUB_REPO_ROOT_PATH_RE, looksLikePreset, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -243,7 +243,6 @@ function capTailChars(value: string, max: number): string {
 
 const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
-const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
 const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
 const CHANNEL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
