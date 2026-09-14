@@ -452,7 +452,16 @@ async function runPrMaintenanceEntrypoint(
       settled = true;
       if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null; }
       if (forceAbandonTimer) { clearTimeout(forceAbandonTimer); forceAbandonTimer = null; }
-      fn();
+      try {
+        fn();
+      } catch (err) {
+        options.logger.error(`[worker:${options.entrypoint.kind}] failed while finishing tick`, {
+          module: 'pr-maintenance-worker',
+          worker: options.entrypoint.kind,
+          err,
+        });
+        rejectPromise(err);
+      }
     };
 
     const onAbort = (): void => {
