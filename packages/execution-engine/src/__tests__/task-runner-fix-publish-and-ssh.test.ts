@@ -2084,11 +2084,11 @@ describe('TaskRunner', () => {
       try {
         const bodyWithoutUnchangedBehaviorClaim = STRICT_COMPLIANT_REVIEW_STACK_BODY
           .replace('\nbehavior\n', '\nrefactor\n');
-        expect(validateReviewStackPrBodyAgainstLocalDiff({
+        expect((await validateReviewStackPrBodyAgainstLocalDiff({
           body: bodyWithoutUnchangedBehaviorClaim,
           cwd,
           baseBranch: 'master',
-        }).join('\n')).toContain('Review lane refactor must state in ## Non-goals that behavior stays unchanged');
+        })).join('\n')).toContain('Review lane refactor must state in ## Non-goals that behavior stays unchanged');
         const executor = makeStrictGateExecutor(
           makeBodyEmittingAgent(tempHome, bodyWithoutUnchangedBehaviorClaim),
           cwd,
