@@ -199,6 +199,32 @@ function buildMarkdownFenceExtensionMap(content) {
   return map;
 }
 
+const REGEX_PRECEDING_CHARS = new Set(['', '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', ';']);
+const REGEX_PRECEDING_KEYWORD = /(?:^|[^\w$])(?:return|typeof|case|in|of|delete|void|throw|new|yield|await)$/;
+const REGEX_LITERAL_TAIL = /^[dgimsuvy]*\s*(?:$|[.,;:)\]}?|&])/;
+
+function startsRegexLiteral(line, index) {
+  const before = line.slice(0, index).trimEnd();
+  return REGEX_PRECEDING_CHARS.has(before.at(-1) ?? '') || REGEX_PRECEDING_KEYWORD.test(before);
+}
+
+function regexLiteralEnd(line, start) {
+  let inClass = false;
+  for (let index = start + 1; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '\\') {
+      index += 1;
+    } else if (inClass) {
+      inClass = char !== ']';
+    } else if (char === '[') {
+      inClass = true;
+    } else if (char === '/') {
+      return REGEX_LITERAL_TAIL.test(line.slice(index + 1)) ? index : -1;
+    }
+  }
+  return -1;
+}
+
 function commentIndexForCodeLine(line) {
   let quote = '';
   let escaped = false;
@@ -224,6 +250,13 @@ function commentIndexForCodeLine(line) {
     }
     if (char === '/' && (next === '/' || next === '*')) {
       return index;
+    }
+    if (char === '/' && startsRegexLiteral(line, index)) {
+      const end = regexLiteralEnd(line, index);
+      if (end > index) {
+        index = end;
+        continue;
+      }
     }
     if (char === '*' && next === '/') {
       return index;
