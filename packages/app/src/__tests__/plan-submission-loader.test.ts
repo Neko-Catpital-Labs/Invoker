@@ -15,6 +15,10 @@ function makeDeps() {
     deps: {
       persistence: {
         listWorkflows: vi.fn(() => workflows.map((workflow) => ({ ...workflow }))),
+        loadWorkflow: vi.fn((workflowId: string) => {
+          const workflow = workflows.find((candidate) => candidate.id === workflowId);
+          return workflow ? { ...workflow } : undefined;
+        }),
         updateWorkflow: vi.fn((workflowId: string, changes: { staged: boolean }) => {
           const workflow = workflows.find((candidate) => candidate.id === workflowId);
           if (workflow) workflow.staged = changes.staged;
@@ -27,6 +31,7 @@ function makeDeps() {
             id: `wf-${loadedPlans.length}`,
             featureBranch: plan.featureBranch,
           });
+          return `wf-${loadedPlans.length}`;
         }),
       },
       allowGraphMutation: true,
