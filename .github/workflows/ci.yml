@@ -82,6 +82,8 @@ jobs:
             command: pnpm run check:comments
           - name: CLI/Headless Parity
             command: pnpm run check:cli-parity
+          - name: Sync Spawn Timeouts
+            command: pnpm run check:sync-spawn-timeouts
 
     name: quality / ${{ matrix.name }}
 
