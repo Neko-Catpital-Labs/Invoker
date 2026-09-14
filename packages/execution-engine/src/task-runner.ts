@@ -1524,7 +1524,7 @@ export class TaskRunner {
         );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const validationErrors = strictReviewStack
-          ? validateReviewStackPrBodyAgainstLocalDiff({
+          ? await validateReviewStackPrBodyAgainstLocalDiff({
             body: result.body,
             cwd: args.cwd,
             baseBranch: args.baseBranch,
@@ -1532,11 +1532,11 @@ export class TaskRunner {
           : hasRepoChecker
             ? [
               ...validateCanonicalPrBody(result.body),
-              ...runRepoLocalPrBodyChecker({
+              ...(await runRepoLocalPrBodyChecker({
                 body: result.body,
                 cwd: args.cwd,
                 baseBranch: args.baseBranch,
-              }),
+              })),
             ]
             : validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
@@ -1576,11 +1576,11 @@ export class TaskRunner {
     if (hasRepoChecker) {
       const canonicalErrors = [
         ...validateCanonicalPrBody(canonicalBody),
-        ...runRepoLocalPrBodyChecker({
+        ...(await runRepoLocalPrBodyChecker({
           body: canonicalBody,
           cwd: args.cwd,
           baseBranch: args.baseBranch,
-        }),
+        })),
       ];
       if (canonicalErrors.length === 0) {
         this.logger.warn(

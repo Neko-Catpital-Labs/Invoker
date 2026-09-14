@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -297,11 +297,11 @@ export function validateReviewStackPrBody(body: string): string[] {
   return errors;
 }
 
-export function validateReviewStackPrBodyAgainstLocalDiff(args: {
+export async function validateReviewStackPrBodyAgainstLocalDiff(args: {
   body: string;
   cwd: string;
   baseBranch: string;
-}): string[] {
+}): Promise<string[]> {
   const structuralErrors = validateReviewStackPrBody(args.body);
   const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   if (!existsSync(validatorPath)) {
@@ -310,7 +310,7 @@ export function validateReviewStackPrBodyAgainstLocalDiff(args: {
       `CI-parity PR body validator is missing: ${validatorPath}`,
     ];
   }
-  return [...structuralErrors, ...runRepoLocalPrBodyChecker(args)];
+  return [...structuralErrors, ...(await runRepoLocalPrBodyChecker(args))];
 }
 
 export function repoLocalPrBodyCheckerPath(cwd: string): string {
@@ -321,25 +321,91 @@ export function resolvePrBodyValidatorNodeBinary(): string {
   return resolveExecutableOnCurrentPath('node') ?? process.execPath;
 }
 
-export function runRepoLocalPrBodyChecker(args: {
+const DEFAULT_PR_BODY_VALIDATOR_TIMEOUT_MS = 60 * 1000;
+
+function getPrBodyValidatorTimeoutMs(): number {
+  const raw = process.env.INVOKER_PR_BODY_VALIDATOR_TIMEOUT_MS?.trim();
+  if (!raw || !/^[1-9]\d*$/.test(raw)) return DEFAULT_PR_BODY_VALIDATOR_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_PR_BODY_VALIDATOR_TIMEOUT_MS;
+}
+
+interface BoundedChildResult {
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+}
+
+function runBoundedChild(
+  command: string,
+  commandArgs: readonly string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
+): Promise<BoundedChildResult> {
+  return new Promise<BoundedChildResult>((resolve, reject) => {
+    const child = spawn(command, commandArgs, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      killProcessGroup(child, 'SIGTERM');
+      forceKillTimeout = setTimeout(() => {
+        killProcessGroup(child, 'SIGKILL');
+      }, SIGKILL_TIMEOUT_MS);
+    }, options.timeoutMs);
+    const clearTimers = (): void => {
+      clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+    };
+
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (error) => {
+      clearTimers();
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimers();
+      resolve({ code, stdout, stderr, timedOut });
+    });
+  });
+}
+
+export async function runRepoLocalPrBodyChecker(args: {
   body: string;
   cwd: string;
   baseBranch: string;
-}): string[] {
+  timeoutMs?: number;
+}): Promise<string[]> {
   const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   const tempDir = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
   const bodyFile = join(tempDir, 'body.md');
+  const timeoutMs = args.timeoutMs ?? getPrBodyValidatorTimeoutMs();
   try {
     writeFileSync(bodyFile, args.body, 'utf8');
-    const nodeExecutable = resolveExecutableOnCurrentPath('node') ?? process.execPath;
-    const result = spawnSync(
-      nodeExecutable,
+    const resolvedNode = resolveExecutableOnCurrentPath('node');
+    const result = await runBoundedChild(
+      resolvedNode ?? process.execPath,
       [validatorPath, '--body-file', bodyFile, '--base', args.baseBranch],
-      { cwd: args.cwd, encoding: 'utf8', env: cleanElectronEnv() },
+      {
+        cwd: args.cwd,
+        env: resolvedNode ? cleanElectronEnv() : { ...cleanElectronEnv(), ELECTRON_RUN_AS_NODE: '1' },
+        timeoutMs,
+      },
     );
-    if (result.status === 0) return [];
+    if (result.timedOut) {
+      return [`CI-parity PR body validation timed out after ${timeoutMs}ms: ${validatorPath}`];
+    }
+    if (result.code === 0) return [];
 
-    const output = `${String(result.stdout ?? '')}\n${String(result.stderr ?? '')}`.trim();
+    const output = `${result.stdout}\n${result.stderr}`.trim();
     return [`CI-parity PR body validation failed: ${output || 'validator exited without output'}`];
   } catch (error) {
     return [
