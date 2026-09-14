@@ -12,6 +12,7 @@ export * from './invoker-home.ts';
 export * from './resolve-active-profile-env.ts';
 export * from './invoker-instance-profile.ts';
 export * from './hourly-snapshot-retention.ts';
+export * from './rotating-log.ts';
 export * from './invoker-config-io.ts';
 export * from './config-diagnostics.ts';
 export * from './remote-target-onboarding.ts';
