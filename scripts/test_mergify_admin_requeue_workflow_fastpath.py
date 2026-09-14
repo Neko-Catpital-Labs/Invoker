@@ -389,6 +389,42 @@ class ClassifyRepairOutcome(unittest.TestCase):
         with mock.patch.object(f, "list_workflow_tasks", return_value=[{"id": "wf/repair", "status": "completed", "execution": {}}]):
             self.assertEqual(f.classify_repair_outcome("wf-1", "completed"), "success")
 
+    @unittest.expectedFailure
+    def test_codex_spend_gate_startup_failure_is_infra_not_code(self):
+        tasks = [
+            {
+                "id": "wf-1789236945955-90/repair",
+                "status": "failed",
+                "execution": {
+                    "exitCode": 1,
+                    "error": (
+                        "Error: Executor startup failed (worktree): Codex is shut off by the daily spend gate "
+                        "and every Codex request fails until a human reviews the sessions.\n"
+                        "Tripped 2026-09-12T07:06:29.462Z for day 2026-09-12: "
+                        "309.4M tokens exceeds the 300.0M daily budget."
+                    ),
+                },
+            },
+            {"id": "wf-1789236945955-90/safe-push", "status": "skipped", "execution": {}},
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1789236945955-90", "failed"), "infra")
+
+    @unittest.expectedFailure
+    def test_executor_startup_timeout_is_infra_not_code(self):
+        tasks = [
+            {"id": "wf-1789186955017-6/repair", "status": "completed", "execution": {"exitCode": 0}},
+            {
+                "id": "wf-1789186955017-6/safe-push",
+                "status": "failed",
+                "execution": {
+                    "error": "Executor startup failed (worktree): Executor startup timed out after 600000ms (worktree)",
+                },
+            },
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1789186955017-6", "failed"), "infra")
+
 
 if __name__ == "__main__":
     unittest.main()
