@@ -1271,7 +1271,7 @@ describe('WorktreeExecutor', () => {
       expect(args).toContain('--session-id');
       expect(args).toContain('--dangerously-skip-permissions');
       expect(args).toContain('-p');
-      expect(args).toContain('test prompt');
+      expect(args).toContainEqual(expect.stringContaining('test prompt'));
 
       // Verify session ID is set on handle
       expect(handle.agentSessionId).toBeDefined();

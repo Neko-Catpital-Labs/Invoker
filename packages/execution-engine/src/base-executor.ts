@@ -1434,7 +1434,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * Build the full prompt by prepending upstream context from completed dependencies.
    */
   protected buildFullPrompt(request: WorkRequest): string {
-    let fullPrompt = request.inputs.prompt ?? '';
+    let fullPrompt = [
+      'Worker orientation:',
+      `- Owning package: ${request.inputs.description ?? request.actionId}`,
+      '- Allowed files: stay inside the task-owned package and the files directly required by the requested change.',
+      '- Do not start with an unscoped repository walk; inspect the named files and nearest package context first.',
+      '',
+      request.inputs.prompt ?? '',
+    ].join('\n');
     if (request.inputs.upstreamContext?.length) {
       const contextLines = request.inputs.upstreamContext.map(ctx => {
         let line = `[Upstream task: ${ctx.taskId}]\nDescription: ${ctx.description}\nSummary: ${ctx.summary ?? 'N/A'}`;
