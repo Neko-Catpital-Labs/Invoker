@@ -3,6 +3,7 @@ import {
   normalizeGithubOwnerRepo,
   type AdminBypassE2eBabysitConfig,
   type CatstackDeployConfig,
+  type HookMetricsCollectConfig,
   type DbReaperConfig,
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
@@ -258,6 +259,29 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateHookMetricsCollectConfig(config: InvokerConfig): void {
+  const hookMetricsCollect = config.hookMetricsCollect;
+  if (hookMetricsCollect === undefined) return;
+  if (typeof hookMetricsCollect !== 'object' || hookMetricsCollect === null || Array.isArray(hookMetricsCollect)) {
+    throw new Error('hookMetricsCollect must be an object');
+  }
+  const typed = hookMetricsCollect as HookMetricsCollectConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('hookMetricsCollect.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.catstackRepoPath !== undefined) {
+    if (typeof typed.catstackRepoPath !== 'string' || typed.catstackRepoPath.trim().length === 0) {
+      throw new Error('hookMetricsCollect.catstackRepoPath must be a non-empty string when set');
+    }
+  }
+}
+
 function validateSelfDeployConfig(config: InvokerConfig): void {
   const selfDeploy = config.selfDeploy;
   if (selfDeploy === undefined) return;
@@ -404,6 +428,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateHookMetricsCollectConfig(config);
   validateSelfDeployConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);

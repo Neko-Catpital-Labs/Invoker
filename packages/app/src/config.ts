@@ -235,6 +235,13 @@ export interface CatstackDeployConfig {
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
+export interface HookMetricsCollectConfig {
+  intervalMinutes?: number;
+  catstackRepoPath?: string;
+}
+
+export const DEFAULT_HOOK_METRICS_COLLECT_INTERVAL_MINUTES = 60;
+
 export interface SelfDeployConfig {
   intervalMinutes?: number;
   repoPath?: string;
@@ -639,6 +646,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  hookMetricsCollect?: HookMetricsCollectConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
   dbReaper?: DbReaperConfig;
