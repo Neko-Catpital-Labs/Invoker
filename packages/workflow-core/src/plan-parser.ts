@@ -1,12 +1,118 @@
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from './orchestrator.js';
 import { normalizeWorkflowBaseBranch } from './repo-default-branch.js';
+import { parseTaskFreshnessSpec } from './task-freshness.js';
 
 export class PlanParseError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PlanParseError';
   }
+}
+
+export function planPublicationAuthorityViolation(
+  onFinish: PlanDefinition['onFinish'],
+  mergeMode: PlanDefinition['mergeMode'],
+): string | undefined {
+  if (onFinish === 'none' && mergeMode === 'external_review') {
+    return '"mergeMode: external_review" cannot be combined with "onFinish: none". External review publishes a pull request, while onFinish: none authorizes no publication.';
+  }
+  return undefined;
+}
+
+export function isPathSafeId(id: string): boolean {
+  if (!id || typeof id !== 'string') return false;
+  if (id.trim() === '') return false;
+  if (id.startsWith('.')) return false;
+  if (id.includes('..')) return false;
+  if (id.includes('/')) return false;
+  if (id.includes('\\')) return false;
+  if (/[\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(id)) return false;
+  return true;
+}
+
+const RESERVED_TASK_ID_PREFIXES = ['__merge__'] as const;
+
+export function hasReservedTaskIdPrefix(id: string): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return RESERVED_TASK_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+const RESERVED_GIT_REFS = ['HEAD', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'] as const;
+
+export function isValidAgentName(name: string): boolean {
+  if (!name || typeof name !== 'string') return false;
+  if (name.trim() === '') return false;
+  if (/[;\n\r`$(){}|&<>]/.test(name)) return false;
+  if (/[\x00-\x1f\x7f]/.test(name)) return false;
+  return true;
+}
+
+export function isValidGitRef(ref: string): boolean {
+  if (!ref || typeof ref !== 'string') return false;
+  if (ref.trim() === '') return false;
+  if (ref.includes('..')) return false;
+  if (ref.startsWith('/') || ref.endsWith('/')) return false;
+  if (ref.includes('//')) return false;
+  if (ref.startsWith('.') || ref.includes('/.')) return false;
+  if (ref.endsWith('.lock')) return false;
+  if (ref.includes('@{')) return false;
+  if (ref.includes('\\')) return false;
+  if (/[\x00-\x1f\x7f~^:?*\[]/.test(ref)) return false;
+  if (ref.startsWith('-')) return false;
+  if (RESERVED_GIT_REFS.includes(ref as typeof RESERVED_GIT_REFS[number])) return false;
+  if (/^(origin|upstream|remote)\//.test(ref)) return false;
+  if (ref.startsWith('refs/') && ref.includes('..')) return false;
+  return true;
+}
+
+interface TaskWithDeps {
+  id: string;
+  dependencies: string[];
+}
+
+function detectDependencyCycle(tasks: TaskWithDeps[]): string | null {
+  const taskIds = new Set(tasks.map((t) => t.id));
+  const adjacency = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+
+  for (const task of tasks) {
+    adjacency.set(task.id, []);
+    inDegree.set(task.id, 0);
+  }
+
+  for (const task of tasks) {
+    for (const dep of task.dependencies) {
+      if (!taskIds.has(dep)) continue;
+      adjacency.get(dep)!.push(task.id);
+      inDegree.set(task.id, inDegree.get(task.id)! + 1);
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [id, degree] of inDegree) {
+    if (degree === 0) queue.push(id);
+  }
+
+  let processed = 0;
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    processed++;
+    for (const neighbor of adjacency.get(id)!) {
+      const newDegree = inDegree.get(neighbor)! - 1;
+      inDegree.set(neighbor, newDegree);
+      if (newDegree === 0) queue.push(neighbor);
+    }
+  }
+
+  if (processed < tasks.length) {
+    const cycleNodes = tasks
+      .filter((t) => inDegree.get(t.id)! > 0)
+      .map((t) => t.id);
+    return `Cycle detected in task dependencies involving: ${cycleNodes.join(', ')}. Task dependencies must form a directed acyclic graph (DAG).`;
+  }
+
+  return null;
 }
 
 export interface RawExperimentVariant {
@@ -36,6 +142,9 @@ export interface RawPlanTask {
   poolId?: string;
   executionAgent?: string;
   executionModel?: string;
+  maxTurns?: number;
+  priority?: number;
+  freshness?: unknown;
 }
 
 export interface RawPlan {
@@ -49,6 +158,8 @@ export interface RawPlan {
   reviewProvider?: string;
   repoUrl?: string;
   scratch?: boolean;
+  poolId?: string;
+  priority?: number;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -155,6 +266,11 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 
   if (!raw || typeof raw !== 'object') throw new PlanParseError('Plan must be a YAML object');
   if (!raw.name || typeof raw.name !== 'string') throw new PlanParseError('Plan must have a "name" field');
+  if (!isPathSafeId(raw.name)) {
+    throw new PlanParseError(
+      `Plan name "${raw.name}" contains unsafe characters. Plan names must not contain "..", "/", "\\", or start with ".".`,
+    );
+  }
   if (!raw.tasks || !Array.isArray(raw.tasks) || raw.tasks.length === 0) {
     throw new PlanParseError('Plan must have a non-empty "tasks" array');
   }
@@ -189,7 +305,17 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   if (scratch && raw.mergeMode !== undefined && raw.mergeMode !== 'no_op') {
     throw new PlanParseError('Plan with "scratch: true" must use mergeMode: "no_op" (or omit it) — there is no repo/branch to merge.');
   }
+  if (raw.mergeMode === 'no_op' && onFinish !== 'none') {
+    throw new PlanParseError(
+      `Plan with "mergeMode: no_op" must use "onFinish: none". Got onFinish: "${onFinish}". ` +
+      'The no_op mode skips merging, so onFinish: merge/pull_request would silently do nothing.',
+    );
+  }
   const mergeMode = (raw.mergeMode as (typeof validMergeModes)[number] | undefined) ?? (scratch ? 'no_op' : undefined);
+  const publicationAuthorityViolation = planPublicationAuthorityViolation(onFinish, mergeMode);
+  if (publicationAuthorityViolation) {
+    throw new PlanParseError(publicationAuthorityViolation);
+  }
   const reviewProvider = raw.reviewProvider ?? (raw.mergeMode === 'external_review' ? 'github' : undefined);
 
   if (scratch && raw.repoUrl !== undefined) {
@@ -205,6 +331,49 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
+  if (raw.featureBranch !== undefined) {
+    if (typeof raw.featureBranch !== 'string') {
+      throw new PlanParseError('Plan "featureBranch" must be a string when provided.');
+    }
+    const trimmed = raw.featureBranch.trim();
+    if (trimmed === '' || !isValidGitRef(trimmed)) {
+      throw new PlanParseError(
+        `Plan "featureBranch" value "${raw.featureBranch}" is not a valid git ref. ` +
+        'Refs must not be empty, contain "..", start/end with "/", or contain control characters.',
+      );
+    }
+  }
+
+  if (raw.baseBranch !== undefined) {
+    if (typeof raw.baseBranch !== 'string') {
+      throw new PlanParseError('Plan "baseBranch" must be a string when provided.');
+    }
+    const trimmed = raw.baseBranch.trim();
+    if (trimmed === '' || !isValidGitRef(trimmed)) {
+      throw new PlanParseError(
+        `Plan "baseBranch" value "${raw.baseBranch}" is not a valid git ref. ` +
+        'Refs must not be empty, contain "..", start/end with "/", or contain control characters.',
+      );
+    }
+  }
+
+  if (scratch && raw.poolId) {
+    throw new PlanParseError('Plan sets "poolId" but has "scratch: true" — scratch plans never use execution pools.');
+  }
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    throw new PlanParseError('Plan "poolId" must be a non-empty string when provided.');
+  }
+  const planPoolId = typeof raw.poolId === 'string' ? raw.poolId.trim() : undefined;
+
+  const validatePriority = (owner: string, value: number | undefined): number | undefined => {
+    if (value === undefined) return undefined;
+    if (!Number.isInteger(value) || value < 1 || value > 5) {
+      throw new PlanParseError(`${owner} "priority" must be an integer from 1 (highest) to 5 (lowest); got ${value}.`);
+    }
+    return value;
+  };
+  const planPriority = validatePriority('Plan', raw.priority);
+
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
   const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
@@ -212,12 +381,29 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
     }
     if (!task.id || typeof task.id !== 'string') throw new PlanParseError(`Task at index ${index} must have an "id" field`);
+    if (!isPathSafeId(task.id)) {
+      throw new PlanParseError(
+        `Task id "${task.id}" contains unsafe characters. Task ids must not contain "..", "/", "\\", or start with ".".`,
+      );
+    }
+    if (hasReservedTaskIdPrefix(task.id)) {
+      throw new PlanParseError(
+        `Task id "${task.id}" uses a reserved prefix. Task ids must not start with "__merge__".`,
+      );
+    }
     if (seenTaskIds.has(task.id)) {
       throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
     }
     seenTaskIds.add(task.id);
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);
+    }
+    const hasCommand = typeof task.command === 'string' && task.command.trim() !== '';
+    const hasPrompt = typeof task.prompt === 'string' && task.prompt.trim() !== '';
+    if (!hasCommand && !hasPrompt) {
+      throw new PlanParseError(
+        `Task "${task.id}" must have at least one of "command" or "prompt". A task without either cannot run.`,
+      );
     }
     assertNoLegacyRoutingKeys(`Task "${task.id}"`, task as object);
     if (hasOwn(task as object, 'autoFix')) {
@@ -232,6 +418,11 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     if (scratch && (task.dockerImage || task.poolId)) {
       throw new PlanParseError(`Task "${task.id}" sets "dockerImage"/"poolId" but the plan has "scratch: true" — scratch tasks always run in a plain temp directory.`);
     }
+    if (task.dockerImage && (planPoolId !== undefined || task.poolId !== undefined)) {
+      throw new PlanParseError(
+        `Task "${task.id}" sets "dockerImage" but its plan/task also sets "poolId" — Docker tasks do not run in execution pools.`,
+      );
+    }
 
     if (task.externalDependencies !== undefined) {
       throw new PlanParseError(
@@ -243,6 +434,19 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
       throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);
     }
+    if (task.maxTurns !== undefined) {
+      if (typeof task.maxTurns !== 'number' || !Number.isInteger(task.maxTurns) || task.maxTurns < 1) {
+        throw new PlanParseError(`Task "${task.id}" field "maxTurns" must be a positive integer when provided`);
+      }
+    }
+
+    const freshness = (() => {
+      try {
+        return parseTaskFreshnessSpec(task.freshness, `Task "${task.id}"`);
+      } catch (error) {
+        throw new PlanParseError(error instanceof Error ? error.message : String(error));
+      }
+    })();
 
     return {
       id: task.id,
@@ -251,20 +455,46 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       prompt: task.prompt,
       dependencies: task.dependencies ?? [],
       pivot: task.pivot,
-      experimentVariants: task.experimentVariants?.map((variant) => ({
-        id: variant.id ?? '',
-        description: variant.description ?? '',
-        prompt: variant.prompt,
-        command: variant.command,
-      })),
+      experimentVariants: task.experimentVariants?.map((variant, variantIndex) => {
+        const variantId = variant.id ?? '';
+        if (variantId && !isPathSafeId(variantId)) {
+          throw new PlanParseError(
+            `Task "${task.id}" experimentVariants[${variantIndex}] id "${variantId}" contains unsafe characters. ` +
+            'Variant ids must not contain "..", "/", "\\", control characters, or start with ".".',
+          );
+        }
+        return {
+          id: variantId,
+          description: variant.description ?? '',
+          prompt: variant.prompt,
+          command: variant.command,
+        };
+      }),
       requiresManualApproval: task.requiresManualApproval,
       featureBranch: task.featureBranch,
       dockerImage: task.dockerImage,
       poolId: task.poolId,
-      executionAgent: task.executionAgent?.trim() || undefined,
+      executionAgent: (() => {
+        const agent = task.executionAgent?.trim();
+        if (agent && !isValidAgentName(agent)) {
+          throw new PlanParseError(
+            `Task "${task.id}" executionAgent "${task.executionAgent}" contains invalid characters. ` +
+            'Agent names must not contain shell metacharacters (;$`|&<>), newlines, or control characters.',
+          );
+        }
+        return agent || undefined;
+      })(),
       executionModel: task.executionModel?.trim() || undefined,
+      maxTurns: task.maxTurns,
+      priority: validatePriority(`Task "${task.id}"`, task.priority) ?? planPriority,
+      ...(freshness !== undefined ? { freshness } : {}),
     };
   });
+
+  const cycleError = detectDependencyCycle(tasks);
+  if (cycleError) {
+    throw new PlanParseError(cycleError);
+  }
 
   return applyPlanDefinitionDefaults({
     name: raw.name,
@@ -277,6 +507,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     reviewProvider,
     repoUrl: raw.repoUrl,
     scratch: scratch || undefined,
+    poolId: planPoolId,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
