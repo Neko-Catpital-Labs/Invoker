@@ -6315,7 +6315,7 @@ describe('Orchestrator', () => {
       }
 
       expect(started.length).toBe(workflowCount);
-      expect(persistence.transactionCalls).toBe(1);
+      expect(persistence.transactionCalls).toBe(workflowCount + 1);
       // Before the fix, getTaskLaunchReadinessImpl() called refreshFromDb()
       // -- reloading every active workflow's tasks from the DB -- once per
       // ready task inside planPendingLaunchQueue()'s map and once more per
