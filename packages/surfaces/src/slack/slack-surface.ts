@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { parseLocalRequest } from './mention-parsers.js';
+import { parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -189,7 +189,7 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
 
-export { parseLocalRequest } from './mention-parsers.js';
+export { parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 export type { LocalRequest } from './mention-parsers.js';
 
 export { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
@@ -460,20 +460,6 @@ function parseChannelRepoSetupRequest(text: string): ChannelRepoSetupPair[] | nu
   }
 
   return pairs.length === repositoryUrls.length ? pairs : null;
-}
-
-// ── Lobby intent routing ─────────────────────────────────────
-
-export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
-  const trimmed = text.trim();
-  // A quick status ask is a single short line. Longer or multi-line text is an
-  // instruction that happens to mention "workflow" and a progress-ish word in
-  // passing, not a request for a status report — fall through to conversation.
-  if (/\n/.test(trimmed)) return null;
-  if (trimmed.split(/\s+/).length > 12) return null;
-  if (!/\bworkflows?\b/i.test(trimmed)) return null;
-  if (!/\b(status|how many|count|running|active|in progress|progress)\b/i.test(trimmed)) return null;
-  return { intent: 'command', operation: 'status', target: { all: true } };
 }
 
 // ── ConversationLike ─────────────────────────────────────────
