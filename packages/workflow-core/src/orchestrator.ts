@@ -315,7 +315,6 @@ export interface OrchestratorPersistence {
     staged?: boolean;
   }>;
   loadTasks(workflowId: string): TaskState[];
-  /** Load a single task by ID when the backing store supports keyed lookup. */
   loadTask?(taskId: string): TaskState | undefined;
   /**
    * Optional batched form of loadTasks: one query for many workflows instead
