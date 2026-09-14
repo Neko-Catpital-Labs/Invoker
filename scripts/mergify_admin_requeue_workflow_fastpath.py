@@ -171,6 +171,11 @@ def _attach_task_events(tasks: list[dict]) -> list[dict]:
     return enriched
 
 
+def _task_never_launched(task: dict) -> bool:
+    execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
+    return execution.get("phase") == "launching" and not execution.get("launchCompletedAt")
+
+
 def classify_repair_outcome(workflow_id: str, status: str) -> str:
     """Classify a terminal repair workflow for Mergify code-cap accounting.
 
@@ -217,6 +222,9 @@ def classify_repair_outcome(workflow_id: str, status: str) -> str:
             return "infra"
         if "/Users/" in error and ("PermissionError" in error or "Permission denied" in error):
             return "infra"
+    failed_tasks = [task for task in tasks if task.get("status") == "failed"]
+    if failed_tasks and all(_task_never_launched(task) for task in failed_tasks):
+        return "infra"
     if status == "completed":
         return "success"
     if status in _TERMINAL_WORKFLOW_STATUSES:

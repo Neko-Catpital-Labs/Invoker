@@ -425,7 +425,6 @@ class ClassifyRepairOutcome(unittest.TestCase):
         with mock.patch.object(f, "list_workflow_tasks", return_value=[{"id": "wf/repair", "status": "completed", "execution": {}}]):
             self.assertEqual(f.classify_repair_outcome("wf-1", "completed"), "success")
 
-    @unittest.expectedFailure
     def test_repair_that_never_launched_is_infra(self):
         tasks = [
             {
@@ -443,7 +442,6 @@ class ClassifyRepairOutcome(unittest.TestCase):
         with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
             self.assertEqual(f.classify_repair_outcome("wf-1789236945955-90", "failed"), "infra")
 
-    @unittest.expectedFailure
     def test_push_that_never_launched_after_a_finished_repair_is_infra(self):
         tasks = [
             {
