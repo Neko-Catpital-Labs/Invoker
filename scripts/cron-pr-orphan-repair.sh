@@ -29,6 +29,7 @@ cron_lock
 
 STATE_FILE="${INVOKER_PR_ORPHAN_STATE_FILE:-$HOME/.invoker/pr-orphan-repair.tsv}"
 MAX_ATTEMPTS="${INVOKER_PR_ORPHAN_MAX_ATTEMPTS:-3}"
+SCAN_BUDGET_SECS="${INVOKER_PR_ORPHAN_SCAN_BUDGET_SECS:-150}"
 ledger_init "$STATE_FILE"
 
 # Repros pass INVOKER_PR_ORPHAN_PLAN_DIR to inspect submitted plans; a
@@ -75,22 +76,6 @@ scan_repo() {
       continue
     fi
 
-    wf=""
-    if [ "$repo" = "$TARGET_REPO" ]; then
-      if ! rec="$(resolve_workflow_for_pr "$num")"; then
-        log_line "$label: workflow lookup failed; skipping"
-        continue
-      fi
-      if ! wf="$(jq -er 'if type == "object" then .workflowId // "" else error("invalid lookup record") end' <<<"$rec")"; then
-        log_line "$label: workflow lookup returned an invalid record; skipping"
-        continue
-      fi
-    fi
-    if [ -n "$wf" ]; then
-      log_line "$label: mapped to workflow $wf; existing workers own it"
-      continue
-    fi
-
     blockers=()
     mergeable="$(jq -r '.mergeable // ""' <<<"$pr")"
     merge_state="$(jq -r '.mergeStateStatus // ""' <<<"$pr")"
@@ -118,6 +103,25 @@ scan_repo() {
 
     if ledger_marker_seen orphan-submitted "$key" "$fingerprint"; then
       log_line "$label: repair already submitted for this head-state ($fingerprint); waiting"
+      continue
+    fi
+    wf=""
+    if [ "$repo" = "$TARGET_REPO" ]; then
+      if [ "$SECONDS" -ge "$SCAN_BUDGET_SECS" ]; then
+        log_line "$label: scan budget of ${SCAN_BUDGET_SECS}s reached; leaving it for a later tick"
+        continue
+      fi
+      if ! rec="$(resolve_workflow_for_pr "$num")"; then
+        log_line "$label: workflow lookup failed; skipping"
+        continue
+      fi
+      if ! wf="$(jq -er 'if type == "object" then .workflowId // "" else error("invalid lookup record") end' <<<"$rec")"; then
+        log_line "$label: workflow lookup returned an invalid record; skipping"
+        continue
+      fi
+    fi
+    if [ -n "$wf" ]; then
+      log_line "$label: mapped to workflow $wf; existing workers own it"
       continue
     fi
     if [ "$(ledger_count orphan-attempt "$key" "$fingerprint")" -ge "$MAX_ATTEMPTS" ]; then
