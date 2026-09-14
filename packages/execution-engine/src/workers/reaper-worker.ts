@@ -1,4 +1,4 @@
-import type { Logger } from '@invoker/contracts';
+import { purgeOldLogShards, type Logger } from '@invoker/contracts';
 import { tmpdir } from 'node:os';
 
 import { resolveInvokerHomeRoot } from '../worker-lock.js';
@@ -8,7 +8,7 @@ import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
-import type { DiskHeadroomWorkerStore } from './disk-headroom-reclaim.js';
+import { expandTildeHome, type DiskHeadroomWorkerStore } from './disk-headroom-reclaim.js';
 import {
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
@@ -91,6 +91,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
       });
       if (ctx.signal?.aborted) return;
       const snapshotsPruned = enforceRetention(options.invokerHome);
+      const logShardsPurged = purgeOldLogShards(expandTildeHome(options.invokerHome));
       const worktreeResults = await reapWorktrees({
         invokerHome: options.invokerHome,
         remoteTargets: options.remoteTargets ?? [],
@@ -121,7 +122,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         `Reaper pass: orphan targets ${orphanResults.length - orphanFailed.length}/${orphanResults.length} ok, `
         + `checkouts removed ${checkoutsRemoved.length}, CLI temp dirs removed ${tempDirsRemoved.length}, `
         + `snapshots pruned ${snapshotsPruned}, `
-        + `worktrees removed ${worktreesRemoved}, `
+        + `log shards purged ${logShardsPurged.length}, worktrees removed ${worktreesRemoved}, `
         + `merge clones removed ${mergeCloneResult.removed.length}`
         + (mergeCloneResult.ok ? '' : ` (merge clone reap failed: ${mergeCloneResult.reason})`)
         + `, dev homes removed ${devHomeResult.removed.length}, dev homes unchecked ${devHomeResult.unchecked.length}`
@@ -142,6 +143,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
             checkoutsRemoved,
             tempDirsRemoved,
             snapshotsPruned,
+            logShardsPurged,
             worktreeResults,
             worktreesRemoved,
             mergeCloneResult,
