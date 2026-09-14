@@ -304,6 +304,16 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   desc_lower = tolower(desc)
   parse_metadata(desc_lower)
 
+  if (has_prompt && review_lane != "" && review_lane != "proof" && review_lane != "cleanup" && !(review_lane in prompt_lane_seen)) {
+    prompt_lane_seen[review_lane] = 1
+    prompt_lane_count++
+    if (prompt_lane_list == "") {
+      prompt_lane_list = review_lane
+    } else {
+      prompt_lane_list = prompt_lane_list ", " review_lane
+    }
+  }
+
   if (enforce_layering == 1) {
     if (layer == "") {
       errors[++errn] = "Task \"" id "\" missing required \"Layer:\" heading in description (implementation plans require layer metadata)"
@@ -496,6 +506,8 @@ BEGIN {
   has_external_dependencies = 0
   prompt_task_count = 0
   standalone_workflow_waiver = 0
+  prompt_lane_count = 0
+  prompt_lane_list = ""
   on_finish = "pull_request"
   enforce_layering = 1
   is_scratch = 0
@@ -687,8 +699,12 @@ END {
   }
 
   if (enforce_layering == 1) {
-    if (stackManifestProvided == 0 && has_external_dependencies == 0 && prompt_task_count > 1 && standalone_workflow_waiver == 0) {
-      errors[++errn] = "Standalone implementation workflow has multiple prompt tasks but no stack context; split into a workflow chain or add \"Standalone workflow waiver:\" with the reason"
+    if (stackManifestProvided == 0 && has_external_dependencies == 0 && prompt_task_count > 1) {
+      if (standalone_workflow_waiver == 0) {
+        errors[++errn] = "Standalone implementation workflow has multiple prompt tasks but no stack context; split into a workflow chain (a \"Standalone workflow waiver:\" covers only prompt tasks that share one review lane)"
+      } else if (prompt_lane_count > 1) {
+        errors[++errn] = "Standalone workflow waiver covers prompt tasks in one review lane, but these prompt tasks span " prompt_lane_count " lanes (" prompt_lane_list "); split into a workflow chain"
+      }
     }
 
     for (idx = 1; idx <= taskn; idx++) {
