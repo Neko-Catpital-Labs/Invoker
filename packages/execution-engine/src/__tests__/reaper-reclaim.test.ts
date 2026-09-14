@@ -1,7 +1,4 @@
 import {
-  execFileSync,
-} from 'node:child_process';
-import {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -23,26 +20,22 @@ import {
   DELETING_ORPHAN_MIN_AGE_MINUTES,
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
+  reapStaleInvokerCliTempDirs,
   reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
+  reapStaleDevelopmentHomes,
+  reapStaleMergeClones,
   reapStaleWorktrees,
+  STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS,
+  STALE_MERGE_CLONE_MIN_AGE_HOURS,
+  STALE_WORKTREE_GIT_TIMEOUT_MS,
   STALE_WORKTREE_MIN_AGE_HOURS,
   trimOversizedLogs,
 } from '../workers/reaper-reclaim.js';
 
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
-  return {
-    ...actual,
-    execFileSync: vi.fn(),
-  };
-});
-
 const tempDirs: string[] = [];
-const mockedExecFileSync = vi.mocked(execFileSync);
 
 afterEach(() => {
-  mockedExecFileSync.mockReset();
   vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -138,19 +131,20 @@ describe('reapDeletingOrphans', () => {
 });
 
 describe('reapStaleWorktrees', () => {
-  it('leaves worktree entries younger than forty-eight hours untouched', () => {
+  it('leaves worktree entries younger than forty-eight hours untouched', async () => {
     const { root, home } = makeHome();
     mkdirSync(join(home, 'repos', 'repoabc123456'), { recursive: true });
     mkdirSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'), { recursive: true });
+    const runLocalGit = vi.fn(async () => {});
 
-    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+    const removed = await reapLocalStaleWorktrees({ invokerHome: home, userHome: root, runLocalGit });
 
     expect(removed).toEqual([]);
     expect(existsSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'))).toBe(true);
-    expect(mockedExecFileSync).not.toHaveBeenCalled();
+    expect(runLocalGit).not.toHaveBeenCalled();
   });
 
-  it('removes stale entries with git worktree remove and prunes once per repo group', () => {
+  it('removes stale entries with git worktree remove and prunes once per repo group', async () => {
     const { root, home } = makeHome();
     const repoHash = 'repoabc123456';
     const oldA = join(home, 'worktrees', repoHash, 'old-a');
@@ -160,18 +154,20 @@ describe('reapStaleWorktrees', () => {
     mkdirSync(oldB, { recursive: true });
     backdate(oldA, (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
     backdate(oldB, (STALE_WORKTREE_MIN_AGE_HOURS + 2) * 60 * 60 * 1000);
-    mockedExecFileSync.mockImplementation((_cmd, args) => {
-      const argv = args as string[];
+    const runLocalGit = vi.fn(async (argv: string[]) => {
       if (argv[3] === 'remove') rmSync(argv[5]!, { recursive: true, force: true });
-      return Buffer.from('');
     });
 
-    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+    const removed = await reapLocalStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit,
+    });
 
     expect(removed.sort()).toEqual([oldA, oldB].sort());
     expect(existsSync(oldA)).toBe(false);
     expect(existsSync(oldB)).toBe(false);
-    const calls = mockedExecFileSync.mock.calls.map((call) => call[1] as string[]);
+    const calls = runLocalGit.mock.calls.map((call) => call[0]);
     expect(calls.filter((args) => args[3] === 'remove')).toHaveLength(2);
     expect(calls.filter((args) => args[3] === 'prune')).toHaveLength(1);
     expect(calls.find((args) => args[3] === 'prune')).toEqual([
@@ -180,26 +176,30 @@ describe('reapStaleWorktrees', () => {
       'worktree',
       'prune',
     ]);
+    expect(runLocalGit.mock.calls.every((call) => call[1] === STALE_WORKTREE_GIT_TIMEOUT_MS))
+      .toBe(true);
   });
 
-  it('falls back to rm -rf when git worktree remove fails', () => {
+  it('falls back to rm -rf when git worktree remove fails', async () => {
     const { root, home } = makeHome();
     const repoHash = 'repoabc123456';
     const old = join(home, 'worktrees', repoHash, 'old-fallback');
     mkdirSync(join(home, 'repos', repoHash), { recursive: true });
     mkdirSync(old, { recursive: true });
     backdate(old, (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
-    mockedExecFileSync.mockImplementation((_cmd, args) => {
-      const argv = args as string[];
+    const runLocalGit = vi.fn(async (argv: string[]) => {
       if (argv[3] === 'remove') throw new Error('worktree metadata missing');
-      return Buffer.from('');
     });
 
-    const removed = reapLocalStaleWorktrees({ invokerHome: home, userHome: root });
+    const removed = await reapLocalStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit,
+    });
 
     expect(removed).toEqual([old]);
     expect(existsSync(old)).toBe(false);
-    const calls = mockedExecFileSync.mock.calls.map((call) => call[1] as string[]);
+    const calls = runLocalGit.mock.calls.map((call) => call[0]);
     expect(calls.filter((args) => args[3] === 'remove')).toHaveLength(1);
     expect(calls.filter((args) => args[3] === 'prune')).toHaveLength(1);
   });
@@ -269,6 +269,230 @@ describe('reapStaleAutomationCheckouts', () => {
   it('returns nothing when the locations are absent', () => {
     const { root, home } = makeHome();
     expect(reapStaleAutomationCheckouts({ invokerHome: home, userHome: root })).toEqual([]);
+  });
+});
+
+describe('reapStaleMergeClones', () => {
+  function taskStore(tasks: Array<{ status: string; workspacePath: string }>) {
+    return {
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: () => tasks.map((task, index) => ({
+        id: `t-${index}`,
+        status: task.status,
+        execution: { workspacePath: task.workspacePath },
+      })) as any,
+    };
+  }
+
+  it('removes stale clones, keeps fresh ones, and keeps a stale clone an unfinished task still uses', async () => {
+    const { root, home } = makeHome();
+    const staleAge = (STALE_MERGE_CLONE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000;
+    for (const name of ['gate-old-Aa1', 'gate-done-Bb2', 'gate-running-Cc3']) {
+      mkdirSync(join(home, 'merge-clones', name, '.git'), { recursive: true });
+      backdate(join(home, 'merge-clones', name), staleAge);
+    }
+    mkdirSync(join(home, 'merge-clones', 'gate-fresh-Dd4'), { recursive: true });
+
+    const result = await reapStaleMergeClones({
+      invokerHome: home,
+      userHome: root,
+      taskStore: taskStore([
+        { status: 'completed', workspacePath: join(home, 'merge-clones', 'gate-done-Bb2') },
+        { status: 'running', workspacePath: join(home, 'merge-clones', 'gate-running-Cc3') },
+      ]),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.removed.sort()).toEqual([
+      join(home, 'merge-clones', 'gate-done-Bb2'),
+      join(home, 'merge-clones', 'gate-old-Aa1'),
+    ]);
+    expect(existsSync(join(home, 'merge-clones', 'gate-running-Cc3'))).toBe(true);
+    expect(existsSync(join(home, 'merge-clones', 'gate-fresh-Dd4'))).toBe(true);
+  });
+
+  it('removes nothing and reports why when task state cannot be read', async () => {
+    const { root, home } = makeHome();
+    mkdirSync(join(home, 'merge-clones', 'gate-old-Aa1'), { recursive: true });
+    backdate(join(home, 'merge-clones', 'gate-old-Aa1'), (STALE_MERGE_CLONE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+    const unreadable = await reapStaleMergeClones({
+      invokerHome: home,
+      userHome: root,
+      logger,
+      taskStore: {
+        listWorkflows: () => {
+          throw new Error('database is locked');
+        },
+        loadTasks: () => [],
+      },
+    });
+    const missing = await reapStaleMergeClones({ invokerHome: home, userHome: root });
+
+    expect(unreadable).toEqual({ ok: false, removed: [], reason: 'task-store-error: database is locked' });
+    expect(missing).toEqual({ ok: false, removed: [], reason: 'no-task-store' });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database is locked'), expect.anything());
+    expect(existsSync(join(home, 'merge-clones', 'gate-old-Aa1'))).toBe(true);
+  });
+});
+
+describe('reapStaleDevelopmentHomes', () => {
+  const staleAge = (STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS + 1) * 24 * 60 * 60 * 1000;
+
+  function makeDevHome(home: string, id: string, opts: { lockPid?: string; ageMs?: number } = {}): string {
+    const devHome = join(home, 'dev', id);
+    mkdirSync(join(devHome, 'db-backups'), { recursive: true });
+    writeFileSync(join(devHome, 'invoker.db'), 'dev-db');
+    writeFileSync(join(devHome, 'invoker.log'), 'log');
+    if (opts.lockPid !== undefined) {
+      mkdirSync(join(devHome, 'invoker.db.lock'), { recursive: true });
+      writeFileSync(join(devHome, 'invoker.db.lock', 'pid'), `${opts.lockPid}\n`);
+      if (opts.ageMs !== undefined) {
+        backdate(join(devHome, 'invoker.db.lock', 'pid'), opts.ageMs);
+        backdate(join(devHome, 'invoker.db.lock'), opts.ageMs);
+      }
+    }
+    if (opts.ageMs !== undefined) {
+      for (const name of ['db-backups', 'invoker.db', 'invoker.log']) backdate(join(devHome, name), opts.ageMs);
+      backdate(devHome, opts.ageMs);
+    }
+    return devHome;
+  }
+
+  it('removes an old dev home whose recorded process is gone and keeps fresh or still-running ones', async () => {
+    const { root, home } = makeHome();
+    writeFileSync(join(home, 'invoker.db'), 'production-db');
+    const abandoned = makeDevHome(home, 'aaaa000001', { lockPid: '11111', ageMs: staleAge });
+    const running = makeDevHome(home, 'bbbb000002', { lockPid: '22222', ageMs: staleAge });
+    const fresh = makeDevHome(home, 'cccc000003', { lockPid: '33333' });
+    const recentlyLogged = makeDevHome(home, 'dddd000004', { ageMs: staleAge });
+    writeFileSync(join(recentlyLogged, 'invoker.log'), 'written today');
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: (pid) => pid === 22222,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [abandoned], unchecked: [] });
+    expect(existsSync(running)).toBe(true);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(recentlyLogged)).toBe(true);
+    expect(readFileSync(join(home, 'invoker.db'), 'utf8')).toBe('production-db');
+  });
+
+  it('keeps an old dev home whose lock cannot be read and reports it as unchecked', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'eeee000005', { ageMs: staleAge });
+    mkdirSync(join(devHome, 'gui-window.lock', 'pid'), { recursive: true });
+    backdate(join(devHome, 'gui-window.lock', 'pid'), staleAge);
+    backdate(join(devHome, 'gui-window.lock'), staleAge);
+    backdate(devHome, staleAge);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      logger,
+      isProcessAlive: () => false,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [devHome] });
+    expect(existsSync(devHome)).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('gui-window.lock'), expect.anything());
+  });
+
+  it('keeps an old dev home when a file deep inside it changed recently', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'ffff000006', { ageMs: staleAge });
+    mkdirSync(join(devHome, 'agent-sessions', 'session-1'), { recursive: true });
+    writeFileSync(join(devHome, 'agent-sessions', 'session-1', 'transcript.jsonl'), 'written today');
+    backdate(join(devHome, 'agent-sessions', 'session-1'), staleAge);
+    backdate(join(devHome, 'agent-sessions'), staleAge);
+    backdate(devHome, staleAge);
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: () => false,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [] });
+    expect(existsSync(devHome)).toBe(true);
+  });
+
+  it('keeps an old dev home whose worker lock file names a running process', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'aaaa000007', { ageMs: staleAge });
+    mkdirSync(join(devHome, 'locks'), { recursive: true });
+    writeFileSync(join(devHome, 'locks', 'worker-reaper.lock'), JSON.stringify({ kind: 'reaper', pid: 44444 }));
+    backdate(join(devHome, 'locks', 'worker-reaper.lock'), staleAge);
+    backdate(join(devHome, 'locks'), staleAge);
+    backdate(devHome, staleAge);
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: (pid) => pid === 44444,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [] });
+    expect(existsSync(devHome)).toBe(true);
+  });
+
+  it('keeps an old dev home whose lock pid is not a plain positive number and reports it as unchecked', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeDevHome(home, 'bbbb000008', { lockPid: '123abc', ageMs: staleAge });
+
+    const result = await reapStaleDevelopmentHomes({
+      invokerHome: home,
+      userHome: root,
+      isProcessAlive: () => false,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [devHome] });
+    expect(existsSync(devHome)).toBe(true);
+  });
+
+  it('does nothing when there is no dev folder', async () => {
+    const { root, home } = makeHome();
+    expect(await reapStaleDevelopmentHomes({ invokerHome: home, userHome: root })).toEqual({
+      ok: true,
+      removed: [],
+      unchecked: [],
+    });
+  });
+});
+
+describe('reapStaleInvokerCliTempDirs', () => {
+  it('removes stale CLI test directories while preserving fresh and unrelated temp entries', async () => {
+    const { root } = makeHome();
+    const tempRoot = join(root, 'tmp');
+    const stale = join(tempRoot, 'invoker-cli-prompt-stale');
+    const fresh = join(tempRoot, 'invoker-cli-prompt-fresh');
+    const unrelated = join(tempRoot, 'other-tool-stale');
+    mkdirSync(stale, { recursive: true });
+    mkdirSync(fresh, { recursive: true });
+    mkdirSync(unrelated, { recursive: true });
+    backdate(stale, 49 * 60 * 60 * 1000);
+    backdate(unrelated, 49 * 60 * 60 * 1000);
+
+    const removed = await reapStaleInvokerCliTempDirs({ tempRoot, userHome: join(root, 'user') });
+
+    expect(removed).toEqual([stale]);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+  });
+
+  it('refuses unsafe temp roots', async () => {
+    const { root } = makeHome();
+    const userHome = join(root, 'user');
+    mkdirSync(userHome, { recursive: true });
+
+    await expect(reapStaleInvokerCliTempDirs({ tempRoot: '/', userHome })).resolves.toEqual([]);
+    await expect(reapStaleInvokerCliTempDirs({ tempRoot: userHome, userHome })).resolves.toEqual([]);
   });
 });
 

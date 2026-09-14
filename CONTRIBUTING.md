@@ -8,6 +8,8 @@ If you've read [Part 2: Architecture](docs/invoker-medium-article.md), most of t
 
 The roadmap and issue tracker live at **[invoker.productlane.com/roadmap](https://invoker.productlane.com/roadmap)**. File bugs, feature requests, and roadmap feedback there. GitHub Issues is fine for code-level discussion tied to a specific PR or commit, but the productlane board is the source of truth for what we're working on next.
 
+Join the community on **[Invoker Slack](https://join.slack.com/t/invoker-ai/shared_invite/zt-476imo738-VqNp_SDfI6DFZp80EGgscQ)**.
+
 When you file an issue, the most useful things you can include are:
 
 - The plan (or a minimal version of it) that reproduces the behavior.

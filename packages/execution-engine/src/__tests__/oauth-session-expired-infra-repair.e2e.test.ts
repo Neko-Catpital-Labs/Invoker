@@ -117,6 +117,13 @@ class MemoryPersistence {
     return this.events.get(taskId) ?? [];
   }
 
+  getRecentEventsOfType(taskId: string, eventType: string, limit: number): TaskEventRecord[] {
+    return (this.events.get(taskId) ?? [])
+      .filter((event) => event.eventType === eventType)
+      .slice(-limit)
+      .reverse();
+  }
+
   saveAttempt(attempt: { nodeId: string }): void {
     const list = this.attempts.get(attempt.nodeId) ?? [];
     list.push(attempt);
@@ -246,7 +253,8 @@ describe('oauth-session-expired infra repair with a dummy repo', () => {
       store: {
         listWorkflows: () => persistence.listWorkflows(),
         loadTasks: (workflowId: string) => persistence.loadTasks(workflowId),
-        getEvents: (taskId: string) => persistence.getEvents(taskId) as never,
+        getRecentEventsOfType: (taskId: string, eventType: string, limit: number) =>
+          persistence.getRecentEventsOfType(taskId, eventType, limit) as never,
         getWorkerAction: (workerKind: string, externalKey: string) =>
           actions.get(`${workerKind}:${externalKey}`),
         upsertWorkerAction: (write: WorkerActionWrite) => {
