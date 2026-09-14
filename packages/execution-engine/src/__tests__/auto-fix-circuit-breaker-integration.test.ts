@@ -139,7 +139,7 @@ describe('auto-fix circuit breaker integration', () => {
     })({} as any);
   }
 
-  it.fails('a usage-limit failure that ended before the last trip does not re-arm the expired pause', async () => {
+  it('a usage-limit failure that ended before the last trip does not re-arm the expired pause', async () => {
     const tripAt = new Date(Date.now() - 7 * HOUR_MS);
     tripCircuitBreaker(circuitBreakerPath, { now: tripAt, reason: 'usage-limit', pauseMs: 6 * HOUR_MS });
     const staleUsageLimitTask = makeFailedTask({
@@ -162,7 +162,7 @@ describe('auto-fix circuit breaker integration', () => {
     expect(submitted).toContain('wf-1/unrelated');
   });
 
-  it.fails('a usage-limit failure that ended before an operator clear does not re-arm the pause', async () => {
+  it('a usage-limit failure that ended before an operator clear does not re-arm the pause', async () => {
     const failedAt = new Date(Date.now() - 5 * HOUR_MS);
     tripCircuitBreaker(circuitBreakerPath, { now: new Date(failedAt.getTime() + 1000), reason: 'usage-limit', pauseMs: 6 * HOUR_MS });
     clearCircuitBreaker(circuitBreakerPath);
