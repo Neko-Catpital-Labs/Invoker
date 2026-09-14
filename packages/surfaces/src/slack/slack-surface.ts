@@ -25,7 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
-import { extractRepositoryUrls, extractRepoUrlFromMessage, looksLikePreset, normalizeSupportedRepoCandidate, parseLocalRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
+import { extractRepositoryUrls, extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery, TRAILING_URL_PUNCTUATION } from './mention-parsers.js';
 import type { LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -189,7 +189,7 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
 
-export { extractRepoUrlFromMessage, parseLocalRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
+export { extractRepoUrlFromMessage, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 export type { LocalRequest } from './mention-parsers.js';
 
 export { PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
@@ -290,72 +290,6 @@ function repoDisplayName(repoUrl: string): string {
   return segments.length >= 2 ? segments.slice(-2).join('/') : parts.path;
 }
 
-/** Peel leading `[preset]` and `[repo:]` tags off a lobby mention; the rest is the request text. A preset-shaped tag matching no key is returned as `unknownPreset` so the caller can reject it instead of silently using the default. */
-export function parsePlanningRequest(
-  text: string,
-  presetKeys: string[],
-  defaultPresetKey: string,
-): {
-  presetKey: string;
-  repo?: string;
-  repositoryUrls?: string[];
-  hasExplicitPreset?: boolean;
-  confirmationMode?: PlanningConfirmationMode;
-  autoSubmitRequested?: boolean;
-  text: string;
-  unknownPreset?: string;
-} {
-  let rest = text.replace(/<@[^>]+>/g, '').trim();
-  let presetKey = defaultPresetKey;
-  let repo: string | undefined;
-  let confirmationMode: PlanningConfirmationMode | undefined;
-  let autoSubmitRequested = false;
-  let unknownPreset: string | undefined;
-  let hasExplicitPreset = false;
-  const keyset = new Set(presetKeys.map((k) => k.toLowerCase()));
-  const tagRe = /^\[([^\]]*)\]\s*/;
-
-  for (;;) {
-    const m = tagRe.exec(rest);
-    if (!m) break;
-    const raw = m[1].trim();
-    if (/^repo:/i.test(raw)) {
-      repo = raw.slice(raw.indexOf(':') + 1).trim();
-      rest = rest.slice(m[0].length);
-      continue;
-    }
-    const normalized = raw.toLowerCase().replace(/\s+/g, '').replace(/^plain/, '');
-    if (normalized === 'auto-submit' || normalized === 'autosubmit') {
-      confirmationMode = 'require';
-      autoSubmitRequested = true;
-      rest = rest.slice(m[0].length);
-      continue;
-    }
-    if (keyset.has(normalized)) {
-      presetKey = normalized;
-      hasExplicitPreset = true;
-      rest = rest.slice(m[0].length);
-      continue;
-    }
-    if (looksLikePreset(normalized)) {
-      unknownPreset = raw;
-      rest = rest.slice(m[0].length);
-    }
-    break;
-  }
-
-  const repositoryUrls = extractRepositoryUrls(rest);
-  return {
-    presetKey,
-    repo,
-    text: rest.trim(),
-    ...(repositoryUrls.length > 0 ? { repositoryUrls } : {}),
-    ...(hasExplicitPreset ? { hasExplicitPreset } : {}),
-    ...(confirmationMode ? { confirmationMode } : {}),
-    ...(autoSubmitRequested ? { autoSubmitRequested } : {}),
-    ...(unknownPreset ? { unknownPreset } : {}),
-  };
-}
 function repositoryIdentity(repoUrl: string): string {
   const parts = parseRepoParts(repoUrl);
   if (!parts) return stripGitSuffix(repoUrl.trim()).toLowerCase();
