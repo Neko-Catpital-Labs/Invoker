@@ -25,6 +25,7 @@ import type { ChatBlocks, ChatTransport, SayFn } from '../approval/chat-transpor
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { PlanIntentConfirm, PlanningContext } from '../approval/approval-state-machine.js';
 import { PlanDraftLifecycle } from '../approval/plan-draft-lifecycle.js';
+import { routeWorkflowMention } from '../core/mention-router.js';
 import { extractRepoUrlFromMessage, normalizeSupportedRepoCandidate, parseChannelRepoSetupRequest, parseLocalRequest, parsePlanningRequest, parseWorkflowStatusQuery } from './mention-parsers.js';
 import type { ChannelRepoSetupPair, LocalRequest } from './mention-parsers.js';
 import { parseSlackCommand } from './slack-commands.js';
@@ -48,7 +49,7 @@ import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from 
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
-import { buildAssistantPrompt, parseWorkflowControl } from './workflow-assistant.js';
+import { buildAssistantPrompt } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, PlanningDraft, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 import { SlackPlanDraftRepository } from '@invoker/data-store';
@@ -1957,9 +1958,9 @@ ${text}`;
   ): Promise<void> {
     const threadTs = event.thread_ts ?? event.ts;
     const channel = event.channel ?? mapping.channelId;
-    const text = (event.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
+    const route = routeWorkflowMention(event.text ?? '');
     this.log('slack', 'info', `[WORKFLOW_MENTION] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} workflow=${mapping.workflowId}`);
-    if (!text) {
+    if (route.kind === 'workflow_help') {
       await say({
         text: `I answer questions about workflow \`${mapping.workflowId}\` and run controls: \`status\`, \`approve <id>\`, \`reject <id>\`, \`retry <id>\`, \`input <id>: <text>\`.`,
         thread_ts: threadTs,
@@ -1967,11 +1968,11 @@ ${text}`;
       return;
     }
 
-    const ctrl = parseWorkflowControl(text);
-    if (ctrl) {
-      await this.dispatchWorkflowControl(mapping, ctrl, say, threadTs);
+    if (route.kind === 'workflow_control') {
+      await this.dispatchWorkflowControl(mapping, route.control, say, threadTs);
       return;
     }
+    const { text } = route;
 
     if (!this.gatherWorkflowContext) {
       await say({ text: 'Workflow context is not available in this deployment.', thread_ts: threadTs });
