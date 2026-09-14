@@ -29,6 +29,8 @@ interface ContextMenuProps {
   onDelete?: (taskId: string) => void;
   onClose: (options?: { restoreFocus?: boolean }) => void;
   autoFocus?: boolean;
+  /** Execution agents offered for fix actions; defaults to the builtin pair. */
+  agents?: string[];
 }
 
 function stopMenuKeyboardEvent(e: KeyboardEvent | React.KeyboardEvent) {
@@ -57,6 +59,7 @@ export function ContextMenu({
   onDelete,
   onClose,
   autoFocus = false,
+  agents,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -66,7 +69,9 @@ export function ContextMenu({
   const [showMore, setShowMore] = useState(false);
 
   // Generate menu items
-  const items = getMenuItems(task, { agents: ['claude', 'codex'] });
+  const items = getMenuItems(task, {
+    agents: agents && agents.length > 0 ? agents : ['claude', 'codex'],
+  });
 
   // Filter items based on available handlers
   const availableItems = items.filter((item) => {

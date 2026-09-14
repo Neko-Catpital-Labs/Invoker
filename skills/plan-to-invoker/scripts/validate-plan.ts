@@ -28,6 +28,91 @@ const VALID_GATE_POLICY = ['completed', 'review_ready'] as const;
 
 type ExternalDep = { workflowId?: string; taskId?: string; requiredStatus?: string; gatePolicy?: string };
 
+const FRESHNESS_KEYS = new Set(['watchPaths', 'pathPreconditions', 'guardedBehaviorIds']);
+const PATH_PRECONDITION_KEYS = new Set(['path', 'expected']);
+const GUARDED_BEHAVIOR_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNormalizedFreshnessPath(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  if (normalized === '' || normalized.length > 4096 || normalized.startsWith('/') || normalized.includes('\\')) return false;
+  for (let index = 0; index < normalized.length; index += 1) {
+    const code = normalized.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return normalized.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+function validateTaskFreshness(errors: ValidationError[], taskId: string, freshness: unknown): void {
+  const field = 'freshness';
+  const invalid = (nestedField: string, value: unknown, message: string): void => {
+    errors.push({ errorType: 'invalid_freshness_value', field: `${field}.${nestedField}`, taskId, message, value });
+  };
+
+  if (!isRecord(freshness)) {
+    invalid('', freshness, `Task "${taskId}" freshness must be an object when provided`);
+    return;
+  }
+  const unknownKey = Object.keys(freshness).find((key) => !FRESHNESS_KEYS.has(key));
+  if (unknownKey) {
+    invalid(unknownKey, freshness[unknownKey], `Task "${taskId}" freshness has unsupported field "${unknownKey}"`);
+    return;
+  }
+
+  for (const key of ['watchPaths', 'guardedBehaviorIds'] as const) {
+    if (freshness[key] === undefined) continue;
+    if (!Array.isArray(freshness[key])) {
+      invalid(key, freshness[key], `Task "${taskId}" freshness.${key} must be an array`);
+      continue;
+    }
+    freshness[key].forEach((entry, index) => {
+      const valid = key === 'watchPaths'
+        ? isNormalizedFreshnessPath(entry)
+        : typeof entry === 'string' && GUARDED_BEHAVIOR_ID_PATTERN.test(entry.trim());
+      if (!valid) {
+        invalid(`${key}[${index}]`, entry, `Task "${taskId}" freshness.${key}[${index}] has an invalid value`);
+      }
+    });
+  }
+
+  if (freshness.pathPreconditions === undefined) return;
+  if (!Array.isArray(freshness.pathPreconditions)) {
+    invalid('pathPreconditions', freshness.pathPreconditions, `Task "${taskId}" freshness.pathPreconditions must be an array`);
+    return;
+  }
+  const expectations = new Map<string, unknown>();
+  freshness.pathPreconditions.forEach((entry, index) => {
+    const entryField = `pathPreconditions[${index}]`;
+    if (!isRecord(entry)) {
+      invalid(entryField, entry, `Task "${taskId}" ${entryField} must be an object`);
+      return;
+    }
+    const unknownEntryKey = Object.keys(entry).find((key) => !PATH_PRECONDITION_KEYS.has(key));
+    if (unknownEntryKey) {
+      invalid(`${entryField}.${unknownEntryKey}`, entry[unknownEntryKey], `Task "${taskId}" ${entryField} has unsupported field "${unknownEntryKey}"`);
+      return;
+    }
+    if (!isNormalizedFreshnessPath(entry.path)) {
+      invalid(`${entryField}.path`, entry.path, `Task "${taskId}" ${entryField}.path must be a normalized repo-relative path`);
+    }
+    if (entry.expected !== 'present' && entry.expected !== 'absent') {
+      invalid(`${entryField}.expected`, entry.expected, `Task "${taskId}" ${entryField}.expected must be "present" or "absent"`);
+    }
+    if (isNormalizedFreshnessPath(entry.path) && (entry.expected === 'present' || entry.expected === 'absent')) {
+      const path = (entry.path as string).trim();
+      const previous = expectations.get(path);
+      if (previous !== undefined && previous !== entry.expected) {
+        invalid('pathPreconditions', entry, `Task "${taskId}" freshness.pathPreconditions has conflicting expectations for path "${path}"`);
+      }
+      expectations.set(path, entry.expected);
+    }
+  });
+}
+
 const NESTED_SHELL_INVOCATION = /\b(?:sh|bash)\s+-(?:c|lc)\b/g;
 const SHELL_VARIABLE_REFERENCE = /\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})/;
 const EXPLICIT_BASH_COMMAND = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*bash\s+-(?:lc|cl|c)\b/;
@@ -619,6 +704,15 @@ function validatePlan(yamlContent: string, repoRoot: string): ValidationError[] 
     });
   }
 
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    errors.push({
+      errorType: 'invalid_field_type',
+      field: 'poolId',
+      message: 'Plan poolId must be a non-empty string when provided',
+      value: raw.poolId,
+    });
+  }
+
   // Validate description required when onFinish is pull_request or merge
   const onFinish = raw.onFinish ?? 'pull_request';
   if ((onFinish === 'pull_request' || onFinish === 'merge') &&
@@ -664,16 +758,40 @@ function validatePlan(yamlContent: string, repoRoot: string): ValidationError[] 
     });
   }
 
-  // Check for stacked baseBranch defaulting to master
-  const hasConcreteExtDep = allExtDeps.some(
-    (dep) => dep.workflowId && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
+  const TRUNK_BASE_BRANCHES = new Set(['master', 'main', 'trunk', 'develop']);
+  const concreteExtDeps = allExtDeps.filter(
+    (dep) => typeof dep.workflowId === 'string'
+      && dep.workflowId.trim() !== ''
+      && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
   );
+  const isMergeGateDep = (dep: ExternalDep): boolean =>
+    dep.taskId === undefined || dep.taskId === null || dep.taskId === '__merge__';
+  const concreteMergeGateDeps = concreteExtDeps.filter(isMergeGateDep);
   const baseBranch = raw.baseBranch ?? 'master';
-  if (hasConcreteExtDep && baseBranch === 'master') {
+  const isTrunkBase = TRUNK_BASE_BRANCHES.has(baseBranch);
+  const isIntentionalFanIn = concreteExtDeps.length >= 2;
+  if (
+    isTrunkBase
+    && !isIntentionalFanIn
+    && concreteExtDeps.length === 1
+    && concreteMergeGateDeps.length === 1
+  ) {
     errors.push({
       errorType: 'stacked_basebranch_default',
       field: 'baseBranch',
-      message: "Plan has externalDependencies but baseBranch is 'master'. For stacked workflows, set baseBranch to the upstream workflow's featureBranch, or use step-submit-stacked to auto-resolve.",
+      message: `Plan has a single concrete upstream merge-gate externalDependency but baseBranch is trunk '${baseBranch}'. Stacked-onto means externalDependencies on that workflow's __merge__ AND baseBranch == that workflow's featureBranch. Gate-only wait is not stacked-onto. Set baseBranch to the upstream featureBranch, or use submit-workflow-chain.sh --onto-workflow / step-submit-stacked.`,
+      value: baseBranch,
+    });
+  }
+
+  const onFinishValue = raw.onFinish ?? 'pull_request';
+  const featureBranch = typeof raw.featureBranch === 'string' ? raw.featureBranch.trim() : '';
+  if (onFinishValue === 'none' && featureBranch !== '') {
+    errors.push({
+      errorType: 'onfinish_none_stack_base_risk',
+      field: 'onFinish',
+      message: `Plan sets onFinish: none with featureBranch '${featureBranch}'. A workflow that will be a stack base for dependents must publish that featureBranch to origin (use onFinish: pull_request or merge); otherwise downstream merge gates fail with base branch not found on remote.`,
+      value: onFinishValue,
     });
   }
 
@@ -694,6 +812,10 @@ function validatePlan(yamlContent: string, repoRoot: string): ValidationError[] 
 
     const taskId = task.id;
     taskIds.add(taskId);
+
+    if (task.freshness !== undefined) {
+      validateTaskFreshness(errors, taskId, task.freshness);
+    }
 
     if (!task.description || typeof task.description !== 'string' || task.description.trim() === '') {
       errors.push({
@@ -777,6 +899,15 @@ function validatePlan(yamlContent: string, repoRoot: string): ValidationError[] 
         taskId,
         message: `Task "${taskId}" poolId must be a string when provided`,
         value: task.poolId,
+      });
+    }
+
+    if (task.dockerImage && (raw.poolId !== undefined || task.poolId !== undefined)) {
+      errors.push({
+        errorType: 'conflicting_fields',
+        field: 'dockerImage|poolId',
+        taskId,
+        message: `Task "${taskId}" sets "dockerImage" but its plan/task also sets "poolId" — Docker tasks do not run in execution pools.`,
       });
     }
 

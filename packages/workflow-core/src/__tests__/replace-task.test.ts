@@ -301,8 +301,8 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
-    expect(orchestrator.getTask('C')!.status).toBe('pending');
-    expect(orchestrator.getTask('D')!.status).toBe('pending');
+    expect(orchestrator.getTask('C')!.status).toBe('skipped');
+    expect(orchestrator.getTask('D')!.status).toBe('skipped');
 
     const s = (l: string) => sid(orchestrator, 0, l);
     terminateLiveDescendant(orchestrator, 'C');
@@ -642,7 +642,7 @@ describe('replaceTask', () => {
       // Step 11 definition. Editing A's command must still succeed —
       // no graph edge changes, only a per-attribute mutation routed
       // through the existing `editTaskCommand` path (Step 2).
-      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('skipped');
 
       expect(() => orchestrator.editTaskCommand('A', 'echo A-v2')).not.toThrow();
       expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');

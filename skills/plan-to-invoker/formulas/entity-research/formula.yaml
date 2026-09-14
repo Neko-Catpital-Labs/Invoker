@@ -1,0 +1,55 @@
+formula: entity-research
+version: 1
+description: >
+  Research one real-world entity and commit a structured record about it, as
+  one write-and-commit task plus an independent post-commit verification task
+  (and an optional upstream gate-check). The recipe locks the workflow shape
+  so the record can never be produced in one task and silently dropped by a
+  separate downstream commit task — the exact failure mode observed in
+  wf-1786134278894-20 (ticker CPB). The author fills the {{var}} slots and
+  specializes the REPLACE_ME research question/schema before submit.
+vars:
+  repo_url:
+    required: true
+    example: "git@github.com:EdbertChan/hidden.git"
+    description: "Git remote for the repo where the record is committed."
+  base_branch:
+    required: false
+    default: "master"
+    example: "main"
+    description: "Base branch for this entity's workflow."
+  entity_id:
+    required: true
+    example: "CPB"
+    description: "Short identifier used in file paths and prose (e.g. a ticker, a case number, a SKU) — display form, may be uppercase."
+  entity_slug:
+    required: true
+    example: "cpb"
+    description: "Lowercase kebab-case form of entity_id, used only in task ids and dependency references (lint-task-atomicity.sh requires kebab-case task ids)."
+  entity_kind:
+    required: true
+    example: "S&P 500 index-removal candidate (stock ticker)"
+    description: "One phrase naming what kind of real-world thing this is, for prose context."
+  research_question:
+    required: true
+    example: "the most recent 10-K inventory accounting method (FIFO vs LIFO) and any other choice that understates book value"
+    description: "The exact fact(s) to research and record for this entity."
+  record_path:
+    required: true
+    example: "data/stocks/CPB.json"
+    description: "Single JSON record file this entity's research produces (one file, one entity)."
+  source_dir:
+    required: true
+    example: "sources/CPB"
+    description: "Directory for verbatim primary-source excerpts backing the record's claims."
+  record_schema_fields:
+    required: true
+    example: "method (enum: fifo|lifo|weighted_average|other), understatement_flag (bool)"
+    description: "Domain-specific fields to add on top of the formula's fixed envelope (entity_id, as_of, claims[])."
+  gate_check_command:
+    required: false
+    default: "true"
+    example: "test -f data/index-removals.json"
+    description: "Optional deterministic eligibility check run before research starts; defaults to a no-op. Must be self-contained (no unchecked-in script)."
+workflows:
+  - entity-research.workflow.yaml

@@ -1,0 +1,94 @@
+name: "Entity research: {{entity_id}}"
+description: |
+  Research {{entity_id}} ({{entity_kind}}) for {{research_question}} and
+  commit the resulting record. The write task commits its own output in the
+  same task — no separate downstream commit task exists in this shape.
+
+  REPLACE_ME: 1-3 sentences on why this entity/batch matters and what the
+  record will be used for.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: {{base_branch}}
+repoUrl: {{repo_url}}
+
+tasks:
+  - id: gate-check-{{entity_slug}}
+    description: |
+      Deterministic eligibility check before spending research effort on {{entity_id}}.
+      Review claim: {{entity_id}} either passes or fails eligibility with a machine-checkable command; no research happens if it fails. REPLACE_ME with the real gate condition.
+      Review lane: docs
+      Safety invariant: This task never writes or modifies the record itself; only a pass/fail signal.
+      Slice rationale: One deterministic gate slice, separate from the research/write slice that follows it.
+      Architectural effect: None; produces no product code, only a gating signal for its own workflow.
+      Goal: Fail fast, before research, if {{entity_id}} does not qualify.
+      Motivation: Cheap gating avoids wasted research effort on ineligible entities. REPLACE_ME if this batch has a real eligibility list.
+      Alternative considerations: Skipping the gate and letting research fail was rejected — it wastes the expensive step instead of the cheap one.
+      Implementation details: Run `{{gate_check_command}}`; exit non-zero if {{entity_id}} is ineligible. REPLACE_ME with the concrete check.
+      Non-goals: No research, no record write, no commit of the record file here.
+      Layer: docs
+      Feature state: active
+      Acceptance criteria:
+      - `{{gate_check_command}}` exits 0.
+    command: "{{gate_check_command}}"
+    dependencies: []
+
+  - id: research-write-{{entity_slug}}
+    description: |
+      Research {{research_question}} for {{entity_id}} and write AND commit
+      the record in this same task. Do not defer the commit to a later task
+      — there must be no task after this one that touches {{record_path}}.
+      Review claim: {{record_path}} matches the fixed record envelope and every claim traces to a committed source excerpt. REPLACE_ME with the precise research claim.
+      Review lane: docs
+      Safety invariant: Every claims[] entry has a non-empty source_excerpt and source_url backed by a file under {{source_dir}}/; no claim is asserted without a primary-source citation.
+      Slice rationale: One research slice: write the record and commit it, nothing else.
+      Architectural effect: None; adds one data file and its source citations, no code.
+      Goal: Produce a committed, schema-valid, source-cited record for {{entity_id}}.
+      Motivation: {{research_question}} REPLACE_ME with why this fact matters for {{entity_id}}.
+      Alternative considerations: A separate downstream commit task was rejected — that split is the exact shape that silently dropped ticker CPB's record in wf-1786134278894-20 (task-runner-prepare.ts's dependency guard only checks .branch, not .commit).
+      Implementation details: Research {{research_question}}; write {{record_path}} matching the schema below; commit both {{record_path}} and {{source_dir}}/*.md yourself, in this task.
+      Non-goals: No aggregation across entities, no schema changes beyond {{record_schema_fields}}, no edits outside {{record_path}} and {{source_dir}}/.
+      Layer: docs
+      Feature state: active
+      Files:
+      - {{record_path}}
+      - {{source_dir}}/*.md
+      Change types:
+      - {{record_path}}: create
+      - {{source_dir}}/*.md: create
+      Acceptance criteria:
+      - {{record_path}} exists, is valid JSON, and has at minimum entity_id (string), as_of (ISO date), and claims[] where each entry has value, source_excerpt, and source_url.
+      - {{record_schema_fields}} are present and correctly typed.
+      - The commit for this task includes {{record_path}} — verify with `git show --stat HEAD | grep {{record_path}}`.
+    prompt: |
+      Goal: Research {{research_question}} for {{entity_id}} and commit a schema-valid, source-cited record.
+      Review lane: docs
+      Motivation: {{research_question}} REPLACE_ME with why this fact matters for {{entity_id}}.
+      Alternative considerations: Do not defer the commit to a later task; there is none in this shape.
+      Implementation details: Write {{record_path}} with entity_id, as_of, claims[] (each with value, source_excerpt, source_url), plus {{record_schema_fields}}. Save verbatim source excerpts under {{source_dir}}/. Commit {{record_path}} and {{source_dir}}/*.md yourself as part of this task — there is no later task that will commit this for you.
+      Non-goals: No aggregation, no schema invention beyond {{record_schema_fields}}.
+      Assume no prior context. You are given only this task.
+      Acceptance criteria:
+      - {{record_path}} exists, is valid JSON, matches the schema above.
+      - `git show --stat HEAD | grep {{record_path}}` succeeds (this is the pass condition).
+    dependencies: [gate-check-{{entity_slug}}]
+
+  - id: verify-record-{{entity_slug}}
+    description: |
+      Read-only re-check that the committed record actually exists on HEAD
+      and parses, independent of what research-write-{{entity_slug}} claimed.
+      Review claim: `git show HEAD:{{record_path}}` succeeds and is valid JSON, checked independently of the write task's self-report.
+      Review lane: proof
+      Safety invariant: This task makes no writes; it only reads HEAD.
+      Slice rationale: One proof slice: independent verification only.
+      Architectural effect: None; adds no product behavior.
+      Goal: Catch the case where research-write-{{entity_slug}} reported success but {{record_path}} is absent from HEAD.
+      Motivation: This is the check that would have caught wf-1786134278894-20's CPB failure — self-reported success is not proof the file landed.
+      Alternative considerations: Trusting the write task's own acceptance criteria was rejected as non-independent.
+      Implementation details: Read {{record_path}} from HEAD and parse it; fail non-zero if missing or malformed.
+      Non-goals: No product edits, no aggregation; verification only.
+      Layer: docs
+      Feature state: active
+      Acceptance criteria:
+      - `git show HEAD:{{record_path}} | python3 -m json.tool` exits 0.
+    command: "git show HEAD:{{record_path}} | python3 -m json.tool"
+    dependencies: [research-write-{{entity_slug}}]
