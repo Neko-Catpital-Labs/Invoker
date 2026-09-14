@@ -1,11 +1,15 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { resolveProductionOwnerServiceMarkerPath } from './invoker-home.js';
 import { resolveRepoRoot } from './repo-root.js';
 
 export interface ResolveActiveInvokerProfileEnvOptions {
   repoRoot?: string;
   timeoutMs?: number;
+  productionMarkerFileExists?: (path: string) => boolean;
+  homeDir?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -19,10 +23,15 @@ function isEnvironmentOverrides(value: unknown): value is Record<string, string>
   );
 }
 
+function isKnownProductionOwnerHost(options: ResolveActiveInvokerProfileEnvOptions): boolean {
+  const productionMarkerFileExists = options.productionMarkerFileExists ?? existsSync;
+  return productionMarkerFileExists(resolveProductionOwnerServiceMarkerPath(options.homeDir));
+}
+
 export function resolveActiveInvokerProfileEnv(
   options: ResolveActiveInvokerProfileEnvOptions = {},
 ): Record<string, string> {
-  if (process.env.INVOKER_PRODUCTION_OWNER_SERVICE === '1') {
+  if (process.env.INVOKER_PRODUCTION_OWNER_SERVICE === '1' || isKnownProductionOwnerHost(options)) {
     return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
   }
   try {
