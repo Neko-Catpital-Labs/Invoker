@@ -144,6 +144,7 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
         'normal',
         WORKFLOW_RESUME_COMMAND_CHANNEL,
         [{}],
+        { deferDrain: true },
       );
       options.ledger.markSubmitted(workflowId, nowMs + cooldownMs);
       options.store.logEvent?.(candidate.readyTaskId, 'recovery.worker.submit', {
@@ -224,6 +225,7 @@ export function createWorkflowResumeWorker(options: WorkflowResumeWorkerOptions)
     start,
     wake: runtime.wake,
     tick: runtime.tick,
+    run: runtime.run,
     stop,
     isRunning: runtime.isRunning,
   };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { TaskRunner, type LaunchOutboxAck, type TaskRunnerCallbacks } from '../task-runner.js';
 import { ResourceLimitError } from '../repo-pool.js';
@@ -18,16 +18,17 @@ function makeLogger(): Logger {
 }
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
+  const { config, ...taskOverrides } = overrides;
   return {
     id: 'wf-d/t1',
     description: 'launch-dispatch test task',
     status: 'pending',
     dependencies: [],
     createdAt: new Date(),
-    config: { workflowId: 'wf-d' },
+    config: resolveTaskConfig({ workflowId: 'wf-d', ...config }),
     execution: { selectedAttemptId: 'attempt-1', generation: 1, phase: 'launching' },
-    ...overrides,
-  } as TaskState;
+    ...taskOverrides,
+  };
 }
 
 interface RunnerEnv {

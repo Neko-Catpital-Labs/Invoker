@@ -233,7 +233,7 @@ export function validateWorkResponse(res: unknown): ValidationResult {
     return { valid: false, error: 'executionGeneration is required and must be a non-negative integer' };
   }
 
-  const validStatuses = ['completed', 'review_ready', 'failed', 'needs_input', 'spawn_experiments', 'select_experiment'];
+  const validStatuses = ['completed', 'review_ready', 'failed', 'needs_input', 'stale', 'spawn_experiments', 'select_experiment'];
   if (!validStatuses.includes(r.status as string)) {
     return { valid: false, error: `status must be one of: ${validStatuses.join(', ')}` };
   }

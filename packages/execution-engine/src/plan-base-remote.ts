@@ -251,3 +251,40 @@ export async function resolvePlanBaseRevision(
 export function isInvokerManagedPoolBranch(branch: string): boolean {
   return branch.startsWith('experiment/') || branch.startsWith('invoker/');
 }
+
+/**
+ * Verify a dependency task's exact commit is resolvable in the pool mirror,
+ * retrying `fetch --all` with backoff first. The pool mirror is shared and
+ * reused across tasks (RepoPool.ensureClone), and `syncPlanBaseRemoteForRef`
+ * only ever fetches the named `baseRef` -- it never fetches for an explicit
+ * dependency SHA (isFullSha short-circuits it). A dependency's just-pushed
+ * commit can therefore be unresolvable here purely from timing, not because
+ * it's actually missing. Throws with a clear message if it's still
+ * unresolvable after retries, instead of letting a later `git worktree add`
+ * fail with an opaque "invalid reference".
+ */
+export async function ensureRequiredCommitResolvable(
+  runGit: GitExec,
+  commit: string,
+  opts: {
+    maxAttempts?: number;
+    sleepMs?: (attempt: number) => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const maxAttempts = opts.maxAttempts ?? 4;
+  const sleepMs = opts.sleepMs ?? ((attempt) => attempt * 2000);
+  const sleep = opts.sleep ?? ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (await tryResolveCommit(runGit, `${commit}^{commit}`)) return;
+    if (attempt >= maxAttempts) {
+      throw new Error(
+        `Required commit ${commit} not resolvable after ${maxAttempts} fetch attempts. `
+        + `It may not have propagated to the shared pool mirror yet.`,
+      );
+    }
+    await sleep(sleepMs(attempt));
+    await runGit(['fetch', '--all', '--prune']).catch(() => undefined);
+  }
+}

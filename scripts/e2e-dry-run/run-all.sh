@@ -82,8 +82,9 @@ for c in "${cases[@]}"; do
   fi
 done
 
-# Final cleanup: prune worktrees created during tests.
-git worktree prune 2>/dev/null || true
+if [ -d "$ROOT/.git" ]; then
+  git worktree prune 2>/dev/null || true
+fi
 
 echo ""
 echo "e2e-dry-run: $passed passed, $failed failed (${#cases[@]} total)"
