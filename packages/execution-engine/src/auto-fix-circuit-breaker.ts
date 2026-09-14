@@ -13,7 +13,7 @@ const EMPTY_STATE: CircuitBreakerState = { pausedUntil: null, reason: null, trig
 
 export function defaultCircuitBreakerPath(): string {
   return process.env.INVOKER_AUTO_FIX_PAUSE_FILE
-    ?? join(homedir(), '.invoker', 'auto-fix-pause.json');
+    ?? join(homedir(), '.invoker', process.env.NODE_ENV === 'test' ? 'test' : '', 'auto-fix-pause.json');
 }
 
 export function loadCircuitBreakerState(path: string): CircuitBreakerState {

@@ -36,6 +36,31 @@ const FAILED_TASK_ERROR_LINE_PATTERNS = [
   /\bELIFECYCLE\b.*\bCommand failed with exit code [1-9]\d*\b/i,
 ];
 
+function deriveOwningPackage(paths: readonly string[]): string | undefined {
+  const packagePaths = paths
+    .map((path) => path.split('/').filter(Boolean))
+    .filter((segments) => segments[0] === 'packages' && segments.length >= 2)
+    .map((segments) => `packages/${segments[1]}`);
+  if (packagePaths.length === 0) return undefined;
+  const [first, ...rest] = packagePaths;
+  return rest.every((path) => path === first) ? first : undefined;
+}
+
+function buildWorkerOrientationPack(request: WorkRequest): string | undefined {
+  if (request.actionType !== 'ai_task') return undefined;
+  const allowedFiles = request.inputs.freshness?.watchPaths;
+  if (!allowedFiles?.length) return undefined;
+
+  const lines = [
+    'Worker orientation:',
+    `Owning package: ${deriveOwningPackage(allowedFiles) ?? 'mixed'}`,
+    'Allowed files:',
+    ...allowedFiles.map((path) => `- ${path}`),
+    'Do not start with an unscoped repository walk; inspect the owning package and allowed files first.',
+  ];
+  return lines.join('\n');
+}
+
 function failedTaskErrorTail(output: string): string | undefined {
   const lines = output.split('\n');
   const tail = lines.slice(-FAILED_TASK_ERROR_TAIL_LINE_LIMIT).join('\n').trim();
@@ -1434,7 +1459,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * Build the full prompt by prepending upstream context from completed dependencies.
    */
   protected buildFullPrompt(request: WorkRequest): string {
-    let fullPrompt = request.inputs.prompt ?? '';
+    const promptParts: string[] = [];
+    const orientationPack = buildWorkerOrientationPack(request);
+    if (orientationPack) promptParts.push(orientationPack);
+    promptParts.push(request.inputs.prompt ?? '');
+    let fullPrompt = promptParts.join('\n\n');
     if (request.inputs.upstreamContext?.length) {
       const contextLines = request.inputs.upstreamContext.map(ctx => {
         let line = `[Upstream task: ${ctx.taskId}]\nDescription: ${ctx.description}\nSummary: ${ctx.summary ?? 'N/A'}`;
