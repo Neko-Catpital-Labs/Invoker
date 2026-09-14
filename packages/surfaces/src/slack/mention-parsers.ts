@@ -12,6 +12,25 @@ export function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
 }
 
+export function extractMessageRepoCandidates(text: string): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(MESSAGE_REPO_TOKEN_RE)) {
+    let candidate = (match[1] ?? match[0]).trim();
+    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
+      candidate = candidate.slice(0, -1);
+    }
+
+    const accepted = normalizeSupportedRepoCandidate(candidate);
+
+    if (accepted && !seen.has(accepted)) {
+      seen.add(accepted);
+      urls.push(accepted);
+    }
+  }
+  return urls;
+}
+
 export function normalizeSupportedRepoCandidate(candidate: string): string | undefined {
   if (/^git@[\w.-]+:.+/.test(candidate)) return candidate;
   if (/^ssh:\/\//i.test(candidate)) return candidate;
