@@ -360,7 +360,7 @@ describe('runRepoLocalPrBodyChecker', () => {
     expect(resolvePrBodyValidatorNodeBinary()).toBe(process.execPath);
   });
 
-  it('runs the repo checker with Electron process vars removed', () => {
+  it('runs the repo checker with Electron process vars removed', async () => {
     const cwd = createTempDir();
     mkdirSync(join(cwd, 'scripts'));
     writeFileSync(
@@ -377,14 +377,14 @@ describe('runRepoLocalPrBodyChecker', () => {
     process.env.ELECTRON_RUN_AS_NODE = '1';
     process.env.INVOKER_PR_BODY_VALIDATOR_NODE = process.execPath;
 
-    expect(runRepoLocalPrBodyChecker({
+    expect(await runRepoLocalPrBodyChecker({
       body: '## Summary\n\nok\n\n## Test Plan\n\nok\n\n## Revert Plan\n\nok',
       cwd,
       baseBranch: 'master',
     })).toEqual([]);
   });
 
-  it.fails('keeps the event loop running and gives up on a checker that never exits', async () => {
+  it('keeps the event loop running and gives up on a checker that never exits', async () => {
     const cwd = createTempDir();
     mkdirSync(join(cwd, 'scripts'));
     writeFileSync(
@@ -413,7 +413,7 @@ describe('runRepoLocalPrBodyChecker', () => {
     }
   }, 40_000);
 
-  it.fails('never boots the host app when node is missing from PATH', async () => {
+  it('never boots the host app when node is missing from PATH', async () => {
     const cwd = createTempDir();
     mkdirSync(join(cwd, 'scripts'));
     writeFileSync(join(cwd, 'scripts', 'validate-pr-body-local.mjs'), 'process.exit(0);\n');
