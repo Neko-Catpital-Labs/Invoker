@@ -180,6 +180,7 @@ import { assertResetComplete, buildTaskResetChanges, type TaskResetKind } from '
 
 const TASK_DELTA_CHANNEL = 'task.delta';
 let workflowCounter = 0;
+let printedHugePlanIntakeBreakdown = false;
 
 function isReplaceableAttemptStatus(status: Attempt['status']): boolean {
   return status === 'pending'
@@ -199,6 +200,12 @@ function workflowTimestamp(): Date {
     return new Date(process.env.INVOKER_TEST_FIXED_NOW);
   }
   return new Date();
+}
+
+function shouldPrintHugePlanIntakeBreakdown(taskCount: number): boolean {
+  if (process.env.NODE_ENV !== 'test') return false;
+  if (printedHugePlanIntakeBreakdown) return false;
+  return taskCount >= 500;
 }
 
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
@@ -269,6 +276,7 @@ export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean;
 export type StartExecutionOptions = { limit?: number };
 
 export interface OrchestratorPersistence {
+  runInTransaction?<T>(work: () => T): T;
   saveWorkflow(workflow: {
     id: string;
     name: string;
@@ -298,6 +306,8 @@ export interface OrchestratorPersistence {
     opts?: { skipWorkflowStatusSync?: boolean },
   ): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
+  saveTasks?(workflowId: string, tasks: TaskState[]): void;
+  logEvents?(events: Array<{ taskId: string; eventType: string; payload?: unknown }>): void;
   listWorkflows(): Array<{
     id: string;
     name: string;
@@ -1469,7 +1479,7 @@ export class Orchestrator {
    * Parse a plan definition and create tasks with dependencies.
    * Persists workflow and tasks, publishes deltas via MessageBus.
    */
-  loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean; staged?: boolean }): void {
+  loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean; staged?: boolean }): string {
     const workflowId = nextWorkflowId();
     const localToScoped = buildPlanLocalToScopedIdMap(workflowId, plan.tasks);
     const workflowExternalDependencies = this.normalizePlanExternalDependencies([
@@ -1618,52 +1628,109 @@ export class Orchestrator {
       },
     );
 
-    // ── Pass 2: all validation passed — persist everything ──
-    this.activeWorkflowIds.add(workflowId);
     const createdAt = workflowTimestamp().toISOString();
-
-    this.persistence.saveWorkflow({
-      id: workflowId,
-      name: plan.name,
-      description: plan.description,
-      visualProof: plan.visualProof,
-      repoUrl: plan.repoUrl,
-      intermediateRepoUrl: plan.intermediateRepoUrl,
-      onFinish: plan.onFinish,
-      baseBranch: plan.baseBranch,
-      featureBranch: plan.featureBranch,
-      mergeMode: plan.mergeMode,
-      externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
-      staged: opts?.staged === true,
-      createdAt,
-      updatedAt: createdAt,
-    });
-
     const deltas: TaskDelta[] = [];
-    for (const task of validatedTasks) {
-      this.createAndSync(task);
-      this.persistence.logEvent?.(task.id, 'task.created');
-      const routingReason = resolvedRoutingByTaskId.get(task.id);
-      if (!routingReason) {
-        throw new Error(`Task "${task.id}" is missing resolved executor routing`);
+    const timing = {
+      workflowSaveMs: 0,
+      taskSavesMs: 0,
+      eventLoggingMs: 0,
+      deltaPublishingMs: 0,
+    };
+    const persist = () => {
+      const workflowSaveStarted = performance.now();
+      this.persistence.saveWorkflow({
+        id: workflowId,
+        name: plan.name,
+        description: plan.description,
+        visualProof: plan.visualProof,
+        repoUrl: plan.repoUrl,
+        intermediateRepoUrl: plan.intermediateRepoUrl,
+        onFinish: plan.onFinish,
+        baseBranch: plan.baseBranch,
+        featureBranch: plan.featureBranch,
+        mergeMode: plan.mergeMode,
+        externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
+        staged: opts?.staged === true,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      timing.workflowSaveMs += performance.now() - workflowSaveStarted;
+
+      const taskEvents: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
+      for (const task of validatedTasks) {
+        const routingReason = resolvedRoutingByTaskId.get(task.id);
+        if (!routingReason) {
+          throw new Error(`Task "${task.id}" is missing resolved executor routing`);
+        }
+        taskEvents.push(
+          { taskId: task.id, eventType: 'task.created' },
+          {
+            taskId: task.id,
+            eventType: 'task.executor.routed',
+            payload: buildExecutorRoutedPayload(
+              task.config.runnerKind,
+              task.config.poolId,
+              routingReason,
+            ),
+          },
+        );
+        deltas.push({ type: 'created', task });
       }
-      this.persistence.logEvent?.(task.id, 'task.executor.routed', buildExecutorRoutedPayload(
-        task.config.runnerKind,
-        task.config.poolId,
-        routingReason,
-      ));
-      deltas.push({ type: 'created', task });
+
+      const allTasks = [...validatedTasks, mergeTask];
+      const taskSaveStarted = performance.now();
+      if (this.persistence.saveTasks) {
+        this.persistence.saveTasks(workflowId, allTasks);
+      } else {
+        for (const task of allTasks) {
+          this.persistence.saveTask(workflowId, task);
+        }
+      }
+      timing.taskSavesMs += performance.now() - taskSaveStarted;
+
+      taskEvents.push({ taskId: mergeTask.id, eventType: 'task.created' });
+      const eventLoggingStarted = performance.now();
+      if (this.persistence.logEvents) {
+        this.persistence.logEvents(taskEvents);
+      } else {
+        for (const event of taskEvents) {
+          this.persistence.logEvent?.(event.taskId, event.eventType, event.payload);
+        }
+      }
+      timing.eventLoggingMs += performance.now() - eventLoggingStarted;
+      deltas.push({ type: 'created', task: mergeTask });
+    };
+    if (this.persistence.runInTransaction) {
+      this.persistence.runInTransaction(persist);
+    } else {
+      persist();
     }
 
-    this.createAndSync(mergeTask);
-    this.persistence.logEvent?.(mergeTask.id, 'task.created');
-    deltas.push({ type: 'created', task: mergeTask });
+    this.activeWorkflowIds.add(workflowId);
+    for (const task of [...validatedTasks, mergeTask]) {
+      this.stateMachine.restoreTask(task);
+    }
+    this.queueStatusUiCache = null;
 
+    const deltaPublishingStarted = performance.now();
     for (const delta of deltas) {
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     }
+    timing.deltaPublishingMs += performance.now() - deltaPublishingStarted;
+
+    if (shouldPrintHugePlanIntakeBreakdown(plan.tasks.length)) {
+      printedHugePlanIntakeBreakdown = true;
+      console.log(
+        `huge-plan loadPlan breakdown tasks=${plan.tasks.length} ` +
+        `workflowSaveMs=${timing.workflowSaveMs.toFixed(2)} ` +
+        `taskSavesMs=${timing.taskSavesMs.toFixed(2)} ` +
+        `eventLoggingMs=${timing.eventLoggingMs.toFixed(2)} ` +
+        `deltaPublishingMs=${timing.deltaPublishingMs.toFixed(2)}`,
+      );
+    }
 
     this.reconcileMergeLeaves(workflowId);
+    return workflowId;
   }
 
   /**
