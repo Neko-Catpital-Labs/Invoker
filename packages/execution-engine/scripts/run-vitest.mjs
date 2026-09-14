@@ -1,11 +1,19 @@
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const forwardedArgs = process.argv.slice(2);
 const vitestArgs = forwardedArgs[0] === "--" ? forwardedArgs.slice(1) : forwardedArgs;
+const env = {
+  ...process.env,
+  INVOKER_AUTO_FIX_PAUSE_FILE: process.env.INVOKER_AUTO_FIX_PAUSE_FILE
+    ?? join(tmpdir(), `invoker-execution-engine-test-auto-fix-pause-${process.pid}.json`),
+};
 
 const child = spawn("vitest", ["run", ...vitestArgs], {
   stdio: "inherit",
   shell: process.platform === "win32",
+  env,
 });
 
 child.on("error", (error) => {

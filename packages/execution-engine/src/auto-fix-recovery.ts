@@ -69,6 +69,21 @@ export const AUTO_FIX_RECREATE_CHANNEL = 'invoker:recreate-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
 const AUTO_FIX_RECREATE_ACTION_TYPE = 'auto-recreate';
+
+export type RecoveryWorkerAuditAction = 'wakeup' | 'scan' | 'submit' | 'skip';
+
+export function classifyAutoFixRecoveryPhase(
+  phase: string,
+  details: Record<string, unknown> = {},
+): RecoveryWorkerAuditAction | undefined {
+  if (phase === 'delta-failed') return 'wakeup';
+  if (phase === 'poll-failed' || phase === 'schedule-enter') return 'scan';
+  if (phase === 'schedule-enqueued' || phase === 'worker-autofix-submitted') return 'submit';
+  if (phase === 'schedule-skip' || phase.endsWith('-skip')) return 'skip';
+  if (details.reason && (phase.includes('skip') || phase.includes('error'))) return 'skip';
+  return undefined;
+}
+
 /**
  * A failed task's auto-fix attempt is a real, capacity-limited agent
  * dispatch, not a free retry. If the provider itself is out of quota, every
