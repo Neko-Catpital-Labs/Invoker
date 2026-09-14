@@ -48,11 +48,14 @@ import {
 import { logCaughtException } from './logging.js';
 import {
   createDefaultMessageBus,
-  createTraceId,
   discoverLiveOwner,
   withTimeout,
   type LiveOwnerInfo,
 } from './live-owner-bus.js';
+import {
+  formatLiveRunJsonOutput,
+  submitPlanToLiveOwner,
+} from './live-plan-submit.js';
 import {
   assertInvokerWakeLineWithinBudget,
   formatInvokerWakeLine,
@@ -95,12 +98,6 @@ type RunResult = {
   completedTasks: number;
   failedTasks: number;
   mode: 'standalone' | 'live';
-};
-
-type LiveSubmissionResult = {
-  workflowId: string;
-  tasks: unknown[];
-  ownerId?: string;
 };
 
 type CliDeps = {
@@ -1032,44 +1029,6 @@ async function runRetryTasks(options: RetryTasksOptions, deps: CliDeps): Promise
   }
 }
 
-function validateLiveSubmissionResponse(raw: unknown): LiveSubmissionResult {
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`Live owner returned invalid headless.run response: expected object, got ${raw === null ? 'null' : typeof raw}`);
-  }
-  const response = raw as Record<string, unknown>;
-  if (typeof response.workflowId !== 'string' || response.workflowId.length === 0) {
-    throw new Error('Live owner returned invalid headless.run response: missing workflowId');
-  }
-  if (!Array.isArray(response.tasks)) {
-    throw new Error('Live owner returned invalid headless.run response: missing tasks array');
-  }
-  return {
-    workflowId: response.workflowId,
-    tasks: response.tasks,
-    ownerId: typeof response.ownerId === 'string' ? response.ownerId : undefined,
-  };
-}
-
-async function submitPlanToLiveOwner(
-  planPath: string,
-  bus: MessageBus,
-  owner: LiveOwnerInfo,
-  timeoutMs = 15_000,
-): Promise<LiveSubmissionResult> {
-  const absolutePlanPath = resolve(planPath);
-  const raw = await withTimeout(
-    bus.request('headless.run', {
-      planPath: absolutePlanPath,
-      traceId: createTraceId('invoker-cli.headless.run'),
-    }),
-    timeoutMs,
-  );
-  return {
-    ...validateLiveSubmissionResponse(raw),
-    ownerId: owner.ownerId,
-  };
-}
-
 function loadRuntimeConfig(configPath?: string): CliRuntimeConfig {
   if (!configPath) return {};
   const resolvedPath = resolve(configPath);
@@ -1236,6 +1195,10 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
 
 function printRunResult(result: RunResult, json: boolean): void {
   if (json) {
+    if (result.mode === 'live' && result.status === 'success') {
+      process.stdout.write(formatLiveRunJsonOutput(result.workflowId));
+      return;
+    }
     process.stdout.write(`${JSON.stringify({ workflow: { id: result.workflowId, status: result.status }, result })}\n`);
   } else if (result.mode === 'live') {
     process.stdout.write(`Delegated to live owner - workflow: ${result.workflowId}\n`);
