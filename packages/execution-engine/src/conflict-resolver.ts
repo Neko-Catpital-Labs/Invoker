@@ -87,23 +87,36 @@ function deriveRemoteManagedWorkspaceInfo(
     : workspacePath.endsWith('/')
     ? workspacePath.slice(0, -1)
     : workspacePath;
-  const match = normalized.match(/^(.*)\/worktrees\/([a-f0-9]{12})\/[^/]+$/);
-  if (match) {
-    return {
-      invokerHome: match[1] || target.remoteInvokerHome || `~/.invoker`,
-      repoHash: match[2],
-      managedPrefix: `${match[1]}/worktrees/${match[2]}`,
-    };
-  }
-
-  if (!target.remoteInvokerHome) return undefined;
   const hashMatch = normalized.match(/\/worktrees\/([a-f0-9]{12})\/[^/]+$/);
   if (!hashMatch) return undefined;
+  const repoHash = hashMatch[1];
+  // Prefer the selected SSH target's remoteInvokerHome over any owner-local
+  // prefix persisted on the task (e.g. /Users/... from a macOS orchestrator).
+  const configuredHome = target.remoteInvokerHome?.replace(/\/+$/, '');
+  const parsedHome = normalized.match(/^(.*)\/worktrees\//)?.[1]?.replace(/\/+$/, '');
+  const invokerHome = configuredHome || parsedHome || '~/.invoker';
   return {
-    invokerHome: target.remoteInvokerHome,
-    repoHash: hashMatch[1],
-    managedPrefix: `${target.remoteInvokerHome}/worktrees/${hashMatch[1]}`,
+    invokerHome,
+    repoHash,
+    managedPrefix: `${invokerHome}/worktrees/${repoHash}`,
   };
+}
+
+/**
+ * Rewrite a managed worktree path onto the selected remote target's invoker home
+ * while preserving repo hash and worktree leaf identity.
+ */
+export function canonicalizeRemoteManagedWorkspacePath(
+  workspacePath: string,
+  remoteInvokerHome: string | undefined,
+): string {
+  const normalized = workspacePath.endsWith('/')
+    ? workspacePath.slice(0, -1)
+    : workspacePath;
+  const match = normalized.match(/\/worktrees\/([a-f0-9]{12})\/([^/]+)$/);
+  if (!match) return workspacePath;
+  const home = (remoteInvokerHome || '~/.invoker').replace(/\/+$/, '');
+  return `${home}/worktrees/${match[1]}/${match[2]}`;
 }
 
 export async function resolveRemoteBranchOwnerPath(
@@ -311,14 +324,20 @@ export function buildRemoteAgentCommand(
   return { shellCommand: cmd, sessionId };
 }
 
+/** How many recent `task.executor.selected` events to check for a usable poolMemberId before giving up. */
+const RECENT_EXECUTOR_SELECTED_EVENTS_TO_CHECK = 20;
+
 export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
   const direct = (task.config as { poolMemberId?: string }).poolMemberId;
   if (direct) return direct;
 
-  const events = host.persistence.getEvents?.(taskId) ?? [];
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (event?.eventType !== 'task.executor.selected' || !event.payload) continue;
+  const events = host.persistence.getRecentEventsOfType?.(
+    taskId,
+    'task.executor.selected',
+    RECENT_EXECUTOR_SELECTED_EVENTS_TO_CHECK,
+  ) ?? [];
+  for (const event of events) {
+    if (!event.payload) continue;
     try {
       const payload = JSON.parse(event.payload) as { poolMemberId?: unknown };
       if (typeof payload.poolMemberId === 'string' && payload.poolMemberId.trim()) {

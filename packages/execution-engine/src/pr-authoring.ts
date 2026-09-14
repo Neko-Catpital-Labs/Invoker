@@ -406,12 +406,59 @@ function normalizeReviewArtifactProviderId(url: string, providerId: string | und
   return providerId;
 }
 
+function extractJsonPayload(raw: string): string {
+  const trimmed = raw.trim();
+  let lastValid: string | undefined;
+  for (let start = 0; start < trimmed.length; start += 1) {
+    if (trimmed[start] !== '{') continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < trimmed.length; end += 1) {
+      const character = trimmed[end];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (character === '"') {
+        inString = true;
+      } else if (character === '{') {
+        depth += 1;
+      } else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = trimmed.slice(start, end + 1);
+          try {
+            JSON.parse(candidate);
+            lastValid = candidate;
+            start = end;
+          } catch {}
+          break;
+        }
+      }
+    }
+  }
+  return lastValid ?? trimmed;
+}
+
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.trim());
   } catch {
-    throw new Error('make-pr stack publisher must output JSON');
+    try {
+      parsed = JSON.parse(extractJsonPayload(raw));
+    } catch {
+      throw new Error('make-pr stack publisher must output JSON');
+    }
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -731,6 +778,7 @@ export function spawnAgentPrAuthorViaRegistry(
   cwd: string,
   agent: ExecutionAgent,
   driver?: SessionDriver,
+  extraEnv: NodeJS.ProcessEnv = {},
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
@@ -741,7 +789,7 @@ export function spawnAgentPrAuthorViaRegistry(
     const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: cleanElectronEnv(),
+      env: { ...cleanElectronEnv(), ...extraEnv },
       detached: process.platform !== 'win32',
     });
 

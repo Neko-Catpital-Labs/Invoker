@@ -17,3 +17,5 @@ export * from './attempt-policy.js';
 export * from './task-reset-policy.js';
 export * from './state-invariants.js';
 export * from './repo-default-branch.js';
+export * from './verification-policy.js';
+export * from './task-freshness.js';

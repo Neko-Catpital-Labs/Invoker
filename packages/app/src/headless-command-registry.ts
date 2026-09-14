@@ -5,23 +5,40 @@ export interface HeadlessCommandDefinition {
   readonly kind: HeadlessCommandKind;
 }
 
+export type HeadlessSetSubcommandScope = 'task' | 'workflow';
+
+export interface HeadlessSetSubcommandDefinition {
+  readonly name: string;
+  readonly scope: HeadlessSetSubcommandScope;
+}
+
 export const HEADLESS_SET_SUBCOMMANDS = [
-  'command',
-  'prompt',
-  'pool',
-  'executor',
-  'agent',
-  'task-pool',
-  'merge-mode',
-  'fix-prompt',
-  'fix-context',
-  'gate-policy',
-  'workflow',
-  'task',
-] as const;
+  { name: 'command', scope: 'task' },
+  { name: 'prompt', scope: 'task' },
+  { name: 'pool', scope: 'task' },
+  { name: 'executor', scope: 'task' },
+  { name: 'agent', scope: 'task' },
+  { name: 'model', scope: 'task' },
+  { name: 'task-pool', scope: 'task' },
+  { name: 'merge-mode', scope: 'workflow' },
+  { name: 'fix-prompt', scope: 'task' },
+  { name: 'fix-context', scope: 'task' },
+  { name: 'gate-policy', scope: 'task' },
+  { name: 'workflow', scope: 'workflow' },
+  { name: 'task', scope: 'task' },
+] as const satisfies readonly HeadlessSetSubcommandDefinition[];
+
+export type HeadlessSetSubcommand = (typeof HEADLESS_SET_SUBCOMMANDS)[number]['name'];
 
 export function formatHeadlessSetSubcommands(separator: string): string {
-  return HEADLESS_SET_SUBCOMMANDS.join(separator);
+  return HEADLESS_SET_SUBCOMMANDS.map((definition) => definition.name).join(separator);
+}
+
+export function findHeadlessSetSubcommandScope(
+  subcommand: string | undefined,
+): HeadlessSetSubcommandScope | undefined {
+  if (!subcommand) return undefined;
+  return HEADLESS_SET_SUBCOMMANDS.find((definition) => definition.name === subcommand)?.scope;
 }
 
 export const HEADLESS_COMMANDS = [
@@ -29,6 +46,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'query', kind: 'read' },
   { name: 'set', kind: 'special' },
   { name: 'migrate-compat', kind: 'write' },
+  { name: 'repair-filing', kind: 'write' },
   { name: 'install-skills', kind: 'special' },
   { name: 'watch', kind: 'read' },
   { name: 'run', kind: 'write' },
@@ -56,8 +74,10 @@ export const HEADLESS_COMMANDS = [
   { name: 'cancel', kind: 'write' },
   { name: 'cancel-workflow', kind: 'write' },
   { name: 'delete-task', kind: 'write' },
+  { name: 'close-task', kind: 'write' },
   { name: 'delete', kind: 'write' },
   { name: 'delete-all', kind: 'write' },
+  { name: 'reset-autofix-budget', kind: 'write' },
   { name: 'open-terminal', kind: 'read' },
   { name: 'query-select', kind: 'read' },
   { name: 'worker', kind: 'read' },

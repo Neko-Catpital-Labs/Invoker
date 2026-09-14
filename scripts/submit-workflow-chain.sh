@@ -214,6 +214,48 @@ resolve_workflow_feature_branch() {
   return 1
 }
 
+extract_concrete_ext_dep_workflow_ids() {
+  local file="$1"
+  awk '
+    function normalize(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      return v
+    }
+    BEGIN { in_ext=0 }
+    {
+      line=$0
+      if (line ~ /^[^[:space:]]/ && line !~ /^externalDependencies:[[:space:]]*$/) {
+        in_ext=0
+      }
+      if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
+        in_ext=1
+        next
+      }
+      if (in_ext && line ~ /^[[:space:]]*-[[:space:]]*workflowId:[[:space:]]*/) {
+        split(line, parts, "workflowId:")
+        id=normalize(parts[2])
+        if (id != "" && id != "__UPSTREAM_WORKFLOW_ID__") print id
+      }
+    }
+  ' "$file" | awk 'NF && !seen[$0]++'
+}
+
+rewrite_plan_base_branch() {
+  local src="$1"
+  local base_branch="$2"
+  local out="$3"
+  if ! matches_pattern "^baseBranch:" "$src"; then
+    echo "Plan is missing top-level baseBranch: $src" >&2
+    return 1
+  fi
+  sed -E "s|^baseBranch:.*$|baseBranch: ${base_branch}|" "$src" > "$out"
+  if ! matches_pattern "^baseBranch:[[:space:]]*${base_branch}$" "$out"; then
+    echo "Plan baseBranch did not update to '${base_branch}': $out" >&2
+    return 1
+  fi
+}
+
 wait_for_external_merge_gate() {
   local workflow_id="$1"
   local merge_id="__merge__${workflow_id}"
@@ -406,19 +448,48 @@ fi
 
 GATE_POLICY="completed"
 GATE_POLICY_EXPLICIT=0
-if [[ "${1:-}" == "--gate-policy" ]]; then
-  GATE_POLICY="${2:-}"
-  GATE_POLICY_EXPLICIT=1
-  shift 2
-fi
+ONTO_WORKFLOW_ID=""
+ONTO_WORKFLOW_EXPLICIT=0
+
+while true; do
+  case "${1:-}" in
+    --gate-policy)
+      GATE_POLICY="${2:-}"
+      GATE_POLICY_EXPLICIT=1
+      shift 2
+      ;;
+    --onto-workflow)
+      ONTO_WORKFLOW_ID="${2:-}"
+      ONTO_WORKFLOW_EXPLICIT=1
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      echo "Usage: $0 [--gate-policy completed|review_ready] [--onto-workflow <id>] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 if [[ "$GATE_POLICY" != "completed" && "$GATE_POLICY" != "review_ready" ]]; then
   echo "Invalid --gate-policy '$GATE_POLICY' (expected completed|review_ready)" >&2
   exit 1
 fi
 
+if [[ "$ONTO_WORKFLOW_EXPLICIT" -eq 1 && -z "$ONTO_WORKFLOW_ID" ]]; then
+  echo "--onto-workflow requires a workflow id" >&2
+  exit 1
+fi
+
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 [--gate-policy completed|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
+  echo "Usage: $0 [--gate-policy completed|review_ready] [--onto-workflow <id>] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
   exit 1
 fi
 
@@ -450,7 +521,34 @@ for i in "${!INPUT_PLANS[@]}"; do
   fi
 
   submit_plan="$plan"
-  if [[ "$i" -gt 0 ]]; then
+  if [[ "$i" -eq 0 ]]; then
+    onto_id="$ONTO_WORKFLOW_ID"
+    if [[ -z "$onto_id" ]]; then
+      concrete_ids=()
+      while IFS= read -r cid; do
+        [[ -n "$cid" ]] && concrete_ids+=("$cid")
+      done < <(extract_concrete_ext_dep_workflow_ids "$plan")
+      if [[ "${#concrete_ids[@]}" -eq 1 ]]; then
+        onto_id="${concrete_ids[0]}"
+        log_chain "auto-detected --onto-workflow from plan[0] concrete externalDependency: $onto_id"
+      elif [[ "${#concrete_ids[@]}" -gt 1 ]]; then
+        log_chain "plan[0] has ${#concrete_ids[@]} concrete externalDependencies; skipping auto --onto-workflow (fan-in keeps trunk baseBranch)"
+      fi
+    fi
+    if [[ -n "$onto_id" ]]; then
+      onto_feature="$(resolve_workflow_feature_branch "$onto_id" || true)"
+      if [[ -z "${onto_feature:-}" ]]; then
+        echo "Failed to resolve featureBranch for --onto-workflow: $onto_id" >&2
+        exit 1
+      fi
+      _onto_tmp="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-onto.XXXXXX")"
+      submit_plan="${_onto_tmp}.yaml"
+      rm -f "$_onto_tmp"
+      rewrite_plan_base_branch "$plan" "$onto_feature" "$submit_plan"
+      RENDERED_PLANS+=("$submit_plan")
+      log_chain "rewrote plan[0] baseBranch -> $onto_feature (onto-workflow=$onto_id)"
+    fi
+  elif [[ "$i" -gt 0 ]]; then
     if [[ -z "$prev_wf_id" ]]; then
       echo "Internal error: missing previous workflow id before rendering chain step $((i+1))." >&2
       exit 1

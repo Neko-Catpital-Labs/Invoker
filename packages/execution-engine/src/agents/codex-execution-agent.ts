@@ -85,7 +85,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
     if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
-    else if (this.fullAuto) args.push('--full-auto');
+    else if (this.fullAuto) args.push('--sandbox', 'workspace-write');
     args.push(...this.buildModelArgs(options.executionModel), fullPrompt);
     return { cmd: this.command, args, sessionId, fullPrompt };
   }
@@ -101,7 +101,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
     if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
-    else if (this.fullAuto) args.push('--full-auto');
+    else if (this.fullAuto) args.push('--sandbox', 'workspace-write');
     args.push(...this.buildModelArgs(options.executionModel), prompt);
     return { cmd: this.command, args, sessionId };
   }

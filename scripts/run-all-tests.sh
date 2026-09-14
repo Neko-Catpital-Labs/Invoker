@@ -6,6 +6,7 @@ cd "$ROOT"
 
 EXTENDED="${INVOKER_TEST_ALL_EXTENDED:-0}"
 DANGEROUS="${INVOKER_TEST_ALL_DANGEROUS:-0}"
+NIGHTLY="${INVOKER_TEST_ALL_NIGHTLY:-0}"
 FAIL_FAST="${INVOKER_TEST_ALL_FAIL_FAST:-0}"
 RESUME="${INVOKER_TEST_ALL_RESUME:-0}"
 FORCE_RERUN="${INVOKER_TEST_ALL_FORCE_RERUN:-0}"
@@ -50,6 +51,52 @@ fi
 
 if [ -n "${TMPDIR:-}" ]; then
   mkdir -p "$TMPDIR"
+fi
+
+# Nightly regression tier: an orthogonal mode driven entirely by
+# scripts/test-suites/regression-inventory.yaml, independent of the
+# required/extended/dangerous suite-file discovery below. Exits here so it
+# cannot interact with that discovery, shard, or proof-threshold logic.
+if [ "$NIGHTLY" = "1" ]; then
+  echo "==> Nightly regression tier: hermetic preflight (manifest validation)"
+  if ! node "$ROOT/scripts/regression-inventory.mjs" validate; then
+    echo "ERROR: regression-inventory manifest failed hermetic preflight; refusing to launch nightly candidates" >&2
+    exit 1
+  fi
+
+  mapfile -t NIGHTLY_IDS < <(node "$ROOT/scripts/regression-inventory.mjs" list --tier nightly --field id)
+  mapfile -t NIGHTLY_COMMANDS < <(node "$ROOT/scripts/regression-inventory.mjs" list --tier nightly --field command)
+  if [ "${#NIGHTLY_IDS[@]}" -eq 0 ]; then
+    echo "ERROR: hermetic preflight passed but no nightly-tier candidates were found" >&2
+    exit 1
+  fi
+
+  nightly_failed=0
+  nightly_executed=0
+  for i in "${!NIGHTLY_IDS[@]}"; do
+    id="${NIGHTLY_IDS[$i]}"
+    command="${NIGHTLY_COMMANDS[$i]}"
+    echo ""
+    echo "==> nightly: $id"
+    if ( cd "$ROOT" && eval "$command" ); then
+      nightly_executed=$((nightly_executed + 1))
+      echo "==> nightly: $id passed"
+    else
+      nightly_failed=1
+      echo "==> nightly: $id FAILED"
+    fi
+  done
+
+  echo ""
+  echo "======== Nightly Summary ========"
+  echo "Candidates: ${#NIGHTLY_IDS[@]}"
+  echo "Passed: $nightly_executed"
+  echo "Failed: $((${#NIGHTLY_IDS[@]} - nightly_executed))"
+
+  if [ "$nightly_failed" -ne 0 ]; then
+    exit 1
+  fi
+  exit 0
 fi
 
 MODE_KEY="required"

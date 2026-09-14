@@ -9,18 +9,110 @@
 
 import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, resolve } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function resolveYamlModulePath(scriptDir) {
-  const localRepoRoot = resolve(scriptDir, '../../..');
-  const localYamlPath = resolve(localRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-  if (existsSync(localYamlPath)) {
-    return localYamlPath;
+const FRESHNESS_KEYS = new Set(['watchPaths', 'pathPreconditions', 'guardedBehaviorIds']);
+const PATH_PRECONDITION_KEYS = new Set(['path', 'expected']);
+const GUARDED_BEHAVIOR_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNormalizedFreshnessPath(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  if (normalized === '' || normalized.length > 4096 || normalized.startsWith('/') || normalized.includes('\\')) return false;
+  for (let index = 0; index < normalized.length; index += 1) {
+    const code = normalized.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return false;
   }
+  return normalized.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+function validateTaskFreshness(errors, taskId, freshness) {
+  const field = 'freshness';
+  const invalid = (nestedField, value, message) => {
+    errors.push({ errorType: 'invalid_freshness_value', field: nestedField ? `${field}.${nestedField}` : field, taskId, message, value });
+  };
+
+  if (!isRecord(freshness)) {
+    invalid('', freshness, `Task "${taskId}" freshness must be an object when provided`);
+    return;
+  }
+  const unknownKey = Object.keys(freshness).find((key) => !FRESHNESS_KEYS.has(key));
+  if (unknownKey) {
+    invalid(unknownKey, freshness[unknownKey], `Task "${taskId}" freshness has unsupported field "${unknownKey}"`);
+    return;
+  }
+
+  for (const key of ['watchPaths', 'guardedBehaviorIds']) {
+    if (freshness[key] === undefined) continue;
+    if (!Array.isArray(freshness[key])) {
+      invalid(key, freshness[key], `Task "${taskId}" freshness.${key} must be an array`);
+      continue;
+    }
+    freshness[key].forEach((entry, index) => {
+      const valid = key === 'watchPaths'
+        ? isNormalizedFreshnessPath(entry)
+        : typeof entry === 'string' && GUARDED_BEHAVIOR_ID_PATTERN.test(entry.trim());
+      if (!valid) invalid(`${key}[${index}]`, entry, `Task "${taskId}" freshness.${key}[${index}] has an invalid value`);
+    });
+  }
+
+  if (freshness.pathPreconditions === undefined) return;
+  if (!Array.isArray(freshness.pathPreconditions)) {
+    invalid('pathPreconditions', freshness.pathPreconditions, `Task "${taskId}" freshness.pathPreconditions must be an array`);
+    return;
+  }
+  const expectations = new Map();
+  freshness.pathPreconditions.forEach((entry, index) => {
+    const entryField = `pathPreconditions[${index}]`;
+    if (!isRecord(entry)) {
+      invalid(entryField, entry, `Task "${taskId}" ${entryField} must be an object`);
+      return;
+    }
+    const unknownEntryKey = Object.keys(entry).find((key) => !PATH_PRECONDITION_KEYS.has(key));
+    if (unknownEntryKey) {
+      invalid(`${entryField}.${unknownEntryKey}`, entry[unknownEntryKey], `Task "${taskId}" ${entryField} has unsupported field "${unknownEntryKey}"`);
+      return;
+    }
+    if (!isNormalizedFreshnessPath(entry.path)) invalid(`${entryField}.path`, entry.path, `Task "${taskId}" ${entryField}.path must be a normalized repo-relative path`);
+    if (entry.expected !== 'present' && entry.expected !== 'absent') invalid(`${entryField}.expected`, entry.expected, `Task "${taskId}" ${entryField}.expected must be "present" or "absent"`);
+    if (isNormalizedFreshnessPath(entry.path) && (entry.expected === 'present' || entry.expected === 'absent')) {
+      const path = entry.path.trim();
+      const previous = expectations.get(path);
+      if (previous !== undefined && previous !== entry.expected) invalid('pathPreconditions', entry, `Task "${taskId}" freshness.pathPreconditions has conflicting expectations for path "${path}"`);
+      expectations.set(path, entry.expected);
+    }
+  });
+}
+
+/**
+ * Locate the Invoker checkout that owns this doctor script, for `yaml` when
+ * it isn't resolvable as a real installed dependency. Dev-convenience/other-
+ * install-shape fallback — see importYaml below. Checked in order:
+ * 1. `INVOKER_REPO_ROOT` (explicit override, same convention used elsewhere
+ *    in the app, e.g. packages/contracts/src/repo-root.ts).
+ * 2. The local relative path (this script running from inside a live
+ *    Invoker checkout or worktree).
+ * 3. The shared checkout behind a linked git worktree's common dir.
+ * 4. `sourceRepoRoot` recorded in ~/.invoker/bundled-skills.json by the last
+ *    `scripts/setup-agent-skills.sh` install.
+ */
+function resolveInvokerRepoRoot(scriptDir) {
+  const hasWorkspaceMarker = (dir) => existsSync(resolve(dir, 'pnpm-workspace.yaml'));
+
+  const envRoot = process.env.INVOKER_REPO_ROOT;
+  if (envRoot && hasWorkspaceMarker(envRoot)) return resolve(envRoot);
+
+  const localRepoRoot = resolve(scriptDir, '../../..');
+  if (hasWorkspaceMarker(localRepoRoot)) return localRepoRoot;
 
   try {
     const gitCommonDir = execSync('git rev-parse --git-common-dir', {
@@ -29,22 +121,60 @@ function resolveYamlModulePath(scriptDir) {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     const sharedRepoRoot = resolve(scriptDir, gitCommonDir, '..');
-    const sharedYamlPath = resolve(sharedRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
-    if (existsSync(sharedYamlPath)) {
-      return sharedYamlPath;
+    if (hasWorkspaceMarker(sharedRepoRoot)) return sharedRepoRoot;
+  } catch {
+    // Fall through to the manifest-based lookup below.
+  }
+
+  try {
+    const invokerHome = process.env.INVOKER_DB_DIR ?? resolve(homedir(), '.invoker');
+    const manifestPath = resolve(invokerHome, 'bundled-skills.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (typeof manifest.sourceRepoRoot === 'string' && hasWorkspaceMarker(manifest.sourceRepoRoot)) {
+      return resolve(manifest.sourceRepoRoot);
     }
   } catch {
-    // Ignore git lookup failure and fall through to the explicit error below.
+    // Fall through to the explicit error at the call site.
+  }
+
+  return null;
+}
+
+/**
+ * `yaml` is a real declared dependency of the published `invoker-cli` npm
+ * package (packages/npm-cli/package.json), so when this script runs from
+ * inside that package's install (npm places `yaml` in an ancestor
+ * node_modules, e.g. <install-root>/node_modules/yaml sitting above
+ * <install-root>/vendor/skills/plan-to-invoker/scripts), a plain bare
+ * import resolves it via Node's own module resolution — no custom path
+ * logic needed. Fall back to locating a real Invoker checkout only when
+ * that fails, e.g. a machine-level skill install (~/.claude/skills/...)
+ * copied via `installBundledSkills()`, which has no such node_modules
+ * anywhere nearby.
+ */
+async function importYaml(scriptDir) {
+  try {
+    return await import('yaml');
+  } catch {
+    // Fall through to the checkout-based lookup below.
+  }
+
+  const invokerRepoRoot = resolveInvokerRepoRoot(scriptDir);
+  if (invokerRepoRoot) {
+    const repoYamlPath = resolve(invokerRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+    if (existsSync(repoYamlPath)) return import(repoYamlPath);
   }
 
   throw new Error(
-    'Unable to resolve yaml runtime. Checked packages/app/node_modules/yaml/dist/index.js in the current worktree and the shared git checkout.',
+    "Unable to resolve yaml runtime. Checked a plain 'yaml' import (present if this script is "
+    + 'running from inside the invoker-cli npm install, which declares it as a real dependency) '
+    + 'and packages/app/node_modules/yaml/dist/index.js in a resolvable Invoker checkout '
+    + '(INVOKER_REPO_ROOT, a live git checkout, or ~/.invoker/bundled-skills.json). Set '
+    + 'INVOKER_REPO_ROOT to an Invoker checkout if neither applies.',
   );
 }
 
-const yamlPath = resolveYamlModulePath(__dirname);
-
-const { parse: parseYaml } = await import(yamlPath);
+const { parse: parseYaml } = await importYaml(__dirname);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
 const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review', 'no_op'];
@@ -484,6 +614,64 @@ function validateReviewGate(reviewGate, errors) {
   });
 }
 
+// Credentials in a repoUrl must never reach validator output — errors are printed to stderr and logged.
+function redactRepoUrlUserInfo(repoUrl) {
+  if (typeof repoUrl !== 'string') return repoUrl;
+  try {
+    const parsed = new URL(repoUrl);
+    if (parsed.username === '' && parsed.password === '') return repoUrl;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    // `new URL` rejects some URLs git still accepts (e.g. file://user:pass@/path).
+    return repoUrl.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@]*@/, '$1');
+  }
+}
+
+// A base ref may be remote-qualified (`origin/master`, `upstream/main`,
+// `refs/remotes/upstream/release`), and repoUrl is only one remote, so a leading segment
+// that could name a different remote yields a second candidate. Reporting `absent` only
+// when every candidate is missing keeps a documented remote-qualified base from being
+// rejected, while an ordinary `feature/foo` still needs its own literal ref.
+function baseBranchRefCandidates(baseBranch) {
+  const ref = baseBranch.trim();
+  const names = [];
+  const afterFirstSegment = (value) => {
+    const slash = value.indexOf('/');
+    return slash > 0 && slash < value.length - 1 ? value.slice(slash + 1) : undefined;
+  };
+
+  if (ref.startsWith('refs/heads/')) {
+    names.push(ref.slice('refs/heads/'.length));
+  } else if (ref.startsWith('refs/remotes/')) {
+    names.push(afterFirstSegment(ref.slice('refs/remotes/'.length)));
+  } else if (!ref.startsWith('refs/')) {
+    names.push(ref, afterFirstSegment(ref));
+  }
+
+  return [...new Set(names.filter(Boolean))].map((name) => `refs/heads/${name}`);
+}
+
+function checkBaseBranchOnRemote(repoUrl, baseBranch) {
+  const wantRefs = baseBranchRefCandidates(baseBranch);
+  if (wantRefs.length === 0) return 'unknown';
+  try {
+    const out = execFileSync('git', ['ls-remote', '--heads', repoUrl, '--', ...wantRefs], {
+      timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    });
+    const matched = out
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .some((parts) => wantRefs.includes(parts[1]));
+    return matched ? 'present' : 'absent';
+  } catch {
+    return 'unknown';
+  }
+}
+
 function validatePlan(yamlContent, repoRoot) {
   const errors = [];
 
@@ -526,7 +714,7 @@ function validatePlan(yamlContent, repoRoot) {
       errorType: 'conflicting_fields',
       field: 'repoUrl',
       message: 'Plan cannot set both "scratch: true" and "repoUrl" — scratch plans run with no git repo',
-      value: raw.repoUrl,
+      value: redactRepoUrlUserInfo(raw.repoUrl),
     });
   } else if (!isScratch && !hasRepoUrl) {
     errors.push({
@@ -575,6 +763,15 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
+  if (raw.onFinish === 'none' && raw.mergeMode === 'external_review') {
+    errors.push({
+      errorType: 'conflicting_fields',
+      field: 'mergeMode',
+      message: '"mergeMode: external_review" cannot be combined with "onFinish: none". External review publishes a pull request, while onFinish: none authorizes no publication.',
+      value: raw.mergeMode,
+    });
+  }
+
   if (raw.runnerKind !== undefined) {
     errors.push({
       errorType: 'unsupported_field',
@@ -582,6 +779,26 @@ function validatePlan(yamlContent, repoRoot) {
       message: '"runnerKind" is no longer supported. Omit it for the default worktree executor, use "poolId" for configured execution pools, or use "dockerImage" for Docker tasks.',
       value: raw.runnerKind,
     });
+  }
+
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    errors.push({
+      errorType: 'invalid_field_type',
+      field: 'poolId',
+      message: 'Plan poolId must be a non-empty string when provided',
+      value: raw.poolId,
+    });
+  }
+
+  for (const field of ['autoFix', 'autoFixRetries']) {
+    if (Object.prototype.hasOwnProperty.call(raw, field)) {
+      errors.push({
+        errorType: 'unsupported_field',
+        field,
+        message: `Plan-level "${field}" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+        value: raw[field],
+      });
+    }
   }
 
   // Validate description required when onFinish is pull_request or merge
@@ -633,17 +850,55 @@ function validatePlan(yamlContent, repoRoot) {
     });
   }
 
-  // Check for stacked baseBranch defaulting to master
-  const hasConcreteExtDep = allExtDeps.some(
-    (dep) => dep.workflowId && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
+  const TRUNK_BASE_BRANCHES = new Set(['master', 'main', 'trunk', 'develop']);
+  const concreteExtDeps = allExtDeps.filter(
+    (dep) => typeof dep.workflowId === 'string'
+      && dep.workflowId.trim() !== ''
+      && dep.workflowId !== '__UPSTREAM_WORKFLOW_ID__',
   );
+  const isMergeGateDep = (dep) =>
+    dep.taskId === undefined || dep.taskId === null || dep.taskId === '__merge__';
+  const concreteMergeGateDeps = concreteExtDeps.filter(isMergeGateDep);
   const baseBranch = raw.baseBranch ?? 'master';
-  if (hasConcreteExtDep && baseBranch === 'master') {
+  const isTrunkBase = TRUNK_BASE_BRANCHES.has(baseBranch);
+  const isIntentionalFanIn = concreteExtDeps.length >= 2;
+  if (
+    isTrunkBase
+    && !isIntentionalFanIn
+    && concreteExtDeps.length === 1
+    && concreteMergeGateDeps.length === 1
+  ) {
     errors.push({
       errorType: 'stacked_basebranch_default',
       field: 'baseBranch',
-      message: "Plan has externalDependencies but baseBranch is 'master'. For stacked workflows, set baseBranch to the upstream workflow's featureBranch, or use step-submit-stacked to auto-resolve.",
+      message: `Plan has a single concrete upstream merge-gate externalDependency but baseBranch is trunk '${baseBranch}'. Stacked-onto means externalDependencies on that workflow's __merge__ AND baseBranch == that workflow's featureBranch. Gate-only wait is not stacked-onto. Set baseBranch to the upstream featureBranch, or use submit-workflow-chain.sh --onto-workflow / step-submit-stacked.`,
+      value: baseBranch,
     });
+  }
+
+  const onFinishValue = raw.onFinish ?? 'pull_request';
+  const featureBranch = typeof raw.featureBranch === 'string' ? raw.featureBranch.trim() : '';
+  if (onFinishValue === 'none' && featureBranch !== '') {
+    errors.push({
+      errorType: 'onfinish_none_stack_base_risk',
+      field: 'onFinish',
+      message: `Plan sets onFinish: none with featureBranch '${featureBranch}'. A workflow that will be a stack base for dependents must publish that featureBranch to origin (use onFinish: pull_request or merge); otherwise downstream merge gates fail with base branch not found on remote.`,
+      value: onFinishValue,
+    });
+  }
+
+  // Check that an explicit baseBranch actually exists on the remote.
+  // Best-effort: network/auth failures are not validation errors.
+  if (typeof raw.baseBranch === 'string' && raw.baseBranch.trim() !== '' && raw.repoUrl) {
+    const remoteCheck = checkBaseBranchOnRemote(raw.repoUrl, raw.baseBranch);
+    if (remoteCheck === 'absent') {
+      errors.push({
+        errorType: 'basebranch_not_on_remote',
+        field: 'baseBranch',
+        message: `baseBranch '${raw.baseBranch}' was not found on ${redactRepoUrlUserInfo(raw.repoUrl)} (git ls-remote returned no matching ref). Invoker's merge gate fetches this branch from origin and will fail with "required by the merge/gate step was not found on the remote" if submitted as-is. Push the branch first, or point baseBranch at a branch that exists (often 'master').`,
+        value: raw.baseBranch,
+      });
+    }
   }
 
   // Collect task IDs for dependency validation
@@ -663,6 +918,10 @@ function validatePlan(yamlContent, repoRoot) {
 
     const taskId = task.id;
     taskIds.add(taskId);
+
+    if (task.freshness !== undefined) {
+      validateTaskFreshness(errors, taskId, task.freshness);
+    }
 
     if (!task.description || typeof task.description !== 'string' || task.description.trim() === '') {
       errors.push({
@@ -729,6 +988,18 @@ function validatePlan(yamlContent, repoRoot) {
     }
 
     // Validate obsolete executor routing fields.
+    for (const field of ['autoFix', 'autoFixRetries']) {
+      if (Object.prototype.hasOwnProperty.call(task, field)) {
+        errors.push({
+          errorType: 'unsupported_field',
+          field,
+          taskId,
+          message: `Task "${taskId}" uses "${field}", which is no longer supported in plan YAML. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
+          value: task[field],
+        });
+      }
+    }
+
     if (task.runnerKind !== undefined) {
       errors.push({
         errorType: 'unsupported_field',
@@ -746,6 +1017,15 @@ function validatePlan(yamlContent, repoRoot) {
         taskId,
         message: `Task "${taskId}" poolId must be a string when provided`,
         value: task.poolId,
+      });
+    }
+
+    if (task.dockerImage && (raw.poolId !== undefined || task.poolId !== undefined)) {
+      errors.push({
+        errorType: 'conflicting_fields',
+        field: 'dockerImage|poolId',
+        taskId,
+        message: `Task "${taskId}" sets "dockerImage" but its plan/task also sets "poolId" — Docker tasks do not run in execution pools.`,
       });
     }
 

@@ -8,7 +8,7 @@ export default defineConfig({
   banner: {
     js: '#!/usr/bin/env node',
   },
-  external: ['node:sqlite', 'yaml', 'dockerode', 'ssh2', 'cpu-features'],
+  external: ['node:sqlite', 'yaml', 'dockerode', 'ssh2', 'cpu-features', '@slack/web-api'],
   noExternal: [
     '@invoker/contracts',
     '@invoker/data-store',

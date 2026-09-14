@@ -59,6 +59,16 @@ export const STATUS_VISUALS: Record<StatusVisualKey, StatusVisual> = {
     active: true,
     pulse: true,
   },
+  queued: {
+    bg: NEUTRAL_SURFACE,
+    border: 'border-border',
+    text: 'text-amber-300',
+    dot: 'bg-amber-400',
+    rail: 'bg-amber-400',
+    inline: { bg: NEUTRAL_INLINE_BG, border: NEUTRAL_INLINE_BORDER, text: '#fcd34d' },
+    active: true,
+    pulse: true,
+  },
   running_executing: {
     bg: NEUTRAL_SURFACE,
     border: 'border-border',

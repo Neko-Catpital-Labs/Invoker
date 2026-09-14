@@ -40,14 +40,21 @@ externalDependencies:
 ```bash
 ./scripts/submit-workflow-chain.sh <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
 ./scripts/submit-workflow-chain.sh --gate-policy review_ready <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
+./scripts/submit-workflow-chain.sh --onto-workflow <wf-id> <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
 ```
+
+## Stacked onto an existing workflow
+
+**Stacked onto WF-X** ⇔ `externalDependencies` on WF-X `__merge__` **and** `baseBranch == WF-X.featureBranch`. A concrete extDep alone is gate-only wait, not a branch stack.
+
+When workflow1 already depends on a prior running workflow, pass `--onto-workflow <id>` (or let the script auto-detect a single concrete non-`__UPSTREAM__` externalDependency on plan[0]) so plan[0] `baseBranch` is set to that workflow's `featureBranch` before submit.
 
 ## Output
 
 The script prints:
 
 - `WF1=<workflow-id>` ... `WFN=<workflow-id>` (persisted IDs in chain order)
-- `RENDERED_PLAN=<temp-yaml-path>` for each rendered template
+- `RENDERED_PLAN=<temp-yaml-path>` for each rendered template (including an onto-adjusted plan[0])
 
 ## Notes
 
@@ -56,4 +63,5 @@ The script prints:
 - `--gate-policy completed|review_ready` controls cross-workflow merge-gate readiness:
   - `completed` (default): downstream waits for upstream merge gate `completed`.
   - `review_ready`: downstream can start once upstream merge gate is `review_ready`, `awaiting_approval`, or `completed`.
+- `--onto-workflow <id>` attaches the chain head onto an already-running upstream by setting plan[0] `baseBranch` to that workflow's `featureBranch`.
 - This skill manages Invoker workflow stacking, not GitHub PR publication policy. If the target repo is Invoker itself, publish/update the resulting GitHub PR stack with `mergify stack push` once the branch commits are ready. If the target repo is something else (for example `EdbertChan/test-playground`), keep normal PR flow unless that repo independently uses Mergify Stacks.

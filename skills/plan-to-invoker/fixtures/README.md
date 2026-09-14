@@ -37,6 +37,7 @@ Positive fixtures demonstrate valid plan patterns:
 - **05-ui-change-with-visual-proof.yaml** - UI workflow that pairs visual proof with focused verification
 - **06-invoker-dogfood-mergify-stack.yaml** - Invoker-on-Invoker PR publication example with focused skill verification
 - **07-prompt-edit-layered-split-with-dormant.yaml** - Dependency-first layer split for prompt-edit bridge work, including a dormant activation slice
+- **11-entity-research-aggregate-fan-in.yaml** - Multi-extDep fan-in on shared trunk (carve-out from stacked_basebranch_default)
 - Implementation fixtures use focused verification by default. Full-suite gates are optional and risk-based, not a validator requirement.
 
 All positive fixtures are extracted from `references/examples.md` sections 1-4.

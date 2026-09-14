@@ -79,6 +79,7 @@ function taskStatusToActionStatus(status: TaskState['status']): ActionGraphNodeS
     case 'stale':
       return 'cancelled';
     case 'closed':
+    case 'skipped':
       return 'failed';
     case 'fixing_with_ai':
       return 'running';
@@ -96,6 +97,7 @@ function attemptStatusToActionStatus(status: Attempt['status']): ActionGraphNode
       return 'pending';
     case 'needs_input':
       return 'waiting';
+    case 'stale':
     case 'superseded':
       return 'cancelled';
   }

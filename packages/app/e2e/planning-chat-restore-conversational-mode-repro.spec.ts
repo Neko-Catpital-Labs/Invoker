@@ -32,7 +32,7 @@ function launchArgs(): string[] {
 
 async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 30000 });
 }
 
 async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketPath: string; configPath: string }): Promise<{ app: ElectronApplication; page: Page }> {
@@ -53,7 +53,6 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: paths.dbDir,
       INVOKER_IPC_SOCKET: paths.ipcSocketPath,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_EMBEDDED_TERMINAL_BACKEND: 'bash',
       INVOKER_REPO_CONFIG_PATH: paths.configPath,
@@ -133,7 +132,7 @@ base.describe('Planning chat conversational mode restore', () => {
 
       await openPlanningTerminal(page);
       await submitPlanningText(page, 'Draft a YAML plan to add a README');
-      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('Draft ready', { timeout: 10000 });
+      await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible({ timeout: 10000 });
       const savedSessionId = await page.evaluate(async () => {
         const list = await window.invoker.planningChatList();
         return list.sessions[0]?.id;

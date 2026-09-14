@@ -5,6 +5,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+CHAIN_SKILL="$ROOT/skills/workflow-chain-submit/SKILL.md"
+[[ -f "$CHAIN_SKILL" ]] || { echo "missing $CHAIN_SKILL"; exit 1; }
+grep -qF 'Stacked onto WF-X' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing stacked-onto rule"; exit 1; }
+grep -qF -- '--onto-workflow' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing --onto-workflow"; exit 1; }
+grep -qF 'gate-only wait' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing gate-only wait distinction"; exit 1; }
+
 mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/plans"
 cp "$ROOT/scripts/submit-workflow-chain.sh" "$TMP_DIR/scripts/submit-workflow-chain.sh"
 chmod +x "$TMP_DIR/scripts/submit-workflow-chain.sh"
@@ -166,4 +172,83 @@ rp3_rr="$(printf '%s\n' "$out_rr" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '2p')
 grep -q '^ *gatePolicy: review_ready$' "$rp2_rr"
 grep -q '^ *gatePolicy: review_ready$' "$rp3_rr"
 
-echo "PASS: submit-workflow-chain enforces merge-gate deps, branch chaining, and gate policy"
+# Seed an upstream workflow that plan[0] can stack onto via concrete extDep.
+SEED_STATE="$TMP_DIR/.state"
+mkdir -p "$SEED_STATE"
+printf '[]' > "$SEED_STATE/workflows.json"
+printf '[]' > "$SEED_STATE/tasks.json"
+printf '2000' > "$SEED_STATE/seq"
+jq -n \
+  --arg id "wf-fanout-1" \
+  --arg name "Fanout Upstream" \
+  --arg base "master" \
+  --arg feature "plan/fanout-upstream" \
+  --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '[{id:$id,name:$name,status:"review_ready",baseBranch:$base,featureBranch:$feature,createdAt:$now}]' \
+  > "$SEED_STATE/workflows.json"
+jq -n --arg id "__merge__wf-fanout-1" '[{id:$id,status:"review_ready",config:{}}]' > "$SEED_STATE/tasks.json"
+
+cat > "$TMP_DIR/plans/onto-head.yaml" <<'EOF'
+name: "OntoHead"
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: main
+featureBranch: feature/onto-head
+externalDependencies:
+  - workflowId: "wf-fanout-1"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+tasks:
+  - id: t-onto
+    description: "onto head"
+    command: echo onto
+EOF
+
+cat > "$TMP_DIR/plans/onto-next.yaml" <<'EOF'
+name: "OntoNext"
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+featureBranch: feature/onto-next
+tasks:
+  - id: t-next
+    description: "onto next"
+    command: echo next
+    externalDependencies:
+      - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+        taskId: "__merge__"
+        requiredStatus: completed
+EOF
+
+out_onto="$(
+  cd "$TMP_DIR"
+  ./scripts/submit-workflow-chain.sh --onto-workflow wf-fanout-1 ./plans/onto-head.yaml ./plans/onto-next.yaml
+)"
+rp_onto="$(printf '%s\n' "$out_onto" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '1p')"
+[[ -f "$rp_onto" ]] || { echo "missing rendered onto-head plan"; echo "$out_onto"; exit 1; }
+grep -q '^baseBranch: plan/fanout-upstream$' "$rp_onto"
+wf_onto_base="$(printf '%s\n' "$out_onto" | awk -F'[= ]' '/^WF1=/{print $4; exit}')"
+[[ "$wf_onto_base" == "plan/fanout-upstream" ]] || { echo "WF1 base should be fanout feature; got: $wf_onto_base"; echo "$out_onto"; exit 1; }
+
+# Auto-detect concrete extDep on plan[0] when --onto-workflow is omitted.
+printf '[]' > "$SEED_STATE/workflows.json"
+printf '[]' > "$SEED_STATE/tasks.json"
+printf '3000' > "$SEED_STATE/seq"
+jq -n \
+  --arg id "wf-fanout-1" \
+  --arg name "Fanout Upstream" \
+  --arg base "master" \
+  --arg feature "plan/fanout-upstream" \
+  --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '[{id:$id,name:$name,status:"review_ready",baseBranch:$base,featureBranch:$feature,createdAt:$now}]' \
+  > "$SEED_STATE/workflows.json"
+jq -n --arg id "__merge__wf-fanout-1" '[{id:$id,status:"review_ready",config:{}}]' > "$SEED_STATE/tasks.json"
+
+out_auto="$(
+  cd "$TMP_DIR"
+  ./scripts/submit-workflow-chain.sh ./plans/onto-head.yaml ./plans/onto-next.yaml
+)"
+rp_auto="$(printf '%s\n' "$out_auto" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '1p')"
+[[ -f "$rp_auto" ]] || { echo "missing auto-onto rendered plan"; echo "$out_auto"; exit 1; }
+grep -q '^baseBranch: plan/fanout-upstream$' "$rp_auto"
+
+echo "PASS: submit-workflow-chain enforces merge-gate deps, branch chaining, gate policy, and --onto-workflow"
