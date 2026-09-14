@@ -8,14 +8,23 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { InAppPlanningSubmitResponse } from '@invoker/contracts';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
-import type { MessageBus } from '@invoker/transport';
+import { TransportError, TransportErrorCode, type MessageBus } from '@invoker/transport';
 import type { PlanningConfirmationMode, PlanningReviewDraft } from '../../planning-core/src/planning-review.js';
 import { buildPlanningHandoffInstructions } from '../../planning-core/src/planning-handoff-prompt.js';
 import { confirmationTextForMode, preparePlanningReview } from '../../planning-core/src/planning-review.js';
 import type { PlanSummary } from '../../planning-core/src/plan-summary.js';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { z } from 'zod';
-import { createDefaultMessageBus, discoverLiveOwner } from './live-owner-bus.js';
+import {
+  createDefaultMessageBus,
+  discoverLiveOwner,
+  resolveDefaultMessageBusSocketPath,
+} from './live-owner-bus.js';
+import {
+  formatLiveRunJsonOutput,
+  LIVE_RUN_NO_OWNER_ERROR,
+  requestPlanRunFromLiveOwner,
+} from './live-plan-submit.js';
 import {
   applyAutoApproveAuthorsAction,
   type GithubLoginLookup,
@@ -160,6 +169,26 @@ export async function submitPlanForSession(
 type SubmitSuccess = { ok: true; workflowId: string; stdout: string };
 type SubmitFailure = { ok: false; exitCode: number; stdout: string; stderr: string; error?: string };
 
+let defaultMcpLiveBus:
+  | { socketPath: string; promise: Promise<MessageBus> }
+  | undefined;
+
+async function getMcpLiveBus(
+  createBus: () => Promise<MessageBus>,
+): Promise<{ bus: MessageBus; disconnectAfterUse: boolean }> {
+  if (createBus !== createDefaultMessageBus) {
+    return { bus: await createBus(), disconnectAfterUse: true };
+  }
+  const socketPath = resolveDefaultMessageBusSocketPath();
+  if (defaultMcpLiveBus && defaultMcpLiveBus.socketPath !== socketPath) {
+    const staleBus = await defaultMcpLiveBus.promise.catch(() => undefined);
+    staleBus?.disconnect();
+    defaultMcpLiveBus = undefined;
+  }
+  defaultMcpLiveBus ??= { socketPath, promise: createDefaultMessageBus() };
+  return { bus: await defaultMcpLiveBus.promise, disconnectAfterUse: false };
+}
+
 export function resolveCliInvocation(
   execPath: string,
   cliPath: string,
@@ -256,8 +285,37 @@ export async function submitPlanForMcp(
   planPath: string,
   mode: McpSubmitMode = 'live',
   runner: McpCliRunner = createProcessRunner(),
+  createBus: () => Promise<MessageBus> = createDefaultMessageBus,
 ): Promise<SubmitSuccess | SubmitFailure> {
   const absolutePlanPath = resolve(planPath);
+  if (mode === 'live') {
+    const { bus, disconnectAfterUse } = await getMcpLiveBus(createBus);
+    try {
+      const submitted = await requestPlanRunFromLiveOwner(
+        absolutePlanPath,
+        bus,
+        15_000,
+        'mcp-spawn-repro-invoker-cli.headless.run',
+      );
+      return {
+        ok: true,
+        workflowId: submitted.workflowId,
+        stdout: formatLiveRunJsonOutput(submitted.workflowId),
+      };
+    } catch (err) {
+      if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
+        return { ok: false, exitCode: 1, stdout: '', stderr: `${LIVE_RUN_NO_OWNER_ERROR}\n` };
+      }
+      return {
+        ok: false,
+        exitCode: 1,
+        stdout: '',
+        stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+      };
+    } finally {
+      if (disconnectAfterUse) bus.disconnect();
+    }
+  }
   const result = await runner.run(argsForSubmit(absolutePlanPath, mode));
   if (result.exitCode !== 0) {
     return { ok: false, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
@@ -499,7 +557,7 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
         return mcpError(err instanceof Error ? err.message : String(err));
       }
       reviewTokens.consume(reviewToken);
-      const result = await submitPlanForMcp(source.planPath, mode ?? 'live', runner);
+      const result = await submitPlanForMcp(source.planPath, mode ?? 'live', runner, createBus);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: formatSubmitFailure(result) }],
