@@ -1,4 +1,4 @@
-import type { ExternalDependency } from '@invoker/workflow-core';
+import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, type ExternalDependency } from '@invoker/workflow-core';
 import {
   COLUMN_MIGRATIONS,
   POST_MIGRATION_STATEMENTS,
@@ -68,10 +68,14 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
       }
     }
   }
+  migrateInAppPlanningSessionStatusConstraint(exec);
   migrateWorkflowStatusColumn(exec);
   dropTaskAutoFixAttemptsColumn(exec);
 
   if (!exec.readOnly) {
+    exec.run('DROP TRIGGER IF EXISTS trg_tasks_executor_routing_insert');
+    exec.run('DROP TRIGGER IF EXISTS trg_tasks_executor_routing_update');
+    migrateTaskExecutorPoolInvariant(exec);
     reconcileTerminalSessionInvariants();
   }
 
@@ -83,9 +87,55 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
     backfillEventTypeCounters(exec);
     migrateTestCommands(exec);
     migrateGatePolicyApprovedToCompleted(exec);
+    migrateTaskLaunchDispatchPriorityToNumeric(exec);
     migrateTaskExternalDependenciesToWorkflows(exec);
     runCompatibilityMigration(exec);
   }
+}
+
+export function migrateTaskExecutorPoolInvariant(exec: SqliteExecutor): void {
+  exec.runTransaction(() => {
+    exec.run(
+      `UPDATE tasks
+          SET runner_kind = 'merge', pool_id = NULL, pool_member_id = NULL
+        WHERE is_merge_node = 1`,
+    );
+    exec.run(
+      `UPDATE tasks
+          SET runner_kind = 'docker', pool_id = NULL, pool_member_id = NULL
+        WHERE COALESCE(is_merge_node, 0) = 0
+          AND (runner_kind = 'docker' OR docker_image IS NOT NULL)`,
+    );
+    exec.run(
+      `UPDATE tasks
+          SET pool_id = NULL, pool_member_id = NULL
+        WHERE runner_kind = 'scratch'`,
+    );
+    exec.run(
+      `UPDATE tasks
+          SET runner_kind = CASE
+                WHEN COALESCE(TRIM(pool_id), '') = '' THEN 'worktree'
+                WHEN TRIM(pool_id) = ? THEN 'worktree'
+                ELSE 'ssh'
+              END,
+              pool_id = CASE
+                WHEN COALESCE(TRIM(pool_id), '') = '' THEN ?
+                ELSE TRIM(pool_id)
+              END
+        WHERE COALESCE(is_merge_node, 0) = 0
+          AND docker_image IS NULL
+          AND (runner_kind IS NULL OR TRIM(runner_kind) = '')`,
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID, BUILT_IN_LOCAL_EXECUTION_POOL_ID],
+    );
+    exec.run(
+      `UPDATE tasks
+          SET pool_id = ?
+        WHERE runner_kind = 'worktree'
+          AND docker_image IS NULL
+          AND COALESCE(TRIM(pool_id), '') = ''`,
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID],
+    );
+  });
 }
 
 /**
@@ -342,6 +392,45 @@ export function runCompatibilityMigration(exec: SqliteExecutor): {
   return report;
 }
 
+export function migrateInAppPlanningSessionStatusConstraint(exec: SqliteExecutor): void {
+  if (exec.readOnly) return;
+  const row = exec.queryOne(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'in_app_planning_sessions'`,
+  ) as { sql?: unknown } | undefined;
+  const tableSql = typeof row?.sql === 'string' ? row.sql : undefined;
+  if (!tableSql || tableSql.includes("'planner_error'")) return;
+
+  const legacyCheck = "CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted'))";
+  const expandedCheck = "CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted', 'planner_error'))";
+  const replacementTable = tableSql
+    .replace(
+      /^CREATE TABLE(?: IF NOT EXISTS)?\s+["`]?in_app_planning_sessions["`]?/i,
+      'CREATE TABLE in_app_planning_sessions_new',
+    )
+    .replace(legacyCheck, expandedCheck);
+  if (replacementTable === tableSql || !replacementTable.includes(expandedCheck)) {
+    throw new Error('Unable to migrate the in_app_planning_sessions status constraint');
+  }
+
+  const foreignKeys = exec.queryOne('PRAGMA foreign_keys') as { foreign_keys?: number } | undefined;
+  const foreignKeysEnabled = foreignKeys?.foreign_keys === 1;
+  if (foreignKeysEnabled) exec.run('PRAGMA foreign_keys = OFF');
+  try {
+    exec.runTransaction(() => {
+      exec.run(replacementTable);
+      exec.run('INSERT INTO in_app_planning_sessions_new SELECT * FROM in_app_planning_sessions');
+      exec.run('DROP TABLE in_app_planning_sessions');
+      exec.run('ALTER TABLE in_app_planning_sessions_new RENAME TO in_app_planning_sessions');
+      exec.run(
+        'CREATE INDEX IF NOT EXISTS idx_in_app_planning_sessions_updated ON in_app_planning_sessions(updated_at)',
+      );
+    });
+    exec.markDirty();
+  } finally {
+    if (foreignKeysEnabled) exec.run('PRAGMA foreign_keys = ON');
+  }
+}
+
 export function migrateWorkflowStatusColumn(exec: SqliteExecutor): void {
   if (exec.readOnly) return;
   const columns = exec.queryAll('PRAGMA table_info(workflows)') as Array<{ name: string }>;
@@ -442,6 +531,16 @@ export function migrateGatePolicyApprovedToCompleted(exec: SqliteExecutor): void
  * This is intentionally idempotent: once task rows are cleared, later runs
  * only see the workflow-level source of truth.
  */
+export function migrateTaskLaunchDispatchPriorityToNumeric(exec: SqliteExecutor): void {
+  try {
+    exec.execRun("UPDATE task_launch_dispatch SET priority = '1' WHERE priority = 'high'");
+    exec.execRun("UPDATE task_launch_dispatch SET priority = '2' WHERE priority = 'normal'");
+    exec.execRun("UPDATE task_launch_dispatch SET priority = '4' WHERE priority = 'low'");
+  } catch (err) {
+    logSwallowedMigrationError('migrateTaskLaunchDispatchPriorityToNumeric', err);
+  }
+}
+
 export function migrateTaskExternalDependenciesToWorkflows(exec: SqliteExecutor): void {
   try {
     const rows = exec.queryAll(

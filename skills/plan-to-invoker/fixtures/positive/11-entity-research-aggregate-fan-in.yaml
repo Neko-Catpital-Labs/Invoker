@@ -1,0 +1,54 @@
+# Positive fixture: Post-merge aggregate table, fan-in on multiple upstream entity-research workflows
+# Source: entity-research-patterns.md Rule 3 — formulas/entity-research-aggregate/
+# Pattern: externalDependencies fan-in on N upstream __merge__ tasks, reads only the shared base branch
+
+name: "Aggregate the stock quirk-check table"
+description: |
+  Regenerate SUMMARY.md from every already-merged record
+  matching data/stocks/*.json on main. Never reads an in-flight
+  entity-research branch. Gated on every upstream entity-research
+  workflow's __merge__ task via externalDependencies below — duplicate the
+  externalDependencies block once per additional upstream workflow before
+  submit; 2 entries are shown as the minimal example.
+
+  REPLACE_ME: list which entity workflows this batch actually gates on.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: main
+repoUrl: git@github.com:EdbertChan/hidden.git
+externalDependencies:
+  - workflowId: "wf-1786134278894-01"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+  - workflowId: "wf-1786134278894-02"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: build-stock-quirk-check-table
+    description: |
+      Read every data/stocks/*.json file on main (post-merge, never
+      an in-flight entity branch) and regenerate SUMMARY.md.
+      Review claim: SUMMARY.md's row count matches the count of files matching data/stocks/*.json exactly, or the task fails.
+      Review lane: docs
+      Safety invariant: Reads only main; never reads or merges any upstream entity-research feature branch directly.
+      Slice rationale: One deterministic transform slice: read staged records, write the mart table, nothing else.
+      Architectural effect: None; adds no product code, only a generated table.
+      Goal: Produce a single reviewable table across all landed records, with a loud failure on any gap.
+      Motivation: Building the table per-entity or pre-merge makes correctness depend on N branch-chaining operations all succeeding at once, with no single point that checks "did every one of these actually land" — the exact blind spot that made wf-1786134278894-20's CPB drop invisible.
+      Alternative considerations: Assembling the table inside a per-entity workflow, or before merge, was rejected for the reason above.
+      Implementation details: Run `python3 scripts/build-summary-table.py`, which globs data/stocks/*.json and rewrites SUMMARY.md.
+      Non-goals: No new records, no edits to any file matching data/stocks/*.json; read-only transform except for SUMMARY.md.
+      Layer: docs
+      Feature state: active
+      Files:
+      - SUMMARY.md
+      Change types:
+      - SUMMARY.md: modify
+      Acceptance criteria:
+      - SUMMARY.md has one row per file matching data/stocks/*.json present on main.
+      - Row count matches file count exactly; the task fails loudly rather than silently skipping a missing or malformed record.
+    command: "python3 scripts/build-summary-table.py"
+    dependencies: []
