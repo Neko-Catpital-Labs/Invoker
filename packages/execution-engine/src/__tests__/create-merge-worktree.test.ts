@@ -313,4 +313,66 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     expect(message).toContain('Recreating the task alone will not help');
   });
 
+  function buildProvisioningExecutor(cwd: string, repoProvisionCommands: Record<string, string>) {
+    return new TaskRunner({
+      orchestrator: { getAllTasks: () => [] } as any,
+      persistence: { updateTask: () => {} } as any,
+      executorRegistry: new ExecutorRegistry(),
+      cwd,
+      defaultBranch: 'master',
+      repoProvisionCommandsProvider: () => repoProvisionCommands,
+    });
+  }
+
+  it('runs the repo provisioning command inside the merge clone', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const executor = buildProvisioningExecutor(sandbox.host, {
+      [sandbox.bare]: 'pwd -P > provisioned.marker',
+    });
+    const clonePath = await executor.createMergeWorktree('master', 'test-provision', sandbox.bare);
+
+    expect(existsSync(join(clonePath, 'provisioned.marker'))).toBe(true);
+    expect(execSync('cat provisioned.marker', { cwd: clonePath }).toString().trim())
+      .toBe(execSync('pwd -P', { cwd: clonePath }).toString().trim());
+
+    await executor.removeMergeWorktree(clonePath);
+  });
+
+  it('creates the merge clone without provisioning when the repo has no command', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const executor = buildProvisioningExecutor(sandbox.host, {});
+    const clonePath = await executor.createMergeWorktree('master', 'test-no-provision', sandbox.bare);
+
+    expect(existsSync(join(clonePath, 'provisioned.marker'))).toBe(false);
+    expect(git(clonePath, 'rev-parse HEAD')).toBe(git(sandbox.bare, 'rev-parse master'));
+
+    await executor.removeMergeWorktree(clonePath);
+  });
+
+  it('fails merge clone creation when the repo provisioning command fails', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+    const prevDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = sandbox.root;
+
+    const executor = buildProvisioningExecutor(sandbox.host, {
+      [sandbox.bare]: 'echo install-broke >&2; exit 7',
+    });
+    let message = '';
+    try {
+      await executor.createMergeWorktree('master', 'test-provision-fails', sandbox.bare);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (prevDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = prevDbDir;
+    }
+
+    expect(message).toContain('install-broke');
+  });
+
 });
