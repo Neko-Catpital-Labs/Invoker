@@ -20,13 +20,42 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
-import { appendJournalEntry, appendJournalEntryWithoutReadback } from './sync-journal.js';
+import { appendJournalEntry, appendJournalEntryWithoutReadback, LOCAL_SYNC_ORIGIN } from './sync-journal.js';
 import { SQLITE_MAX_VARIABLE_NUMBER } from './sqlite-workflow-repository.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
 export const CLAIMABLE_ATTEMPT_WHERE_CLAUSE =
   "status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)";
+
+const SAVE_TASK_COLUMNS = [
+  'id', 'workflow_id', 'description', 'status', 'blocked_by', 'dependencies',
+  'command', 'prompt', 'experiment_prompt', 'exit_code', 'error', 'protocol_error_code', 'protocol_error_message', 'input_prompt', 'external_dependencies',
+  'summary', 'problem', 'approach', 'test_plan', 'repro_command', 'fix_prompt', 'fix_context',
+  'branch', 'commit_hash', 'fixed_integration_sha', 'fixed_integration_recorded_at', 'fixed_integration_source', 'parent_task',
+  'pivot', 'experiment_variants', 'is_reconciliation', 'selected_experiment',
+  'selected_experiments', 'experiment_results', 'requires_manual_approval',
+  'repo_url', 'feature_branch',
+  'is_merge_node', 'auto_fix', 'max_fix_attempts',
+  'runner_kind', 'pool_id', 'agent_session_id', 'workspace_path', 'container_id',
+  'last_agent_session_id', 'last_agent_name',
+  'action_request_id', 'experiments',
+  'created_at', 'launch_phase', 'launch_started_at', 'launch_completed_at', 'started_at', 'completed_at', 'last_heartbeat_at',
+  'utilization', 'pending_fix_error', 'fix_session_entry_status', 'failure_class',
+  'review_url', 'review_id', 'review_status', 'review_provider_id', 'review_gate',
+  'is_fixing_with_ai',
+  'execution_generation',
+  'selected_attempt_id',
+  'pool_member_id',
+  'docker_image',
+  'execution_agent',
+  'execution_model',
+  'agent_name',
+  'freshness',
+  'task_state_version',
+] as const;
+
+const SAVE_TASK_ROW_PLACEHOLDERS = `(${SAVE_TASK_COLUMNS.map(() => '?').join(', ')})`;
 
 /**
  * Safety invariant: saveTask's INSERT OR REPLACE must bind selected_attempt_id
@@ -356,6 +385,142 @@ export class SqliteTaskAttemptRepository {
         payload,
       });
     });
+  }
+
+  saveTasks(workflowId: string, tasks: TaskState[]): void {
+    if (tasks.length === 0) return;
+    const records = tasks.map((task) => this.buildSaveTaskRecord(workflowId, task));
+    this.exec.runTransaction(() => {
+      const rowsPerInsert = Math.max(1, Math.floor(SQLITE_MAX_VARIABLE_NUMBER / SAVE_TASK_COLUMNS.length));
+      for (let offset = 0; offset < records.length; offset += rowsPerInsert) {
+        const chunk = records.slice(offset, offset + rowsPerInsert);
+        this.exec.execRun(
+          `INSERT OR REPLACE INTO tasks (${SAVE_TASK_COLUMNS.join(', ')}) VALUES ${chunk.map(() => SAVE_TASK_ROW_PLACEHOLDERS).join(', ')}`,
+          chunk.flatMap((record) => record.values),
+        );
+      }
+      for (const record of records) {
+        this.syncCrashPreservationState(record.task.id, undefined, record.task.execution);
+      }
+
+      const payloads = this.loadTaskJournalPayloads(records.map((record) => record.task.id));
+      this.appendTaskJournalEntries(records.map((record) => {
+        const payload = payloads.get(record.task.id);
+        if (!payload) {
+          throw new Error(`Failed to load task ${record.task.id} after insert for sync journal`);
+        }
+        return { taskId: record.task.id, payload };
+      }));
+    });
+  }
+
+  private buildSaveTaskRecord(workflowId: string, inputTask: TaskState): { task: TaskState; values: unknown[] } {
+    let task = inputTask;
+    const cfg = resolveTaskConfig(task.config);
+    if (cfg !== task.config) {
+      task = { ...task, config: cfg };
+    }
+    assertTaskConsistent(task);
+    const exec = task.execution;
+    const values: unknown[] = [
+      task.id, workflowId, task.description, task.status,
+      exec.blockedBy ?? null,
+      JSON.stringify(task.dependencies),
+      cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
+      exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null, exec.inputPrompt ?? null,
+      null,
+      cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
+      cfg.testPlan ?? null, cfg.reproCommand ?? null, cfg.fixPrompt ?? null, cfg.fixContext ?? null,
+      exec.branch ?? null,
+      exec.commit ?? null,
+      exec.fixedIntegrationSha ?? null,
+      exec.fixedIntegrationRecordedAt?.toISOString() ?? null,
+      exec.fixedIntegrationSource ?? null,
+      cfg.parentTask ?? null,
+      cfg.pivot ? 1 : 0,
+      cfg.experimentVariants ? JSON.stringify(cfg.experimentVariants) : null,
+      cfg.isReconciliation ? 1 : 0,
+      exec.selectedExperiment ?? null,
+      exec.selectedExperiments ? JSON.stringify(exec.selectedExperiments) : null,
+      exec.experimentResults ? JSON.stringify(exec.experimentResults) : null,
+      cfg.requiresManualApproval ? 1 : 0,
+      null, cfg.featureBranch ?? null,
+      cfg.isMergeNode ? 1 : 0,
+      0, null,
+      cfg.runnerKind ?? null,
+      cfg.poolId ?? null,
+      exec.agentSessionId ?? null,
+      exec.workspacePath ?? null,
+      exec.containerId ?? null,
+      exec.lastAgentSessionId ?? null,
+      exec.lastAgentName ?? null,
+      exec.actionRequestId ?? null,
+      exec.experiments ? JSON.stringify(exec.experiments) : null,
+      task.createdAt.toISOString(),
+      exec.phase ?? null,
+      exec.launchStartedAt?.toISOString() ?? null,
+      exec.launchCompletedAt?.toISOString() ?? null,
+      exec.startedAt?.toISOString() ?? null,
+      exec.completedAt?.toISOString() ?? null,
+      exec.lastHeartbeatAt?.toISOString() ?? null,
+      null,
+      exec.pendingFixError ?? null,
+      exec.fixSessionEntryStatus ?? null,
+      exec.failureClass ?? null,
+      exec.reviewUrl ?? null,
+      exec.reviewId ?? null,
+      exec.reviewStatus ?? null,
+      exec.reviewProviderId ?? null,
+      exec.reviewGate ? JSON.stringify(exec.reviewGate) : null,
+      exec.isFixingWithAI ? 1 : 0,
+      exec.generation ?? 0,
+      exec.selectedAttemptId ?? null,
+      cfg.poolMemberId ?? null,
+      cfg.dockerImage ?? null,
+      cfg.executionAgent ?? null,
+      cfg.executionModel ?? null,
+      exec.agentName ?? null,
+      cfg.freshness !== undefined ? JSON.stringify(cfg.freshness) : null,
+      task.taskStateVersion ?? 1,
+    ];
+    assertSaveTaskPersistsSelectedAttemptId([...SAVE_TASK_COLUMNS], values, exec);
+    return { task, values };
+  }
+
+  private loadTaskJournalPayloads(taskIds: string[]): Map<string, Record<string, unknown>> {
+    const payloads = new Map<string, Record<string, unknown>>();
+    for (let offset = 0; offset < taskIds.length; offset += SQLITE_MAX_VARIABLE_NUMBER) {
+      const chunk = taskIds.slice(offset, offset + SQLITE_MAX_VARIABLE_NUMBER);
+      const rows = this.exec.queryAll(
+        `SELECT * FROM tasks WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+        chunk,
+      );
+      for (const row of rows) {
+        payloads.set(String(row.id), row);
+      }
+    }
+    return payloads;
+  }
+
+  private appendTaskJournalEntries(entries: Array<{ taskId: string; payload: Record<string, unknown> }>): void {
+    const columnsPerRow = 6;
+    const rowsPerInsert = Math.max(1, Math.floor(SQLITE_MAX_VARIABLE_NUMBER / columnsPerRow));
+    for (let offset = 0; offset < entries.length; offset += rowsPerInsert) {
+      const chunk = entries.slice(offset, offset + rowsPerInsert);
+      const params = chunk.flatMap((entry) => [
+        'task',
+        entry.taskId,
+        'upsert',
+        JSON.stringify(entry.payload ?? null),
+        LOCAL_SYNC_ORIGIN,
+        new Date().toISOString(),
+      ]);
+      this.exec.execRun(
+        `INSERT INTO sync_journal (entity_type, entity_id, op, payload, origin, created_at)
+         VALUES ${chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(', ')}`,
+        params,
+      );
+    }
   }
 
   updateTask(
