@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
+import { Channels } from '@invoker/transport';
 
 import {
   SPEND_CIRCUIT_BREAKER_WORKER_KIND,
@@ -271,6 +272,35 @@ describe('createSpendCircuitBreakerWorker Codex spend gate alert', () => {
     });
     expect(alert?.summary).toContain('Codex is shut off by the daily spend gate');
     expect(alert?.summary).toContain('invoker-cli spend-gate reset');
+  });
+
+  it('publishes one Slack alert with the reset command for a new trip', async () => {
+    const gatePath = join(makeTempDir(), 'codex-spend-gate.json');
+    recordCodexSpendGateTrip(gatePath, TRIP);
+    const { store } = makeAlertStore();
+    const publish = vi.fn();
+    const worker = createSpendCircuitBreakerWorker({
+      logger: makeLogger(),
+      store,
+      messageBus: { publish, subscribe: vi.fn(), request: vi.fn(), onRequest: vi.fn(), disconnect: vi.fn() },
+      codexDailyGate: { statePath: gatePath },
+      statePath: join(makeTempDir(), 'state.json'),
+      now: () => NOW,
+      tickOnStart: false,
+      intervalMs: 0,
+    });
+
+    await worker.tick('manual');
+    await worker.tick('manual');
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    const [channel, event] = publish.mock.calls[0]!;
+    expect(channel).toBe(Channels.SURFACE_EVENT);
+    expect(event).toMatchObject({
+      type: 'alert',
+      alert: { severity: 'critical', source: SPEND_CIRCUIT_BREAKER_WORKER_KIND },
+    });
+    expect(event.alert.message).toContain('invoker-cli spend-gate reset');
   });
 
   it('records no alert while the gate is open', async () => {
