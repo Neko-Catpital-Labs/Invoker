@@ -13,6 +13,7 @@
  * (terminals) or reject with a structured `{ code }` error (everything else).
  */
 
+import { readCodexSpendGateStatus } from '../codex-spend-gate-status.js';
 import type {
   BundledSkillsStatus,
   BundledSkillsInstallMode,
@@ -297,7 +298,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           (args[1] as Parameters<SQLiteAdapter['searchWorkflowsAndTasks']>[1]) ?? undefined,
         );
       case 'invoker:get-runtime-status':
-        return { ownerMode: true, readOnly: false, mode: 'local-owner' };
+        return { ownerMode: true, readOnly: false, mode: 'local-owner', ...readCodexSpendGateStatus() };
       case 'invoker:get-ui-perf-stats':
         return {};
       case 'invoker:report-ui-perf': {

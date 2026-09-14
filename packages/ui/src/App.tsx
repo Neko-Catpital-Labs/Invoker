@@ -1054,6 +1054,15 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      window.invoker?.getRuntimeStatus?.()
+        .then(setRuntimeStatus)
+        .catch((error) => console.warn('[runtime-status] refresh failed', error));
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     const unsubscribe = window.invoker?.onPlanningChatStream?.((event) => {
       const sessionId = typeof event.sessionId === 'string' ? event.sessionId.trim() : '';
       if (sessionId && event.turn && typeof event.turn === 'object' && typeof event.turnId === 'string') {
@@ -5004,6 +5013,20 @@ export function App() {
           </div>
         </div>
       )}
+      {runtimeStatus?.codexSpendGate ? (
+        <div
+          role="alert"
+          data-testid="codex-spend-gate-banner"
+          className="border-b border-red-700 bg-red-950/50 px-4 py-2 text-sm text-red-100"
+        >
+          <span className="font-semibold">
+            {runtimeStatus.codexSpendGate.state === 'tripped'
+              ? 'Codex is switched off by the daily spend gate.'
+              : 'Codex spend gate state could not be read, so Codex requests fail.'}
+          </span>{' '}
+          <span className="whitespace-pre-line">{runtimeStatus.codexSpendGate.message}</span>
+        </div>
+      ) : null}
       {runtimeStatus?.mode === 'connection-lost' ? (
         <div
           role="status"

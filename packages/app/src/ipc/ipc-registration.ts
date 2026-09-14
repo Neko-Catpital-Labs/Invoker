@@ -1,3 +1,4 @@
+import type { CodexSpendGateStatus } from '@invoker/contracts';
 import type { IpcMain } from 'electron';
 import { TransportError, TransportErrorCode } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -149,6 +150,7 @@ export interface RuntimeStatusSnapshot {
   ownerMode: boolean;
   readOnly: boolean;
   mode: 'local-owner' | 'daemon-owner' | 'read-only';
+  codexSpendGate?: CodexSpendGateStatus;
 }
 
 export interface BootstrapStateIpcContext {
