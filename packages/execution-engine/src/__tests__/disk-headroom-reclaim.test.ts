@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -730,5 +730,89 @@ describe('cleanupRemoteInvokerHome', () => {
 
     expect(result.ok).toBe(true);
     expect(capturedScript).toContain('PRESERVE=()');
+  });
+});
+
+describe('disk-headroom cleanup honors the in-use mark', () => {
+  function seedMarkedHome(root: string): string {
+    const home = join(root, '.invoker');
+    for (const hash of ['fresh-hash', 'old-hash', 'bare-hash']) {
+      mkdirSync(join(home, 'worktrees', hash, 'wt'), { recursive: true });
+      writeFileSync(join(home, 'worktrees', hash, 'wt', 'file.txt'), hash);
+    }
+    for (const hash of ['fresh-hash', 'old-hash']) {
+      mkdirSync(join(home, 'repos', hash), { recursive: true });
+      writeFileSync(join(home, 'repos', hash, 'file.txt'), hash);
+    }
+    for (const hash of ['fresh-hash', 'old-hash']) {
+      mkdirSync(join(home, 'in-use', 'worktrees', hash), { recursive: true });
+      writeFileSync(join(home, 'in-use', 'worktrees', hash, 'wt'), '');
+    }
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(join(home, 'in-use', 'worktrees', 'old-hash', 'wt'), twoHoursAgo, twoHoursAgo);
+    return home;
+  }
+
+  function expectOnlyFreshSurvived(home: string): void {
+    expect(existsSync(join(home, 'worktrees', 'fresh-hash', 'wt', 'file.txt'))).toBe(true);
+    expect(existsSync(join(home, 'repos', 'fresh-hash', 'file.txt'))).toBe(true);
+    expect(existsSync(join(home, 'worktrees', 'old-hash'))).toBe(false);
+    expect(existsSync(join(home, 'worktrees', 'bare-hash'))).toBe(false);
+    expect(existsSync(join(home, 'repos', 'old-hash'))).toBe(false);
+    expect(existsSync(join(home, 'in-use', 'worktrees', 'fresh-hash', 'wt'))).toBe(true);
+  }
+
+  it('keeps a freshly marked workspace when the generated remote script runs for real', () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-in-use-remote-'));
+    tempDirs.push(root);
+    const home = seedMarkedHome(root);
+    const isolatedTmp = join(root, 'scratch-tmp');
+    mkdirSync(isolatedTmp, { recursive: true });
+
+    const scriptPath = join(root, 'cleanup.sh');
+    writeFileSync(scriptPath, buildInvokerHomeCleanupScript(home, [], 'critical'));
+    const result = spawnSync('bash', [scriptPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TMPDIR: isolatedTmp },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('(fresh in-use mark)');
+    expectOnlyFreshSurvived(home);
+  });
+
+  it('keeps a freshly marked workspace during a cleanup on this machine', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-in-use-local-'));
+    tempDirs.push(root);
+    const home = seedMarkedHome(root);
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome: root,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.protectedSkipCount).toBeGreaterThanOrEqual(2);
+    expectOnlyFreshSurvived(home);
+  });
+
+  it('keeps a workspace whose mark cannot be read', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-in-use-unreadable-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    mkdirSync(join(home, 'worktrees', 'err-hash', 'wt'), { recursive: true });
+    writeFileSync(join(home, 'worktrees', 'err-hash', 'wt', 'file.txt'), 'x');
+    mkdirSync(join(home, 'in-use', 'worktrees'), { recursive: true });
+    writeFileSync(join(home, 'in-use', 'worktrees', 'err-hash'), 'not-a-directory');
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome: root,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(home, 'worktrees', 'err-hash', 'wt', 'file.txt'))).toBe(true);
   });
 });
