@@ -18,7 +18,7 @@ import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/con
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
-import { BaseExecutor } from './base-executor.js';
+import { BaseExecutor, normalizeRepoUrlForProvisionLookup } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { createExecutionBench } from './execution-bench.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
@@ -1210,7 +1210,17 @@ export class TaskRunner {
       cwd: this.cwd,
       logger: this.logger,
       ensureRepoMirrorPath: (url) => this.ensureRepoMirrorPath(url),
+      provisionCommandFor: (url) => this.resolveMergeCloneProvisionCommand(url),
     });
+  }
+
+  private resolveMergeCloneProvisionCommand(repoUrl: string | undefined): string {
+    const poolDefault = this.getWorktreeTargets()[BUILT_IN_LOCAL_EXECUTION_POOL_ID]?.provisionCommand?.trim() ?? '';
+    if (!repoUrl) return poolDefault;
+    const wanted = normalizeRepoUrlForProvisionLookup(repoUrl);
+    const override = Object.entries(this.getRepoProvisionCommands())
+      .find(([url]) => normalizeRepoUrlForProvisionLookup(url) === wanted)?.[1];
+    return override !== undefined ? override : poolDefault;
   }
 
   /** @internal */ cloneMergeWorktree(cloneSource: string, clonePath: string): Promise<void> {
