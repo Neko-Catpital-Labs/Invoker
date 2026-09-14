@@ -31,12 +31,25 @@ function isKnownProductionOwnerHost(options: ResolveActiveInvokerProfileEnvOptio
 export function resolveActiveInvokerProfileEnv(
   options: ResolveActiveInvokerProfileEnvOptions = {},
 ): Record<string, string> {
-  if (process.env.INVOKER_PRODUCTION_OWNER_SERVICE === '1' || isKnownProductionOwnerHost(options)) {
+  if (process.env.INVOKER_PRODUCTION_OWNER_SERVICE === '1') {
     return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
   }
+
+  let repoRoot: string;
   try {
-    const repoRoot = resolve(options.repoRoot ?? resolveRepoRoot(process.cwd()));
+    repoRoot = resolve(options.repoRoot ?? resolveRepoRoot(process.cwd()));
+  } catch {
+    if (isKnownProductionOwnerHost(options)) {
+      return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
+    }
+    return {};
+  }
+
+  try {
     const scriptPath = resolve(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
+    if (!existsSync(scriptPath) && isKnownProductionOwnerHost(options)) {
+      return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
+    }
     const result = spawnSync(
       process.execPath,
       [scriptPath, '--source-root', repoRoot, '--print-env'],
