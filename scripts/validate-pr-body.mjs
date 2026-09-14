@@ -11,7 +11,6 @@ import {
   validateKnownReviewBoundaries,
   validateReviewLaneUnitCompatibility,
   validateReviewUnitChangedFiles,
-  validateReviewUnitFocus,
   validateReviewUnitValue,
 } from './review-unit-rules.mjs';
 
@@ -519,15 +518,6 @@ export async function validatePrBody(body, options = {}) {
   if (sliceRationale && !sliceRationale.trim()) {
     errors.push('## Slice Rationale must not be empty.');
   }
-  errors.push(...validateReviewUnitFocus({
-    declaredReviewUnit: reviewUnit,
-    context: 'PR body',
-    texts: [
-      getSectionBody(trimmed, '## Summary'),
-      reviewClaim,
-      sliceRationale,
-    ],
-  }));
 
   errors.push(...await validateMermaidBlocks(trimmed, { context: 'PR body' }));
 

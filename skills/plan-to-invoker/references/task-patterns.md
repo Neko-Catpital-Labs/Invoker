@@ -297,7 +297,7 @@ node skills/plan-to-invoker/scripts/unit-triggers.mjs plans/<step>.yaml
 grep -n "test -- --run" plans/<step>.yaml
 ```
 
-`freshness-check.mjs` reproduces the owner's prose gate against the ref the plan will run on and exits 1 with the missing anchor and the clause that created it. `unit-triggers.mjs` gives the same verdict as `lint-review-units.mjs` and prints the scanned section line behind each tripped review unit, so a reword targets the line instead of guessing synonyms. The `grep` must print nothing.
+`freshness-check.mjs` reproduces the owner's prose gate against the ref the plan will run on and exits 1 with the missing anchor and the clause that created it. `unit-triggers.mjs` gives the same verdict as `lint-review-units.mjs` and prints each task's listed files with the review unit each belongs to, so a split moves files between tasks instead of rewording prose. The `grep` must print nothing.
 
 ## UI Change Plans
 
