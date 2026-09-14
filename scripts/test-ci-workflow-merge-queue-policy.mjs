@@ -389,4 +389,20 @@ for (const pattern of rawInstallerPatterns) {
   );
 }
 
+const pnpmInstallPattern = /\bpnpm\s+(?:install|i)\b/;
+for (const [jobName, job] of Object.entries(jobs)) {
+  const steps = job.steps ?? [];
+  const cachesPnpmStore = steps.some(
+    (step) => String(step.uses ?? '').startsWith('actions/setup-node@') && step.with?.cache === 'pnpm',
+  );
+  if (!cachesPnpmStore) {
+    continue;
+  }
+  assert(
+    steps.some((step) => pnpmInstallPattern.test(String(step.run ?? ''))),
+    `${jobName} sets setup-node cache: pnpm but never runs pnpm install, so a cache miss leaves no pnpm store `
+    + 'and the post-job cache save fails with "Path Validation Error"; drop cache: pnpm or install dependencies',
+  );
+}
+
 console.log('CI merge-queue policy is valid.');
