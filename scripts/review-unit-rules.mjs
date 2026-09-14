@@ -28,7 +28,6 @@ const UNIT_PATTERNS = [
   ['contract', [
     /\bcontracts?\b/,
     /\binterfaces?\b/,
-    /\btypes?\b/,
     /\bports?\b/,
     /\bschemas?\b/,
   ]],
@@ -50,13 +49,11 @@ const UNIT_PATTERNS = [
     /\bvalidat(?:e|es|ed|ing|ion)\b/,
     /\beligib(?:le|ility)\b/,
     /\bineligible\b/,
-    /\bstale\b/,
     /\bretr(?:y|ies)\b/,
     /\bdedupe\b/,
     /\bdeduplicat(?:e|es|ed|ing|ion)\b/,
     /\bduplicates?\b/,
     /\bsuppress(?:es|ed|ing)?\b/,
-    /\bskip(?:s|ped|ping)?\b/,
     /\breject(?:s|ed|ing)?\b/,
     /\balready queued\b/,
     /\bopen fix intents?\b/,
@@ -183,7 +180,7 @@ function isPathLikeToken(token) {
 }
 
 export function blankPathLikeTokens(text) {
-  return String(text).replace(/\S+/g, (token) => (isPathLikeToken(token) ? BLANKED_PATH : token));
+  return String(text).replace(/`[^`\n]*`/g, ' ').replace(/\S+/g, (token) => (isPathLikeToken(token) ? BLANKED_PATH : token));
 }
 
 export function detectReviewUnitTriggers(text) {
