@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SQLiteAdapter, SlackSessionRepository } from '@invoker/data-store';
+import { SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import { ApprovalStateMachine } from '../approval/approval-state-machine.js';
 import type { ApprovalStateMachineDeps, PlanIntentConfirm } from '../approval/approval-state-machine.js';
-import type { ChatBlocks, ChatTransport, MessageUpdate, OutboundMessage, SayFn } from '../approval/chat-transport.js';
-import type { WorkflowOp, WorkflowOpProgress } from '../surface.js';
+import { PlanDraftLifecycle, PlanDraftPostingError } from '../approval/plan-draft-lifecycle.js';
+import type { PlanDraftLifecycleDeps } from '../approval/plan-draft-lifecycle.js';
+import type { ChatBlocks, ChatTransport, FileUpload, MessageUpdate, OutboundMessage, SayFn } from '../approval/chat-transport.js';
+import type { SurfaceCommand, WorkflowOp, WorkflowOpProgress } from '../surface.js';
 
 vi.mock('@slack/bolt', () => {
   throw new Error('@slack/bolt was loaded by the transport-agnostic approval core');
@@ -11,7 +13,10 @@ vi.mock('@slack/bolt', () => {
 
 class FakeTransport implements ChatTransport {
   posts: Array<{ channel: string; message: OutboundMessage }> = [];
+  retried: OutboundMessage[] = [];
   updates: Array<{ channel: string; ts: string; message: MessageUpdate }> = [];
+  uploads: FileUpload[] = [];
+  uploadId: string | undefined = 'FILE-1';
   private nextTs = 100;
 
   async post(channel: string, message: OutboundMessage) {
@@ -19,8 +24,18 @@ class FakeTransport implements ChatTransport {
     return { ts: `${this.nextTs++}.0` };
   }
 
+  async sendWithRetry(say: SayFn, message: OutboundMessage) {
+    this.retried.push(message);
+    return say(message);
+  }
+
   async update(channel: string, ts: string, message: MessageUpdate) {
     this.updates.push({ channel, ts, message });
+  }
+
+  async upload(file: FileUpload) {
+    this.uploads.push(file);
+    return this.uploadId;
   }
 
   async react() {}
@@ -39,7 +54,11 @@ class FakeTransport implements ChatTransport {
 const fakeBlocks: ChatBlocks = {
   confirmPrompt: (prompt, key) => [{ fake: 'confirm', prompt, key }],
   planIntentPrompt: (key) => [{ fake: 'plan_intent', key }],
+  planDraftCard: (summary, draft, state) => [{ fake: 'draft', name: summary.name, value: `${draft.draftId}:${draft.version}`, state }],
+  describeActions: (blocks) => (blocks?.length ? 'fake' : 'none'),
 };
+
+const PLAN_TEXT = 'name: Fake Plan\ntasks:\n  - id: a\n    description: A\n';
 
 describe('approval core over a fake transport', () => {
   let adapter: SQLiteAdapter;
@@ -155,5 +174,110 @@ describe('approval core over a fake transport', () => {
 
     recovered.clearPendingConfirm('T1');
     expect(approvals().getPendingConfirm('T1')).toBeUndefined();
+  });
+});
+
+describe('plan-draft lifecycle over a fake transport', () => {
+  let adapter: SQLiteAdapter;
+  let drafts: SlackPlanDraftRepository;
+  let transport: FakeTransport;
+
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
+    drafts = new SlackPlanDraftRepository(adapter);
+    transport = new FakeTransport();
+  });
+
+  afterEach(() => adapter.close());
+
+  function lifecycle(overrides: Partial<PlanDraftLifecycleDeps> = {}): PlanDraftLifecycle {
+    return new PlanDraftLifecycle({
+      platformName: 'Fake',
+      transport,
+      blocks: fakeBlocks,
+      log: () => {},
+      store: drafts,
+      dispatch: async () => ({ workflowIds: ['wf-1'] }),
+      normalizePlanRepoUrl: (planText) => planText,
+      loadPlanningContext: () => undefined,
+      defaultConfirmationMode: 'require',
+      raiseAlert: async () => {},
+      ...overrides,
+    });
+  }
+
+  const input = {
+    channelId: 'C1',
+    threadTs: 'T1',
+    planText: PLAN_TEXT,
+    repoUrl: 'https://github.com/acme/repo.git',
+    harnessPreset: 'codex',
+    workingDir: '/tmp/repo',
+    requestedBy: 'U1',
+  };
+
+  it('uploads, posts a ready card, and submits on approval from the requester', async () => {
+    const dispatched: SurfaceCommand[] = [];
+    const core = lifecycle({ dispatch: async (command) => { dispatched.push(command); return { workflowIds: ['wf-9'] }; } });
+
+    const { draft } = await core.stagePlanDraftForReview(input, transport.sayIn('C1'));
+
+    expect(transport.uploads).toEqual([{ channel: 'C1', threadTs: 'T1', content: PLAN_TEXT, filename: `${draft.draftId}.yaml`, title: 'Fake Plan.yaml' }]);
+    expect(transport.retried).toHaveLength(1);
+    expect(transport.posts[0].message.blocks).toEqual([{ fake: 'draft', name: 'Fake Plan', value: `${draft.draftId}:${draft.version}`, state: 'ready' }]);
+    expect(draft.status).toBe('ready');
+    expect(draft.slackFileId).toBe('FILE-1');
+    expect(draft.messageTs).toBe('100.0');
+
+    const replaced: string[] = [];
+    await core.approvePlanDraft(
+      `${draft.draftId}:${draft.version}`,
+      { channel: 'C1', threadTs: 'T1', userId: 'U1' },
+      async (text) => { replaced.push(text); },
+    );
+
+    expect(replaced).toEqual([]);
+    expect(dispatched).toEqual([expect.objectContaining({ type: 'start_plan', planText: PLAN_TEXT, lobbyChannel: 'C1', lobbyThreadTs: 'T1' })]);
+    expect(transport.updates).toEqual([{ channel: 'C1', ts: '100.0', message: { text: 'Starting plan execution…', blocks: [] } }]);
+    expect(drafts.get(draft.draftId, draft.version)?.status).toBe('submitted');
+  });
+
+  it('rejects approval from anyone but the requester without dispatching', async () => {
+    const dispatch = vi.fn();
+    const core = lifecycle({ dispatch });
+    const { draft } = await core.stagePlanDraftForReview(input, transport.sayIn('C1'));
+
+    const replaced: string[] = [];
+    await core.approvePlanDraft(`${draft.draftId}:${draft.version}`, { channel: 'C1', threadTs: 'T1', userId: 'U2' }, async (text) => { replaced.push(text); });
+
+    expect(replaced).toEqual(['This plan review is no longer available.']);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(drafts.get(draft.draftId, draft.version)?.status).toBe('ready');
+  });
+
+  it('keeps a cancelled draft approvable and discards on request', async () => {
+    const core = lifecycle();
+    const { draft } = await core.stagePlanDraftForReview(input, transport.sayIn('C1'));
+    const actor = { channel: 'C1', threadTs: 'T1', userId: 'U1' };
+    const value = `${draft.draftId}:${draft.version}`;
+
+    await core.cancelPlanDraft(value, actor, async () => {});
+    expect(transport.updates.at(-1)?.message.blocks).toEqual([{ fake: 'draft', name: 'Fake Plan', value, state: 'kept' }]);
+    expect(drafts.get(draft.draftId, draft.version)?.status).toBe('ready');
+
+    await core.discardPlanDraft(value, actor, async () => {});
+    expect(transport.updates.at(-1)?.message).toEqual({ text: 'Plan draft discarded.', blocks: [] });
+    expect(drafts.get(draft.draftId, draft.version)?.status).toBe('rejected');
+  });
+
+  it('surfaces a missing upload id as a posting error named for the transport', async () => {
+    transport.uploadId = undefined;
+    const core = lifecycle();
+
+    const error = await core.stagePlanDraftForReview(input, transport.sayIn('C1')).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(PlanDraftPostingError);
+    expect((error as Error).message).toBe('Fake did not return an uploaded YAML file id.');
+    expect(transport.posts).toEqual([]);
   });
 });
