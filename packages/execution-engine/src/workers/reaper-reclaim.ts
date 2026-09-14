@@ -1,15 +1,11 @@
 import { execFile } from 'node:child_process';
 import {
-  closeSync,
   existsSync,
   lstatSync,
-  openSync,
   readdirSync,
   readFileSync,
-  readSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -47,10 +43,6 @@ export const AUTOMATION_CHECKOUT_MIN_AGE_HOURS = 48;
 export const STALE_WORKTREE_MIN_AGE_HOURS = 48;
 export const STALE_WORKTREE_GIT_TIMEOUT_MS = 5 * 60 * 1000;
 export const STALE_INVOKER_CLI_TEMP_MIN_AGE_HOURS = 48;
-
-export const LOG_TRIM_MAX_BYTES = 100 * 1024 * 1024;
-export const LOG_TRIM_KEEP_BYTES = 20 * 1024 * 1024;
-export const REAPER_LOG_SUFFIX = '.log';
 
 function errorDetail(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -867,63 +859,4 @@ export function enforceHourlySnapshotRetention(
 ): number {
   const home = expandTildeHome(invokerHome, userHome);
   return pruneHourlySnapshots(join(home, 'db-backups'), hourlySnapshotRetention());
-}
-
-export function trimOversizedLogs(opts: {
-  invokerHome: string;
-  logger?: Logger;
-  userHome?: string;
-  maxBytes?: number;
-  keepBytes?: number;
-}): string[] {
-  const userHome = opts.userHome ?? homedir();
-  const home = expandTildeHome(opts.invokerHome, userHome);
-  if (!isSafeInvokerHome(home, userHome)) return [];
-
-  const maxBytes = opts.maxBytes ?? LOG_TRIM_MAX_BYTES;
-  const keepBytes = opts.keepBytes ?? LOG_TRIM_KEEP_BYTES;
-
-  let entries: string[];
-  try {
-    entries = readdirSync(home);
-  } catch {
-    return [];
-  }
-
-  const trimmed: string[] = [];
-  for (const name of entries) {
-    if (!name.endsWith(REAPER_LOG_SUFFIX)) continue;
-    const path = join(home, name);
-    let size: number;
-    try {
-      const stat = statSync(path);
-      if (!stat.isFile()) continue;
-      size = stat.size;
-    } catch {
-      continue;
-    }
-    if (size <= maxBytes) continue;
-    try {
-      trimLogTail(path, size, keepBytes);
-      trimmed.push(path);
-      opts.logger?.info?.(`[reaper] trimmed log ${path} from ${size} bytes`, { module: 'reaper' });
-    } catch (err) {
-      opts.logger?.warn?.(`[reaper] failed to trim ${path}: ${errorDetail(err)}`, {
-        module: 'reaper',
-      });
-    }
-  }
-  return trimmed;
-}
-
-function trimLogTail(path: string, size: number, keepBytes: number): void {
-  const length = Math.min(keepBytes, size);
-  const tail = Buffer.alloc(length);
-  const fd = openSync(path, 'r');
-  try {
-    readSync(fd, tail, 0, length, size - length);
-  } finally {
-    closeSync(fd);
-  }
-  writeFileSync(path, tail);
 }
