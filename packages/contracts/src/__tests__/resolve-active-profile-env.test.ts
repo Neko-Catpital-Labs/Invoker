@@ -56,8 +56,26 @@ describe('resolveActiveInvokerProfileEnv', () => {
   });
 
   describe('when a sibling process cannot inherit the production env marker', () => {
-    it('recognizes production via the on-disk marker file instead', () => {
+    it('prefers the checkout profile when it shares the production owner home', () => {
       const repoRoot = resolveRepoRoot(process.cwd());
+
+      const actual = resolveActiveInvokerProfileEnv({
+        repoRoot,
+        homeDir: '/home/invoker',
+        productionMarkerFileExists: () => true,
+      });
+      const socketPath = resolveInvokerIpcSocketPath(actual);
+
+      expect(actual.INVOKER_RUNTIME_KIND).toBe('source-development');
+      expect(actual.INVOKER_PRODUCTION_OWNER_SERVICE).toBeUndefined();
+      expect(socketPath).toBe(actual.INVOKER_IPC_SOCKET);
+      expect(socketPath).toContain('/.invoker/dev/');
+      expect(socketPath).not.toBe('/home/invoker/.invoker/ipc-transport.sock');
+    });
+
+    it('recognizes production via the on-disk marker file instead', () => {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'invoker-packaged-install-'));
+      tempDirs.push(repoRoot);
 
       const actual = resolveActiveInvokerProfileEnv({
         repoRoot,
