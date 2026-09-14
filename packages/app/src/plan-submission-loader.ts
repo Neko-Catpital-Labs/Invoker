@@ -14,7 +14,7 @@ export interface PlanSubmissionLoadDeps {
     listWorkflows(): Array<{ id: string; featureBranch?: string; staged?: boolean }>;
     updateWorkflow(workflowId: string, changes: { staged: boolean }): void;
   };
-  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean; staged?: boolean }): void };
+  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean; staged?: boolean }): string | void };
   allowGraphMutation?: boolean;
   logger?: Logger;
 }
@@ -79,9 +79,16 @@ export async function loadPlanSubmissionBundle(
         ],
       };
     }
-    backupPlan(plan, undefined, deps.logger);
-    deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
-    const workflow = deps.persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+    const backupSource = submission.plans.length === 1 && !upstream ? planText : undefined;
+    backupPlan(plan, backupSource, deps.logger);
+    const createdWorkflowId = deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
+    const workflow = typeof createdWorkflowId === 'string'
+      ? {
+          id: createdWorkflowId,
+          featureBranch: plan.featureBranch,
+          staged: options?.staged === true,
+        }
+      : deps.persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
     if (!workflow) {
       throw new Error('Loaded plan did not create a workflow.');
     }
