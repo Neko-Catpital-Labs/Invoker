@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { registerBuiltinWorkers } from '../builtin-workers.js';
@@ -35,6 +39,37 @@ function okResult(targetKey: string): DiskCleanupResult {
   };
 }
 
+describe('reaper worker log files', () => {
+  it('leaves an oversized invoker.log at its full size after a pass', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-reaper-logs-'));
+    try {
+      const home = join(root, '.invoker');
+      mkdirSync(home, { recursive: true });
+      const logPath = join(home, 'invoker.log');
+      writeFileSync(logPath, '');
+      const size = 101 * 1024 * 1024;
+      truncateSync(logPath, size);
+
+      const runtime = createReaperWorker({
+        logger: makeLogger(),
+        invokerHome: home,
+        intervalMs: 0,
+        tickOnStart: false,
+        reapOrphans: vi.fn(async () => []),
+        reapCheckouts: vi.fn(() => []),
+        reapWorktrees: vi.fn(async () => []),
+        reapTempDirs: vi.fn(async () => []),
+        enforceRetention: vi.fn(() => 0),
+      });
+      await runtime.tick('manual');
+
+      expect(statSync(logPath).size).toBe(size);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('reaper worker', () => {
   it('is registered among the built-in workers and builds a runtime from dependencies', () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
@@ -68,7 +103,6 @@ describe('reaper worker', () => {
     ]);
     const reapTempDirs = vi.fn(async () => ['/tmp/invoker-cli-prompt-old']);
     const enforceRetention = vi.fn(() => 2);
-    const trimLogs = vi.fn(() => ['/tmp/invoker-home/invoker.log']);
     const reapMergeClones = vi.fn(async () => ({
       ok: true,
       removed: ['/tmp/invoker-home/merge-clones/gate-a', '/tmp/invoker-home/merge-clones/gate-b'],
@@ -94,7 +128,6 @@ describe('reaper worker', () => {
       reapWorktrees,
       reapTempDirs,
       enforceRetention,
-      trimLogs,
       reapMergeClones,
       reapDevHomes,
     });
@@ -112,8 +145,6 @@ describe('reaper worker', () => {
     expect(reapTempDirs.mock.calls[0]?.[0]).toMatchObject({ tempRoot: expect.any(String) });
     expect(enforceRetention).toHaveBeenCalledTimes(1);
     expect(enforceRetention.mock.calls[0]?.[0]).toBe('/tmp/invoker-home');
-    expect(trimLogs).toHaveBeenCalledTimes(1);
-    expect(trimLogs.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
     expect(reapWorktrees).toHaveBeenCalledTimes(1);
     expect(reapWorktrees.mock.calls[0]?.[0]).toMatchObject({
       invokerHome: '/tmp/invoker-home',
@@ -133,7 +164,6 @@ describe('reaper worker', () => {
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('checkouts removed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('CLI temp dirs removed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('snapshots pruned 2');
-    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('logs trimmed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('worktrees removed 5');
     expect(reapMergeClones).toHaveBeenCalledTimes(1);
     expect(reapMergeClones.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home', taskStore });
@@ -173,7 +203,6 @@ describe('reaper worker', () => {
       reapWorktrees: vi.fn(async () => []),
       reapTempDirs: vi.fn(async () => []),
       enforceRetention: vi.fn(() => 0),
-      trimLogs: vi.fn(() => []),
       reapMergeClones: vi.fn(async () => ({ ok: true, removed: [] })),
     });
 
@@ -203,7 +232,6 @@ describe('reaper worker', () => {
       reapWorktrees: vi.fn(async () => []),
       reapTempDirs: vi.fn(async () => []),
       enforceRetention: vi.fn(() => 0),
-      trimLogs: vi.fn(() => []),
       reapMergeClones: vi.fn(async () => ({ ok: false, removed: [], reason: 'no-task-store' })),
     });
 
