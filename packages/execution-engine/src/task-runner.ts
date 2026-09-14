@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, FailureClassifier, scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, Attempt, FailureClass } from '@invoker/workflow-core';
+import { CodexSpendGateTrippedError } from './codex-spend-gate.js';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
@@ -108,7 +109,19 @@ function failureClassFromThrownError(err: unknown): FailureClass | undefined {
       return failureClass as FailureClass;
     }
   }
+  if (isCausedByCodexSpendGate(err)) return 'agent-spend-gate';
   return undefined;
+}
+
+function isCausedByCodexSpendGate(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current instanceof Error && !seen.has(current)) {
+    if (current instanceof CodexSpendGateTrippedError) return true;
+    seen.add(current);
+    current = current.cause;
+  }
+  return false;
 }
 
 function errorWithFailureClass(message: string, failureClass: FailureClass | undefined): Error {
