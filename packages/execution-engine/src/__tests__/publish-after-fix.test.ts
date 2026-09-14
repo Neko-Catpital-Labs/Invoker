@@ -618,7 +618,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
       return () => persistedConfig;
     }
 
-    it.fails('without review publication', async () => {
+    it('without review publication', async () => {
       const sandbox = createSandbox();
       root = sandbox.root;
       const mergeTask = mergeGateTask();
@@ -631,7 +631,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
       expect(persistedConfig()).toMatchObject({ isMergeNode: true, runnerKind: 'merge', summary: '## Summary' });
     }, REAL_GIT_TIMEOUT_MS);
 
-    it.fails('with review publication', async () => {
+    it('with review publication', async () => {
       const sandbox = createSandbox();
       root = sandbox.root;
       const fixCommit = git('rev-parse HEAD', sandbox.gateDir);
@@ -659,7 +659,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
       expect(persistedConfig()).toMatchObject({ isMergeNode: true, runnerKind: 'merge', summary: '## Summary' });
     }, REAL_GIT_TIMEOUT_MS);
 
-    it.fails('without a feature branch', async () => {
+    it('without a feature branch', async () => {
       const sandbox = createSandbox();
       root = sandbox.root;
       const mergeTask = mergeGateTask();
