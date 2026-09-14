@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
@@ -238,11 +238,65 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain('start_bootstrap_heartbeat');
     expect(callScript).toContain('stop_bootstrap_heartbeat');
     expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
+    const inUseGuard = 'case "$WT" in\n"$INVOKER_HOME"/worktrees/?*)';
+    const markAssignment = 'INVOKER_IN_USE_MARK="$INVOKER_HOME/in-use/${WT#"$INVOKER_HOME"/}"';
+    const guardIndex = callScript.indexOf(inUseGuard);
+    const markIndex = callScript.indexOf(markAssignment);
+    const setupEndIndex = callScript.indexOf('\n  ;;\nesac\n', markIndex);
+    expect(guardIndex).toBeGreaterThanOrEqual(0);
+    expect(markIndex).toBeGreaterThan(guardIndex);
+    expect(setupEndIndex).toBeGreaterThan(markIndex);
+    expect(callScript.indexOf(markAssignment, setupEndIndex)).toBe(-1);
+    expect(callScript.slice(0, guardIndex)).not.toContain(markAssignment);
+    expect(callScript.slice(guardIndex, setupEndIndex)).toContain('mkdir -p "$(dirname "$INVOKER_IN_USE_MARK")"');
+    expect(callScript.slice(guardIndex, setupEndIndex)).toContain('touch "$INVOKER_IN_USE_MARK"');
+    expect(callScript.slice(guardIndex, setupEndIndex)).toContain('export INVOKER_IN_USE_MARK');
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
     expect(callScript).toContain("trap 'cleanup_runtime' EXIT");
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
+  });
+
+  it('generated runner script refreshes an in-use mark while payload runs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-runner-in-use-mark-'));
+    try {
+      const markPath = join(root, 'in-use', 'worktrees', 'repo-hash', 'task-branch');
+      mkdirSync(join(root, 'in-use', 'worktrees', 'repo-hash'), { recursive: true });
+      const payloadStartPath = join(root, 'payload-start-ms');
+      const runnerPath = join(root, 'runner.sh');
+      const payloadPath = join(root, 'payload.sh');
+      const ssh = new SshExecutor({
+        host: 'localhost',
+        user: 'testuser',
+        sshKeyPath: '/dev/null',
+        remoteHeartbeatIntervalSeconds: 1,
+      }) as any;
+      writeFileSync(runnerPath, ssh.buildRunnerScript());
+      writeFileSync(payloadPath, [
+        'node -e \'process.stdout.write(String(Date.now()))\' > "$PAYLOAD_START_FILE"',
+        'sleep 2.4',
+        '',
+      ].join('\n'));
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('bash', [runnerPath, payloadPath], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          INVOKER_IN_USE_MARK: markPath,
+          PAYLOAD_START_FILE: payloadStartPath,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(existsSync(markPath)).toBe(true);
+      const payloadStartMs = Number(readFileSync(payloadStartPath, 'utf8'));
+      expect(statSync(markPath).mtimeMs).toBeGreaterThan(payloadStartMs + 1000);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('managed mode skips provisioning when provisionCommand is unset', async () => {

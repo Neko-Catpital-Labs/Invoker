@@ -270,11 +270,13 @@ PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
 printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+[ -z "\${INVOKER_IN_USE_MARK:-}" ] || touch "$INVOKER_IN_USE_MARK" || true
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
     printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    [ -z "\${INVOKER_IN_USE_MARK:-}" ] || touch "$INVOKER_IN_USE_MARK" || true
   done
 ) &
 HEARTBEAT_PID=$!
@@ -385,10 +387,12 @@ INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${heartbeatIntervalSeconds}
 start_bootstrap_heartbeat() {
   printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+  [ -z "\${INVOKER_IN_USE_MARK:-}" ] || touch "$INVOKER_IN_USE_MARK" || true
   (
     while true; do
       sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
       printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+      [ -z "\${INVOKER_IN_USE_MARK:-}" ] || touch "$INVOKER_IN_USE_MARK" || true
     done
   ) &
   BOOTSTRAP_HEARTBEAT_PID=$!
@@ -414,6 +418,14 @@ chmod 700 "$STAGING_DIR"
 ${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
+case "$WT" in
+"$INVOKER_HOME"/worktrees/?*)
+  INVOKER_IN_USE_MARK="$INVOKER_HOME/in-use/\${WT#"\$INVOKER_HOME"/}"
+  mkdir -p "$(dirname "$INVOKER_IN_USE_MARK")"
+  touch "$INVOKER_IN_USE_MARK"
+  export INVOKER_IN_USE_MARK
+  ;;
+esac
 ${options.envExports}
 start_bootstrap_heartbeat
 ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
