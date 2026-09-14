@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -99,6 +99,27 @@ try {
   assert.match(proseBody.stdout, /mentions multiple review units \(write-path, routing\).*Matched words: write-path \[submit\]/);
 } finally {
   rmSync(dir, { recursive: true, force: true });
+}
+
+const cleanupClaim = 'Cleanup skips folders with a fresh mark and removes stale ones.';
+assert.deepEqual([...detectReviewUnits(cleanupClaim)], ['cleanup'], 'stale and skip must not count toward validation-policy');
+assert.deepEqual(validateSingleReviewUnitFocus({ texts: [cleanupClaim], context: 'plan task' }), []);
+
+const commandClaim = 'Run `find "$DIR" -type f -mmin -15` before cleanup.';
+assert.deepEqual([...detectReviewUnits(commandClaim)], ['cleanup'], 'text inside backticks must not count toward a unit');
+assert.deepEqual(validateSingleReviewUnitFocus({ texts: [commandClaim], context: 'plan task' }), []);
+
+const lintScript = new URL('../skills/plan-to-invoker/scripts/lint-review-units.mjs', import.meta.url).pathname;
+for (const fixture of [
+  'anti-pattern-n-broad-autofix-policy-review-unit.yaml',
+  'anti-pattern-o-all-in-one-autofix-review-unit.yaml',
+  'anti-pattern-r-waiver-spans-review-lanes.yaml',
+  'anti-pattern-j-zero-context-missing-metadata.yaml',
+  'anti-pattern-q-behavior-plus-unrelated-docs.yaml',
+]) {
+  const fixturePath = new URL(`../skills/plan-to-invoker/fixtures/negative/${fixture}`, import.meta.url).pathname;
+  const result = spawnSync(process.execPath, [lintScript, fixturePath], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0, `${fixture} must still fail lint-review-units:\n${result.stdout}${result.stderr}`);
 }
 
 console.log('review-unit trigger-word tests passed');

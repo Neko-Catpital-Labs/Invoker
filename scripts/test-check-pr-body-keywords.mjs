@@ -22,10 +22,8 @@ function run(bodyText, declaredUnit) {
 }
 
 try {
-  // Reproduces the exact failure hit while drafting a real PR body: "stale"
-  // trips validation-policy even though the declared unit is routing.
   const bad = run(
-    '## Summary\nThis narrows the job and routes it onto a possibly-stale self-hosted runner.\n',
+    '## Summary\nThis narrows the job and routes its retries onto a self-hosted runner.\n',
     'routing',
   );
   assert.equal(bad.exitCode, 1, 'a body with a conflicting keyword must exit non-zero');
