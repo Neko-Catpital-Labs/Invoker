@@ -383,6 +383,77 @@ describe('runRepoLocalPrBodyChecker', () => {
       baseBranch: 'master',
     })).toEqual([]);
   });
+
+  it.fails('keeps the event loop running and gives up on a checker that never exits', async () => {
+    const cwd = createTempDir();
+    mkdirSync(join(cwd, 'scripts'));
+    writeFileSync(
+      join(cwd, 'scripts', 'validate-pr-body-local.mjs'),
+      'setTimeout(() => process.exit(0), 12_000);\n',
+    );
+    process.env.INVOKER_PR_BODY_VALIDATOR_NODE = process.execPath;
+
+    let ticks = 0;
+    const ticker = setInterval(() => { ticks += 1; }, 50);
+    const startedAt = Date.now();
+    try {
+      const errors = await runRepoLocalPrBodyChecker({
+        body: '## Summary\n\nok',
+        cwd,
+        baseBranch: 'master',
+        timeoutMs: 1_000,
+      });
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(ticks).toBeGreaterThan(5);
+      expect(elapsedMs).toBeLessThan(10_000);
+      expect(errors.join('\n')).toContain('timed out');
+    } finally {
+      clearInterval(ticker);
+    }
+  }, 40_000);
+
+  it.fails('never boots the host app when node is missing from PATH', async () => {
+    const cwd = createTempDir();
+    mkdirSync(join(cwd, 'scripts'));
+    writeFileSync(join(cwd, 'scripts', 'validate-pr-body-local.mjs'), 'process.exit(0);\n');
+    const realNode = process.execPath;
+    const fakeAppDir = createTempDir();
+    const fakeApp = join(fakeAppDir, 'FakeElectronApp');
+    writeFileSync(
+      fakeApp,
+      [
+        '#!/bin/sh',
+        'if [ "$ELECTRON_RUN_AS_NODE" = "1" ]; then',
+        `  exec "${realNode}" "$@"`,
+        'fi',
+        'sleep 12',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const emptyPathDir = createTempDir();
+    const originalPath = process.env.PATH;
+    const originalExecPath = process.execPath;
+    delete process.env.INVOKER_PR_BODY_VALIDATOR_NODE;
+    process.env.PATH = emptyPathDir;
+    Object.defineProperty(process, 'execPath', { value: fakeApp, configurable: true, writable: true });
+    const startedAt = Date.now();
+    try {
+      const errors = await runRepoLocalPrBodyChecker({
+        body: '## Summary\n\nok',
+        cwd,
+        baseBranch: 'master',
+        timeoutMs: 5_000,
+      });
+
+      expect(Date.now() - startedAt).toBeLessThan(10_000);
+      expect(errors).toEqual([]);
+    } finally {
+      Object.defineProperty(process, 'execPath', { value: originalExecPath, configurable: true, writable: true });
+      process.env.PATH = originalPath;
+    }
+  }, 40_000);
 });
 
 // ── make-pr stack publish prompt + parsing ───────────────
