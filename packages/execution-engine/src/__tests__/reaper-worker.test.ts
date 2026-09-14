@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -64,6 +64,43 @@ describe('reaper worker log files', () => {
       await runtime.tick('manual');
 
       expect(statSync(logPath).size).toBe(size);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('reaper worker log shards', () => {
+  it('deletes rotated log shards older than seven days and keeps the active log and newer shards', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-reaper-shards-'));
+    try {
+      const home = join(root, '.invoker');
+      mkdirSync(home, { recursive: true });
+      const eightDaysAgo = Date.now() / 1000 - 8 * 24 * 60 * 60;
+      const oldShard = 'invoker.2026-09-01T00-00-00-000Z-1.log';
+      const newShard = 'invoker.2026-09-13T00-00-00-000Z-1.log';
+      for (const name of ['invoker.log', oldShard, newShard]) {
+        writeFileSync(join(home, name), 'z');
+      }
+      utimesSync(join(home, oldShard), eightDaysAgo, eightDaysAgo);
+      utimesSync(join(home, 'invoker.log'), eightDaysAgo, eightDaysAgo);
+
+      const runtime = createReaperWorker({
+        logger: makeLogger(),
+        invokerHome: home,
+        intervalMs: 0,
+        tickOnStart: false,
+        reapOrphans: vi.fn(async () => []),
+        reapCheckouts: vi.fn(() => []),
+        reapWorktrees: vi.fn(async () => []),
+        reapTempDirs: vi.fn(async () => []),
+        enforceRetention: vi.fn(() => 0),
+        reapMergeClones: vi.fn(async () => ({ ok: true, removed: [] })),
+        reapDevHomes: vi.fn(async () => ({ ok: true, removed: [], unchecked: [] })),
+      });
+      await runtime.tick('manual');
+
+      expect(readdirSync(home).sort()).toEqual(['invoker.log', newShard].sort());
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
