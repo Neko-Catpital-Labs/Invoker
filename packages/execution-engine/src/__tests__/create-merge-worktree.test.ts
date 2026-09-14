@@ -8,7 +8,7 @@
  * Pattern: bare remote + working clone + TaskRunner with real git.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -373,6 +373,9 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     }
 
     expect(message).toContain('install-broke');
+    const leftoverClones = readdirSync(join(sandbox.root, 'merge-clones'))
+      .filter((name) => name.startsWith('test-provision-fails-'));
+    expect(leftoverClones).toEqual([]);
   });
 
 });

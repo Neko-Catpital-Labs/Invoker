@@ -293,13 +293,18 @@ export async function createMergeWorktree(
   } else {
     ctx.logger.info(`[createMergeWorktree] No provisioning command configured for ${repoUrl ?? ctx.cwd}; merge clone ${clonePath} not provisioned`);
   }
-  await spawnLocalProvisioning({
-    command: provisionCommand,
-    cwd: clonePath,
-    traceLabel: 'createMergeWorktree.provision',
-    failurePrefix: 'Merge clone provisioning failed:',
-    timeoutMs: getExecutorStartTimeoutMs(),
-  }).completion;
+  try {
+    await spawnLocalProvisioning({
+      command: provisionCommand,
+      cwd: clonePath,
+      traceLabel: 'createMergeWorktree.provision',
+      failurePrefix: 'Merge clone provisioning failed:',
+      timeoutMs: getExecutorStartTimeoutMs(),
+    }).completion;
+  } catch (error) {
+    await removeMergeWorktree(clonePath, ctx.logger);
+    throw error;
+  }
   return clonePath;
 }
 
