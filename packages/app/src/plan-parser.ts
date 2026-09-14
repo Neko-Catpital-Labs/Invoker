@@ -655,8 +655,77 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
   };
 }
 
+function parseSimpleScalar(rawValue: string): string | number | boolean {
+  const value = rawValue.trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^-?\d+$/.test(value)) return Number(value);
+  return value;
+}
+
+function parseSimpleStringList(rawValue: string): string[] | undefined {
+  const value = rawValue.trim();
+  if (!value.startsWith('[') || !value.endsWith(']')) return undefined;
+  const inner = value.slice(1, -1).trim();
+  if (!inner) return [];
+  return inner.split(',').map((item) => {
+    const parsed = parseSimpleScalar(item.trim());
+    return typeof parsed === 'string' ? parsed : undefined;
+  }).filter((item): item is string => item !== undefined);
+}
+
+function parseSimplePlanSubmissionBundle(yamlContent: string): RawPlanBundle | undefined {
+  const raw: RawPlanBundle = {};
+  const tasks: RawPlanTask[] = [];
+  let inTasks = false;
+  let currentTask: RawPlanTask | undefined;
+
+  for (const line of yamlContent.split(/\r?\n/)) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+    if (line.includes('\t')) return undefined;
+
+    if (!inTasks) {
+      if (line === 'tasks:') {
+        inTasks = true;
+        continue;
+      }
+      if (line === 'workflows:') return undefined;
+      const match = /^([A-Za-z][A-Za-z0-9]*):\s+(.+)$/.exec(line);
+      if (!match) return undefined;
+      const [, key, value] = match;
+      Reflect.set(raw, key, parseSimpleScalar(value));
+      continue;
+    }
+
+    const taskStart = /^  - id:\s+(.+)$/.exec(line);
+    if (taskStart) {
+      currentTask = { id: String(parseSimpleScalar(taskStart[1])) };
+      tasks.push(currentTask);
+      continue;
+    }
+    const taskField = /^    ([A-Za-z][A-Za-z0-9]*):\s+(.+)$/.exec(line);
+    if (!taskField || !currentTask) return undefined;
+    const [, key, value] = taskField;
+    if (key === 'dependencies') {
+      const dependencies = parseSimpleStringList(value);
+      if (!dependencies) return undefined;
+      currentTask.dependencies = dependencies;
+      continue;
+    }
+    Reflect.set(currentTask, key, parseSimpleScalar(value));
+  }
+
+  if (!inTasks) return undefined;
+  raw.tasks = tasks;
+  return raw;
+}
+
 export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBundle {
-  const raw = parseYaml(yamlContent) as RawPlanBundle;
+  const raw = parseSimplePlanSubmissionBundle(yamlContent)
+    ?? parseYaml(yamlContent, { prettyErrors: false }) as RawPlanBundle;
 
   if (!raw || typeof raw !== 'object') {
     throw new PlanParseError('Plan must be a YAML object');
