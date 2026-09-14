@@ -1748,6 +1748,16 @@ export class Orchestrator {
    */
   startExecution(opts?: StartExecutionOptions): TaskState[] {
     this.pruneLaunchDeferrals();
+    if (opts?.limit === 0) {
+      this.logger.info('[orchestrator] startExecution', {
+        ready: 0,
+        active: undefined,
+        maxConcurrency: this.maxConcurrency,
+        limit: opts.limit,
+        readyIds: [],
+      });
+      return [];
+    }
 
     const activeAttempts = this.countActivePersistedAttempts();
     const hasPerCallLimit = typeof opts?.limit === 'number' && opts.limit >= 0;
