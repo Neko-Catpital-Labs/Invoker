@@ -1998,7 +1998,6 @@ function startHeadlessMode(): void {
         ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> => {
           const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
           const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-          const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
           const workflowIds: string[] = [];
           let upstream: { workflowId: string; featureBranch: string } | undefined;
 
@@ -2019,24 +2018,40 @@ function startHeadlessMode(): void {
                 ],
               };
             }
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-            const workflowId = orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id))!;
-            existingWorkflowIds.add(workflowId);
+            const workflowId = orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
             workflowIds.push(workflowId);
             upstream = { workflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
+            setImmediate(() => {
+              try {
+                backupPlan(plan, undefined, logger);
+              } catch (err) {
+                logger.error(
+                  `headless.run deferred plan backup failed plan="${submission.name}" workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+                  { module: 'ipc-delegate' },
+                );
+              }
+            });
           }
 
           const workflowId = workflowIds[workflowIds.length - 1];
           if (!workflowId) {
             throw new Error('Loaded plan did not create a workflow.');
           }
-          const started = orchestrator.startExecution();
-          logger.info(
-            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
-            { module: 'ipc-delegate' },
-          );
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+          setImmediate(() => {
+            try {
+              const started = orchestrator.startWorkflowExecution(workflowId);
+              logger.info(
+                `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+                { module: 'ipc-delegate' },
+              );
+            } catch (err) {
+              logger.error(
+                `headless.run deferred startExecution failed plan="${submission.name}" workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+                { module: 'ipc-delegate' },
+              );
+            }
+          });
           return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
         };
 
