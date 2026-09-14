@@ -27,6 +27,16 @@ type InvalidationSignal = {
   abortController: AbortController;
 };
 
+type PersistenceBatchOperation = {
+  run: () => unknown;
+  resolve: (value: unknown) => void;
+  reject: (error: unknown) => void;
+};
+
+type IntentExecutionOutcome =
+  | { status: 'completed'; result: unknown }
+  | { status: 'failed'; error: unknown };
+
 export type WorkflowMutationContext = {
   signal: AbortSignal;
   intentId: number;
@@ -110,6 +120,7 @@ export class PersistedWorkflowMutationCoordinator {
   private readonly enqueueStartedAtMs = new Map<number, number>();
   private readonly drainingWorkflows = new Set<string>();
   private readonly pendingDrainWorkflows = new Set<string>();
+  private readonly pendingPersistenceOperations: PersistenceBatchOperation[] = [];
   private readonly leaseHeartbeatMs = Math.max(1_000, Math.floor(WORKFLOW_MUTATION_LEASE_MS / 3));
   private readonly leaseRenewMinIntervalMs = Math.max(
     500,
@@ -121,6 +132,7 @@ export class PersistedWorkflowMutationCoordinator {
   );
   private readonly enableTraceLogs: boolean;
   private deferredDrainTimer: NodeJS.Timeout | null = null;
+  private persistenceBatchScheduled = false;
 
   constructor(
     private readonly persistence: SQLiteAdapter,
@@ -243,18 +255,18 @@ export class PersistedWorkflowMutationCoordinator {
   }
 
   private scheduleWorkflowDrain(workflowId: string): void {
+    this.pendingDrainWorkflows.add(workflowId);
     if (this.drainingWorkflows.has(workflowId)) {
       return;
     }
-    this.pendingDrainWorkflows.add(workflowId);
     void this.processPendingDrains();
   }
 
   private scheduleWorkflowDrainDeferred(workflowId: string): void {
+    this.pendingDrainWorkflows.add(workflowId);
     if (this.drainingWorkflows.has(workflowId)) {
       return;
     }
-    this.pendingDrainWorkflows.add(workflowId);
     if (this.deferredDrainTimer) {
       return;
     }
@@ -306,7 +318,11 @@ export class PersistedWorkflowMutationCoordinator {
         .mark('PersistedWorkflowMutationCoordinator.runWorkflowDrain.claimLease', 'completed', {
           ownerId: this.ownerId,
         });
-      let intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
+      let intent = this.claimNextWorkflowMutationIntentNow(workflowId);
+      if (!intent) {
+        await this.runInPersistenceBatch(() =>
+          this.persistence.releaseWorkflowMutationLease(workflowId, this.ownerId));
+      }
       while (intent) {
         const waitMs = this.intentQueueWaitMs(intent.id);
         this.createTiming(workflowId, intent.channel, intent.id, intent.args)
@@ -314,24 +330,53 @@ export class PersistedWorkflowMutationCoordinator {
             queueWaitMs: waitMs,
           });
         this.trace(`drain-start workflow=${workflowId} intent=${intent.id} channel=${intent.channel} queueWaitMs=${waitMs}`);
-        this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
-          activeIntentId: intent.id,
-          activeMutationKind: intent.channel,
-          minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
-          minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
-        });
-        await this.executeIntent(workflowId, intent);
+        const completedIntent = intent;
+        const outcome = await this.executeIntent(workflowId, completedIntent);
         this.trace(`drain-finished workflow=${workflowId} intent=${intent.id} channel=${intent.channel}`);
-        intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
+        intent = await this.claimNextWorkflowMutationIntentBatched(workflowId);
+        if (!intent) {
+          await this.runInPersistenceBatch(() =>
+            this.persistence.releaseWorkflowMutationLease(workflowId, this.ownerId));
+        }
+        this.settleIntentExecution(completedIntent, outcome);
       }
-      this.persistence.releaseWorkflowMutationLease(workflowId, this.ownerId);
     } finally {
       this.drainingWorkflows.delete(workflowId);
     }
   }
 
-  private async executeIntent(workflowId: string, intent: WorkflowMutationIntent): Promise<void> {
-    const deferred = this.inFlightPromises.get(intent.id);
+  private claimNextWorkflowMutationIntentNow(workflowId: string): WorkflowMutationIntent | undefined {
+    const intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
+    if (intent) {
+      this.renewWorkflowMutationLeaseForIntent(workflowId, intent);
+    }
+    return intent;
+  }
+
+  private claimNextWorkflowMutationIntentBatched(workflowId: string): Promise<WorkflowMutationIntent | undefined> {
+    this.pendingDrainWorkflows.delete(workflowId);
+    return this.runInPersistenceBatch(() => {
+      const intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
+      if (intent) {
+        this.renewWorkflowMutationLeaseForIntent(workflowId, intent);
+      }
+      return intent;
+    });
+  }
+
+  private renewWorkflowMutationLeaseForIntent(workflowId: string, intent: WorkflowMutationIntent): void {
+    this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
+      activeIntentId: intent.id,
+      activeMutationKind: intent.channel,
+      minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
+      minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
+    });
+  }
+
+  private async executeIntent(
+    workflowId: string,
+    intent: WorkflowMutationIntent,
+  ): Promise<IntentExecutionOutcome> {
     const invalidation = this.createRunningIntentInvalidation(intent.id);
     const timing = this.createTiming(workflowId, intent.channel, intent.id, intent.args);
     const intentStartedAtMs = Date.now();
@@ -359,41 +404,114 @@ export class PersistedWorkflowMutationCoordinator {
         undefined,
         () => this.dispatch(intent.channel, intent.args, mutationContext),
       );
-      void dispatchPromise.catch(() => {});
+      void dispatchPromise
+        .catch(async (error) => {
+          const message = summarizeMutationFailureMessage(error);
+          await this.runInPersistenceBatch(() => {
+            this.persistence.failWorkflowMutationIntent(intent.id, message);
+          });
+          this.notifyIntentFailed(intent, message);
+          this.logDispatchFailure(intent, message);
+        })
+        .catch((recordError) => {
+          const detail = recordError instanceof Error ? recordError.stack ?? recordError.message : String(recordError);
+          process.stderr.write(
+            `[workflow-mutation-coordinator] could not record dispatch failure intent=${intent.id} workflow=${workflowId}: ${detail}\n`,
+          );
+        });
       const result = await Promise.race([
         dispatchPromise,
         invalidation.promise,
       ]);
-      const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
-      if (latestIntent?.status === 'running') {
-        this.persistence.completeWorkflowMutationIntent(intent.id);
-      }
+      await this.runInPersistenceBatch(() => {
+        const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
+        if (latestIntent?.status === 'running') {
+          this.persistence.completeWorkflowMutationIntent(intent.id);
+        }
+      });
       timing.mark('PersistedWorkflowMutationCoordinator.executeIntent', 'completed', {
         durationMs: Date.now() - intentStartedAtMs,
       });
-      deferred?.resolve(result);
+      return { status: 'completed', result };
     } catch (error) {
       const message = summarizeMutationFailureMessage(error);
-      const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
-      if (latestIntent?.status === 'running') {
+      const recordedFailure = await this.runInPersistenceBatch(() => {
+        const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
+        if (latestIntent?.status !== 'running') {
+          return false;
+        }
         this.persistence.failWorkflowMutationIntent(intent.id, message);
+        return true;
+      });
+      if (recordedFailure) {
         this.notifyIntentFailed(intent, message);
       }
       timing.mark('PersistedWorkflowMutationCoordinator.executeIntent', 'failed', {
         durationMs: Date.now() - intentStartedAtMs,
         error: error instanceof Error ? error.message : String(error),
       });
-      deferred?.reject(error);
+      return { status: 'failed', error };
     } finally {
       clearInterval(leaseHeartbeat);
       invalidation.abortController.abort();
       this.runningIntentInvalidations.delete(intent.id);
-      this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
-        minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
-        minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
+    }
+  }
+
+  private settleIntentExecution(intent: WorkflowMutationIntent, outcome: IntentExecutionOutcome): void {
+    const deferred = this.inFlightPromises.get(intent.id);
+    if (outcome.status === 'completed') {
+      deferred?.resolve(outcome.result);
+    } else {
+      deferred?.reject(outcome.error);
+    }
+    this.inFlightPromises.delete(intent.id);
+    this.enqueueStartedAtMs.delete(intent.id);
+  }
+
+  private logDispatchFailure(intent: WorkflowMutationIntent, message: string): void {
+    const logMessage = `[workflow-mutation-coordinator] dispatch failed intent=${intent.id} workflow=${intent.workflowId}: ${message}`;
+    if (this.options?.logger) {
+      this.options.logger.error(logMessage, {
+        module: 'workflow-mutation-coordinator',
+        workflowId: intent.workflowId,
+        intentId: intent.id,
       });
-      this.inFlightPromises.delete(intent.id);
-      this.enqueueStartedAtMs.delete(intent.id);
+      return;
+    }
+    process.stderr.write(`${logMessage}\n`);
+  }
+
+  private runInPersistenceBatch<T>(run: () => T): Promise<T> {
+    const result = new Promise<T>((resolve, reject) => {
+      this.pendingPersistenceOperations.push({
+        run,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
+    });
+    if (!this.persistenceBatchScheduled) {
+      this.persistenceBatchScheduled = true;
+      queueMicrotask(() => this.flushPersistenceBatch());
+    }
+    return result;
+  }
+
+  private flushPersistenceBatch(): void {
+    this.persistenceBatchScheduled = false;
+    const operations = this.pendingPersistenceOperations.splice(0);
+    if (operations.length === 0) {
+      return;
+    }
+    try {
+      const results = this.persistence.runInTransaction(() => operations.map((operation) => operation.run()));
+      operations.forEach((operation, index) => operation.resolve(results[index]));
+    } catch (error) {
+      operations.forEach((operation) => operation.reject(error));
+    }
+    if (this.pendingPersistenceOperations.length > 0 && !this.persistenceBatchScheduled) {
+      this.persistenceBatchScheduled = true;
+      queueMicrotask(() => this.flushPersistenceBatch());
     }
   }
 
