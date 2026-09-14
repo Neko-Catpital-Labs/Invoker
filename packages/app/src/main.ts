@@ -3899,7 +3899,7 @@ startMainProcessBootstrap({
                 actionId: task.id,
                 executionGeneration: task.execution.generation ?? 0,
                 status: 'failed',
-                outputs: { exitCode: 1, error: 'Application quit' },
+                outputs: { exitCode: 1, error: 'Application quit', failureClass: 'owner-interrupted' },
               });
             }
           }
