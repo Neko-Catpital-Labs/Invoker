@@ -278,7 +278,7 @@ export type SshInfraFailureClass =
 
 export type TransientFailureClass = 'ssh-transport-transient';
 
-export type AgentFailureClass = 'agent-usage-limit';
+export type AgentFailureClass = 'agent-usage-limit' | 'agent-spend-gate';
 
 export type FailureClass = 'liveness_stall' | SshInfraFailureClass | TransientFailureClass | AgentFailureClass;
 
