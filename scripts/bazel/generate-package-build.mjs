@@ -33,11 +33,12 @@ function renderPackageBuild(dirName, pkg) {
   const kind = packageKind(dirName, pkg);
   const hasTest = Boolean(pkg.scripts?.test) && !String(pkg.scripts.test).startsWith('echo');
   const hasBuild = Boolean(pkg.scripts?.build);
-  const tags = ['no-sandbox', 'local', `kind_${kind}`];
+  const tags = ['no-sandbox', `kind_${kind}`];
   if (kind === 'electron' || kind === 'vite') {
     tags.push('no-remote-exec');
   }
   const tagLit = tags.map((t) => `"${t}"`).join(', ');
+  const dataGlob = 'glob(["**"], exclude = ["node_modules/**", "dist/**", "coverage/**", "BUILD.bazel"])';
   const lines = [HEADER, 'exports_files(["package.json"])', ''];
   if (hasBuild) {
     lines.push(
@@ -45,18 +46,24 @@ function renderPackageBuild(dirName, pkg) {
       '    name = "build",',
       '    srcs = ["//scripts/bazel:run_pnpm_filter.sh"],',
       `    args = ["${name}", "build"],`,
+      `    data = ${dataGlob},`,
       `    tags = [${tagLit}],`,
       ')',
       '',
     );
   }
   if (hasTest) {
+    const testSize =
+      kind === 'electron' || kind === 'vite' || dirName === 'execution-engine' || dirName === 'surfaces' || dirName === 'cli' || dirName === 'data-store'
+        ? 'enormous'
+        : 'large';
     lines.push(
       'sh_test(',
       '    name = "test",',
       '    srcs = ["//scripts/bazel:run_pnpm_filter.sh"],',
       `    args = ["${name}", "test"],`,
-      '    size = "medium",',
+      `    size = "${testSize}",`,
+      `    data = ${dataGlob},`,
       `    tags = [${tagLit}],`,
       ')',
       '',
@@ -90,7 +97,7 @@ function renderRootBuild(enabled) {
         '    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],',
         `    args = [${cmd.map((c) => `"${c}"`).join(', ')}],`,
         '    size = "large",',
-        '    tags = ["no-sandbox", "local", "quality"],',
+        '    tags = ["no-sandbox", "quality"],',
         ')',
         '',
       );
@@ -103,28 +110,28 @@ function renderRootBuild(enabled) {
       '    srcs = ["//scripts/bazel:run_pnpm_filter.sh"],',
       '    args = ["@invoker/app", "test:e2e"],',
       '    size = "enormous",',
-      '    tags = ["no-sandbox", "local", "no-remote-exec", "playwright"],',
+      '    tags = ["no-sandbox", "no-remote-exec", "playwright"],',
       ')',
       '',
     );
   }
   if (enabled.packaging) {
-    lines.push(
-      'sh_binary(',
-      '    name = "dist_cli",',
-      '    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],',
-      '    args = ["pnpm", "run", "dist:cli"],',
-      '    tags = ["no-sandbox", "local", "packaging"],',
-      ')',
-      '',
-      'sh_binary(',
-      '    name = "dist_desktop_linux",',
-      '    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],',
-      '    args = ["bash", "scripts/package-desktop.sh", "--linux"],',
-      '    tags = ["no-sandbox", "local", "packaging"],',
-      ')',
-      '',
-    );
+    for (const [name, ...cmd] of [
+      ['dist_cli', 'pnpm', 'run', 'dist:cli'],
+      ['dist_slack', 'pnpm', 'run', 'dist:slack'],
+      ['dist_watcher', 'pnpm', 'run', 'dist:watcher'],
+      ['dist_desktop_linux', 'bash', 'scripts/package-desktop.sh', '--linux'],
+    ]) {
+      lines.push(
+        'sh_binary(',
+        `    name = "${name}",`,
+        '    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],',
+        `    args = [${cmd.map((c) => `"${c}"`).join(', ')}],`,
+        '    tags = ["no-sandbox", "packaging"],',
+        ')',
+        '',
+      );
+    }
   }
   return lines.join('\n');
 }
