@@ -21,7 +21,7 @@ vi.mock('node:fs', async (importOriginal) => {
 // Must import after mock setup
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
+import { WorktreeExecutor, computeContentHash, isCloneableRepoUrl } from '../worktree-executor.js';
 import { BaseExecutor, isHeartbeatAliveDuringFinalize, normalizeRepoUrlForProvisionLookup } from '../base-executor.js';
 import { registerBuiltinAgents } from '../agents/index.js';
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
@@ -210,6 +210,29 @@ describe('normalizeRepoUrlForProvisionLookup', () => {
     'ssh://git@github.com/test/repo.git',
   ])('canonicalizes %s', (repoUrl) => {
     expect(normalizeRepoUrlForProvisionLookup(repoUrl)).toBe('github.com/test/repo');
+  });
+});
+
+describe('isCloneableRepoUrl', () => {
+  it.each([
+    ['https://github.com/owner/repo', true],
+    ['https://github.com/owner/repo.git', true],
+    ['http://example.com/repo.git', true],
+    ['git@github.com:owner/repo.git', true],
+    ['git@gitlab.com:group/project.git', true],
+    ['ssh://git@github.com/owner/repo.git', true],
+    ['file:///home/user/repo.git', true],
+    ['owner/repo', true],
+    ['/tmp/invoker-repro-fixture/repro-repo', true],
+    ['.', false],
+    ['..', false],
+    ['./repo', false],
+    ['../repo', false],
+    ['', false],
+    ['  ', false],
+    ['just-a-name', false],
+  ])('isCloneableRepoUrl(%j) returns %s', (repoUrl, expected) => {
+    expect(isCloneableRepoUrl(repoUrl)).toBe(expected);
   });
 });
 
@@ -561,7 +584,6 @@ describe('WorktreeExecutor', () => {
     });
     mockPool(provisionedExecutor);
 
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => true);
     try {
       const startPromise = provisionedExecutor.start(makeRequest());
       const rejection = expect(startPromise).rejects.toThrow('provision command timed out after 25ms');
@@ -574,10 +596,11 @@ describe('WorktreeExecutor', () => {
       await vi.advanceTimersByTimeAsync(25 + SIGKILL_TIMEOUT_MS);
 
       await rejection;
-      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
-      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGKILL');
+      // The mocked pid does not lead a real process group, so killProcessGroup
+      // falls back to child.kill() rather than process.kill(-pid).
+      expect(provisionProcess.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(provisionProcess.kill).toHaveBeenCalledWith('SIGKILL');
     } finally {
-      killSpy.mockRestore();
       if (previousTimeout === undefined) {
         delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
       } else {
@@ -647,10 +670,10 @@ describe('WorktreeExecutor', () => {
       executor.onComplete(handle, (res) => resolve(res));
     });
 
-    // When kill sends SIGTERM, simulate process exit
-    const origKill = process.kill;
-    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
-      // Simulate the process closing after receiving the signal
+    // When kill sends SIGTERM, simulate process exit. The mocked pid does
+    // not lead a real process group, so killProcessGroup falls back to
+    // child.kill() rather than process.kill(-pid) — mock that fallback.
+    vi.mocked(taskProcess.kill).mockImplementation((_signal?) => {
       setTimeout(() => taskProcess.emit('close', null, 'SIGTERM'), 0);
       return true;
     });
@@ -665,8 +688,6 @@ describe('WorktreeExecutor', () => {
         (call[1] as string[])?.includes('remove'),
     );
     expect(removeCalls.length).toBe(0);
-
-    vi.mocked(process.kill).mockRestore();
   });
 
   it('kill returns when process close already fired during finalization', async () => {
@@ -715,16 +736,15 @@ describe('WorktreeExecutor', () => {
 
     expect(taskProcesses).toHaveLength(2);
 
-    // Simulate processes closing when SIGTERM is sent
-    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
-      for (const tp of taskProcesses) {
-        if (!(tp as any)._closed) {
-          (tp as any)._closed = true;
-          setTimeout(() => tp.emit('close', null, 'SIGTERM'), 0);
-        }
-      }
-      return true;
-    });
+    // Simulate processes closing when SIGTERM is sent. The mocked pids do
+    // not lead real process groups, so killProcessGroup falls back to
+    // child.kill() rather than process.kill(-pid) — mock that fallback.
+    for (const tp of taskProcesses) {
+      vi.mocked(tp.kill).mockImplementation((_signal?) => {
+        setTimeout(() => tp.emit('close', null, 'SIGTERM'), 0);
+        return true;
+      });
+    }
 
     await executor.destroyAll();
 
@@ -736,8 +756,6 @@ describe('WorktreeExecutor', () => {
         (call[1] as string[])?.includes('remove'),
     );
     expect(removeCalls.length).toBe(0);
-
-    vi.mocked(process.kill).mockRestore();
   });
 
 

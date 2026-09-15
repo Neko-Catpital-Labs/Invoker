@@ -1,0 +1,327 @@
+#!/usr/bin/env node
+/**
+ * Scan terminal Invoker agent sessions (Claude/Codex/OMP) for thrash and
+ * submit one follow-up Invoker workflow per session hash per week.
+ * Never stops the original repair.
+ *
+ * Discovery: Invoker headless task inventory (agentSessionId + agentName),
+ * then resolve transcript paths per harness. Optional inventory JSON for tests.
+ */
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+  mkdtempSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { detectThrash, sessionHash } from './worker-session-mine-thrash.mjs';
+import { resolveTranscriptPath, claudeProjectRoots, agentSessionsDir } from './worker-session-mine-resolve.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(__dirname, '..');
+const STATE_DIR = process.env.INVOKER_SESSION_MINE_STATE_DIR
+  ?? join(homedir(), '.invoker', 'worker-session-mine');
+const LEDGER_PATH = join(STATE_DIR, 'cooldown.json');
+const COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_PER_TICK = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_TICK ?? '1');
+const MAX_PER_DAY = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_DAY ?? '2');
+const LOOKBACK_HOURS = Number(process.env.INVOKER_SESSION_MINE_LOOKBACK_HOURS ?? '168');
+const WORKFLOW_PREFIXES = (process.env.INVOKER_SESSION_MINE_WORKFLOW_PREFIXES
+  ?? 'admin-bypass-repair-,CI regression')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const EXCLUDE_NAME_RE = /(session-mine|reflect-ci-|worker-session-mine)/i;
+const POOL_ID = process.env.INVOKER_SESSION_MINE_POOL_ID?.trim() ?? '';
+const DRY_RUN = process.env.INVOKER_SESSION_MINE_DRY_RUN === '1';
+const OWNER_CLI = process.env.INVOKER_SESSION_MINE_CLI ?? 'invoker-cli';
+const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stale']);
+
+function loadLedger() {
+  if (!existsSync(LEDGER_PATH)) return { version: 1, entries: {}, dayCounts: {} };
+  try {
+    return JSON.parse(readFileSync(LEDGER_PATH, 'utf8'));
+  } catch {
+    return { version: 1, entries: {}, dayCounts: {} };
+  }
+}
+
+function saveLedger(ledger) {
+  mkdirSync(STATE_DIR, { recursive: true });
+  writeFileSync(LEDGER_PATH, `${JSON.stringify(ledger, null, 2)}\n`);
+}
+
+function dayKey(d = new Date()) {
+  return d.toISOString().slice(0, 10);
+}
+
+function runOwnerQueryJson(args) {
+  const result = spawnSync(OWNER_CLI, [...args, '--output', 'json'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: { ...process.env },
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(result.stdout || 'null');
+  } catch {
+    return null;
+  }
+}
+
+/** @returns {Array<{ workflowName: string, sessionId: string, agentName: string, status: string }>} */
+function listFromInventoryFile(path) {
+  const raw = JSON.parse(readFileSync(path, 'utf8'));
+  const rows = Array.isArray(raw) ? raw : (raw.sessions || raw.tasks || []);
+  return rows.map((r) => ({
+    workflowName: r.workflowName || r.workflow || '',
+    sessionId: r.sessionId || r.agentSessionId || '',
+    agentName: r.agentName || r.executionAgent || 'claude',
+    status: r.status || 'failed',
+  })).filter((r) => r.sessionId);
+}
+
+function listFromOwner() {
+  const workflows = runOwnerQueryJson(['query', 'workflows']);
+  if (!Array.isArray(workflows)) return null;
+  const out = [];
+  for (const wf of workflows) {
+    const name = wf.name || wf.id || '';
+    if (EXCLUDE_NAME_RE.test(name)) continue;
+    if (!WORKFLOW_PREFIXES.some((p) => name.startsWith(p) || name.includes(p))) continue;
+    const tasks = runOwnerQueryJson(['query', 'tasks', '--workflow', wf.id]);
+    if (!Array.isArray(tasks)) continue;
+    for (const task of tasks) {
+      const status = task.status || '';
+      if (!TERMINAL.has(status)) continue;
+      const execution = task.execution || {};
+      const sessionId = execution.agentSessionId || execution.lastAgentSessionId || '';
+      if (!sessionId) continue;
+      const agentName = execution.agentName || execution.lastAgentName || task.config?.executionAgent || 'claude';
+      out.push({ workflowName: name, sessionId, agentName, status });
+    }
+  }
+  return out;
+}
+
+/** Disk fallback when headless is unavailable (dev / fixtures). */
+function listFromDiskFallback() {
+  const cutoff = Date.now() - LOOKBACK_HOURS * 3600 * 1000;
+  const out = [];
+  for (const root of claudeProjectRoots()) {
+    if (!existsSync(root)) continue;
+    for (const project of readdirSync(root)) {
+      const projectDir = join(root, project);
+      try {
+        if (!statSync(projectDir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      for (const name of readdirSync(projectDir)) {
+        if (!name.endsWith('.jsonl')) continue;
+        const path = join(projectDir, name);
+        try {
+          const mtime = statSync(path).mtimeMs;
+          if (mtime < cutoff) continue;
+          out.push({
+            workflowName: '',
+            sessionId: name.replace(/\.jsonl$/, ''),
+            agentName: 'claude',
+            status: 'failed',
+            path,
+            mtime,
+          });
+        } catch {
+          // skip
+        }
+      }
+    }
+  }
+  const sessions = agentSessionsDir();
+  if (existsSync(sessions)) {
+    for (const name of readdirSync(sessions)) {
+      const path = join(sessions, name);
+      try {
+        const mtime = statSync(path).mtimeMs;
+        if (mtime < cutoff) continue;
+      } catch {
+        continue;
+      }
+      if (name.endsWith('.jsonl')) {
+        const sessionId = name.replace(/\.jsonl$/, '');
+        out.push({
+          workflowName: '',
+          sessionId,
+          agentName: 'codex',
+          status: 'failed',
+          path: resolveTranscriptPath('codex', sessionId) ?? path,
+        });
+      } else if (name.endsWith('.omp.txt')) {
+        out.push({
+          workflowName: '',
+          sessionId: name.replace(/\.omp\.txt$/, ''),
+          agentName: 'omp',
+          status: 'failed',
+          path,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function matchesAllowlist(workflowName, report) {
+  const hint = workflowName || report.workflowHint || '';
+  if (EXCLUDE_NAME_RE.test(hint)) return false;
+  if (!hint) {
+    return process.env.INVOKER_SESSION_MINE_ALLOW_UNHINTTED === '1';
+  }
+  return WORKFLOW_PREFIXES.some((prefix) => hint.startsWith(prefix) || hint.includes(prefix));
+}
+
+function buildFollowUpPlan({ sessionId, jsonlPath, report, hash, agentName }) {
+  const name = `worker-session-mine-${hash}`;
+  const reasons = report.reasons.join('; ');
+  return `name: "${name}"
+description: |
+  Follow-up reflect/fix for thrashy worker session ${sessionId} (${agentName}).
+  Original repair is untouched. Never merge. Never vendor skills/reflect/.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+${POOL_ID ? `poolId: ${POOL_ID}\n` : ''}
+tasks:
+  - id: repro-thrash
+    description: |
+      Prove the thrash detector fires on a fixture copy and stays silent on a clean fixture.
+      Review claim: Detector positive/negative fixtures encode the thrash reasons for session ${hash}.
+      Review lane: proof
+      Safety invariant: Proof-only; does not modify the original session or merge anything.
+    command: "node scripts/worker-session-mine-thrash.mjs --self-test"
+    dependencies: []
+
+  - id: reflect-and-fix
+    description: |
+      Reflect via catstack and route each Accepted finding by root cause: catstack gets its own PR; Invoker changes are committed here for the merge gate to publish.
+      Review claim: Accepted findings land exactly once, as a catstack PR or an Invoker commit published by this workflow's merge gate, for session ${hash}.
+      Review lane: behavior
+      Safety invariant: Never vendor skills/reflect/ into Invoker; never merge; original workflow untouched.
+      Acceptance criteria:
+      - Summary says no durable finding, lists catstack PR URL(s), or names the Invoker commit(s) left for the merge gate.
+      - test ! -e skills/reflect
+    maxTurns: 30
+    prompt: |
+      Goal: Reflect on thrashy Invoker worker session ${sessionId} (agent=${agentName}) and land each Accepted finding exactly once, unmerged.
+      Safety invariant: Never vendor skills/reflect/; never merge; do not touch the original repair workflow.
+      Implementation details: |
+        Clone https://github.com/EdbertChan/catstack.git. Follow engine/skills/reflect/SKILL.md against ${jsonlPath}.
+        Skill/hook/methodology -> catstack PR. Invoker harness/prompt/product -> commit in this task's worktree only.
+        For Invoker changes, do not push and do not open a PR: this workflow's merge gate owns Invoker publication (onFinish: pull_request). Never merge.
+      Pass condition: Exit 0 when acceptance criteria hold.
+    dependencies:
+      - repro-thrash
+`;
+}
+
+function submitPlan(yamlText) {
+  const dir = mkdtempSync(join(tmpdir(), 'session-mine-plan-'));
+  const planPath = join(dir, 'plan.yaml');
+  writeFileSync(planPath, yamlText);
+  if (DRY_RUN) {
+    console.log(`dry-run plan written: ${planPath}`);
+    return { ok: true, dryRun: true, planPath };
+  }
+  const result = spawnSync(OWNER_CLI, ['run', '--live', planPath], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: { ...process.env },
+  });
+  console.log(result.stdout || '');
+  if (result.stderr) console.error(result.stderr);
+  return { ok: result.status === 0, status: result.status, planPath };
+}
+
+function main() {
+  mkdirSync(STATE_DIR, { recursive: true });
+  const ledger = loadLedger();
+  const today = dayKey();
+  const dayCount = ledger.dayCounts?.[today] ?? 0;
+  if (dayCount >= MAX_PER_DAY) {
+    console.log(`session-mine: day cap reached (${dayCount}/${MAX_PER_DAY})`);
+    return 0;
+  }
+
+  let candidates;
+  if (process.env.INVOKER_SESSION_MINE_INVENTORY_JSON) {
+    candidates = listFromInventoryFile(process.env.INVOKER_SESSION_MINE_INVENTORY_JSON);
+  } else {
+    candidates = listFromOwner();
+    if (!candidates || candidates.length === 0) {
+      console.log('session-mine: owner inventory empty or unavailable; using disk fallback');
+      candidates = listFromDiskFallback();
+    }
+  }
+
+  let filed = 0;
+  const now = Date.now();
+
+  for (const cand of candidates) {
+    if (filed >= MAX_PER_TICK) break;
+    if ((ledger.dayCounts?.[today] ?? 0) >= MAX_PER_DAY) break;
+
+    const path = cand.path || resolveTranscriptPath(cand.agentName, cand.sessionId);
+    if (!path || !existsSync(path)) continue;
+
+    const report = detectThrash(path);
+    if (!report.thrash) continue;
+    if (!matchesAllowlist(cand.workflowName, report)) continue;
+
+    const hash = sessionHash(cand.sessionId, cand.workflowName || report.workflowHint || '');
+    const prev = ledger.entries[hash];
+    if (prev && now - Number(prev.at || 0) < COOLDOWN_MS) {
+      console.log(`session-mine: cooldown ${hash}`);
+      continue;
+    }
+
+    console.log(`session-mine: filing follow-up for ${cand.sessionId} agent=${cand.agentName} hash=${hash} reasons=${report.reasons.join(',')}`);
+    const yamlText = buildFollowUpPlan({
+      sessionId: cand.sessionId,
+      jsonlPath: path,
+      report,
+      hash,
+      agentName: cand.agentName,
+    });
+    const submitted = submitPlan(yamlText);
+    if (!submitted.ok) {
+      console.error(`session-mine: submit failed for ${hash}`);
+      continue;
+    }
+    ledger.entries[hash] = {
+      at: now,
+      sessionId: cand.sessionId,
+      agentName: cand.agentName,
+      path,
+      reasons: report.reasons,
+    };
+    ledger.dayCounts = ledger.dayCounts || {};
+    ledger.dayCounts[today] = (ledger.dayCounts[today] ?? 0) + 1;
+    filed += 1;
+    saveLedger(ledger);
+  }
+
+  console.log(`session-mine: filed ${filed}`);
+  return 0;
+}
+
+process.exit(main());

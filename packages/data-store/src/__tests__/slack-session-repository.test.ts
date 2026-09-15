@@ -28,6 +28,7 @@ describe('SlackSessionRepository', () => {
       requestedBy: 'U123',
       lobbyChannelId: 'C456',
       confirmationMode: 'require' as const,
+      surface: 'slack',
     };
 
     repo.saveLaunchContext(context);
@@ -48,6 +49,7 @@ describe('SlackSessionRepository', () => {
       requestedBy: 'U123',
       lobbyChannelId: 'C456',
       confirmationMode: 'require' as const,
+      surface: 'slack',
     };
     try {
       const writer = await SQLiteAdapter.create(databasePath, { ownerCapability: true });

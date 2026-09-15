@@ -9,7 +9,7 @@ import { computeContentHash, buildExperimentBranchName } from './branch-utils.js
 import type { AgentRegistry } from './agent-registry.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { traceExecution } from './exec-trace.js';
-import { syncPlanBaseRemoteForRef } from './plan-base-remote.js';
+import { syncPlanBaseRemoteForRef, ensureRequiredCommitResolvable } from './plan-base-remote.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
 const TAG = '[DockerExecutor]';
@@ -389,7 +389,13 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
 
       const upstreamBaseCommit = request.inputs.upstreamBase?.commitHash?.trim();
       const baseRef = upstreamBaseCommit || request.inputs.baseBranch || 'HEAD';
-      await syncPlanBaseRemoteForRef((args) => this.execGitSimple(args, CONTAINER_CWD), baseRef);
+      const runGit = (args: string[]) => this.execGitSimple(args, CONTAINER_CWD);
+      if (upstreamBaseCommit) {
+        // syncPlanBaseRemoteForRef is a no-op for full SHAs, so it never
+        // fetches for upstreamBaseCommit specifically -- verify it directly.
+        await ensureRequiredCommitResolvable(runGit, upstreamBaseCommit);
+      }
+      await syncPlanBaseRemoteForRef(runGit, baseRef);
       const baseHead = FULL_SHA_RE.test(baseRef)
         ? baseRef
         : (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();

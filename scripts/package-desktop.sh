@@ -36,6 +36,7 @@ fi
 
 pnpm --filter @invoker/ui build
 pnpm --filter @invoker/cli build
+pnpm --filter @invoker/surfaces build
 rm -rf release/embedded-cli
 mkdir -p release/embedded-cli
 TARGET_ARCH="${MAC_ARCH:-$(node -p "process.arch")}"
