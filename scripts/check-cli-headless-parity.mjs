@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTRY = join(REPO_ROOT, 'packages/app/src/headless-command-registry.ts');
-const CLI = join(REPO_ROOT, 'packages/cli/src/index.ts');
+const CLI_SOURCES = [
+  join(REPO_ROOT, 'packages/cli/src/index.ts'),
+  join(REPO_ROOT, 'packages/cli/src/cli-runtime.ts'),
+];
 const DEBT = join(REPO_ROOT, 'scripts/cli-headless-parity-debt.txt');
 
 const SPECIAL_CLI_SPELLINGS = new Map([
@@ -36,12 +39,14 @@ function headlessCommands(source) {
   return found.map(([, name, kind]) => ({ name, kind }));
 }
 
-function cliVerbs(source) {
+function cliVerbs(sources) {
   const verbs = new Set();
-  for (const [, name] of source.matchAll(/argv\[0\] === '([^']+)'/g)) verbs.add(name);
-  for (const [, name] of source.matchAll(/parsed\.command === '([^']+)'/g)) verbs.add(name);
-  for (const [, name] of source.matchAll(/parsed\.command !== '([^']+)'/g)) verbs.add(name);
-  for (const [, name] of source.matchAll(/case '([^']+)':/g)) verbs.add(name);
+  for (const source of sources) {
+    for (const [, name] of source.matchAll(/argv\[0\] === '([^']+)'/g)) verbs.add(name);
+    for (const [, name] of source.matchAll(/parsed\.command === '([^']+)'/g)) verbs.add(name);
+    for (const [, name] of source.matchAll(/parsed\.command !== '([^']+)'/g)) verbs.add(name);
+    for (const [, name] of source.matchAll(/case '([^']+)':/g)) verbs.add(name);
+  }
   if (verbs.size === 0) {
     console.error('fail\tno CLI dispatch verbs parsed; refusing to report a vacuous pass');
     process.exit(2);
@@ -63,7 +68,7 @@ function isExposed(command, verbs) {
 }
 
 const commands = headlessCommands(read(REGISTRY));
-const verbs = cliVerbs(read(CLI));
+const verbs = cliVerbs(CLI_SOURCES.map(read));
 const debt = debtList(read(DEBT));
 
 if (process.argv.includes('--list')) {

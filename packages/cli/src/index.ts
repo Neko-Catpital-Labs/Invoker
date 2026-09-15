@@ -1,4 +1,4 @@
-const VERSION = '0.1.4';
+const VERSION = '0.1.5';
 
 export const CLI_SET_FIELDS: readonly string[] = [
   'command',
