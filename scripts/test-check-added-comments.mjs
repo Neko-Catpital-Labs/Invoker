@@ -28,12 +28,13 @@ const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.me
   const diff = [
     'diff --git a/packages/core/src/regex.ts b/packages/core/src/regex.ts',
     '+++ b/packages/core/src/regex.ts',
-    '@@ -0,0 +1,9 @@',
+    '@@ -0,0 +1,10 @@',
     '+const patterns = [',
     '+  /^local\\s*:\\s*/i,',
     '+];',
     "+const tagRe = /^\\[([^\\]]*)\\]\\s*/;",
     "+if (/^ssh:\\/\\//i.test(candidate) || /[?#*/]/.test(candidate)) return candidate;",
+    "+const combined = /^ssh:\\/\\//i + suffix;",
     '+const quoted = /["\']\\s*/g;',
     '+const noted = /a\\s*/; // explains the obvious',
     '+const ratio = total / count; // explains the obvious',
@@ -42,9 +43,9 @@ const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.me
   ].join('\n');
   const violations = collectAddedCommentViolations(diff);
   assert.deepEqual(violations.map((violation) => `${violation.path}:${violation.line}`), [
-    'packages/core/src/regex.ts:7',
     'packages/core/src/regex.ts:8',
     'packages/core/src/regex.ts:9',
+    'packages/core/src/regex.ts:10',
   ]);
 }
 
