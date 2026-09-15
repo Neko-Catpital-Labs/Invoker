@@ -21,6 +21,7 @@ import { registerSelfDeployWorker } from './workers/self-deploy-worker.js';
 import { registerAdminBypassE2eBabysitWorker } from './workers/admin-bypass-e2e-babysit-worker.js';
 import { registerMergifyQueueResearchWorker } from './workers/mergify-queue-research-worker.js';
 import { registerSpendCircuitBreakerWorker } from './workers/spend-circuit-breaker-worker.js';
+import { registerWorkflowCleanupWorker } from './workers/workflow-cleanup-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -47,5 +48,6 @@ export function registerBuiltinWorkers(
   registerAdminBypassE2eBabysitWorker(registry);
   registerMergifyQueueResearchWorker(registry);
   registerSpendCircuitBreakerWorker(registry);
+  registerWorkflowCleanupWorker(registry);
   return registry;
 }
