@@ -1672,6 +1672,51 @@ export class TaskRunner {
       agentCount: orderedAgents.length,
     });
 
+    const reviewGateState = args.reviewGate;
+    const existingArtifacts = reviewGateState
+      ? reviewGateState.artifacts.filter((artifact) => this.isCurrentReviewGateArtifact(reviewGateState, artifact))
+      : [];
+    if (existingArtifacts.length > 0 && this.mergeGateProvider?.getReviewBody) {
+      const bodyErrors: string[] = [];
+      const reusableArtifacts: ReviewGateArtifact[] = [];
+      for (const artifact of existingArtifacts) {
+        if (!artifact.providerId) {
+          bodyErrors.push(`${artifact.id}: missing providerId`);
+          continue;
+        }
+        try {
+          const body = await this.mergeGateProvider.getReviewBody({
+            identifier: artifact.providerId,
+            cwd: args.cwd,
+          });
+          const errors = validateReviewStackPrBody(body);
+          if (errors.length > 0) {
+            bodyErrors.push(`${artifact.id}: ${errors.join('; ')}`);
+            continue;
+          }
+          reusableArtifacts.push({
+            ...artifact,
+            generation: args.expectedGeneration,
+          });
+        } catch (error) {
+          bodyErrors.push(`${artifact.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      if (bodyErrors.length === 0 && reusableArtifacts.length === existingArtifacts.length) {
+        logProgress('info', 'Reusing existing review stack with validated bodies', {
+          artifactCount: reusableArtifacts.length,
+        });
+        this.logger.info(
+          `[pr-authoring] review-stack reused existing artifacts=${reusableArtifacts.length} `
+            + 'bodies validated against make-pr schema',
+        );
+        return { artifacts: reusableArtifacts, sessionId: 'existing-review-stack', agentName: 'deterministic' };
+      }
+      logProgress('info', 'Existing review stack requires make-pr repair', {
+        errors: bodyErrors,
+      });
+    }
+
     const errors: string[] = [];
     let failureClass: FailureClass | undefined;
 

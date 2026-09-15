@@ -505,6 +505,10 @@ export function buildMakePrStackPublishPrompt(args: {
       + '<details><summary>Test Plan</summary> / <summary>Revert Plan</summary> blocks. '
       + 'Never hide review metadata inside a <details> block.',
     '- Do NOT let Mergify default the PR body to the commit message; author the body explicitly.',
+    '- If the stack PRs already exist for the artifact head branches, do not republish the stack. '
+      + 'Repair those existing PR titles/bodies in place and return their current artifact JSON.',
+    '- When updating existing Mergify-created PRs, use the base branch already on each PR. '
+      + 'Validate each body against that PR base, not against the cumulative stack base.',
     '',
     'Workflow summary:',
     '```md',
