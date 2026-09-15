@@ -731,6 +731,39 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(result.ok).toBe(true);
     expect(capturedScript).toContain('PRESERVE=()');
   });
+
+  it('reports cleanup-error when the generated remote script cannot inspect an in-use mark', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-remote-mark-error-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const isolatedTmp = join(root, 'scratch-tmp');
+    mkdirSync(join(home, 'repos', 'err-hash'), { recursive: true });
+    writeFileSync(join(home, 'repos', 'err-hash', 'file.txt'), 'x');
+    mkdirSync(join(home, 'in-use'), { recursive: true });
+    writeFileSync(join(home, 'in-use', 'worktrees'), 'not-a-directory');
+    mkdirSync(isolatedTmp, { recursive: true });
+
+    const target = makeTarget({ remotePath: home });
+    const runRemoteScript = vi.fn(async (_t: RemoteDiskTarget, script: string) => {
+      const scriptPath = join(root, 'cleanup.sh');
+      writeFileSync(scriptPath, script);
+      const run = spawnSync('bash', [scriptPath], {
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: isolatedTmp },
+      });
+      if (run.status !== 0) {
+        throw new Error(`${run.stderr}${run.stdout}`);
+      }
+      return run.stdout;
+    });
+
+    const result = await cleanupRemoteInvokerHome({ target, runRemoteScript });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('cleanup-error');
+    expect(result.detail).toContain('in-use mark inspection failed');
+    expect(existsSync(join(home, 'repos', 'err-hash', 'file.txt'))).toBe(true);
+  });
 });
 
 describe('disk-headroom cleanup honors the in-use mark', () => {
@@ -779,6 +812,31 @@ describe('disk-headroom cleanup honors the in-use mark', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('(fresh in-use mark)');
     expectOnlyFreshSurvived(home);
+  });
+
+  it('keeps a child and exits nonzero when the generated remote script cannot inspect the mark path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-in-use-remote-enotdir-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const isolatedTmp = join(root, 'scratch-tmp');
+    mkdirSync(join(home, 'worktrees', 'err-hash', 'wt'), { recursive: true });
+    writeFileSync(join(home, 'worktrees', 'err-hash', 'wt', 'file.txt'), 'x');
+    mkdirSync(join(home, 'in-use'), { recursive: true });
+    writeFileSync(join(home, 'in-use', 'worktrees'), 'not-a-directory');
+    mkdirSync(isolatedTmp, { recursive: true });
+
+    const scriptPath = join(root, 'cleanup.sh');
+    writeFileSync(scriptPath, buildInvokerHomeCleanupScript(home, [], 'critical'));
+    const result = spawnSync('bash', [scriptPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TMPDIR: isolatedTmp },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('in-use mark inspection failed');
+    expect(result.stderr).toContain('is not a directory');
+    expect(result.stderr).toContain('in-use mark inspection error');
+    expect(existsSync(join(home, 'worktrees', 'err-hash', 'wt', 'file.txt'))).toBe(true);
   });
 
   it('keeps a freshly marked workspace during a cleanup on this machine', async () => {

@@ -238,17 +238,45 @@ is_preserved() {
 }
 # A task sent by another Invoker owner is invisible to PRESERVE above; its
 # running task refreshes this mark on the host, so a fresh mark is never deleted.
-IN_USE_MARK_ROOT="$INVOKER_HOME/${IN_USE_MARK_DIR}/worktrees"
+IN_USE_MARK_PARENT="$INVOKER_HOME/${IN_USE_MARK_DIR}"
+IN_USE_MARK_ROOT="$IN_USE_MARK_PARENT/worktrees"
+MARK_INSPECTION_FAILED=0
+preserve_mark_inspection_error() {
+  local mark_path="$1"
+  local detail="$2"
+  echo "[disk-headroom-cleanup] in-use mark inspection failed $mark_path: $detail" >&2
+  MARK_INSPECTION_FAILED=1
+}
 has_fresh_in_use_mark() {
   local base="$1"
-  [ -e "$IN_USE_MARK_ROOT/$base" ] || return 1
-  find "$IN_USE_MARK_ROOT/$base" -type f -mmin -${inUseMarkMaxAgeMinutes} -print -quit 2>/dev/null | grep -q .
+  local mark_path="$IN_USE_MARK_ROOT/$base"
+  if [ -e "$IN_USE_MARK_PARENT" ] && [ ! -d "$IN_USE_MARK_PARENT" ]; then
+    preserve_mark_inspection_error "$mark_path" "$IN_USE_MARK_PARENT is not a directory"
+    return 0
+  fi
+  if [ -e "$IN_USE_MARK_ROOT" ] && [ ! -d "$IN_USE_MARK_ROOT" ]; then
+    preserve_mark_inspection_error "$mark_path" "$IN_USE_MARK_ROOT is not a directory"
+    return 0
+  fi
+  [ -e "$mark_path" ] || return 1
+  if [ ! -d "$mark_path" ]; then
+    preserve_mark_inspection_error "$mark_path" "$mark_path is not a directory"
+    return 0
+  fi
+  local find_output
+  find_output=$(find "$mark_path" -type f -mmin -${inUseMarkMaxAgeMinutes} -print -quit 2>&1)
+  local find_status=$?
+  if [ "$find_status" -ne 0 ]; then
+    preserve_mark_inspection_error "$mark_path" "$find_output"
+    return 0
+  fi
+  [ -n "$find_output" ]
 }
 sweep_children_preserving() {
   local dir="$1"
   local prefix="$2"
   [ -d "$dir" ] || return 0
-  find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | while IFS= read -r -d '' child; do
+  while IFS= read -r -d '' child; do
     local base
     base=$(basename "$child")
     if is_preserved "$prefix/$base"; then
@@ -264,7 +292,7 @@ sweep_children_preserving() {
         ;;
     esac
     remove_path "$child"
-  done
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
 ${destructiveSection}# Shared temp dir: reclaim only Invoker/test scratch, never a blanket /tmp wipe.
 # Age guard leaves entries newer than ${TMP_SCRATCH_MIN_AGE_MINUTES}m alone (an active run may hold them).
@@ -306,6 +334,11 @@ find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} 
   -print0 2>/dev/null | while IFS= read -r -d '' entry; do
   reap_tmp "$entry"
 done
+if [ "$MARK_INSPECTION_FAILED" -ne 0 ]; then
+  echo "[disk-headroom-cleanup] failed: in-use mark inspection error" >&2
+  df -h / | tail -1
+  exit 1
+fi
 echo "[disk-headroom-cleanup] ${mode === 'stale-only' ? 'stale-only ' : ''}done"
 df -h / | tail -1
 exit 0
