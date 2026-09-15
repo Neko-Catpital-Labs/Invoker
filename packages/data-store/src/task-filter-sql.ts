@@ -41,6 +41,7 @@ function compileNode(node: TaskFilterNode, params: unknown[]): string {
   switch (node.op) {
     case 'and':
     case 'or':
+      if (node.filters.length === 0) throw new Error(`${node.op} requires at least one filter`);
       return `(${node.filters.map((child) => compileNode(child, params)).join(node.op === 'and' ? ' AND ' : ' OR ')})`;
     case 'not':
       return `(NOT ${compileNode(node.filter, params)})`;
@@ -74,8 +75,11 @@ function compileNode(node: TaskFilterNode, params: unknown[]): string {
         clauses.push(`${column} <= ?`);
         params.push(node.end);
       }
+      if (clauses.length === 0) throw new Error('time_range requires a start or end bound');
       return clauses.length === 1 ? clauses[0] : `(${clauses.join(' AND ')})`;
     }
+    default:
+      throw new Error(`Unknown task filter operation: ${String((node as { op?: unknown }).op)}`);
   }
 }
 

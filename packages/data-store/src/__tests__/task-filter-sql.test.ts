@@ -89,6 +89,8 @@ describe('task filter SQL read path', () => {
     await seededAdapter();
     expect(adapter.queryTasksByFilter({ op: 'eq', key: 'description', value: "' OR 1=1 --" })).toEqual([]);
     expect(() => compileTaskFilter({ op: 'eq', key: 'description; DROP TABLE tasks' as never, value: 'x' })).toThrow('Unknown task filter key');
+    expect(() => compileTaskFilter({ op: 'and', filters: [] })).toThrow('requires at least one filter');
+    expect(() => compileTaskFilter({ op: 'time_range', key: 'created_at' })).toThrow('requires a start or end bound');
   });
 
   it('excludes deleted workflows and caps results at 500 in creation order', async () => {
