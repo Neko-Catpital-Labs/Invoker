@@ -363,11 +363,21 @@ CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"infra", "superseded"})
 INFRA_REPAIR_OWNERSHIP_TTL_SECONDS = 30 * 60
 
 
-def count_code_repair_attempts(ledger: Ledger, submit_kind: str, pr_number: int, key: str) -> int:
-    """Count submit rows that should spend the code-repair cap.
+def count_code_repair_attempts(
+    ledger: Ledger,
+    submit_kind: str,
+    pr_number: int,
+    head_sha: str,
+    key: str,
+) -> int:
+    """Count attempts for the PR's current head that spend the code cap.
 
     Settled attempts classified as `infra` or `superseded` are excluded.
     Unsettled submits still count (in-flight is gated separately).
+
+    A successful repair/rebase changes the PR head. It completed the unit of
+    work for the old head, so attempts on that old head must not consume the
+    retry budget for the new head.
     """
     settled_kind = f"{submit_kind}-settled"
     count = 0
@@ -375,6 +385,8 @@ def count_code_repair_attempts(ledger: Ledger, submit_kind: str, pr_number: int,
         if row.get("kind") != submit_kind:
             continue
         if int(row.get("pr", -1)) != pr_number:
+            continue
+        if str(row.get("headSha") or "") != head_sha:
             continue
         if row.get("key") != key:
             continue
@@ -440,13 +452,12 @@ def repair_attempt_count_excluding_infra_crash(
     return count, crashed_on_infra
 
 
-# The retry-cap decision for (pr, kind, key), shared with the JS
+# The retry-cap decision for (pr, current head, kind, key), shared with the JS
 # CI-regression watcher (scripts/retry-ledger.mjs) instead of re-deriving
 # the same "should we try again?" logic in Python a second time -- see that
-# module's header for why. Unlike repair_attempt_count_excluding_infra_crash,
-# the count here is persistent across a head_sha change: a successful repair
-# attempt pushes a new commit as its normal side effect, and that must not
-# silently reset the cap for this (pr, kind, key) unit of work.
+# module's header for why. The count is scoped to the current head_sha: a
+# successful repair attempt pushes a new commit as its normal side effect,
+# completing the old-head unit without spending the new-head budget.
 #
 # backoff_base_ms defaults to 0 (no cooldown between attempts): this module
 # already has its own real "don't resubmit while outstanding" gate
@@ -466,7 +477,7 @@ def retry_decision(
     max_attempts: int,
     backoff_base_ms: int = 0,
 ) -> dict:
-    count = count_code_repair_attempts(ledger, submit_kind, pr_number, key)
+    count = count_code_repair_attempts(ledger, submit_kind, pr_number, head_sha, key)
     crashed_on_infra = repair_crash_reason(ledger, pr_number, head_sha, submit_kind, key, plan_name) is not None
     if crashed_on_infra:
         # Live OAuth/infra crash on the current unsettled attempt: do not spend
