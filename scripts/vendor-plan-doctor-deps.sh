@@ -6,10 +6,6 @@
 # scripts/archive-slack-binary.sh), which ship skills/ with no packages/, no
 # node_modules, and no repo-root scripts/ directory alongside it.
 #
-# Vendored: scripts/review-unit-rules.mjs -- source of truth is this repo's
-# own scripts/review-unit-rules.mjs, shared by several other repo-root
-# scripts (validate-pr-body.mjs, check-pr-body-keywords.mjs, etc.), so it
-# stays canonical at that path and is copied, not moved.
 #
 # The doctor's other out-of-tree dependency, the `yaml` npm package, is NOT
 # vendored -- it's a real declared dependency of the published `invoker-cli`

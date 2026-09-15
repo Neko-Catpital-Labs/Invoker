@@ -173,10 +173,9 @@ must_contain "$SKILL_MD" "Manually inspected: state exactly what you saw when yo
 must_contain "$REVIEW_COMPRESSION_MD" "## Proof Must Match the Claim" "review-compression must keep the proof-must-match-the-claim section heading"
 must_contain "$REVIEW_COMPRESSION_MD" "A proxy assertion can pass while the real behavior described in the claim is still broken" "review-compression must explain why a proxy assertion is unsafe"
 
-# Drafters must check review-unit keyword conflicts before the full validator,
-# not discover them through repeated rejections.
-must_contain "$SKILL_MD" "scripts/check-pr-body-keywords.mjs" "make-pr skill must reference the review-unit-keyword pre-flight check"
-must_contain "$SKILL_MD" "Before running the full validator, check the drafted Summary/Non-goals prose against the declared Review Unit" "make-pr skill must require the keyword pre-flight before the full validator"
-[[ -f "$REPO_ROOT/scripts/check-pr-body-keywords.mjs" ]] || fail "scripts/check-pr-body-keywords.mjs referenced by make-pr skill must actually exist"
+must_contain "$SKILL_MD" "CI validates the declared Review Lane and Review Unit against the actual changed files" "make-pr skill must say review units come from changed files"
+if grep -q "check-pr-body-keywords" "$SKILL_MD"; then
+  fail "make-pr skill must not send drafters to a prose keyword check; review units come from changed files"
+fi
 
 echo "OK: make-pr skill contract checks passed"
