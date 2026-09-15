@@ -1389,6 +1389,83 @@ describe('TaskRunner', () => {
       expect(result.artifacts).toHaveLength(1);
     });
 
+    it('publishReviewStackWithMakePrSkill reuses an existing review stack when live bodies validate', async () => {
+      const validBody = [
+        '## Summary', '', 'Already published.', '',
+        '## Review Claim', '', 'Reviewers can approve the existing slice.', '',
+        '## Review Lane', '', 'cleanup', '',
+        '## Review Unit', '', 'cleanup', '',
+        '## Safety Invariant', '', 'The existing PR body already passed the make-pr schema.', '',
+        '## Slice Rationale', '', 'This retry should not republish an unchanged stack.', '',
+        '## Non-goals', '', '- No branch, title, or body mutation.', '',
+        '## Test Plan', '', '<details>', '<summary>Test Plan</summary>', '', '- [x] pnpm test', '', '</details>', '',
+        '## Revert Plan', '', '<details>', '<summary>Revert Plan</summary>', '', '- Safe to revert? Yes', '', '</details>',
+      ].join('\n');
+      const agent = {
+        name: 'codex',
+        stdinMode: 'ignore',
+        bundledSkillRoot: '/tmp/codex-skills',
+        bundledSkills: ['make-pr'],
+        buildCommand: () => { throw new Error('agent must not run for a validated existing stack'); },
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+      const getReviewBody = vi.fn().mockResolvedValue(validBody);
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: { logEvent: vi.fn() } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: vi.fn().mockReturnValue(agent),
+          getOrThrow: vi.fn(),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([agent]),
+        } as any,
+        mergeGateProvider: {
+          name: 'github',
+          createReview: vi.fn(),
+          checkApproval: vi.fn(),
+          getReviewBody,
+        } as any,
+        cwd: '/tmp',
+      });
+
+      const result = await (executor as any).publishReviewStackWithMakePrSkill({
+        workflowId: 'wf-retry',
+        title: 'Stack',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        workflowSummary: 'summary',
+        cwd: '/tmp',
+        mergeNodeTaskId: '__merge__wf-retry',
+        expectedGeneration: 9,
+        reviewGate: {
+          activeGeneration: 3,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [
+            {
+              id: 'only',
+              title: 'Only',
+              url: 'https://example.test/pr/1',
+              providerId: '1',
+              provider: 'github',
+              branch: 'stack/only',
+              baseBranch: 'master',
+              required: true,
+              status: 'open',
+              generation: 3,
+            },
+          ],
+        },
+      });
+
+      expect(result.agentName).toBe('deterministic');
+      expect(result.sessionId).toBe('existing-review-stack');
+      expect(result.artifacts).toEqual([
+        expect.objectContaining({ id: 'only', providerId: '1', generation: 9 }),
+      ]);
+      expect(getReviewBody).toHaveBeenCalledWith({ identifier: '1', cwd: '/tmp' });
+    });
+
     it('publishReviewStackWithMakePrSkill uses the workflow declared agent, not a fallback chain', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
