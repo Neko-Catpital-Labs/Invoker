@@ -9,9 +9,9 @@ baseBranch: HEAD
 tasks:
   - id: e2e-g442-taskA
     description: "E2E 4.2 — first task"
-    command: echo pr-test-a
+    command: 'mkdir -p e2e-artifacts && printf "pr-test-a\n" > e2e-artifacts/group4-2-a.txt'
     dependencies: []
   - id: e2e-g442-taskB
     description: "E2E 4.2 — second task"
-    command: echo pr-test-b
+    command: 'mkdir -p e2e-artifacts && printf "pr-test-b\n" > e2e-artifacts/group4-2-b.txt'
     dependencies: []
