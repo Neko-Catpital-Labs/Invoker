@@ -424,6 +424,10 @@ function buildRegisteredOwnerWorkerDeps(
 
   return {
     store,
+    deleteWorkflow: (workflowId) => orchestrator.deleteWorkflow(workflowId),
+    workflowCleanup: {
+      listWorkflows: () => persistence.listWorkflows(),
+    },
     submitter: {
       submit: submitRegisteredOwnerWorkerMutation,
       submitGlobalRecovery: (
