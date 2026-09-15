@@ -36,6 +36,7 @@ import { SELF_DEPLOY_WORKER_KIND } from '../workers/self-deploy-worker.js';
 import { ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND } from '../workers/admin-bypass-e2e-babysit-worker.js';
 import { MERGIFY_QUEUE_RESEARCH_WORKER_KIND } from '../workers/mergify-queue-research-worker.js';
 import { SPEND_CIRCUIT_BREAKER_WORKER_KIND } from '../workers/spend-circuit-breaker-worker.js';
+import { WORKFLOW_CLEANUP_WORKER_KIND } from '../workers/workflow-cleanup-worker.js';
 
 const silentLogger = {
   debug: () => {},
@@ -107,6 +108,7 @@ describe('worker registry', () => {
       ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
       MERGIFY_QUEUE_RESEARCH_WORKER_KIND,
       SPEND_CIRCUIT_BREAKER_WORKER_KIND,
+      WORKFLOW_CLEANUP_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(REQUEUE_WORKER_KIND)).toBeDefined();
@@ -131,6 +133,7 @@ describe('worker registry', () => {
     expect(registry.get(ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND)).toBeDefined();
     expect(registry.get(MERGIFY_QUEUE_RESEARCH_WORKER_KIND)).toBeDefined();
     expect(registry.get(SPEND_CIRCUIT_BREAKER_WORKER_KIND)).toBeDefined();
+    expect(registry.get(WORKFLOW_CLEANUP_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
