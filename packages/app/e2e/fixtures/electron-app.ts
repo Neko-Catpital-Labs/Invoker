@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 import { killOwnedProcessGroup } from './process-group.js';
+import { cleanupStandaloneOwnersForTestDir, e2eDevelopmentProfileEnv } from './headless-client.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -29,11 +30,28 @@ export type ElectronFixtures = {
   breakPlanningPresets: boolean;
   standaloneOwnerIdleTimeoutMs: string;
   repoConfig: Partial<InvokerConfig>;
+  codexSpendGateTripped: boolean;
   page: Page;
   testDir: string;
 };
 
 const repoRoot = resolveRepoRoot(__dirname);
+
+function writeTrippedCodexSpendGate(testDir: string): string {
+  const statePath = path.join(testDir, 'codex-spend-gate.json');
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      trippedAt: '2026-09-04T04:11:00.000Z',
+      dayKey: '2026-09-04',
+      tokenBudget: 100_000_000,
+      observedTokens: 1_471_200_000,
+      tokensByHost: { owner: 894_900_000, remote_digital_ocean_3: 202_900_000 },
+    }),
+    'utf8',
+  );
+  return statePath;
+}
 type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
 
 async function removeTestDir(dir: string): Promise<void> {
@@ -99,7 +117,7 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
   });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
-    closePromise.then(() => false),
+    Promise.all([closePromise, childExitPromise]).then(() => false),
     delay(5_000).then(() => true),
   ]);
   if (!timedOut) return;
@@ -123,6 +141,7 @@ export const test = base.extend<ElectronFixtures>({
   breakPlanningPresets: [false, { option: true }],
   standaloneOwnerIdleTimeoutMs: [process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000', { option: true }],
   repoConfig: [{ autoFixRetries: 0 }, { option: true }],
+  codexSpendGateTripped: [false, { option: true }],
 
   testDir: async ({}, use) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
@@ -132,7 +151,7 @@ export const test = base.extend<ElectronFixtures>({
     }
   },
 
-  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, standaloneOwnerIdleTimeoutMs, repoConfig, testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, standaloneOwnerIdleTimeoutMs, repoConfig, codexSpendGateTripped, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
@@ -230,6 +249,7 @@ exit 64
       ],
       env: {
         ...process.env,
+        ...e2eDevelopmentProfileEnv(testDir, electronUserDataDir, configPath, ipcSocketPath),
         NODE_ENV: 'test',
         INVOKER_TEST_WORKFLOW_IDS: '1',
         INVOKER_DISABLE_SLACK: '1',
@@ -237,10 +257,11 @@ exit 64
         INVOKER_GUI_OWNER_MODE: (forceReadOnlyStatus || forceConnectionLostStatus) ? 'gui' : guiOwnerMode,
         INVOKER_DB_DIR: testDir,
         INVOKER_IPC_SOCKET: ipcSocketPath,
-        INVOKER_ALLOW_DELETE_ALL: '1',
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: standaloneOwnerIdleTimeoutMs,
+        INVOKER_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS:
+          process.env.INVOKER_E2E_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS ?? '30000',
         INVOKER_EMBEDDED_TERMINAL_BACKEND:
           process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
         INVOKER_E2E_MARKER_ROOT: markerRoot,
@@ -261,6 +282,9 @@ exit 64
         ...(process.env.INVOKER_E2E_CODEX_DEMO_RENDERER
           ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
           : {}),
+        ...(codexSpendGateTripped
+          ? { INVOKER_CODEX_SPEND_GATE_PATH: writeTrippedCodexSpendGate(testDir) }
+          : {}),
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         ...(breakPlanningPresets ? { INVOKER_E2E_BREAK_PLANNING_PRESETS: '1' } : {}),
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
@@ -268,8 +292,12 @@ exit 64
         PATH: pathEnv,
       },
     });
-    await use(app);
-    await closeElectronApp(app);
+    try {
+      await use(app);
+    } finally {
+      await closeElectronApp(app);
+      await cleanupStandaloneOwnersForTestDir(testDir);
+    }
   },
 
   page: async ({ electronApp, guiOwnerMode }, use) => {
@@ -353,33 +381,58 @@ export async function selectFirstWorkflow(page: Page): Promise<void> {
   await selectWorkflowNode(page);
 }
 
+type TasksBridgeResult = {
+  tasks: Array<{ id: string }>;
+  workflows: Array<{ id: string }>;
+};
+
+/**
+ * Poll `window.invoker.getTasks()` from Node until `predicate` is satisfied.
+ * `page.waitForFunction` cannot express this: an in-page predicate that calls
+ * `.then(...)` on a bridge promise returns that (always-truthy) Promise object
+ * to Playwright's polling loop, which resolves on the first tick instead of
+ * waiting for the awaited result (see PR #9267 / #9416).
+ */
+export async function waitForTasksResult(
+  page: Page,
+  predicate: (result: TasksBridgeResult) => boolean,
+  timeoutMs = 10000,
+): Promise<void> {
+  await expect.poll(async () => {
+    const raw = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(raw) ? raw : raw.tasks;
+    const workflows = Array.isArray(raw) ? [] : raw.workflows ?? [];
+    return predicate({ tasks, workflows });
+  }, { timeout: timeoutMs }).toBe(true);
+}
+
 /** Load a plan into the running app via the IPC bridge and wait for its mini-DAG to render. */
-export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<void> {
+export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<string> {
   const planYaml = yamlStringify(plan);
   const beforeIds = await page.evaluate(async () => {
     const workflows = await window.invoker.listWorkflows();
     return workflows.map((workflow: { id: string }) => workflow.id);
   });
   await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
-  const workflowId = await page.evaluate(async (knownIds) => {
-    const workflows = await window.invoker.listWorkflows();
-    const created = workflows.find((workflow: { id: string }) => !knownIds.includes(workflow.id));
-    return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
-  }, beforeIds);
-  await page.waitForFunction(
-    (expectedTaskCount) => window.invoker.getTasks().then((result) => {
-      const tasks = Array.isArray(result) ? result : result.tasks;
-      const workflows = Array.isArray(result) ? [] : result.workflows ?? [];
-      return tasks.length >= expectedTaskCount && workflows.length > 0;
-    }),
-    plan.tasks.length,
-    { timeout: 10000 },
+  let workflowId: string | undefined;
+  await expect.poll(async () => {
+    const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+    workflowId = workflows.find((workflow: { id: string }) => !beforeIds.includes(workflow.id))?.id;
+    return workflowId;
+  }, { timeout: 10000 }).toBeTruthy();
+  if (!workflowId) {
+    throw new Error('Loaded plan did not create a workflow');
+  }
+  await waitForTasksResult(
+    page,
+    ({ tasks, workflows }) => tasks.length >= plan.tasks.length && workflows.length > 0,
   );
   await page.getByTestId('sidebar-planning').click();
   await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 10000 });
   await page.getByRole('button', { name: 'Refresh' }).click();
-  await selectWorkflowNode(page, workflowId ?? undefined);
+  await selectWorkflowNode(page, workflowId);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
+  return workflowId;
 }
 
 /** Open Plan graph so rail Refresh / DAG chrome exist (default surface is Planning home). */
@@ -418,7 +471,7 @@ export async function injectTaskStates(
 
 /** Start the loaded plan via the IPC bridge. */
 export async function startPlan(page: Page): Promise<void> {
-  await page.evaluate(() => window.invoker.start());
+  await page.evaluate(() => window.invoker.startReady());
 }
 
 /** Get all current tasks via the IPC bridge. */
@@ -500,14 +553,20 @@ async function ensureScreenshotViewport(page: Page): Promise<void> {
  * Assert a named screenshot matches the committed baseline (toHaveScreenshot).
  * Used by normal regression tests. Viewport capture (not fullPage) to match
  * the Playwright config's toHaveScreenshot defaults.
+ *
+ * Ordinary runs (local macOS dev, and CI) stay DOM-only: the calling test's
+ * DOM assertions still ran before this call, and no pixel comparison happens
+ * here unless INVOKER_VISUAL_PROOF_LINUX=1 is set explicitly, which asserts
+ * against the committed packages/app/e2e/__screenshots__/visual-proof.spec.ts/linux/
+ * baselines instead of the default (macOS) ones.
  */
 export async function assertPageScreenshot(page: Page, name: string): Promise<void> {
-  // Skip pixel-level screenshot comparison on CI (no Linux baselines committed).
-  // DOM assertions in the calling test still run.
-  if (process.env.CI) return;
+  const linuxProof = process.env.INVOKER_VISUAL_PROOF_LINUX === '1';
+  if (process.env.CI && !linuxProof) return;
   await ensureScreenshotViewport(page);
   await waitForStableUI(page);
-  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 0 });
+  const snapshotName = linuxProof ? ['linux', `${name}.png`] : `${name}.png`;
+  await expect(page).toHaveScreenshot(snapshotName, { timeout: 0 });
 }
 
 /**

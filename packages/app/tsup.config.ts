@@ -5,7 +5,7 @@ import { cpSync } from 'node:fs';
 const gitSha = execSync('git rev-parse --short HEAD').toString().trim();
 
 export default defineConfig({
-  entry: ['src/main.ts', 'src/preload.ts', 'src/headless-client.ts', 'src/action-graph-diagnostics.ts'],
+  entry: ['src/main.ts', 'src/preload.ts', 'src/headless-client.ts', 'src/action-graph-diagnostics.ts', 'src/sqlite-quick-check-worker.ts'],
   format: ['cjs'],
   outDir: 'dist',
   external: ['electron', 'node:sqlite', 'sql.js', 'dockerode', 'node-pty', 'dotenv'],
@@ -21,6 +21,9 @@ export default defineConfig({
     '@invoker/execution-engine',
     '@invoker/planning-core',
     '@invoker/shell',
+    '@invoker/slack-bug-scan',
+    '@invoker/surfaces',
+    '@slack/bolt',
     'yaml',
   ],
   clean: true,

@@ -12,6 +12,8 @@ tasks:
       - refactor
       Safety invariant:
       - The extraction should preserve existing behavior.
+      Effectiveness measurement:
+      - `cd packages/app && pnpm test` exits 0.
       Slice rationale:
       - Refactor must land before any new fields or behavior changes.
       Architectural effect:
@@ -69,6 +71,8 @@ tasks:
       - proof
       Safety invariant:
       - This command changes no production behavior.
+      Effectiveness measurement:
+      - `pnpm run test:all` exits 0.
       Slice rationale:
       - Final regression stays separate from implementation.
       Architectural effect:

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { ConversationRepository, SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import { SlackSurface, DEFAULT_HARNESS_PRESET } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 // A plain-English request ("submit it") should never draft or submit a plan
 // on its own. If the agent judges the request is itself a plan ask, it can
@@ -173,6 +174,7 @@ describe('Slack plan-intent auto-detect repro', () => {
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     await surface.start(async (command) => { commands.push(command); });
   });
@@ -194,6 +196,8 @@ describe('Slack plan-intent auto-detect repro', () => {
     });
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
+    // Proves the default harness preset really spawned a codex session.
+    expect(mockSpawn.mock.calls[0][0]).toBe('codex');
     expect(tryButtonValue(say, 'lobby_plan_for_execution')).toBeUndefined();
     expect(tryButtonValue(say, 'lobby_continue_conversation')).toBeUndefined();
   });
