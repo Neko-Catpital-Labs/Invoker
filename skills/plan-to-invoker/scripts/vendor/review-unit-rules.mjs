@@ -393,6 +393,22 @@ export function formatReviewUnits(units) {
   return VALID_REVIEW_UNITS.filter((unit) => unitSet.has(unit)).join(', ');
 }
 
+export function parseFileListItems(section) {
+  return String(section)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*]\s*/, '').trim())
+    .filter((line) => line && !/\s/.test(line));
+}
+
+export function validateSingleReviewUnitFiles({ files = [], context }) {
+  if (files.length === 0) return [];
+  const units = reviewUnitsForChangedFiles(files);
+  if (units.length <= 1) return [];
+  return [
+    `${context} lists files from ${formatReviewUnits(units)}; split into one review unit per task.`,
+  ];
+}
+
 export function validateReviewUnitChangedFiles({ declaredReviewUnit, changedFiles = [], context }) {
   if (!VALID_REVIEW_UNIT_SET.has(declaredReviewUnit) || changedFiles.length === 0) return [];
 
