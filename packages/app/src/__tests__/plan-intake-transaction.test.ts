@@ -13,7 +13,7 @@ describe('plan intake transaction', () => {
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('leaves no stored workflow when a task write fails partway through intake', async () => {
+  it('leaves no stored workflow when event logging fails after task writes', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-plan-intake-transaction-'));
     tempDirs.push(dir);
     const persistence = await SQLiteAdapter.create(join(dir, 'invoker.db'), { ownerCapability: true });
@@ -23,12 +23,10 @@ describe('plan intake transaction', () => {
       maxConcurrency: 1,
       resolveRepoDefaultBranch: () => 'master',
     });
-    const originalSaveTask = persistence.saveTask.bind(persistence);
-    let saveCount = 0;
-    vi.spyOn(persistence, 'saveTask').mockImplementation((workflowId, task) => {
-      saveCount += 1;
-      if (saveCount === 2) throw new Error('injected task write failure');
-      originalSaveTask(workflowId, task);
+    const saveTasks = vi.spyOn(persistence, 'saveTasks');
+    const logEvents = vi.spyOn(persistence, 'logEvents').mockImplementation((events) => {
+      expect(events.length).toBeGreaterThan(0);
+      throw new Error('injected event logging failure');
     });
 
     expect(() => orchestrator.loadPlan({
@@ -38,11 +36,12 @@ describe('plan intake transaction', () => {
         { id: 'first', description: 'first', command: 'echo first' },
         { id: 'second', description: 'second', command: 'echo second' },
       ],
-    })).toThrow('injected task write failure');
+    })).toThrow('injected event logging failure');
 
     expect(persistence.listWorkflows()).toEqual([]);
     expect(persistence.getAllTaskIds()).toEqual([]);
-    expect(saveCount).toBe(2);
+    expect(saveTasks).toHaveBeenCalledTimes(1);
+    expect(logEvents).toHaveBeenCalledTimes(1);
     persistence.close();
   });
 });
