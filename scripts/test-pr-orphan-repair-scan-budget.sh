@@ -35,6 +35,7 @@ run_cron() {
   PATH="$TMP/bin:$PATH" \
   HOME="$TMP/home" \
   INVOKER_GITHUB_TARGET_REPO="fake/repo" \
+  INVOKER_GITHUB_TARGET_REPOS="fake/repo" \
   INVOKER_PR_CRON_AUTHOR="fake-bot" \
   INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
@@ -54,7 +55,7 @@ echo "$out" | grep -q "PR #801: repair already submitted for this head-state" \
   || fail "tick 2: expected dedup for #801" "$out"
 
 : > "$TMP/ledger.tsv"; : > "$RG_LOG"; : > "$NODE_LOG"
-out="$(run_cron INVOKER_PR_ORPHAN_SCAN_BUDGET_SECS=0)" || fail "budget tick exited non-zero" "$out"
+out="$(run_cron env INVOKER_PR_ORPHAN_SCAN_BUDGET_SECS=0)" || fail "budget tick exited non-zero" "$out"
 for pr in 801 803; do
   echo "$out" | grep -q "PR #$pr: scan budget of 0s reached; leaving it for a later tick" \
     || fail "expected PR #$pr to be left for a later tick once the budget is spent" "$out"

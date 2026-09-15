@@ -32,7 +32,11 @@ RG_LOG="$TMP/review-gate.log"; : > "$RG_LOG"
 cat > "$TMP/review-gate.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$1" >> "$RG_LOG"
-printf '{}\n'
+if [ "\${1:-}" = "803" ]; then
+  printf '{"workflowId":"wf-mapped-803","workflowGeneration":2,"baseBranch":"master"}\n'
+else
+  printf '{}\n'
+fi
 EOF
 chmod +x "$TMP/review-gate.sh"
 
@@ -55,9 +59,13 @@ grep -q "^pr list --repo fake/repo " "$GH_LOG" || fail "primary repo was not sca
 grep -q "^pr list --repo other/tools " "$GH_LOG" || fail "second configured repo was not scanned" "$(cat "$GH_LOG")"
 
 primary_plan="$TMP/plans/repair-pr-801.yaml"
+primary_mapped_plan="$TMP/plans/repair-pr-803.yaml"
 other_plan="$TMP/plans/other__tools/repair-pr-801.yaml"
+other_mapped_plan="$TMP/plans/other__tools/repair-pr-803.yaml"
 [ -f "$primary_plan" ] || fail "primary repo plan missing" "$out"
+[ ! -f "$primary_mapped_plan" ] || fail "primary mapped PR plan must not be generated" "$(cat "$primary_mapped_plan")"
 [ -f "$other_plan" ] || fail "second repo plan missing" "$out"
+[ -f "$other_mapped_plan" ] || fail "second repo mapped-number plan missing" "$out"
 grep -qx 'repoUrl: https://github.com/fake/repo.git' "$primary_plan" \
   || fail "primary plan must target fake/repo" "$(cat "$primary_plan")"
 grep -qx 'repoUrl: https://github.com/other/tools.git' "$other_plan" \
@@ -66,13 +74,13 @@ grep -q "key='other/tools#801'" "$other_plan" \
   || fail "second repo ledger key must carry the repo" "$(cat "$other_plan")"
 
 runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
-[ "$runs" -eq 4 ] || fail "expected 2 submissions per repo (801 and 803), got $runs" "$(cat "$NODE_LOG")"
+[ "$runs" -eq 3 ] || fail "expected primary 801 and second-repo 801/803 submissions, got $runs" "$(cat "$NODE_LOG")"
 
 lookups="$(wc -l < "$RG_LOG" | tr -d ' ')"
 [ "$lookups" -eq 2 ] || fail "only the primary repo's broken PRs may hit review-gate; got $lookups lookups" "$(cat "$RG_LOG")"
 
 out="$(run_cron)" || fail "second tick exited non-zero" "$out"
 runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
-[ "$runs" -eq 4 ] || fail "second tick must dedup both repos; got $runs total submissions" "$out"
+[ "$runs" -eq 3 ] || fail "second tick must dedup both repos; got $runs total submissions" "$out"
 
 echo "[test] passed"
