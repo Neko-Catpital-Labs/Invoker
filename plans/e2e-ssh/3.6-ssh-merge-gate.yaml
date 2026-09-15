@@ -9,11 +9,11 @@ baseBranch: HEAD
 tasks:
   - id: e2e-g336-taskA
     description: "E2E 3.6 — worktree task"
-    command: echo worktree-a-ok
+    command: printf 'worktree-a-ok\n' > e2e-g336-taskA.txt
     dependencies: []
 
   - id: e2e-g336-taskB
     description: "E2E 3.6 — SSH task"
-    command: echo ssh-b-ok
+    command: printf 'ssh-b-ok\n' > e2e-g336-taskB.txt
     dependencies: []
     poolId: localhost-e2e

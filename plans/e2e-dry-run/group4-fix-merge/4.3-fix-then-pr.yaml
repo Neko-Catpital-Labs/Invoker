@@ -13,5 +13,5 @@ tasks:
     dependencies: []
   - id: e2e-g443-taskB
     description: "E2E 4.3 — downstream task depends on A"
-    command: echo downstream-ok
+    command: printf 'downstream-ok\n' > e2e-g443-taskB.txt
     dependencies: [e2e-g443-taskA]
