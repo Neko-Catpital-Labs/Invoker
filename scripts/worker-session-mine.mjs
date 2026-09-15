@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  appendFileSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -21,6 +22,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { scoreSessionFile } from './agentic-context-score.mjs';
 import { detectThrash, sessionHash } from './worker-session-mine-thrash.mjs';
 import { resolveTranscriptPath, claudeProjectRoots, agentSessionsDir } from './worker-session-mine-resolve.mjs';
 
@@ -29,6 +31,12 @@ const REPO_ROOT = resolve(__dirname, '..');
 const STATE_DIR = process.env.INVOKER_SESSION_MINE_STATE_DIR
   ?? join(homedir(), '.invoker', 'worker-session-mine');
 const LEDGER_PATH = join(STATE_DIR, 'cooldown.json');
+const AGENTIC_CONTEXT_DIR = process.env.INVOKER_AGENTIC_CONTEXT_DIR
+  ?? join(homedir(), '.invoker', 'agentic-context');
+const METRICS_PATH = process.env.INVOKER_AGENTIC_CONTEXT_METRICS_PATH
+  ?? join(AGENTIC_CONTEXT_DIR, 'metrics.jsonl');
+const BASELINE_PATH = process.env.INVOKER_AGENTIC_CONTEXT_BASELINE_JSON
+  ?? join(__dirname, 'fixtures', 'agentic-context-score', 'baseline.json');
 const COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PER_TICK = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_TICK ?? '1');
 const MAX_PER_DAY = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_DAY ?? '2');
@@ -50,6 +58,15 @@ function loadLedger() {
     return JSON.parse(readFileSync(LEDGER_PATH, 'utf8'));
   } catch {
     return { version: 1, entries: {}, dayCounts: {} };
+  }
+}
+
+function loadBaseline() {
+  if (!existsSync(BASELINE_PATH)) return null;
+  try {
+    return JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
+  } catch (err) {
+    throw new Error(`agentic-context baseline unreadable at ${BASELINE_PATH}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -88,7 +105,107 @@ function listFromInventoryFile(path) {
     sessionId: r.sessionId || r.agentSessionId || '',
     agentName: r.agentName || r.executionAgent || 'claude',
     status: r.status || 'failed',
+    path: r.path || r.jsonlPath || r.transcriptPath || '',
   })).filter((r) => r.sessionId);
+}
+
+function emptyAgentMetrics() {
+  return {
+    sessions: 0,
+    discoveryTax: 0,
+    terminalFailure: 0,
+    classSearchInPrompt: 0,
+    toolsBeforeFirstEditTotal: 0,
+    discoveryTaxRate: null,
+    terminalFailureRate: null,
+    classSearchInPromptRate: null,
+    toolsBeforeFirstEditAverage: null,
+  };
+}
+
+function finalizeMetrics(m) {
+  if (m.sessions === 0) return m;
+  return {
+    ...m,
+    discoveryTaxRate: m.discoveryTax / m.sessions,
+    terminalFailureRate: m.terminalFailure / m.sessions,
+    classSearchInPromptRate: m.classSearchInPrompt / m.sessions,
+    toolsBeforeFirstEditAverage: m.toolsBeforeFirstEditTotal / m.sessions,
+  };
+}
+
+function baselineDelta(totals, baseline) {
+  const rates = baseline?.rates ?? {};
+  const delta = {};
+  for (const key of ['discoveryTaxRate', 'terminalFailureRate', 'classSearchInPromptRate']) {
+    delta[key] = typeof rates[key] === 'number' && typeof totals[key] === 'number'
+      ? totals[key] - rates[key]
+      : null;
+  }
+  return delta;
+}
+
+function appendAgenticContextMetrics(candidates, tickDate = new Date()) {
+  const totals = emptyAgentMetrics();
+  const byAgent = {};
+  const seenPaths = new Set();
+  let missing = 0;
+  let nonJsonl = 0;
+  let duplicates = 0;
+
+  for (const cand of candidates) {
+    const path = cand.path || resolveTranscriptPath(cand.agentName, cand.sessionId);
+    if (!path || !existsSync(path)) {
+      missing += 1;
+      continue;
+    }
+    if (!path.endsWith('.jsonl')) {
+      nonJsonl += 1;
+      continue;
+    }
+    if (seenPaths.has(path)) {
+      duplicates += 1;
+      continue;
+    }
+    seenPaths.add(path);
+
+    const score = scoreSessionFile(path);
+    const agent = score.agent === 'unknown' ? (cand.agentName || 'unknown') : score.agent;
+    byAgent[agent] = byAgent[agent] || emptyAgentMetrics();
+    for (const bucket of [totals, byAgent[agent]]) {
+      bucket.sessions += 1;
+      bucket.discoveryTax += score.discoveryTax ? 1 : 0;
+      bucket.terminalFailure += score.terminalFailure ? 1 : 0;
+      bucket.classSearchInPrompt += score.classSearchInPrompt ? 1 : 0;
+      bucket.toolsBeforeFirstEditTotal += score.toolsBeforeFirstEdit;
+    }
+  }
+
+  const finalTotals = finalizeMetrics(totals);
+  const finalByAgent = Object.fromEntries(
+    Object.entries(byAgent).map(([agent, metrics]) => [agent, finalizeMetrics(metrics)]),
+  );
+  const baseline = loadBaseline();
+  const line = {
+    type: 'agentic-context-discovery-tax-rollup',
+    at: tickDate.toISOString(),
+    lookbackHours: LOOKBACK_HOURS,
+    candidates: candidates.length,
+    scannedJsonl: finalTotals.sessions,
+    skipped: { missing, nonJsonl, duplicates },
+    totals: finalTotals,
+    byAgent: finalByAgent,
+    baseline: baseline ? {
+      path: BASELINE_PATH,
+      periodDays: baseline.periodDays ?? null,
+      rates: baseline.rates ?? {},
+      delta: baselineDelta(finalTotals, baseline),
+    } : null,
+  };
+
+  mkdirSync(dirname(METRICS_PATH), { recursive: true });
+  appendFileSync(METRICS_PATH, `${JSON.stringify(line)}\n`);
+  return line;
 }
 
 function listFromOwner() {
@@ -256,11 +373,6 @@ function main() {
   mkdirSync(STATE_DIR, { recursive: true });
   const ledger = loadLedger();
   const today = dayKey();
-  const dayCount = ledger.dayCounts?.[today] ?? 0;
-  if (dayCount >= MAX_PER_DAY) {
-    console.log(`session-mine: day cap reached (${dayCount}/${MAX_PER_DAY})`);
-    return 0;
-  }
 
   let candidates;
   if (process.env.INVOKER_SESSION_MINE_INVENTORY_JSON) {
@@ -271,6 +383,15 @@ function main() {
       console.log('session-mine: owner inventory empty or unavailable; using disk fallback');
       candidates = listFromDiskFallback();
     }
+  }
+
+  const metrics = appendAgenticContextMetrics(candidates);
+  console.log(`session-mine: agentic-context metrics scanned ${metrics.scannedJsonl}/${metrics.candidates} jsonl`);
+
+  const dayCount = ledger.dayCounts?.[today] ?? 0;
+  if (dayCount >= MAX_PER_DAY) {
+    console.log(`session-mine: day cap reached (${dayCount}/${MAX_PER_DAY})`);
+    return 0;
   }
 
   let filed = 0;
