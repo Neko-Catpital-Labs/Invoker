@@ -40,6 +40,7 @@ export async function loadPlanSubmissionBundle(
     parsePlanSubmissionBundle,
   } = await import('./plan-parser.js');
   const submission = parsePlanSubmissionBundle(planText);
+  const singlePlanBackupSource = submission.plans.length === 1 ? planText : undefined;
   const loadedWorkflowIds: string[] = [];
   let upstream: { workflowId: string; featureBranch: string } | undefined;
 
@@ -79,7 +80,7 @@ export async function loadPlanSubmissionBundle(
         ],
       };
     }
-    backupPlan(plan, undefined, deps.logger);
+    backupPlan(plan, singlePlanBackupSource, deps.logger);
     const loadedWorkflowId = deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
     const workflow = deps.persistence.loadWorkflow?.(loadedWorkflowId)
       ?? deps.persistence.listWorkflows().find((candidate) => candidate.id === loadedWorkflowId);
