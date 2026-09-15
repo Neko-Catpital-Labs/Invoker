@@ -1704,14 +1704,8 @@ class InfraCrashDoesNotCountAgainstCap(PlannerTestCase):
         self.assertIsNone(action)
 
 
-class RepairAttemptResetsOnNewHeadSha(PlannerTestCase):
-    """A repair attempt that successfully pushes a commit changes head_sha as
-    a normal side effect. Ledger.count() filters on head_sha, so the retry
-    cap never accumulates for a check that keeps almost-but-not-quite getting
-    fixed -- only for a PR that's completely frozen on one sha. Reproduces
-    the live incident: PR 9067's ui-vitest check refiled repeatedly across
-    several different head_shas in one day, never once approaching
-    max_repair_attempts=3."""
+class RepairAttemptBudgetIsScopedToCurrentHead(PlannerTestCase):
+    """A successful repair changes head_sha and completes the old-head unit."""
 
     def test_plan_direct_repairs_never_caps_across_head_sha_changes(self):
         ledger = self._ledger()
@@ -1723,11 +1717,15 @@ class RepairAttemptResetsOnNewHeadSha(PlannerTestCase):
         snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")}, head_ref_oid="d" * 40)
         facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
         action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
-        # Fixed: 3 real prior attempts on this check, across 3 different
-        # head_shas, now correctly caps the 4th instead of resubmitting --
-        # the count persists via Ledger.count_by_unit() instead of resetting
-        # on every new commit.
-        self.assertEqual(action.kind, "comment_blocked")
+        self.assertEqual(action.kind, "repair_check")
+
+    def test_old_head_attempts_do_not_count_for_current_head(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)
+        self.assertEqual(
+            p.count_code_repair_attempts(ledger, "repair-check", 1, "b" * 40, "build"),
+            0,
+        )
 
 
 class PlanStackExecution(PlannerTestCase):
@@ -1920,7 +1918,7 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
             with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
                 action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
         self.assertEqual(action.kind, "repair_check")
-        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, "build"), 0)
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
 
     def test_stale_head_superseded_outcomes_do_not_spend_code_cap(self):
         ledger = self._ledger()
@@ -1930,7 +1928,7 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
                 "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250 + i,
                 meta={"outcomeClass": "superseded", "workflowStatus": "failed"},
             )
-        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, "build"), 0)
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
         snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")})
         facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
         with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
@@ -1945,7 +1943,7 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
                 "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250 + i,
                 meta={"outcomeClass": "code", "workflowStatus": "failed"},
             )
-        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, "build"), 3)
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 3)
         snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")})
         facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
         with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):

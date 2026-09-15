@@ -474,7 +474,7 @@ Failing checks
             with self.assertRaises(RuntimeError):
                 repairer.rebase_onto_master(item, "GitHub reports merge conflict", 1)
         self.assertEqual(
-            count_code_repair_attempts(ledger, "rebase-onto-master", item.number, f"rebase-onto-master:{item.number}"),
+            count_code_repair_attempts(ledger, "rebase-onto-master", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
             0,
         )
         self.assertEqual(ledger.count("rebase-onto-master-pending", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"), 1)
@@ -493,7 +493,7 @@ Failing checks
             ):
                 with self.assertRaises(RuntimeError):
                     repairer.repair_check(item, "PR Body", 1)
-        self.assertEqual(count_code_repair_attempts(ledger, "repair-check", item.number, "PR Body"), 0)
+        self.assertEqual(count_code_repair_attempts(ledger, "repair-check", item.number, item.head_ref_oid, "PR Body"), 0)
 
     def test_bot_thread_submission_failure_is_infra_and_does_not_spend_code_retry(self):
         item = pr(2663, threads=(ReviewThread("tbot", False, ("coderabbitai[bot]",)),), latest=mergify())
@@ -505,7 +505,7 @@ Failing checks
         ):
             with self.assertRaises(RuntimeError):
                 repairer.repair_bot_thread(item, "tbot", 1)
-        self.assertEqual(count_code_repair_attempts(ledger, "repair-bot-thread", item.number, "tbot"), 0)
+        self.assertEqual(count_code_repair_attempts(ledger, "repair-bot-thread", item.number, item.head_ref_oid, "tbot"), 0)
 
     def test_next_cycle_retries_prestart_failure_and_only_success_spends_budget(self):
         ledger = self.ledger()
@@ -546,7 +546,7 @@ Failing checks
             2,
         )
         self.assertEqual(
-            count_code_repair_attempts(refreshed, "rebase-onto-master", item.number, f"rebase-onto-master:{item.number}"),
+            count_code_repair_attempts(refreshed, "rebase-onto-master", item.number, item.head_ref_oid, f"rebase-onto-master:{item.number}"),
             1,
         )
 
