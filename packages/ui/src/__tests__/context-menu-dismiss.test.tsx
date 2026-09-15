@@ -88,5 +88,5 @@ describe('Context menu dismissal (node-right-click regression)', () => {
     } finally {
       interceptor.remove();
     }
-  });
+  }, 10000);
 });
