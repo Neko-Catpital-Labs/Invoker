@@ -884,10 +884,15 @@ export interface SystemDiagnostics {
 
 export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
 
+export type CodexSpendGateStatus =
+  | { state: 'tripped'; trippedAt: string; dayKey: string; message: string }
+  | { state: 'unreadable'; message: string };
+
 export interface RuntimeStatus {
   ownerMode: boolean;
   readOnly: boolean;
   mode: RuntimeMode;
+  codexSpendGate?: CodexSpendGateStatus;
 }
 
 
