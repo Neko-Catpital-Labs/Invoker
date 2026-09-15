@@ -575,7 +575,7 @@ function validateAutoFixCandidate(
   if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.failureClass)) {
     const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
     const alreadyCounted = isFailureCoveredByCircuitBreaker(breakerState, latest.execution.completedAt);
-    if (!alreadyCounted) tripAutoFixCircuitBreaker(options);
+    if (!alreadyCounted) tripAutoFixCircuitBreaker(options, latest.execution.error);
     skipAutoFixCandidate(options, candidate, 'usage-limit', {
       status: latest.status,
       rearmedCircuitBreaker: !alreadyCounted,
@@ -627,9 +627,12 @@ export function collectValidatedAutoFixRecoveryCandidates(
     .filter((candidate): candidate is ValidatedAutoFixRecoveryCandidate => Boolean(candidate));
 }
 
-function tripAutoFixCircuitBreaker(options: AutoFixRecoveryPolicyOptions): void {
+function tripAutoFixCircuitBreaker(options: AutoFixRecoveryPolicyOptions, error: unknown): void {
   tripCircuitBreaker(options.circuitBreakerPath ?? defaultCircuitBreakerPath(), {
     reason: 'usage-limit',
+    details: {
+      failure: typeof error === 'string' ? error : String(error),
+    },
     pauseMs: options.circuitBreakerPauseMs ?? DEFAULT_CIRCUIT_BREAKER_PAUSE_MS,
   });
 }
