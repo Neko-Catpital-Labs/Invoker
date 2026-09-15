@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -65,8 +66,15 @@ class ResolveRulesForRepoTests(unittest.TestCase):
 
 
 class RunCronTargetReposTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.state_file = str(Path(self._tmp.name) / "ledger.jsonl")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
     def test_scans_each_repo_with_its_own_resolved_rules_and_repo_scoped_args(self):
-        args = base_args(repo=DEFAULT_INVOKER_REPO)
+        args = base_args(repo=DEFAULT_INVOKER_REPO, state_file=self.state_file)
         seen_repos = []
         seen_rules = []
 
@@ -89,7 +97,7 @@ class RunCronTargetReposTests(unittest.TestCase):
         self.assertEqual(args.repo, DEFAULT_INVOKER_REPO)
 
     def test_one_repo_rule_resolution_failure_does_not_block_the_others(self):
-        args = base_args()
+        args = base_args(state_file=self.state_file)
         scanned = []
 
         def fake_resolve(repo, gh):
@@ -104,6 +112,34 @@ class RunCronTargetReposTests(unittest.TestCase):
             )
         self.assertEqual(scanned, [DEFAULT_INVOKER_REPO])
         self.assertEqual(code, 2)
+
+    def test_each_tick_starts_with_the_next_repo_so_a_killed_tick_cannot_starve_later_repos(self):
+        args = base_args(state_file=self.state_file)
+        repos = [DEFAULT_INVOKER_REPO, "some-org/catstack", "other-org/tools"]
+        first_scanned = []
+
+        def killed_after_first_repo(repo_args, claim, release, rules=None):
+            first_scanned.append(repo_args.repo)
+            raise SystemExit("tick timeout")
+
+        with mock.patch.object(exec_impl, "resolve_rules_for_repo", return_value=("master", frozenset(), frozenset())), \
+             mock.patch.object(exec_impl, "run_cycle", side_effect=killed_after_first_repo):
+            for _ in range(4):
+                with self.assertRaises(SystemExit):
+                    exec_impl.run_cron_target_repos(args, repos, gh=mock.Mock())
+        self.assertEqual(
+            first_scanned,
+            [DEFAULT_INVOKER_REPO, "some-org/catstack", "other-org/tools", DEFAULT_INVOKER_REPO],
+        )
+
+    def test_unreadable_rotation_state_starts_from_the_first_repo(self):
+        args = base_args(state_file=self.state_file)
+        Path(self.state_file).with_suffix(".repo-rotation").write_text("not-a-number")
+        scanned = []
+        with mock.patch.object(exec_impl, "resolve_rules_for_repo", return_value=("master", frozenset(), frozenset())), \
+             mock.patch.object(exec_impl, "run_cycle", side_effect=lambda a, c, r, rules=None: scanned.append(a.repo)):
+            exec_impl.run_cron_target_repos(args, [DEFAULT_INVOKER_REPO, "some-org/catstack"], gh=mock.Mock())
+        self.assertEqual(scanned, [DEFAULT_INVOKER_REPO, "some-org/catstack"])
 
 
 if __name__ == "__main__":
