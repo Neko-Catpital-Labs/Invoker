@@ -358,6 +358,105 @@ export function assertNoDuplicateTaskIds(tasks: { id: string }[]): void {
   }
 }
 
+const fastTopLevelPlanKeys = new Set([
+  'name',
+  'description',
+  'visualProof',
+  'onFinish',
+  'baseBranch',
+  'featureBranch',
+  'mergeMode',
+  'reviewProvider',
+  'repoUrl',
+  'scratch',
+  'poolId',
+  'intermediateRepoUrl',
+]);
+
+const fastTaskKeys = new Set([
+  'id',
+  'description',
+  'command',
+  'prompt',
+  'dependencies',
+  'pivot',
+  'requiresManualApproval',
+  'featureBranch',
+  'dockerImage',
+  'poolId',
+  'executionAgent',
+  'executionModel',
+  'maxTurns',
+  'priority',
+]);
+
+function parseFastScalar(value: string): string | number | boolean | string[] | undefined {
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
+  if (trimmed.startsWith('[') || trimmed.endsWith(']')) {
+    if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return undefined;
+    const inner = trimmed.slice(1, -1).trim();
+    if (inner === '') return [];
+    const values = inner.split(',').map((part) => part.trim());
+    if (values.some((part) => part === '' || /[\[\]{}:"']/.test(part))) return undefined;
+    return values;
+  }
+  if (/^[|>{}"']/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function tryParseFlatPlanFast(yamlContent: string): RawPlanBundle | undefined {
+  const raw: RawPlanBundle = {};
+  let tasks: RawPlanTask[] | undefined;
+  let currentTask: RawPlanTask | undefined;
+  for (const line of yamlContent.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    if (line.trimStart().startsWith('#')) return undefined;
+    if (/^\S/.test(line)) {
+      const match = /^([A-Za-z][A-Za-z0-9]*):(?:\s*(.*))?$/.exec(line);
+      if (!match) return undefined;
+      const key = match[1]!;
+      const valueText = match[2] ?? '';
+      if (key === 'tasks') {
+        if (valueText.trim() !== '') return undefined;
+        tasks = [];
+        raw.tasks = tasks;
+        currentTask = undefined;
+        continue;
+      }
+      if (!fastTopLevelPlanKeys.has(key)) return undefined;
+      const value = parseFastScalar(valueText);
+      if (value === undefined || Array.isArray(value)) return undefined;
+      (raw as Record<string, unknown>)[key] = value;
+      currentTask = undefined;
+      continue;
+    }
+    if (!tasks) return undefined;
+    const taskStart = /^  - ([A-Za-z][A-Za-z0-9]*):\s*(.*)$/.exec(line);
+    if (taskStart) {
+      const key = taskStart[1]!;
+      if (!fastTaskKeys.has(key)) return undefined;
+      const value = parseFastScalar(taskStart[2] ?? '');
+      if (value === undefined) return undefined;
+      currentTask = {};
+      (currentTask as Record<string, unknown>)[key] = value;
+      tasks.push(currentTask);
+      continue;
+    }
+    const taskField = /^    ([A-Za-z][A-Za-z0-9]*):\s*(.*)$/.exec(line);
+    if (!taskField || !currentTask) return undefined;
+    const key = taskField[1]!;
+    if (!fastTaskKeys.has(key)) return undefined;
+    const value = parseFastScalar(taskField[2] ?? '');
+    if (value === undefined) return undefined;
+    (currentTask as Record<string, unknown>)[key] = value;
+  }
+  return tasks ? raw : undefined;
+}
+
 /**
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
@@ -468,6 +567,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
   const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
   const rawTasks = raw.tasks;
+  const seenTaskIds = new Set<string>();
   const tasks = rawTasks.map((task, index) => {
     if (!task || typeof task !== 'object' || Array.isArray(task)) {
       throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
@@ -475,7 +575,10 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
     }
-    assertNoDuplicateTaskIds(rawTasks.slice(0, index + 1) as { id: string }[]);
+    if (seenTaskIds.has(task.id)) {
+      throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
+    }
+    seenTaskIds.add(task.id);
 
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);
@@ -623,7 +726,7 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
 }
 
 export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBundle {
-  const raw = parseYaml(yamlContent) as RawPlanBundle;
+  const raw = tryParseFlatPlanFast(yamlContent) ?? parseYaml(yamlContent) as RawPlanBundle;
 
   if (!raw || typeof raw !== 'object') {
     throw new PlanParseError('Plan must be a YAML object');

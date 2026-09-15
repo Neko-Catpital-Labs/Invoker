@@ -56,6 +56,7 @@ const SAVE_TASK_COLUMNS = [
 ] as const;
 
 const SAVE_TASK_ROW_PLACEHOLDERS = `(${SAVE_TASK_COLUMNS.map(() => '?').join(', ')})`;
+const SAVE_TASK_INSERT_SQL = `INSERT OR REPLACE INTO tasks (${SAVE_TASK_COLUMNS.join(', ')}) VALUES ${SAVE_TASK_ROW_PLACEHOLDERS}`;
 
 /**
  * Safety invariant: saveTask's INSERT OR REPLACE must bind selected_attempt_id
@@ -391,25 +392,15 @@ export class SqliteTaskAttemptRepository {
     if (tasks.length === 0) return;
     const records = tasks.map((task) => this.buildSaveTaskRecord(workflowId, task));
     this.exec.runTransaction(() => {
-      const rowsPerInsert = Math.max(1, Math.floor(SQLITE_MAX_VARIABLE_NUMBER / SAVE_TASK_COLUMNS.length));
-      for (let offset = 0; offset < records.length; offset += rowsPerInsert) {
-        const chunk = records.slice(offset, offset + rowsPerInsert);
-        this.exec.execRun(
-          `INSERT OR REPLACE INTO tasks (${SAVE_TASK_COLUMNS.join(', ')}) VALUES ${chunk.map(() => SAVE_TASK_ROW_PLACEHOLDERS).join(', ')}`,
-          chunk.flatMap((record) => record.values),
-        );
+      for (const record of records) {
+        this.exec.execRun(SAVE_TASK_INSERT_SQL, record.values);
       }
       for (const record of records) {
         this.syncCrashPreservationState(record.task.id, undefined, record.task.execution);
       }
 
-      const payloads = this.loadTaskJournalPayloads(records.map((record) => record.task.id));
       this.appendTaskJournalEntries(records.map((record) => {
-        const payload = payloads.get(record.task.id);
-        if (!payload) {
-          throw new Error(`Failed to load task ${record.task.id} after insert for sync journal`);
-        }
-        return { taskId: record.task.id, payload };
+        return { taskId: record.task.id, payload: this.buildTaskJournalPayload(record) };
       }));
     });
   }
@@ -485,6 +476,12 @@ export class SqliteTaskAttemptRepository {
     ];
     assertSaveTaskPersistsSelectedAttemptId([...SAVE_TASK_COLUMNS], values, exec);
     return { task, values };
+  }
+
+  private buildTaskJournalPayload(record: { values: unknown[] }): Record<string, unknown> {
+    return Object.fromEntries(
+      SAVE_TASK_COLUMNS.map((column, index) => [column, record.values[index] ?? null]),
+    );
   }
 
   private loadTaskJournalPayloads(taskIds: string[]): Map<string, Record<string, unknown>> {

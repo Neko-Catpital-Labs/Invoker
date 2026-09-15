@@ -95,6 +95,10 @@ export class SqliteWorkflowRepository {
     private readonly reconcileTaskFromSelectedAttempt: (task: TaskState) => TaskState,
   ) {}
 
+  runInTransaction<T>(work: () => T): T {
+    return this.exec.runTransaction(work);
+  }
+
   private loadWorkflowJournalPayload(workflowId: string): Record<string, unknown> | undefined {
     return this.exec.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
   }

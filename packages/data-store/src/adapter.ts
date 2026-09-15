@@ -411,6 +411,8 @@ export type InAppPlanningSessionPatch = Partial<Pick<
 >>;
 
 export interface PersistenceAdapter {
+  runInTransaction?<T>(work: () => T): T;
+
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
   updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'staged' | 'updatedAt'>>): void;
