@@ -1,9 +1,14 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import {
   classifyReviewUnitsForPath,
+  parseFileListItems,
   reviewUnitsForChangedFiles,
   validateReviewUnitChangedFiles,
+  validateSingleReviewUnitFiles,
 } from './review-unit-rules.mjs';
 
 const rootPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -104,6 +109,79 @@ for (const path of webTransportFiles) {
     ['routing'],
     `HTTP transport file under packages/app/src/web/ should stay routing: ${path}`,
   );
+}
+
+assert.deepEqual(
+  parseFileListItems('- packages/app/src/main.ts\n- scripts/one.mjs\nAdd policy contracts\n'),
+  ['packages/app/src/main.ts', 'scripts/one.mjs'],
+  'a Files list keeps path entries and drops prose lines',
+);
+assert.deepEqual(parseFileListItems(''), [], 'an empty Files section lists no files');
+
+assert.deepEqual(
+  validateSingleReviewUnitFiles({ files: ['packages/execution-engine/src/ssh-executor.ts'], context: 'Task "x"' }),
+  [],
+  'files in one review unit pass',
+);
+assert.deepEqual(
+  validateSingleReviewUnitFiles({ files: [], context: 'Task "x"' }),
+  [],
+  'no files means the caller reports unchecked, not a failure',
+);
+const mixedFiles = validateSingleReviewUnitFiles({
+  files: ['packages/execution-engine/src/ssh-executor.ts', 'packages/ui/src/app.tsx'],
+  context: 'Task "x"',
+});
+assert.equal(mixedFiles.length, 1, 'files from two review units fail');
+assert.match(mixedFiles[0], /lists files from routing, activation-surface; split into one review unit per task\./);
+
+const lintScript = new URL('../skills/plan-to-invoker/scripts/lint-review-units.mjs', import.meta.url).pathname;
+function lintPlan(planPath) {
+  const result = spawnSync(process.execPath, [lintScript, planPath], { encoding: 'utf8' });
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+const spanningFixture = new URL('../skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml', import.meta.url).pathname;
+const spanning = lintPlan(spanningFixture);
+assert.equal(spanning.status, 1, `a task whose Files span review units must fail:\n${spanning.stdout}${spanning.stderr}`);
+assert.match(spanning.stderr, /lists files from .*; split into one review unit per task\./);
+
+const tempDir = mkdtempSync(join(tmpdir(), 'review-unit-files-'));
+try {
+  const onePlan = join(tempDir, 'one-unit.yaml');
+  writeFileSync(onePlan, [
+    'name: one unit',
+    'onFinish: pull_request',
+    'tasks:',
+    '  - id: implement',
+    '    description: |',
+    '      Files:',
+    '      - packages/execution-engine/src/ssh-executor.ts',
+    '      - packages/execution-engine/src/__tests__/ssh-executor.test.ts',
+    '      Change types:',
+    '      - packages/execution-engine/src/ssh-executor.ts: modify',
+    '    prompt: do the work',
+    '',
+  ].join('\n'));
+  const one = lintPlan(onePlan);
+  assert.equal(one.status, 0, `one review unit must pass:\n${one.stdout}${one.stderr}`);
+
+  const noFilesPlan = join(tempDir, 'no-files.yaml');
+  writeFileSync(noFilesPlan, [
+    'name: no files',
+    'onFinish: pull_request',
+    'tasks:',
+    '  - id: implement',
+    '    description: |',
+    '      Review claim: something.',
+    '    prompt: do the work',
+    '',
+  ].join('\n'));
+  const noFiles = lintPlan(noFilesPlan);
+  assert.equal(noFiles.status, 0, 'a task with no Files list does not fail');
+  assert.match(noFiles.stderr, /UNCHECKED: Task "implement" lists no Files:, so its review unit was not checked/);
+} finally {
+  rmSync(tempDir, { recursive: true, force: true });
 }
 
 console.log('review-unit classification: all assertions passed');
