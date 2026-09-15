@@ -1,6 +1,7 @@
 import { _electron as electron, expect, test } from '@playwright/test';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter } from '@invoker/data-store';
+import { WORKFLOW_CLEANUP_WORKER_KIND } from '@invoker/execution-engine';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
 import * as fs from 'node:fs/promises';
@@ -139,6 +140,7 @@ async function seedStartupWorkflows(testDir: string, workflowCount: number): Pro
         }
       }
     });
+    adapter.setWorkerDesiredState(WORKFLOW_CLEANUP_WORKER_KIND, false);
     return adapter.listWorkflows()
       .flatMap((workflow) => adapter.loadTasks(workflow.id))
       .length;
@@ -195,6 +197,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
 
     const startedAt = Date.now();
     const app = await launchElectronApp(testDir, {
+      INVOKER_E2E_FULL_BOOTSTRAP: '1',
       INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
     });
     try {

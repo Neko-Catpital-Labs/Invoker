@@ -17,9 +17,10 @@ import type { InvokerAPI } from '@invoker/contracts';
 
 const api: Record<string, unknown> = {};
 const bootstrapStartedAt = Date.now();
+const useLightBootstrap = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FULL_BOOTSTRAP !== '1';
 const bootstrapState = ipcRenderer.sendSync(
   'invoker:get-bootstrap-state-sync',
-  process.env.NODE_ENV === 'test' ? { light: true } : undefined,
+  useLightBootstrap ? { light: true } : undefined,
 ) as
   | { tasks?: unknown[]; workflows?: unknown[]; runtimeStatus?: unknown; appStartedAtEpochMs?: number }
   | undefined;

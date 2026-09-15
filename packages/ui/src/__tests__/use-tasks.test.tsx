@@ -233,6 +233,52 @@ describe('useTasks', () => {
     });
   });
 
+  it('applies a delayed startup snapshot after an early empty workflow event', async () => {
+    let releaseStartupSnapshot: (value: { tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[]; streamSequence: number }) => void;
+    const startupSnapshot = new Promise<{ tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[]; streamSequence: number }>((resolve) => {
+      releaseStartupSnapshot = resolve;
+    });
+    const fetched = makeUITask({ id: 'wf-startup/task-1', workflowId: 'wf-startup', description: 'Startup task' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [],
+      workflows: [],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi.fn().mockReturnValue(startupSnapshot),
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
+        workflowsChangedHandler = cb;
+        return () => {};
+      }),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(workflowsChangedHandler).toBeDefined();
+    });
+
+    act(() => {
+      workflowsChangedHandler!([]);
+    });
+
+    await act(async () => {
+      releaseStartupSnapshot!({
+        tasks: [fetched],
+        workflows: [{ id: 'wf-startup', name: 'Startup workflow', status: 'running' }],
+        streamSequence: 0,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.tasks.get('wf-startup/task-1')?.description).toBe('Startup task');
+      expect(result.current.workflows.get('wf-startup')?.name).toBe('Startup workflow');
+    });
+  });
+
   it('does not check PR statuses during startup snapshot loading', async () => {
     const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
     const checkPrStatuses = vi.fn().mockResolvedValue(undefined);
