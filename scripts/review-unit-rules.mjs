@@ -171,15 +171,58 @@ export function normalizeReviewUnit(value = '') {
   return firstMeaningfulLine(value).replace(/^[-*]\s*/, '').trim().toLowerCase();
 }
 
-export function detectReviewUnits(text) {
-  const haystack = String(text).toLowerCase();
-  const detected = new Set();
+const TOKEN_WRAPPER = /^[`'"([{<]+|[`'")\]}>.,;:!?]+$/g;
+const FILE_EXTENSION = /[^./]\.[a-z][a-z0-9]{0,5}$/i;
+const SLASH_JOINED_WORDS = /^[a-z]+(?:\/[a-z]+)+$/i;
+const BLANKED_PATH = '\u0000';
+
+function isPathLikeToken(token) {
+  const bare = token.replace(TOKEN_WRAPPER, '');
+  if (FILE_EXTENSION.test(bare)) return true;
+  return bare.includes('/') && !SLASH_JOINED_WORDS.test(bare);
+}
+
+export function blankPathLikeTokens(text) {
+  return String(text).replace(/\S+/g, (token) => (isPathLikeToken(token) ? BLANKED_PATH : token));
+}
+
+export function detectReviewUnitTriggers(text) {
+  const haystack = blankPathLikeTokens(text).toLowerCase();
+  const triggers = new Map();
   for (const [unit, patterns] of UNIT_PATTERNS) {
-    if (patterns.some((pattern) => pattern.test(haystack))) {
-      detected.add(unit);
+    const words = new Set();
+    for (const pattern of patterns) {
+      for (const match of haystack.matchAll(new RegExp(pattern.source, 'g'))) {
+        words.add(match[0].replace(/\s+/g, ' '));
+      }
+    }
+    if (words.size > 0) triggers.set(unit, Array.from(words));
+  }
+  return triggers;
+}
+
+export function detectReviewUnits(text) {
+  return new Set(detectReviewUnitTriggers(text).keys());
+}
+
+function mergeReviewUnitTriggers(texts) {
+  const merged = new Map();
+  for (const text of texts) {
+    for (const [unit, words] of detectReviewUnitTriggers(includedWorkText(text))) {
+      const known = merged.get(unit) ?? new Set();
+      for (const word of words) known.add(word);
+      merged.set(unit, known);
     }
   }
-  return detected;
+  return merged;
+}
+
+function formatTriggerWords(triggers, units) {
+  const unitSet = new Set(units);
+  const parts = VALID_REVIEW_UNITS
+    .filter((unit) => unitSet.has(unit) && triggers.has(unit))
+    .map((unit) => `${unit} [${Array.from(triggers.get(unit)).join(', ')}]`);
+  return parts.length > 0 ? ` Matched words: ${parts.join('; ')}.` : '';
 }
 
 function includedWorkText(text) {
@@ -192,22 +235,18 @@ function includedWorkText(text) {
 export function validateSingleReviewUnitFocus({ texts = [], context }) {
   const errors = [];
 
-  const detected = new Set();
-  for (const text of texts) {
-    for (const unit of detectReviewUnits(includedWorkText(text))) {
-      detected.add(unit);
-    }
-  }
-
-  const detectedProductUnits = Array.from(detected).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
+  const triggers = mergeReviewUnitTriggers(texts);
+  const detectedProductUnits = Array.from(triggers.keys()).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
   if (detectedProductUnits.length > 1) {
     errors.push(
-      `${context} mentions multiple review units (${formatReviewUnits(detectedProductUnits)}); split into one conceptual unit per diff/task.`,
+      `${context} mentions multiple review units (${formatReviewUnits(detectedProductUnits)}); split into one conceptual unit per diff/task.${formatTriggerWords(triggers, detectedProductUnits)}`,
     );
   }
 
-  if (detected.has('docs') && detectedProductUnits.length > 0) {
-    errors.push(`${context} mixes docs language with product-unit language; split docs from implementation policy.`);
+  if (triggers.has('docs') && detectedProductUnits.length > 0) {
+    errors.push(
+      `${context} mixes docs language with product-unit language; split docs from implementation policy.${formatTriggerWords(triggers, ['docs', ...detectedProductUnits])}`,
+    );
   }
 
   return errors;
@@ -246,17 +285,11 @@ export function validateReviewUnitFocus({ declaredReviewUnit, texts = [], contex
   const errors = validateSingleReviewUnitFocus({ texts, context });
   if (!VALID_REVIEW_UNIT_SET.has(declaredReviewUnit)) return errors;
 
-  const detected = new Set();
-  for (const text of texts) {
-    for (const unit of detectReviewUnits(includedWorkText(text))) {
-      detected.add(unit);
-    }
-  }
-
-  const detectedProductUnits = Array.from(detected).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
+  const triggers = mergeReviewUnitTriggers(texts);
+  const detectedProductUnits = Array.from(triggers.keys()).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
   if (detectedProductUnits.length === 1 && PRODUCT_REVIEW_UNITS.has(declaredReviewUnit) && detectedProductUnits[0] !== declaredReviewUnit) {
     errors.push(
-      `${context} Review Unit "${declaredReviewUnit}" does not match the described ${detectedProductUnits[0]} work.`,
+      `${context} Review Unit "${declaredReviewUnit}" does not match the described ${detectedProductUnits[0]} work.${formatTriggerWords(triggers, detectedProductUnits)}`,
     );
   }
 

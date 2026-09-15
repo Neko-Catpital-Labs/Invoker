@@ -80,6 +80,10 @@ jobs:
             command: pnpm run check:deps
           - name: Added Comment Policy
             command: pnpm run check:comments
+          - name: CLI/Headless Parity
+            command: pnpm run check:cli-parity
+          - name: Sync Spawn Timeouts
+            command: pnpm run check:sync-spawn-timeouts
 
     name: quality / ${{ matrix.name }}
 
@@ -283,10 +287,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            .node-version
 
       - name: Run large file guardrail
         run: pnpm run check:large-files

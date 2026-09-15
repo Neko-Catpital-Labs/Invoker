@@ -743,12 +743,21 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     if (!workflowId) {
       throw new Error('Loaded plan did not create a workflow.');
     }
-    const started = orchestrator.startExecution();
-    logger.info(
-      `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
-      { module: 'ipc-delegate' },
-    );
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+    setImmediate(() => {
+      try {
+        const started = orchestrator.startExecution();
+        logger.info(
+          `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+          { module: 'ipc-delegate' },
+        );
+      } catch (err) {
+        logger.error(
+          `headless.run deferred startExecution failed workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ipc-delegate' },
+        );
+      }
+    });
     return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
   }
 
