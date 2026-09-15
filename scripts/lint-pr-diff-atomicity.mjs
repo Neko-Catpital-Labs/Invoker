@@ -374,6 +374,82 @@ function collectAssertionCalls(file, content, lineNumbers, groupMap) {
   return assertions;
 }
 
+const ADDITIVE_EXPECTATION_MATCHERS = new Set([
+  'toEqual',
+  'toStrictEqual',
+  'toMatchObject',
+  'toHaveBeenCalledWith',
+  'toHaveBeenLastCalledWith',
+  'toHaveBeenNthCalledWith',
+]);
+
+function parseArgumentList(ts, argsText) {
+  const sourceFile = ts.createSourceFile('args.ts', `[${argsText}]`, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  if ((sourceFile.parseDiagnostics ?? []).length > 0 || sourceFile.statements.length !== 1) {
+    return null;
+  }
+  const statement = sourceFile.statements[0];
+  if (!ts.isExpressionStatement(statement) || !ts.isArrayLiteralExpression(statement.expression)) {
+    return null;
+  }
+  return statement.expression.elements;
+}
+
+function propertyKey(ts, property) {
+  if (ts.isSpreadAssignment(property)) {
+    return `...${property.expression.getText()}`;
+  }
+  return property.name ? property.name.getText() : null;
+}
+
+function argumentsOnlyAddFields(ts, oldArgs, newArgs) {
+  return oldArgs.length === newArgs.length
+    && oldArgs.every((arg, index) => nodeOnlyAddsFields(ts, arg, newArgs[index]));
+}
+
+function nodeOnlyAddsFields(ts, oldNode, newNode) {
+  if (oldNode.getText() === newNode.getText()) {
+    return true;
+  }
+  if (ts.isObjectLiteralExpression(oldNode) && ts.isObjectLiteralExpression(newNode)) {
+    const newByKey = new Map();
+    for (const property of newNode.properties) {
+      const key = propertyKey(ts, property);
+      if (key === null || newByKey.has(key)) {
+        return false;
+      }
+      newByKey.set(key, property);
+    }
+    return oldNode.properties.every((property) => {
+      const key = propertyKey(ts, property);
+      const match = key === null ? undefined : newByKey.get(key);
+      if (!match) {
+        return false;
+      }
+      return property.getText() === match.getText()
+        || (ts.isPropertyAssignment(property)
+          && ts.isPropertyAssignment(match)
+          && nodeOnlyAddsFields(ts, property.initializer, match.initializer));
+    });
+  }
+  if (ts.isCallExpression(oldNode) && ts.isCallExpression(newNode)) {
+    return oldNode.expression.getText() === 'expect.objectContaining'
+      && newNode.expression.getText() === 'expect.objectContaining'
+      && argumentsOnlyAddFields(ts, oldNode.arguments, newNode.arguments);
+  }
+  return false;
+}
+
+function isStricterExpectation(removed, added) {
+  if (removed.negated || added.negated || !ADDITIVE_EXPECTATION_MATCHERS.has(added.matcherName)) {
+    return false;
+  }
+  const ts = getTypeScript();
+  const oldArgs = parseArgumentList(ts, removed.matcherArgs);
+  const newArgs = parseArgumentList(ts, added.matcherArgs);
+  return Boolean(oldArgs && newArgs) && argumentsOnlyAddFields(ts, oldArgs, newArgs);
+}
+
 function groupIdsIntersect(a, b) {
   for (const id of a) {
     if (b.has(id)) {
@@ -403,7 +479,8 @@ function collectTestAssertionWeakenedFindings(files) {
       const flipped = removedAssertions.some((removed) =>
         removed.target === added.target
         && removed.matcherName === added.matcherName
-        && (removed.negated !== added.negated || removed.matcherArgs !== added.matcherArgs)
+        && (removed.negated !== added.negated
+          || (removed.matcherArgs !== added.matcherArgs && !isStricterExpectation(removed, added)))
         && groupIdsIntersect(removed.groupIds, added.groupIds));
       if (flipped) {
         findings.push(makeFinding('test-assertion-weakened', file.path, added.line, file.source));
