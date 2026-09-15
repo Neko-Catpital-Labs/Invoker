@@ -710,6 +710,68 @@ Failing checks
         self.assertIn('"failed_check"', log)
         self.assertIn('"pr_number": 2606', log)
 
+    def test_report_mode_prints_stack_report_without_mutation_or_ledger_write(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+                self.label_edits = []
+                self.retargets = []
+                self.merges = []
+                self.compare_calls = []
+
+            def compare_status(self, repo, base, head):
+                self.compare_calls.append((repo, base, head))
+                return "ahead"
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def edit_label(self, repo, pr_number, *, add=None, remove=None):
+                self.label_edits.append((repo, pr_number, add, remove))
+
+            def retarget_base(self, repo, pr_number, base):
+                self.retargets.append((repo, pr_number, base))
+
+            def merge_squash(self, repo, number):
+                self.merges.append((repo, number))
+
+        fake_gh = FakeGh()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        state_file = Path(tmp.name) / "ledger.jsonl"
+        stack = StackGroup(
+            "report-stack",
+            (
+                pr(8101, head="stack/report-bottom", labels={"admin-bypass"}, latest=mergify()),
+                pr(8102, base="stack/report-bottom", head="stack/report-top", labels={"admin-bypass"}),
+            ),
+        )
+        stdout = io.StringIO()
+        args = requeue.parse_args([
+            "--report",
+            "--repo",
+            "Neko-Catpital-Labs/Invoker",
+            "--state-file",
+            str(state_file),
+        ])
+        with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
+            with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                with mock.patch.object(exec_impl, "settle_workflow_fastpath_rows") as settle_fast:
+                    with mock.patch.object(exec_impl, "settle_repairer_plan_rows") as settle_repairer:
+                        with redirect_stdout(stdout):
+                            code = exec_impl.run_report(args)
+        self.assertEqual(code, 0)
+        self.assertIn("STACK | DIAGNOSIS", stdout.getvalue())
+        self.assertIn("#8101 -> #8102", stdout.getvalue())
+        self.assertIn("Root #8101 (report-stack)", stdout.getvalue())
+        self.assertEqual(fake_gh.comments, [])
+        self.assertEqual(fake_gh.label_edits, [])
+        self.assertEqual(fake_gh.retargets, [])
+        self.assertEqual(fake_gh.merges, [])
+        self.assertFalse(state_file.exists())
+        settle_fast.assert_not_called()
+        settle_repairer.assert_not_called()
+
     def test_run_cycle_logs_degraded_once_when_all_repair_dispatches_fail(self):
         args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}

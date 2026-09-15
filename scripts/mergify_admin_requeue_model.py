@@ -137,6 +137,32 @@ class StackExecutionPlan:
     prereq_status: RepairPrereqStatus | None = None
     queue_only_noop_check: str | None = None
 
+
+@dataclass(frozen=True)
+class RepairWorkflowEvidence:
+    kind: str
+    pr_number: int
+    head_sha: str
+    key: str
+    plan_name: str
+    dispatch_state: str
+    workflow_id: str | None
+    workflow_status: str | None
+    outcome_class: str | None
+    note: str | None
+    epoch: int
+    cap_attempts: int | None = None
+    cap_limit: int | None = None
+
+
+@dataclass(frozen=True)
+class StackReportSection:
+    stack_id: str
+    stack_arrow: str
+    root_pr_number: int
+    diagnosis: str
+    details: tuple[str, ...]
+
 class Ledger:
     def __init__(self, path: Path):
         self.path = path
