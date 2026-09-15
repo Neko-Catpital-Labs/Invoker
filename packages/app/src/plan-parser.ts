@@ -5,8 +5,9 @@
  * Uses the `yaml` npm package for parsing.
  */
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execFile, execFileSync, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
@@ -180,10 +181,6 @@ const REMOTE_CLONE_PROBE_ATTEMPTS = 2;
 const REMOTE_CLONE_PROBE_RETRY_DELAY_MS = 500;
 const REMOTE_CLONE_PROBE_TIMEOUT_MS = 30_000;
 
-function sleepSyncMs(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
 function describeCloneProbeError(err: unknown): string {
   const stderr = (err as { stderr?: Buffer | string })?.stderr;
   const stderrText = stderr ? stderr.toString().trim() : '';
@@ -200,7 +197,10 @@ function assertLocalGitRepoReadable(localPath: string): void {
   });
 }
 
-export function assertRepoUrlCloneable(repoUrl: string): void {
+function classifyRepoUrl(repoUrl: string): {
+  trimmed: string;
+  kind: 'localPath' | 'fileUrl' | 'remoteUrl';
+} {
   const trimmed = repoUrl.trim();
   const isLocalPath = trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../');
   const isFileUrl = trimmed.startsWith('file://');
@@ -211,8 +211,25 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
       `repoUrl "${repoUrl}" is not a valid git repository. Use a full clone URL or a configured Slack alias.`,
     );
   }
+  return {
+    trimmed,
+    kind: isLocalPath ? 'localPath' : isFileUrl ? 'fileUrl' : 'remoteUrl',
+  };
+}
 
-  if (isLocalPath) {
+export function isRemoteRepoUrl(repoUrl: string | undefined): repoUrl is string {
+  if (typeof repoUrl !== 'string') return false;
+  try {
+    return classifyRepoUrl(repoUrl).kind === 'remoteUrl';
+  } catch {
+    return false;
+  }
+}
+
+export function assertRepoUrlCloneable(repoUrl: string): void {
+  const { trimmed, kind } = classifyRepoUrl(repoUrl);
+
+  if (kind === 'localPath') {
     try {
       assertLocalGitRepoReadable(trimmed);
       return;
@@ -222,7 +239,7 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
       );
     }
   }
-  if (isFileUrl) {
+  if (kind === 'fileUrl') {
     try {
       assertLocalGitRepoReadable(fileURLToPath(trimmed));
       return;
@@ -232,19 +249,35 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
       );
     }
   }
+}
+
+function execFilePromise(file: string, args: string[], options: Parameters<typeof execFile>[2]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function assertRemoteRepoUrlCloneable(repoUrl: string): Promise<void> {
+  const { trimmed, kind } = classifyRepoUrl(repoUrl);
+  if (kind !== 'remoteUrl') return;
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= REMOTE_CLONE_PROBE_ATTEMPTS; attempt += 1) {
     try {
-      execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
+      await execFilePromise('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
         timeout: REMOTE_CLONE_PROBE_TIMEOUT_MS,
       });
       return;
     } catch (err) {
       lastError = err;
       if (attempt < REMOTE_CLONE_PROBE_ATTEMPTS) {
-        sleepSyncMs(REMOTE_CLONE_PROBE_RETRY_DELAY_MS);
+        await sleep(REMOTE_CLONE_PROBE_RETRY_DELAY_MS);
       }
     }
   }
