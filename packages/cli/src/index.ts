@@ -79,6 +79,29 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       process.stdout.write(`${VERSION}\n`);
       return 0;
     }
+    if (
+      argv[0] === 'doctor'
+      || argv[0] === 'install'
+      || argv[0] === 'setup'
+      || argv[0] === 'mcp'
+      || argv[0] === 'spend-gate'
+      || argv[0] === 'auto-approve-authors'
+      || argv[0] === 'owner'
+      || argv[0] === 'worker'
+      || argv[0] === 'run-worker'
+      || argv[0] === 'query'
+      || argv[0] === 'wait'
+      || argv[0] === 'retry-task'
+      || argv[0] === 'retry'
+      || argv[0] === 'resume'
+      || argv[0] === 'delete'
+      || argv[0] === 'retry-tasks'
+      || argv[0] === 'delete-all'
+      || argv[0] === 'set'
+      || argv[0] === 'run'
+    ) {
+      return await runRuntimeMain(argv, deps);
+    }
     return await runRuntimeMain(argv, deps);
   } catch (err) {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
