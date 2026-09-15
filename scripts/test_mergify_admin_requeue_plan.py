@@ -1906,6 +1906,19 @@ class PlanStackExecution(PlannerTestCase):
 
 
 class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
+    def test_capacity_deferred_settlement_consumes_zero_and_stays_in_flight(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-check", 1, HEAD, "build", epoch=NOW - 100,
+            meta={"workflowId": "wf-capacity", "outcomeClass": "capacity-deferred"},
+        )
+        ledger.record(
+            "repair-check-settled", 1, HEAD, "build", epoch=NOW,
+            meta={"workflowId": "wf-capacity", "outcomeClass": "capacity-deferred"},
+        )
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, "build"), 0)
+        self.assertTrue(p.repair_in_flight(ledger, 1, HEAD, "repair-check", "build", NOW + 1))
+
     def test_three_infra_outcomes_do_not_cap_and_eventual_retry_files(self):
         ledger = self._ledger()
         for i in range(3):
