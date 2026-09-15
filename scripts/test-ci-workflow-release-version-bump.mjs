@@ -57,12 +57,25 @@ assert(
   'the patch-bump step must commit the patch version stamp with the daily tag in the message',
 );
 assert(
-  bumpStep.includes('git push origin HEAD:master'),
-  'the patch-bump step must push the bumped commit back to master',
+  !/git push[^\n]*\bmaster\b/.test(bumpStep),
+  'the patch-bump step must not push to master: the master ruleset requires a pull request and rejects the push with GH013',
 );
 assert(
-  !/open-daily-release-bump-pr|pull-requests|git checkout -b/.test(bumpStep),
-  'the patch-bump step must not route the nightly bump through a release PR',
+  bumpStep.includes('git checkout -b "daily-version-bump-${{ steps.decide.outputs.tag }}"'),
+  'the patch-bump step must commit the bump on a daily-version-bump branch',
+);
+assert(
+  bumpStep.includes('bash scripts/open-daily-release-bump-pr.sh --tag "${{ steps.decide.outputs.tag }}"'),
+  'the patch-bump step must open the bump PR through scripts/open-daily-release-bump-pr.sh',
+);
+assert(
+  bumpStep.includes('GH_TOKEN: ${{ github.token }}'),
+  'the patch-bump step must give the PR helper a GitHub token',
+);
+const helperDepsIndex = decideJob.indexOf('      - name: Install dependencies for the bump PR helper');
+assert(
+  helperDepsIndex > decideCutIndex && helperDepsIndex < bumpIndex,
+  'the bump PR helper dependencies must be installed between the daily-cut decision and the patch-bump step',
 );
 
 const resolveShaStep = extractStep(decideJob, 'Resolve build sha');

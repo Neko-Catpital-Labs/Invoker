@@ -131,6 +131,19 @@ export class PersistedWorkflowMutationCoordinator {
     this.enableTraceLogs = process.env.INVOKER_TRACE_MUTATION_QUEUE === '1';
   }
 
+  submitGlobalRecovery(
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ): number {
+    return this.submit(workflowId, priority, channel, args, {
+      ...options,
+      coalesceGlobally: true,
+    });
+  }
+
   async enqueue<T>(
     workflowId: string,
     priority: WorkflowMutationPriority,
@@ -158,17 +171,23 @@ export class PersistedWorkflowMutationCoordinator {
     priority: WorkflowMutationPriority,
     channel: string,
     args: unknown[],
-    options?: { deferDrain?: boolean },
+    options?: { deferDrain?: boolean; coalesceGlobally?: boolean },
   ): number {
-    const coalesced = this.findOpenCoalescibleRetryIntent(workflowId, channel, args);
+    const coalesced = this.findOpenCoalescibleRetryIntent(
+      workflowId,
+      channel,
+      args,
+      options?.coalesceGlobally === true,
+    );
     if (coalesced) {
       this.trace(
         `submit coalesced workflow=${workflowId} channel=${channel} into intent=${coalesced.id} status=${coalesced.status}`,
       );
+      const drainWorkflowId = options?.coalesceGlobally ? coalesced.workflowId : workflowId;
       if (options?.deferDrain) {
-        this.scheduleWorkflowDrainDeferred(workflowId);
+        this.scheduleWorkflowDrainDeferred(drainWorkflowId);
       } else {
-        this.scheduleWorkflowDrain(workflowId);
+        this.scheduleWorkflowDrain(drainWorkflowId);
       }
       return coalesced.id;
     }
@@ -197,10 +216,13 @@ export class PersistedWorkflowMutationCoordinator {
     workflowId: string,
     channel: string,
     args: unknown[],
+    coalesceGlobally: boolean,
   ): WorkflowMutationIntent | undefined {
     const key = this.coalescibleRetryKey(channel, args);
     if (!key) return undefined;
-    const open = this.persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
+    const open = coalesceGlobally && key === 'start-ready'
+      ? this.persistence.listWorkflowMutationIntents(undefined, ['queued', 'running'])
+      : this.persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
     return open.find((intent) => this.coalescibleRetryKey(intent.channel, intent.args) === key);
   }
 

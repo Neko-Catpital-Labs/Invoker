@@ -389,6 +389,76 @@ class ClassifyRepairOutcome(unittest.TestCase):
         with mock.patch.object(f, "list_workflow_tasks", return_value=[{"id": "wf/repair", "status": "completed", "execution": {}}]):
             self.assertEqual(f.classify_repair_outcome("wf-1", "completed"), "success")
 
+    @unittest.expectedFailure
+    def test_repair_that_never_launched_is_infra(self):
+        tasks = [
+            {
+                "id": "wf-1789236945955-90/repair",
+                "status": "failed",
+                "execution": {
+                    "exitCode": 1,
+                    "phase": "launching",
+                    "launchStartedAt": "2026-09-12T18:15:49.607Z",
+                    "error": "Error: Executor startup failed (worktree): Codex is shut off by the daily spend gate",
+                },
+            },
+            {"id": "wf-1789236945955-90/safe-push", "status": "skipped", "execution": {}},
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1789236945955-90", "failed"), "infra")
+
+    @unittest.expectedFailure
+    def test_push_that_never_launched_after_a_finished_repair_is_infra(self):
+        tasks = [
+            {
+                "id": "wf-1789186955017-6/repair",
+                "status": "completed",
+                "execution": {
+                    "exitCode": 0,
+                    "phase": "executing",
+                    "launchStartedAt": "2026-09-12T05:10:56.479Z",
+                    "launchCompletedAt": "2026-09-12T05:13:20.906Z",
+                    "commit": "6b41e235",
+                },
+            },
+            {
+                "id": "wf-1789186955017-6/safe-push",
+                "status": "failed",
+                "execution": {"exitCode": 1, "phase": "launching", "launchStartedAt": "2026-09-12T05:45:37.455Z"},
+            },
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1789186955017-6", "failed"), "infra")
+
+    def test_task_that_launched_then_failed_is_code_even_when_its_error_names_the_spend_gate(self):
+        tasks = [
+            {
+                "id": "wf-1/repair",
+                "status": "failed",
+                "execution": {
+                    "exitCode": 1,
+                    "phase": "executing",
+                    "launchStartedAt": "2026-09-12T05:10:56.479Z",
+                    "launchCompletedAt": "2026-09-12T05:13:20.906Z",
+                    "error": "Codex is shut off by the daily spend gate",
+                },
+            }
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1", "failed"), "code")
+
+    def test_one_launched_failure_beside_a_never_launched_task_is_code(self):
+        tasks = [
+            {
+                "id": "wf-1/repair-a",
+                "status": "failed",
+                "execution": {"exitCode": 1, "phase": "executing", "launchCompletedAt": "2026-09-12T05:13:20.906Z"},
+            },
+            {"id": "wf-1/repair-b", "status": "failed", "execution": {"exitCode": 1, "phase": "launching"}},
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1", "failed"), "code")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,6 +33,13 @@ export interface WorkflowResumeWorkerSubmitter {
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
+  submitGlobalRecovery?(
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: typeof WORKFLOW_RESUME_COMMAND_CHANNEL,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ): number;
 }
 
 export interface WorkflowResumeWorkerConfig {
@@ -139,13 +146,21 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
       }
       submitted.add(workflowId);
 
-      const intentId = options.submitter.submit(
-        workflowId,
-        'normal',
-        WORKFLOW_RESUME_COMMAND_CHANNEL,
-        [{}],
-        { deferDrain: true },
-      );
+      const intentId = options.submitter.submitGlobalRecovery
+        ? options.submitter.submitGlobalRecovery(
+          workflowId,
+          'normal',
+          WORKFLOW_RESUME_COMMAND_CHANNEL,
+          [{}],
+          { deferDrain: true },
+        )
+        : options.submitter.submit(
+          workflowId,
+          'normal',
+          WORKFLOW_RESUME_COMMAND_CHANNEL,
+          [{}],
+          { deferDrain: true },
+        );
       options.ledger.markSubmitted(workflowId, nowMs + cooldownMs);
       options.store.logEvent?.(candidate.readyTaskId, 'recovery.worker.submit', {
         worker: WORKFLOW_RESUME_WORKER_KIND,

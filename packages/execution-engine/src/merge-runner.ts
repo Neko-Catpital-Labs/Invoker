@@ -162,6 +162,15 @@ function setMergeGateReviewReady(
   host.orchestrator.setTaskReviewReady(taskId, changes, expectedLineage);
 }
 
+function mergeGateConfig(config: TaskStateChanges['config']): TaskStateChanges['config'] {
+  return {
+    ...(config ?? {}),
+    runnerKind: 'merge',
+    poolId: undefined,
+    poolMemberId: undefined,
+  };
+}
+
 function buildSingleArtifactReviewGate(args: {
   expectedGeneration: number;
   title: string;
@@ -1203,17 +1212,11 @@ export async function executeMergeNodeImpl(
 ): Promise<void> {
   const result = await runMergeGateActionImpl(host, task);
   const { response } = result;
-  const mergeConfig: TaskStateChanges['config'] = {
-    ...(result.taskChanges.config ?? {}),
-    runnerKind: 'merge',
-    poolId: undefined,
-    poolMemberId: undefined,
-  };
   const mergeChanges: TaskStateChanges = {
     status: result.taskChanges.status,
     dependencies: result.taskChanges.dependencies,
     execution: result.taskChanges.execution,
-    config: mergeConfig,
+    config: mergeGateConfig(result.taskChanges.config),
   };
 
   updateMergeGateMetadataIfCurrent(host, task.id, mergeChanges, captureMergeGateLineage(task));
@@ -1377,7 +1380,7 @@ export async function publishAfterFixImpl(
           `will persist workspacePath=${gateWorkspacePath ?? 'NULL'}`,
       );
       setMergeGateReviewReady(host, task.id, {
-        config: { runnerKind: 'worktree', summary },
+        config: mergeGateConfig({ summary }),
         execution: {
           workspacePath: gateWorkspacePath,
           fixedIntegrationSha: undefined,
@@ -1607,7 +1610,7 @@ export async function publishAfterFixImpl(
       });
 
       setMergeGateReviewReady(host, task.id, {
-        config: { runnerKind: 'worktree', summary },
+        config: mergeGateConfig({ summary }),
         execution: {
           branch: featureBranch,
           workspacePath: gateWorkspacePath,
@@ -1628,7 +1631,7 @@ export async function publishAfterFixImpl(
     }
 
     setMergeGateReviewReady(host, task.id, {
-      config: { runnerKind: 'worktree', summary },
+      config: mergeGateConfig({ summary }),
       execution: {
         branch: featureBranch,
         workspacePath: gateWorkspacePath,

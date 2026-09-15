@@ -2084,11 +2084,11 @@ describe('TaskRunner', () => {
       try {
         const bodyWithoutUnchangedBehaviorClaim = STRICT_COMPLIANT_REVIEW_STACK_BODY
           .replace('\nbehavior\n', '\nrefactor\n');
-        expect(validateReviewStackPrBodyAgainstLocalDiff({
+        expect((await validateReviewStackPrBodyAgainstLocalDiff({
           body: bodyWithoutUnchangedBehaviorClaim,
           cwd,
           baseBranch: 'master',
-        }).join('\n')).toContain('Review lane refactor must state in ## Non-goals that behavior stays unchanged');
+        })).join('\n')).toContain('Review lane refactor must state in ## Non-goals that behavior stays unchanged');
         const executor = makeStrictGateExecutor(
           makeBodyEmittingAgent(tempHome, bodyWithoutUnchangedBehaviorClaim),
           cwd,
@@ -3556,7 +3556,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it.fails('no featureBranch: early exit with setTaskReviewReady', async () => {
+    it('no featureBranch: early exit with setTaskReviewReady', async () => {
       const { executor, mergeTask, orchestrator, gitCalls } = setupPublishAfterFix({
         featureBranch: undefined,
         gateWorkspacePath: '/tmp/gate-clone',
