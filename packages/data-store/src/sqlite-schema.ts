@@ -449,6 +449,37 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_task_state
         ON task_launch_dispatch(task_id, state);
 
+      CREATE TABLE IF NOT EXISTS queue_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        workflow_id TEXT,
+        task_id TEXT,
+        attempt_id TEXT,
+        dispatch_id INTEGER,
+        resource_key TEXT,
+        resource_type TEXT,
+        holder_id TEXT,
+        from_state TEXT,
+        to_state TEXT NOT NULL DEFAULT 'unknown',
+        queue_position INTEGER CHECK (queue_position IS NULL OR queue_position > 0),
+        queue_size INTEGER CHECK (queue_size IS NULL OR queue_size >= 0),
+        payload_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+        unknown_fields TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(unknown_fields))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_queue_history_workflow_recorded
+        ON queue_history(workflow_id, recorded_at, id);
+
+      CREATE INDEX IF NOT EXISTS idx_queue_history_task_recorded
+        ON queue_history(task_id, recorded_at, id);
+
+      CREATE INDEX IF NOT EXISTS idx_queue_history_attempt_recorded
+        ON queue_history(attempt_id, recorded_at, id);
+
+      CREATE INDEX IF NOT EXISTS idx_queue_history_dispatch_recorded
+        ON queue_history(dispatch_id, recorded_at, id);
+
       CREATE TABLE IF NOT EXISTS worker_actions (
         id TEXT PRIMARY KEY,
         worker_kind TEXT NOT NULL,
@@ -726,6 +757,28 @@ export const POST_MIGRATION_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated ON worker_actions(task_id, updated_at)',
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status ON worker_actions(workflow_id, worker_kind, status)',
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_kind_updated ON worker_actions(worker_kind, updated_at DESC, id)',
+  `CREATE TABLE IF NOT EXISTS queue_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorded_at TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    workflow_id TEXT,
+    task_id TEXT,
+    attempt_id TEXT,
+    dispatch_id INTEGER,
+    resource_key TEXT,
+    resource_type TEXT,
+    holder_id TEXT,
+    from_state TEXT,
+    to_state TEXT NOT NULL DEFAULT 'unknown',
+    queue_position INTEGER CHECK (queue_position IS NULL OR queue_position > 0),
+    queue_size INTEGER CHECK (queue_size IS NULL OR queue_size >= 0),
+    payload_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+    unknown_fields TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(unknown_fields))
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_queue_history_workflow_recorded ON queue_history(workflow_id, recorded_at, id)',
+  'CREATE INDEX IF NOT EXISTS idx_queue_history_task_recorded ON queue_history(task_id, recorded_at, id)',
+  'CREATE INDEX IF NOT EXISTS idx_queue_history_attempt_recorded ON queue_history(attempt_id, recorded_at, id)',
+  'CREATE INDEX IF NOT EXISTS idx_queue_history_dispatch_recorded ON queue_history(dispatch_id, recorded_at, id)',
   `CREATE TABLE IF NOT EXISTS worker_desired_states (
     worker_kind TEXT PRIMARY KEY,
     desired_enabled INTEGER NOT NULL,
