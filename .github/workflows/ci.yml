@@ -1286,6 +1286,25 @@ jobs:
       - name: Overlay self-check
         run: node scripts/test-bazel-overlay.mjs
 
+      - name: Configure BuildBuddy credentials
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILDBUDDY_API_KEY:-}" ]; then
+            echo "BUILDBUDDY_API_KEY unset; remote cache/BES disabled"
+            exit 0
+          fi
+          umask 077
+          {
+            echo "build --bes_results_url=https://app.buildbuddy.io/invocation/"
+            echo "build --bes_backend=grpcs://remote.buildbuddy.io"
+            echo "common --remote_cache=grpcs://remote.buildbuddy.io"
+            echo "common --remote_timeout=10m"
+            echo "common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+            echo "common --bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          } > .bazelrc.user
+
       - name: Bazel test with BuildBuddy cache when keyed
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -1339,6 +1358,25 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workspace }}/.invoker-bazel-disk
           repository-cache: true
+
+      - name: Configure BuildBuddy credentials
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILDBUDDY_API_KEY:-}" ]; then
+            echo "BUILDBUDDY_API_KEY unset; remote cache/BES disabled"
+            exit 0
+          fi
+          umask 077
+          {
+            echo "build --bes_results_url=https://app.buildbuddy.io/invocation/"
+            echo "build --bes_backend=grpcs://remote.buildbuddy.io"
+            echo "common --remote_cache=grpcs://remote.buildbuddy.io"
+            echo "common --remote_timeout=10m"
+            echo "common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+            echo "common --bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          } > .bazelrc.user
 
       - name: Bazel RBE for sandboxed tsup packages when keyed
         env:

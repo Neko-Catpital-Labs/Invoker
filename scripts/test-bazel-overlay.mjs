@@ -41,6 +41,10 @@ const bazelrc = readFileSync('.bazelrc', 'utf8');
 assert(/build:remote\s+--remote_cache=/.test(bazelrc), '.bazelrc must define build:remote remote_cache');
 assert(/build:rbe\s+--remote_executor=/.test(bazelrc), '.bazelrc must define dormant build:rbe remote_executor');
 assert(
+  !bazelrc.includes('${BUILDBUDDY_API_KEY}'),
+  '.bazelrc must not put ${BUILDBUDDY_API_KEY} in remote headers; Bazel does not expand it — auth belongs in .bazelrc.user',
+);
+assert(
   !/^build\s+--remote_executor=/m.test(bazelrc),
   'default build must not enable remote_executor (rbe stays behind --config=rbe)',
 );
@@ -94,6 +98,10 @@ const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const pilot = workflow.jobs?.['bazel-cache-pilot'];
 assert(pilot, 'ci.yml must define bazel-cache-pilot');
 assert(pilot['runs-on'] === 'ubuntu-latest', 'bazel-cache-pilot must use ubuntu-latest');
+assert(
+  JSON.stringify(pilot).includes('Configure BuildBuddy credentials'),
+  'bazel-cache-pilot must write .bazelrc.user from BUILDBUDDY_API_KEY',
+);
 const rbePilot = workflow.jobs?.['bazel-rbe-pilot'];
 assert(rbePilot, 'ci.yml must define bazel-rbe-pilot (optional, dormant rbe)');
 assert(rbePilot['runs-on'] === 'ubuntu-latest', 'bazel-rbe-pilot must use ubuntu-latest');
