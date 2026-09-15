@@ -5,6 +5,7 @@ dist/
 .env*
 .DS_Store
 coverage/
+.playwright-artifacts/
 .claude/worktrees/
 *.tsbuildinfo
 tsup.config.bundled_*.mjs

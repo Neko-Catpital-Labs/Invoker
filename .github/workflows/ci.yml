@@ -937,7 +937,7 @@ jobs:
         with:
           name: playwright-artifacts-${{ matrix.name }}
           path: |
-            .git/playwright-artifacts
+            .playwright-artifacts
             packages/app/test-results
           if-no-files-found: ignore
 
@@ -1015,7 +1015,7 @@ jobs:
         with:
           name: playwright-artifacts-nightly-perf-${{ matrix.name }}
           path: |
-            .git/playwright-artifacts
+            .playwright-artifacts
             packages/app/test-results
           if-no-files-found: ignore
 
@@ -1087,7 +1087,7 @@ jobs:
         with:
           name: playwright-artifacts-nightly-visual-proof
           path: |
-            .git/playwright-artifacts
+            .playwright-artifacts
             packages/app/test-results
           if-no-files-found: ignore
 
