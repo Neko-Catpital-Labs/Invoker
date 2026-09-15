@@ -1,0 +1,1651 @@
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { pathToFileURL } from 'node:url';
+import {
+  DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+  listHeadlessSetSubcommandsForScope,
+  readInvokerConfigFile,
+  resolveHeadlessOwnerLaunchSpec,
+  resolveInvokerHomeRoot,
+  resolveRepoRoot,
+  validateTaskFilter,
+  updateInvokerConfigFile,
+  type HeadlessOwnerLaunchSpec,
+  type Logger,
+} from '@invoker/contracts';
+import { SQLiteAdapter, SqliteTaskRepository, type Workflow } from '@invoker/data-store';
+import {
+  AUTO_FIX_WORKER_KIND,
+  ExecutorRegistry,
+  TaskRunner,
+  WorktreeExecutor,
+  acquireWorkerLock,
+  createAutoFixAttemptLedger,
+  createWorkerRegistry,
+  registerAutoFixWorker,
+  registerExternalWorkers,
+  WorkerLockHeldError,
+  registerBuiltinAgents,
+  type ExternalWorkerConfig,
+  type ExternalWorkerRuntime,
+  type WorkerDefinition,
+  type WorkerRegistry,
+  type WorkerRuntime,
+  type WorkerRuntimeDependencies,
+} from '@invoker/execution-engine';
+import { type MessageBus } from '@invoker/transport';
+import {
+  ALREADY_TERMINAL_TASK_STATUSES,
+  Orchestrator,
+  parsePlanFile,
+  type OrchestratorMessageBus,
+  type PlanDefinition,
+  type TaskState,
+  type TaskStatus,
+} from '@invoker/workflow-core';
+import { logCaughtException } from './logging.js';
+import {
+  createDefaultMessageBus,
+  createTraceId,
+  discoverLiveOwner,
+  withTimeout,
+  type LiveOwnerInfo,
+} from './live-owner-bus.js';
+import {
+  assertInvokerWakeLineWithinBudget,
+  formatInvokerWakeLine,
+} from './invoker-wake.js';
+import { runMcpServer } from './mcp-server.js';
+import {
+  normalizeTaskSnapshots,
+  waitForWorkflowTasks,
+} from './mcp-workflow-status.js';
+import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
+import { runInstall } from './quick-install.js';
+import {
+  applyDesiredStateWorkerToggle,
+  applyWorkerToggle,
+  findWorkerToggle,
+  isDesiredStateWorkerToggle,
+  isPolicyWorkerToggle,
+  ONBOARDING_WORKER_TOGGLES,
+  WORKER_TOGGLES,
+  openWorkerDesiredStateStore,
+  readDesiredStateWorkerToggleValue,
+  readWorkerToggleValue,
+  resolveCliInstanceProfile,
+} from './worker-toggles.js';
+import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
+import { runSpendGateCommand } from './spend-gate-command.js';
+
+const VERSION = '0.1.5';
+
+type CliOptions = {
+  dbDir?: string;
+  config?: string;
+  json: boolean;
+  mode: 'auto' | 'live' | 'standalone';
+};
+
+type RunResult = {
+  workflowId: string;
+  status: 'success' | 'failed';
+  completedTasks: number;
+  failedTasks: number;
+  mode: 'standalone' | 'live';
+};
+
+type LiveSubmissionResult = {
+  workflowId: string;
+  tasks: unknown[];
+  ownerId?: string;
+};
+
+type CliDeps = {
+  createMessageBus?: () => Promise<MessageBus> | MessageBus;
+  runMcpServer?: () => Promise<void>;
+  resolveOwnerLaunchSpec?: (repoRoot: string) => HeadlessOwnerLaunchSpec;
+  spawnProcess?: typeof spawn;
+};
+
+type CliRuntimeConfig = {
+  defaultBranch?: string;
+  maxConcurrency?: number;
+  docker?: {
+    imageName?: string;
+    secretsFile?: string;
+  };
+  remoteTargets?: Record<string, {
+    host: string;
+    user: string;
+    sshKeyPath: string;
+    port?: number;
+    managedWorkspaces?: boolean;
+    remoteInvokerHome?: string;
+    provisionCommand?: string;
+    use_api_key?: boolean;
+    secretsFile?: string;
+    remoteHeartbeatIntervalSeconds?: number;
+    maxConcurrentTasks?: number;
+  }>;
+  worktreeTargets?: Record<string, {
+    provisionCommand?: string;
+    maxConcurrentTasks?: number;
+  }>;
+  executionPools?: Record<string, {
+    members: Array<
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+    >;
+    selectionStrategy?: 'roundRobin' | 'leastLoaded';
+    maxConcurrentTasksPerMember?: number;
+  }>;
+  defaultPoolId?: string;
+  executorRoutingRules?: Array<{
+    pattern?: string;
+    regex?: string;
+    poolId: string;
+    strategy?: 'enforce' | 'route';
+  }>;
+  autoFixRetries?: number;
+  autoFixAgent?: string;
+  autoFixExecutionModel?: string;
+  autoApproveAIFixes?: boolean;
+  externalWorkers?: ExternalWorkerConfig[];
+};
+
+type QueryResource = 'workflows' | 'tasks' | 'capacity';
+type QueryOutput = 'text' | 'json';
+
+type QueryOptions = {
+  resource: QueryResource;
+  workflowId?: string;
+  status?: string;
+  filter?: string;
+  output: QueryOutput;
+  mode: 'live' | 'standalone';
+  forwardedFlags: string[];
+};
+
+type RetryTasksOptions = {
+  status: string;
+  parallel: number;
+  dryRun: boolean;
+};
+
+type RetryTaskRow = {
+  id: string;
+  status?: string;
+};
+
+type SetOptions = {
+  field: string;
+  taskId: string;
+  values: string[];
+  force: boolean;
+};
+
+type ExecutorRouting = {
+  runnerKind?: string;
+  poolId?: string;
+  poolMemberId?: string;
+};
+
+type SetTargetTask = {
+  id: string;
+  status: string;
+  isMergeNode: boolean;
+  routing: ExecutorRouting;
+};
+
+export const CLI_SET_FIELDS: readonly string[] = listHeadlessSetSubcommandsForScope('task');
+
+const LAUNCHED_TASK_STATUSES = new Set<string>(['running', 'fixing_with_ai']);
+const RUNNER_KINDS_REQUIRING_POOL = new Set<string>(['worktree', 'ssh']);
+const RUNNER_KINDS_FORBIDDING_POOL = new Set<string>(['docker', 'merge', 'scratch']);
+const ROUTING_CONFIG_FIELD_PATH = /^(?:raw\.)?config\.(runnerKind|poolId|poolMemberId)$/;
+
+const silentLogger: Logger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error() {},
+  child() { return silentLogger; },
+};
+
+const noopBus: OrchestratorMessageBus = {
+  publish() {},
+};
+
+function usage(): string {
+  return [
+    'Usage:',
+    '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli query workflows [--status <status>] [--output text|json] [--standalone]',
+    '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json] [--standalone]',
+    '  invoker-cli query capacity [--output text|json]',
+    '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
+    '  invoker-cli retry-task <taskId>',
+    '  invoker-cli retry <workflowId>',
+    '  invoker-cli resume <workflowId>',
+    '  invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]',
+    '  invoker-cli set <field> <taskId> <value...> [--force] [-- <value...>]',
+    '  invoker-cli delete <workflowId>',
+    '  invoker-cli delete-all',
+    '  invoker-cli owner serve',
+    '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli install [--demo]',
+    '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
+    '  invoker-cli mcp',
+    '  invoker-cli worker [autofix|list]',
+    '  invoker-cli worker toggles [--enable <id>|--disable <id> ...]',
+    '  invoker-cli run-worker <kind> -- <args...>',
+    '  invoker-cli spend-gate [status|reset]',
+    '  invoker-cli auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
+    '  invoker-cli --help',
+    '  invoker-cli --version',
+    '',
+    'Commands:',
+    '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
+    '  query workflows|tasks  Read workflows or tasks from a live owner, or from a read-only database view with --standalone.',
+    '  query capacity  Show live pool/member slot usage, queue depth by workflow, and the oldest-waiting task. Requires a live owner.',
+    '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
+    '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
+    '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
+    '  resume <workflowId> Ask a live Invoker owner to resume a workflow.',
+    '  retry-tasks --status <status>  Retry all tasks matching a status through a live owner.',
+    `  set <field> <taskId> <value...>  Edit one task field through a live owner. Fields: ${CLI_SET_FIELDS.join(', ')}. Refuses terminal tasks, running tasks without --force, and pool or executor changes the task's runner kind cannot take.`,
+    '  delete-all      Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
+    '  owner serve     Start a headless Invoker owner process.',
+    '  doctor          Validate tools, config, and your default planning preset.',
+    '  install         Quick-install: global cli+ui, doctor --fix, skills+MCP, default workers. Skips Slack/machines.',
+    '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
+    '  mcp             Start the Invoker MCP stdio server.',
+    '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
+    '  worker toggles      Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, worker-session-mine, codex-spend-clamp, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
+    '  spend-gate      Show or clear the Codex daily-spend shutoff. While tripped, every Codex request fails; `reset` reopens it after you review the sessions.',
+    '  auto-approve-authors  Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
+    '',
+    'Options:',
+    '  --planner-url <url>   Planner service URL for `setup planner`.',
+    '  --access-token <tok>  Planner service access token for `setup planner`.',
+    `  --planner-package <spec>  Planner MCP package spec for \`setup planner\`. Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}.`,
+    '  --target <path>       MCP config path for planner setup. Defaults to ~/.invoker/mcp.json.',
+    '  --uninstall           Remove the experimental planner MCP entry and disable its Invoker flag.',
+    '  --live           Require a running Invoker owner and submit over IPC.',
+    '  --standalone     Skip IPC for `run` or `query` and use an isolated/configured CLI database.',
+    '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
+    '  --config <path>  Optional config path reserved for CLI runtime configuration.',
+    '  --json           Emit only a machine-readable result summary on stdout.',
+    '  --workflow <id>  Restrict `query tasks` to one workflow.',
+    '  --status <status>  Restrict `query workflows` or `query tasks` to one status.',
+    '  --max-wait-ms <ms>  Maximum park time for `wait`. Defaults to 86400000 (24h).',
+    '  --poll-interval-ms <ms>  Query interval for `wait`. Defaults to 5000.',
+    '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
+    '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
+    '  --force         Let `set` edit a running task; the owner cancels the launched attempt first.',
+    '  --              End `set` options; later arguments are passed as values even if they start with --.',
+    '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
+    '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
+    '  --fix            Best-effort install of missing doctor tools.',
+    '  --help           Show this help text.',
+    '  --version        Show the CLI version.',
+  ].join('\n');
+}
+
+function parseArgs(argv: string[]): { command?: string; planPath?: string; options: CliOptions } {
+  const options: CliOptions = { json: false, mode: 'auto' };
+  const positional: string[] = [];
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--db-dir') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --db-dir');
+      options.dbDir = value;
+    } else if (arg === '--config') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --config');
+      options.config = value;
+    } else if (arg === '--json') {
+      options.json = true;
+    } else if (arg === '--live') {
+      if (options.mode === 'standalone') throw new Error('Cannot combine --live and --standalone');
+      options.mode = 'live';
+    } else if (arg === '--standalone') {
+      if (options.mode === 'live') throw new Error('Cannot combine --live and --standalone');
+      options.mode = 'standalone';
+    } else if (arg === '--help' || arg === '-h') {
+      positional.push('--help');
+    } else if (arg === '--version' || arg === '-v') {
+      positional.push('--version');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown option: ${arg}`);
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  return {
+    command: positional[0],
+    planPath: positional[1],
+    options,
+  };
+}
+
+function parseQueryArgs(argv: string[]): QueryOptions {
+  const resource = argv[0];
+  if (resource !== 'workflows' && resource !== 'tasks' && resource !== 'capacity') {
+    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks|capacity>');
+  }
+
+  const options: QueryOptions = {
+    resource,
+    output: 'text',
+    mode: 'live',
+    forwardedFlags: [],
+  };
+
+  for (let i = 1; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--workflow') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --workflow');
+      if (resource !== 'tasks') throw new Error('--workflow is only supported for `query tasks`');
+      options.workflowId = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--status') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --status');
+      options.status = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--filter') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --filter');
+      if (resource !== 'tasks') throw new Error('--filter is only supported for `query tasks`');
+      options.filter = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--output') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --output');
+      if (value !== 'text' && value !== 'json') {
+        throw new Error('Invalid --output value. Supported values: text, json');
+      }
+      options.output = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--standalone') {
+      options.mode = 'standalone';
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli query <workflows|tasks> [--workflow <id>] [--status <status>] [--output text|json] [--standalone]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown query option: ${arg}`);
+    } else {
+      throw new Error(`Unexpected query argument: ${arg}`);
+    }
+  }
+
+  return options;
+}
+
+function parseRetryTasksArgs(argv: string[]): RetryTasksOptions {
+  const options: Partial<RetryTasksOptions> = {
+    parallel: 8,
+    dryRun: false,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--status') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --status');
+      options.status = value;
+    } else if (arg === '--parallel') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --parallel');
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== value) {
+        throw new Error('Invalid --parallel value. Expected a positive integer.');
+      }
+      options.parallel = parsed;
+    } else if (arg === '--dry-run') {
+      options.dryRun = true;
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown retry-tasks option: ${arg}`);
+    } else {
+      throw new Error(`Unexpected retry-tasks argument: ${arg}`);
+    }
+  }
+
+  if (!options.status) {
+    throw new Error('Missing --status. Usage: invoker-cli retry-tasks --status <status> [--parallel N] [--dry-run]');
+  }
+
+  return options as RetryTasksOptions;
+}
+
+function validateLiveQueryResponse(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Live owner returned invalid headless.query response: expected object, got ${raw === null ? 'null' : typeof raw}`);
+  }
+  const output = (raw as Record<string, unknown>).output;
+  if (typeof output !== 'string') {
+    throw new Error('Live owner returned invalid headless.query response: missing output string');
+  }
+  return output;
+}
+
+async function queryLiveOwner(
+  options: QueryOptions,
+  bus: MessageBus,
+): Promise<string> {
+  const raw = await withTimeout(
+    bus.request('headless.query', {
+      kind: 'cli-query',
+      args: ['query', options.resource, ...options.forwardedFlags],
+    }),
+    15_000,
+  );
+  return validateLiveQueryResponse(raw);
+}
+
+function resolveQueryDbDir(): string {
+  return resolve(resolveCliInstanceProfile().homeRoot);
+}
+
+function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    status: workflow.status,
+    createdAt: workflow.createdAt,
+    updatedAt: workflow.updatedAt,
+    ...(workflow.description != null ? { description: workflow.description } : {}),
+    ...(workflow.visualProof != null ? { visualProof: workflow.visualProof } : {}),
+    ...(workflow.planFile != null ? { planFile: workflow.planFile } : {}),
+    ...(workflow.repoUrl != null ? { repoUrl: workflow.repoUrl } : {}),
+    ...(workflow.intermediateRepoUrl != null ? { intermediateRepoUrl: workflow.intermediateRepoUrl } : {}),
+    ...(workflow.branch != null ? { branch: workflow.branch } : {}),
+    ...(workflow.onFinish != null ? { onFinish: workflow.onFinish } : {}),
+    ...(workflow.baseBranch != null ? { baseBranch: workflow.baseBranch } : {}),
+    ...(workflow.featureBranch != null ? { featureBranch: workflow.featureBranch } : {}),
+    ...(workflow.mergeMode != null ? { mergeMode: workflow.mergeMode } : {}),
+    ...(workflow.reviewProvider != null ? { reviewProvider: workflow.reviewProvider } : {}),
+    ...(workflow.externalDependencies != null ? { externalDependencies: workflow.externalDependencies } : {}),
+    ...(workflow.externalDependencyChanges != null ? { externalDependencyChanges: workflow.externalDependencyChanges } : {}),
+    ...(workflow.detachedExternalDependencies != null ? { detachedExternalDependencies: workflow.detachedExternalDependencies } : {}),
+    ...(workflow.generation != null ? { generation: workflow.generation } : {}),
+  };
+}
+
+function serializeTaskForQuery(task: TaskState): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
+  if (task.config.command != null) config.command = task.config.command;
+  if (task.config.prompt != null) config.prompt = task.config.prompt;
+  if (task.config.runnerKind != null) config.runnerKind = task.config.runnerKind;
+  if (task.config.poolId != null) config.poolId = task.config.poolId;
+  if (task.config.poolMemberId != null) config.poolMemberId = task.config.poolMemberId;
+  if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
+  if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
+  if (task.config.executionModel != null) config.executionModel = task.config.executionModel;
+  if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
+
+  const execution: Record<string, unknown> = {};
+  if (task.execution.branch != null) execution.branch = task.execution.branch;
+  if (task.execution.commit != null) execution.commit = task.execution.commit;
+  if (task.execution.error != null) execution.error = task.execution.error;
+  if (task.execution.exitCode != null) execution.exitCode = task.execution.exitCode;
+  if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
+  if (task.execution.reviewId != null) execution.reviewId = task.execution.reviewId;
+  if (task.execution.reviewStatus != null) execution.reviewStatus = task.execution.reviewStatus;
+  if (task.execution.reviewProviderId != null) execution.reviewProviderId = task.execution.reviewProviderId;
+  if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
+  if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;
+  if (task.execution.agentName != null) execution.agentName = task.execution.agentName;
+  if (task.execution.lastAgentName != null) execution.lastAgentName = task.execution.lastAgentName;
+  if (task.execution.phase != null) execution.phase = task.execution.phase;
+  if (task.execution.startedAt != null) execution.startedAt = task.execution.startedAt.toISOString();
+  if (task.execution.completedAt != null) execution.completedAt = task.execution.completedAt.toISOString();
+  if (task.execution.launchStartedAt != null) execution.launchStartedAt = task.execution.launchStartedAt.toISOString();
+  if (task.execution.launchCompletedAt != null) execution.launchCompletedAt = task.execution.launchCompletedAt.toISOString();
+  if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt.toISOString();
+  if (task.execution.pendingFixError != null) execution.pendingFixError = task.execution.pendingFixError;
+
+  return {
+    id: task.id,
+    description: task.description,
+    status: task.status,
+    dependencies: [...task.dependencies],
+    createdAt: task.createdAt.toISOString(),
+    config,
+    execution,
+  };
+}
+
+function renderWorkflowText(workflows: Workflow[]): string {
+  if (workflows.length === 0) return 'No workflows found.\n';
+  return `${workflows.map((workflow) => (
+    `${workflow.id}\t${workflow.status}\t${workflow.name}\t${workflow.createdAt}`
+  )).join('\n')}\n`;
+}
+
+const TASK_FILTER_PAGE_SIZE = 500;
+
+function queryAllTasksByFilter(
+  persistence: Pick<SQLiteAdapter, 'queryTasksByFilter'>,
+  filter: import('@invoker/contracts').TaskFilterNode,
+): TaskState[] {
+  const all: TaskState[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = persistence.queryTasksByFilter(filter, { limit: TASK_FILTER_PAGE_SIZE, offset });
+    all.push(...page);
+    if (page.length < TASK_FILTER_PAGE_SIZE) break;
+    offset += TASK_FILTER_PAGE_SIZE;
+  }
+  return all;
+}
+
+function renderTaskText(tasks: TaskState[]): string {
+  if (tasks.length === 0) return 'No tasks found.\n';
+  return `${tasks.map((task) => (
+    `${task.id}\t${task.config.workflowId ?? ''}\t${task.status}\t${task.description}`
+  )).join('\n')}\n`;
+}
+
+async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
+  if (options.resource === 'capacity') {
+    throw new Error('query capacity requires a live owner: start the Invoker app or run `invoker-cli owner serve`.');
+  }
+  let parsedFilter: import('@invoker/contracts').TaskFilterNode | undefined;
+  if (options.filter !== undefined) {
+    let rawFilter: unknown;
+    try {
+      rawFilter = JSON.parse(options.filter);
+    } catch (error) {
+      throw new Error(`Invalid --filter JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const validation = validateTaskFilter(rawFilter);
+    if (!validation.valid) throw new Error(validation.error);
+    parsedFilter = rawFilter as import('@invoker/contracts').TaskFilterNode;
+  }
+  const dbDir = resolveQueryDbDir();
+  const dbPath = join(dbDir, 'invoker.db');
+  if (!existsSync(dbPath)) {
+    return `${options.output === 'json' ? '[]' : (options.resource === 'workflows' ? 'No workflows found.' : 'No tasks found.')}\n`;
+  }
+
+  const persistence = await SQLiteAdapter.create(dbPath, {
+    readOnly: true,
+    outputDir: join(dbDir, 'outputs'),
+    slowQueryThresholdMs: 0,
+  });
+  try {
+    const snapshot = persistence.loadWorkflowTaskSnapshot();
+    const workflows = snapshot.workflows.filter((workflow) => (
+      !options.status || workflow.status === options.status
+    ));
+    if (options.resource === 'workflows') {
+      return options.output === 'json'
+        ? `${JSON.stringify(workflows.map(serializeWorkflowForQuery))}\n`
+        : renderWorkflowText(workflows);
+    }
+
+    let tasks = snapshot.tasks;
+    if (parsedFilter) {
+      tasks = queryAllTasksByFilter(persistence, parsedFilter);
+    }
+    if (options.workflowId) {
+      tasks = tasks.filter((task) => task.config.workflowId === options.workflowId);
+    }
+    if (options.status) {
+      tasks = tasks.filter((task) => task.status === options.status);
+    }
+    return options.output === 'json'
+      ? `${JSON.stringify(tasks.map(serializeTaskForQuery))}\n`
+      : renderTaskText(tasks);
+  } finally {
+    persistence.close();
+  }
+}
+
+async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
+  if (options.mode === 'standalone') {
+    process.stdout.write(await queryStandaloneDatabase(options));
+    return 0;
+  }
+
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (owner) {
+      process.stdout.write(await queryLiveOwner(options, bus));
+      return 0;
+    }
+    throw new Error(`${REQUIRED_OWNER_MESSAGE} Use \`--standalone\` to read the configured CLI database directly.`);
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+type WaitOptions = {
+  workflowId: string;
+  maxWaitMs: number;
+  pollIntervalMs: number;
+};
+
+const DEFAULT_WAIT_MAX_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_WAIT_POLL_MS = 5_000;
+
+function parsePositiveIntFlag(flag: string, value: string | undefined): number {
+  if (!value) throw new Error(`Missing value for ${flag}`);
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== value) {
+    throw new Error(`Invalid ${flag} value. Expected a positive integer.`);
+  }
+  return parsed;
+}
+
+export function parseWaitArgs(argv: string[]): WaitOptions {
+  let workflowId: string | undefined;
+  let maxWaitMs = DEFAULT_WAIT_MAX_MS;
+  let pollIntervalMs = DEFAULT_WAIT_POLL_MS;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--max-wait-ms') {
+      maxWaitMs = parsePositiveIntFlag('--max-wait-ms', argv[++i]);
+    } else if (arg === '--poll-interval-ms') {
+      pollIntervalMs = parsePositiveIntFlag('--poll-interval-ms', argv[++i]);
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown wait option: ${arg}`);
+    } else if (!workflowId) {
+      workflowId = arg;
+    } else {
+      throw new Error(`Unexpected wait argument: ${arg}`);
+    }
+  }
+
+  if (!workflowId) {
+    throw new Error('Missing workflowId. Usage: invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]');
+  }
+
+  return { workflowId, maxWaitMs, pollIntervalMs };
+}
+
+async function runWait(options: WaitOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) {
+      throw new Error(REQUIRED_OWNER_MESSAGE);
+    }
+    const activeBus = bus;
+    const result = await waitForWorkflowTasks({
+      workflowId: options.workflowId,
+      maxWaitMs: options.maxWaitMs,
+      pollIntervalMs: options.pollIntervalMs,
+      loadTasks: async () => {
+        const raw = await withTimeout(
+          activeBus.request('headless.query', {
+            kind: 'cli-query',
+            args: ['query', 'tasks', '--workflow', options.workflowId, '--output', 'json'],
+          }),
+          15_000,
+        );
+        return normalizeTaskSnapshots(JSON.parse(validateLiveQueryResponse(raw)));
+      },
+    });
+    const line = formatInvokerWakeLine(result);
+    assertInvokerWakeLineWithinBudget(line);
+    process.stdout.write(`${line}\n`);
+    return result.settled ? 0 : 1;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+const REQUIRED_OWNER_MESSAGE = 'No running Invoker owner is reachable; start the Invoker app or run `invoker-cli owner serve`.';
+
+function mutationQueryOptions(status: string): QueryOptions {
+  return {
+    resource: 'tasks',
+    status,
+    output: 'json',
+    mode: 'live',
+    forwardedFlags: ['--status', status, '--output', 'json'],
+  };
+}
+
+function parseRetryTaskRows(output: string, status: string): RetryTaskRow[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch (err) {
+    throw new Error(`Could not parse task query JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error('Task query returned invalid JSON: expected an array');
+  }
+  return parsed
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .filter((item) => item.status === status)
+    .filter((item): item is RetryTaskRow => typeof item.id === 'string' && item.id.length > 0);
+}
+
+async function queryRetryTasks(status: string, bus?: MessageBus, owner?: LiveOwnerInfo | null): Promise<RetryTaskRow[]> {
+  const options = mutationQueryOptions(status);
+  const output = owner && bus
+    ? await queryLiveOwner(options, bus)
+    : await queryStandaloneDatabase(options);
+  return parseRetryTaskRows(output, status);
+}
+
+async function requireLiveOwnerForMutation(bus: MessageBus): Promise<LiveOwnerInfo> {
+  const owner = await discoverLiveOwner(bus);
+  if (!owner) {
+    throw new Error(REQUIRED_OWNER_MESSAGE);
+  }
+  return owner;
+}
+
+async function sendHeadlessExec(bus: MessageBus, args: string[]): Promise<void> {
+  await withTimeout(
+    bus.request('headless.exec', { args, noTrack: true }),
+    30_000,
+  );
+}
+
+async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume' | 'delete', targetId: string | undefined, deps: CliDeps): Promise<number> {
+  if (!targetId) {
+    const target = command === 'retry-task' ? 'taskId' : 'workflowId';
+    throw new Error(`Missing ${target}. Usage: invoker-cli ${command} <${target}>`);
+  }
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    await sendHeadlessExec(bus, [command, targetId]);
+    process.stdout.write(`${command} accepted by live owner.\n`);
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    await sendHeadlessExec(bus, ['delete-all']);
+    process.stdout.write('delete-all accepted by live owner.\n');
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+function setUsage(field = `<${CLI_SET_FIELDS.join('|')}>`, taskId = '<taskId>'): string {
+  return `Usage: invoker-cli set ${field} ${taskId} <value...> [--force]`;
+}
+
+function parseSetArgs(argv: string[]): SetOptions {
+  const positional: string[] = [];
+  let force = false;
+  let optionsEnded = false;
+  for (const arg of argv) {
+    if (optionsEnded) {
+      positional.push(arg);
+    } else if (arg === '--') {
+      optionsEnded = true;
+    } else if (arg === '--force') {
+      force = true;
+    } else if (arg === '--help') {
+      throw new Error(setUsage());
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown set option: ${arg}. Put -- before values that start with --.`);
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  const [field, taskId, ...values] = positional;
+  if (!field) {
+    throw new Error(`Missing set field. ${setUsage()}`);
+  }
+  if (!CLI_SET_FIELDS.includes(field)) {
+    throw new Error(`Unknown set field: "${field}". Task fields: ${CLI_SET_FIELDS.join(', ')}`);
+  }
+  if (!taskId) {
+    throw new Error(`Missing taskId. ${setUsage(field)}`);
+  }
+  if (values.length === 0) {
+    throw new Error(`Missing value. ${setUsage(field, taskId)}`);
+  }
+  return { field, taskId, values, force };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+function parseMetadataArg(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function parseSetTargetTask(output: string, taskId: string): SetTargetTask {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch (err) {
+    throw new Error(`Could not parse task query JSON for "${taskId}": ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const record = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
+  if (typeof record.id !== 'string' || typeof record.status !== 'string') {
+    throw new Error(`Live owner returned an invalid task for "${taskId}": missing id or status`);
+  }
+  const config = (record.config && typeof record.config === 'object' ? record.config : {}) as Record<string, unknown>;
+  return {
+    id: record.id,
+    status: record.status,
+    isMergeNode: config.isMergeNode === true || config.runnerKind === 'merge',
+    routing: {
+      runnerKind: optionalString(config.runnerKind),
+      poolId: optionalString(config.poolId),
+      poolMemberId: optionalString(config.poolMemberId),
+    },
+  };
+}
+
+async function querySetTargetTask(bus: MessageBus, taskId: string): Promise<SetTargetTask> {
+  const raw = await withTimeout(
+    bus.request('headless.query', {
+      kind: 'cli-query',
+      args: ['query', 'task', taskId, '--output', 'json'],
+    }),
+    15_000,
+  );
+  return parseSetTargetTask(validateLiveQueryResponse(raw), taskId);
+}
+
+function describeExecutorRoutingViolation(routing: ExecutorRouting): string | undefined {
+  const { runnerKind } = routing;
+  if (!runnerKind) return undefined;
+  if (RUNNER_KINDS_REQUIRING_POOL.has(runnerKind) && !routing.poolId) {
+    return `${runnerKind} tasks require a non-empty pool`;
+  }
+  if (RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind) && (routing.poolId || routing.poolMemberId)) {
+    return `${runnerKind} tasks cannot have a pool or pool member`;
+  }
+  return undefined;
+}
+
+function findExecutorRoutingRefusal(options: SetOptions, task: SetTargetTask): string | undefined {
+  const { field, values } = options;
+  const routingKey = field === 'task' ? values[0]?.match(ROUTING_CONFIG_FIELD_PATH)?.[1] : undefined;
+  const changesRouting = field === 'pool' || field === 'executor' || field === 'task-pool' || routingKey !== undefined;
+  if (!changesRouting) {
+    return undefined;
+  }
+  if (task.isMergeNode) {
+    return 'merge nodes run on the merge executor and cannot take a pool, pool member, or executor change';
+  }
+  if (field === 'pool' || field === 'executor') {
+    const [runnerKind, poolMemberId] = values;
+    if (runnerKind === 'merge') {
+      return 'the merge executor is reserved for merge nodes';
+    }
+    if (RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind) && poolMemberId) {
+      return `${runnerKind} tasks cannot take a pool member`;
+    }
+    return undefined;
+  }
+  if (field === 'task-pool') {
+    const { runnerKind } = task.routing;
+    return runnerKind && RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind)
+      ? `${runnerKind} tasks cannot take a pool`
+      : undefined;
+  }
+  if (!routingKey) {
+    return undefined;
+  }
+  const requested = optionalString(parseMetadataArg(values.slice(1).join(' ')));
+  const violation = describeExecutorRoutingViolation({ ...task.routing, [routingKey]: requested });
+  return violation
+    ? `${violation}; use \`invoker-cli set executor\` or \`invoker-cli set task-pool\` to change routing`
+    : undefined;
+}
+
+function findSetRefusal(options: SetOptions, task: SetTargetTask): string | undefined {
+  if (ALREADY_TERMINAL_TASK_STATUSES.includes(task.status as TaskStatus)) {
+    return `it is ${task.status}, a terminal state`;
+  }
+  if (LAUNCHED_TASK_STATUSES.has(task.status) && !options.force) {
+    return `it is ${task.status} and its launched attempt has already resolved its configuration; re-run with --force to cancel that attempt and apply the change`;
+  }
+  return findExecutorRoutingRefusal(options, task);
+}
+
+async function runSetMutation(options: SetOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    const task = await querySetTargetTask(bus, options.taskId);
+    const refusal = findSetRefusal(options, task);
+    if (refusal) {
+      throw new Error(`Cannot set ${options.field} on task "${task.id}": ${refusal}.`);
+    }
+    await sendHeadlessExec(bus, ['set', options.field, options.taskId, ...options.values]);
+    process.stdout.write(`set ${options.field} accepted by live owner.\n`);
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+async function runBounded<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<{ accepted: number; failed: Array<{ item: T; error: unknown }> }> {
+  let nextIndex = 0;
+  let accepted = 0;
+  const failed: Array<{ item: T; error: unknown }> = [];
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++];
+      if (item === undefined) continue;
+      try {
+        await worker(item);
+        accepted += 1;
+      } catch (error) {
+        failed.push({ item, error });
+      }
+    }
+  });
+  await Promise.all(workers);
+  return { accepted, failed };
+}
+
+async function runRetryTasks(options: RetryTasksOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (!owner && !options.dryRun) {
+      throw new Error(REQUIRED_OWNER_MESSAGE);
+    }
+
+    const tasks = await queryRetryTasks(options.status, bus, owner);
+    if (options.dryRun) {
+      if (tasks.length === 0) {
+        process.stdout.write(`No tasks matched status "${options.status}".\n`);
+      } else {
+        process.stdout.write(`${tasks.map((task) => task.id).join('\n')}\n`);
+      }
+      return 0;
+    }
+
+    const result = await runBounded(tasks, options.parallel, async (task) => {
+      if (!bus) throw new Error('Message bus is unavailable');
+      await sendHeadlessExec(bus, ['retry-task', task.id]);
+    });
+    process.stdout.write(`Accepted ${result.accepted} task(s); failed ${result.failed.length} task(s).\n`);
+    for (const failure of result.failed) {
+      process.stderr.write(`Failed to retry ${failure.item.id}: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}\n`);
+    }
+    return result.failed.length === 0 ? 0 : 1;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+function validateLiveSubmissionResponse(raw: unknown): LiveSubmissionResult {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Live owner returned invalid headless.run response: expected object, got ${raw === null ? 'null' : typeof raw}`);
+  }
+  const response = raw as Record<string, unknown>;
+  if (typeof response.workflowId !== 'string' || response.workflowId.length === 0) {
+    throw new Error('Live owner returned invalid headless.run response: missing workflowId');
+  }
+  if (!Array.isArray(response.tasks)) {
+    throw new Error('Live owner returned invalid headless.run response: missing tasks array');
+  }
+  return {
+    workflowId: response.workflowId,
+    tasks: response.tasks,
+    ownerId: typeof response.ownerId === 'string' ? response.ownerId : undefined,
+  };
+}
+
+async function submitPlanToLiveOwner(
+  planPath: string,
+  bus: MessageBus,
+  owner: LiveOwnerInfo,
+  timeoutMs = 15_000,
+): Promise<LiveSubmissionResult> {
+  const absolutePlanPath = resolve(planPath);
+  const raw = await withTimeout(
+    bus.request('headless.run', {
+      planPath: absolutePlanPath,
+      traceId: createTraceId('invoker-cli.headless.run'),
+    }),
+    timeoutMs,
+  );
+  return {
+    ...validateLiveSubmissionResponse(raw),
+    ownerId: owner.ownerId,
+  };
+}
+
+function loadRuntimeConfig(configPath?: string): CliRuntimeConfig {
+  if (!configPath) return {};
+  const resolvedPath = resolve(configPath);
+  if (!existsSync(resolvedPath)) {
+    throw new Error(`Config file does not exist: ${resolvedPath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(resolvedPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`Invalid Invoker config JSON at ${resolvedPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Invalid Invoker config at ${resolvedPath}: expected a JSON object`);
+  }
+  return parsed as CliRuntimeConfig;
+}
+
+function isTerminalTaskStatus(status: TaskState['status']): boolean {
+  return status === 'completed'
+    || status === 'failed'
+    || status === 'closed'
+    || status === 'needs_input'
+    || status === 'review_ready'
+    || status === 'awaiting_approval'
+    || status === 'stale';
+}
+
+function resolvePlanLocalPath(value: string | undefined, cwd: string): string | undefined {
+  if (!value || /^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+  return resolve(cwd, value);
+}
+
+function normalizePlanRuntimePaths(plan: PlanDefinition, cwd: string): PlanDefinition {
+  return {
+    ...plan,
+    repoUrl: resolvePlanLocalPath(plan.repoUrl, cwd) ?? plan.repoUrl,
+    intermediateRepoUrl: resolvePlanLocalPath(plan.intermediateRepoUrl, cwd),
+  };
+}
+
+async function waitForWorkflowToSettle(
+  orchestrator: Orchestrator,
+  workflowId: string,
+  timeoutMs = 24 * 60 * 60 * 1000,
+): Promise<TaskState[]> {
+  const startedAt = Date.now();
+  while (true) {
+    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+    if (tasks.length > 0 && tasks.every((task) => isTerminalTaskStatus(task.status))) {
+      return tasks;
+    }
+    if (
+      tasks.some((task) => task.status === 'failed')
+      && tasks.every((task) => task.status !== 'running' && task.status !== 'fixing_with_ai')
+    ) {
+      return tasks;
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`Timed out waiting for standalone workflow ${workflowId} to settle`);
+    }
+    await new Promise((resolveTimer) => setTimeout(resolveTimer, 250));
+  }
+}
+
+async function runPlan(planPath: string, options: CliOptions): Promise<RunResult> {
+  const absolutePlanPath = resolve(planPath);
+  const dbDir = resolve(options.dbDir ?? join(homedir(), '.invoker-cli'));
+  mkdirSync(dbDir, { recursive: true });
+
+  const previousInvokerDbDir = process.env.INVOKER_DB_DIR;
+  if (options.config) {
+    process.env.INVOKER_CONFIG = resolve(options.config);
+    process.env.INVOKER_REPO_CONFIG_PATH = resolve(options.config);
+  }
+  process.env.INVOKER_DB_DIR = dbDir;
+  const runtimeConfig = loadRuntimeConfig(options.config);
+  const maxConcurrency = runtimeConfig.maxConcurrency ?? 1;
+
+  const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
+    ownerCapability: true,
+    outputDir: join(dbDir, 'outputs'),
+    ...(options.json ? { slowQueryThresholdMs: 0 } : {}),
+  });
+  const stdoutWrite = process.stdout.write;
+  if (options.json) {
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+  }
+
+
+  try {
+    const executionAgentRegistry = registerBuiltinAgents();
+    const executorRegistry = new ExecutorRegistry();
+    executorRegistry.register('worktree', new WorktreeExecutor({
+      worktreeBaseDir: join(dbDir, 'worktrees'),
+      cacheDir: join(dbDir, 'repos'),
+      maxWorktrees: maxConcurrency,
+      agentRegistry: executionAgentRegistry,
+    }));
+    const orchestrator = new Orchestrator({
+      persistence,
+      taskRepository: new SqliteTaskRepository(persistence),
+      messageBus: noopBus,
+      logger: silentLogger,
+      maxConcurrency,
+      executorRoutingRules: runtimeConfig.executorRoutingRules ?? [],
+      defaultPoolId: runtimeConfig.defaultPoolId,
+      availablePoolIds: Object.keys(runtimeConfig.executionPools ?? {}),
+    });
+    const taskRunner = new TaskRunner({
+      orchestrator,
+      persistence,
+      executorRegistry,
+      cwd: dirname(absolutePlanPath),
+      defaultBranch: runtimeConfig.defaultBranch,
+      dockerConfig: {
+        imageName: runtimeConfig.docker?.imageName,
+        secretsFile: runtimeConfig.docker?.secretsFile,
+      },
+      remoteTargetsProvider: () => loadRuntimeConfig(options.config).remoteTargets ?? {},
+      worktreeTargetsProvider: () => loadRuntimeConfig(options.config).worktreeTargets ?? {},
+      executionPoolsProvider: () => loadRuntimeConfig(options.config).executionPools ?? {},
+      executionAgentRegistry,
+      callbacks: {
+        onOutput: (taskId, data) => {
+          if (!options.json) process.stdout.write(data);
+          try {
+            persistence.appendTaskOutput(taskId, data);
+          } catch (err) {
+            logCaughtException(`Failed to persist standalone output for ${taskId}`, err);
+          }
+        },
+      },
+      logger: silentLogger,
+    });
+    const plan = normalizePlanRuntimePaths(await parsePlanFile(absolutePlanPath), process.cwd());
+    orchestrator.loadPlan(plan);
+    const started = orchestrator.startExecution();
+    await taskRunner.executeTasks(started);
+
+    const workflow = persistence.listWorkflows()[0];
+    const tasks = workflow ? await waitForWorkflowToSettle(orchestrator, workflow.id) : [];
+    const failedTasks = tasks.filter((task) => task.status === 'failed').length;
+    const completedTasks = tasks.filter((task) => task.status === 'completed').length;
+    return {
+      workflowId: workflow?.id ?? 'unknown',
+      status: failedTasks === 0 ? 'success' : 'failed',
+      completedTasks,
+      failedTasks,
+      mode: 'standalone',
+    };
+  } finally {
+    if (options.json) {
+      process.stdout.write = stdoutWrite;
+    }
+    if (previousInvokerDbDir === undefined) {
+      delete process.env.INVOKER_DB_DIR;
+    } else {
+      process.env.INVOKER_DB_DIR = previousInvokerDbDir;
+    }
+    persistence.close();
+  }
+}
+
+function printRunResult(result: RunResult, json: boolean): void {
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ workflow: { id: result.workflowId, status: result.status }, result })}\n`);
+  } else if (result.mode === 'live') {
+    process.stdout.write(`Delegated to live owner - workflow: ${result.workflowId}\n`);
+  }
+}
+
+function readWorkerConfig(homeRoot: string): {
+  autoFixRetries?: number;
+  autoFixAgent?: string;
+  externalWorkers?: ExternalWorkerConfig[];
+} {
+  const configPath = join(homeRoot, 'config.json');
+  if (!existsSync(configPath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as CliRuntimeConfig;
+    return {
+      autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
+      autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+      externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
+    };
+  } catch (err) {
+    logCaughtException(`Failed to read worker config at ${configPath}`, err);
+    return {};
+  }
+}
+
+function workerDisplayName(kind: string): string {
+  return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
+}
+
+function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
+  process.stdout.write('Worker kinds\n');
+  for (const worker of registry.list()) {
+    process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
+  }
+}
+
+async function runWorkerTogglesCommand(args: string[]): Promise<number> {
+  const changes: Array<{ spec: NonNullable<ReturnType<typeof findWorkerToggle>>; enabled: boolean }> = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const flag = args[i];
+    if (flag !== '--enable' && flag !== '--disable') {
+      throw new Error(`Unknown option for worker toggles: "${flag}". Usage: invoker-cli worker toggles [--enable <id>|--disable <id> ...]`);
+    }
+    const id = args[++i];
+    const spec = id ? findWorkerToggle(id) : undefined;
+    if (!spec) {
+      const knownIds = WORKER_TOGGLES.map((toggle) => toggle.id).join(', ');
+      throw new Error(`Unknown worker toggle id: "${id ?? ''}". Known ids: ${knownIds}`);
+    }
+    changes.push({ spec, enabled: flag === '--enable' });
+  }
+
+  if (changes.length > 0) {
+    const configPath = defaultConfigPath();
+    const policyChanges = changes.filter((change) => isPolicyWorkerToggle(change.spec));
+    const desiredChanges = changes.filter((change) => isDesiredStateWorkerToggle(change.spec));
+
+    if (policyChanges.length > 0) {
+      updateInvokerConfigFile(configPath, (config) => {
+        for (const { spec, enabled } of policyChanges) {
+          Object.assign(config, applyWorkerToggle(config, spec, enabled));
+        }
+      });
+    }
+
+    if (desiredChanges.length > 0) {
+      const store = await openWorkerDesiredStateStore();
+      try {
+        for (const { spec, enabled } of desiredChanges) {
+          applyDesiredStateWorkerToggle(store, spec, enabled);
+        }
+      } finally {
+        store.close?.();
+      }
+      await tryLiveDesiredStateWorkerControl(desiredChanges);
+    }
+
+    for (const { spec, enabled } of changes) {
+      process.stdout.write(`${spec.label}: ${enabled ? 'on' : 'off'}\n`);
+    }
+    return 0;
+  }
+
+  const config = readInvokerConfigFile(defaultConfigPath());
+  const store = await openWorkerDesiredStateStore();
+  try {
+    process.stdout.write('Worker toggles\n');
+    for (const spec of WORKER_TOGGLES) {
+      let value: boolean | undefined;
+      if (isDesiredStateWorkerToggle(spec)) {
+        value = readDesiredStateWorkerToggleValue(store, spec);
+      } else {
+        value = readWorkerToggleValue(config, spec);
+      }
+      const enabled = value ?? spec.defaultEnabled ?? false;
+      const state = enabled ? 'on' : 'off';
+      process.stdout.write(`  ${spec.label}: ${value === undefined ? `${state} (default)` : state} — ${spec.description}\n`);
+    }
+  } finally {
+    store.close?.();
+  }
+  return 0;
+}
+
+async function tryLiveDesiredStateWorkerControl(
+  changes: ReadonlyArray<{ spec: Extract<NonNullable<ReturnType<typeof findWorkerToggle>>, { workerKinds: readonly string[] }>; enabled: boolean }>,
+): Promise<void> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await createDefaultMessageBus();
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) return;
+    for (const { spec, enabled } of changes) {
+      for (const kind of spec.workerKinds) {
+        await bus.request('headless.gui-mutation', {
+          channel: enabled ? 'invoker:start-worker' : 'invoker:stop-worker',
+          args: [kind],
+        });
+      }
+    }
+  } catch {
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) disconnect.call(bus);
+  }
+}
+
+function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorkerRuntime {
+  return 'finished' in worker && worker.finished instanceof Promise;
+}
+
+async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
+  const owner = await discoverLiveOwner(bus);
+  const homeRoot = resolveInvokerHomeRoot();
+  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+
+  let lock;
+  try {
+    lock = acquireWorkerLock({ kind: definition.kind, homeRoot, logger: silentLogger });
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      process.stderr.write(`${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+  const persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
+    outputDir: join(homeRoot, 'outputs'),
+  });
+
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
+  try {
+    const worker = definition.factory({
+      logger: silentLogger,
+      messageBus: bus,
+      store: persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, mutationArgs) =>
+          persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+      },
+      autoFix: {
+        defaultAutoFixRetries: autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
+        getAutoFixAgent: () => autoFixAgent,
+      },
+    });
+
+    worker.start();
+    const ownerSuffix = owner?.ownerId ? ` to owner ${owner.ownerId}` : '';
+    process.stdout.write(`${workerDisplayName(definition.kind)} worker connected${ownerSuffix}.\n`);
+
+    const shutdownGate = Promise.withResolvers<void>();
+    const shutdown = (): void => shutdownGate.resolve();
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    await Promise.race([
+      shutdownGate.promise,
+      isExternalWorkerRuntime(worker) ? worker.finished : shutdownGate.promise,
+    ]);
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
+    await worker.stop();
+  } finally {
+    lock.release();
+    persistence.close();
+  }
+  process.stdout.write(`${workerDisplayName(definition.kind)} worker stopped.\n`);
+  return 0;
+}
+
+async function runWorkerOnce(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus, runArgs: string[]): Promise<number> {
+  const homeRoot = resolveInvokerHomeRoot();
+  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+
+  let lock;
+  let persistence;
+  let worker: WorkerRuntime | undefined;
+  let autoFixAttemptLedger;
+  try {
+    lock = acquireWorkerLock({ kind: definition.kind, homeRoot, logger: silentLogger });
+    persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
+      outputDir: join(homeRoot, 'outputs'),
+    });
+    autoFixAttemptLedger = createAutoFixAttemptLedger();
+    worker = definition.factory({
+      logger: silentLogger,
+      messageBus: bus,
+      store: persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, mutationArgs) =>
+          persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+      },
+      autoFix: {
+        defaultAutoFixRetries: autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
+        getAutoFixAgent: () => autoFixAgent,
+      },
+    });
+
+    process.stdout.write(`${workerDisplayName(definition.kind)} worker running.\n`);
+    await worker.run(runArgs);
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      process.stderr.write(`${err.message}\n`);
+      return 1;
+    }
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  } finally {
+    await worker?.stop({ settleTimeoutMs: 5_000 });
+    lock?.release();
+    persistence?.close();
+  }
+  process.stdout.write(`${workerDisplayName(definition.kind)} worker finished.\n`);
+  return 0;
+}
+async function runHeadlessOwnerServe(deps: CliDeps): Promise<number> {
+  const repoRoot = resolveRepoRoot(__dirname, { fallback: resolve(__dirname, '../../../..') });
+  const launchSpec = (deps.resolveOwnerLaunchSpec ?? resolveHeadlessOwnerLaunchSpec)(repoRoot);
+  const child = (deps.spawnProcess ?? spawn)(launchSpec.command, launchSpec.args, {
+    cwd: launchSpec.cwd,
+    env: {
+      ...process.env,
+      LIBGL_ALWAYS_SOFTWARE: process.platform === 'linux' ? '1' : process.env.LIBGL_ALWAYS_SOFTWARE,
+    },
+    stdio: 'inherit',
+  });
+  return await new Promise<number>((resolveExit, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`headless owner exited with signal ${signal}`));
+        return;
+      }
+      resolveExit(code ?? 0);
+    });
+  });
+}
+
+export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    if (argv[0] === 'doctor') {
+      return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'install') {
+      return await runInstall(argv.slice(1));
+    }
+    if (argv[0] === 'setup') {
+      return await runSetup(argv.slice(1));
+    }
+    if (argv[0] === 'mcp') {
+      await (deps.runMcpServer ?? runMcpServer)();
+      return 0;
+    }
+    if (argv[0] === 'spend-gate') {
+      return runSpendGateCommand(argv.slice(1));
+    }
+    if (argv[0] === 'auto-approve-authors') {
+      return await runAutoApproveAuthorsCommand(argv.slice(1), { configPath: defaultConfigPath() });
+    }
+    if (argv[0] === 'owner') {
+      if (argv[1] !== 'serve') {
+        throw new Error('Unknown owner command. Usage: invoker-cli owner serve');
+      }
+      return await runHeadlessOwnerServe(deps);
+    }
+    if (argv[0] === 'worker') {
+      const subcommand = argv[1] ?? 'list';
+      if (subcommand === 'toggles') {
+        return await runWorkerTogglesCommand(argv.slice(2));
+      }
+      const registry = registerExternalWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
+      );
+      if (subcommand === 'list') {
+        printWorkerKinds(registry);
+        return 0;
+      }
+      const definition = registry.get(subcommand);
+      if (!definition) {
+        const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+        throw new Error(`Unknown worker kind: "${subcommand}". Usage: invoker-cli worker <${knownKinds}|list>`);
+      }
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      return await runWorker(definition, bus);
+    }
+    if (argv[0] === 'run-worker') {
+      const kind = argv[1];
+      if (!kind) {
+        throw new Error('Missing worker kind. Usage: invoker-cli run-worker <kind> -- <args...>');
+      }
+      const dashDash = argv.indexOf('--', 2);
+      const workerArgs = dashDash === -1 ? [] : argv.slice(dashDash + 1);
+      const registry = registerExternalWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
+      );
+      const definition = registry.get(kind);
+      if (!definition) {
+        const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+        throw new Error(`Unknown worker kind: "${kind}". Usage: invoker-cli run-worker <${knownKinds}>`);
+      }
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      return await runWorkerOnce(definition, bus, workerArgs);
+    }
+    if (argv[0] === 'query') {
+      return await runQuery(parseQueryArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'wait') {
+      return await runWait(parseWaitArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume' || argv[0] === 'delete') {
+      if (argv.length > 2) {
+        throw new Error(`Unexpected argument: ${argv[2]}`);
+      }
+      return await runSimpleMutation(argv[0], argv[1], deps);
+    }
+    if (argv[0] === 'retry-tasks') {
+      return await runRetryTasks(parseRetryTasksArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'delete-all') {
+      if (argv.length > 1) {
+        throw new Error(`Unexpected argument: ${argv[1]}`);
+      }
+      return await runDeleteAllMutation(deps);
+    }
+    if (argv[0] === 'set') {
+      return await runSetMutation(parseSetArgs(argv.slice(1)), deps);
+    }
+    const parsed = parseArgs(argv);
+    if (!parsed.command || parsed.command === '--help') {
+      process.stdout.write(`${usage()}\n`);
+      return 0;
+    }
+    if (parsed.command === '--version') {
+      process.stdout.write(`${VERSION}\n`);
+      return 0;
+    }
+    if (parsed.command !== 'run') {
+      throw new Error(`Unknown command: ${parsed.command}`);
+    }
+    if (!parsed.planPath) {
+      throw new Error('Missing plan file. Usage: invoker-cli run <plan.yaml>');
+    }
+
+    if (parsed.options.mode === 'live' && parsed.options.dbDir) {
+      throw new Error('--db-dir cannot be used with --live because the owner database is authoritative');
+    }
+
+    if (parsed.options.mode !== 'standalone') {
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      const owner = await discoverLiveOwner(bus);
+      if (owner) {
+        if (parsed.options.dbDir) {
+          throw new Error('--db-dir cannot be used when a live owner accepts the run; use --standalone to force an isolated database');
+        }
+        const submitted = await submitPlanToLiveOwner(parsed.planPath, bus, owner);
+        printRunResult({
+          workflowId: submitted.workflowId,
+          status: 'success',
+          completedTasks: 0,
+          failedTasks: 0,
+          mode: 'live',
+        }, parsed.options.json);
+        return 0;
+      }
+      if (parsed.options.mode === 'live') {
+        throw new Error('No running Invoker owner is reachable; start the owner or omit --live to run standalone');
+      }
+    }
+
+    const result = await runPlan(parsed.planPath, parsed.options);
+    printRunResult(result, parsed.options.json);
+    return result.status === 'success' ? 0 : 1;
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  void main().then((exitCode) => {
+    process.exitCode = exitCode;
+  });
+}
