@@ -39,12 +39,14 @@ function headlessCommands(source) {
   return found.map(([, name, kind]) => ({ name, kind }));
 }
 
-function cliVerbs(source) {
+function cliVerbs(sources) {
   const verbs = new Set();
-  for (const [, name] of source.matchAll(/argv\[0\] === '([^']+)'/g)) verbs.add(name);
-  for (const [, name] of source.matchAll(/parsed\.command === '([^']+)'/g)) verbs.add(name);
-  for (const [, name] of source.matchAll(/parsed\.command !== '([^']+)'/g)) verbs.add(name);
-  for (const [, name] of source.matchAll(/case '([^']+)':/g)) verbs.add(name);
+  for (const source of sources) {
+    for (const [, name] of source.matchAll(/argv\[0\] === '([^']+)'/g)) verbs.add(name);
+    for (const [, name] of source.matchAll(/parsed\.command === '([^']+)'/g)) verbs.add(name);
+    for (const [, name] of source.matchAll(/parsed\.command !== '([^']+)'/g)) verbs.add(name);
+    for (const [, name] of source.matchAll(/case '([^']+)':/g)) verbs.add(name);
+  }
   if (verbs.size === 0) {
     console.error('fail\tno CLI dispatch verbs parsed; refusing to report a vacuous pass');
     process.exit(2);
@@ -66,7 +68,7 @@ function isExposed(command, verbs) {
 }
 
 const commands = headlessCommands(read(REGISTRY));
-const verbs = cliVerbs(CLI_SOURCES.map(read).join('\n'));
+const verbs = cliVerbs(CLI_SOURCES.map(read));
 const debt = debtList(read(DEBT));
 
 if (process.argv.includes('--list')) {

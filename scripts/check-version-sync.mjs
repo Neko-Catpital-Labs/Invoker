@@ -19,15 +19,17 @@ const sources = [
   ['packages/npm-ui/package.json', JSON.parse(readFileSync(join(root, 'packages/npm-ui/package.json'), 'utf8')).version],
   ['packages/npm-slack/package.json', JSON.parse(readFileSync(join(root, 'packages/npm-slack/package.json'), 'utf8')).version],
   ['packages/npm-watcher/package.json', JSON.parse(readFileSync(join(root, 'packages/npm-watcher/package.json'), 'utf8')).version],
-  [
-    'packages/cli/src/index.ts (const VERSION)',
-    readFileSync(join(root, 'packages/cli/src/index.ts'), 'utf8').match(/^const VERSION = '([^']+)';$/m)?.[1],
-  ],
+  ['packages/cli/src/index.ts (const VERSION)', readVersion('packages/cli/src/index.ts')],
+  ['packages/cli/src/cli-runtime.ts (const VERSION)', readVersion('packages/cli/src/cli-runtime.ts')],
   [
     'packages/slack-manager/src/index.ts (const VERSION)',
     readFileSync(join(root, 'packages/slack-manager/src/index.ts'), 'utf8').match(/^const VERSION = '([^']+)';$/m)?.[1],
   ],
 ];
+
+function readVersion(relativePath) {
+  return readFileSync(join(root, relativePath), 'utf8').match(/^const VERSION = '([^']+)';$/m)?.[1];
+}
 
 const versions = new Set(sources.map(([, version]) => version));
 if (versions.size === 1 && !versions.has(undefined)) {
