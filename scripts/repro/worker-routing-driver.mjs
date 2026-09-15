@@ -55,6 +55,7 @@ function makeLeg(kind) {
     HOME: home,
     FAKE_GH_STATE_DIR: state,
     INVOKER_GITHUB_TARGET_REPO: 'fake/repo',
+    INVOKER_GITHUB_TARGET_REPOS: '',
     INVOKER_PR_CRON_AUTHOR: 'fake-bot',
     INVOKER_HEADLESS_IPC_HELPER: join(ROOT, 'scripts/repro/fixtures/fake-headless-ipc.js'),
   };
