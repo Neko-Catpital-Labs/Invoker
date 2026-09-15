@@ -201,7 +201,7 @@ function buildMarkdownFenceExtensionMap(content) {
 
 const REGEX_PRECEDING_CHARS = new Set(['', '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', ';']);
 const REGEX_PRECEDING_KEYWORD = /(?:^|[^\w$])(?:return|typeof|case|in|of|delete|void|throw|new|yield|await)$/;
-const REGEX_LITERAL_TAIL = /^[dgimsuvy]*\s*(?:$|[.,;:)\]}?|&])/;
+const REGEX_LITERAL_TAIL = /^[dgimsuvy]*\s*(?:$|[.,;:)\]}?+\-*%<>=^&|]|(?:in|instanceof)\b)/;
 
 function startsRegexLiteral(line, index) {
   const before = line.slice(0, index).trimEnd();
