@@ -1162,3 +1162,44 @@ describe('WorkflowInspector', () => {
     expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
   });
 });
+
+describe('WorkflowInspector Codex spend gate failure', () => {
+  it('labels a task that failed because the Codex spend gate is tripped', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({
+          status: 'failed',
+          execution: {
+            error: 'Executor startup failed (worktree): Codex is shut off by the daily spend gate and every Codex request fails until a human reviews the sessions.',
+            failureClass: 'agent-spend-gate',
+            exitCode: 1,
+          },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('inspector-codex-spend-gate-label')).toHaveTextContent(
+      'Codex is switched off by the daily spend gate. Auto-fix will not retry this task.',
+    );
+  });
+
+  it('does not show the spend gate label for other failures', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: 'SSH key not found', exitCode: 1 } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('inspector-codex-spend-gate-label')).toBeNull();
+  });
+});
