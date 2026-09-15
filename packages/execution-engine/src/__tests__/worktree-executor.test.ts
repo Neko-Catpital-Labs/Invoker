@@ -1897,8 +1897,8 @@ describe('WorktreeExecutor', () => {
         (taskProcess as any).exitCode = 0;
         (taskProcess as any).killed = false;
 
-        // Advance past heartbeat interval
-        await vi.advanceTimersByTimeAsync(150);
+        // Advance past the heartbeat grace interval
+        await vi.advanceTimersByTimeAsync(250);
 
         // Heartbeat should detect orphaned process
         const orphanOutput = outputLines.find(line => line.includes('Heartbeat detected orphaned process'));
@@ -1911,6 +1911,30 @@ describe('WorktreeExecutor', () => {
         expect(responses[0].outputs.error).toContain('heartbeat recovery');
 
         await vi.runAllTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not recover before a delayed close event can report completion', async () => {
+      vi.useFakeTimers();
+      try {
+        const { taskProcess } = setupSpawnMock();
+        const responses: WorkResponse[] = [];
+        const request = makeRequest();
+        const handle = await executor.start(request);
+        executor.onComplete(handle, (response) => { responses.push(response); });
+
+        // Node can expose exitCode before it delivers the close event.
+        (taskProcess as any).exitCode = 0;
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(responses).toHaveLength(0);
+
+        taskProcess.emit('close', 0, null);
+        await vi.runAllTimersAsync();
+        expect(responses).toHaveLength(1);
+        expect(responses[0].status).toBe('completed');
       } finally {
         vi.useRealTimers();
       }
