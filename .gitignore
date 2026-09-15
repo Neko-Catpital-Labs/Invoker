@@ -46,3 +46,8 @@ local-builds/
 # Local pipeline secrets/config
 config/nightly-usage.env
 __pycache__/
+
+# Bazel
+/bazel-*
+/.bazelrc.user
+user.bazelrc

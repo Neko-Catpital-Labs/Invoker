@@ -84,6 +84,8 @@ jobs:
             command: pnpm run check:cli-parity
           - name: Sync Spawn Timeouts
             command: pnpm run check:sync-spawn-timeouts
+          - name: Bazel Overlay
+            command: node scripts/test-bazel-overlay.mjs
 
     name: quality / ${{ matrix.name }}
 
@@ -1242,6 +1244,116 @@ jobs:
 
       - name: Run optional suite
         run: ${{ matrix.command }}
+
+
+  bazel-cache-pilot:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    name: bazel-cache-pilot
+
+    steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bazelisk
+        uses: bazel-contrib/setup-bazel@0.14.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workspace }}/.invoker-bazel-disk
+          repository-cache: true
+
+      - name: Overlay self-check
+        run: node scripts/test-bazel-overlay.mjs
+
+      - name: Bazel test with BuildBuddy cache when keyed
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          TARGETS="$(node scripts/bazel/list-test-targets.mjs cache)"
+          ARGS=(test --test_env=BUILD_WORKSPACE_DIRECTORY="$GITHUB_WORKSPACE" --test_env=PATH="$PATH" --test_output=errors)
+          if [ -n "${BUILDBUDDY_API_KEY:-}" ]; then
+            ARGS+=(--config=remote)
+          else
+            echo "BUILDBUDDY_API_KEY unset; running with local disk cache only"
+          fi
+          bazelisk "${ARGS[@]}" $TARGETS
+
+  bazel-rbe-pilot:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    name: bazel-rbe-pilot
+    continue-on-error: true
+
+    steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bazelisk
+        uses: bazel-contrib/setup-bazel@0.14.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workspace }}/.invoker-bazel-disk
+          repository-cache: true
+
+      - name: Bazel RBE for sandboxed tsup packages when keyed
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILDBUDDY_API_KEY:-}" ]; then
+            echo "BUILDBUDDY_API_KEY unset; skipping RBE pilot"
+            exit 0
+          fi
+          TARGETS="$(node scripts/bazel/list-test-targets.mjs rbe)"
+          bazelisk test --config=rbe \
+            --test_env=BUILD_WORKSPACE_DIRECTORY="$GITHUB_WORKSPACE" \
+            --test_env=PATH="$PATH" \
+            --test_output=errors \
+            --test_tag_filters=-no-remote-exec \
+            $TARGETS
 
   docker:
     if: ${{ github.event_name != 'pull_request' }}
