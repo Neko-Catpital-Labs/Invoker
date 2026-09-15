@@ -324,6 +324,27 @@ class RepairerPlanSettleObserver(unittest.TestCase):
             self.assertIsNotNone(ledger.latest("repair-check-settled", 100, head, "UI Vitest"))
             self.assertIsNotNone(ledger.latest("conflict-repair-settled", 200, head, "conflict:200"))
 
+    def test_settles_capacity_only_deferral_without_admission(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            head = "abc1234" + "0" * 33
+            ledger.record("repair-check", 100, head, "UI Vitest", 100)
+            plan_name = f.repair_check_plan_name(100, "UI Vitest", head)
+            workflows = [{"id": "wf-capacity", "name": plan_name, "status": "failed"}]
+            tasks = [{
+                "id": "wf-capacity/repair",
+                "events": [{
+                    "eventType": "task.executor.deferred",
+                    "payload": {"reason": "execution-pool-capacity"},
+                }],
+            }]
+            with mock.patch.object(f, "list_workflows", return_value=workflows), \
+                    mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+                self.assertEqual(f.settle_repairer_plan_rows(ledger, 200), 1)
+            settled = ledger.latest("repair-check-settled", 100, head, "UI Vitest")
+            self.assertEqual(settled["meta"]["outcomeClass"], "capacity-deferred")
+
     def test_leaves_a_still_running_repair_unsettled(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -368,6 +389,21 @@ class RepairerPlanSettleObserver(unittest.TestCase):
 
 
 class ClassifyRepairOutcome(unittest.TestCase):
+    def test_capacity_only_deferral_is_not_a_code_attempt(self):
+        tasks = [{"id": "wf-1/repair", "status": "failed", "execution": {}, "events": [
+            {"eventType": "task.executor.deferred", "payload": {"reason": "execution-pool-capacity"}},
+        ]}]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1", "failed"), "capacity-deferred")
+
+    def test_executor_selection_makes_a_deferred_repair_an_admitted_attempt(self):
+        tasks = [{"id": "wf-1/repair", "status": "failed", "execution": {}, "events": [
+            {"eventType": "task.executor.deferred", "payload": {"reason": "resource-limit"}},
+            {"eventType": "task.executor.selected", "payload": {}},
+        ]}]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1", "failed"), "code")
+
     def test_completed_with_stale_head_is_superseded_not_success(self):
         tasks = [
             {
