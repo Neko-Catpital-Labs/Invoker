@@ -29,7 +29,6 @@ const sources = [
   ],
 ];
 
-
 const versions = new Set(sources.map(([, version]) => version));
 if (versions.size === 1 && !versions.has(undefined)) {
   console.log(`ok all release versions are ${sources[0][1]}`);
