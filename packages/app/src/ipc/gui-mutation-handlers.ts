@@ -410,6 +410,73 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   installPackagedSkills: (mode?: BundledSkillsInstallMode) => ReturnType<typeof installBundledSkills>;
 }
 
+interface RemoteRepoUrlProbeDeps {
+  logger: Logger;
+  persistence: SQLiteAdapter;
+  requestWorkflowMetadataPublish: (reason: string) => void;
+}
+
+function failWorkflowTasksForRemoteRepoUrlProbe(
+  workflowId: string,
+  repoUrl: string,
+  message: string,
+  deps: RemoteRepoUrlProbeDeps,
+): void {
+  const completedAt = new Date();
+  const tasks = deps.persistence.loadTasks(workflowId);
+  for (const task of tasks) {
+    const changes: TaskStateChanges = {
+      status: 'failed',
+      execution: {
+        error: message,
+        completedAt,
+        fixSessionEntryStatus: undefined,
+      },
+    };
+    deps.persistence.updateTask(task.id, changes);
+    deps.persistence.logEvent(task.id, 'task.failed', {
+      ...changes,
+      repoUrl,
+      workflowId,
+      source: 'remote-repo-url-probe',
+    });
+  }
+  deps.requestWorkflowMetadataPublish('remote-repo-url-probe-failed');
+}
+
+function scheduleRemoteRepoUrlProbes(workflowIds: readonly string[], deps: RemoteRepoUrlProbeDeps): void {
+  const targets = workflowIds
+    .map((workflowId) => {
+      const workflow = deps.persistence.loadWorkflow(workflowId);
+      return workflow?.repoUrl && isRemoteRepoUrl(workflow.repoUrl)
+        ? { workflowId, repoUrl: workflow.repoUrl }
+        : undefined;
+    })
+    .filter((target): target is { workflowId: string; repoUrl: string } => target !== undefined);
+  if (targets.length === 0) return;
+
+  setImmediate(() => {
+    for (const { workflowId, repoUrl } of targets) {
+      void assertRemoteRepoUrlCloneable(repoUrl).catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        const message = `repoUrl "${repoUrl}" is not a readable git repository. Check network reachability, its clone URL, and credentials. (${detail})`;
+        deps.logger.error(
+          `remote repoUrl probe failed for workflow "${workflowId}" repoUrl="${repoUrl}": ${detail}`,
+          { module: 'ipc', workflowId, repoUrl, error: detail },
+        );
+        try {
+          failWorkflowTasksForRemoteRepoUrlProbe(workflowId, repoUrl, message, deps);
+        } catch (failErr) {
+          deps.logger.error(
+            `failed to mark workflow "${workflowId}" after remote repoUrl probe failure: ${failErr instanceof Error ? failErr.message : String(failErr)}`,
+            { module: 'ipc', workflowId, repoUrl },
+          );
+        }
+      });
+    }
+  });
+}
+
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
@@ -450,60 +517,6 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
   const refreshRuntime = (): void => {
     orchestrator = context.getOrchestrator();
     commandService = context.getCommandService();
-  };
-  const failWorkflowTasksForRemoteProbe = (workflowId: string, repoUrl: string, message: string): void => {
-    const completedAt = new Date();
-    const tasks = persistence.loadTasks(workflowId);
-    for (const task of tasks) {
-      const changes: TaskStateChanges = {
-        status: 'failed',
-        execution: {
-          error: message,
-          completedAt,
-          fixSessionEntryStatus: undefined,
-        },
-      };
-      persistence.updateTask(task.id, changes);
-      persistence.logEvent(task.id, 'task.failed', {
-        ...changes,
-        repoUrl,
-        workflowId,
-        source: 'remote-repo-url-probe',
-      });
-    }
-    requestWorkflowMetadataPublish('remote-repo-url-probe-failed');
-  };
-  const scheduleRemoteRepoUrlProbes = (workflowIds: readonly string[]): void => {
-    const targets = workflowIds
-      .map((workflowId) => {
-        const workflow = persistence.loadWorkflow(workflowId);
-        return workflow?.repoUrl && isRemoteRepoUrl(workflow.repoUrl)
-          ? { workflowId, repoUrl: workflow.repoUrl }
-          : undefined;
-      })
-      .filter((target): target is { workflowId: string; repoUrl: string } => target !== undefined);
-    if (targets.length === 0) return;
-
-    setImmediate(() => {
-      for (const { workflowId, repoUrl } of targets) {
-        void assertRemoteRepoUrlCloneable(repoUrl).catch((err) => {
-          const detail = err instanceof Error ? err.message : String(err);
-          const message = `repoUrl "${repoUrl}" is not a readable git repository. Check network reachability, its clone URL, and credentials. (${detail})`;
-          logger.error(
-            `remote repoUrl probe failed for workflow "${workflowId}" repoUrl="${repoUrl}": ${detail}`,
-            { module: 'ipc', workflowId, repoUrl, error: detail },
-          );
-          try {
-            failWorkflowTasksForRemoteProbe(workflowId, repoUrl, message);
-          } catch (failErr) {
-            logger.error(
-              `failed to mark workflow "${workflowId}" after remote repoUrl probe failure: ${failErr instanceof Error ? failErr.message : String(failErr)}`,
-              { module: 'ipc', workflowId, repoUrl },
-            );
-          }
-        });
-      }
-    });
   };
   const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
     const workflowId = workflowIdForTaskArg(taskId);
@@ -804,7 +817,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       { module: 'ipc-delegate' },
     );
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-    scheduleRemoteRepoUrlProbes(workflowIds);
+    scheduleRemoteRepoUrlProbes(workflowIds, { logger, persistence, requestWorkflowMetadataPublish });
     return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
   }
 
@@ -1396,7 +1409,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       taskHandles,
       staged: options?.staged ?? true,
     });
-    scheduleRemoteRepoUrlProbes(result.workflowIds ?? [result.workflowId]);
+    scheduleRemoteRepoUrlProbes(result.workflowIds ?? [result.workflowId], { logger, persistence, requestWorkflowMetadataPublish });
     return result;
   }
 
