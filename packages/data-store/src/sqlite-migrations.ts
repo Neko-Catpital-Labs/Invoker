@@ -82,6 +82,7 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
   for (const sql of POST_MIGRATION_STATEMENTS) {
     exec.run(sql);
   }
+  normalizeQueueHistoryUnknownSemantics(exec);
 
   if (!exec.readOnly) {
     backfillEventTypeCounters(exec);
@@ -90,6 +91,19 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
     migrateTaskLaunchDispatchPriorityToNumeric(exec);
     migrateTaskExternalDependenciesToWorkflows(exec);
     runCompatibilityMigration(exec);
+  }
+}
+
+export function normalizeQueueHistoryUnknownSemantics(exec: SqliteExecutor): void {
+  try {
+    exec.run(
+      `UPDATE queue_history
+          SET unknown_fields = '[]'
+        WHERE unknown_fields IS NULL
+           OR TRIM(unknown_fields) = ''`,
+    );
+  } catch (err) {
+    logSwallowedMigrationError('normalizeQueueHistoryUnknownSemantics', err);
   }
 }
 

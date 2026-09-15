@@ -99,6 +99,24 @@ export interface TaskAttemptMutators {
   ): void;
 }
 
+interface QueueHistoryEvent {
+  eventType: string;
+  workflowId?: string | null;
+  taskId?: string | null;
+  attemptId?: string | null;
+  dispatchId?: number | null;
+  resourceKey?: string | null;
+  resourceType?: string | null;
+  holderId?: string | null;
+  fromState?: string | null;
+  toState?: string | null;
+  queuePosition?: number | null;
+  queueSize?: number | null;
+  payload?: Record<string, unknown>;
+  unknownFields?: string[];
+  recordedAt?: string;
+}
+
 export class SqliteTaskAttemptRepository {
   constructor(
     private readonly exec: SqliteExecutor,
@@ -156,6 +174,34 @@ export class SqliteTaskAttemptRepository {
       },
       status: rollup.status,
     };
+  }
+
+  private appendQueueHistory(event: QueueHistoryEvent): void {
+    const unknownFields = event.unknownFields ?? [];
+    this.exec.execRun(
+      `INSERT INTO queue_history (
+          recorded_at, event_type, workflow_id, task_id, attempt_id, dispatch_id,
+          resource_key, resource_type, holder_id, from_state, to_state,
+          queue_position, queue_size, payload_json, unknown_fields
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        event.recordedAt ?? new Date().toISOString(),
+        event.eventType,
+        event.workflowId ?? null,
+        event.taskId ?? null,
+        event.attemptId ?? null,
+        event.dispatchId ?? null,
+        event.resourceKey ?? null,
+        event.resourceType ?? null,
+        event.holderId ?? null,
+        event.fromState ?? null,
+        event.toState ?? 'unknown',
+        event.queuePosition ?? null,
+        event.queueSize ?? null,
+        JSON.stringify(event.payload ?? {}),
+        JSON.stringify(unknownFields),
+      ],
+    );
   }
 
   private hasCrashPreservationTable(): boolean {
@@ -384,6 +430,15 @@ export class SqliteTaskAttemptRepository {
         op: 'upsert',
         payload,
       });
+      this.appendQueueHistory({
+        eventType: 'task_state_transition',
+        workflowId,
+        taskId: task.id,
+        fromState: null,
+        toState: task.status,
+        payload: { source: 'saveTask' },
+        unknownFields: ['from_state'],
+      });
     });
   }
 
@@ -411,6 +466,17 @@ export class SqliteTaskAttemptRepository {
         }
         return { taskId: record.task.id, payload };
       }));
+      for (const record of records) {
+        this.appendQueueHistory({
+          eventType: 'task_state_transition',
+          workflowId,
+          taskId: record.task.id,
+          fromState: null,
+          toState: record.task.status,
+          payload: { source: 'saveTasks' },
+          unknownFields: ['from_state'],
+        });
+      }
     });
   }
 
@@ -767,6 +833,16 @@ export class SqliteTaskAttemptRepository {
         op: 'upsert',
         payload: taskPayload,
       });
+      if (changes.status !== undefined && changes.status !== beforeTask.status) {
+        this.appendQueueHistory({
+          eventType: 'task_state_transition',
+          workflowId,
+          taskId,
+          fromState: beforeTask.status,
+          toState: changes.status,
+          payload: { source: 'updateTask' },
+        });
+      }
 
       if (!statusChanged || !workflowId) return;
       const afterWorkflow = this.loadWorkflowJournalPayload(workflowId);
@@ -776,6 +852,14 @@ export class SqliteTaskAttemptRepository {
         entityId: workflowId,
         op: 'upsert',
         payload: afterWorkflow.payload,
+      });
+      this.appendQueueHistory({
+        eventType: 'workflow_state_transition',
+        workflowId,
+        fromState: beforeWorkflow?.status ?? null,
+        toState: afterWorkflow.status,
+        payload: { source: 'taskRollup' },
+        unknownFields: beforeWorkflow ? [] : ['from_state'],
       });
     });
   }
@@ -840,6 +924,10 @@ export class SqliteTaskAttemptRepository {
     if (setClauses.length === 0) return;
     setClauses.push('task_state_version = task_state_version + 1');
     values.push(taskId);
+    const beforeRow = this.exec.queryOne(
+      'SELECT workflow_id, status FROM tasks WHERE id = ?',
+      [taskId],
+    ) as { workflow_id?: string; status?: string } | undefined;
 
     this.exec.runTransaction(() => {
       const taskPayload = this.exec.queryOne(
@@ -856,6 +944,17 @@ export class SqliteTaskAttemptRepository {
         op: 'upsert',
         payload: taskPayload,
       });
+      if (changes.status !== undefined && beforeRow?.status !== changes.status) {
+        this.appendQueueHistory({
+          eventType: 'task_state_transition',
+          workflowId: beforeRow?.workflow_id ?? String(taskPayload.workflow_id ?? ''),
+          taskId,
+          fromState: beforeRow?.status ?? null,
+          toState: changes.status,
+          payload: { source: 'updateTaskLaunchState' },
+          unknownFields: beforeRow?.status ? [] : ['from_state'],
+        });
+      }
     });
   }
 
@@ -1116,6 +1215,23 @@ export class SqliteTaskAttemptRepository {
         op: 'upsert',
         payload,
       });
+      const taskRow = this.exec.queryOne(
+        'SELECT workflow_id FROM tasks WHERE id = ?',
+        [attempt.nodeId],
+      ) as { workflow_id?: string } | undefined;
+      this.appendQueueHistory({
+        eventType: 'attempt_state_transition',
+        workflowId: taskRow?.workflow_id ?? null,
+        taskId: attempt.nodeId,
+        attemptId: attempt.id,
+        fromState: null,
+        toState: attempt.status,
+        payload: { source: 'saveAttempt' },
+        unknownFields: [
+          'from_state',
+          ...(taskRow?.workflow_id ? [] : ['workflow_id']),
+        ],
+      });
     });
   }
 
@@ -1178,6 +1294,13 @@ export class SqliteTaskAttemptRepository {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    const beforeAttempt = this.exec.queryOne(
+      `SELECT a.id, a.node_id, a.status, t.workflow_id
+         FROM attempts a
+         LEFT JOIN tasks t ON t.id = a.node_id
+        WHERE a.id = ?`,
+      [attemptId],
+    ) as { id?: string; node_id?: string; status?: string; workflow_id?: string } | undefined;
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -1214,6 +1337,22 @@ export class SqliteTaskAttemptRepository {
         op: 'upsert',
         payload,
       });
+      if (changes.status !== undefined && beforeAttempt?.status !== changes.status) {
+        this.appendQueueHistory({
+          eventType: 'attempt_state_transition',
+          workflowId: beforeAttempt?.workflow_id ?? null,
+          taskId: beforeAttempt?.node_id ?? null,
+          attemptId,
+          fromState: beforeAttempt?.status ?? null,
+          toState: changes.status,
+          payload: { source: 'updateAttempt' },
+          unknownFields: [
+            ...(beforeAttempt?.status ? [] : ['from_state']),
+            ...(beforeAttempt?.workflow_id ? [] : ['workflow_id']),
+            ...(beforeAttempt?.node_id ? [] : ['task_id']),
+          ],
+        });
+      }
     });
   }
 
@@ -1237,15 +1376,37 @@ export class SqliteTaskAttemptRepository {
     if (this.exec.readOnly) {
       throw new Error('SQLiteAdapter is read-only in this process');
     }
-    this.exec.run(
-      `UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ? AND (${CLAIMABLE_ATTEMPT_WHERE_CLAUSE})`,
-      values,
-    );
-    const claimed = this.exec.getRowsModified() > 0;
-    if (claimed) {
-      this.exec.markDirty();
-    }
-    return claimed;
+    return this.exec.runTransaction(() => {
+      const beforeAttempt = this.exec.queryOne(
+        `SELECT a.id, a.node_id, a.status, t.workflow_id
+           FROM attempts a
+           LEFT JOIN tasks t ON t.id = a.node_id
+          WHERE a.id = ?`,
+        [attemptId],
+      ) as { id?: string; node_id?: string; status?: string; workflow_id?: string } | undefined;
+      this.exec.execRun(
+        `UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ? AND (${CLAIMABLE_ATTEMPT_WHERE_CLAUSE})`,
+        values,
+      );
+      const claimed = this.exec.getRowsModified() > 0;
+      if (claimed && changes.status !== undefined && beforeAttempt?.status !== changes.status) {
+        this.appendQueueHistory({
+          eventType: 'attempt_state_transition',
+          workflowId: beforeAttempt?.workflow_id ?? null,
+          taskId: beforeAttempt?.node_id ?? null,
+          attemptId,
+          fromState: beforeAttempt?.status ?? null,
+          toState: changes.status,
+          payload: { source: 'claimAttemptForLaunch' },
+          unknownFields: [
+            ...(beforeAttempt?.status ? [] : ['from_state']),
+            ...(beforeAttempt?.workflow_id ? [] : ['workflow_id']),
+            ...(beforeAttempt?.node_id ? [] : ['task_id']),
+          ],
+        });
+      }
+      return claimed;
+    });
   }
 
   // ── Task ↔ attempt reconciliation ────────────────────────
