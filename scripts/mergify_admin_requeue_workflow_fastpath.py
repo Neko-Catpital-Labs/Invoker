@@ -114,6 +114,7 @@ _SSH_INFRA_FAILURE_CLASSES = frozenset({
     "ssh-disk-full",
 })
 _OAUTH_INFRA_SIGNATURE = "Failed to authenticate: OAuth session expired and could not be refreshed"
+_CAPACITY_DEFERRED_REASONS = frozenset({"resource-limit", "execution-pool-capacity", "ssh-resource-lease-held"})
 
 
 def list_workflow_tasks(workflow_id: str) -> list[dict] | None:
@@ -132,23 +133,74 @@ def list_workflow_tasks(workflow_id: str) -> list[dict] | None:
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, list):
-            return [row for row in parsed if isinstance(row, dict)]
+            return _attach_task_events([row for row in parsed if isinstance(row, dict)])
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return None
+    return _attach_task_events([row for row in parsed if isinstance(row, dict)]) if isinstance(parsed, list) else None
+
+
+def list_task_events(task_id: str) -> list[dict] | None:
+    completed = _run_headless('headless_query query audit "$2" --output json', task_id)
+    if completed.returncode != 0:
+        return None
+    text = completed.stdout.strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+        for line in reversed(text.splitlines()):
+            try:
+                candidate = json.loads(line.strip())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, list):
+                parsed = candidate
+                break
     return [row for row in parsed if isinstance(row, dict)] if isinstance(parsed, list) else None
+
+
+def _attach_task_events(tasks: list[dict]) -> list[dict]:
+    enriched = []
+    for task in tasks:
+        task_with_events = dict(task)
+        task_with_events["events"] = list_task_events(str(task.get("id") or "")) or []
+        task_with_events["_auditEventsLoaded"] = True
+        enriched.append(task_with_events)
+    return enriched
 
 
 def classify_repair_outcome(workflow_id: str, status: str) -> str:
     """Classify a terminal repair workflow for Mergify code-cap accounting.
 
-    `infra` and `superseded` must not spend the code-repair attempt budget.
+    `infra`, `superseded`, and capacity-only deferrals must not spend the
+    code-repair attempt budget. Executor selection takes precedence over an
+    earlier capacity deferral because it proves the repair was admitted.
     Unknown/code failures still count so thrash cannot loop forever.
     Inspect tasks before treating `completed` as success — a merge-gate
     workflow can complete while safe-push failed with stale-head (PR #10278).
     """
     tasks = list_workflow_tasks(workflow_id) or []
+    admitted = False
+    capacity_deferred = False
+    for task in tasks:
+        events = task.get("events", []) if task.get("_auditEventsLoaded") or "events" in task else []
+        for event in events or []:
+            event_type = event.get("eventType")
+            payload = event.get("payload")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    payload = {}
+            payload = payload if isinstance(payload, dict) else {}
+            if event_type == "task.executor.selected":
+                admitted = True
+            elif event_type == "task.executor.deferred" and payload.get("reason") in _CAPACITY_DEFERRED_REASONS:
+                capacity_deferred = True
+    if capacity_deferred and not admitted:
+        return "capacity-deferred"
     for task in tasks:
         execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
         failure_class = execution.get("failureClass")
