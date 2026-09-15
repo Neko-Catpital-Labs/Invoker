@@ -21,7 +21,7 @@ function canonicalReason(reason: unknown): AutoFixCircuitBreakerReason | null {
 
 function canonicalState(state: CircuitBreakerState): CircuitBreakerState {
   const reason = canonicalReason(state.reason);
-  const details = state.reason && reason && state.reason !== reason
+  const details = state.reason !== null && state.reason !== reason
     ? { ...(state.details ?? {}), legacyReason: state.reason }
     : state.details;
   return { ...state, reason, details };

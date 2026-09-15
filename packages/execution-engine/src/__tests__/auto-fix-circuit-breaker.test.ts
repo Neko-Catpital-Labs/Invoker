@@ -76,4 +76,16 @@ describe('auto-fix circuit breaker', () => {
     expect(state.reason).toBe('usage-limit');
     expect(state.details).toEqual({ legacyReason: 'perf-beachball-hold-until-fix' });
   });
+
+  it('preserves an empty persisted reason as diagnostic detail', () => {
+    writeFileSync(path, JSON.stringify({
+      pausedUntil: '2099-01-01T00:00:00.000Z',
+      reason: '',
+      triggeredAt: '2026-09-13T04:44:37.000Z',
+    }));
+
+    const state = loadCircuitBreakerState(path);
+    expect(state.reason).toBe('usage-limit');
+    expect(state.details).toEqual({ legacyReason: '' });
+  });
 });
