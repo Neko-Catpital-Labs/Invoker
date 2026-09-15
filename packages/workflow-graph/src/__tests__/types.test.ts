@@ -26,6 +26,11 @@ describe('createTaskState', () => {
     expect(task.execution).toEqual({ generation: 0 });
   });
 
+  it('keeps a declared pool without guessing its executor kind', () => {
+    expect(resolveTaskConfig({ poolId: 'mixed-local-ssh' })).toEqual({ poolId: 'mixed-local-ssh' });
+    expect(() => assertResolvedTaskConfig({ poolId: 'mixed-local-ssh' })).not.toThrow();
+  });
+
   it('rejects a config patch that pairs runnerKind and isMergeNode inconsistently', () => {
     const merge: TaskConfig = { runnerKind: 'merge' };
     expect(() => applyTaskConfigPatch(merge, { executionAgent: 'codex' }))
