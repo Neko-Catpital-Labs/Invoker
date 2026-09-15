@@ -543,6 +543,11 @@ export function WorkflowInspector({
           {task?.execution.error && (
             <div className="mt-3 border-t border-red-500/30 pt-2">
               <h3 className="text-[11px] uppercase tracking-wide text-red-300">Error</h3>
+              {task.execution.failureClass === 'agent-spend-gate' && (
+                <p data-testid="inspector-codex-spend-gate-label" className="mt-1 text-xs font-semibold text-red-200">
+                  Codex is switched off by the daily spend gate. Auto-fix will not retry this task.
+                </p>
+              )}
               <p className="mt-1 text-xs text-red-300 break-words">{task.execution.error}</p>
               {task.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
                 <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
