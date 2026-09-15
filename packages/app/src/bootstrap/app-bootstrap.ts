@@ -1,3 +1,4 @@
+import type { CodexSpendGateStatus } from '@invoker/contracts';
 import { join } from 'node:path';
 import type { App } from 'electron';
 
@@ -51,6 +52,7 @@ export interface RuntimeStatusFields {
   ownerMode: boolean;
   readOnly: boolean;
   mode: RuntimeModeSnapshot;
+  codexSpendGate?: CodexSpendGateStatus;
 }
 
 /** Compute the GUI runtime status from ownership flags. */

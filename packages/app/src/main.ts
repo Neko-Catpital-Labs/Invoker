@@ -252,6 +252,7 @@ import {
 } from './worker-control.js';
 import { runStartReady } from './start-ready.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
+import { readCodexSpendGateStatus } from './codex-spend-gate-status.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
@@ -3650,7 +3651,7 @@ startMainProcessBootstrap({
       }
     });
 
-    const computeRuntimeStatus = () => {
+    const computeOwnershipRuntimeStatus = () => {
       if (process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS === '1') {
         return { ownerMode: false, readOnly: true, mode: 'connection-lost' as const };
       }
@@ -3659,6 +3660,7 @@ startMainProcessBootstrap({
       }
       return computeGuiRuntimeStatus({ ownerMode, guiUsingDaemonOwner, connectionLost: guiDaemonOwnerConnectionLost });
     };
+    const computeRuntimeStatus = () => ({ ...computeOwnershipRuntimeStatus(), ...readCodexSpendGateStatus() });
     daemonOwnerLoss.setNotify(() => { if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) mainWindow.webContents.send('invoker:runtime-status', computeRuntimeStatus()); });
 
     registerBootstrapStateIpc({
