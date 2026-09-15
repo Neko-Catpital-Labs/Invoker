@@ -55,6 +55,51 @@ describe('resolveActiveInvokerProfileEnv', () => {
     });
   });
 
+  describe('when a sibling process cannot inherit the production env marker', () => {
+    it('prefers the checkout profile when it shares the production owner home', () => {
+      const repoRoot = resolveRepoRoot(process.cwd());
+
+      const actual = resolveActiveInvokerProfileEnv({
+        repoRoot,
+        homeDir: '/home/invoker',
+        productionMarkerFileExists: () => true,
+      });
+      const socketPath = resolveInvokerIpcSocketPath(actual);
+
+      expect(actual.INVOKER_RUNTIME_KIND).toBe('source-development');
+      expect(actual.INVOKER_PRODUCTION_OWNER_SERVICE).toBeUndefined();
+      expect(socketPath).toBe(actual.INVOKER_IPC_SOCKET);
+      expect(socketPath).toContain('/.invoker/dev/');
+      expect(socketPath).not.toBe('/home/invoker/.invoker/ipc-transport.sock');
+    });
+
+    it('recognizes production via the on-disk marker file instead', () => {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'invoker-packaged-install-'));
+      tempDirs.push(repoRoot);
+
+      const actual = resolveActiveInvokerProfileEnv({
+        repoRoot,
+        homeDir: '/home/invoker',
+        productionMarkerFileExists: (path) => path === '/home/invoker/.invoker/.production-owner-service-marker',
+      });
+
+      expect(actual).toEqual({ INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' });
+    });
+
+    it('still falls through to dev-profile detection when the marker file is absent', () => {
+      const repoRoot = resolveRepoRoot(process.cwd());
+
+      const actual = resolveActiveInvokerProfileEnv({
+        repoRoot,
+        homeDir: '/home/some-developer',
+        productionMarkerFileExists: () => false,
+      });
+
+      expect(actual.INVOKER_PRODUCTION_OWNER_SERVICE).toBeUndefined();
+      expect(actual.INVOKER_DEVELOPMENT_PROFILE).toBeTruthy();
+    });
+  });
+
   it('matches the development profile script for this repository', () => {
     const repoRoot = resolveRepoRoot(process.cwd());
     const scriptPath = join(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');

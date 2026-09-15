@@ -102,12 +102,22 @@ describe('mcp-server session-scoped tools', () => {
 
   it('submits a file-path plan only with a matching reviewToken', async () => {
     delete process.env.INVOKER_PLANNING_SESSION_ID;
+    const runHandler = vi.fn(async (req: unknown) => {
+      expect(req).toEqual(expect.objectContaining({
+        planPath: fixturePlan,
+        traceId: expect.stringContaining('invoker-cli.headless.run'),
+      }));
+      return { workflowId: 'wf-file-path', tasks: [] };
+    });
     const runner = {
-      run: vi.fn(async () => ({ exitCode: 0, stdout: '{"workflow":{"id":"wf-file-path"}}\n', stderr: '' })),
+      run: vi.fn(async () => ({ exitCode: 99, stdout: '', stderr: 'unexpected spawn\n' })),
     };
     const { client, close } = await connectMcpClient({
       runner,
-      createMessageBus: refusingCreateMessageBus(),
+      createMessageBus: liveOwnerBusFactory((bus) => {
+        bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+        bus.onRequest('headless.run', runHandler);
+      }),
     });
     try {
       const review = await client.callTool({
@@ -122,7 +132,8 @@ describe('mcp-server session-scoped tools', () => {
       });
 
       expect(result.isError).toBeFalsy();
-      expect(runner.run).toHaveBeenCalledTimes(1);
+      expect(runHandler).toHaveBeenCalledTimes(1);
+      expect(runner.run).not.toHaveBeenCalled();
       const content = result.content as Array<{ type: string; text: string }>;
       const payload = JSON.parse(content[0]!.text) as { ok: boolean; workflowId: string };
       expect(payload.ok).toEqual(true);

@@ -11,6 +11,7 @@ import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutati
 import { isGitRefLockRace } from './git-utils.js';
 import { childProcessHasExited, cleanElectronEnv, cleanGitRepositoryEnv, killProcessGroup, SIGKILL_TIMEOUT_MS, terminateChildProcessGroup } from './process-utils.js';
 import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
+import { appendProvisionOutputTail, spawnLocalProvisioning } from './local-provisioning.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -19,8 +20,6 @@ const DEFAULT_MAX_BUFFER_CHUNKS = 1000;
 const DEFAULT_MAX_BUFFER_BYTES = 5 * 1024 * 1024; // 5MB
 /** Default cap for `git fetch` / `git push` (network-bound). Override via INVOKER_GIT_NETWORK_TIMEOUT_MS; use 0 for unbounded. */
 const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
-const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
-const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
 const FAILED_TASK_ERROR_TAIL_LINE_LIMIT = 50;
 const FAILED_TASK_ERROR_CHAR_LIMIT = 3000;
 
@@ -249,14 +248,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   }
 
   protected appendProvisionOutputTail(tail: string, text: string): string {
-    const segments = `${tail}${text}`.split('\n');
-    const segmentLimit = segments.at(-1) === ''
-      ? PROVISION_OUTPUT_TAIL_LINE_LIMIT + 1
-      : PROVISION_OUTPUT_TAIL_LINE_LIMIT;
-    const nextTail = segments.slice(-segmentLimit).join('\n');
-    return nextTail.length <= PROVISION_OUTPUT_TAIL_CHAR_LIMIT
-      ? nextTail
-      : nextTail.slice(nextTail.length - PROVISION_OUTPUT_TAIL_CHAR_LIMIT);
+    return appendProvisionOutputTail(tail, text);
   }
 
   protected createHandle(request: WorkRequest): ExecutorHandle {
@@ -346,83 +338,29 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     startMessage?: string;
     failurePrefix: string;
   }): { child: ChildProcess | null; completion: Promise<void> } {
-    const command = options.command.trim();
-    if (!command) {
-      traceExecution(`[${options.traceLabel}] skipped dir=${options.cwd}`);
-      return { child: null, completion: Promise.resolve() };
+    const executionId = options.executionId;
+    const hasCommand = options.command.trim().length > 0;
+    if (hasCommand && executionId && options.startMessage) {
+      this.emitOutput(executionId, options.startMessage);
     }
-    traceExecution(`[${options.traceLabel}] begin dir=${options.cwd}`);
-    if (options.executionId && options.startMessage) {
-      this.emitOutput(options.executionId, options.startMessage);
-    }
-    const child = spawn('/bin/bash', ['-lc', command], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: options.cwd,
-      detached: true,
-      env: cleanElectronEnv(),
-    });
-    let combinedOutputTail = '';
-    const appendOutput = (chunk: Buffer | string): void => {
-      const text = String(chunk);
-      combinedOutputTail = this.appendProvisionOutputTail(combinedOutputTail, text);
-      if (options.executionId) this.emitOutput(options.executionId, text);
-    };
-    child.stdout?.on('data', appendOutput);
-    child.stderr?.on('data', appendOutput);
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
-    let settled = false;
-    let timedOutMessage: string | undefined;
-    const timeoutMs = options.executionId
-      ? this.localProvisioningTimeoutsMs.get(options.executionId) ?? getExecutorStartTimeoutMs()
+    const timeoutMs = executionId
+      ? this.localProvisioningTimeoutsMs.get(executionId) ?? getExecutorStartTimeoutMs()
       : getExecutorStartTimeoutMs();
-    const finish = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      clearTimeout(forceKillTimeout);
-      if (options.executionId) {
-        this.localProvisioningTimeoutsMs.delete(options.executionId);
-      }
-      fn();
-    };
-    const completion = new Promise<void>((resolve, reject) => {
-      child.on('error', (error) => {
-        finish(() => reject(new Error(`${options.failurePrefix} ${error.message}`)));
-      });
-      child.on('close', (code, signal) => {
-        finish(() => {
-          if (code === 0) {
-            traceExecution(`[${options.traceLabel}] done dir=${options.cwd}`);
-            resolve();
-            return;
-          }
-          const tail = combinedOutputTail.trim();
-          const fallback = timedOutMessage
-            ?? `provision command exited with code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`;
-          const detail = tail ? `${fallback}\n${tail}` : fallback;
-          reject(new Error(`${options.failurePrefix} ${detail}`));
-        });
-      });
-      if (timeoutMs > 0) {
-        timeout = setTimeout(() => {
-          if (settled) return;
-          timedOutMessage = `provision command timed out after ${timeoutMs}ms`;
-          killProcessGroup(child, 'SIGTERM');
-          forceKillTimeout = setTimeout(() => {
-            if (!settled) killProcessGroup(child, 'SIGKILL');
-            finish(() => {
-              const tail = combinedOutputTail.trim();
-              const detail = tail ? `${timedOutMessage!}\n${tail}` : timedOutMessage!;
-              reject(new Error(`${options.failurePrefix} ${detail}`));
-            });
-          }, SIGKILL_TIMEOUT_MS);
-          forceKillTimeout.unref?.();
-        }, timeoutMs);
-        timeout.unref?.();
-      }
+    const run = spawnLocalProvisioning({
+      command: options.command,
+      cwd: options.cwd,
+      traceLabel: options.traceLabel,
+      failurePrefix: options.failurePrefix,
+      timeoutMs,
+      onOutput: executionId ? (text) => this.emitOutput(executionId, text) : undefined,
     });
-    return { child, completion };
+    if (hasCommand && executionId) {
+      const clearTimeoutEntry = (): void => {
+        this.localProvisioningTimeoutsMs.delete(executionId);
+      };
+      run.completion.then(clearTimeoutEntry, clearTimeoutEntry);
+    }
+    return run;
   }
 
   /**

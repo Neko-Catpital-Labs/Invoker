@@ -74,6 +74,7 @@ describe('auto-fix circuit breaker integration', () => {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
           + 'to purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
+        failureClass: 'agent-usage-limit',
       },
     });
     const unrelatedTask = makeFailedTask({ id: 'wf-1/unrelated' });
@@ -139,7 +140,7 @@ describe('auto-fix circuit breaker integration', () => {
     })({} as any);
   }
 
-  it.fails('a usage-limit failure that ended before the last trip does not re-arm the expired pause', async () => {
+  it('a usage-limit failure that ended before the last trip does not re-arm the expired pause', async () => {
     const tripAt = new Date(Date.now() - 7 * HOUR_MS);
     tripCircuitBreaker(circuitBreakerPath, { now: tripAt, reason: 'usage-limit', pauseMs: 6 * HOUR_MS });
     const staleUsageLimitTask = makeFailedTask({
@@ -147,6 +148,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: new Date(tripAt.getTime() - 1000),
       },
     });
@@ -162,7 +164,7 @@ describe('auto-fix circuit breaker integration', () => {
     expect(submitted).toContain('wf-1/unrelated');
   });
 
-  it.fails('a usage-limit failure that ended before an operator clear does not re-arm the pause', async () => {
+  it('a usage-limit failure that ended before an operator clear does not re-arm the pause', async () => {
     const failedAt = new Date(Date.now() - 5 * HOUR_MS);
     tripCircuitBreaker(circuitBreakerPath, { now: new Date(failedAt.getTime() + 1000), reason: 'usage-limit', pauseMs: 6 * HOUR_MS });
     clearCircuitBreaker(circuitBreakerPath);
@@ -171,6 +173,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: failedAt,
       },
     });
@@ -191,6 +194,7 @@ describe('auto-fix circuit breaker integration', () => {
       execution: {
         generation: 2, selectedAttemptId: 'a1', branch: 'x',
         error: USAGE_LIMIT_ERROR,
+        failureClass: 'agent-usage-limit',
         completedAt: new Date(Date.now() - 60 * 1000),
       },
     });
@@ -203,6 +207,32 @@ describe('auto-fix circuit breaker integration', () => {
     expect(state.triggeredAt).not.toBe(tripAt.toISOString());
     expect(isCircuitBreakerPaused(state, Date.now())).toBe(true);
     expect(submitted).not.toContain('wf-1/unrelated');
+  });
+
+  it('does not trip on a CI check table rate-limit row without a typed agent failure class', async () => {
+    const mergeGateCheckTable = [
+      'quality / TypeScript Types\tpass\t42s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265672\t',
+      'CodeRabbit\tpass\t0\t\tReview rate limited',
+      'UI Vitest\tpass\t2m44s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265910\t',
+      '[worktree] Process exited: actionId=wf-1788249568173-6/land-verified-pr exitCode=1',
+    ].join('\n');
+    const mergeGateTask = makeFailedTask({
+      id: 'wf-1/merge-gate',
+      config: { workflowId: 'wf-1', runnerKind: 'merge' },
+      execution: {
+        generation: 2,
+        selectedAttemptId: 'a1',
+        branch: 'x',
+        error: mergeGateCheckTable,
+        failureClass: undefined,
+      },
+    });
+    const submitted: string[] = [];
+
+    await runTick([mergeGateTask], submitted);
+
+    expect(isCircuitBreakerPaused(loadCircuitBreakerState(circuitBreakerPath), Date.now())).toBe(false);
+    expect(submitted).toContain('wf-1/merge-gate');
   });
 
   it('dispatches normally with no pause file at all', async () => {

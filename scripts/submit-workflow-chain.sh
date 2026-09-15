@@ -115,6 +115,12 @@ parse_plan_name() {
   ' "$p"
 }
 
+parse_top_level_field() {
+  local plan="$1"
+  local field="$2"
+  awk -v field="$field" '$0 ~ ("^" field ":[[:space:]]*") { sub("^" field ":[[:space:]]*", ""); gsub(/^"|"$/, ""); print; exit }' "$plan"
+}
+
 matches_pattern() {
   local pattern="$1"
   local file="$2"
@@ -207,17 +213,26 @@ validate_upstream_dependency_fields() {
 
 resolve_persisted_workflow_id() {
   local workflow_name="$1"
+  local started_at="$2"
+  local same_name_workflows
+  local new_same_name_count
   local wf_id=""
   local start_ms
   start_ms="$(now_ms)"
   local attempt=0
   for _ in $(seq 1 30); do
     attempt=$((attempt + 1))
-    wf_id="$(
+    same_name_workflows="$(
       chain_backend_query_workflows \
         | extract_json_stream \
-        | jq -r --arg n "$workflow_name" '[.[] | select(.name == $n)] | sort_by(.createdAt) | last | .id // empty'
+        | jq -c --arg n "$workflow_name" '[.[] | select(.name == $n)]'
     )"
+    new_same_name_count="$(jq --arg started "$started_at" '[.[] | select(.createdAt > $started)] | length' <<<"$same_name_workflows")"
+    if [[ "$new_same_name_count" -gt 1 ]]; then
+      echo "Multiple workflows named '$workflow_name' were created after chain step start; cannot resolve a unique workflow id." >&2
+      return 1
+    fi
+    wf_id="$(jq -r 'sort_by(.createdAt) | last | .id // empty' <<<"$same_name_workflows")"
     if [[ -n "$wf_id" ]]; then
       log_chain "resolve_persisted_workflow_id name=\"$workflow_name\" found=\"$wf_id\" attempt=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))" >&2
       printf '%s' "$wf_id"
@@ -626,6 +641,7 @@ for i in "${!INPUT_PLANS[@]}"; do
 
   echo "Submitting workflow $((i+1)) (backend=${BACKEND}): $submit_plan"
   run_start_ms="$(now_ms)"
+  run_started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
   log_chain "headless-run begin step=$((i+1)) plan=\"$submit_plan\" backend=${BACKEND}"
   _chain_out="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-out$((i+1)).XXXXXX")"
   out_file="${_chain_out}.log"
@@ -638,7 +654,11 @@ for i in "${!INPUT_PLANS[@]}"; do
     echo "  printed_id=${printed_id:-<none>}"
   fi
 
-  persisted_id="$(resolve_persisted_workflow_id "$plan_name" || true)"
+  if [[ -n "${printed_id:-}" ]]; then
+    persisted_id="$printed_id"
+  else
+    persisted_id="$(resolve_persisted_workflow_id "$plan_name" "$run_started_at" || true)"
+  fi
   if [[ -z "${persisted_id:-}" ]]; then
     echo "Failed to resolve persisted workflow id for name: $plan_name" >&2
     echo "Headless output tail:" >&2
@@ -647,17 +667,16 @@ for i in "${!INPUT_PLANS[@]}"; do
   fi
 
   CHAIN_WORKFLOW_IDS+=("$persisted_id")
-  wf_base_branch="$(
-    chain_backend_query_workflows \
-      | extract_json_stream \
-      | jq -r --arg id "$persisted_id" '.[] | select(.id == $id) | .baseBranch // empty' | head -1
-  )"
+  wf_base_branch="$(parse_top_level_field "$submit_plan" baseBranch)"
   CHAIN_BASE_BRANCHES+=("${wf_base_branch:-<unset>}")
 
-  wf_feature_branch="$(resolve_workflow_feature_branch "$persisted_id" || true)"
-  if [[ -z "${wf_feature_branch:-}" ]]; then
-    echo "Failed to resolve featureBranch for workflow: $persisted_id (name: $plan_name)" >&2
-    exit 1
+  wf_feature_branch=""
+  if [[ "$i" -lt $((${#INPUT_PLANS[@]} - 1)) ]]; then
+    wf_feature_branch="$(resolve_workflow_feature_branch "$persisted_id" || true)"
+    if [[ -z "${wf_feature_branch:-}" ]]; then
+      echo "Failed to resolve featureBranch for workflow: $persisted_id (name: $plan_name)" >&2
+      exit 1
+    fi
   fi
   CHAIN_FEATURE_BRANCHES+=("$wf_feature_branch")
   prev_wf_feature_branch="$wf_feature_branch"

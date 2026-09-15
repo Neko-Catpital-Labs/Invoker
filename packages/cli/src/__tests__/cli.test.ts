@@ -501,41 +501,100 @@ tasks:
     });
   });
 
-  it('submits MCP plans in live mode by default', async () => {
-    const calls: string[][] = [];
+  it('submits MCP plans in live mode by default without spawning a CLI child', async () => {
+    const bus = new LocalBus();
+    const runHandler = vi.fn(async (req: unknown) => {
+      expect(req).toEqual(expect.objectContaining({
+        planPath: fixturePlan,
+        traceId: expect.stringContaining('invoker-cli.headless.run'),
+      }));
+      return { workflowId: 'wf-live', tasks: [] };
+    });
     const runner: McpCliRunner = {
-      async run(args) {
-        calls.push(args);
-        return { exitCode: 0, stdout: '{"workflow":{"id":"wf-live"}}\n', stderr: '' };
-      },
+      run: vi.fn(async () => ({ exitCode: 99, stdout: '', stderr: 'unexpected spawn\n' })),
+    };
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.run', runHandler);
+
+    const result = await submitPlanForMcp(fixturePlan, undefined, runner, async () => bus);
+
+    expect(result).toMatchObject({
+      ok: true,
+      workflowId: 'wf-live',
+      stdout: `${JSON.stringify({
+        workflow: { id: 'wf-live', status: 'success' },
+        result: {
+          workflowId: 'wf-live',
+          status: 'success',
+          completedTasks: 0,
+          failedTasks: 0,
+          mode: 'live',
+        },
+      })}\n`,
+    });
+    expect(runHandler).toHaveBeenCalledTimes(1);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('returns the live owner-required MCP submit error without spawning a CLI child', async () => {
+    const bus = new LocalBus();
+    const runner: McpCliRunner = {
+      run: vi.fn(async () => ({ exitCode: 99, stdout: '', stderr: 'unexpected spawn\n' })),
     };
 
-    const result = await submitPlanForMcp(fixturePlan, undefined, runner);
+    const result = await submitPlanForMcp(fixturePlan, 'live', runner, async () => bus);
 
-    expect(result).toEqual({ ok: true, workflowId: 'wf-live', stdout: '{"workflow":{"id":"wf-live"}}\n' });
-    expect(calls).toEqual([['run', fixturePlan, '--live', '--json']]);
+    expect(result).toEqual({
+      ok: false,
+      exitCode: 1,
+      stdout: '',
+      stderr: 'No running Invoker owner is reachable; start the owner or omit --live to run standalone\n',
+    });
+    expect(runner.run).not.toHaveBeenCalled();
   });
-  it('rejects MCP submit output that is not one JSON result', async () => {
+
+  it('returns live owner MCP submit failures with the same stderr shape as the CLI path', async () => {
+    const bus = new LocalBus();
+    const runner: McpCliRunner = {
+      run: vi.fn(async () => ({ exitCode: 99, stdout: '', stderr: 'unexpected spawn\n' })),
+    };
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.run', async () => {
+      throw new Error('Invalid YAML: flow sequence in plan.yaml');
+    });
+
+    const result = await submitPlanForMcp(fixturePlan, 'live', runner, async () => bus);
+
+    expect(result).toEqual({
+      ok: false,
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Invalid YAML: flow sequence in plan.yaml\n',
+    });
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('rejects MCP standalone submit output that is not one JSON result', async () => {
     const runner: McpCliRunner = {
       async run() {
         return { exitCode: 0, stdout: 'task log\n{"workflow":{"id":"wf-live"}}\n', stderr: '' };
       },
     };
 
-    const result = await submitPlanForMcp(fixturePlan, undefined, runner);
+    const result = await submitPlanForMcp(fixturePlan, 'standalone', runner);
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('Invalid invoker-cli run --json output');
   });
 
-  it('returns MCP submit process failures with stdout and stderr', async () => {
+  it('returns MCP standalone submit process failures with stdout and stderr', async () => {
     const runner: McpCliRunner = {
       async run() {
         return { exitCode: 42, stdout: '{"partial":true}\n', stderr: 'boom\n' };
       },
     };
 
-    const result = await submitPlanForMcp(fixturePlan, undefined, runner);
+    const result = await submitPlanForMcp(fixturePlan, 'standalone', runner);
 
     expect(result).toEqual({
       ok: false,
