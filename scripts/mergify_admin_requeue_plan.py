@@ -361,7 +361,7 @@ def repair_crash_reason(
 # the repair_in_flight TTL wait in that case, since there is nothing left to
 # wait out).
 # Outcomes that must not spend Mergify's code-repair attempt budget.
-CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"infra", "superseded"})
+CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"infra", "superseded", "capacity-deferred"})
 # After an infra settle, give infra-repair this long to own/retry before Mergify
 # may file another repair for the same unit.
 INFRA_REPAIR_OWNERSHIP_TTL_SECONDS = 30 * 60
@@ -526,6 +526,8 @@ def repair_in_flight(
     submitted_epoch = int(submitted.get("epoch", 0) or 0)
     settled = ledger.latest(f"{submit_kind}-settled", pr_number, head_sha, key)
     if settled is not None and int(settled.get("epoch", 0) or 0) >= submitted_epoch:
+        if (settled.get("meta") or {}).get("outcomeClass") == "capacity-deferred":
+            return True
         return False
     if now - submitted_epoch >= ttl_seconds:
         return False
