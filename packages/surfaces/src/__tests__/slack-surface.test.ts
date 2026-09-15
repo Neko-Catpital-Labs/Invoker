@@ -164,6 +164,31 @@ describe('SlackSurface', () => {
     });
   });
 
+  describe('owner alerts', () => {
+    it('posts a Codex spend gate alert from the owner bus to the lobby channel', async () => {
+      await surface.start(async () => {});
+      const app = surface.getApp() as any;
+      const ownerBusEvent = {
+        type: 'alert',
+        alert: {
+          severity: 'critical',
+          source: 'spend-circuit-breaker',
+          subject: 'Codex is switched off by the daily spend gate',
+          message: 'Codex is shut off by the daily spend gate and every Codex request fails until a human reviews the sessions.\nReview the sessions, then clear it with: invoker-cli spend-gate reset',
+          alertKey: 'alert-send:codex-spend-gate:2026-09-13T16:35:24.179Z',
+        },
+      } as unknown as SurfaceEvent;
+
+      await surface.handleEvent(ownerBusEvent);
+
+      expect(app.client.chat.postMessage).toHaveBeenCalledTimes(1);
+      const posted = app.client.chat.postMessage.mock.calls[0][0];
+      expect(posted.channel).toBe('C-test');
+      expect(posted.text).toContain('CRITICAL alert: Codex is switched off by the daily spend gate');
+      expect(posted.text).toContain('invoker-cli spend-gate reset');
+    });
+  });
+
   describe('handleEvent', () => {
     function surfaceWithMappedWorkflow(): SlackSurface {
       const mockRepo = {
