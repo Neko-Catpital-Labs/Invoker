@@ -56,9 +56,11 @@ describe('resolveSelectedRemoteTargetId bounded event lookup', () => {
     adapter.saveTask('wf-1', task);
 
     adapter.logEvent('wf-1/t1', 'task.executor.selected', { poolMemberId: 'stale-target' });
-    for (let index = 0; index < 20_000; index += 1) {
-      adapter.logEvent('wf-1/t1', 'debug.progress', { index });
-    }
+    adapter.logEvents(Array.from({ length: 20_000 }, (_value, index) => ({
+      taskId: 'wf-1/t1',
+      eventType: 'debug.progress',
+      payload: { index },
+    })));
     adapter.logEvent('wf-1/t1', 'task.executor.selected', { poolMemberId: 'current-target' });
 
     const host = { persistence: adapter } as unknown as ConflictResolverHost;

@@ -35,6 +35,31 @@ const FAILED_TASK_ERROR_LINE_PATTERNS = [
   /\bELIFECYCLE\b.*\bCommand failed with exit code [1-9]\d*\b/i,
 ];
 
+const PACKAGE_PATH_RE = /\bpackages\/[A-Za-z0-9._-]+(?=\/|\b)/g;
+
+function inferOwningPackage(request: WorkRequest): string {
+  const haystack = [
+    request.actionId,
+    request.inputs.description,
+    request.inputs.prompt,
+    request.inputs.command,
+  ].filter((part): part is string => typeof part === 'string' && part.length > 0).join('\n');
+  const packages = [...new Set(haystack.match(PACKAGE_PATH_RE) ?? [])];
+  if (packages.length === 1) return packages[0];
+  if (packages.length > 1) return `${packages[0]} (plus explicitly named sibling paths)`;
+  return 'not specified; infer the narrowest package from the named files before editing';
+}
+
+function buildWorkerOrientationPack(request: WorkRequest): string {
+  const owningPackage = inferOwningPackage(request);
+  return [
+    'Worker orientation pack:',
+    `- Owning package: ${owningPackage}`,
+    '- Allowed files: stay inside the owning package and any task-named files unless the task explicitly widens scope.',
+    '- Do not start with an unscoped repository walk; inspect the named package, files, and existing tests first.',
+  ].join('\n');
+}
+
 function failedTaskErrorTail(output: string): string | undefined {
   const lines = output.split('\n');
   const tail = lines.slice(-FAILED_TASK_ERROR_TAIL_LINE_LIMIT).join('\n').trim();
@@ -1373,6 +1398,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    */
   protected buildFullPrompt(request: WorkRequest): string {
     let fullPrompt = request.inputs.prompt ?? '';
+    if (request.actionType === 'ai_task') {
+      fullPrompt = `${buildWorkerOrientationPack(request)}\n\n${fullPrompt}`;
+    }
     if (request.inputs.upstreamContext?.length) {
       const contextLines = request.inputs.upstreamContext.map(ctx => {
         let line = `[Upstream task: ${ctx.taskId}]\nDescription: ${ctx.description}\nSummary: ${ctx.summary ?? 'N/A'}`;
