@@ -13,12 +13,13 @@ import { homedir } from 'node:os';
 
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, FailureClassifier, scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, Attempt, FailureClass } from '@invoker/workflow-core';
+import { CodexSpendGateTrippedError } from './codex-spend-gate.js';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
-import { BaseExecutor } from './base-executor.js';
+import { BaseExecutor, normalizeRepoUrlForProvisionLookup } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { createExecutionBench } from './execution-bench.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
@@ -108,7 +109,19 @@ function failureClassFromThrownError(err: unknown): FailureClass | undefined {
       return failureClass as FailureClass;
     }
   }
+  if (isCausedByCodexSpendGate(err)) return 'agent-spend-gate';
   return undefined;
+}
+
+function isCausedByCodexSpendGate(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current instanceof Error && !seen.has(current)) {
+    if (current instanceof CodexSpendGateTrippedError) return true;
+    seen.add(current);
+    current = current.cause;
+  }
+  return false;
 }
 
 function errorWithFailureClass(message: string, failureClass: FailureClass | undefined): Error {
@@ -1210,7 +1223,17 @@ export class TaskRunner {
       cwd: this.cwd,
       logger: this.logger,
       ensureRepoMirrorPath: (url) => this.ensureRepoMirrorPath(url),
+      provisionCommandFor: (url) => this.resolveMergeCloneProvisionCommand(url),
     });
+  }
+
+  private resolveMergeCloneProvisionCommand(repoUrl: string | undefined): string {
+    const poolDefault = this.getWorktreeTargets()[BUILT_IN_LOCAL_EXECUTION_POOL_ID]?.provisionCommand?.trim() ?? '';
+    if (!repoUrl) return poolDefault;
+    const wanted = normalizeRepoUrlForProvisionLookup(repoUrl);
+    const override = Object.entries(this.getRepoProvisionCommands())
+      .find(([url]) => normalizeRepoUrlForProvisionLookup(url) === wanted)?.[1];
+    return override !== undefined ? override : poolDefault;
   }
 
   /** @internal */ cloneMergeWorktree(cloneSource: string, clonePath: string): Promise<void> {
