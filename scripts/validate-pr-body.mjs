@@ -234,6 +234,21 @@ function stripDetailsBlocks(text) {
 export function classifyScopeKind(filePath) {
   const path = filePath.replace(/\\/g, '/');
 
+  const basename = path.split('/').pop() ?? '';
+
+  if (
+    basename === 'BUILD.bazel'
+    || basename === 'MODULE.bazel'
+    || basename === 'MODULE.bazel.lock'
+    || basename === '.bazelrc'
+    || basename === '.bazelrc.user.example'
+    || basename === '.bazelignore'
+    || basename === '.bazelversion'
+    || basename === 'buildbuddy.yaml'
+    || path.startsWith('scripts/bazel/')
+  ) {
+    return 'policy';
+  }
   if (path.startsWith('scripts/repro/')) return 'proof';
   if (path.startsWith('packages/app/e2e/visual-proof/')) return 'product-test';
   if (path.startsWith('skills/') || path.startsWith('docs/') || path.endsWith('.md')) return 'docs';

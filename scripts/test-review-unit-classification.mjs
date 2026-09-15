@@ -184,4 +184,19 @@ try {
   rmSync(tempDir, { recursive: true, force: true });
 }
 
+const bazelOverlayFiles = [
+  'packages/contracts/BUILD.bazel',
+  'packages/ui/BUILD.bazel',
+  'packages/execution-engine/BUILD.bazel',
+  'MODULE.bazel',
+  'scripts/bazel/generate-package-build.mjs',
+];
+for (const path of bazelOverlayFiles) {
+  assert.deepEqual(
+    classifyReviewUnitsForPath(path),
+    ['tooling-policy'],
+    `Bazel overlay file should classify as tooling-policy: ${path}`,
+  );
+}
+
 console.log('review-unit classification: all assertions passed');
