@@ -779,6 +779,39 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
   });
 
+  it('coalesces global start-ready intents across workflow owners', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    for (const workflowId of ['wf-1', 'wf-2']) {
+      adapter.saveWorkflow({
+        id: workflowId,
+        name: workflowId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => undefined,
+    );
+
+    const first = coordinator.submit('wf-1', 'normal', 'invoker:start-ready', [{}], {
+      deferDrain: true,
+      coalesceGlobally: true,
+    });
+    const duplicate = coordinator.submit('wf-2', 'normal', 'invoker:start-ready', [{}], {
+      deferDrain: true,
+      coalesceGlobally: true,
+    });
+
+    expect(duplicate).toBe(first);
+    expect(adapter.listWorkflowMutationIntents(undefined, ['queued', 'running'])).toHaveLength(1);
+    expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
+    expect(adapter.listWorkflowMutationIntents('wf-2')).toHaveLength(0);
+  });
+
   it('drains independent deferred start-ready intents from one batch timer', async () => {
     vi.useFakeTimers();
     const adapter = await SQLiteAdapter.create(':memory:');
