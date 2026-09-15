@@ -473,6 +473,8 @@ describe('make-pr stack publish body contract', () => {
     expect(prompt).toContain('Never hide review metadata');
     expect(prompt).toContain('Review Unit');
     expect(prompt).toContain('Do NOT let Mergify default the PR body');
+    expect(prompt).toContain('do not republish the stack');
+    expect(prompt).toContain('Validate each body against that PR base');
   });
 
   it('parses the body field for each artifact', () => {
