@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import type {
   WorkerActionRecord,
@@ -71,7 +73,7 @@ function makeRecoveryPolicyHarness(
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[],
   attemptLedger = createAutoFixAttemptLedger(),
 ) {
-  const workflows = [{ id: 'wf-1' }];
+  const workflows = [{ id: 'wf-1', repoUrl: 'git@github.com:owner/repo.git' }];
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const intents: WorkflowMutationIntent[] = [...existingIntents];
   const actions = new Map<string, WorkerActionRecord>();
@@ -117,6 +119,7 @@ function makeRecoveryPolicyHarness(
     logger,
     attemptLedger,
     defaultAutoFixRetries: 3,
+    circuitBreakerPath: join(tmpdir(), `invoker-auto-fix-recovery-test-${process.pid}-${Math.random().toString(16).slice(2)}.json`),
     getAutoFixAgent: () => 'codex',
     ...(drainWakeupHints ? { drainWakeupHints } : {}),
   };
@@ -179,11 +182,21 @@ describe('auto-fix recovery worker', () => {
       },
     } as unknown as WorkerRuntimeDependencies);
 
-    worker.start();
-    await worker.stop();
+    const previousPauseFile = process.env.INVOKER_AUTO_FIX_PAUSE_FILE;
+    process.env.INVOKER_AUTO_FIX_PAUSE_FILE = harness.options.circuitBreakerPath;
+    try {
+      worker.start();
+      await vi.waitFor(() => expect(harness.submit).toHaveBeenCalledTimes(1));
+      await worker.stop();
+    } finally {
+      if (previousPauseFile === undefined) {
+        delete process.env.INVOKER_AUTO_FIX_PAUSE_FILE;
+      } else {
+        process.env.INVOKER_AUTO_FIX_PAUSE_FILE = previousPauseFile;
+      }
+    }
 
     expect(messageBus.subscribe).toHaveBeenCalled();
-    expect(harness.submit).toHaveBeenCalledTimes(1);
     expect(harness.submit).toHaveBeenCalledWith(
       'wf-1',
       'normal',

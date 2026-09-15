@@ -1016,6 +1016,41 @@ describe('catstackDeploy config', () => {
   });
 });
 
+describe('thrashDetector config', () => {
+  it('accepts omitted thrashDetector block', () => {
+    expect(validateInvokerConfig({})).toEqual({});
+  });
+
+  it('accepts enabled, intervalMinutes, thresholdCount, and windowHours', () => {
+    const config = validateInvokerConfig({
+      thrashDetector: {
+        enabled: true,
+        intervalMinutes: 15,
+        thresholdCount: 3,
+        windowHours: 24,
+      },
+    });
+    expect(config.thrashDetector).toEqual({
+      enabled: true,
+      intervalMinutes: 15,
+      thresholdCount: 3,
+      windowHours: 24,
+    });
+  });
+
+  it('rejects invalid numeric fields', () => {
+    expect(() => validateInvokerConfig({
+      thrashDetector: { thresholdCount: 0 },
+    })).toThrow(/thrashDetector.thresholdCount must be an integer > 0/);
+  });
+
+  it('rejects non-boolean enabled', () => {
+    expect(() => validateInvokerConfig({
+      thrashDetector: { enabled: 'yes' as never },
+    })).toThrow(/thrashDetector.enabled must be a boolean when set/);
+  });
+});
+
 describe('selfDeploy config', () => {
   it('accepts omitted selfDeploy block', () => {
     expect(validateInvokerConfig({})).toEqual({});

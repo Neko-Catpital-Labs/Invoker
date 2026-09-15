@@ -504,6 +504,17 @@ export function resolveHeadlessSelfDeployConfig(
   };
 }
 
+export function resolveHeadlessThrashDetectorConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['thrashDetector']> {
+  return {
+    enabled: invokerConfig.thrashDetector?.enabled,
+    intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 15) * 60_000,
+    thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+    windowHours: invokerConfig.thrashDetector?.windowHours,
+  };
+}
+
 export function resolveHeadlessInfraRepairConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
   repoRoot: string,
@@ -673,6 +684,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      thrashDetector: resolveHeadlessThrashDetectorConfig(deps.invokerConfig),
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });

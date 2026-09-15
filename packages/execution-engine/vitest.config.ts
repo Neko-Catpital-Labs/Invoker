@@ -1,4 +1,6 @@
 import { defineConfig, mergeConfig } from 'vitest/config';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import sharedConfig from '../../vitest.shared.ts';
 
 export default mergeConfig(sharedConfig, defineConfig({
@@ -19,7 +21,13 @@ export default mergeConfig(sharedConfig, defineConfig({
       GIT_CONFIG_VALUE_0: 'master',
       GIT_CONFIG_KEY_1: 'advice.detachedHead',
       GIT_CONFIG_VALUE_1: 'false',
+      INVOKER_AUTO_FIX_PAUSE_FILE: join(
+        tmpdir(),
+        `invoker-execution-engine-vitest-auto-fix-pause-${process.pid}.json`,
+      ),
     },
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     poolOptions: {
       forks: {
         maxForks: 1,

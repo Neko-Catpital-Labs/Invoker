@@ -87,7 +87,8 @@ function makeHarness(task = makeFailedTask()) {
     logEvent: vi.fn(),
   };
   const attemptLedger = createAutoFixAttemptLedger();
-  return { tasks, actions, store, submit, attemptLedger };
+  const circuitBreakerPath = join(tmpdir(), `invoker-engine-auto-fix-test-${process.pid}-${Math.random().toString(16).slice(2)}.json`);
+  return { tasks, actions, store, submit, attemptLedger, circuitBreakerPath };
 }
 
 describe('collectValidatedAutoFixRecoveryCandidates', () => {
@@ -376,6 +377,7 @@ describe('auto-fix recovery merge-gate recreate routing', () => {
       logger,
       attemptLedger: harness.attemptLedger,
       defaultAutoFixRetries: 3,
+      circuitBreakerPath: harness.circuitBreakerPath,
       getAutoFixAgent: () => 'codex',
     });
 
@@ -422,6 +424,7 @@ describe('auto-fix dispatch acknowledgement accounting', () => {
       logger,
       attemptLedger: harness.attemptLedger,
       defaultAutoFixRetries: 3,
+      circuitBreakerPath: harness.circuitBreakerPath,
       getAutoFixAgent: () => 'codex',
     });
 

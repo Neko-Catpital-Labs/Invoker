@@ -235,6 +235,20 @@ export interface CatstackDeployConfig {
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
+/**
+ * Built-in recurring auto-fix thrash detector settings.
+ */
+export interface ThrashDetectorConfig {
+  /** Enables no-op guarded ticks when false. Default: true. */
+  enabled?: boolean;
+  /** Poll cadence in minutes. Default: 15. */
+  intervalMinutes?: number;
+  /** Matching debug.auto-fix events needed inside the window. Default: 3. */
+  thresholdCount?: number;
+  /** Sliding detection window in hours. Default: 24. */
+  windowHours?: number;
+}
+
 export interface SelfDeployConfig {
   intervalMinutes?: number;
   repoPath?: string;
@@ -639,6 +653,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  thrashDetector?: ThrashDetectorConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
   dbReaper?: DbReaperConfig;

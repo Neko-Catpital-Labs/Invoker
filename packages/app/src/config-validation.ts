@@ -3,6 +3,7 @@ import {
   normalizeGithubOwnerRepo,
   type AdminBypassE2eBabysitConfig,
   type CatstackDeployConfig,
+  type ThrashDetectorConfig,
   type DbReaperConfig,
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
@@ -258,6 +259,25 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateThrashDetectorConfig(config: InvokerConfig): void {
+  const thrashDetector = config.thrashDetector;
+  if (thrashDetector === undefined) return;
+  if (typeof thrashDetector !== 'object' || thrashDetector === null || Array.isArray(thrashDetector)) {
+    throw new Error('thrashDetector must be an object');
+  }
+  const typed = thrashDetector as ThrashDetectorConfig;
+  if (typed.enabled !== undefined && typeof typed.enabled !== 'boolean') {
+    throw new Error('thrashDetector.enabled must be a boolean when set');
+  }
+  for (const key of ['intervalMinutes', 'thresholdCount', 'windowHours'] as const) {
+    const value = typed[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      throw new Error(`thrashDetector.${key} must be an integer > 0`);
+    }
+  }
+}
+
 function validateSelfDeployConfig(config: InvokerConfig): void {
   const selfDeploy = config.selfDeploy;
   if (selfDeploy === undefined) return;
@@ -404,6 +424,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateThrashDetectorConfig(config);
   validateSelfDeployConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);
