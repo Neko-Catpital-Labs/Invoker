@@ -67,9 +67,7 @@ export interface WorkerRuntimeDependencies {
     & IdleTaskCleanupWorkerStore
     & DbReaperWorkerStore
     & SpendCircuitBreakerWorkerStore;
-  /** Owner-host workflow deletion lifecycle operation. */
   deleteWorkflow?: (workflowId: string) => void;
-  /** Status-aware workflow listing for terminal workflow cleanup. */
   workflowCleanup?: WorkflowCleanupWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
