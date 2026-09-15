@@ -67,6 +67,24 @@ function discoverSpecFiles(e2eDir) {
   return results.sort();
 }
 
+function unsafePlaywrightArtifactUploadPaths(workflow) {
+  const badPaths = [];
+  for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+    for (const step of job?.steps ?? []) {
+      if (!String(step?.uses ?? '').startsWith('actions/upload-artifact@')) continue;
+      if (!String(step?.name ?? '').toLowerCase().includes('playwright artifacts')) continue;
+      const paths = Array.isArray(step?.with?.path) ? step.with.path.join('\n') : String(step?.with?.path ?? '');
+      for (const line of paths.split(/\r?\n/)) {
+        const path = line.trim();
+        if (path.startsWith('.git/playwright-artifacts')) {
+          badPaths.push(`${jobName}: ${path}`);
+        }
+      }
+    }
+  }
+  return badPaths;
+}
+
 function checkInventory({ workflowPath, e2eDir, manualOnlySpecs }) {
   const workflow = YAML.parse(readFileSync(workflowPath, 'utf8'));
   const listed = [
@@ -92,8 +110,16 @@ function checkInventory({ workflowPath, e2eDir, manualOnlySpecs }) {
   const missing = discovered.filter((file) => !listedSet.has(file));
   const extra = listed.filter((file) => !discoveredSet.has(file) && !manualListedSet.has(file));
   const duplicates = [...new Set(listed.filter((file, index) => listed.indexOf(file) !== index))];
+  const gitArtifactPaths = unsafePlaywrightArtifactUploadPaths(workflow);
 
-  const ok = !(manualMissing.length || manualListed.length || missing.length || extra.length || duplicates.length);
+  const ok = !(
+    manualMissing.length
+    || manualListed.length
+    || missing.length
+    || extra.length
+    || duplicates.length
+    || gitArtifactPaths.length
+  );
   return {
     ok,
     manualMissing,
@@ -101,6 +127,7 @@ function checkInventory({ workflowPath, e2eDir, manualOnlySpecs }) {
     missing,
     extra,
     duplicates,
+    gitArtifactPaths,
     discoveredCount: discovered.length,
     manualCount: manualOnlySpecs.size,
   };
@@ -115,6 +142,7 @@ function reportResult(result, label) {
     if (result.missing.length) console.error(`  Missing from shards: ${result.missing.join(', ')}`);
     if (result.extra.length) console.error(`  Extra in shards: ${result.extra.join(', ')}`);
     if (result.duplicates.length) console.error(`  Duplicate shard entries: ${result.duplicates.join(', ')}`);
+    if (result.gitArtifactPaths.length) console.error(`  Playwright artifacts must not be uploaded from .git: ${result.gitArtifactPaths.join(', ')}`);
     return;
   }
   console.log(
