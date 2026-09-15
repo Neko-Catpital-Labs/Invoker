@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody, validatePrScope, visualProofNeedsAnimation } from './validate-pr-body.mjs';
+import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validateGuardedBehaviorMarkers, validatePrBody, validatePrScope, visualProofNeedsAnimation } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -181,6 +181,19 @@ None.
 assert((await validatePrBody(validMinimal)).length === 0, 'valid minimal body should pass');
 assert((await validatePrBody(validArchitecture)).length === 0, 'valid architecture body should pass');
 assert(getPrBodyWarnings(validMinimal).length === 0, 'short summary should produce no warnings');
+
+const noChangedFilesError = 'PR has no file changes; close it instead of merging it.';
+const emptyChangedFilesErrors = await validatePrBody(validMinimal, { changedFiles: [] });
+assert(
+  emptyChangedFilesErrors.includes(noChangedFilesError),
+  'explicit empty changed-file array should fail validation',
+);
+
+const changedFilesErrors = await validatePrBody(validMinimal, { changedFiles: ['packages/workflow-core/src/router.ts'] });
+assert(
+  !changedFilesErrors.includes(noChangedFilesError),
+  'non-empty changed-file array should not report the no-file-changes error',
+);
 
 const dependencyLiteTmp = mkdtempSync(join(tmpdir(), 'pr-body-validator-lite-'));
 try {
@@ -891,6 +904,12 @@ assert(
   JSON.stringify(scopeKindsForChangedFiles(proofToolingPolicyFiles)) === JSON.stringify(['policy']),
   'scopeKindsForChangedFiles should drop other files and keep sorted unique policy kinds',
 );
+assert(
+  JSON.stringify(scopeKindsForChangedFiles(['.github/workflows/ci.yml'])) === JSON.stringify(['policy']),
+  'a .github/ file alone must map to scope kind "policy", matching its tooling-policy review unit -- '
+  + 'otherwise the repair-normalize auto-split gate (which requires "policy" in scopeKinds) silently '
+  + 'refuses to split a proof-lane PR whose only tooling-policy file lives under .github/',
+);
 
 const refactorBody = `## Summary
 
@@ -1383,6 +1402,18 @@ const guardedBehaviorClaimedErrors = await validatePrBody(guardedBehaviorClaimed
 assert(
   !guardedBehaviorClaimedErrors.some((error) => error.includes('Guarded behavior "dag-surface-background-click-noop"')),
   'a diff touching a guarded-behavior marker line should pass when the PR body names the marker id in Safety Invariant or Non-goals',
+);
+
+const guardedBehaviorSubstringClaimErrors = validateGuardedBehaviorMarkers({
+  diffText: guardedBehaviorTouchingDiff,
+  body: validMinimal.replace(
+    'Only the refresh path changes.',
+    'Only not-dag-surface-background-click-noop-suffix changes.',
+  ),
+});
+assert(
+  guardedBehaviorSubstringClaimErrors.some((error) => error.includes('Guarded behavior "dag-surface-background-click-noop"')),
+  'a longer body token must not claim a guarded-behavior marker id by substring',
 );
 
 const guardedBehaviorNonTouchingErrors = await validatePrBody(validMinimal, { diffText: guardedBehaviorNonTouchingDiff });

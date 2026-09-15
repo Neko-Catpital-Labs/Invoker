@@ -439,9 +439,11 @@ export function WorkflowInspector({
   const statusText = taskColors?.text ?? workflowVisual?.textClass ?? 'text-muted-foreground';
   const statusDot = taskColors?.dot ?? '';
   const isFixApproval = Boolean(task?.execution.pendingFixError);
+  const isNoMergeGate = Boolean(task?.config.isMergeNode && workflow?.onFinish === 'none');
   const showApprovalActions = Boolean(
     task
     && (task.status === 'awaiting_approval' || task.status === 'review_ready')
+    && !isNoMergeGate
     && onApprove
     && onReject,
   );
@@ -541,6 +543,11 @@ export function WorkflowInspector({
           {task?.execution.error && (
             <div className="mt-3 border-t border-red-500/30 pt-2">
               <h3 className="text-[11px] uppercase tracking-wide text-red-300">Error</h3>
+              {task.execution.failureClass === 'agent-spend-gate' && (
+                <p data-testid="inspector-codex-spend-gate-label" className="mt-1 text-xs font-semibold text-red-200">
+                  Codex is switched off by the daily spend gate. Auto-fix will not retry this task.
+                </p>
+              )}
               <p className="mt-1 text-xs text-red-300 break-words">{task.execution.error}</p>
               {task.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
                 <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
@@ -703,7 +710,7 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task && !task.config.isMergeNode && onEditPool && (
+        {task && onEditPool && (
           <section className="rounded border border-border bg-secondary/70 p-3">
             <label className="flex items-center justify-between gap-3">
               <span className="text-xs uppercase tracking-wide text-muted-foreground">Executor Pool</span>
@@ -725,7 +732,7 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task?.config.prompt && onEditAgent && (
+        {(task?.config.prompt || task?.config.isMergeNode) && onEditAgent && (
           <section className="rounded border border-border bg-secondary/70 p-3">
             <label className="flex items-center justify-between gap-3">
               <span className="text-xs uppercase tracking-wide text-muted-foreground">AI Agent</span>
@@ -743,7 +750,7 @@ export function WorkflowInspector({
             </label>
           </section>
         )}
-        {task?.config.prompt && onEditModel && modelOptions.length > 0 && (
+        {(task?.config.prompt || task?.config.isMergeNode) && onEditModel && modelOptions.length > 0 && (
           <section className="rounded border border-border bg-secondary/70 p-3">
             <label className="flex items-center justify-between gap-3">
               <span className="text-xs uppercase tracking-wide text-muted-foreground">AI Model</span>

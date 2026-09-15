@@ -16,6 +16,7 @@ import type {
   InAppPlanningDiscardDraftRequest,
   InAppPlanningDiscardDraftResponse,
   InAppPlanningListSessionsResponse,
+  InAppPlanningRepoBinding,
   InAppPlanningPlanSummary,
   InAppPlanningRebindRepoRequest,
   InAppPlanningRebindRepoResponse,
@@ -28,6 +29,7 @@ import type {
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  InAppPlanningTurnStatus,
   Logger,
   PlanningConfirmationMode,
   PlanningTerminalMode,
@@ -44,15 +46,18 @@ import type { AgentRegistry } from '@invoker/execution-engine';
 import {
   decideWorktreeBinding,
   evaluatePlanningTurn,
+  formatPlanningHostedTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
+  looksLikeQuestion,
   preparePlanningReview,
   submitPlanningReview,
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
+import { detectDefaultBranchRemote } from '@invoker/workflow-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
-import type { InvokerConfig } from './config.js';
+import { filterPlanningPresets, type InvokerConfig } from './config.js';
 import {
   ensurePlanningWorktreeReady,
   planningMcpConfigPath,
@@ -89,7 +94,11 @@ export interface InAppPlannerDeps {
   conversationRepo?: ConversationRepository;
   logger?: Logger;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  /** Only consulted when plannerReplyOverride is set (see the ad665bff sidecar-approval comment in sendPlanningChatMessage). */
+  plannerReplyOverrideSidecarDraft?: boolean;
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
+  /** Canonical full skill-doctor script. Kept separate from target worktrees. */
+  planDoctorScriptPath?: string;
 }
 
 export interface InAppPlanningChatSession {
@@ -107,6 +116,8 @@ export interface InAppPlanningChatSession {
   worktreeBranch?: string;
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
+  planningDraftId?: string;
+  planningDraftHash?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
@@ -115,6 +126,9 @@ export interface InAppPlanningChatSession {
   terminalExitCode?: number;
   terminalOutputSnapshot?: string;
   terminalUpdatedAt?: string;
+  activeTurnId?: string;
+  activeTurnStatus?: InAppPlanningTurnStatus;
+  activeTurnError?: string;
   createdAt: string;
   updatedAt: string;
   nextMessageId: number;
@@ -135,6 +149,22 @@ function isModuleResolutionError(error: unknown): boolean {
     || error.message.includes('Cannot find package')
     || error.message.includes('ERR_MODULE_NOT_FOUND')
     || error.message.includes('ERR_UNKNOWN_FILE_EXTENSION')
+  );
+}
+
+function isAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('oauth')
+    || message.includes('401')
+    || message.includes('unauthorized')
+    || message.includes('failed to authenticate')
+    || message.includes('authentication failed')
+    || message.includes('token has expired')
+    || message.includes('re-authenticate')
+    || message.includes('session expired')
+    || message.includes('api error: 401')
   );
 }
 
@@ -225,6 +255,19 @@ function oneLine(value: string): string {
     .trim();
 }
 
+function extractFencedYamlPlanText(text: string): string | null {
+  const fenceStart = text.lastIndexOf('```yaml\n');
+  if (fenceStart === -1) return null;
+  const contentStart = fenceStart + '```yaml\n'.length;
+  const rest = text.slice(contentStart);
+  const closeMatch = rest.match(/^```\s*$/m);
+  const yamlContent = closeMatch && closeMatch.index !== undefined
+    ? rest.slice(0, closeMatch.index)
+    : rest;
+  const trimmed = yamlContent.trim();
+  return trimmed ? trimmed : null;
+}
+
 function truncatedLine(value: string, limit = PLANNING_TERMINAL_BRIDGE_TEXT_LIMIT): string {
   const normalized = oneLine(value);
   if (normalized.length <= limit) return normalized;
@@ -241,6 +284,8 @@ function planningStatusLabel(status: InAppPlanningSessionStatus): string {
       return 'draft ready';
     case 'submitted':
       return 'submitted';
+    case 'planner_error':
+      return 'error';
   }
 }
 
@@ -280,6 +325,8 @@ function planningNextActionLine(session: InAppPlanningChatSession): string {
       return 'Next: Review or submit the draft in chat; use this shell for manual context checks.';
     case 'submitted':
       return 'Next: Review the submitted workflow in Invoker; submitted planning sessions stay read-only.';
+    case 'planner_error':
+      return 'Next: Re-authenticate or fix the error, then retry the last message.';
   }
 }
 
@@ -356,10 +403,10 @@ function titleFromMessage(message: string): string {
   return firstLine.length > 56 ? `${firstLine.slice(0, 53).trimEnd()}…` : firstLine;
 }
 function normalizePlanningConfirmationMode(
-  value: string | null | undefined,
-  fallback: PlanningConfirmationMode = 'require',
+  _value: string | null | undefined,
+  _fallback: PlanningConfirmationMode = 'require',
 ): PlanningConfirmationMode {
-  return value === 'auto_submit' || value === 'require' ? value : fallback;
+  return 'require';
 }
 
 function resolveDefaultPlanningConfirmationMode(config: InvokerConfig): PlanningConfirmationMode {
@@ -411,6 +458,70 @@ function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary'
   return Boolean(session.draftPlanText || session.draftPlanSummary);
 }
 
+function planningRepositoryContext(session: InAppPlanningChatSession): string {
+  if (!session.repoUrl || !session.baseBranch) return '';
+  return [
+    'Current planning repository binding:',
+    `- Default every workflow repoUrl to exactly: ${session.repoUrl}`,
+    `- Default every workflow baseBranch to exactly: ${session.baseBranch}`,
+    '- Only target another repository when the user explicitly asks for that repository.',
+  ].join('\n');
+}
+
+function canonicalGitRepositoryIdentity(repoUrl: string): string {
+  const trimmed = repoUrl.trim();
+  const scpLike = /^git@([^:]+):(.+)$/i.exec(trimmed);
+  if (scpLike) {
+    return canonicalRemoteRepositoryIdentity(scpLike[1], scpLike[2]);
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!['http:', 'https:', 'ssh:'].includes(parsed.protocol)
+      || !parsed.host
+      || parsed.search
+      || parsed.hash) {
+      return trimmed;
+    }
+    return canonicalRemoteRepositoryIdentity(parsed.host, parsed.pathname);
+  } catch {
+    return trimmed;
+  }
+}
+
+function canonicalRemoteRepositoryIdentity(host: string, path: string): string {
+  const canonicalHost = host.toLowerCase();
+  const withoutGitSuffix = path
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\.git$/i, '');
+  const canonicalPath = canonicalHost === 'github.com'
+    ? withoutGitSuffix.toLowerCase()
+    : withoutGitSuffix;
+  return `${canonicalHost}/${canonicalPath}`;
+}
+
+async function silentRepoMismatch(
+  session: InAppPlanningChatSession,
+  planText: string,
+): Promise<string | undefined> {
+  const sessionRepoUrl = session.repoUrl;
+  if (!sessionRepoUrl) return undefined;
+  const sessionRepoIdentity = canonicalGitRepositoryIdentity(sessionRepoUrl);
+  const { parsePlanSubmissionBundle } = await import('./plan-parser.js');
+  const submission = parsePlanSubmissionBundle(planText);
+  const userText = session.messages
+    .filter((message) => message.role === 'user')
+    .map((message) => message.text)
+    .join('\n');
+  return submission.plans
+    .map((plan) => plan.repoUrl)
+    .find((repoUrl): repoUrl is string => Boolean(
+      repoUrl
+      && canonicalGitRepositoryIdentity(repoUrl) !== sessionRepoIdentity
+      && !userText.includes(repoUrl),
+    ));
+}
+
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
@@ -428,6 +539,8 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     messages: session.messages,
     draftPlanSummary: session.draftPlanSummary,
     draftPlanText: session.draftPlanText,
+    planningDraftId: session.planningDraftId,
+    planningDraftHash: session.planningDraftHash,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
     terminalMode: session.terminalMode ?? 'chat',
@@ -436,6 +549,9 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activeTurnId: session.activeTurnId,
+    activeTurnStatus: session.activeTurnStatus,
+    activeTurnError: session.activeTurnError,
     pendingResponse,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -491,6 +607,9 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     terminalExitCode: session.terminalExitCode,
     terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
     terminalUpdatedAt: session.terminalUpdatedAt,
+    activeTurnId: session.activeTurnId,
+    activeTurnStatus: session.activeTurnStatus,
+    activeTurnError: session.activeTurnError,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -587,19 +706,6 @@ function saveOverrideConversation(
   );
 }
 
-function formatConversationalPlanningMessage(message: string): string {
-  return [
-    message,
-    '',
-    'In-app planning chat rule:',
-    '- Treat this as a conversation before a plan.',
-    '- Talk through edge cases, corner cases, architecture, and ambiguity with the human.',
-    '- Resolve those points before producing a YAML plan.',
-    '- If anything important is unclear, ask concise questions instead of drafting.',
-    '- Draft YAML only after the human asks you to draft/proceed, or after the conversation has already resolved the important choices.',
-  ].join('\n');
-}
-
 export function hasExplicitDraftIntent(message: string): boolean {
   return hasCoreExplicitDraftIntent(message);
 }
@@ -614,7 +720,7 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput'> & { mcpConfigPath?: string },
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput' | 'planDoctorScriptPath'> & { mcpConfigPath?: string },
   threadTs: string,
   selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
   options: { conversationalPlanning?: boolean; draftingPreauthorized?: boolean } = {},
@@ -630,6 +736,7 @@ function planConversationConfig(
     repoUrl: deps.config.defaultRepoUrl,
     experimentalPlanner: deps.config.experimentalPlanner,
     conversationalPlanning: options.conversationalPlanning ?? false,
+    planningSurface: options.conversationalPlanning ? 'in_app' : undefined,
     draftingPreauthorized: options.draftingPreauthorized ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
@@ -640,6 +747,7 @@ function planConversationConfig(
     }),
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
+    planDoctorScriptPath: deps.planDoctorScriptPath,
     onRawPlannerOutput: deps.onRawPlannerOutput
       ? (chunk) => deps.onRawPlannerOutput?.({ sessionId: threadTs, chunk })
       : undefined,
@@ -654,7 +762,7 @@ function planConversationConfig(
 }
 
 async function createSession(
-  request: Partial<InAppPlanningCreateSessionRequest> | null | undefined,
+  request: (Partial<InAppPlanningCreateSessionRequest> & { repoBinding?: InAppPlanningRepoBinding }) | null | undefined,
   deps: InAppPlannerDeps & {
     sessions: InAppPlanningChatSessions;
     planningCommandBuilder: PlanningCommandBuilder;
@@ -680,23 +788,31 @@ async function createSession(
     resolveDefaultPlanningConfirmationMode(deps.config),
   );
 
-  const repoUrl = deps.config.defaultRepoUrl;
-  const baseBranch = deps.config.defaultBranch ?? 'main';
+  const repoBinding = request?.repoBinding ?? resolvePlanningRepoBinding(deps.config);
   let worktreeBinding:
     | { repoUrl: string; baseBranch: string; baseCommit: string; worktreePath: string; worktreeBranch: string }
     | undefined;
-  if (deps.repoPool && typeof repoUrl === 'string' && repoUrl.trim()) {
-    const provisioned = await provisionPlanningWorktree(deps.repoPool, { repoUrl, baseBranch, sessionId: id });
+  if (deps.repoPool && repoBinding) {
+    const provisioned = await provisionPlanningWorktree(deps.repoPool, {
+      repoUrl: repoBinding.repoUrl,
+      baseBranch: repoBinding.baseBranch,
+      sessionId: id,
+    });
     worktreeBinding = {
-      repoUrl,
-      baseBranch,
+      repoUrl: repoBinding.repoUrl,
+      baseBranch: repoBinding.baseBranch,
       baseCommit: provisioned.baseCommit,
       worktreePath: provisioned.worktreePath,
       worktreeBranch: provisioned.branch,
     };
   }
   const conversationDeps = worktreeBinding
-    ? { ...deps, workingDir: worktreeBinding.worktreePath, mcpConfigPath: planningMcpConfigPath(worktreeBinding.worktreePath) }
+    ? {
+        ...deps,
+        planDoctorScriptPath: deps.planDoctorScriptPath,
+        workingDir: worktreeBinding.worktreePath,
+        mcpConfigPath: planningMcpConfigPath(worktreeBinding.worktreePath),
+      }
     : deps;
 
   const session: InAppPlanningChatSession = {
@@ -723,11 +839,60 @@ async function createSession(
   return session;
 }
 
+export function resolvePlanningRepoBinding(config: InvokerConfig): InAppPlanningRepoBinding | undefined {
+  const repoUrl = config.defaultRepoUrl?.trim();
+  if (!repoUrl) return undefined;
+  const baseBranch = config.defaultBranch?.trim()
+    || detectDefaultBranchRemote(repoUrl)
+    || 'main';
+  return { repoUrl, baseBranch };
+}
+
+async function activatePlanningSessionWorktree(
+  session: InAppPlanningChatSession,
+  deps: InAppPlannerDeps & { repoPool?: PlanningRepoPool },
+): Promise<boolean> {
+  if (!deps.repoPool || !session.repoUrl || !session.baseBranch || session.worktreePath) return false;
+
+  const provisioned = await provisionPlanningWorktree(deps.repoPool, {
+    repoUrl: session.repoUrl,
+    baseBranch: session.baseBranch,
+    sessionId: session.id,
+  });
+  const presets = await resolveHarnessPresets(deps.config);
+  const preset = presets[session.presetKey];
+  if (!preset) throw new Error(`Unknown planner preset "${session.presetKey}".`);
+  const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
+  const conversationDeps = {
+    ...deps,
+    workingDir: provisioned.worktreePath,
+    mcpConfigPath: planningMcpConfigPath(provisioned.worktreePath),
+  };
+
+  session.baseCommit = provisioned.baseCommit;
+  session.worktreePath = provisioned.worktreePath;
+  session.worktreeBranch = provisioned.branch;
+  session.conversation = new PlanConversation(planConversationConfig(
+    preset,
+    conversationDeps,
+    session.id,
+    selectHarnessSessionDriver,
+    { conversationalPlanning: true },
+  ));
+  return true;
+}
+
+/**
+ * List the planning presets offered to pickers.
+ * The `enabledExecutionAgents` allowlist is applied HERE (not at the IPC/web
+ * dispatch surfaces) so every caller — the Electron IPC handler and the web
+ * dispatch — gets the same filtered view without double-filtering.
+ */
 export async function listInAppPlanningPresets(config: InvokerConfig): Promise<PlanningPresetOption[]> {
   const presets = await resolveHarnessPresets(config);
   const defaultPresetKey = await resolveDefaultPresetKey(config);
   const defaultConfirmationMode = resolveDefaultPlanningConfirmationMode(config);
-  return Object.entries(presets).map(([key, preset]) => ({
+  const options = Object.entries(presets).map(([key, preset]) => ({
     key,
     label: labelForPresetKey(key),
     tool: preset.tool,
@@ -735,6 +900,12 @@ export async function listInAppPlanningPresets(config: InvokerConfig): Promise<P
     isDefault: key === defaultPresetKey,
     defaultConfirmationMode,
   }));
+  const filtered = filterPlanningPresets(options, config);
+  const hasDefault = filtered.some((opt) => opt.isDefault);
+  if (!hasDefault && filtered.length > 0) {
+    filtered[0] = { ...filtered[0], isDefault: true };
+  }
+  return filtered;
 }
 
 export function createPlanningCommandBuilderFromRegistry(
@@ -764,7 +935,7 @@ export async function planFromGoal(
     const { PlanConversation, extractYamlPlan, selectHarnessSessionDriver } = await loadPlannerSurfaces();
     const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver, { conversationalPlanning: true, draftingPreauthorized: true }));
     const plannerOutput = await conversation.sendMessage(goal);
-    const planText = extractYamlPlan(plannerOutput);
+    const planText = conversation.lastTurnDraftPlanText ?? extractYamlPlan(plannerOutput);
     if (!planText) {
       return { ok: false, error: 'Planner did not return a valid YAML plan.' };
     }
@@ -831,8 +1002,9 @@ export async function sendPlanningChatMessage(
     taggedMessage.confirmationMode ?? rawRequest?.confirmationMode,
     resolveDefaultPlanningConfirmationMode(deps.config),
   );
+  const turnId = (typeof rawRequest?.turnId === 'string' && rawRequest.turnId.trim()) || randomUUID();
   if (!message) {
-    return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
+    return { ok: false, sessionId: rawRequest?.sessionId, turnId, error: 'Type a message first.' };
   }
 
   const suppliedSessionId = typeof rawRequest?.sessionId === 'string'
@@ -847,6 +1019,7 @@ export async function sendPlanningChatMessage(
       return {
         ok: false,
         sessionId: suppliedSessionId,
+        turnId,
         error: `Planning session "${suppliedSessionId}" was not found.`,
       };
     }
@@ -855,16 +1028,21 @@ export async function sendPlanningChatMessage(
         presetKey: rawRequest?.presetKey,
         title: titleFromMessage(message),
         confirmationMode: requestedConfirmationMode,
+        repoBinding: rawRequest?.repoBinding,
       }, deps);
       if ('error' in created) {
-        return { ok: false, sessionId, error: created.error };
+        return { ok: false, sessionId, turnId, error: created.error };
       }
       session = created;
       sessionId = session.id;
     }
     if (session.status === 'submitted') {
-      return { ok: false, sessionId: session.id, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
+      return { ok: false, sessionId: session.id, turnId, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
     }
+    if (session.activeTurnStatus === 'running' && session.activeTurnId === turnId) {
+      return { ok: false, sessionId: session.id, turnId, error: 'duplicate-turn' };
+    }
+    const isRetry = session.activeTurnStatus === 'failed' && session.activeTurnId === turnId;
 
     const activeSession = session;
     activeSession.confirmationMode = requestedConfirmationMode;
@@ -875,16 +1053,51 @@ export async function sendPlanningChatMessage(
         role: entry.role,
         content: entry.text,
       }));
-      appendSessionMessage(activeSession, 'user', message);
+      if (!isRetry) {
+        appendSessionMessage(activeSession, 'user', message);
+      }
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
       }
+      activeSession.activeTurnId = turnId;
+      activeSession.activeTurnStatus = 'running';
+      activeSession.activeTurnError = undefined;
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
+      const finishTurn = (response: Extract<InAppPlanningChatResponse, { ok: true }>): InAppPlanningChatResponse => {
+        activeSession.activeTurnId = undefined;
+        activeSession.activeTurnStatus = undefined;
+        activeSession.activeTurnError = undefined;
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        deps.onRawPlannerOutput?.({
+          sessionId: activeSession.id,
+          turnId,
+          turn: {
+            status: 'completed',
+            reply: response.reply,
+            confirmationMode: response.confirmationMode,
+            draftPlanAvailable: response.draftPlanAvailable,
+            draftPlanSummary: response.draftPlanSummary,
+            draftPlanText: response.draftPlanText,
+          },
+        });
+        return response;
+      };
+
       try {
-        const { extractYamlPlan } = await loadPlannerSurfaces();
-        const formattedMessage = formatConversationalPlanningMessage(message);
-        if (deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
+        const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        const repositoryContext = planningRepositoryContext(activeSession);
+        const previousVisibleAssistantMessage = [...messagesBeforeTurn]
+          .reverse()
+          .find((entry) => entry.role === 'assistant')?.content;
+        const visibleTranscriptContext = previousVisibleAssistantMessage
+          ? `Previous assistant message visible in the Invoker chat:\n${previousVisibleAssistantMessage}`
+          : '';
+        const hostedMessage = [repositoryContext, visibleTranscriptContext, formatPlanningHostedTurn('in_app', message)]
+          .filter(Boolean)
+          .join('\n\n');
+        if (!activatedWorktree && deps.repoPool && activeSession.worktreePath && activeSession.repoUrl && activeSession.baseCommit) {
           try {
             await ensurePlanningWorktreeReady(deps.repoPool, {
               repoUrl: activeSession.repoUrl,
@@ -896,43 +1109,66 @@ export async function sendPlanningChatMessage(
             logPlanningWorktreeReadyError(activeSession.id, 'before-send', error);
           }
         }
-        const reply = deps.plannerReplyOverride
-          ? await deps.plannerReplyOverride(formattedMessage)
-          : await activeSession.conversation.sendMessage(formattedMessage);
+        let reply = deps.plannerReplyOverride
+          ? await deps.plannerReplyOverride(hostedMessage)
+          : await activeSession.conversation.sendMessage(hostedMessage);
         if (deps.plannerReplyOverride) {
-          saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
+          saveOverrideConversation(deps.conversationRepo, activeSession.id, message, reply);
         }
         const reasoningParts = deps.plannerReplyOverride
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
+        const immediateDraftPlanText = deps.plannerReplyOverride
+          ? extractFencedYamlPlanText(reply)
+          : activeSession.conversation.lastTurnDraftPlanText;
         const result = evaluatePlanningTurn({
           userMessage: message,
           messagesBeforeTurn,
           assistantReply: reply,
-          immediateDraftPlanText: deps.plannerReplyOverride
-            ? extractYamlPlan(reply)
-            : activeSession.conversation.lastTurnDraftPlanText,
+          immediateDraftPlanText,
+          hasExistingDraft: hasDraftPlan(activeSession),
         });
-        if (result.kind === 'message') {
+        // Prompt-mode sidecar approval (incident ad665bff): a draft the
+        // planner deliberately wrote to the sidecar file, in a turn where the
+        // user supplied information rather than asking a question, is
+        // review-ready without an explicit "draft it" message. YAML that
+        // merely appears in the chat reply text still needs the user to have
+        // asked for a draft (#5320 draft gate). Test/e2e sends never exercise
+        // the real sidecar file, so plannerReplyOverride callers signal the
+        // same scenario via deps.plannerReplyOverrideSidecarDraft instead.
+        const sidecarDraftApproved = (
+          deps.plannerReplyOverride
+            ? Boolean(deps.plannerReplyOverrideSidecarDraft)
+            : activeSession.conversation.lastTurnDraftFromSidecarFile
+        ) && !looksLikeQuestion(message);
+        const unauthorizedDraft = result.kind === 'draft_ready'
+          && !result.draftingAuthorized
+          && !sidecarDraftApproved;
+        if (result.kind === 'message' || unauthorizedDraft) {
+          const conversationStatus = result.kind === 'message'
+            ? result.status
+            : reply.includes('?')
+              ? 'waiting_for_answer'
+              : 'still_discussing';
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
-            : result.status;
+            : conversationStatus;
           appendSessionMessage(activeSession, 'assistant', reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
+          return finishTurn({
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
             draftPlanText: activeSession.draftPlanText,
-          } as InAppPlanningChatResponse;
+          } as Extract<InAppPlanningChatResponse, { ok: true }>);
         }
 
-        const review = preparePlanningReview({
+        let review = preparePlanningReview({
           plannerOutput: reply,
           extractDraftPlanText: () => result.planText,
           confirmationMode: activeSession.confirmationMode,
@@ -942,40 +1178,114 @@ export async function sendPlanningChatMessage(
             ? 'draft_ready'
             : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', review.reply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
+          return finishTurn({
             ok: true,
             sessionId: activeSession.id,
+            turnId,
             reply: review.reply,
             reasoning,
             confirmationMode: activeSession.confirmationMode,
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
             draftPlanText: activeSession.draftPlanText,
-          } as InAppPlanningChatResponse;
+          } as Extract<InAppPlanningChatResponse, { ok: true }>);
         }
 
+        const mismatchedRepoUrl = await silentRepoMismatch(activeSession, review.planText);
+        if (mismatchedRepoUrl) {
+          const mismatchReply = `Draft rejected because it silently changed repositories to ${mismatchedRepoUrl}. `
+            + `This planning session is bound to ${activeSession.repoUrl}. Name a different repository explicitly if that is intentional.`;
+          const correctionPrompt = `${repositoryContext}\n\nInvoker host feedback:\n${mismatchReply}\n\nRewrite the complete YAML draft now using the bound repository.`;
+          const correctedReply = deps.plannerReplyOverride
+            ? await deps.plannerReplyOverride(correctionPrompt)
+            : await activeSession.conversation.sendMessage(correctionPrompt);
+          const correctedPlanText = deps.plannerReplyOverride
+            ? extractFencedYamlPlanText(correctedReply)
+            : activeSession.conversation.lastTurnDraftPlanText;
+          const correctedReview = correctedPlanText
+            ? preparePlanningReview({
+                plannerOutput: correctedReply,
+                extractDraftPlanText: () => correctedPlanText,
+                confirmationMode: activeSession.confirmationMode,
+              })
+            : undefined;
+          const correctedMismatch = correctedReview && !('kind' in correctedReview)
+            ? await silentRepoMismatch(activeSession, correctedReview.planText)
+            : mismatchedRepoUrl;
+          if (correctedReview && !('kind' in correctedReview) && !correctedMismatch) {
+            reply = correctedReply;
+            review = correctedReview;
+          } else {
+            removePlanDraftSidecarIfPresent(activeSession.id);
+            activeSession.status = 'still_discussing';
+            appendSessionMessage(activeSession, 'assistant', mismatchReply);
+            return finishTurn({
+              ok: true,
+              sessionId: activeSession.id,
+              turnId,
+              reply: mismatchReply,
+              reasoning,
+              confirmationMode: activeSession.confirmationMode,
+              draftPlanAvailable: false,
+              draftPlanSummary: activeSession.draftPlanSummary,
+              draftPlanText: activeSession.draftPlanText,
+            } as Extract<InAppPlanningChatResponse, { ok: true }>);
+          }
+        }
+
+        let planningDraftId: string | undefined;
+        let planningDraftHash: string | undefined;
+        let reviewedPlanText = review.planText;
+        if (!deps.plannerReplyOverride && activeSession.conversation.draftDoctorEnabled) {
+          const approvedDraft = activeSession.conversation.approvedPlanningDraft;
+          if (!approvedDraft) {
+            throw new Error('The in-app review has no immutable doctor-approved draft.');
+          }
+          planningDraftId = approvedDraft.id;
+          planningDraftHash = approvedDraft.contentHash;
+          reviewedPlanText = approvedDraft.planText;
+        }
         activeSession.draftPlanSummary = review.summary;
-        activeSession.draftPlanText = review.planText;
+        activeSession.draftPlanText = reviewedPlanText;
+        activeSession.planningDraftId = planningDraftId;
+        activeSession.planningDraftHash = planningDraftHash;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
-        persistPlanningSession(activeSession, deps.planningSessionStore, false);
-        return {
+        return finishTurn({
           ok: true,
           sessionId: activeSession.id,
+          turnId,
           reply,
           reasoning,
           confirmationMode: activeSession.confirmationMode,
           draftPlanAvailable: true,
           draftPlanSummary: review.summary,
           draftPlanText: review.planText,
-        } as InAppPlanningChatResponse;
+        } as Extract<InAppPlanningChatResponse, { ok: true }>);
       } catch (error) {
+        const failureMessage = error instanceof Error ? error.message : String(error);
+        activeSession.activeTurnStatus = 'failed';
+        activeSession.activeTurnError = failureMessage;
+        if (isAuthenticationError(error)) {
+          activeSession.status = 'planner_error';
+          appendSessionMessage(
+            activeSession,
+            'system',
+            'Authentication failed. The planner could not complete this turn. Re-authenticate and try again.',
+            'error',
+          );
+        }
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        deps.onRawPlannerOutput?.({
+          sessionId: activeSession.id,
+          turnId,
+          turn: { status: 'failed', error: failureMessage },
+        });
         return {
           ok: false,
           sessionId: activeSession.id,
-          error: error instanceof Error ? error.message : String(error),
+          turnId,
+          error: failureMessage,
         };
       }
     });
@@ -985,6 +1295,7 @@ export async function sendPlanningChatMessage(
     return {
       ok: false,
       sessionId,
+      turnId,
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -994,7 +1305,10 @@ export async function submitPlanningChatDraft(
   request: InAppPlanningSubmitRequest,
   deps: {
     sessions: InAppPlanningChatSessions;
-    loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
+    loadGeneratedPlan: (
+      planText: string,
+      repositoryBinding?: InAppPlanningRepoBinding,
+    ) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
     planningSessionStore?: InAppPlanningSessionStore;
   },
 ): Promise<InAppPlanningSubmitResponse> {
@@ -1016,9 +1330,25 @@ export async function submitPlanningChatDraft(
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
     try {
+      let planText = session.draftPlanText!;
+      if (session.planningDraftId) {
+        const approvedDraft = session.conversation.approvedPlanningDraft;
+        if (!approvedDraft
+          || approvedDraft.id !== session.planningDraftId
+          || approvedDraft.contentHash !== session.planningDraftHash
+          || approvedDraft.planText !== session.draftPlanText) {
+          return { ok: false, error: 'This plan review no longer matches its immutable approved draft.' };
+        }
+        planText = approvedDraft.planText;
+      }
+      const repositoryBinding = session.repoUrl && session.baseBranch
+        ? { repoUrl: session.repoUrl, baseBranch: session.baseBranch }
+        : undefined;
       const approved = await submitPlanningReview({
-        planText: session.draftPlanText,
-        loadPlan: deps.loadGeneratedPlan,
+        planText,
+        loadPlan: repositoryBinding
+          ? (approvedPlanText) => deps.loadGeneratedPlan(approvedPlanText, repositoryBinding)
+          : deps.loadGeneratedPlan,
       });
       if (!approved.ok) {
         return approved;
@@ -1026,6 +1356,9 @@ export async function submitPlanningChatDraft(
       session.status = 'submitted';
       session.submittedPlanName = approved.planName;
       session.submittedWorkflowId = approved.workflowId;
+      if (session.planningDraftId) {
+        session.conversation.markApprovedPlanningDraftSubmitted();
+      }
       session.updatedAt = new Date().toISOString();
       appendSessionMessage(
         session,
@@ -1071,6 +1404,9 @@ export function discardPlanningChatDraft(
   session.status = 'still_discussing';
   session.draftPlanSummary = undefined;
   session.draftPlanText = undefined;
+  session.planningDraftId = undefined;
+  session.planningDraftHash = undefined;
+  session.conversation.discardApprovedPlanningDraft();
   appendSessionMessage(session, 'system', 'Draft discarded. Ask Invoker to draft it again.');
   persistPlanningSession(session, deps.planningSessionStore, false);
   return { ok: true };
@@ -1080,6 +1416,7 @@ export function resetPlanningChat(
   request: InAppPlanningResetRequest,
   deps: { sessions: InAppPlanningChatSessions; planningSessionStore?: InAppPlanningSessionStore },
 ): InAppPlanningResetResponse {
+  deps.sessions.get(request.sessionId)?.conversation.reset();
   deps.sessions.delete(request.sessionId);
   deps.planningSessionStore?.deleteInAppPlanningSession(request.sessionId);
   return { ok: true };
@@ -1110,8 +1447,11 @@ export function setPlanningChatTerminalMode(
 
 export async function rebindPlanningChatRepo(
   request: InAppPlanningRebindRepoRequest,
-  deps: {
-    config: InvokerConfig;
+  deps: Pick<
+    InAppPlannerDeps,
+    'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry'
+    | 'conversationRepo' | 'logger' | 'onRawPlannerOutput' | 'planDoctorScriptPath'
+  > & {
     sessions: InAppPlanningChatSessions;
     planningSessionStore?: InAppPlanningSessionStore;
     repoPool?: PlanningRepoPool;
@@ -1126,6 +1466,9 @@ export async function rebindPlanningChatRepo(
   if (session.status === 'submitted') {
     return { ok: false, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
   }
+  if (session.messages.length > 0 || session.terminalSessionId) {
+    return { ok: false, error: 'Set the repo before the conversation or terminal starts.' };
+  }
   if (!deps.repoPool) {
     return { ok: false, error: 'Worktree provisioning is not available.' };
   }
@@ -1135,7 +1478,10 @@ export async function rebindPlanningChatRepo(
   if (!requestedRepoUrl) {
     return { ok: false, error: 'No repository specified.' };
   }
-  const requestedBaseBranch = rawRequest?.baseBranch?.trim() || deps.config.defaultBranch || 'main';
+  const requestedBaseBranch = rawRequest?.baseBranch?.trim()
+    || deps.config.defaultBranch?.trim()
+    || detectDefaultBranchRemote(requestedRepoUrl)
+    || 'main';
 
   try {
     await repoPool.ensureCloneThroughRepoQueue(requestedRepoUrl);
@@ -1179,6 +1525,7 @@ export async function rebindPlanningChatRepo(
     const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
     const conversationDeps = {
       ...deps,
+      planDoctorScriptPath: deps.planDoctorScriptPath,
       workingDir: provisioned.worktreePath,
       mcpConfigPath: planningMcpConfigPath(provisioned.worktreePath),
     };
@@ -1199,8 +1546,11 @@ export async function rebindPlanningChatRepo(
     session.conversation = conversation;
 
     if (decision.action === 'invalidate_and_block_submit') {
+      session.conversation.discardApprovedPlanningDraft();
       session.draftPlanSummary = undefined;
       session.draftPlanText = undefined;
+      session.planningDraftId = undefined;
+      session.planningDraftHash = undefined;
       if (session.status === 'draft_ready') {
         session.status = 'still_discussing';
       }
@@ -1302,7 +1652,12 @@ export async function restorePlanningChatSessions(
       }
     }
     const conversationDeps = restoredWorktreePath
-      ? { ...deps, workingDir: restoredWorktreePath, mcpConfigPath: planningMcpConfigPath(restoredWorktreePath) }
+      ? {
+          ...deps,
+          planDoctorScriptPath: deps.planDoctorScriptPath,
+          workingDir: restoredWorktreePath,
+          mcpConfigPath: planningMcpConfigPath(restoredWorktreePath),
+        }
       : deps;
 
     const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver, { conversationalPlanning: true }));
@@ -1324,6 +1679,8 @@ export async function restorePlanningChatSessions(
       worktreeBranch: record.worktreeBranch,
       draftPlanSummary: record.draftPlanSummary,
       draftPlanText: record.draftPlanText,
+      planningDraftId: record.planningDraftId,
+      planningDraftHash: record.planningDraftHash,
       submittedWorkflowId: record.submittedWorkflowId,
       submittedPlanName: record.submittedPlanName,
       terminalMode: record.terminalMode ?? 'chat',
@@ -1332,6 +1689,9 @@ export async function restorePlanningChatSessions(
       terminalExitCode: record.terminalExitCode,
       terminalOutputSnapshot: record.terminalOutputSnapshot ?? '',
       terminalUpdatedAt: record.terminalUpdatedAt,
+      activeTurnId: record.activeTurnId,
+      activeTurnStatus: record.activeTurnStatus,
+      activeTurnError: record.activeTurnError,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       nextMessageId,
@@ -1343,17 +1703,29 @@ export async function restorePlanningChatSessions(
         appendSessionMessage(
           session,
           'system',
-          'Planner was interrupted before it could answer. Send another message to continue.',
+          'Planner was interrupted before it could answer.',
           'error',
         );
+        session.activeTurnId = record.activeTurnId ?? randomUUID();
+        session.activeTurnStatus = 'failed';
+        session.activeTurnError = 'Planner was interrupted before it could answer.';
       }
       shouldPersist = true;
     }
 
     if (session.status === 'draft_ready') {
-      if (!session.draftPlanText) {
+      const restoredApproved = conversation.approvedPlanningDraft;
+      const immutableDraftMissing = Boolean(session.planningDraftId)
+        && (!restoredApproved
+          || restoredApproved.id !== session.planningDraftId
+          || restoredApproved.contentHash !== session.planningDraftHash
+          || restoredApproved.planText !== session.draftPlanText);
+      if (!session.draftPlanText || immutableDraftMissing) {
         session.status = 'still_discussing';
         session.draftPlanSummary = undefined;
+        session.draftPlanText = undefined;
+        session.planningDraftId = undefined;
+        session.planningDraftHash = undefined;
         appendSessionMessage(
           session,
           'system',
@@ -1361,7 +1733,7 @@ export async function restorePlanningChatSessions(
           'error',
         );
         shouldPersist = true;
-      } else if (!session.draftPlanSummary) {
+      } else {
         const restoredSummary = summarizePlanText(session.draftPlanText);
         if (!restoredSummary) {
           session.status = 'still_discussing';
@@ -1373,10 +1745,11 @@ export async function restorePlanningChatSessions(
             'The saved draft could not be restored. Ask the planner to draft it again.',
             'error',
           );
-        } else {
+          shouldPersist = true;
+        } else if (JSON.stringify(session.draftPlanSummary) !== JSON.stringify(restoredSummary)) {
           session.draftPlanSummary = restoredSummary;
+          shouldPersist = true;
         }
-        shouldPersist = true;
       }
     }
 

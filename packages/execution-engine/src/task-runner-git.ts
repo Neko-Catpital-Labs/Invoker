@@ -23,6 +23,8 @@ import { homedir } from 'node:os';
 import type { Logger } from '@invoker/contracts';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { spawnLocalProvisioning } from './local-provisioning.js';
+import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
 import { retryTransientGitHubCli } from './git-utils.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
@@ -56,6 +58,7 @@ export interface CreateMergeWorktreeContext {
   cwd: string;
   logger: Logger;
   ensureRepoMirrorPath: (repoUrl: string) => Promise<string | undefined>;
+  provisionCommandFor?: (repoUrl: string | undefined) => string;
 }
 
 function getGitOperationTimeoutMs(): number {
@@ -284,6 +287,24 @@ export async function createMergeWorktree(
     );
   }
   await execGitIn(['checkout', '--detach', refSha], clonePath);
+  const provisionCommand = ctx.provisionCommandFor?.(repoUrl) ?? '';
+  if (provisionCommand.trim()) {
+    ctx.logger.info(`[createMergeWorktree] Provisioning merge clone ${clonePath} for ${repoUrl ?? ctx.cwd}`);
+  } else {
+    ctx.logger.info(`[createMergeWorktree] No provisioning command configured for ${repoUrl ?? ctx.cwd}; merge clone ${clonePath} not provisioned`);
+  }
+  try {
+    await spawnLocalProvisioning({
+      command: provisionCommand,
+      cwd: clonePath,
+      traceLabel: 'createMergeWorktree.provision',
+      failurePrefix: 'Merge clone provisioning failed:',
+      timeoutMs: getExecutorStartTimeoutMs(),
+    }).completion;
+  } catch (error) {
+    await removeMergeWorktree(clonePath, ctx.logger);
+    throw error;
+  }
   return clonePath;
 }
 

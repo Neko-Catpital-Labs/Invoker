@@ -329,4 +329,65 @@ describe('applyGraphMutation', () => {
     expect(cRemap).toBeLessThan(bStale);
     expect(bStale).toBeLessThan(fixCreated);
   });
+
+  it('rejects pool-routed runnerKind without poolId at graph mutation', () => {
+    orchestrator.loadPlan({
+      name: 'test',
+      tasks: [{ id: 'A', description: 'A', command: 'echo A' }],
+    });
+    orchestrator.startExecution();
+
+    const s = (l: string) => sid(orchestrator, 0, l);
+    const wfId = orchestrator.getTask(s('A'))!.config.workflowId!;
+
+    expect(() =>
+      applyMutation(orchestrator, {
+        sourceNodeId: s('A'),
+        sourceDisposition: 'complete',
+        newNodes: [
+          {
+            id: s('exp-bad'),
+            description: 'Pool stamp without poolId',
+            dependencies: [s('A')],
+            workflowId: wfId,
+            runnerKind: 'ssh',
+          },
+        ],
+        outputNodeId: s('exp-bad'),
+      }),
+    ).toThrow(/runnerKind=ssh but no poolId/);
+  });
+
+  it.each([
+    { label: 'isMergeNode=true with runnerKind omitted', isMergeNode: true },
+    { label: 'runnerKind=merge with isMergeNode=false', runnerKind: 'merge' as const, isMergeNode: false },
+  ])('repro: normalizes merge fields for $label', ({ runnerKind, isMergeNode }) => {
+    orchestrator.loadPlan({
+      name: `merge-invariant-${String(isMergeNode)}-${runnerKind ?? 'omitted'}`,
+      tasks: [{ id: 'A', description: 'A', command: 'echo A' }],
+    });
+    orchestrator.startExecution();
+
+    const sourceId = orchestrator.getAllTasks().find((task) => !task.config.isMergeNode)!.id;
+    const workflowId = orchestrator.getTask(sourceId)!.config.workflowId!;
+    const createdId = `${sourceId}-merge-mismatch`;
+
+    applyMutation(orchestrator, {
+      sourceNodeId: sourceId,
+      sourceDisposition: 'complete',
+      newNodes: [{
+        id: createdId,
+        description: 'Mismatched merge fields',
+        dependencies: [sourceId],
+        workflowId,
+        runnerKind,
+        isMergeNode,
+      }],
+      outputNodeId: createdId,
+    });
+
+    const created = orchestrator.getTask(createdId)!;
+    expect(created.config.isMergeNode).toBe(true);
+    expect(created.config.runnerKind).toBe('merge');
+  });
 });
