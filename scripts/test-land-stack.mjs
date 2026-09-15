@@ -131,6 +131,24 @@ test('queue targets include the whole open stack in order', () => {
   assert.deepEqual(targets.map((pr) => pr.number), [2174, 2175]);
 });
 
+test('every direct admin-bypass label site is guarded by the central policy', () => {
+  const landSource = readFileSync(new URL('./land-stack.mjs', import.meta.url), 'utf8');
+  const cronSource = readFileSync(new URL('./cron-pr-auto-label.sh', import.meta.url), 'utf8');
+  const dailyReleaseSource = readFileSync(new URL('./open-daily-release-bump-pr.sh', import.meta.url), 'utf8');
+  assert.equal((landSource.match(/labels\[\]=admin-bypass/g) ?? []).length, 1);
+  assert.equal((cronSource.match(/--add-label admin-bypass/g) ?? []).length, 1);
+  assert.equal((dailyReleaseSource.match(/--add-label admin-bypass/g) ?? []).length, 1);
+  assert.match(
+    landSource,
+    /checkGuardedBehaviorApprovalForPr\([\s\S]*?\n[\s\S]*?addAdminBypassLabel\(pr\.number\)/,
+  );
+  assert.match(
+    cronSource,
+    /guarded_bypass_is_eligible \"\$num\"[\s\S]*?--add-label admin-bypass/,
+  );
+  assert.match(dailyReleaseSource, /guarded-behavior-approval\.mjs[\s\S]*?--add-label admin-bypass/);
+});
+
 function runCli(prNumbers, { diffs = {}, reviews = {} } = {}) {
   const tmp = mkdtempSync(join(tmpdir(), 'land-stack-test-'));
   const bin = join(tmp, 'bin');
