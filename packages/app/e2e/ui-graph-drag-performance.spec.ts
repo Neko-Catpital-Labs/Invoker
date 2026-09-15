@@ -20,6 +20,7 @@ const UPDATES_PER_BURST = 16;
 const UPDATE_BURST_DELAY_MS = 50;
 const UPDATE_START_DELAY_MS = 250;
 const MIN_FRAME_COUNT = 35;
+const MIN_FRAME_COUNT_WITH_UPDATES = 30;
 const MAX_P95_FRAME_GAP_MS = 80;
 const MAX_P95_FRAME_GAP_WITH_UPDATES_MS = 220;
 const MAX_FRAME_GAP_MS = 250;
@@ -28,6 +29,10 @@ const MAX_FIRST_TRANSFORM_MS = 600;
 const MAX_RENDERER_EVENT_LOOP_LAG_MS = 1000;
 const MAX_RENDERER_LONG_TASK_MS = 1500;
 const MAX_TASK_DELTA_BATCH_SIZE = 250;
+const GRAPH_SETTLE_SAMPLE_MS = 1_000;
+const GRAPH_SETTLE_MAX_FRAME_GAP_MS = 100;
+const GRAPH_SETTLE_MIN_FRAME_COUNT = 35;
+const GRAPH_SETTLE_TIMEOUT_MS = 15_000;
 
 const DRAG_PERF_BUDGETS = {
   minFrameCount: MIN_FRAME_COUNT,
@@ -42,6 +47,7 @@ const DRAG_PERF_BUDGETS = {
 
 const DRAG_PERF_BUDGETS_WITH_UPDATES = {
   ...DRAG_PERF_BUDGETS,
+  minFrameCount: MIN_FRAME_COUNT_WITH_UPDATES,
   maxP95FrameGapMs: MAX_P95_FRAME_GAP_WITH_UPDATES_MS,
 };
 
@@ -116,6 +122,57 @@ async function seedLargeWorkflowGraph(page: Page): Promise<void> {
   await dismissKnownOverlays(page);
   await page.getByRole('button', { name: 'Refresh' }).dispatchEvent('click', { bubbles: true, cancelable: true });
   await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 30_000 });
+  await waitForGraphRendererSettle(page);
+}
+
+async function waitForGraphRendererSettle(page: Page): Promise<void> {
+  const deadline = Date.now() + GRAPH_SETTLE_TIMEOUT_MS;
+  let lastSample: { frameCount: number; maxFrameGapMs: number; durationMs: number } | null = null;
+
+  while (Date.now() < deadline) {
+    lastSample = await page.evaluate(async ({ durationMs }) => {
+      const startedAt = performance.now();
+      const frames: number[] = [];
+      await new Promise<void>((resolve) => {
+        const sample = (timestamp: number) => {
+          frames.push(timestamp);
+          if (timestamp - startedAt >= durationMs) {
+            resolve();
+            return;
+          }
+          requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+      const gaps: number[] = [];
+      for (let i = 1; i < frames.length; i += 1) {
+        gaps.push(frames[i] - frames[i - 1]);
+      }
+      return {
+        frameCount: frames.length,
+        maxFrameGapMs: Math.max(0, ...gaps),
+        durationMs: (frames.at(-1) ?? startedAt) - startedAt,
+      };
+    }, { durationMs: GRAPH_SETTLE_SAMPLE_MS });
+
+    if (
+      lastSample.frameCount >= GRAPH_SETTLE_MIN_FRAME_COUNT &&
+      lastSample.maxFrameGapMs <= GRAPH_SETTLE_MAX_FRAME_GAP_MS
+    ) {
+      return;
+    }
+
+    await page.waitForTimeout(100);
+  }
+
+  throw new Error(`Graph renderer did not settle before drag benchmark: ${JSON.stringify({
+    lastSample,
+    budgets: {
+      minFrameCount: GRAPH_SETTLE_MIN_FRAME_COUNT,
+      maxFrameGapMs: GRAPH_SETTLE_MAX_FRAME_GAP_MS,
+      timeoutMs: GRAPH_SETTLE_TIMEOUT_MS,
+    },
+  })}`);
 }
 
 async function findPaneDragStart(page: Page, paneSelector: string): Promise<DragStartPoint> {
