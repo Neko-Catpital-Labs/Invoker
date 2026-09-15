@@ -271,7 +271,6 @@ export async function assertRemoteRepoUrlCloneable(repoUrl: string): Promise<voi
   for (let attempt = 1; attempt <= REMOTE_CLONE_PROBE_ATTEMPTS; attempt += 1) {
     try {
       await execFilePromise('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
         timeout: REMOTE_CLONE_PROBE_TIMEOUT_MS,
       });
       return;
