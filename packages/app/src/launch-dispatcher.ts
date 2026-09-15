@@ -32,6 +32,7 @@ export type LaunchDispatcherPersistence = Pick<
   | 'listExecutionResourceLeasesByTask'
   | 'releaseExecutionResourceLease'
   | 'countAbandonedLaunchDispatchesForTask'
+  | 'loadLaunchDispatchByAttempt'
   | 'logEvent'
 > & {
   releaseExpiredExecutionResourceLeases?(nowIso?: string): number;
@@ -359,6 +360,7 @@ export class LaunchDispatcher {
           const now = Date.now();
           const stranded = this.orchestrator.getExecutableReadyTasks?.({ alreadyRefreshed: true })?.filter((task) => {
             if (task.status !== 'pending' || task.execution.phase === 'launching') return false;
+            if (this.hasLiveLaunchDispatchForSelectedAttempt(task)) return false;
             if (this.orchestrator?.isLaunchParked?.(task.id, now)) return false;
             return true;
           });
@@ -393,6 +395,26 @@ export class LaunchDispatcher {
         error: err instanceof Error ? err.message : String(err),
         module: 'launch-dispatcher',
       });
+    }
+  }
+
+  private hasLiveLaunchDispatchForSelectedAttempt(task: TaskState): boolean {
+    const attemptId = task.execution.selectedAttemptId?.trim();
+    if (!attemptId) return false;
+    try {
+      const dispatch = this.persistence.loadLaunchDispatchByAttempt(attemptId);
+      if (!dispatch) return false;
+      if (dispatch.taskId !== task.id) return false;
+      return (task.execution.generation ?? 0) === (dispatch.generation ?? 0);
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] selected attempt dispatch check failed; suppressing top-up', {
+        ownerId: this.ownerId,
+        taskId: task.id,
+        attemptId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+      return true;
     }
   }
 
