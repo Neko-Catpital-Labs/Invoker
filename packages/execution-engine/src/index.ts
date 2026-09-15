@@ -91,6 +91,7 @@ export * from './workers/reaper-worker.js';
 export * from './workers/requeue-worker.js';
 export * from './workers/workflow-resume-worker.js';
 export * from './workers/slack-bug-scan-worker.js';
+export * from './workers/workflow-cleanup-worker.js';
 export * from './workers/slack-bug-scan-scanner.js';
 export * from './workers/spend-circuit-breaker-worker.js';
 export * from './spend-attribution.js';
