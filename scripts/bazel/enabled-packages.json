@@ -1,11 +1,47 @@
 {
   "packages": [
-    "workflow-graph"
+    "workflow-graph",
+    "runtime-domain",
+    "slack-bug-scan",
+    "svc-api",
+    "contracts",
+    "execution-engine",
+    "surfaces",
+    "cli",
+    "data-store",
+    "slack-manager",
+    "runtime-adapters",
+    "runtime-service",
+    "planning-core",
+    "protocol",
+    "shell",
+    "transport",
+    "watcher",
+    "workflow-core",
+    "graph"
   ],
-  "quality": false,
+  "quality": true,
   "playwright": false,
   "packaging": false,
   "rbePilotPackages": [
-    "workflow-graph"
+    "workflow-graph",
+    "runtime-domain",
+    "slack-bug-scan",
+    "svc-api",
+    "contracts",
+    "execution-engine",
+    "surfaces",
+    "cli",
+    "data-store",
+    "slack-manager",
+    "runtime-adapters",
+    "runtime-service",
+    "planning-core",
+    "protocol",
+    "shell",
+    "transport",
+    "watcher",
+    "workflow-core",
+    "graph"
   ]
 }
