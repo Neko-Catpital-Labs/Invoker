@@ -1580,9 +1580,7 @@ export class Orchestrator {
           this.executorRoutingRules,
           this.availablePoolIds,
         );
-        taskConfig = resolvedRouting.poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID
-          ? { ...baseConfig, runnerKind: 'worktree' as const, poolId: resolvedRouting.poolId }
-          : { ...baseConfig, runnerKind: 'ssh' as const, poolId: resolvedRouting.poolId };
+        taskConfig = { ...baseConfig, poolId: resolvedRouting.poolId };
         resolvedRoutingByTaskId.set(scopedId, resolvedRouting.reason);
       }
       const task = createTaskState(
@@ -2990,9 +2988,7 @@ export class Orchestrator {
         executionModel: rt.executionModel ?? task.config.executionModel,
         maxTurns: rt.maxTurns ?? task.config.maxTurns,
       } as const;
-      const inheritedPoolId = task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh'
-        ? task.config.poolId
-        : BUILT_IN_LOCAL_EXECUTION_POOL_ID;
+      const inheritedPoolId = task.config.poolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID;
       // Replacement tasks inherit executor config from the parent task.
       // The switch narrows the config so TS accepts the correct variant.
       let rtConfig: TaskConfig;
@@ -3019,9 +3015,8 @@ export class Orchestrator {
         default:
           rtConfig = {
             ...rtBase,
-            runnerKind: 'worktree' as const,
             poolId: inheritedPoolId,
-            poolMemberId: task.config.runnerKind === 'worktree' ? task.config.poolMemberId : undefined,
+            poolMemberId: task.config.poolMemberId,
           };
           break;
       }
