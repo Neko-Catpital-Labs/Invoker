@@ -19,9 +19,11 @@ try:
         Ledger,
         MergifyQueueEvent,
         PrSnapshot,
+        RepairWorkflowEvidence,
         RepairPrereqStatus,
         StackExecutionPlan,
         StackGroup,
+        StackReportSection,
     )
 except ImportError:
     from mergify_admin_requeue_model import (
@@ -31,9 +33,11 @@ except ImportError:
         Ledger,
         MergifyQueueEvent,
         PrSnapshot,
+        RepairWorkflowEvidence,
         RepairPrereqStatus,
         StackExecutionPlan,
         StackGroup,
+        StackReportSection,
     )
 
 try:
@@ -1659,3 +1663,288 @@ def plan_stack_execution(
         prereq_status=facts.prereq_status,
         queue_only_noop_check=facts.queue_only_noop_check,
     )
+
+
+REPORT_REPAIR_KINDS = frozenset({"repair-check", "conflict-repair", "rebase-onto-master", "repair-bot-thread"})
+
+
+def stack_arrow(stack: StackGroup) -> str:
+    return " -> ".join(f"#{pr.number}" for pr in stack.prs)
+
+
+def _display_value(value: object) -> str:
+    text = str(value)
+    return text.replace("\n", " ").strip()
+
+
+def _json_value(value: object) -> str:
+    return json.dumps(str(value), sort_keys=True)
+
+
+def _repair_plan_name(kind: str, pr_number: int, head_sha: str, key: str) -> str:
+    if kind == "repair-check":
+        return repair_check_plan_name(pr_number, key, head_sha)
+    if kind == "conflict-repair":
+        return repair_conflict_plan_name(pr_number, head_sha)
+    if kind == "rebase-onto-master":
+        return rebase_onto_master_plan_name(pr_number, head_sha)
+    return repair_bot_thread_plan_name(pr_number, head_sha)
+
+
+def _repair_kind_key_for_action(action: Action) -> tuple[str, str] | None:
+    if action.kind == "repair_check":
+        if action.key.startswith("bot_review_thread:"):
+            return "repair-bot-thread", action.key.split(":", 1)[1]
+        return "repair-check", action.key
+    if action.kind == "rebase_onto_master":
+        return "rebase-onto-master", action.key
+    return None
+
+
+def _normalized_repair_row_kind(kind: str) -> tuple[str, str] | None:
+    if kind.endswith("-pending-settled"):
+        base = kind.removesuffix("-pending-settled")
+        return (base, "pending-settled") if base in REPORT_REPAIR_KINDS else None
+    if kind.endswith("-pending"):
+        base = kind.removesuffix("-pending")
+        return (base, "pending") if base in REPORT_REPAIR_KINDS else None
+    if kind.endswith("-settled"):
+        base = kind.removesuffix("-settled")
+        return (base, "settled") if base in REPORT_REPAIR_KINDS else None
+    return (kind, "submitted") if kind in REPORT_REPAIR_KINDS else None
+
+
+def _repair_row_note(phase: str, dispatch_state: str, workflow_id: str | None, meta: Mapping[str, object]) -> str | None:
+    if dispatch_state == "not-acknowledged" and meta.get("failurePhase") == "submission":
+        error = str(meta.get("error") or "").lower()
+        if "timeout" in error or "timed out" in error:
+            return "submission-timeout"
+        return "submission-not-acknowledged"
+    if dispatch_state == "acknowledged" and not workflow_id:
+        return "missing workflow id"
+    if phase == "pending" and not workflow_id:
+        return "awaiting submission acknowledgement; missing workflow id"
+    reason = meta.get("reason")
+    return str(reason) if reason else None
+
+
+def repair_workflow_evidence_for_stack(
+    stack: StackGroup,
+    ledger: Ledger,
+    max_repair_attempts: int,
+) -> tuple[RepairWorkflowEvidence, ...]:
+    current_heads = {pr.number: pr.head_ref_oid for pr in stack.prs}
+    evidence: list[RepairWorkflowEvidence] = []
+    for row in ledger.rows:
+        normalized = _normalized_repair_row_kind(str(row.get("kind") or ""))
+        if normalized is None:
+            continue
+        kind, phase = normalized
+        pr_number = int(row.get("pr", -1))
+        head_sha = str(row.get("headSha") or "")
+        if current_heads.get(pr_number) != head_sha:
+            continue
+        key = str(row.get("key") or "")
+        meta = row.get("meta") if isinstance(row.get("meta"), Mapping) else {}
+        workflow_id_value = meta.get("workflowId") if isinstance(meta, Mapping) else None
+        workflow_id = str(workflow_id_value) if workflow_id_value else None
+        dispatch_state = str(meta.get("dispatchState") or phase)
+        plan_name = str(meta.get("planName") or _repair_plan_name(kind, pr_number, head_sha, key))
+        evidence.append(
+            RepairWorkflowEvidence(
+                kind=kind,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                key=key,
+                plan_name=plan_name,
+                dispatch_state=dispatch_state,
+                workflow_id=workflow_id,
+                workflow_status=str(meta.get("workflowStatus")) if meta.get("workflowStatus") else None,
+                outcome_class=str(meta.get("outcomeClass")) if meta.get("outcomeClass") else None,
+                note=_repair_row_note(phase, dispatch_state, workflow_id, meta),
+                epoch=int(row.get("epoch", 0) or 0),
+                cap_attempts=count_code_repair_attempts(ledger, kind, pr_number, key),
+                cap_limit=max_repair_attempts,
+            )
+        )
+    return tuple(sorted(evidence, key=lambda item: (item.pr_number, item.kind, item.key, item.epoch)))
+
+
+def _format_evidence(evidence: RepairWorkflowEvidence) -> str:
+    parts = [
+        f"{evidence.kind} PR #{evidence.pr_number}",
+        f"key={_json_value(evidence.key)}",
+        f"plan={evidence.plan_name}",
+        f"dispatch={evidence.dispatch_state}",
+        f"workflow={evidence.workflow_id or 'missing'}",
+    ]
+    if evidence.workflow_status:
+        parts.append(f"status={evidence.workflow_status}")
+    if evidence.outcome_class:
+        parts.append(f"outcome={evidence.outcome_class}")
+    if evidence.cap_attempts is not None and evidence.cap_limit is not None:
+        parts.append(f"cap={evidence.cap_attempts}/{evidence.cap_limit}")
+    if evidence.note:
+        parts.append(f"note={evidence.note}")
+    return " ".join(parts)
+
+
+def _action_diagnosis(action: Action) -> str:
+    if action.kind == "comment_blocked":
+        return action.detail
+    return f"{action.kind}: {action.detail}"
+
+
+def _plan_diagnosis(plan: StackExecutionPlan) -> str:
+    if plan.actions:
+        return "; ".join(_action_diagnosis(action) for action in plan.actions)
+    reason = plan.wait_reason or "no-action"
+    blockers = []
+    for pr_summary in plan.summary.get("prs", []):
+        if not isinstance(pr_summary, Mapping):
+            continue
+        for blocker in pr_summary.get("blockers", []):
+            if isinstance(blocker, Mapping):
+                blockers.append(f"#{pr_summary.get('number')}: {blocker.get('detail')}")
+    if blockers:
+        return f"wait: {reason}; " + "; ".join(_display_value(item) for item in blockers)
+    return f"wait: {reason}"
+
+
+def _report_cap_lines(plan: StackExecutionPlan, ledger: Ledger, max_repair_attempts: int) -> tuple[str, ...]:
+    lines: list[str] = []
+    for pr_summary in plan.summary.get("prs", []):
+        if not isinstance(pr_summary, Mapping):
+            continue
+        pr_number = int(pr_summary.get("number") or 0)
+        head_sha = str(pr_summary.get("head_sha") or "")
+        for blocker in pr_summary.get("blockers", []):
+            if not isinstance(blocker, Mapping):
+                continue
+            kind = str(blocker.get("kind") or "")
+            key = str(blocker.get("key") or "")
+            if kind == "failed_check":
+                attempts = count_code_repair_attempts(ledger, "repair-check", pr_number, key)
+                lines.append(f"repair-check PR #{pr_number} key={_json_value(key)} cap={attempts}/{max_repair_attempts}")
+            elif kind == "conflict":
+                repair_key = f"rebase-onto-master:{pr_number}"
+                attempts = count_code_repair_attempts(ledger, "rebase-onto-master", pr_number, repair_key)
+                lines.append(f"rebase-onto-master PR #{pr_number} key={_json_value(repair_key)} cap={attempts}/{max_repair_attempts}")
+            elif kind == "bot_review_thread":
+                attempts = count_code_repair_attempts(ledger, "repair-bot-thread", pr_number, key)
+                lines.append(f"repair-bot-thread PR #{pr_number} key={_json_value(key)} cap={attempts}/{max_repair_attempts}")
+        if plan.actions:
+            for action in plan.actions:
+                normalized = _repair_kind_key_for_action(action)
+                if normalized is None or action.pr_number != pr_number:
+                    continue
+                action_kind, action_key = normalized
+                if action_kind == "rebase-onto-master":
+                    action_key = f"rebase-onto-master:{pr_number}"
+                attempts = count_code_repair_attempts(ledger, action_kind, pr_number, action_key)
+                line = f"{action_kind} PR #{pr_number} key={_json_value(action_key)} cap={attempts}/{max_repair_attempts}"
+                if line not in lines:
+                    lines.append(line)
+        del head_sha
+    return tuple(lines)
+
+
+def build_stack_report_sections(
+    stacks: Collection[StackGroup],
+    required_checks: Collection[str],
+    ledger: Ledger,
+    now_epoch: int,
+    open_pr_numbers: Collection[int],
+    open_pr_numbers_by_head: Mapping[str, Collection[int]],
+    max_requeue_attempts: int = 2,
+    max_repair_attempts: int = 3,
+    trunk: str = TRUNK,
+    stale_base_by_pr: Mapping[int, bool] | None = None,
+) -> tuple[StackReportSection, ...]:
+    sections: list[StackReportSection] = []
+    for stack in stacks:
+        plan = plan_stack_execution(
+            stack,
+            required_checks,
+            ledger,
+            now_epoch,
+            open_pr_numbers,
+            open_pr_numbers_by_head,
+            max_requeue_attempts,
+            max_repair_attempts,
+            trunk,
+            stale_base_by_pr,
+            None,
+            None,
+        )
+        root = stack.prs[0]
+        descendants = tuple(pr for pr in stack.prs[1:] if pr.state == "OPEN")
+        details = [
+            f"Stack: {stack_arrow(stack)}",
+            f"Bottom topology: {plan.summary.get('bottom_topology')}",
+            f"Bottom PR: #{plan.summary.get('bottom_pr')}" if plan.summary.get("bottom_pr") else "Bottom PR: none",
+            "Descendants: " + (", ".join(f"#{pr.number}" for pr in descendants) if descendants else "none"),
+        ]
+        if plan.summary.get("bottom_topology") == "external_open_base":
+            details.append(f"External base: root #{root.number} is based on {root.base_ref_name}")
+        if plan.prereq_status:
+            details.append(
+                "Prerequisite repair: "
+                f"check={_json_value(plan.prereq_status.check_name)} "
+                f"pr=#{plan.prereq_status.prereq_pr_number} "
+                f"branch={plan.prereq_status.prereq_branch or 'missing'} "
+                f"open={str(plan.prereq_status.is_open).lower()} "
+                f"needs_followup_requeue={str(plan.prereq_status.needs_followup_requeue).lower()}"
+            )
+        if plan.actions:
+            for action in plan.actions:
+                repair = _repair_kind_key_for_action(action)
+                if repair is not None:
+                    repair_kind, repair_key = repair
+                    details.append(
+                        "Planned repair: "
+                        f"{repair_kind} PR #{action.pr_number} "
+                        f"key={_json_value(repair_key)} "
+                        f"plan={_repair_plan_name(repair_kind, action.pr_number, root.head_ref_oid if action.pr_number == root.number else next(pr.head_ref_oid for pr in stack.prs if pr.number == action.pr_number), repair_key)}"
+                    )
+                else:
+                    details.append(f"Planned action: {action.kind} PR #{action.pr_number} key={_json_value(action.key)}")
+        else:
+            details.append(f"Wait reason: {plan.wait_reason or 'no-action'}")
+        blockers = []
+        for pr_summary in plan.summary.get("prs", []):
+            if not isinstance(pr_summary, Mapping):
+                continue
+            for blocker in pr_summary.get("blockers", []):
+                if isinstance(blocker, Mapping):
+                    blockers.append(
+                        f"#{pr_summary.get('number')} {blocker.get('kind')} key={_json_value(blocker.get('key'))}: {_display_value(blocker.get('detail'))}"
+                    )
+        details.append("Blockers: " + ("; ".join(blockers) if blockers else "none"))
+        cap_lines = _report_cap_lines(plan, ledger, max_repair_attempts)
+        details.append("Caps: " + ("; ".join(cap_lines) if cap_lines else "none"))
+        evidence = repair_workflow_evidence_for_stack(stack, ledger, max_repair_attempts)
+        details.append("Repair evidence: " + ("; ".join(_format_evidence(row) for row in evidence) if evidence else "none for current heads"))
+        sections.append(
+            StackReportSection(
+                stack_id=stack.stack_id,
+                stack_arrow=stack_arrow(stack),
+                root_pr_number=root.number,
+                diagnosis=_plan_diagnosis(plan),
+                details=tuple(details),
+            )
+        )
+    return tuple(sections)
+
+
+def render_stack_report(repo: str, sections: Collection[StackReportSection]) -> str:
+    lines = [f"Admin-bypass stack report for {repo}", "", "STACK | DIAGNOSIS", "----- | ---------"]
+    for section in sections:
+        lines.append(f"{section.stack_arrow} | {_display_value(section.diagnosis)}")
+    if not sections:
+        lines.append("(none) | no eligible admin-bypass stacks")
+    for section in sections:
+        lines.extend(["", f"Root #{section.root_pr_number} ({section.stack_id})"])
+        for detail in section.details:
+            lines.append(f"  {detail}")
+    return "\n".join(lines) + "\n"

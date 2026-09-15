@@ -26,10 +26,12 @@ try:
         REBASE_ONTO_MASTER_LEDGER_KIND,
         ClaimRepairFiling,
         ReleaseRepairFiling,
+        build_stack_report_sections,
         current_bottom_pr,
         mergify_check_state_sha,
         plan_stack_execution,
         repair_filing_kind_for_check,
+        render_stack_report,
     )
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
@@ -58,10 +60,12 @@ except ImportError:
         REBASE_ONTO_MASTER_LEDGER_KIND,
         ClaimRepairFiling,
         ReleaseRepairFiling,
+        build_stack_report_sections,
         current_bottom_pr,
         mergify_check_state_sha,
         plan_stack_execution,
         repair_filing_kind_for_check,
+        render_stack_report,
     )
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
@@ -521,6 +525,37 @@ def run_once(
     return 0
 
 
+def run_report(args: argparse.Namespace) -> int:
+    gh = GhClient()
+    try:
+        trunk, _labels, required_checks = resolve_rules_for_repo(args.repo, gh)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    logger = AdminBypassLogger()
+    ledger = Ledger(Path(args.state_file).expanduser())
+    loader = AdminBypassStackLoader(gh)
+    loaded = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
+    stacks = loaded.stacks
+    now = int(time.time())
+    stale_base_by_pr = compute_stale_base_by_pr(stacks, trunk, args.repo, gh, logger)
+    pr_by_number = {pr.number for stack in stacks for pr in stack.prs}
+    sections = build_stack_report_sections(
+        stacks,
+        required_checks,
+        ledger,
+        now,
+        pr_by_number,
+        loaded.open_pr_numbers_by_head,
+        args.max_requeue_attempts,
+        args.max_repair_attempts,
+        trunk,
+        stale_base_by_pr,
+    )
+    print(render_stack_report(args.repo, sections), end="")
+    return 0
+
+
 def run_loop(
     args: argparse.Namespace,
     claim_repair_filing: ClaimRepairFiling | None = None,
@@ -590,6 +625,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="Run one scan/action cycle and exit. Cron uses this.")
     mode.add_argument("--loop", action="store_true", help="Poll until no actionable stack remains.")
+    mode.add_argument("--report", action="store_true", help="Render a read-only stack, blocker, cap, and repair workflow report.")
     parser.add_argument("--poll-seconds", type=float, default=60, help="Seconds to wait between loop scans. Default: 60.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions; perform no GitHub mutations.")
     parser.add_argument("--repo", default="Neko-Catpital-Labs/Invoker", help="Default: Neko-Catpital-Labs/Invoker.")
@@ -607,4 +643,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--max-requeue-attempts", type=int, default=2, help="Default: 2 per PR/head/dequeue event.")
     parser.add_argument("--max-repair-attempts", type=int, default=3, help="Default: 3 per PR/head/blocker.")
     parser.add_argument("--json", action="store_true", help="Emit one JSON object per decision/action.")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.report and args.target_repos:
+        parser.error("--report cannot be combined with --target-repos; pass one --repo instead")
+    return args
