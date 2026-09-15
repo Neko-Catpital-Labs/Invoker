@@ -31,6 +31,8 @@ REPO_ROOT = exec_impl.REPO_ROOT
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    if args.report:
+        return exec_impl.run_report(args)
     target_repos = [repo.strip() for repo in args.target_repos.split(",") if repo.strip()]
     if target_repos:
         return exec_impl.run_cron_target_repos(

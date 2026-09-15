@@ -1967,5 +1967,152 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
         self.assertIsNone(action)
 
 
+class StackReport(PlannerTestCase):
+    def test_report_renders_multi_pr_chain_failed_check_cap_and_workflow_evidence(self):
+        ledger = self._ledger()
+        for idx in range(3):
+            ledger.record(
+                "repair-check",
+                101,
+                HEAD,
+                "build",
+                epoch=NOW - 30 + idx,
+                meta={
+                    "dispatchState": "acknowledged",
+                    "planName": f"admin-bypass-repair-check-pr-101-build-{idx}",
+                    "workflowId": f"wf-build-{idx}",
+                },
+            )
+            ledger.record(
+                "repair-check-settled",
+                101,
+                HEAD,
+                "build",
+                epoch=NOW - 20 + idx,
+                meta={"workflowId": f"wf-build-{idx}", "workflowStatus": "failed", "outcomeClass": "code"},
+            )
+        bottom = pr(
+            number=101,
+            labels=frozenset({"admin-bypass"}),
+            head_ref_name="stack/bottom",
+            checks={"build": check("failure")},
+        )
+        upper = pr(
+            number=102,
+            base_ref_name="stack/bottom",
+            head_ref_name="stack/top",
+            head_ref_oid="b" * 40,
+            labels=frozenset({"admin-bypass"}),
+        )
+        with unittest.mock.patch.object(
+            p,
+            "retry_decision",
+            return_value={"action": "needs-human", "attempts": 3, "crashed_on_infra": False},
+        ):
+            sections = p.build_stack_report_sections(
+                (m.StackGroup("stacked", (bottom, upper)),),
+                REQUIRED,
+                ledger,
+                NOW,
+                {101, 102},
+                {"stack/bottom": (101,), "stack/top": (102,)},
+                max_repair_attempts=3,
+            )
+        text = p.render_stack_report("owner/repo", sections)
+        self.assertIn("#101 -> #102 | required check failed: build. The retry cap was reached", text)
+        self.assertIn("Descendants: #102", text)
+        self.assertIn('Blockers: #101 failed_check key="build": required check failed: build', text)
+        self.assertIn('Caps: repair-check PR #101 key="build" cap=3/3', text)
+        self.assertIn("workflow=wf-build-2", text)
+        self.assertIn("status=failed", text)
+        self.assertIn("outcome=code", text)
+
+    def test_report_includes_conflict_rebase_plan_and_submission_timeout(self):
+        ledger = self._ledger()
+        ledger.record(
+            "rebase-onto-master-pending-settled",
+            201,
+            HEAD,
+            "rebase-onto-master:201",
+            epoch=NOW - 10,
+            meta={
+                "dispatchState": "not-acknowledged",
+                "failurePhase": "submission",
+                "planName": "admin-bypass-rebase-onto-master-pr-201-aaaaaaa",
+                "error": "timed out after 30s",
+            },
+        )
+        item = pr(
+            number=201,
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+        )
+        with unittest.mock.patch.object(
+            p,
+            "retry_decision",
+            return_value={"action": "file", "attempts": 0, "crashed_on_infra": False},
+        ):
+            sections = p.build_stack_report_sections(
+                (m.StackGroup("conflict", (item,)),),
+                REQUIRED,
+                ledger,
+                NOW,
+                {201},
+                {},
+                max_repair_attempts=3,
+            )
+        text = p.render_stack_report("owner/repo", sections)
+        self.assertIn("Planned repair: rebase-onto-master PR #201", text)
+        self.assertIn("plan=admin-bypass-rebase-onto-master-pr-201-aaaaaaa", text)
+        self.assertIn("note=submission-timeout", text)
+        self.assertIn("workflow=missing", text)
+
+    def test_report_marks_missing_workflow_id_on_acknowledged_repair(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-check",
+            301,
+            HEAD,
+            "build",
+            epoch=NOW - 10,
+            meta={"dispatchState": "acknowledged", "planName": "admin-bypass-repair-check-pr-301-build-aaaaaaa"},
+        )
+        item = pr(
+            number=301,
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+        )
+        with unittest.mock.patch.object(
+            p,
+            "retry_decision",
+            return_value={"action": "backoff", "attempts": 1, "crashed_on_infra": False},
+        ):
+            sections = p.build_stack_report_sections((m.StackGroup("missing-id", (item,)),), REQUIRED, ledger, NOW, {301}, {})
+        text = p.render_stack_report("owner/repo", sections)
+        self.assertIn("note=missing workflow id", text)
+        self.assertIn("workflow=missing", text)
+
+    def test_report_describes_external_base_owner(self):
+        ledger = self._ledger()
+        item = pr(
+            number=401,
+            base_ref_name="stack/external-base",
+            head_ref_name="stack/root",
+            labels=frozenset({"admin-bypass"}),
+        )
+        sections = p.build_stack_report_sections(
+            (m.StackGroup("external", (item,)),),
+            REQUIRED,
+            ledger,
+            NOW,
+            {401},
+            {"stack/external-base": (7001,)},
+        )
+        text = p.render_stack_report("owner/repo", sections)
+        self.assertIn("#401 | lowest open stack PR #401 is based on `stack/external-base`", text)
+        self.assertIn("External base: root #401 is based on stack/external-base", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
