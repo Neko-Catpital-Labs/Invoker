@@ -102,18 +102,12 @@ const { parse: parseYaml } = await importYaml(__dirname);
 
 const {
   getLabelSection,
+  parseFileListItems,
   validateChangeTypeItems,
-  validateSingleReviewUnitFocus,
+  validateSingleReviewUnitFiles,
 } = await import(resolveReviewUnitRulesModulePath(__dirname));
 
-function reviewFocusTexts(text) {
-  return [
-    getLabelSection(text, 'Review claim'),
-    getLabelSection(text, 'Slice rationale'),
-    getLabelSection(text, 'Implementation details'),
-    getLabelSection(text, 'Implementation'),
-  ].filter(Boolean);
-}
+const unchecked = [];
 
 function validateTask(task, enforceReviewUnits) {
   const errors = [];
@@ -124,18 +118,13 @@ function validateTask(task, enforceReviewUnits) {
   const description = typeof task.description === 'string' ? task.description : '';
   const prompt = typeof task.prompt === 'string' ? task.prompt : '';
 
-  errors.push(...validateSingleReviewUnitFocus({
-    context: `${context} description`,
-    texts: reviewFocusTexts(description),
-  }));
-  errors.push(...validateChangeTypeItems(getLabelSection(description, 'Change types'), `${context} description`));
-
-  if (prompt) {
-    errors.push(...validateSingleReviewUnitFocus({
-      context: `${context} prompt`,
-      texts: reviewFocusTexts(prompt),
-    }));
+  const files = parseFileListItems(getLabelSection(description, 'Files'));
+  if (files.length === 0) {
+    if (prompt) unchecked.push(`${context} lists no Files:, so its review unit was not checked`);
+  } else {
+    errors.push(...validateSingleReviewUnitFiles({ files, context: `${context} description` }));
   }
+  errors.push(...validateChangeTypeItems(getLabelSection(description, 'Change types'), `${context} description`));
 
   return errors;
 }
@@ -172,6 +161,9 @@ try {
       console.error(`  - ${error}`);
     }
     process.exit(1);
+  }
+  for (const note of unchecked) {
+    console.error(`Review unit lint UNCHECKED: ${note}`);
   }
   console.log(`Review unit lint passed: ${planPath}`);
 } catch (error) {
