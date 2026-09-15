@@ -113,6 +113,7 @@ export interface BaseEntry {
   heartbeatTimer?: ReturnType<typeof setInterval>;
   /** Timestamp when the heartbeat was started, for max duration enforcement. */
   heartbeatStartedAt?: number;
+  exitObservedAt?: number;
   /**
    * True while the child process has already closed but completion is intentionally
    * deferred (for example, remote finalize/push). Keeps heartbeats alive so the
@@ -377,6 +378,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     const emitIntervalHeartbeat = opts.emitIntervalHeartbeat ?? true;
 
     entry.heartbeatStartedAt = Date.now();
+    entry.exitObservedAt = undefined;
 
     entry.heartbeatTimer = setInterval(() => {
       if (entry.completed) {
@@ -387,6 +389,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
       if (childProcessHasExited(child) || child.killed) {
         if (isHeartbeatAliveDuringFinalize(entry, child)) {
+          this.emitHeartbeat(executionId);
+          return;
+        }
+        if (entry.exitObservedAt === undefined) {
+          entry.exitObservedAt = Date.now();
           this.emitHeartbeat(executionId);
           return;
         }
