@@ -1,6 +1,7 @@
 import { hostname, networkInterfaces } from 'node:os';
 
 import type { Logger } from '@invoker/contracts';
+import { Channels, type MessageBus } from '@invoker/transport';
 
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
@@ -255,6 +256,7 @@ export async function runCodexDailySpendGateTick(
 export interface SpendCircuitBreakerWorkerOptions extends SpendCircuitBreakerWorkerConfig {
   logger: Logger;
   store: SpendCircuitBreakerWorkerStore;
+  messageBus?: MessageBus;
 }
 
 export function createSpendCircuitBreakerWorker(options: SpendCircuitBreakerWorkerOptions): WorkerRuntime {
@@ -277,7 +279,19 @@ export function createSpendCircuitBreakerWorker(options: SpendCircuitBreakerWork
       ctx.signal?.throwIfAborted();
 
       await runCodexDailySpendGateTick(codexDailyGate, options.logger, now());
-      recordCodexSpendGateAlert(options.store, codexDailyGate.statePath ?? defaultCodexSpendGatePath());
+      const newAlert = recordCodexSpendGateAlert(options.store, codexDailyGate.statePath ?? defaultCodexSpendGatePath());
+      if (newAlert) {
+        options.messageBus?.publish(Channels.SURFACE_EVENT, {
+          type: 'alert',
+          alert: {
+            severity: 'critical',
+            source: SPEND_CIRCUIT_BREAKER_WORKER_KIND,
+            subject: 'Codex is switched off by the daily spend gate',
+            message: newAlert.message,
+            alertKey: newAlert.externalKey,
+          },
+        });
+      }
       ctx.signal?.throwIfAborted();
 
       if (!enabled || Object.keys(tokenBudgetByWorkerKind).length === 0) return;
@@ -320,11 +334,14 @@ export function createSpendCircuitBreakerWorker(options: SpendCircuitBreakerWork
   });
 }
 
-function recordCodexSpendGateAlert(store: WorkerDecisionStore, gatePath: string): void {
+function recordCodexSpendGateAlert(
+  store: WorkerDecisionStore,
+  gatePath: string,
+): { externalKey: string; message: string } | undefined {
   const trip = loadCodexSpendGateTrip(gatePath);
-  if (!trip) return;
+  if (!trip) return undefined;
   const externalKey = `alert-send:codex-spend-gate:${trip.trippedAt}`;
-  if (store.getWorkerAction?.(SPEND_CIRCUIT_BREAKER_WORKER_KIND, externalKey)) return;
+  if (store.getWorkerAction?.(SPEND_CIRCUIT_BREAKER_WORKER_KIND, externalKey)) return undefined;
   const message = codexSpendGateBlockMessage(trip, gatePath);
   recordWorkerDecisionRow(store, {
     workerKind: SPEND_CIRCUIT_BREAKER_WORKER_KIND,
@@ -343,6 +360,7 @@ function recordCodexSpendGateAlert(store: WorkerDecisionStore, gatePath: string)
       statePath: gatePath,
     },
   });
+  return { externalKey, message };
 }
 
 function defaultCodexSessionDir(): string {
@@ -363,6 +381,7 @@ export function registerSpendCircuitBreakerWorker(
       return createSpendCircuitBreakerWorker({
         logger: deps.logger,
         store: deps.store,
+        messageBus: deps.messageBus,
         enabled: config.enabled,
         windowMinutes: config.windowMinutes,
         tokenBudgetByWorkerKind: config.tokenBudgetByWorkerKind,
