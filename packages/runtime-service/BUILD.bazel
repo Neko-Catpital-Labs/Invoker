@@ -7,13 +7,15 @@ sh_binary(
     name = "build",
     srcs = ["//scripts/bazel:run_pnpm_filter.sh"],
     args = ["@invoker/runtime-service", "build"],
-    tags = ["no-sandbox", "local", "kind_tsup"],
+    data = glob(["**"], exclude = ["node_modules/**", "dist/**", "coverage/**", "BUILD.bazel"]),
+    tags = ["no-sandbox", "kind_tsup"],
 )
 
 sh_test(
     name = "test",
     srcs = ["//scripts/bazel:run_pnpm_filter.sh"],
     args = ["@invoker/runtime-service", "test"],
-    size = "medium",
-    tags = ["no-sandbox", "local", "kind_tsup"],
+    size = "large",
+    data = glob(["**"], exclude = ["node_modules/**", "dist/**", "coverage/**", "BUILD.bazel"]),
+    tags = ["no-sandbox", "kind_tsup"],
 )
