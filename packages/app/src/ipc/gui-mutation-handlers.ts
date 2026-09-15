@@ -289,6 +289,7 @@ type RendererTaskFeed = ReturnType<typeof createRendererTaskFeed>;
 type TaskGraphEventPublisher = ReturnType<typeof createTaskGraphEventPublisher>;
 
 export interface GuiMutationTaskActions {
+  scheduleRemoteRepoUrlProbes: (workflowIds: readonly string[]) => void;
   scheduleAutoFix: (taskId: string) => void;
   logAutoFixDebug: (taskId: string, phase: string, details?: Record<string, unknown>) => void;
   performDeleteWorkflow: (workflowId: string) => Promise<void>;
@@ -1204,6 +1205,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
 
 
   return {
+    scheduleRemoteRepoUrlProbes,
     scheduleAutoFix,
     logAutoFixDebug,
     performDeleteWorkflow,
@@ -1396,7 +1398,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       taskHandles,
       staged: options?.staged ?? true,
     });
-    scheduleRemoteRepoUrlProbes(result.workflowIds ?? [result.workflowId]);
+    actions.scheduleRemoteRepoUrlProbes(result.workflowIds ?? [result.workflowId]);
     return result;
   }
 
