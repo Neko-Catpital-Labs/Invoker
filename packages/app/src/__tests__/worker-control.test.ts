@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_APPROVE_WORKER_KIND,
+  WORKFLOW_CLEANUP_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
   CLAUDE_OAUTH_REFRESH_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
@@ -179,13 +180,14 @@ function controller(
 }
 
 describe('autoStartedOwnerWorkerKindsForConfig', () => {
-  it('always-on list is pr-status, claude-oauth-refresh, disk-headroom, autoapprove', () => {
+  it('always-on list includes workflow cleanup', () => {
     expect(autoStartedOwnerWorkerKinds()).toEqual([...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS]);
     expect(ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS).toEqual([
       PR_STATUS_WORKER_KIND,
       CLAUDE_OAUTH_REFRESH_WORKER_KIND,
       DISK_HEADROOM_WORKER_KIND,
       AUTO_APPROVE_WORKER_KIND,
+      WORKFLOW_CLEANUP_WORKER_KIND,
     ]);
   });
 
