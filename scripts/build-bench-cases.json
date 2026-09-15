@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "stageId": "01-benchmark",
+  "reviewLane": "policy",
+  "reviewUnit": "tooling-policy",
+  "originalReference": "929f7da88df726b846926f103fad94b600212648",
+  "suite": "migration",
+  "cachePolicy": "task-local caches; benchmark clones only; no user checkout cleaning",
+  "recipe": {
+    "baselineCommand": [
+      "node",
+      "scripts/build-bench.mjs",
+      "baseline",
+      "--ref",
+      "929f7da88df726b846926f103fad94b600212648",
+      "--suite",
+      "migration",
+      "--repetitions",
+      "7"
+    ],
+    "statusPolicy": "Record baseline only. Failed, skipped, stale, missing-report or mismatched-scope cases are disqualified from speedup claims.",
+    "comparisonPolicy": "Compare identical case ids, artifacts and test ids only; seven samples report median/min/max/MAD and do not report p95."
+  },
+  "cases": [
+    {
+      "id": "workflow-graph-build",
+      "suite": "migration",
+      "kind": "build",
+      "description": "Workflow graph package build.",
+      "cwd": ".",
+      "argv": ["pnpm", "--filter", "@invoker/workflow-graph", "build"],
+      "artifacts": ["packages/workflow-graph/dist"]
+    },
+    {
+      "id": "ci-four-package-artifact-build",
+      "suite": "migration",
+      "kind": "build",
+      "description": "Four-package CI artifact build boundary.",
+      "cwd": ".",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@invoker/contracts",
+        "--filter",
+        "@invoker/surfaces",
+        "--filter",
+        "@invoker/transport",
+        "--filter",
+        "@invoker/app",
+        "build"
+      ],
+      "artifacts": [
+        "packages/contracts/dist",
+        "packages/surfaces/dist",
+        "packages/transport/dist",
+        "packages/app/dist"
+      ]
+    },
+    {
+      "id": "required-package-builds",
+      "suite": "migration",
+      "kind": "build",
+      "description": "Required package build lane used by check:required-builds.",
+      "cwd": ".",
+      "argv": ["bash", "scripts/required-builds.sh"],
+      "artifacts": [
+        "packages/contracts/dist",
+        "packages/surfaces/dist",
+        "packages/transport/dist"
+      ]
+    },
+    {
+      "id": "root-typecheck",
+      "suite": "migration",
+      "kind": "typecheck",
+      "description": "Root TypeScript typecheck.",
+      "cwd": ".",
+      "argv": ["pnpm", "run", "check:types"],
+      "artifacts": []
+    },
+    {
+      "id": "workspace-package-builds",
+      "suite": "migration",
+      "kind": "build",
+      "description": "Workspace recursive package build command.",
+      "cwd": ".",
+      "argv": ["pnpm", "-r", "build"],
+      "artifacts": ["packages/*/dist"]
+    },
+    {
+      "id": "workspace-package-vitest",
+      "suite": "migration",
+      "kind": "workspace-package-test",
+      "description": "Workspace package test command. Literal no-op package test scripts are recorded in inventory as no tests.",
+      "cwd": ".",
+      "argv": ["pnpm", "-r", "--workspace-concurrency=4", "test", "--"],
+      "artifacts": []
+    }
+  ]
+}
