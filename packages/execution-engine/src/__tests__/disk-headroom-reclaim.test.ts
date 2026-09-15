@@ -781,6 +781,30 @@ describe('disk-headroom cleanup honors the in-use mark', () => {
     expectOnlyFreshSurvived(home);
   });
 
+  it('fails closed when the generated remote script cannot inspect an in-use mark path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-in-use-remote-enotdir-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const isolatedTmp = join(root, 'scratch-tmp');
+    mkdirSync(isolatedTmp, { recursive: true });
+    mkdirSync(join(home, 'worktrees', 'err-hash', 'wt'), { recursive: true });
+    writeFileSync(join(home, 'worktrees', 'err-hash', 'wt', 'file.txt'), 'x');
+    mkdirSync(join(home, 'in-use'), { recursive: true });
+    writeFileSync(join(home, 'in-use', 'worktrees'), 'not-a-directory');
+
+    const scriptPath = join(root, 'cleanup.sh');
+    writeFileSync(scriptPath, buildInvokerHomeCleanupScript(home, [], 'critical'));
+    const result = spawnSync('bash', [scriptPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TMPDIR: isolatedTmp },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('in-use mark inspection failed');
+    expect(result.stdout).toContain('(in-use mark inspection failed)');
+    expect(existsSync(join(home, 'worktrees', 'err-hash', 'wt', 'file.txt'))).toBe(true);
+  });
+
   it('keeps a freshly marked workspace during a cleanup on this machine', async () => {
     const root = mkdtempSync(join(tmpdir(), 'invoker-in-use-local-'));
     tempDirs.push(root);
