@@ -64,4 +64,16 @@ describe('auto-fix circuit breaker', () => {
     const state = loadCircuitBreakerState(path);
     expect(isCircuitBreakerPaused(state, Date.now())).toBe(false);
   });
+
+  it('canonicalizes an unknown persisted reason and preserves it as diagnostic detail', () => {
+    writeFileSync(path, JSON.stringify({
+      pausedUntil: '2099-01-01T00:00:00.000Z',
+      reason: 'perf-beachball-hold-until-fix',
+      triggeredAt: '2026-09-13T04:44:37.000Z',
+    }));
+
+    const state = loadCircuitBreakerState(path);
+    expect(state.reason).toBe('usage-limit');
+    expect(state.details).toEqual({ legacyReason: 'perf-beachball-hold-until-fix' });
+  });
 });
