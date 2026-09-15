@@ -338,7 +338,7 @@ function submitRegisteredOwnerWorkerMutation(
   priority: WorkflowMutationPriority,
   channel: string,
   mutationArgs: unknown[],
-  options?: { deferDrain?: boolean },
+  options?: { deferDrain?: boolean; coalesceGlobally?: boolean },
 ): number {
   if (!workflowMutationCoordinator) {
     throw new Error('Workflow mutation coordinator is unavailable');
@@ -346,8 +346,25 @@ function submitRegisteredOwnerWorkerMutation(
   if (!workflowMutationDispatcher.has(channel)) {
     throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
   }
+  const coordinator = options?.coalesceGlobally
+    ? {
+      submit: (
+        id: string,
+        mutationPriority: WorkflowMutationPriority,
+        mutationChannel: string,
+        args: unknown[],
+        submitOptions?: { deferDrain?: boolean },
+      ) => workflowMutationCoordinator!.submitGlobalRecovery(
+        id,
+        mutationPriority,
+        mutationChannel,
+        args,
+        submitOptions,
+      ),
+    }
+    : workflowMutationCoordinator;
   const result = submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, channel, mutationArgs, {
-    coordinator: workflowMutationCoordinator,
+    coordinator,
     workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
     logger,
     deferDrain: options?.deferDrain,
@@ -409,6 +426,16 @@ function buildRegisteredOwnerWorkerDeps(
     store,
     submitter: {
       submit: submitRegisteredOwnerWorkerMutation,
+      submitGlobalRecovery: (
+        workflowId: string,
+        priority: WorkflowMutationPriority,
+        channel: string,
+        mutationArgs: unknown[],
+        options?: { deferDrain?: boolean },
+      ) => submitRegisteredOwnerWorkerMutation(workflowId, priority, channel, mutationArgs, {
+        ...options,
+        coalesceGlobally: true,
+      }),
     },
     logger,
     messageBus,
