@@ -348,7 +348,7 @@ describe('Timeline view (component)', () => {
     });
   });
 
-  it('renders worker events as one chronological list and preserves task mode behavior', async () => {
+  async function renderPagedWorkerTimeline(): Promise<void> {
     const alphaOlder = makeWorkerAction({
       id: 'alpha-older',
       workerKind: 'autofix',
@@ -435,6 +435,10 @@ describe('Timeline view (component)', () => {
         'worker-timeline-action-alpha-inspect-launched',
       ]);
     });
+  }
+
+  it('renders worker events as one chronological list and opens the selected task', async () => {
+    await renderPagedWorkerTimeline();
 
     expect(screen.getByTestId('worker-timeline-row-alpha-repair-launched')).toHaveTextContent('Autofix');
     expect(screen.getByTestId('worker-timeline-row-alpha-repair-launched')).toHaveTextContent('Repair');
@@ -449,6 +453,10 @@ describe('Timeline view (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('First test task');
     });
+  });
+
+  it('filters worker events, loads older actions, and preserves task mode behavior', async () => {
+    await renderPagedWorkerTimeline();
 
     fireEvent.click(screen.getByTestId('worker-timeline-filter-autofix'));
 
