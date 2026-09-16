@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
 import http from 'node:http';
-import { assertRepoUrlCloneable } from '../plan-parser.js';
+import { assertRemoteRepoUrlCloneable } from '../plan-parser.js';
 
 // Real-network repro, no mocks anywhere: a minimal real HTTP server
 // fronting `git http-backend` (the same CGI program a real git host runs)
@@ -14,9 +14,8 @@ import { assertRepoUrlCloneable } from '../plan-parser.js';
 // ECONNREFUSED against a real socket on a real https-scheme URL -- matching
 // the actual protocol (https://github.com/...) and the same failure shape
 // that stuck PR #11153's repair claim on 2026-08-28. The daemon's start
-// timing is driven by a separate OS process, not a Node timer, because
-// assertRepoUrlCloneable is fully synchronous (execFileSync + Atomics.wait)
-// and never yields to the event loop.
+// timing is driven by a separate OS process to keep the server startup
+// independent from the probe's retry schedule.
 async function freePort(): Promise<number> {
   const srv = net.createServer();
   await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
@@ -91,7 +90,7 @@ function startRealGitHttpServer(rootDir: string, port: number): http.Server {
   return server;
 }
 
-describe('assertRepoUrlCloneable against a real transient network blip', () => {
+describe('assertRemoteRepoUrlCloneable against a real transient network blip', () => {
   it('survives a real git HTTP server that starts 200ms late (first attempt gets real ECONNREFUSED)', async () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'clone-probe-repro-'));
     makeBareRepo(rootDir);
@@ -142,7 +141,7 @@ describe('assertRepoUrlCloneable against a real transient network blip', () => {
     delayed.unref();
 
     try {
-      expect(() => assertRepoUrlCloneable(url)).not.toThrow();
+      await expect(assertRemoteRepoUrlCloneable(url)).resolves.toBeUndefined();
     } finally {
       try {
         process.kill(-delayed.pid!, 'SIGKILL');
