@@ -237,12 +237,12 @@ export type ExecutorRoutingReason =
   | { type: 'scratch' };
 
 export function buildExecutorRoutedPayload(
-  runnerKind: RunnerKind | undefined,
+  runnerKind: RunnerKind,
   poolId: string | undefined,
   reason: ExecutorRoutingReason,
 ): Record<string, unknown> {
   return {
-    ...(runnerKind ? { runnerKind } : {}),
+    runnerKind,
     ...(poolId ? { poolId } : {}),
     reason,
   };
