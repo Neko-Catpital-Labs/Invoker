@@ -7,6 +7,7 @@ import { E2E_BROWSER_REGISTRY_ENV } from './e2e/fixtures/browser-process-registr
 const workers = Number(process.env.INVOKER_PLAYWRIGHT_WORKERS ?? (process.env.CI ? '1' : '2'));
 const retries = Number(process.env.INVOKER_PLAYWRIGHT_RETRIES ?? (process.env.CI ? '2' : '0'));
 const jsonOutputFile = process.env.INVOKER_PLAYWRIGHT_JSON_OUTPUT;
+process.env.INVOKER_REPO_ROOT = path.resolve(__dirname, '..', '..');
 process.env[E2E_BROWSER_REGISTRY_ENV] ??= path.join(
   mkdtempSync(path.join(tmpdir(), 'invoker-e2e-browser-registry-')),
   'user-data-dirs.txt',
