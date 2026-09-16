@@ -4393,7 +4393,7 @@ describe('Orchestrator', () => {
 
       const task = orchestrator.getTask('t1');
       expect(task?.config.poolId).toBe('mixed-local-ssh');
-      expect(task?.config.runnerKind).toBe('ssh');
+      expect(task?.config.runnerKind).toBeUndefined();
       expect(task?.config.poolMemberId).toBeUndefined();
       expect(persistence.getTaskEntry('t1')?.task.config.poolId).toBe('mixed-local-ssh');
     });
@@ -4474,6 +4474,31 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('running');
       expect(task.config.poolId).toBe('mixed-local-ssh');
       expect(task.execution.generation).toBeGreaterThan(before);
+    });
+
+    it('keeps a pool-only task in its pool when its executor is set', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        logger: consoleLogger,
+        availablePoolIds: ['mixed-local-ssh'],
+      });
+      orchestrator.loadPlan({
+        name: 'edit-type-pool-only',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'mixed-local-ssh' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      expect(orchestrator.getTask('t1')!.config.runnerKind).toBeUndefined();
+
+      orchestrator.editTaskType('t1', 'worktree');
+
+      const task = orchestrator.getTask('t1')!;
+      expect(task.config.runnerKind).toBe('worktree');
+      expect(task.config.poolId).toBe('mixed-local-ssh');
     });
   });
 

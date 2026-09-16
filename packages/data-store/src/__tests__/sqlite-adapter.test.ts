@@ -1048,13 +1048,46 @@ describe('SQLiteAdapter', () => {
       )).toThrow('tasks executor routing invariant violated');
       expect(() => db.run(
         `INSERT INTO tasks (id, workflow_id, description, runner_kind, pool_id)
-         VALUES ('bad-null-kind-insert', 'wf-1', 'no runner kind', NULL, 'local-worktree')`,
+         VALUES ('bad-null-kind-insert', 'wf-1', 'no runner kind or pool', NULL, NULL)`,
       )).toThrow('tasks executor routing invariant violated');
+      expect(() => db.run(
+        `INSERT INTO tasks (id, workflow_id, description, runner_kind, pool_id, docker_image)
+         VALUES ('bad-pooled-docker-image', 'wf-1', 'pool with image', NULL, 'mixed-pool', 'node:22')`,
+      )).toThrow('tasks executor routing invariant violated');
+      expect(() => db.run(
+        `INSERT INTO tasks (id, workflow_id, description, runner_kind, pool_id)
+         VALUES ('pool-only-insert', 'wf-1', 'pool picks the runner', NULL, 'mixed-pool')`,
+      )).not.toThrow();
 
       adapter.saveTask('wf-1', makeTask('valid-task'));
       expect(() => db.run(
         `UPDATE tasks SET pool_id = NULL WHERE id = 'valid-task'`,
       )).toThrow('tasks executor routing invariant violated');
+    });
+
+    it('keeps a pool-only task without a runner kind across save, load, and reopen', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-pool-only-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.saveWorkflow(testWorkflow);
+        first.saveTask('wf-1', makeTask('pool-only', {
+          config: { command: 'echo pooled', poolId: 'mixed-pool', poolMemberId: 'member-a' },
+        }));
+        const saved = first.loadTask('pool-only');
+        expect(saved?.config).toMatchObject({ poolId: 'mixed-pool', poolMemberId: 'member-a' });
+        expect(saved?.config.runnerKind).toBeUndefined();
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const reloaded = reopened.loadTask('pool-only');
+        expect(reloaded?.config).toMatchObject({ poolId: 'mixed-pool', poolMemberId: 'member-a' });
+        expect(reloaded?.config.runnerKind).toBeUndefined();
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('backfills compatible legacy ordinary rows without changing lifecycle data', async () => {

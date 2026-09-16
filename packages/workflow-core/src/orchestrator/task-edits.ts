@@ -144,9 +144,7 @@ export function editTaskTypeImpl(
     host.cancelTask(taskId);
   }
 
-  const inheritedPoolId = task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh'
-    ? task.config.poolId
-    : BUILT_IN_LOCAL_EXECUTION_POOL_ID;
+  const inheritedPoolId = task.config.poolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID;
   const configPatch: NonNullable<TaskStateChanges['config']> = effectiveType === 'ssh'
     ? { runnerKind: 'ssh', poolId: inheritedPoolId, poolMemberId, dockerImage: undefined }
     : effectiveType === 'worktree'
@@ -189,7 +187,7 @@ export function editTaskPoolImpl(host: TaskEditHost, taskId: string, poolId: str
   const poolChanges: TaskStateChanges = {
     config: {
       poolId,
-      runnerKind: poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh',
+      runnerKind: undefined,
       poolMemberId: undefined,
     },
   };

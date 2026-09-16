@@ -113,19 +113,20 @@ export function migrateTaskExecutorPoolInvariant(exec: SqliteExecutor): void {
     );
     exec.run(
       `UPDATE tasks
-          SET runner_kind = CASE
-                WHEN COALESCE(TRIM(pool_id), '') = '' THEN 'worktree'
-                WHEN TRIM(pool_id) = ? THEN 'worktree'
-                ELSE 'ssh'
-              END,
-              pool_id = CASE
-                WHEN COALESCE(TRIM(pool_id), '') = '' THEN ?
-                ELSE TRIM(pool_id)
-              END
+          SET runner_kind = 'worktree',
+              pool_id = ?
         WHERE COALESCE(is_merge_node, 0) = 0
           AND docker_image IS NULL
-          AND (runner_kind IS NULL OR TRIM(runner_kind) = '')`,
-      [BUILT_IN_LOCAL_EXECUTION_POOL_ID, BUILT_IN_LOCAL_EXECUTION_POOL_ID],
+          AND (runner_kind IS NULL OR TRIM(runner_kind) = '')
+          AND COALESCE(TRIM(pool_id), '') = ''`,
+      [BUILT_IN_LOCAL_EXECUTION_POOL_ID],
+    );
+    exec.run(
+      `UPDATE tasks
+          SET runner_kind = NULL
+        WHERE COALESCE(is_merge_node, 0) = 0
+          AND docker_image IS NULL
+          AND TRIM(runner_kind) = ''`,
     );
     exec.run(
       `UPDATE tasks

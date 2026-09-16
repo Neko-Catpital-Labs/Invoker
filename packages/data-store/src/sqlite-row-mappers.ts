@@ -100,7 +100,13 @@ export function mapRowToTask(row: any): TaskState {
       config = { ...baseConfig, runnerKind };
       break;
     default:
-      config = { ...baseConfig, runnerKind };
+      config = row.pool_id
+        ? {
+            ...baseConfig,
+            poolId: row.pool_id,
+            ...((row.pool_member_id ?? undefined) ? { poolMemberId: row.pool_member_id } : {}),
+          }
+        : { ...baseConfig, runnerKind };
   }
   assertResolvedTaskConfig(config);
   return {
