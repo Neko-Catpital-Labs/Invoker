@@ -405,4 +405,23 @@ for (const [jobName, job] of Object.entries(jobs)) {
   );
 }
 
+assert(jobs['bazel-cache-pilot'], 'Missing bazel-cache-pilot job');
+assert(jobs['bazel-cache-pilot'].if === FULL_CI_GATE, 'bazel-cache-pilot must run only for full CI events');
+assert(
+  jobs['bazel-cache-pilot']['runs-on'] === 'ubuntu-latest',
+  'bazel-cache-pilot must use GitHub-hosted ubuntu-latest',
+);
+assert(jobs['bazel-rbe-pilot'], 'Missing bazel-rbe-pilot job');
+assert(jobs['bazel-rbe-pilot'].if === FULL_CI_GATE, 'bazel-rbe-pilot must run only for full CI events');
+assert(
+  jobs['bazel-rbe-pilot']['runs-on'] === 'ubuntu-latest',
+  'bazel-rbe-pilot must use GitHub-hosted ubuntu-latest',
+);
+for (const checkName of requiredChecks) {
+  assert(
+    !String(checkName).toLowerCase().includes('bazel'),
+    `Mergify must not require Bazel checks before stack-4 cutover, found ${checkName}`,
+  );
+}
+
 console.log('CI merge-queue policy is valid.');
