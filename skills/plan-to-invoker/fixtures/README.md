@@ -37,6 +37,8 @@ Positive fixtures demonstrate valid plan patterns:
 - **05-ui-change-with-visual-proof.yaml** - UI workflow that pairs visual proof with focused verification
 - **06-invoker-dogfood-mergify-stack.yaml** - Invoker-on-Invoker PR publication example with focused skill verification
 - **07-prompt-edit-layered-split-with-dormant.yaml** - Dependency-first layer split for prompt-edit bridge work, including a dormant activation slice
+- **11-entity-research-aggregate-fan-in.yaml** - Multi-extDep fan-in on shared trunk (carve-out from stacked_basebranch_default)
+- **12-hook-plan-with-readme.yaml** - Behavior slice in a non-Invoker repo whose README sits beside the hook's `detect.py` (lint treats it as part of the hook)
 - Implementation fixtures use focused verification by default. Full-suite gates are optional and risk-based, not a validator requirement.
 
 All positive fixtures are extracted from `references/examples.md` sections 1-4.
@@ -59,6 +61,7 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **anti-pattern-k-missing-review-compression.yaml** - Implementation task omits review-compression metadata (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-n-broad-autofix-policy-review-unit.yaml** - #1574-shaped auto-fix policy task combines scan, validation, duplicate suppression, and submit work (**fails `skill-doctor` review-unit lint**)
 - **anti-pattern-o-all-in-one-autofix-review-unit.yaml** - Original all-in-one auto-fix task combines ownership, policy, wakeups, and CLI activation (**fails `skill-doctor` review-unit lint**)
+- **anti-pattern-q-behavior-plus-unrelated-docs.yaml** - Hook behavior slice that also edits a README outside the hook's `detect.py` directory (**fails `skill-doctor` lint, not YAML schema**)
 
 ### Edge Cases (specific validation errors)
 

@@ -64,4 +64,30 @@ ACTUAL_VERSION="$("$PROJECT_DIR/node_modules/.bin/invoker-slack" --version)"
 [ -x "$PROJECT_DIR/node_modules/@neko-catpital-labs/invoker-slack/vendor/invoker-slack" ] \
   || fail "invoker-slack postinstall did not install vendor binary"
 
-echo "ok npm install yields working invoker-slack $VERSION"
+# The plan-doctor scripts ship inside this real npm install's own
+# vendor/skills/ (scripts/archive-slack-binary.sh's payload) with no
+# monorepo, no INVOKER_REPO_ROOT, and no ~/.invoker/bundled-skills.json
+# anywhere near it — the exact shape a cut invoker-slack binary has for
+# anyone who `npm install -g`'d it. Prove the doctor actually runs there,
+# not just that the binary and its vendor files exist.
+SLACK_INSTALL_ROOT="$PROJECT_DIR/node_modules/@neko-catpital-labs/invoker-slack"
+SLACK_DOCTOR="$SLACK_INSTALL_ROOT/vendor/skills/plan-to-invoker/scripts/skill-doctor.sh"
+[ -f "$SLACK_DOCTOR" ] || fail "npm install did not lay down $SLACK_DOCTOR"
+# Isolate HOME and INVOKER_DB_DIR under $SCRATCH: an inherited real
+# ~/.invoker/bundled-skills.json would let the doctor's manifest fallback
+# resolve yaml/scripts via the tester's own monorepo checkout, masking a
+# missing packaged dependency instead of proving the npm install stands alone.
+DOCTOR_HOME="$SCRATCH/doctor-home"
+mkdir -p "$DOCTOR_HOME"
+DOCTOR_OUTPUT="$(cd "$SCRATCH" && env -u INVOKER_REPO_ROOT HOME="$DOCTOR_HOME" INVOKER_DB_DIR="$DOCTOR_HOME/.invoker" bash "$SLACK_DOCTOR" --skip-assumptions "$ROOT/skills/plan-to-invoker/fixtures/positive/02-feature-implementation.yaml" 2>/dev/null || true)"
+for step in validate-plan lint-review-units; do
+  STATUS="$(printf '%s' "$DOCTOR_OUTPUT" | node -e '
+    const raw = require("node:fs").readFileSync(0, "utf8");
+    const report = JSON.parse(raw);
+    const check = report.checks.find((c) => c.stepId === process.argv[1]);
+    process.stdout.write(check ? String(check.status) : "missing");
+  ' "$step")"
+  [ "$STATUS" = "passed" ] || fail "real npm-installed invoker-slack doctor step $step did not pass; got status=$STATUS. Full output: $DOCTOR_OUTPUT"
+done
+
+echo "ok npm install yields working invoker-slack $VERSION with a working plan-doctor (validate-plan + lint-review-units)"

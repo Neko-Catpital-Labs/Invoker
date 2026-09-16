@@ -89,7 +89,11 @@ test.describe('Workflow lifecycle', () => {
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const allSettled = tasks.every(
-      (t: any) => t.status === 'failed' || t.status === 'completed' || t.status === 'pending',
+      (t: any) =>
+        t.status === 'failed' ||
+        t.status === 'completed' ||
+        t.status === 'pending' ||
+        t.status === 'skipped',
     );
     expect(allSettled).toBe(true);
   });

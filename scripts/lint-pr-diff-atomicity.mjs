@@ -157,6 +157,8 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
   let current = null;
   let counter = 0;
   let oldCounter = 0;
+  let groupCounter = 0;
+  let inChangeRun = false;
 
   const start = (header) => {
     const finalized = finalizeFile(current);
@@ -172,6 +174,8 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
       changeType: 'modify',
       addedLineNumbers: new Set(),
       removedLineNumbers: new Set(),
+      addedGroupMap: new Map(),
+      removedGroupMap: new Map(),
       removedCount: 0,
       newLineMap: new Map(),
       oldLineMap: new Map(),
@@ -181,6 +185,8 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
     };
     counter = 0;
     oldCounter = 0;
+    groupCounter = 0;
+    inChangeRun = false;
   };
 
   for (const line of lines) {
@@ -223,20 +229,31 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
       const match = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
       oldCounter = match ? Number.parseInt(match[1], 10) : 0;
       counter = match ? Number.parseInt(match[2], 10) : 0;
+      inChangeRun = false;
       continue;
     }
     if (counter < 1 && oldCounter < 1) {
       continue;
     }
     if (line.startsWith('+') && !line.startsWith('+++')) {
+      if (!inChangeRun) {
+        groupCounter += 1;
+        inChangeRun = true;
+      }
       current.newLineMap.set(counter, line.slice(1));
       current.addedLineNumbers.add(counter);
+      current.addedGroupMap.set(counter, groupCounter);
       counter += 1;
       continue;
     }
     if (line.startsWith('-') && !line.startsWith('---')) {
+      if (!inChangeRun) {
+        groupCounter += 1;
+        inChangeRun = true;
+      }
       current.oldLineMap.set(oldCounter, line.slice(1));
       current.removedLineNumbers.add(oldCounter);
+      current.removedGroupMap.set(oldCounter, groupCounter);
       current.removedCount += 1;
       oldCounter += 1;
       continue;
@@ -246,6 +263,7 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
       current.oldLineMap.set(oldCounter, line.slice(1));
       counter += 1;
       oldCounter += 1;
+      inChangeRun = false;
     }
   }
 
@@ -318,7 +336,7 @@ function analyzeAssertionCall(ts, node) {
   return { target, matcherName, matcherArgs, negated };
 }
 
-function collectAssertionCalls(file, content, lineNumbers) {
+function collectAssertionCalls(file, content, lineNumbers, groupMap) {
   if (!CODE_EXTENSIONS.has(path.extname(file.path)) || lineNumbers.size === 0) {
     return [];
   }
@@ -329,9 +347,24 @@ function collectAssertionCalls(file, content, lineNumbers) {
   const walk = (node) => {
     const assertion = analyzeAssertionCall(ts, node);
     if (assertion) {
-      const lineNumber = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-      if (lineNumbers.has(lineNumber)) {
-        assertions.push({ ...assertion, line: lineNumber });
+      // Match on the call's full line RANGE, not just its start line: an
+      // expected-value edit inside a multi-line argument list leaves the
+      // `expect(` line untouched and must still count as a changed assertion.
+      const startLine = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+      const endLine = sourceFile.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
+      let touchesChangedLine = false;
+      const groupIds = new Set();
+      for (let line = startLine; line <= endLine; line += 1) {
+        if (lineNumbers.has(line)) {
+          touchesChangedLine = true;
+          const groupId = groupMap.get(line);
+          if (groupId !== undefined) {
+            groupIds.add(groupId);
+          }
+        }
+      }
+      if (touchesChangedLine) {
+        assertions.push({ ...assertion, line: startLine, groupIds });
       }
     }
     ts.forEachChild(node, walk);
@@ -339,6 +372,91 @@ function collectAssertionCalls(file, content, lineNumbers) {
 
   walk(sourceFile);
   return assertions;
+}
+
+const ADDITIVE_EXPECTATION_MATCHERS = new Set([
+  'toEqual',
+  'toStrictEqual',
+  'toMatchObject',
+  'toHaveBeenCalledWith',
+  'toHaveBeenLastCalledWith',
+  'toHaveBeenNthCalledWith',
+]);
+
+function parseArgumentList(ts, argsText) {
+  const sourceFile = ts.createSourceFile('args.ts', `[${argsText}]`, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  if ((sourceFile.parseDiagnostics ?? []).length > 0 || sourceFile.statements.length !== 1) {
+    return null;
+  }
+  const statement = sourceFile.statements[0];
+  if (!ts.isExpressionStatement(statement) || !ts.isArrayLiteralExpression(statement.expression)) {
+    return null;
+  }
+  return statement.expression.elements;
+}
+
+function propertyKey(ts, property) {
+  if (ts.isSpreadAssignment(property)) {
+    return `...${property.expression.getText()}`;
+  }
+  return property.name ? property.name.getText() : null;
+}
+
+function argumentsOnlyAddFields(ts, oldArgs, newArgs) {
+  return oldArgs.length === newArgs.length
+    && oldArgs.every((arg, index) => nodeOnlyAddsFields(ts, arg, newArgs[index]));
+}
+
+function nodeOnlyAddsFields(ts, oldNode, newNode) {
+  if (oldNode.getText() === newNode.getText()) {
+    return true;
+  }
+  if (ts.isObjectLiteralExpression(oldNode) && ts.isObjectLiteralExpression(newNode)) {
+    const newByKey = new Map();
+    for (const property of newNode.properties) {
+      const key = propertyKey(ts, property);
+      if (key === null || newByKey.has(key)) {
+        return false;
+      }
+      newByKey.set(key, property);
+    }
+    return oldNode.properties.every((property) => {
+      const key = propertyKey(ts, property);
+      const match = key === null ? undefined : newByKey.get(key);
+      if (!match) {
+        return false;
+      }
+      return property.getText() === match.getText()
+        || (ts.isPropertyAssignment(property)
+          && ts.isPropertyAssignment(match)
+          && nodeOnlyAddsFields(ts, property.initializer, match.initializer));
+    });
+  }
+  if (ts.isCallExpression(oldNode) && ts.isCallExpression(newNode)) {
+    return oldNode.expression.getText() === 'expect.objectContaining'
+      && newNode.expression.getText() === 'expect.objectContaining'
+      && argumentsOnlyAddFields(ts, oldNode.arguments, newNode.arguments);
+  }
+  return false;
+}
+
+function isStricterExpectation(removed, added) {
+  if (removed.negated || added.negated || !ADDITIVE_EXPECTATION_MATCHERS.has(added.matcherName)) {
+    return false;
+  }
+  const ts = getTypeScript();
+  const oldArgs = parseArgumentList(ts, removed.matcherArgs);
+  const newArgs = parseArgumentList(ts, added.matcherArgs);
+  return Boolean(oldArgs && newArgs) && argumentsOnlyAddFields(ts, oldArgs, newArgs);
+}
+
+function groupIdsIntersect(a, b) {
+  for (const id of a) {
+    if (b.has(id)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function collectTestAssertionWeakenedFindings(files) {
@@ -352,16 +470,18 @@ function collectTestAssertionWeakenedFindings(files) {
     if (file.category !== 'test') {
       continue;
     }
-    const removedAssertions = collectAssertionCalls(file, file.oldContent, file.removedLineNumbers);
+    const removedAssertions = collectAssertionCalls(file, file.oldContent, file.removedLineNumbers, file.removedGroupMap);
     if (removedAssertions.length === 0) {
       continue;
     }
-    const addedAssertions = collectAssertionCalls(file, file.newContent, file.addedLineNumbers);
+    const addedAssertions = collectAssertionCalls(file, file.newContent, file.addedLineNumbers, file.addedGroupMap);
     for (const added of addedAssertions) {
       const flipped = removedAssertions.some((removed) =>
         removed.target === added.target
         && removed.matcherName === added.matcherName
-        && (removed.negated !== added.negated || removed.matcherArgs !== added.matcherArgs));
+        && (removed.negated !== added.negated
+          || (removed.matcherArgs !== added.matcherArgs && !isStricterExpectation(removed, added)))
+        && groupIdsIntersect(removed.groupIds, added.groupIds));
       if (flipped) {
         findings.push(makeFinding('test-assertion-weakened', file.path, added.line, file.source));
       }

@@ -18,7 +18,7 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import { isInvokerRepoUrl, reviewClaimSlices, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -162,6 +162,15 @@ function setMergeGateReviewReady(
   host.orchestrator.setTaskReviewReady(taskId, changes, expectedLineage);
 }
 
+function mergeGateConfig(config: TaskStateChanges['config']): TaskStateChanges['config'] {
+  return {
+    ...(config ?? {}),
+    runnerKind: 'merge',
+    poolId: undefined,
+    poolMemberId: undefined,
+  };
+}
+
 function buildSingleArtifactReviewGate(args: {
   expectedGeneration: number;
   title: string;
@@ -277,6 +286,33 @@ async function pushFeatureBranchWithRefLockRetry(
   await assertBranchRetrievableOnOrigin(host, dir, featureBranch);
 }
 
+async function assertBranchContainsRecordedFix(
+  host: MergeRunnerHost,
+  dir: string,
+  branch: string,
+  recordedCommit: string,
+): Promise<void> {
+  const resolvedCommit = (await execGitInMergeSafe(
+    host,
+    ['rev-parse', '--verify', `${recordedCommit}^{commit}`],
+    dir,
+  )).trim();
+  try {
+    await execGitInMergeSafe(host, ['merge-base', '--is-ancestor', resolvedCommit, branch], dir);
+  } catch {
+    const branchHead = (await execGitInMergeSafe(host, ['rev-parse', '--verify', `${branch}^{commit}`], dir)
+      .catch(() => '')).trim();
+    throw new Error(
+      [
+        'repair-publication-unowned-diff: refusing to publish a repair PR whose head does not contain the recorded fix-session commit.',
+        `Recorded commit: ${resolvedCommit}`,
+        `Published branch: ${branch}`,
+        `Published head: ${branchHead || '(unresolved)'}`,
+      ].join('\n'),
+    );
+  }
+}
+
 export async function assertBranchRetrievableOnOrigin(
   host: MergeRunnerHost,
   dir: string,
@@ -373,6 +409,7 @@ export interface MergeRunnerHost {
     cwd: string;
     expectedGeneration: number;
     reviewGate?: ReviewGateState;
+    recordedFixCommit?: string;
   }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }>;
   authorPrBodyWithSkill?(args: {
     workflowId?: string;
@@ -430,7 +467,7 @@ async function authorPrBodyForMerge(
   );
   return authored.body;
 }
-async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
+export async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
   workflowId?: string;
   mergeNodeTaskId: string;
   workflowName: string;
@@ -441,12 +478,14 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
   expectedGeneration: number;
   repoUrl?: string;
   reviewGate?: ReviewGateState;
+  recordedFixCommit?: string;
 }): Promise<{
   reviewUrl?: string;
   reviewId?: string;
   reviewStatus: 'Awaiting review';
   reviewGate: ReviewGateState;
 }> {
+  const reviewClaims = args.workflowId ? workflowReviewClaims(host, args.workflowId) : [];
   if (isInvokerRepoUrl(args.repoUrl)) {
     if (!host.publishReviewStackWithMakePrSkill) {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
@@ -464,7 +503,13 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
       cwd: args.cwd,
       expectedGeneration: args.expectedGeneration,
       reviewGate: args.reviewGate,
+      recordedFixCommit: args.recordedFixCommit,
     });
+    if (reviewClaims.length > published.artifacts.length) {
+      throw new Error(
+        `review stack for workflow ${args.workflowId} has ${published.artifacts.length} PR(s) for ${reviewClaims.length} review claims; publish one PR per claim: ${reviewClaims.map((claim) => `"${claim}"`).join('; ')}`,
+      );
+    }
     logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Review stack published', {
       agentName: published.agentName,
       artifactCount: published.artifacts.length,
@@ -497,6 +542,11 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
 
   if (!host.mergeGateProvider) {
     throw new Error('merge review publication requires a configured review provider');
+  }
+  if (reviewClaims.length > 1) {
+    throw new Error(
+      `workflow ${args.workflowId} carries ${reviewClaims.length} review claims, but it would publish as one PR; split the plan into a workflow chain with one claim per workflow: ${reviewClaims.map((claim) => `"${claim}"`).join('; ')}`,
+    );
   }
 
   logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Authoring PR body', {
@@ -550,6 +600,13 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
     reviewStatus: 'Awaiting review',
     reviewGate,
   };
+}
+
+function workflowReviewClaims(host: MergeRunnerHost, workflowId: string): string[] {
+  const tasks = host.orchestrator.getAllTasks().filter(
+    (t) => t.config.workflowId === workflowId && !t.config.isMergeNode,
+  );
+  return reviewClaimSlices(tasks.map((t) => ({ description: t.description, command: t.config.command ?? undefined })));
 }
 
 /**
@@ -1155,21 +1212,17 @@ export async function executeMergeNodeImpl(
 ): Promise<void> {
   const result = await runMergeGateActionImpl(host, task);
   const { response } = result;
-  const legacyConfig = {
-    ...(result.taskChanges.config ?? {}),
-    runnerKind: 'worktree',
-  } as TaskStateChanges['config'];
-  const legacyChanges: TaskStateChanges = {
+  const mergeChanges: TaskStateChanges = {
     status: result.taskChanges.status,
     dependencies: result.taskChanges.dependencies,
     execution: result.taskChanges.execution,
-    config: legacyConfig,
+    config: mergeGateConfig(result.taskChanges.config),
   };
 
-  updateMergeGateMetadataIfCurrent(host, task.id, legacyChanges, captureMergeGateLineage(task));
+  updateMergeGateMetadataIfCurrent(host, task.id, mergeChanges, captureMergeGateLineage(task));
 
   if (response.status === 'review_ready') {
-    setMergeGateReviewReady(host, task.id, legacyChanges, {
+    setMergeGateReviewReady(host, task.id, mergeChanges, {
       selectedAttemptId: task.execution.selectedAttemptId,
       generation: task.execution.generation ?? 0,
     });
@@ -1295,6 +1348,7 @@ export async function publishAfterFixImpl(
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
+  const shouldPublishReview = mergeMode === 'external_review' || onFinish === 'pull_request';
 
   const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
   const gateWorkspacePath = safeGetWorkspacePath(host.persistence, task.id) ?? undefined;
@@ -1326,7 +1380,7 @@ export async function publishAfterFixImpl(
           `will persist workspacePath=${gateWorkspacePath ?? 'NULL'}`,
       );
       setMergeGateReviewReady(host, task.id, {
-        config: { runnerKind: 'worktree', summary },
+        config: mergeGateConfig({ summary }),
         execution: {
           workspacePath: gateWorkspacePath,
           fixedIntegrationSha: undefined,
@@ -1339,6 +1393,11 @@ export async function publishAfterFixImpl(
       });
       await startReviewReadyDependents(host);
       return;
+    }
+    if (shouldPublishReview && !fixedIntegrationSha) {
+      throw new Error(
+        'repair-publication-missing-session-commit: post-fix repair PR publication requires the fix session recorded commit hash.',
+      );
     }
 
     // Consolidate task branches in the gate clone, starting from the gate
@@ -1378,6 +1437,11 @@ export async function publishAfterFixImpl(
           gateWorkspacePath,
           error,
         });
+        if (shouldPublishReview) {
+          throw new Error(
+            `repair-publication-missing-session-commit: recorded fix session commit ${fixedIntegrationSha} is not present in the repair workspace.`,
+          );
+        }
         console.warn(
           `[merge] Post-fix: failed to use fixedIntegrationSha=${fixedIntegrationSha} ` +
           `for ${task.id}; falling back to current gate HEAD. Error: ${error}`,
@@ -1492,15 +1556,34 @@ export async function publishAfterFixImpl(
     }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
+    if (shouldPublishReview) {
+      await assertBranchContainsRecordedFix(host, consolidateDir, featureBranch, fixedIntegrationSha!);
+    }
     logTaskProgress(host, task.id, 'info', 'Pushing feature branch', {
       featureBranch,
     });
     await pushFeatureBranchWithRefLockRetry(host, consolidateDir, featureBranch);
 
-    const shouldPublishReview = mergeMode === 'external_review' || onFinish === 'pull_request';
     const reviewBase = shouldPublishReview || visualProof
       ? await resolveReviewBaseRef(host, consolidateDir, baseBranch)
       : { branchName: normalizeBranchForGithubCli(baseBranch), gitRef: baseBranch };
+
+    let skipReviewForEmptyDiff = false;
+    if (shouldPublishReview && isInvokerRepoUrl(workflow?.repoUrl)) {
+      const changedFiles = await listReviewableChangedFiles(host, consolidateDir, reviewBase.gitRef, featureBranch);
+      if (changedFiles.length === 0) {
+        logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
+          baseBranch: reviewBase.branchName,
+          featureBranch,
+        });
+        mergeTrace('PUBLISH_AFTER_FIX_REVIEW_PUBLISH_NOOP', {
+          taskId: task.id,
+          baseBranch: reviewBase.branchName,
+          featureBranch,
+        });
+        skipReviewForEmptyDiff = true;
+      }
+    }
 
     let fullSummary = summary;
     if (visualProof && host.runVisualProofCapture) {
@@ -1511,7 +1594,7 @@ export async function publishAfterFixImpl(
       }
     }
 
-    if (shouldPublishReview) {
+    if (shouldPublishReview && !skipReviewForEmptyDiff) {
       const published = await publishReviewArtifactsForMerge(host, {
         workflowId,
         mergeNodeTaskId: task.id,
@@ -1523,10 +1606,11 @@ export async function publishAfterFixImpl(
         expectedGeneration: task.execution.generation ?? 0,
         repoUrl: workflow?.repoUrl,
         reviewGate: task.execution.reviewGate,
+        recordedFixCommit: fixedIntegrationSha,
       });
 
       setMergeGateReviewReady(host, task.id, {
-        config: { runnerKind: 'worktree', summary },
+        config: mergeGateConfig({ summary }),
         execution: {
           branch: featureBranch,
           workspacePath: gateWorkspacePath,
@@ -1547,7 +1631,7 @@ export async function publishAfterFixImpl(
     }
 
     setMergeGateReviewReady(host, task.id, {
-      config: { runnerKind: 'worktree', summary },
+      config: mergeGateConfig({ summary }),
       execution: {
         branch: featureBranch,
         workspacePath: gateWorkspacePath,
