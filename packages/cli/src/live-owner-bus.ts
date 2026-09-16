@@ -1,4 +1,8 @@
 import {
+  resolveActiveInvokerProfileEnv,
+  resolveInvokerIpcSocketPath,
+} from '@invoker/contracts';
+import {
   IpcBus,
   TransportError,
   TransportErrorCode,
@@ -63,7 +67,14 @@ export async function discoverLiveOwner(bus: MessageBus, timeoutMs = 10_000): Pr
 }
 
 export async function createDefaultMessageBus(): Promise<MessageBus> {
-  const bus = new IpcBus(undefined, { allowServe: false });
+  const socketPath = resolveDefaultMessageBusSocketPath();
+  const bus = new IpcBus(socketPath, { allowServe: false });
   await bus.ready();
   return bus;
+}
+
+export function resolveDefaultMessageBusSocketPath(): string {
+  const profileEnv = resolveActiveInvokerProfileEnv();
+  const mergedEnv = { ...profileEnv, ...process.env };
+  return resolveInvokerIpcSocketPath(mergedEnv);
 }
