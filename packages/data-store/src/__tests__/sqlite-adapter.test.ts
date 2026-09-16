@@ -864,6 +864,18 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadTask('with-freshness')?.config).not.toHaveProperty('freshness');
     });
 
+    it('persists pool-only routing without a guessed runner kind', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('pool-only-task', {
+        config: { poolId: 'mixed-local-ssh' },
+      }));
+
+      expect(adapter.loadTask('pool-only-task')?.config).toMatchObject({
+        poolId: 'mixed-local-ssh',
+      });
+      expect(adapter.loadTask('pool-only-task')?.config.runnerKind).toBeUndefined();
+    });
+
     it('persists poolMemberId through updateTask and getPoolMemberId', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('ssh-task', {
@@ -1048,8 +1060,12 @@ describe('SQLiteAdapter', () => {
       )).toThrow('tasks executor routing invariant violated');
       expect(() => db.run(
         `INSERT INTO tasks (id, workflow_id, description, runner_kind, pool_id)
-         VALUES ('bad-null-kind-insert', 'wf-1', 'no runner kind', NULL, 'local-worktree')`,
+         VALUES ('bad-null-route-insert', 'wf-1', 'no runner kind or pool', NULL, NULL)`,
       )).toThrow('tasks executor routing invariant violated');
+      expect(() => db.run(
+        `INSERT INTO tasks (id, workflow_id, description, runner_kind, pool_id)
+         VALUES ('good-pool-only-insert', 'wf-1', 'pool-only routing', NULL, 'local-worktree')`,
+      )).not.toThrow();
 
       adapter.saveTask('wf-1', makeTask('valid-task'));
       expect(() => db.run(
