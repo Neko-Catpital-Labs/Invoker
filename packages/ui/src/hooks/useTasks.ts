@@ -194,7 +194,8 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     const requestedAt = performance.now();
     const request = window.invoker.getTasks().then((result) => {
       const requestDurationMs = performance.now() - requestedAt;
-      if (gen !== startupSnapshotGenerationRef.current) {
+      const hasNewerRendererState = tasksRef.current.size > 0 || workflowsRef.current.size > 0;
+      if (gen !== startupSnapshotGenerationRef.current && hasNewerRendererState) {
         return;
       }
       const taskList = result.tasks ?? [];
