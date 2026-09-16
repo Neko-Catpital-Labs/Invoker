@@ -6504,6 +6504,21 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('pruneOldEvents', () => {
+    it('bounds candidate scans, advances past ineligible rows, and revisits retained rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'running', config: { workflowId: 'wf-1' } }));
+      adapter.saveTask('wf-1', makeTask('wf-1/t2', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      for (let i = 0; i < 1000; i += 1) insertEvent('wf-1/t1');
+      insertEvent('wf-1/t2');
+      (adapter as any).db.run("UPDATE events SET created_at = datetime('now','-30 days')");
+      expect(adapter.pruneOldEvents(14)).toBe(0);
+      expect(adapter.getEvents('wf-1/t2')).toHaveLength(1);
+      expect(adapter.pruneOldEvents(14)).toBe(1);
+      expect(adapter.pruneOldEvents(14)).toBe(0); // reset at end of keyspace
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      expect(adapter.pruneOldEvents(14)).toBe(1000);
+    });
+
     function backdateEvent(eventId: number, daysAgo: number): void {
       (adapter as any).db.run(
         `UPDATE events SET created_at = datetime('now', ?) WHERE id = ?`,
@@ -6581,6 +6596,18 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('pruneOldSyncJournal', () => {
+    it('limits deletes to 1000 candidates and eventually revisits unacknowledged rows', () => {
+      for (let i = 0; i < 2001; i += 1) insertJournalRow(30);
+      insertCursor('peer', 1500);
+      expect(adapter.pruneOldSyncJournal(14)).toBe(1000);
+      expect(adapter.pruneOldSyncJournal(14)).toBe(500);
+      expect(adapter.pruneOldSyncJournal(14)).toBe(0);
+      expect(journalRowCount()).toBe(501);
+      expect(adapter.pruneOldSyncJournal(14)).toBe(0); // reset at end of keyspace
+      (adapter as any).db.run('UPDATE sync_cursors SET last_sent_seq = 2001');
+      expect(adapter.pruneOldSyncJournal(14)).toBe(501);
+    });
+
     function insertJournalRow(daysAgo: number, seq?: number): number {
       (adapter as any).db.run(
         `INSERT INTO sync_journal (entity_type, entity_id, op, payload, origin, created_at)

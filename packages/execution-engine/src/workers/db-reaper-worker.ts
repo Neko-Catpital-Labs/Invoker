@@ -1,3 +1,4 @@
+import { setImmediate as yieldToRequests } from 'node:timers/promises';
 import type { Logger } from '@invoker/contracts';
 
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
@@ -55,17 +56,56 @@ export function createDbReaperWorker(options: DbReaperWorkerOptions): WorkerRunt
       await options.onTick?.(ctx);
       ctx.signal?.throwIfAborted();
 
-      const eventsPruned = options.store.pruneOldEvents(options.eventsRetentionDays);
-      ctx.signal?.throwIfAborted();
-      const syncJournalPruned = options.store.pruneOldSyncJournal(options.syncJournalRetentionDays);
-      ctx.signal?.throwIfAborted();
+      const passStarted = performance.now();
+      let batch = 0;
+      const runBatch = async (operation: string, work: () => number): Promise<number> => {
+        await yieldToRequests(undefined, { signal: ctx.signal });
+        ctx.signal.throwIfAborted();
+        const started = performance.now();
+        const fields = { module: DB_REAPER_WORKER_KIND, operation, batch: ++batch,
+          tick: ctx.tickNumber, wall_time: new Date().toISOString(), monotonic_ms: started };
+        options.logger.info('DB maintenance batch started', { ...fields, event: 'start' });
+        try {
+          const affected = work();
+          options.logger.info('DB maintenance batch finished', { ...fields, event: 'end',
+            wall_time: new Date().toISOString(), monotonic_ms: performance.now(),
+            duration_ms: performance.now() - started, affected });
+          return affected;
+        } catch (error) {
+          options.logger.error('DB maintenance batch failed', { ...fields, event: 'error',
+            wall_time: new Date().toISOString(), monotonic_ms: performance.now(),
+            duration_ms: performance.now() - started, error });
+          throw error;
+        }
+      };
+      const prune = async (operation: string, work: () => number): Promise<number> => {
+        let total = 0;
+        for (let i = 0; i < 20; i += 1) {
+          const deleted = await runBatch(operation, work);
+          total += deleted;
+          if (deleted < 1000 || performance.now() - passStarted >= 50) break;
+        }
+        return total;
+      };
+      const eventsPruned = await prune('events.retention',
+        () => options.store.pruneOldEvents(options.eventsRetentionDays));
+      const syncJournalPruned = await prune('sync_journal.retention',
+        () => options.store.pruneOldSyncJournal(options.syncJournalRetentionDays));
 
       const vacuumThreshold = options.vacuumFreelistThresholdPages ?? DEFAULT_VACUUM_FREELIST_THRESHOLD_PAGES;
       const vacuumMaxPages = options.vacuumMaxPagesPerTick ?? DEFAULT_VACUUM_MAX_PAGES_PER_TICK;
-      const freelistPages = options.store.getFreelistPageCount();
-      const pagesVacuumed = freelistPages > vacuumThreshold
-        ? options.store.runIncrementalVacuum(vacuumMaxPages)
-        : 0;
+      const freelistPages = await runBatch('freelist_count', () => options.store.getFreelistPageCount());
+      let pagesVacuumed = 0;
+      if (freelistPages > vacuumThreshold) {
+        let remaining = Math.min(vacuumMaxPages, DEFAULT_VACUUM_MAX_PAGES_PER_TICK);
+        while (remaining > 0 && performance.now() - passStarted < 50) {
+          const pages = Math.min(100, remaining);
+          const reclaimed = await runBatch('incremental_vacuum', () => options.store.runIncrementalVacuum(pages));
+          pagesVacuumed += reclaimed;
+          remaining -= pages;
+          if (reclaimed === 0) break;
+        }
+      }
 
       const summary = `DB reaper pass: ${eventsPruned} old event row(s) pruned `
         + `(retention=${options.eventsRetentionDays}d), ${syncJournalPruned} old sync_journal row(s) pruned `

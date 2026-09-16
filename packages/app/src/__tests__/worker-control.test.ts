@@ -162,6 +162,7 @@ function controller(
   register(CLAUDE_OAUTH_REFRESH_WORKER_KIND, 'Refreshes Claude OAuth credentials.');
   register(IDLE_TASK_CLEANUP_WORKER_KIND, 'Reports idle tasks.');
   register(REQUEUE_WORKER_KIND, 'Requeues stalled tasks.');
+  register('db-reaper', 'Database maintenance.');
   register('external-preview', 'External preview worker.');
 
   const runtimeDeps = deps();
@@ -266,6 +267,27 @@ describe('migrateWorkerDesiredStateFromLegacyConfig', () => {
 });
 
 describe('createWorkerRuntimeController', () => {
+  it('defers database maintenance until recovery and honors a stop during recovery', async () => {
+    const setup = controller(['db-reaper', PR_STATUS_WORKER_KIND]);
+    setup.controller.startAutoStartedWorkers('before-recovery');
+    expect(setup.runtimes.has('db-reaper')).toBe(false);
+    expect(setup.runtimes.get(PR_STATUS_WORKER_KIND)?.[0].starts).toBe(1);
+    setup.controller.startAutoStartedWorkers('after-recovery');
+    expect(setup.runtimes.get('db-reaper')?.[0].starts).toBe(1);
+    expect(setup.runtimes.get(PR_STATUS_WORKER_KIND)?.[0].starts).toBe(1);
+    await setup.controller.stopAll();
+    setup.controller.startAutoStartedWorkers('after-recovery');
+    expect(setup.runtimes.get('db-reaper')).toHaveLength(1);
+  });
+
+  it('does not override a persisted maintenance stop at recovery completion', async () => {
+    const setup = controller(['db-reaper']);
+    setup.controller.startAutoStartedWorkers('before-recovery');
+    await setup.controller.stop('db-reaper');
+    setup.controller.startAutoStartedWorkers('after-recovery');
+    expect(setup.runtimes.has('db-reaper')).toBe(false);
+  });
+
   it('auto-starts only the code always-on workers', () => {
     const setup = controller();
 
