@@ -1590,7 +1590,11 @@ export class Orchestrator {
           this.executorRoutingRules,
           this.availablePoolIds,
         );
-        taskConfig = { ...baseConfig, poolId: resolvedRouting.poolId };
+        taskConfig = {
+          ...baseConfig,
+          runnerKind: resolvedRouting.poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh',
+          poolId: resolvedRouting.poolId,
+        };
         resolvedRoutingByTaskId.set(scopedId, resolvedRouting.reason);
       }
       const task = createTaskState(
@@ -3076,6 +3080,7 @@ export class Orchestrator {
         default:
           rtConfig = {
             ...rtBase,
+            runnerKind: inheritedPoolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh',
             poolId: inheritedPoolId,
             poolMemberId: task.config.poolMemberId,
           };
