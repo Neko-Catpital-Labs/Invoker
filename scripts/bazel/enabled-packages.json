@@ -18,11 +18,14 @@
     "transport",
     "watcher",
     "workflow-core",
-    "graph"
+    "graph",
+    "ui",
+    "web-app",
+    "app"
   ],
   "quality": true,
-  "playwright": false,
-  "packaging": false,
+  "playwright": true,
+  "packaging": true,
   "rbePilotPackages": [
     "workflow-graph",
     "runtime-domain",

@@ -25,3 +25,25 @@ sh_test(
     size = "large",
     tags = ["no-sandbox", "local", "quality"],
 )
+
+sh_test(
+    name = "playwright_e2e",
+    srcs = ["//scripts/bazel:run_pnpm_filter.sh"],
+    args = ["@invoker/app", "test:e2e"],
+    size = "enormous",
+    tags = ["no-sandbox", "local", "no-remote-exec", "playwright"],
+)
+
+sh_binary(
+    name = "dist_cli",
+    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
+    args = ["pnpm", "run", "dist:cli"],
+    tags = ["no-sandbox", "local", "packaging"],
+)
+
+sh_binary(
+    name = "dist_desktop_linux",
+    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
+    args = ["bash", "scripts/package-desktop.sh", "--linux"],
+    tags = ["no-sandbox", "local", "packaging"],
+)
