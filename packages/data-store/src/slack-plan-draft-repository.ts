@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { PersistenceAdapter, SlackPlanDraft } from './adapter.js';
+import type { ChatSurface, PersistenceAdapter, SlackPlanDraft } from './adapter.js';
+import { DEFAULT_CHAT_SURFACE } from './adapter.js';
+import { PlanningDraftRepository } from './planning-draft-repository.js';
 
 export interface CreateSlackPlanDraft {
   channelId: string;
   threadTs: string;
+  planningDraftId?: string;
   planText: string;
   summaryJson: string;
   repoUrl: string;
@@ -11,19 +14,37 @@ export interface CreateSlackPlanDraft {
   workingDir: string;
   requestedBy: string;
   confirmationMode: SlackPlanDraft['confirmationMode'];
+  surface?: ChatSurface;
 }
 
 export class SlackPlanDraftRepository {
-  constructor(private readonly adapter: PersistenceAdapter) {}
+  private readonly planningDrafts: PlanningDraftRepository;
+
+  constructor(private readonly adapter: PersistenceAdapter) {
+    this.planningDrafts = new PlanningDraftRepository(adapter);
+  }
 
   create(input: CreateSlackPlanDraft): SlackPlanDraft {
     const now = new Date().toISOString();
-    const previous = this.adapter.loadReadySlackPlanDraft(input.channelId, input.threadTs);
+    if (input.planningDraftId) {
+      const approved = this.planningDrafts.get(input.planningDraftId);
+      const inputHash = createHash('sha256').update(input.planText).digest('hex');
+      if (!approved
+        || approved.conversationId !== input.threadTs
+        || approved.status !== 'current'
+        || approved.contentHash !== inputHash
+        || approved.planText !== input.planText) {
+        throw new Error('Slack review must reference the exact current doctor-approved planning draft.');
+      }
+    }
+    const surface = input.surface ?? DEFAULT_CHAT_SURFACE;
+    const previous = this.adapter.loadReadySlackPlanDraft(input.channelId, input.threadTs, surface);
     const version = (previous?.version ?? 0) + 1;
-    this.adapter.supersedeReadySlackPlanDrafts(input.channelId, input.threadTs, now);
+    this.adapter.supersedeReadySlackPlanDrafts(input.channelId, input.threadTs, now, surface);
     const draft: SlackPlanDraft = {
       draftId: randomUUID(),
       version,
+      planningDraftId: input.planningDraftId,
       channelId: input.channelId,
       threadTs: input.threadTs,
       planText: input.planText,
@@ -36,6 +57,7 @@ export class SlackPlanDraftRepository {
       requestedBy: input.requestedBy,
       confirmationMode: input.confirmationMode,
       createdAt: now,
+      surface,
     };
     this.adapter.saveSlackPlanDraft(draft);
     return draft;
@@ -45,8 +67,8 @@ export class SlackPlanDraftRepository {
     return this.adapter.loadSlackPlanDraft(draftId, version);
   }
 
-  getReady(channelId: string, threadTs: string): SlackPlanDraft | undefined {
-    return this.adapter.loadReadySlackPlanDraft(channelId, threadTs);
+  getReady(channelId: string, threadTs: string, surface?: ChatSurface): SlackPlanDraft | undefined {
+    return this.adapter.loadReadySlackPlanDraft(channelId, threadTs, surface);
   }
 
   bindMessage(draft: SlackPlanDraft, messageTs: string): void {
@@ -77,6 +99,27 @@ export class SlackPlanDraftRepository {
       status: 'submitted',
       workflowIdsJson: JSON.stringify(workflowIds),
     });
+    if (draft.planningDraftId) {
+      this.planningDrafts.markSubmitted(draft.planningDraftId);
+    }
+  }
+
+  resolvePlanText(draft: SlackPlanDraft): string {
+    if (!draft.planningDraftId) {
+      const legacyHash = createHash('sha256').update(draft.planText).digest('hex');
+      if (legacyHash !== draft.contentHash) {
+        throw new Error('This legacy plan review failed its integrity check.');
+      }
+      return draft.planText;
+    }
+    const approved = this.planningDrafts.get(draft.planningDraftId);
+    if (!approved
+      || approved.conversationId !== draft.threadTs
+      || approved.planText !== draft.planText
+      || approved.contentHash !== draft.contentHash) {
+      throw new Error('This plan review no longer matches its immutable approved draft.');
+    }
+    return approved.planText;
   }
 
   markFailed(draft: SlackPlanDraft, userId: string): void {
@@ -97,5 +140,8 @@ export class SlackPlanDraftRepository {
       decidedAt: new Date().toISOString(),
       decidedBy: userId,
     });
+    if (status === 'rejected' && draft.planningDraftId) {
+      this.planningDrafts.supersede(draft.planningDraftId);
+    }
   }
 }

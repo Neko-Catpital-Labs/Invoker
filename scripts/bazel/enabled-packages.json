@@ -1,0 +1,11 @@
+{
+  "packages": [
+    "workflow-graph"
+  ],
+  "quality": false,
+  "playwright": false,
+  "packaging": false,
+  "rbePilotPackages": [
+    "workflow-graph"
+  ]
+}

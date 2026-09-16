@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from '../../../execution-engine/src/__tests__/fixtures/pr-6976-oauth-session-expired.js';
 import { FailureClassifier, SSH_INFRA_FAILURE_CLASSES } from '../failure-classifier.js';
 
+const GIT_REF_PATH_CONFLICT_ERROR =
+  "fatal: cannot lock ref 'refs/heads/experiment/child': "
+  + 'unable to create directory for .git/refs/heads/experiment/child';
+
 describe('FailureClassifier.classifyError', () => {
   it('classifies the env.sh invalid-export signature', () => {
     expect(FailureClassifier.classifyError(
@@ -32,9 +36,39 @@ describe('FailureClassifier.classifyError', () => {
     )).toBe('ssh-repo-mirror-corrupt');
   });
 
+  it('classifies finalize-time stale managed-worktree admin metadata', () => {
+    expect(FailureClassifier.classifyError(
+      'remote commit or push failed (code 128): fatal: not a git repository: '
+      + '/home/invoker/.invoker/repos/c9d4f5f68faf/.git/worktrees/'
+      + 'experiment-wf-1787334654569-9-repair-g0.t0.a-a0a740992-ff047c23',
+    )).toBe('ssh-worktree-corrupt');
+  });
+
+  it('classifies finalize-time worktree corruption when git omits the admin path', () => {
+    expect(FailureClassifier.classifyError(
+      'remote commit or push failed (code 128): fatal: not a git repository: (null)',
+    )).toBe('ssh-worktree-corrupt');
+  });
+
+  it('does not classify a bare "not a git repository" outside the finalize commit/push path', () => {
+    expect(FailureClassifier.classifyError(
+      'fatal: not a git repository: (null)',
+    )).toBeUndefined();
+  });
+
   it('classifies the OAuth-session-expired signature', () => {
     expect(FailureClassifier.classifyError(PR_6976_OAUTH_SESSION_EXPIRED_ERROR))
       .toBe('ssh-oauth-session-expired');
+  });
+
+  it('classifies an explicit disk-full signature', () => {
+    expect(FailureClassifier.classifyError(
+      'No space left on device',
+    )).toBe('ssh-disk-full');
+  });
+
+  it('does not classify a non-ENOSPC Git ref-path conflict as disk-full', () => {
+    expect(FailureClassifier.classifyError(GIT_REF_PATH_CONFLICT_ERROR)).toBeUndefined();
   });
 
   it('does not classify a bare "not a git repository" outside the bootstrap-clone phase', () => {
@@ -43,10 +77,91 @@ describe('FailureClassifier.classifyError', () => {
     )).toBeUndefined();
   });
 
+  it('classifies transport failures after definitive infrastructure checks miss', () => {
+    expect(FailureClassifier.classifyError('SSH transport failed (exit 255): connection reset by peer.'))
+      .toBe('ssh-transport-transient');
+    expect(FailureClassifier.classifyError('SSH remote script failed (exit=1, phase=run_task)'))
+      .toBeUndefined();
+  });
+
   it('returns undefined for ordinary code failures and non-strings', () => {
     expect(FailureClassifier.classifyError('AssertionError: expected 1 to be 2')).toBeUndefined();
     expect(FailureClassifier.classifyError(undefined)).toBeUndefined();
     expect(FailureClassifier.classifyError(42 as unknown as string)).toBeUndefined();
+  });
+});
+
+const DRAFTER_CORE_MISSING_ERROR =
+  "Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@neko-catpital-labs/drafter-core' imported from "
+  + '/home/invoker/.invoker/worktrees/417fc44c7e5b/experiment-wf-1789272584168-2-verify-pr-505-live-body/'
+  + 'engine/skills/draft-pr/scripts/validate-pr-body.mjs\n'
+  + "  code: 'ERR_MODULE_NOT_FOUND'";
+const SAFE_PUSH_STALE_HEAD_ERROR =
+  'pr-worker-safe-push: stale-head: refs/heads/stack/EdbertChan/plan/x/y--917fad44 is '
+  + '7af80382e9578c7500dbec4d8b1b845df8acc04d; expected b3fd0f58573e769ae60fd91f175d50a26f4e7593\n'
+  + '[worktree] Process exited: actionId=wf-1789327282247-10/safe-push exitCode=20';
+const MERGE_BRANCH_MISSING_ERROR =
+  'Error: Branch "feature/local-llm-e2e" required by the merge/gate step was not found on the remote '
+  + '(https://github.com/EdbertChan/fraud_repo.git). This branch is retrieved from origin, but it is not there';
+
+describe('FailureClassifier.classifyWorkFailure', () => {
+  it('classifies a missing installed package', () => {
+    expect(FailureClassifier.classifyWorkFailure(DRAFTER_CORE_MISSING_ERROR)).toBe('dependency-missing');
+  });
+
+  it('does not classify a missing relative module as a missing package', () => {
+    expect(FailureClassifier.classifyWorkFailure(
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/repo/src/missing.js' imported from /repo/src/index.js",
+    )).toBeUndefined();
+  });
+
+  it('classifies a safe-push refusal because the branch head moved', () => {
+    expect(FailureClassifier.classifyWorkFailure(SAFE_PUSH_STALE_HEAD_ERROR)).toBe('branch-head-moved');
+  });
+
+  it('classifies a merge gate whose branch is missing on the remote', () => {
+    expect(FailureClassifier.classifyWorkFailure(MERGE_BRANCH_MISSING_ERROR)).toBe('branch-missing-on-remote');
+  });
+
+  it('returns undefined for ordinary code failures and non-strings', () => {
+    expect(FailureClassifier.classifyWorkFailure('AssertionError: expected 1 to be 2')).toBeUndefined();
+    expect(FailureClassifier.classifyWorkFailure(undefined)).toBeUndefined();
+  });
+
+  it('leaves classifyError unchanged for these signatures', () => {
+    expect(FailureClassifier.classifyError(DRAFTER_CORE_MISSING_ERROR)).toBeUndefined();
+    expect(FailureClassifier.classifyError(SAFE_PUSH_STALE_HEAD_ERROR)).toBeUndefined();
+    expect(FailureClassifier.classifyError(MERGE_BRANCH_MISSING_ERROR)).toBeUndefined();
+  });
+});
+
+describe('FailureClassifier.classifyAgentQuotaRefusal', () => {
+  it('classifies both real agent-quota failure shapes seen in production', () => {
+    expect(FailureClassifier.classifyAgentQuotaRefusal(
+      '[Fix with Agent failed] SSH remote script failed (exit=1, phase=remote_agent_fix)\n'
+      + "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to "
+      + 'purchase more credits or try again at Aug 20th, 2026 4:36 AM.',
+    )).toBe('agent-usage-limit');
+    expect(FailureClassifier.classifyAgentQuotaRefusal(
+      'codex fix exited with code 1: [assistant] Model refused: usage limit reached',
+    )).toBe('agent-usage-limit');
+  });
+
+  it('ignores a third-party CI check row that reports its own rate limiting', () => {
+    const mergeGateCheckTable = [
+      'quality / TypeScript Types\tpass\t42s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265672\t',
+      'CodeRabbit\tpass\t0\t\tReview rate limited',
+      'UI Vitest\tpass\t2m44s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265910\t',
+      '[worktree] Process exited: actionId=wf-1788249568173-6/land-verified-pr exitCode=1',
+    ].join('\n');
+    expect(FailureClassifier.classifyAgentQuotaRefusal(mergeGateCheckTable)).toBeUndefined();
+  });
+
+  it('classifies a provider HTTP rate-limit refusal', () => {
+    expect(FailureClassifier.classifyAgentQuotaRefusal(
+      'API error: 429 {"type":"error","error":{"type":"rate_limit_error",'
+      + '"message":"Number of request tokens has exceeded your per-minute rate limit"}}',
+    )).toBe('agent-usage-limit');
   });
 });
 
@@ -70,5 +185,42 @@ describe('FailureClassifier predicates', () => {
     expect(FailureClassifier.isCancellation('Terminated: shutdown')).toBe(true);
     expect(FailureClassifier.isCancellation('boom')).toBe(false);
     expect(FailureClassifier.isCancellation(undefined)).toBe(false);
+  });
+
+  it('stopped, workspace, and branch classes route to no infra or requeue owner', () => {
+    for (const cls of ['cancelled', 'owner-interrupted', 'dependency-missing', 'branch-head-moved', 'branch-missing-on-remote'] as const) {
+      expect(FailureClassifier.isSshInfra(cls)).toBe(false);
+      expect(FailureClassifier.isLiveness(cls)).toBe(false);
+      expect(FailureClassifier.isUsageLimit(cls)).toBe(false);
+      expect(FailureClassifier.isRequeueableFailureTask({ execution: { failureClass: cls } })).toBe(false);
+    }
+  });
+
+  it('isUsageLimit matches only the typed agent usage-limit class', () => {
+    expect(FailureClassifier.isUsageLimit('agent-usage-limit')).toBe(true);
+    expect(FailureClassifier.isUsageLimit('liveness_stall')).toBe(false);
+    expect(FailureClassifier.isUsageLimit('ssh-transport-transient')).toBe(false);
+    expect(FailureClassifier.isUsageLimit(undefined)).toBe(false);
+  });
+
+  it('isUsageLimit ignores error text that reports third-party CI rate limiting', () => {
+    // Live incident 2026-09-12: attempt wf-1788249568173-6/land-verified-pr-acbb90da0
+    // failed on CI, and its execution.error is the merge gate's check table. One row
+    // is CodeRabbit reporting its own review throttling on a PASSING check. That row
+    // tripped the fleet-wide auto-fix breaker for 6h even though no agent quota was hit.
+    const mergeGateCheckTable = [
+      'quality / TypeScript Types\tpass\t42s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265672\t',
+      'CodeRabbit\tpass\t0\t\tReview rate limited',
+      'UI Vitest\tpass\t2m44s\thttps://github.com/o/r/actions/runs/33484479428/job/99781265910\t',
+      '[worktree] Process exited: actionId=wf-1788249568173-6/land-verified-pr exitCode=1',
+    ].join('\n');
+    expect(FailureClassifier.isUsageLimit(mergeGateCheckTable as never)).toBe(false);
+  });
+
+  it('isUsageLimit ignores provider HTTP rate-limit text without typed classification', () => {
+    expect(FailureClassifier.isUsageLimit((
+      'API error: 429 {"type":"error","error":{"type":"rate_limit_error",'
+      + '"message":"Number of request tokens has exceeded your per-minute rate limit"}}'
+    ) as never)).toBe(false);
   });
 });
