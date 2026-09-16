@@ -173,6 +173,7 @@ describe('cancelTask', () => {
     const task = orchestrator.getTask('a');
     expect(task!.status).toBe('failed');
     expect(task!.execution.error).toContain('Terminated by user');
+    expect(task!.execution.failureClass).toBe('cancelled');
   });
 
   it('cascades cancel to never-started dependents as blocked, not failed', () => {
@@ -449,6 +450,7 @@ describe('cancelWorkflow', () => {
 
     expect(result.runningCancelled).toContain(sid(orchestrator, 0, 'a'));
     expect(orchestrator.getTask('a')!.execution.error).toBe('Cancelled by user (workflow)');
+    expect(orchestrator.getTask('a')!.execution.failureClass).toBe('cancelled');
     expect(persistence.loadAttempt(orchestrator.getTask('a')!.execution.selectedAttemptId!)?.status).toBe('failed');
     expect(orchestrator.getTask('b')!.execution.selectedAttemptId).toBeUndefined();
   });

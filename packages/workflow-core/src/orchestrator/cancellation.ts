@@ -180,7 +180,7 @@ export function cancelActiveCandidatesImpl(
     const completedAt = new Date();
     const changes: TaskStateChanges = {
       status: 'failed',
-      execution: { error, completedAt },
+      execution: { error, completedAt, failureClass: 'cancelled' },
     };
     const updated = host.writeAndSync(t.id, changes);
     host.persistence.logEvent?.(t.id, 'task.cancelled', changes);
@@ -283,7 +283,7 @@ export function cancelTaskImpl(
         : `Terminated: upstream task "${upstreamLabel}" was terminated`;
     const changes: TaskStateChanges = {
       status: 'failed',
-      execution: { error: errorMsg, completedAt: new Date() },
+      execution: { error: errorMsg, completedAt: new Date(), failureClass: 'cancelled' },
     };
     const cancelUpdated = host.writeAndSync(id, changes);
     host.updateSelectedAttempt(id, {
@@ -400,6 +400,7 @@ export function cancelWorkflowImpl(
       execution: {
         error: reason,
         completedAt: new Date(),
+        failureClass: 'cancelled',
       },
     };
     const wfCancelUpdated = host.writeAndSync(id, changes);
