@@ -748,6 +748,86 @@ function renderPipelineSection(workerActions: readonly PrAuthoringWorkerActionEn
   return lines;
 }
 
+interface FallbackReviewMetadata {
+  unit: string;
+  lane: string;
+}
+
+async function resolveFallbackReviewMetadata(cwd: string, baseBranch: string): Promise<FallbackReviewMetadata | undefined> {
+  if (!existsSync(join(cwd, 'drafter.config.json'))) return undefined;
+  const source = `
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  loadDrafterConfig, reviewUnitsForChangedFiles, validateReviewUnitChangedFiles,
+  validateReviewLaneUnitCompatibility, forbiddenUnitsForLane,
+} from '@neko-catpital-labs/drafter-core';
+const base = process.argv[1];
+const remote = 'origin/' + base;
+const options = { encoding: 'utf8', timeout: 10000, stdio: 'pipe' };
+const remoteExists = spawnSync('git', ['rev-parse', '--verify', '--quiet', remote], options).status === 0;
+const mergeBase = execFileSync('git', ['merge-base', remoteExists ? remote : base, 'HEAD'], options).trim();
+const changedFiles = execFileSync('git', ['diff', '--name-only', '-z', mergeBase, '--'], options).split('\\0').filter(Boolean);
+const config = await loadDrafterConfig({ explicitPath: 'drafter.config.json' });
+const units = reviewUnitsForChangedFiles(changedFiles, config);
+const candidates = units.filter((unit) => validateReviewUnitChangedFiles({
+  declaredReviewUnit: unit, changedFiles, config, context: 'Fallback',
+}).length === 0);
+if (candidates.length !== 1) throw new Error('Ambiguous fallback review unit: ' + (units.join(', ') || 'no classified changes'));
+const unit = candidates[0];
+const lanes = config.taxonomy.lanes.map(({ id }) => id).filter((lane) =>
+  validateReviewLaneUnitCompatibility({ reviewLane: lane, reviewUnit: unit, config, context: 'Fallback' }).length === 0
+  && forbiddenUnitsForLane(units, lane, config).length === 0);
+const lane = lanes.includes('behavior') ? 'behavior' : lanes.length === 1 && lanes[0] !== 'refactor' ? lanes[0] : undefined;
+if (!lane) throw new Error('Ambiguous fallback review lane for ' + unit + ': ' + lanes.join(', '));
+console.log(JSON.stringify({ unit, lane }));
+`;
+  const resolvedNode = resolveExecutableOnCurrentPath('node');
+  const result = await runBoundedChild(resolvedNode ?? process.execPath, ['--input-type=module', '-e', source, baseBranch], {
+    cwd,
+    env: resolvedNode ? cleanElectronEnv() : { ...cleanElectronEnv(), ELECTRON_RUN_AS_NODE: '1' },
+    timeoutMs: getPrBodyValidatorTimeoutMs(),
+  });
+  if (result.timedOut || result.code !== 0) {
+    throw new Error(`Fallback review metadata could not be resolved; provision the target repository dependencies and resolve its review scope: ${
+      result.timedOut ? 'classification timed out' : `${result.stdout}\n${result.stderr}`.trim() || `classifier exited ${result.code}`
+    }`);
+  }
+  const metadata: unknown = JSON.parse(result.stdout);
+  if (!metadata || typeof metadata !== 'object'
+    || !('unit' in metadata) || typeof metadata.unit !== 'string' || !metadata.unit.trim()
+    || !('lane' in metadata) || typeof metadata.lane !== 'string' || !metadata.lane.trim()) {
+    throw new Error('Fallback review classifier returned invalid metadata.');
+  }
+  return { unit: metadata.unit, lane: metadata.lane };
+}
+
+export async function buildValidatedFallbackPrBody(args: {
+  title: string;
+  workflowSummary: string;
+  structuredContext?: PrAuthoringContext;
+  cwd: string;
+  baseBranch: string;
+}): Promise<string> {
+  const reviewMetadata = await resolveFallbackReviewMetadata(args.cwd, args.baseBranch);
+  const body = buildCanonicalPrBody({ ...args, reviewMetadata });
+  const errors = validateCanonicalPrBody(body);
+  if (existsSync(repoLocalPrBodyCheckerPath(args.cwd))) {
+    errors.push(...await runRepoLocalPrBodyChecker({ ...args, body }));
+  } else if (reviewMetadata) {
+    errors.push(`CI-parity PR body validator is missing: ${repoLocalPrBodyCheckerPath(args.cwd)}`);
+  }
+  if (errors.length > 0) {
+    throw new Error('[pr-authoring] target repo checker rejected every PR body; refusing canonical fallback. '
+      + `Errors: canonical: ${errors.join('; ')}`);
+  }
+  return body;
+}
+
+function preservedContext(value: string): string {
+  const fence = '`'.repeat(Math.max(3, ...[...value.matchAll(/`+/g)].map(([run]) => run.length + 1)));
+  return `${fence}text\n${value}\n${fence}`;
+}
+
 /**
  * Build a deterministic canonical PR body from structured context.
  * Used as the no-AI escape hatch when all agent-authored attempts fail.
@@ -756,17 +836,16 @@ export function buildCanonicalPrBody(args: {
   title: string;
   workflowSummary: string;
   structuredContext?: PrAuthoringContext;
+  reviewMetadata?: FallbackReviewMetadata;
 }): string {
   const lines: string[] = [];
 
   // ## Summary
   lines.push('## Summary');
   lines.push('');
-  if (args.structuredContext?.workflowDescription) {
-    lines.push(args.structuredContext.workflowDescription);
-  } else {
-    lines.push(args.workflowSummary.trim());
-  }
+  lines.push('This pull request presents the recorded work for review.');
+  lines.push('');
+  lines.push('The details below preserve the supplied context and checks. They do not establish that the requested change is complete.');
   lines.push('');
 
   if (args.structuredContext?.workerActions !== undefined) {
@@ -775,18 +854,13 @@ export function buildCanonicalPrBody(args: {
 
   lines.push('## Review Claim');
   lines.push('');
-  lines.push('This PR publishes the completed workflow changes described in the summary.');
+  lines.push('Review the proposed changes using the recorded context and checks below.');
   lines.push('');
 
-  lines.push('## Review Lane');
-  lines.push('');
-  lines.push('behavior');
-  lines.push('');
-
-  lines.push('## Review Unit');
-  lines.push('');
-  lines.push('routing');
-  lines.push('');
+  if (args.reviewMetadata) {
+    lines.push('## Review Lane', '', args.reviewMetadata.lane, '');
+    lines.push('## Review Unit', '', args.reviewMetadata.unit, '');
+  }
 
   lines.push('## Safety Invariant');
   lines.push('');
@@ -795,14 +869,23 @@ export function buildCanonicalPrBody(args: {
 
   lines.push('## Slice Rationale');
   lines.push('');
-  lines.push('This is the smallest publishable routing unit for the completed workflow output.');
+  lines.push('The review scope is derived from the changed paths where repository conventions are available.');
   lines.push('');
 
   lines.push('## Non-goals');
   lines.push('');
   lines.push('- No validation weakening, skipping, or deletion.');
-  lines.push('- No unrelated publishing or workflow behavior changes.');
+  lines.push('- This generated description does not infer outcomes beyond the supplied evidence.');
   lines.push('');
+
+  lines.push('## Workflow Context', '');
+  if (args.structuredContext?.workflowDescription) {
+    lines.push(preservedContext(args.structuredContext.workflowDescription), '');
+  }
+  lines.push(preservedContext(args.workflowSummary), '');
+  if (args.structuredContext?.tasks.length) {
+    lines.push(preservedContext(JSON.stringify(args.structuredContext.tasks, null, 2)), '');
+  }
 
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
@@ -829,10 +912,10 @@ export function buildCanonicalPrBody(args: {
   lines.push('<details>');
   lines.push('<summary>Revert Plan</summary>');
   lines.push('');
-  lines.push('- Safe to revert? Yes');
+  lines.push('- Safe to revert? Requires review of the changed code.');
   lines.push('- Revert command: `git revert <sha>`');
-  lines.push('- Post-revert steps: None');
-  lines.push('- Data migration? No');
+  lines.push('- Post-revert steps: Not established by the supplied evidence.');
+  lines.push('- Data migration? Not established by the supplied evidence.');
   lines.push('');
   lines.push('</details>');
   lines.push('');
