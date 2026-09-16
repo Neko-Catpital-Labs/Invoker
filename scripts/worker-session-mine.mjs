@@ -9,6 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -21,6 +22,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { scoreSessionFile } from './agentic-context-score.mjs';
 import { detectThrash, sessionHash } from './worker-session-mine-thrash.mjs';
 import { resolveTranscriptPath, claudeProjectRoots, agentSessionsDir } from './worker-session-mine-resolve.mjs';
 
@@ -29,6 +31,9 @@ const REPO_ROOT = resolve(__dirname, '..');
 const STATE_DIR = process.env.INVOKER_SESSION_MINE_STATE_DIR
   ?? join(homedir(), '.invoker', 'worker-session-mine');
 const LEDGER_PATH = join(STATE_DIR, 'cooldown.json');
+const AGENTIC_CONTEXT_METRICS_PATH = process.env.INVOKER_AGENTIC_CONTEXT_METRICS_PATH
+  ?? join(homedir(), '.invoker', 'agentic-context', 'metrics.jsonl');
+const BASELINE_PATH = join(REPO_ROOT, 'scripts', 'fixtures', 'agentic-context-score', 'baseline.json');
 const COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PER_TICK = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_TICK ?? '1');
 const MAX_PER_DAY = Number(process.env.INVOKER_SESSION_MINE_MAX_PER_DAY ?? '2');
@@ -56,6 +61,65 @@ function loadLedger() {
 function saveLedger(ledger) {
   mkdirSync(STATE_DIR, { recursive: true });
   writeFileSync(LEDGER_PATH, `${JSON.stringify(ledger, null, 2)}\n`);
+}
+
+function loadAgenticContextBaseline() {
+  try {
+    return JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : String(err),
+      path: BASELINE_PATH,
+    };
+  }
+}
+
+function emptyAgenticContextRollup({ candidateCount }) {
+  return {
+    type: 'agentic-context.discovery-tax.rollup',
+    generatedAt: new Date().toISOString(),
+    periodHours: LOOKBACK_HOURS,
+    candidateCount,
+    scoredSessions: 0,
+    counts: {
+      discoveryTax: 0,
+      terminalFailure: 0,
+      classSearchInPrompt: 0,
+      byAgent: {},
+      skippedNonJsonl: 0,
+      scoreErrors: 0,
+    },
+    rates: {
+      discoveryTaxRate: null,
+      terminalFailureRate: null,
+      classSearchInPromptRate: null,
+    },
+    baseline: loadAgenticContextBaseline(),
+  };
+}
+
+function addAgenticContextScore(rollup, score) {
+  rollup.scoredSessions += 1;
+  if (score.discoveryTax) rollup.counts.discoveryTax += 1;
+  if (score.terminalFailure) rollup.counts.terminalFailure += 1;
+  if (score.classSearchInPrompt) rollup.counts.classSearchInPrompt += 1;
+  const agent = score.agent || 'unknown';
+  rollup.counts.byAgent[agent] = (rollup.counts.byAgent[agent] ?? 0) + 1;
+}
+
+function finalizeAgenticContextRollup(rollup) {
+  const total = rollup.scoredSessions;
+  if (total > 0) {
+    rollup.rates.discoveryTaxRate = rollup.counts.discoveryTax / total;
+    rollup.rates.terminalFailureRate = rollup.counts.terminalFailure / total;
+    rollup.rates.classSearchInPromptRate = rollup.counts.classSearchInPrompt / total;
+  }
+  return rollup;
+}
+
+function appendAgenticContextRollup(rollup) {
+  mkdirSync(dirname(AGENTIC_CONTEXT_METRICS_PATH), { recursive: true });
+  appendFileSync(AGENTIC_CONTEXT_METRICS_PATH, `${JSON.stringify(finalizeAgenticContextRollup(rollup))}\n`);
 }
 
 function dayKey(d = new Date()) {
@@ -88,6 +152,7 @@ function listFromInventoryFile(path) {
     sessionId: r.sessionId || r.agentSessionId || '',
     agentName: r.agentName || r.executionAgent || 'claude',
     status: r.status || 'failed',
+    path: r.path || '',
   })).filter((r) => r.sessionId);
 }
 
@@ -257,10 +322,6 @@ function main() {
   const ledger = loadLedger();
   const today = dayKey();
   const dayCount = ledger.dayCounts?.[today] ?? 0;
-  if (dayCount >= MAX_PER_DAY) {
-    console.log(`session-mine: day cap reached (${dayCount}/${MAX_PER_DAY})`);
-    return 0;
-  }
 
   let candidates;
   if (process.env.INVOKER_SESSION_MINE_INVENTORY_JSON) {
@@ -273,15 +334,34 @@ function main() {
     }
   }
 
+  const rollup = emptyAgenticContextRollup({ candidateCount: candidates.length });
+  const scoredPaths = new Set();
   let filed = 0;
   const now = Date.now();
+  if (dayCount >= MAX_PER_DAY) {
+    console.log(`session-mine: day cap reached (${dayCount}/${MAX_PER_DAY})`);
+  }
 
   for (const cand of candidates) {
-    if (filed >= MAX_PER_TICK) break;
-    if ((ledger.dayCounts?.[today] ?? 0) >= MAX_PER_DAY) break;
-
     const path = cand.path || resolveTranscriptPath(cand.agentName, cand.sessionId);
     if (!path || !existsSync(path)) continue;
+
+    if (!scoredPaths.has(path)) {
+      scoredPaths.add(path);
+      if (path.endsWith('.jsonl')) {
+        try {
+          addAgenticContextScore(rollup, scoreSessionFile(path));
+        } catch (err) {
+          rollup.counts.scoreErrors += 1;
+          console.error(`session-mine: agentic-context score failed for ${path}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      } else {
+        rollup.counts.skippedNonJsonl += 1;
+      }
+    }
+
+    if (filed >= MAX_PER_TICK) continue;
+    if ((ledger.dayCounts?.[today] ?? 0) >= MAX_PER_DAY) continue;
 
     const report = detectThrash(path);
     if (!report.thrash) continue;
@@ -320,6 +400,7 @@ function main() {
     saveLedger(ledger);
   }
 
+  appendAgenticContextRollup(rollup);
   console.log(`session-mine: filed ${filed}`);
   return 0;
 }
