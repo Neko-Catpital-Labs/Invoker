@@ -359,7 +359,7 @@ export class PersistedWorkflowMutationCoordinator {
         undefined,
         () => this.dispatch(intent.channel, intent.args, mutationContext),
       );
-      void dispatchPromise.catch(() => {});
+      void dispatchPromise.catch((dispatchError) => this.recordUnattributedDispatchFailure(workflowId, intent, dispatchError));
       const result = await Promise.race([
         dispatchPromise,
         invalidation.promise,
@@ -388,12 +388,34 @@ export class PersistedWorkflowMutationCoordinator {
       clearInterval(leaseHeartbeat);
       invalidation.abortController.abort();
       this.runningIntentInvalidations.delete(intent.id);
-      this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
-        minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
-        minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
-      });
       this.inFlightPromises.delete(intent.id);
       this.enqueueStartedAtMs.delete(intent.id);
+    }
+  }
+
+  private recordUnattributedDispatchFailure(
+    workflowId: string,
+    intent: WorkflowMutationIntent,
+    dispatchError: unknown,
+  ): void {
+    try {
+      const message = summarizeMutationFailureMessage(dispatchError);
+      this.options?.logger?.warn('[workflow-mutation-coordinator] dispatch rejected after intent settled', {
+        module: 'workflow-mutation-coordinator',
+        workflowId,
+        intentId: intent.id,
+        channel: intent.channel,
+        error: message,
+      });
+      const latest = this.persistence.loadWorkflowMutationIntent(intent.id);
+      if (latest?.status === 'running') {
+        this.persistence.failWorkflowMutationIntent(intent.id, message);
+        this.notifyIntentFailed(latest, message);
+      }
+    } catch (recordError) {
+      process.stderr.write(
+        `[workflow-mutation-coordinator] failed to record dispatch rejection for intent ${intent.id}: ${recordError instanceof Error ? recordError.message : String(recordError)}\n`,
+      );
     }
   }
 
