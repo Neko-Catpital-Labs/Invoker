@@ -25,11 +25,11 @@ fi
 echo "==> case 4.1: confirmed A=failed"
 
 STB=$(invoker_e2e_task_status e2e-g441-taskB)
-if [ "$STB" != "pending" ]; then
-  echo "FAIL case 4.1: expected B=pending after submit, got '$STB'"
+if [ "$STB" != "skipped" ]; then
+  echo "FAIL case 4.1: expected B=skipped after submit, got '$STB'"
   exit 1
 fi
-echo "==> case 4.1: confirmed B=pending"
+echo "==> case 4.1: confirmed B=skipped"
 
 echo "==> case 4.1: fix A (claude-marker.sh runs)"
 invoker_e2e_run_headless fix e2e-g441-taskA

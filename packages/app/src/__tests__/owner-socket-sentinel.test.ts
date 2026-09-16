@@ -42,6 +42,23 @@ describe('createOwnerSocketSentinel', () => {
     expect(reserves).toBe(2);
   });
 
+  it('does not repeatedly re-serve while the socket remains unreachable', async () => {
+    let reserves = 0;
+    const sentinel = createOwnerSocketSentinel({
+      probe: () => Promise.resolve(false),
+      reserve: () => { reserves++; },
+      log: noopLog,
+      failuresBeforeReserve: 2,
+    });
+
+    await sentinel.tick();
+    await sentinel.tick();
+    await sentinel.tick();
+    await sentinel.tick();
+
+    expect(reserves).toBe(1);
+  });
+
   it('treats a throwing probe as a failure', async () => {
     let reserves = 0;
     const sentinel = createOwnerSocketSentinel({

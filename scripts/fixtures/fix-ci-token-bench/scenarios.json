@@ -1,0 +1,76 @@
+[
+  {
+    "id": "direct-fast-no-poll",
+    "profile": "shared",
+    "env": {
+      "INVOKER_FIX_CI_BENCH_WALLCLOCK_S": "0"
+    },
+    "representative": true,
+    "description": "Verify finishes before the first poll would fire, so the session emits zero wait turns and zero poll-loop growth. Identical under both profiles (there is no poll interval to change), so it is recorded once with profile \"shared\" rather than duplicated as baseline and proposed."
+  },
+  {
+    "id": "normal-speed",
+    "profile": "baseline",
+    "env": {
+      "INVOKER_FIX_CI_BENCH_WALLCLOCK_S": "60",
+      "INVOKER_FIX_CI_BENCH_POLL_INTERVAL_S": "10"
+    },
+    "representative": true,
+    "description": "A typical one-minute verify polled at today's 10s cadence: 6 turns. The common case the current behavior is measured against."
+  },
+  {
+    "id": "normal-speed",
+    "profile": "proposed",
+    "env": {
+      "INVOKER_FIX_CI_BENCH_WALLCLOCK_S": "60",
+      "INVOKER_FIX_CI_BENCH_POLL_INTERVAL_S": "180"
+    },
+    "representative": true,
+    "description": "The same one-minute verify at the proposed 180s cadence: a single turn. The common case the proposed behavior is measured against."
+  },
+  {
+    "id": "slow-suite-many-polls",
+    "profile": "baseline",
+    "env": {
+      "INVOKER_FIX_CI_BENCH_WALLCLOCK_S": "2700",
+      "INVOKER_FIX_CI_BENCH_POLL_INTERVAL_S": "10"
+    },
+    "representative": false,
+    "description": "A 45-minute suite polled every 10s: 270 turns, each resending the whole conversation. This is the known-bad case that produced the 50-125M token production sessions. Not representative -- it is the pathology being reproduced, not an average input."
+  },
+  {
+    "id": "slow-suite-many-polls",
+    "profile": "proposed",
+    "env": {
+      "INVOKER_FIX_CI_BENCH_WALLCLOCK_S": "2700",
+      "INVOKER_FIX_CI_BENCH_POLL_INTERVAL_S": "180",
+      "INVOKER_FIX_CI_BENCH_MAX_TURNS": "15"
+    },
+    "representative": true,
+    "description": "The same 45-minute suite at the proposed 180s cadence with a 15-turn cap: 15 turns. Representative of what a genuinely slow but healthy suite should cost under the proposed behavior."
+  },
+  {
+    "id": "never-finishes-timeout",
+    "profile": "baseline",
+    "env": {
+      "INVOKER_FIX_CI_BENCH_WALLCLOCK_S": "21600",
+      "INVOKER_FIX_CI_BENCH_POLL_INTERVAL_S": "10",
+      "INVOKER_FIX_CI_BENCH_NEVER_COMPLETES": "1",
+      "INVOKER_FIX_CI_BENCH_MAX_TURNS": "700"
+    },
+    "representative": false,
+    "description": "A verify that never completes, polled every 10s until the 700-turn ceiling. WALLCLOCK_S is set to a 6-hour harness timeout so MAX_TURNS is the binding constraint rather than the wallclock. No task_complete is emitted. Not representative -- a worst-case ceiling check."
+  },
+  {
+    "id": "never-finishes-timeout",
+    "profile": "proposed",
+    "env": {
+      "INVOKER_FIX_CI_BENCH_WALLCLOCK_S": "21600",
+      "INVOKER_FIX_CI_BENCH_POLL_INTERVAL_S": "180",
+      "INVOKER_FIX_CI_BENCH_NEVER_COMPLETES": "1",
+      "INVOKER_FIX_CI_BENCH_MAX_TURNS": "30"
+    },
+    "representative": false,
+    "description": "The same never-completing verify under the proposed 180s cadence and 30-turn cap. No task_complete is emitted. Not representative -- a ceiling check, not an average input."
+  }
+]

@@ -2,30 +2,31 @@ name: "CI regression: {{job_slug}}"
 description: |
   {{marker}}
 
-  CI job `{{job_name}}` first failed on default-branch push commit {{sha}}
-  in run {{run_id}}. It was most recently still red at {{last_bad_sha}}
-  in run {{last_bad_run_id}}.
-
-  First bad job: {{job_url}}
+  {{failure_description}}
 onFinish: pull_request
 mergeMode: external_review
 baseBranch: {{base_branch}}
 repoUrl: {{repo_url}}
+priority: 4
 
 tasks:
   - id: fix-ci-{{job_slug}}
-    executionAgent: codex
     description: |
       Fix CI job {{job_name}} first observed failing at {{sha}}.
       Review claim: The change corrects the CI regression's root cause at its source, with no unrelated edits.
       Review lane: behavior
       Safety invariant: Other CI jobs and product behavior stay unchanged except for the corrected defect.
+      Effectiveness measurement: `{{verify_command}}` fails before this change and passes after; that transition is the effectiveness signal.
       Slice rationale: One behavior slice: the failing CI job's root cause and deterministic proof.
       Architectural effect: None expected; no new module boundaries unless the root cause requires it.
       Goal: Make the CI job `{{job_name}}` pass on current master.
       Motivation: This job first failed on default-branch commit {{sha}} and stayed red through {{last_bad_sha}}.
       Alternative considerations: Re-running or weakening the test was rejected; fix the underlying defect.
       Implementation details: Reproduce at {{sha}}, then implement on current master.
+      Repro protocol:
+      - Before editing, check out {{sha}} in a detached temporary worktree and run `{{verify_command}}` or the narrowest probe derived from failing CI job `{{job_name}}`; record the failing exit code in the task summary.
+      - If the failure cannot reproduce locally because it is infra-class, write a `Repro waiver:` block in the task summary quoting the CI job log evidence, including the URL and exact relevant lines; an unproven fix without this waiver is a task failure.
+      - After the fix, run the same probe on the final branch and record the passing exit code in the task summary.
       Non-goals: No refactor, no unrelated cleanup, no test weakening, no snapshot churn unless it is the reviewed expected output.
       Layer: e2e_regression
       Feature state: active
@@ -50,18 +51,23 @@ tasks:
       `.github/workflows/ci.yml`, the relevant `scripts/` suite entrypoint, and
       the first failing GitHub job logs:
       `gh run view {{run_id}} --repo Neko-Catpital-Labs/Invoker --job {{job_database_id}} --log`.
-      Inspect the introducing commit with `git show {{sha}}`. Reproduce against
-      the historical commit without doing final work there: use a detached
-      temporary worktree or clone at {{sha}}, then run `{{verify_command}}`.
-      Return to the current task branch based on master and implement the fix
-      there. If historical reproduction is blocked by external runner setup,
-      use the GitHub job logs as the historical evidence and still prove the
-      final fix locally.
+      Inspect the introducing commit with `git show {{sha}}`.
+      Acceptance criteria: `{{verify_command}}` exits 0 on the final branch
+      after the change.
       Non-goals: Do not weaken, skip, or delete assertions; do not make broad
       refactors; do not manually edit GitHub CI state; do not target a PR at
       the historical SHA.
-      Acceptance criteria: `{{verify_command}}` must exit code 0 on the final
-      branch after the change.
+      Repro protocol:
+      1. Before editing, check out {{sha}} in a detached temporary worktree and
+         run `{{verify_command}}` or the narrowest probe derived from failing CI
+         job `{{job_name}}`; record the failing exit code in the task summary.
+      2. If the failure cannot reproduce locally because it is infra-class,
+         write a `Repro waiver:` block in the task summary quoting the CI job
+         log evidence, including the URL and exact relevant lines; an unproven
+         fix without this waiver is a task failure.
+      3. Return to the current task branch based on master, implement the fix
+         there, then run the same probe and record the passing exit code in the
+         task summary.
     dependencies: []
 
   - id: verify-ci-{{job_slug}}
@@ -70,6 +76,7 @@ tasks:
       Review claim: The command passes only when the CI regression is fixed.
       Review lane: proof
       Safety invariant: The command is identical before and after the fix.
+      Effectiveness measurement: Exit code of `{{verify_command}}` is the effectiveness signal for this proof slice.
       Slice rationale: One proof slice for the repaired CI job.
       Architectural effect: None; adds no product behavior.
       Goal: Prove the CI job repair locally.
@@ -83,3 +90,23 @@ tasks:
       {{verify_command}}
     dependencies:
       - fix-ci-{{job_slug}}
+
+  - id: scrub-handoff-artifacts
+    description: |
+      Check that ephemeral inter-task handoff files are absent before the merge gate.
+      Review claim: The terminal check reports leaked handoff files without changing repository state.
+      Review lane: proof
+      Safety invariant: The check cannot modify files, index state, HEAD, or unrelated untracked content.
+      Effectiveness measurement: The check exits zero only when no handoff path remains.
+      Slice rationale: One terminal proof required on every implementation plan that opens a pull request.
+      Architectural effect: None.
+      Goal: Leave a clean worktree for the pull request.
+      Motivation: Ephemeral state must not leak into the reviewed diff.
+      Alternative considerations: Mutating cleanup at the terminal gate was rejected because it can alter caller work.
+      Implementation details: Run the repository's handoff-artifact script in its default read-only mode.
+      Non-goals: No product edits or repository mutations in this task.
+      Layer: e2e_regression
+      Feature state: active
+    command: bash scripts/scrub-handoff-artifacts.sh
+    dependencies:
+      - verify-ci-{{job_slug}}

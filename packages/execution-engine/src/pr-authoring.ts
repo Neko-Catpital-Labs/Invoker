@@ -1,13 +1,22 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
+import { FailureClassifier } from '@invoker/workflow-core';
+
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
-import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath as resolveExecutableOnCurrentPathFromEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { materializeLocalAgentPrompt } from './agent-prompt-transport.js';
+
+function resolveExecutableOnCurrentPath(command: string): string | undefined {
+  const override = command === 'node'
+    ? process.env.INVOKER_PR_BODY_VALIDATOR_NODE?.trim()
+    : undefined;
+  return override || resolveExecutableOnCurrentPathFromEnv(command);
+}
 
 export interface MakePrStackArtifactOutput {
   readonly id: string;
@@ -68,7 +77,42 @@ export interface PrAuthoringContext {
   visualProofMarkdown?: string;
 }
 
-const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'] as const;
+function stripBullet(value: string): string | undefined {
+  const text = value.startsWith('-') ? value.slice(1).trim() : value.trim();
+  return text || undefined;
+}
+
+function headingValue(description: string, heading: string): string | undefined {
+  const lines = description.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim().toLowerCase().startsWith(`${heading}:`));
+  if (start < 0) return undefined;
+  const inline = lines[start].trim().slice(heading.length + 1).trim();
+  if (inline) return stripBullet(inline);
+  for (const line of lines.slice(start + 1)) {
+    const value = line.trim();
+    if (!value) continue;
+    return value.startsWith('-') ? stripBullet(value) : undefined;
+  }
+  return undefined;
+}
+
+export function reviewClaimSlices(
+  tasks: readonly { description: string; command?: string }[],
+): string[] {
+  const claims = new Map<string, string>();
+  for (const task of tasks) {
+    if (task.command) continue;
+    const lane = headingValue(task.description, 'review lane')?.toLowerCase();
+    if (lane === 'proof' || lane === 'cleanup') continue;
+    const claim = headingValue(task.description, 'review claim');
+    if (!claim) continue;
+    const key = claim.toLowerCase().replace(/\s+/g, ' ');
+    if (!claims.has(key)) claims.set(key, claim);
+  }
+  return [...claims.values()];
+}
+
+const REQUIRED_SECTIONS =['## Summary', '## Test Plan', '## Revert Plan'] as const;
 const REVIEW_STACK_REQUIRED_SECTIONS = [
   '## Summary',
   '## Non-goals',
@@ -253,39 +297,118 @@ export function validateReviewStackPrBody(body: string): string[] {
   return errors;
 }
 
-export function validateReviewStackPrBodyAgainstLocalDiff(args: {
+export async function validateReviewStackPrBodyAgainstLocalDiff(args: {
   body: string;
   cwd: string;
   baseBranch: string;
-}): string[] {
+}): Promise<string[]> {
   const structuralErrors = validateReviewStackPrBody(args.body);
-  const validatorPath = join(args.cwd, 'scripts', 'validate-pr-body-local.mjs');
+  const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   if (!existsSync(validatorPath)) {
     return [
       ...structuralErrors,
       `CI-parity PR body validator is missing: ${validatorPath}`,
     ];
   }
+  return [...structuralErrors, ...(await runRepoLocalPrBodyChecker(args))];
+}
 
+export function repoLocalPrBodyCheckerPath(cwd: string): string {
+  return join(cwd, 'scripts', 'validate-pr-body-local.mjs');
+}
+
+export function resolvePrBodyValidatorNodeBinary(): string {
+  return resolveExecutableOnCurrentPath('node') ?? process.execPath;
+}
+
+const DEFAULT_PR_BODY_VALIDATOR_TIMEOUT_MS = 60 * 1000;
+
+function getPrBodyValidatorTimeoutMs(): number {
+  const raw = process.env.INVOKER_PR_BODY_VALIDATOR_TIMEOUT_MS?.trim();
+  if (!raw || !/^[1-9]\d*$/.test(raw)) return DEFAULT_PR_BODY_VALIDATOR_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_PR_BODY_VALIDATOR_TIMEOUT_MS;
+}
+
+interface BoundedChildResult {
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+}
+
+function runBoundedChild(
+  command: string,
+  commandArgs: readonly string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
+): Promise<BoundedChildResult> {
+  return new Promise<BoundedChildResult>((resolve, reject) => {
+    const child = spawn(command, commandArgs, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      killProcessGroup(child, 'SIGTERM');
+      forceKillTimeout = setTimeout(() => {
+        killProcessGroup(child, 'SIGKILL');
+      }, SIGKILL_TIMEOUT_MS);
+    }, options.timeoutMs);
+    const clearTimers = (): void => {
+      clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+    };
+
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (error) => {
+      clearTimers();
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimers();
+      resolve({ code, stdout, stderr, timedOut });
+    });
+  });
+}
+
+export async function runRepoLocalPrBodyChecker(args: {
+  body: string;
+  cwd: string;
+  baseBranch: string;
+  timeoutMs?: number;
+}): Promise<string[]> {
+  const validatorPath = repoLocalPrBodyCheckerPath(args.cwd);
   const tempDir = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
   const bodyFile = join(tempDir, 'body.md');
+  const timeoutMs = args.timeoutMs ?? getPrBodyValidatorTimeoutMs();
   try {
     writeFileSync(bodyFile, args.body, 'utf8');
-    const result = spawnSync(
-      process.execPath,
+    const resolvedNode = resolveExecutableOnCurrentPath('node');
+    const result = await runBoundedChild(
+      resolvedNode ?? process.execPath,
       [validatorPath, '--body-file', bodyFile, '--base', args.baseBranch],
-      { cwd: args.cwd, encoding: 'utf8' },
+      {
+        cwd: args.cwd,
+        env: resolvedNode ? cleanElectronEnv() : { ...cleanElectronEnv(), ELECTRON_RUN_AS_NODE: '1' },
+        timeoutMs,
+      },
     );
-    if (result.status === 0) return structuralErrors;
+    if (result.timedOut) {
+      return [`CI-parity PR body validation timed out after ${timeoutMs}ms: ${validatorPath}`];
+    }
+    if (result.code === 0) return [];
 
-    const output = `${String(result.stdout ?? '')}\n${String(result.stderr ?? '')}`.trim();
-    return [
-      ...structuralErrors,
-      `CI-parity PR body validation failed: ${output || 'validator exited without output'}`,
-    ];
+    const output = `${result.stdout}\n${result.stderr}`.trim();
+    return [`CI-parity PR body validation failed: ${output || 'validator exited without output'}`];
   } catch (error) {
     return [
-      ...structuralErrors,
       `CI-parity PR body validation could not run: ${error instanceof Error ? error.message : String(error)}`,
     ];
   } finally {
@@ -406,12 +529,76 @@ function normalizeReviewArtifactProviderId(url: string, providerId: string | und
   return providerId;
 }
 
+function extractJsonPayload(raw: string): string {
+  const trimmed = raw.trim();
+  let lastValid: string | undefined;
+  for (let start = 0; start < trimmed.length; start += 1) {
+    if (trimmed[start] !== '{') continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < trimmed.length; end += 1) {
+      const character = trimmed[end];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (character === '"') {
+        inString = true;
+      } else if (character === '{') {
+        depth += 1;
+      } else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = trimmed.slice(start, end + 1);
+          try {
+            JSON.parse(candidate);
+            lastValid = candidate;
+            start = end;
+          } catch {}
+          break;
+        }
+      }
+    }
+  }
+  return lastValid ?? trimmed;
+}
+
+export function extractAgentReportedError(stdout: string): string | undefined {
+  if (!stdout) return undefined;
+  for (const match of stdout.matchAll(/"error"\s*:\s*\{/g)) {
+    const slice = stdout.slice(match.index);
+    const messageMatch = slice.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (!messageMatch) continue;
+    try {
+      const message = JSON.parse(`"${messageMatch[1]}"`) as string;
+      if (message.trim()) return message.trim();
+    } catch {
+      const message = messageMatch[1].trim();
+      if (message) return message;
+    }
+  }
+  return undefined;
+}
+
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.trim());
   } catch {
-    throw new Error('make-pr stack publisher must output JSON');
+    try {
+      parsed = JSON.parse(extractJsonPayload(raw));
+    } catch {
+      throw new Error('make-pr stack publisher must output JSON');
+    }
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -561,6 +748,86 @@ function renderPipelineSection(workerActions: readonly PrAuthoringWorkerActionEn
   return lines;
 }
 
+interface FallbackReviewMetadata {
+  unit: string;
+  lane: string;
+}
+
+async function resolveFallbackReviewMetadata(cwd: string, baseBranch: string): Promise<FallbackReviewMetadata | undefined> {
+  if (!existsSync(join(cwd, 'drafter.config.json'))) return undefined;
+  const source = `
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  loadDrafterConfig, reviewUnitsForChangedFiles, validateReviewUnitChangedFiles,
+  validateReviewLaneUnitCompatibility, forbiddenUnitsForLane,
+} from '@neko-catpital-labs/drafter-core';
+const base = process.argv[1];
+const remote = 'origin/' + base;
+const options = { encoding: 'utf8', timeout: 10000, stdio: 'pipe' };
+const remoteExists = spawnSync('git', ['rev-parse', '--verify', '--quiet', remote], options).status === 0;
+const mergeBase = execFileSync('git', ['merge-base', remoteExists ? remote : base, 'HEAD'], options).trim();
+const changedFiles = execFileSync('git', ['diff', '--name-only', '-z', mergeBase, '--'], options).split('\\0').filter(Boolean);
+const config = await loadDrafterConfig({ explicitPath: 'drafter.config.json' });
+const units = reviewUnitsForChangedFiles(changedFiles, config);
+const candidates = units.filter((unit) => validateReviewUnitChangedFiles({
+  declaredReviewUnit: unit, changedFiles, config, context: 'Fallback',
+}).length === 0);
+if (candidates.length !== 1) throw new Error('Ambiguous fallback review unit: ' + (units.join(', ') || 'no classified changes'));
+const unit = candidates[0];
+const lanes = config.taxonomy.lanes.map(({ id }) => id).filter((lane) =>
+  validateReviewLaneUnitCompatibility({ reviewLane: lane, reviewUnit: unit, config, context: 'Fallback' }).length === 0
+  && forbiddenUnitsForLane(units, lane, config).length === 0);
+const lane = lanes.includes('behavior') ? 'behavior' : lanes.length === 1 && lanes[0] !== 'refactor' ? lanes[0] : undefined;
+if (!lane) throw new Error('Ambiguous fallback review lane for ' + unit + ': ' + lanes.join(', '));
+console.log(JSON.stringify({ unit, lane }));
+`;
+  const resolvedNode = resolveExecutableOnCurrentPath('node');
+  const result = await runBoundedChild(resolvedNode ?? process.execPath, ['--input-type=module', '-e', source, baseBranch], {
+    cwd,
+    env: resolvedNode ? cleanElectronEnv() : { ...cleanElectronEnv(), ELECTRON_RUN_AS_NODE: '1' },
+    timeoutMs: getPrBodyValidatorTimeoutMs(),
+  });
+  if (result.timedOut || result.code !== 0) {
+    throw new Error(`Fallback review metadata could not be resolved; provision the target repository dependencies and resolve its review scope: ${
+      result.timedOut ? 'classification timed out' : `${result.stdout}\n${result.stderr}`.trim() || `classifier exited ${result.code}`
+    }`);
+  }
+  const metadata: unknown = JSON.parse(result.stdout);
+  if (!metadata || typeof metadata !== 'object'
+    || !('unit' in metadata) || typeof metadata.unit !== 'string' || !metadata.unit.trim()
+    || !('lane' in metadata) || typeof metadata.lane !== 'string' || !metadata.lane.trim()) {
+    throw new Error('Fallback review classifier returned invalid metadata.');
+  }
+  return { unit: metadata.unit, lane: metadata.lane };
+}
+
+export async function buildValidatedFallbackPrBody(args: {
+  title: string;
+  workflowSummary: string;
+  structuredContext?: PrAuthoringContext;
+  cwd: string;
+  baseBranch: string;
+}): Promise<string> {
+  const reviewMetadata = await resolveFallbackReviewMetadata(args.cwd, args.baseBranch);
+  const body = buildCanonicalPrBody({ ...args, reviewMetadata });
+  const errors = validateCanonicalPrBody(body);
+  if (existsSync(repoLocalPrBodyCheckerPath(args.cwd))) {
+    errors.push(...await runRepoLocalPrBodyChecker({ ...args, body }));
+  } else if (reviewMetadata) {
+    errors.push(`CI-parity PR body validator is missing: ${repoLocalPrBodyCheckerPath(args.cwd)}`);
+  }
+  if (errors.length > 0) {
+    throw new Error('[pr-authoring] target repo checker rejected every PR body; refusing canonical fallback. '
+      + `Errors: canonical: ${errors.join('; ')}`);
+  }
+  return body;
+}
+
+function preservedContext(value: string): string {
+  const fence = '`'.repeat(Math.max(3, ...[...value.matchAll(/`+/g)].map(([run]) => run.length + 1)));
+  return `${fence}text\n${value}\n${fence}`;
+}
+
 /**
  * Build a deterministic canonical PR body from structured context.
  * Used as the no-AI escape hatch when all agent-authored attempts fail.
@@ -569,21 +836,55 @@ export function buildCanonicalPrBody(args: {
   title: string;
   workflowSummary: string;
   structuredContext?: PrAuthoringContext;
+  reviewMetadata?: FallbackReviewMetadata;
 }): string {
   const lines: string[] = [];
 
   // ## Summary
   lines.push('## Summary');
   lines.push('');
-  if (args.structuredContext?.workflowDescription) {
-    lines.push(args.structuredContext.workflowDescription);
-  } else {
-    lines.push(args.workflowSummary.trim());
-  }
+  lines.push('This pull request presents the recorded work for review.');
+  lines.push('');
+  lines.push('The details below preserve the supplied context and checks. They do not establish that the requested change is complete.');
   lines.push('');
 
   if (args.structuredContext?.workerActions !== undefined) {
     lines.push(...renderPipelineSection(args.structuredContext.workerActions));
+  }
+
+  lines.push('## Review Claim');
+  lines.push('');
+  lines.push('Review the proposed changes using the recorded context and checks below.');
+  lines.push('');
+
+  if (args.reviewMetadata) {
+    lines.push('## Review Lane', '', args.reviewMetadata.lane, '');
+    lines.push('## Review Unit', '', args.reviewMetadata.unit, '');
+  }
+
+  lines.push('## Safety Invariant');
+  lines.push('');
+  lines.push('The fallback PR body keeps repository validation enabled and only publishes after the generated body passes the configured checks.');
+  lines.push('');
+
+  lines.push('## Slice Rationale');
+  lines.push('');
+  lines.push('The review scope is derived from the changed paths where repository conventions are available.');
+  lines.push('');
+
+  lines.push('## Non-goals');
+  lines.push('');
+  lines.push('- No validation weakening, skipping, or deletion.');
+  lines.push('- This generated description does not infer outcomes beyond the supplied evidence.');
+  lines.push('');
+
+  lines.push('## Workflow Context', '');
+  if (args.structuredContext?.workflowDescription) {
+    lines.push(preservedContext(args.structuredContext.workflowDescription), '');
+  }
+  lines.push(preservedContext(args.workflowSummary), '');
+  if (args.structuredContext?.tasks.length) {
+    lines.push(preservedContext(JSON.stringify(args.structuredContext.tasks, null, 2)), '');
   }
 
   // ## Test Plan — content collapsed per the canonical schema.
@@ -611,10 +912,10 @@ export function buildCanonicalPrBody(args: {
   lines.push('<details>');
   lines.push('<summary>Revert Plan</summary>');
   lines.push('');
-  lines.push('- Safe to revert? Yes');
+  lines.push('- Safe to revert? Requires review of the changed code.');
   lines.push('- Revert command: `git revert <sha>`');
-  lines.push('- Post-revert steps: None');
-  lines.push('- Data migration? No');
+  lines.push('- Post-revert steps: Not established by the supplied evidence.');
+  lines.push('- Data migration? Not established by the supplied evidence.');
   lines.push('');
   lines.push('</details>');
   lines.push('');
@@ -731,6 +1032,7 @@ export function spawnAgentPrAuthorViaRegistry(
   cwd: string,
   agent: ExecutionAgent,
   driver?: SessionDriver,
+  extraEnv: NodeJS.ProcessEnv = {},
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
@@ -741,7 +1043,7 @@ export function spawnAgentPrAuthorViaRegistry(
     const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: cleanElectronEnv(),
+      env: { ...cleanElectronEnv(), ...extraEnv },
       detached: process.platform !== 'win32',
     });
 
@@ -802,7 +1104,12 @@ export function spawnAgentPrAuthorViaRegistry(
             resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
             return;
           }
-          reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${buildAgentExitFailureDetail(stdout, stderr, displayStdout)}`));
+          const failureDetail = buildAgentExitFailureDetail(stdout, stderr, displayStdout);
+          const failureClass = FailureClassifier.classifyAgentQuotaRefusal(failureDetail);
+          reject(Object.assign(
+            new Error(`${agent.name} PR authoring exited with code ${code}: ${failureDetail}`),
+            failureClass ? { failureClass } : {},
+          ));
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
         }

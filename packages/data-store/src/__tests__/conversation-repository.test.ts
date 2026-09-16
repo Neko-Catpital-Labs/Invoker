@@ -157,11 +157,83 @@ describe('ConversationRepository', () => {
     });
   });
 
+  // ── saved-count divergence ───────────────────────────────
+
+  describe('saveConversation when the stored row holds more messages than memory', () => {
+    function seedOrphanedRow(threadTs: string): void {
+      seedConversation(threadTs);
+      adapter.appendMessage(threadTs, 'user', 'orphan question one');
+      adapter.appendMessage(threadTs, 'assistant', 'orphan answer one');
+      adapter.appendMessage(threadTs, 'user', 'orphan question two');
+      adapter.appendMessage(threadTs, 'assistant', 'orphan answer two');
+    }
+
+    it('leaves the stored transcript intact rather than interleaving a divergent one', () => {
+      seedOrphanedRow('ts-orphan');
+
+      repo.saveConversation('ts-orphan', [
+        { role: 'user', content: 'brand new session, first message' },
+        { role: 'assistant', content: 'brand new session, first reply' },
+      ]);
+
+      const stored = repo.loadConversation('ts-orphan')!.messages.map((m) => m.content);
+      expect(stored).toHaveLength(4);
+      expect(stored).not.toContain('brand new session, first message');
+    });
+
+    it('reports the divergence with both counts instead of a silent success', () => {
+      const warnings: string[] = [];
+      const errors: string[] = [];
+      const loudRepo = new ConversationRepository(adapter, {
+        info: () => {},
+        warn: (message: string) => warnings.push(message),
+        error: (message: string) => errors.push(message),
+      });
+      seedOrphanedRow('ts-orphan-log');
+
+      loudRepo.saveConversation('ts-orphan-log', [
+        { role: 'user', content: 'brand new session, first message' },
+      ]);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('ts-orphan-log');
+      expect(errors[0]).toContain('memory holds 1 message(s)');
+      expect(errors[0]).toContain('the stored row holds 4');
+      expect(errors[0]).toContain('NOT persisted');
+      expect(warnings).toEqual([]);
+    });
+  });
+
   // ── loadConversation ─────────────────────────────────────
 
   describe('loadConversation', () => {
     it('returns null for non-existent thread', () => {
       expect(repo.loadConversation('nonexistent')).toBeNull();
+    });
+
+    it('round-trips a bare numeric reply as the string the user typed', () => {
+      repo.saveConversation('ts-numeric', [
+        { role: 'user', content: 'Which option? 1, 2, or 3' },
+        { role: 'assistant', content: 'Pick one.' },
+        { role: 'user', content: '3' },
+      ]);
+
+      const loaded = repo.loadConversation('ts-numeric');
+      expect(loaded!.messages.map((m) => m.content)).toEqual([
+        'Which option? 1, 2, or 3',
+        'Pick one.',
+        '3',
+      ]);
+    });
+
+    it('keeps JSON-looking scalar replies (true, null) as strings', () => {
+      repo.saveConversation('ts-scalar', [
+        { role: 'user', content: 'true' },
+        { role: 'user', content: 'null' },
+      ]);
+
+      const loaded = repo.loadConversation('ts-scalar');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['true', 'null']);
     });
 
     it('deserializes plan and messages from JSON', () => {
