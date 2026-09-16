@@ -762,6 +762,48 @@ describe('WorkflowInspector', () => {
     expect(screen.getByTestId('inspector-pending-fix-error')).toHaveTextContent('tests failed');
   });
 
+  it('hides merge approval actions when the workflow has no merge configured', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', onFinish: 'none' }}
+        task={makeTask({
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true, runnerKind: 'merge' },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Approve Merge' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject Merge' })).not.toBeInTheDocument();
+  });
+
+  it('keeps merge approval actions for workflows with a configured finish action', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', onFinish: 'pull_request' }}
+        task={makeTask({
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true, runnerKind: 'merge' },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Approve Merge' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reject Merge' })).toBeVisible();
+  });
+
   it('surfaces an executor-selection failure captured in pendingFixError so approve dispatch errors are visible', () => {
     const capabilityError =
       'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"';
@@ -1118,5 +1160,46 @@ describe('WorkflowInspector', () => {
     );
 
     expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
+  });
+});
+
+describe('WorkflowInspector Codex spend gate failure', () => {
+  it('labels a task that failed because the Codex spend gate is tripped', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({
+          status: 'failed',
+          execution: {
+            error: 'Executor startup failed (worktree): Codex is shut off by the daily spend gate and every Codex request fails until a human reviews the sessions.',
+            failureClass: 'agent-spend-gate',
+            exitCode: 1,
+          },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('inspector-codex-spend-gate-label')).toHaveTextContent(
+      'Codex is switched off by the daily spend gate. Auto-fix will not retry this task.',
+    );
+  });
+
+  it('does not show the spend gate label for other failures', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: 'SSH key not found', exitCode: 1 } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('inspector-codex-spend-gate-label')).toBeNull();
   });
 });

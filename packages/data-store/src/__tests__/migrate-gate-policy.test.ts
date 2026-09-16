@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow } from '../adapter.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { resolveTaskConfig, type TaskState } from '@invoker/workflow-core';
 
 describe('migrateGatePolicyApprovedToCompleted', () => {
   let tmpDir: string;
@@ -34,7 +34,7 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
       status: 'pending',
       dependencies: [],
       createdAt: new Date(),
-      config: {},
+      config: resolveTaskConfig(),
       execution: {},
       taskStateVersion: 1,
       ...overrides,

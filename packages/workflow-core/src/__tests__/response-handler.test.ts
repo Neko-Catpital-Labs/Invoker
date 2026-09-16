@@ -123,6 +123,23 @@ describe('ResponseHandler (pure parser)', () => {
     });
   });
 
+  describe('stale', () => {
+    it('parses deterministic stale completion without converting it to needs_input', () => {
+      const result = handler.parseResponse(makeResponse({
+        status: 'stale',
+        outputs: { exitCode: 1, error: 'path precondition failed', summary: 'replan required' },
+      }));
+
+      expect(result).toEqual({
+        type: 'stale',
+        taskId: 't1',
+        exitCode: 1,
+        error: 'path precondition failed',
+        summary: 'replan required',
+      });
+    });
+  });
+
   // ── failed ─────────────────────────────────────────────
 
   describe('failed', () => {

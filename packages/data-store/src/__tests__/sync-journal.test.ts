@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createAttempt } from '@invoker/workflow-core';
+import { createAttempt, resolveTaskConfig } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { WorkflowSaveInput } from '../adapter.js';
@@ -47,7 +47,7 @@ describe('sync journal', () => {
       status,
       dependencies: [],
       createdAt: new Date('2026-07-28T00:00:00.000Z'),
-      config: {},
+      config: resolveTaskConfig(),
       execution: {},
       taskStateVersion: 1,
     };

@@ -1,3 +1,5 @@
+import { isExactPlanningSubmitCommand } from './planning-surface.js';
+
 export type PlanningRole = 'user' | 'assistant' | 'system';
 
 export interface PlanningMessage {
@@ -10,6 +12,7 @@ function normalized(text: string): string {
 }
 
 export function hasExplicitDraftIntent(message: string): boolean {
+  if (isExactPlanningSubmitCommand(message)) return true;
   const value = message.trim().toLowerCase().replace(/\s+/g, ' ');
   return [
     /^draft$/,
@@ -41,6 +44,20 @@ export function isShortDraftConfirmation(message: string): boolean {
     'lgtm',
     'ship it',
   ].includes(normalized(message).replace(/[.!]+$/g, '').replace(/\s+/g, ' '));
+}
+
+const QUESTION_PUNCTUATION_PATTERN = /[?？¿؟՞︖⁇⁈⁉]/;
+
+const LEADING_QUESTION_WORD_PATTERN = /^(what|when|where|who|whom|whose|which|why|how|is|are|am|was|were|do|does|did|can|could|will|would|shall|should|may|might|must)\b/i;
+
+// A bare `?` check misses punctuation-free ("What files are in this repo")
+// and non-ASCII questions, which can slip past authorization gates that key
+// off "is this a question."
+export function looksLikeQuestion(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  if (QUESTION_PUNCTUATION_PATTERN.test(trimmed)) return true;
+  return LEADING_QUESTION_WORD_PATTERN.test(trimmed);
 }
 
 export function assistantAskedWhetherToDraft(message: string): boolean {
