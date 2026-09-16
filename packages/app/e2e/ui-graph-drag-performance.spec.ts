@@ -122,6 +122,10 @@ async function seedLargeWorkflowGraph(page: Page): Promise<void> {
   await dismissKnownOverlays(page);
   await page.getByRole('button', { name: 'Refresh' }).dispatchEvent('click', { bubbles: true, cancelable: true });
   await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 30_000 });
+  await expect.poll(
+    () => page.locator('[data-testid^="workflow-node-"]').count(),
+    { timeout: 30_000 },
+  ).toBeGreaterThanOrEqual(WORKFLOW_COUNT);
   await waitForGraphRendererSettle(page);
 }
 
