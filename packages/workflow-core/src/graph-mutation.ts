@@ -247,7 +247,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       default:
         nodeConfig = {
           ...nodeBase,
-          runnerKind: nodeDef.poolId && nodeDef.poolId !== BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'ssh' : 'worktree',
+          ...(nodeDef.runnerKind === 'worktree' ? { runnerKind: 'worktree' as const } : {}),
           poolId: nodeDef.poolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID,
         };
         break;

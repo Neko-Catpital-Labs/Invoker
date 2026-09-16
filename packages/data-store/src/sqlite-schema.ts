@@ -698,7 +698,7 @@ export const POST_MIGRATION_STATEMENTS = [
   `CREATE TRIGGER trg_tasks_executor_routing_insert
     BEFORE INSERT ON tasks
     WHEN COALESCE((
-      (NEW.runner_kind IN ('worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
+      (COALESCE(NEW.runner_kind, '') IN ('', 'worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
       OR (NEW.runner_kind = 'docker' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
       OR (NEW.runner_kind = 'merge' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
       OR (NEW.runner_kind = 'scratch' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
@@ -709,7 +709,7 @@ export const POST_MIGRATION_STATEMENTS = [
   `CREATE TRIGGER trg_tasks_executor_routing_update
     BEFORE UPDATE OF runner_kind, pool_id, pool_member_id, docker_image ON tasks
     WHEN COALESCE((
-      (NEW.runner_kind IN ('worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
+      (COALESCE(NEW.runner_kind, '') IN ('', 'worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
       OR (NEW.runner_kind = 'docker' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
       OR (NEW.runner_kind = 'merge' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
       OR (NEW.runner_kind = 'scratch' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
