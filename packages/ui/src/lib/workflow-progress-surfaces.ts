@@ -26,12 +26,13 @@ const WORKFLOW_STATUS_PRIORITY: Record<WorkflowStatus, number> = {
   closed: 9,
 };
 
-const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
+export const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
   failed: 0,
   awaiting_approval: 1,
   review_ready: 2,
   blocked: 3,
   needs_input: 4,
+  skipped: 7,
 };
 
 const RUNNING_TASK_STATUS: Partial<Record<TaskStatus, true>> = {

@@ -20,6 +20,7 @@ describe('skipped status UI coverage', () => {
 
   it('is absent from the attention and running task-status maps', async () => {
     const surfaces = await import('../lib/workflow-progress-surfaces.js');
+    expect(surfaces.ATTENTION_STATUS_PRIORITY.skipped).toBe(7);
     expect(
       surfaces.isAttentionTask({
         status: 'skipped',
