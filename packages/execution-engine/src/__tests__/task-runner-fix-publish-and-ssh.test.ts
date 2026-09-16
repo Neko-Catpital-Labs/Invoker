@@ -2169,6 +2169,18 @@ describe('TaskRunner', () => {
       return cwd;
     }
 
+    it.each([
+      [1, 'target checker rejected the body'],
+      [3, 'UNCHECKED: PR body rules not checked (drafter-core not installed)'],
+    ])('no-registry fallback refuses target checker exit %s', async (code, message) => {
+      const cwd = createRepoCheckerWorkspace(`console.error(${JSON.stringify(message)}); process.exit(${code});`);
+      const executor = createExecutorWithTasks(new Map());
+      await expect(executor.authorPrBodyWithSkill({
+        title: 'Recorded work', baseBranch: 'main', featureBranch: 'repair',
+        workflowSummary: 'Recorded context', cwd,
+      })).rejects.toThrow(String(message));
+    });
+
     async function authorNonInvokerBody(body: string, cwd: string) {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
@@ -2746,10 +2758,10 @@ describe('TaskRunner', () => {
       expect(body).toContain('`pnpm run a11y:check` — Verify accessibility contrast');
 
       // Failed tasks must NOT appear (only completed commands)
-      expect(body).not.toContain('pnpm run build:broken');
+      expect(body.split('## Test Plan')[1]).not.toContain('pnpm run build:broken');
 
       // Tasks without commands must NOT appear as checklist items
-      expect(body).not.toContain('Manual review');
+      expect(body.split('## Test Plan')[1]).not.toContain('Manual review');
 
       // Must NOT contain "Manual verification required" since we have completed commands
       expect(body).not.toContain('Manual verification required');
@@ -2841,10 +2853,10 @@ describe('TaskRunner', () => {
       // No completed command tasks → must show manual verification
       expect(body).toContain('Manual verification required');
       // Failed command task must NOT appear
-      expect(body).not.toContain('pnpm run build');
+      expect(body.split('## Test Plan')[1]).not.toContain('pnpm run build');
     });
 
-    it('canonical body uses workflowDescription over workflowSummary in Summary section', () => {
+    it('canonical body preserves both inputs outside Summary', () => {
       // buildCanonicalPrBody already imported at top of file
 
       const body = buildCanonicalPrBody({
@@ -2857,7 +2869,9 @@ describe('TaskRunner', () => {
       });
 
       expect(body).toContain('This is the structured description from the plan YAML.');
-      expect(body).not.toContain('This is the raw summary');
+      expect(body.split('## Workflow Context')[1]).toContain('This is the raw summary');
+      expect(body.split('## Review Claim')[0]).not.toContain('This is the raw summary');
+      expect(body.split('## Review Claim')[0]).not.toContain('structured description');
     });
 
     it('resolveConflict includes dep description in merge -m', async () => {
@@ -5416,10 +5430,11 @@ describe('TaskRunner', () => {
   });
 
   describe('no-capable-agent deterministic PR-body fallback', () => {
-    it('canonical fallback includes all required sections', () => {
+    it('canonical fallback includes review sections when metadata is supplied', () => {
       const body = buildCanonicalPrBody({
         title: 'Test PR',
         workflowSummary: 'Implemented feature X.',
+        reviewMetadata: { unit: 'routing', lane: 'behavior' },
       });
 
       expect(body).toContain('## Summary');
@@ -5435,10 +5450,10 @@ describe('TaskRunner', () => {
       expect(validateReviewStackPrBody(body)).toEqual([]);
     });
 
-    it('canonical fallback uses workflowDescription over workflowSummary when available', () => {
+    it('canonical fallback keeps both supplied sources in later sections', () => {
       const body = buildCanonicalPrBody({
         title: 'Test PR',
-        workflowSummary: 'Raw summary that should not appear.',
+        workflowSummary: 'Raw technical summary.',
         structuredContext: {
           workflowDescription: 'Preferred description from YAML.',
           tasks: [],
@@ -5446,7 +5461,9 @@ describe('TaskRunner', () => {
       });
 
       expect(body).toContain('Preferred description from YAML.');
-      expect(body).not.toContain('Raw summary that should not appear.');
+      expect(body.split('## Workflow Context')[1]).toContain('Raw technical summary.');
+      expect(body.split('## Review Claim')[0]).not.toContain('Raw technical summary.');
+      expect(body.split('## Review Claim')[0]).not.toContain('Preferred description');
     });
 
     it('canonical fallback lists completed command tasks as checked items in Test Plan', () => {
@@ -5467,9 +5484,9 @@ describe('TaskRunner', () => {
       expect(body).toContain('- [x] `pnpm test` — Run unit tests');
       expect(body).toContain('- [x] `pnpm lint` — Run lint');
       // Non-command task excluded from Test Plan command list
-      expect(body).not.toContain('Implement feature');
+      expect(body.split('## Test Plan')[1]).not.toContain('Implement feature');
       // Failed command task excluded
-      expect(body).not.toContain('pnpm deploy');
+      expect(body.split('## Test Plan')[1]).not.toContain('pnpm deploy');
     });
 
     it('canonical fallback shows manual verification when no completed command tasks exist', () => {

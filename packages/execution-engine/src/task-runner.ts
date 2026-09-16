@@ -49,7 +49,7 @@ import {
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
-  buildCanonicalPrBody,
+  buildValidatedFallbackPrBody,
   isInvokerRepoUrl,
   buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
@@ -1504,20 +1504,17 @@ export class TaskRunner {
       this.logger.warn(
         '[pr-authoring] executionAgentRegistry missing, using canonical fallback PR body.',
       );
-      const canonicalBody = buildCanonicalPrBody({
-        title: args.title,
-        workflowSummary: args.workflowSummary,
-        structuredContext: args.structuredContext,
-      });
-      return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
     }
 
     // Build the ordered agent fallback chain:
     // 1. Preferred agent from workflow tasks
     // 2. Remaining PR-capable agents in stable registry order
-    const preferredName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
-    const prCapableAgents = this.executionAgentRegistry.listWithCapability('make-pr');
-    const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
+    const orderedAgents = this.executionAgentRegistry
+      ? this.buildAgentFallbackOrder(
+        this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId),
+        this.executionAgentRegistry.listWithCapability('make-pr'),
+      )
+      : [];
 
     const errors: string[] = [];
     let failureClass: FailureClass | undefined;
@@ -1528,7 +1525,7 @@ export class TaskRunner {
         continue;
       }
 
-      const driver = this.executionAgentRegistry.getSessionDriver(agent.name);
+      const driver = this.executionAgentRegistry?.getSessionDriver(agent.name);
       const prompt = buildMakePrPrompt({
         skillPath,
         title: args.title,
@@ -1590,40 +1587,19 @@ export class TaskRunner {
       );
     }
 
-    const canonicalBody = buildCanonicalPrBody({
-      title: args.title,
-      workflowSummary: args.workflowSummary,
-      structuredContext: args.structuredContext,
-    });
-
-    if (hasRepoChecker) {
-      const canonicalErrors = [
-        ...validateCanonicalPrBody(canonicalBody),
-        ...(await runRepoLocalPrBodyChecker({
-          body: canonicalBody,
-          cwd: args.cwd,
-          baseBranch: args.baseBranch,
-        })),
-      ];
-      if (canonicalErrors.length === 0) {
-        this.logger.warn(
-          `[pr-authoring] All AI agents failed for PR authoring; using validated canonical fallback. `
-            + `Errors: ${errors.join(' | ')}`,
-        );
-        return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
-      }
+    try {
+      const canonicalBody = await buildValidatedFallbackPrBody(args);
+      this.logger.warn(
+        `[pr-authoring] All AI agents failed for PR authoring; using validated canonical fallback. `
+          + `Errors: ${errors.join(' | ')}`,
+      );
+      return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
+    } catch (error) {
       throw errorWithFailureClass(
-        '[pr-authoring] target repo checker rejected every PR body; refusing canonical fallback. '
-          + `Errors: ${[...errors, `canonical: ${canonicalErrors.join('; ')}`].join(' | ')}`,
+        `${error instanceof Error ? error.message : String(error)} Author errors: ${errors.join(' | ')}`,
         failureClass,
       );
     }
-
-    // No AI agent succeeded — emit deterministic canonical PR body
-    this.logger.warn(
-      `[pr-authoring] All AI agents failed for PR authoring, using canonical fallback. Errors: ${errors.join(' | ')}`,
-    );
-    return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
   }
 
   async publishReviewStackWithMakePrSkill(args: {
