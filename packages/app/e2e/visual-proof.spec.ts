@@ -715,6 +715,8 @@ test.describe('Connection lost visual proof', () => {
 });
 
 test.describe('Visual proof capture', () => {
+  test.use({ repoConfig: { autoFixRetries: 0, disableAutoRunOnStartup: true } });
+
   test('history view — task state timeline', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
@@ -2121,8 +2123,8 @@ test.describe('Visual proof capture', () => {
       {
         taskId: 'task-alpha',
         changes: {
-          status: 'running',
-          execution: { isFixingWithAI: true, startedAt: new Date() },
+          status: 'fixing_with_ai',
+          execution: { startedAt: new Date() },
         },
       },
       {
@@ -2401,8 +2403,8 @@ test.describe('Visual proof capture', () => {
       {
         taskId: 'task-alpha',
         changes: {
-          status: 'running',
-          execution: { isFixingWithAI: true, startedAt: now },
+          status: 'fixing_with_ai',
+          execution: { startedAt: now },
         },
       },
       {
@@ -2421,6 +2423,8 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+
+    await page.getByTestId('rail-refresh').click();
 
     // DOM assertions for the three status labels
     const miniDag = page.getByTestId('selected-workflow-mini-dag');
@@ -3157,7 +3161,7 @@ test.describe('Visual proof capture', () => {
     const now = new Date();
     await injectTaskStates(page, [
       { taskId: 'qh-running', changes: { status: 'running', execution: { startedAt: now } } },
-      { taskId: 'qh-fixing', changes: { status: 'running', execution: { isFixingWithAI: true, startedAt: now } } },
+      { taskId: 'qh-fixing', changes: { status: 'fixing_with_ai', execution: { startedAt: now } } },
       { taskId: 'qh-approval', changes: { status: 'awaiting_approval', execution: { startedAt: now } } },
       // qh-queued stays pending with no deps → Action Queue queued section
       // qh-downstream stays pending with unmet dep on qh-running → Backlog
