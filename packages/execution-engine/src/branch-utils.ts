@@ -1,3 +1,4 @@
+import { cancelOwnedStartupChild, type ExecutorStartup } from './executor.js';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { cleanGitRepositoryEnv } from './process-utils.js';
@@ -390,14 +391,17 @@ export function parseMergeError(exitCode: number, stderr: string): MergeError {
  * Run a bash script locally via child_process.spawn.
  * Returns stdout on success; throws on non-zero exit with stderr attached.
  */
-export function runBashLocal(script: string, cwd?: string): Promise<string> {
+export function runBashLocal(script: string, cwd?: string, startup?: ExecutorStartup): Promise<string> {
+  startup?.check();
   return new Promise((resolve, reject) => {
     const child = spawn('bash', ['-c', script], {
       cwd,
+      detached: !!startup,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: cleanGitRepositoryEnv(),
     });
 
+    cancelOwnedStartupChild(child, startup);
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -408,6 +412,7 @@ export function runBashLocal(script: string, cwd?: string): Promise<string> {
     });
 
     child.on('close', (code) => {
+      try { startup?.check(); } catch (error) { reject(error); return; }
       if (code === 0) {
         resolve(stdout);
       } else {

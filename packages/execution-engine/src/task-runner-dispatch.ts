@@ -13,7 +13,7 @@
 import type { TaskState, RunnerKind } from '@invoker/workflow-core';
 import type { WorkRequest } from '@invoker/contracts';
 
-import type { Executor, ExecutorHandle } from './executor.js';
+import { ExecutorStartup, StartupCancelledError, type Executor, type ExecutorHandle } from './executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
   PRE_START_HEARTBEAT_INTERVAL_MS,
@@ -88,6 +88,11 @@ export async function dispatchExecutor(
     request.inputs.executionAgent = resolvedExecution.executionAgent;
     request.inputs.executionModel = resolvedExecution.executionModel;
     const startTimeoutMs = getExecutorStartTimeoutMs();
+    const startup = new ExecutorStartup(
+      Date.now() + startTimeoutMs,
+      new StartupCancelledError('timeout', `Executor startup timed out after ${startTimeoutMs}ms (${executor.type})`),
+      () => !host.isLaunchStale(task.id, attemptId, startGeneration),
+    );
     const preStartHeartbeatTimer = setInterval(() => {
       const now = new Date();
       host.renewPoolSelectionLease(poolSelectionForStart);
@@ -100,10 +105,21 @@ export async function dispatchExecutor(
     let preStartTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
       handle = await Promise.race<ExecutorHandle>([
-        executor.start(request),
+        executor.start(request, startup).then(async (started) => {
+          try {
+            if (startup.signal.aborted || Date.now() >= startup.deadlineMs) startup.check();
+          } catch (error) {
+            try { await selectedExecutor.executor.kill(started); } catch (killError) {
+              host.logger.warn('[TaskRunner] failed to kill expired startup handle', { killError });
+            }
+            throw error;
+          }
+          return started;
+        }),
         new Promise<ExecutorHandle>((_resolve, reject) => {
           preStartTimeout = setTimeout(() => {
-            reject(new Error(`Executor startup timed out after ${startTimeoutMs}ms (${executor.type})`));
+            startup.cancel();
+            reject(startup.signal.reason);
           }, startTimeoutMs);
         }),
       ]);
@@ -119,6 +135,7 @@ export async function dispatchExecutor(
       }
       break;
     } catch (err) {
+      startup.cancel(err);
       const meta = err as StartupFailureMetadata;
       if (
         executor.type === 'ssh'

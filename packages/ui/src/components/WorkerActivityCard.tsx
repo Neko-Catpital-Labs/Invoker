@@ -47,6 +47,12 @@ function activityExplanation(worker: WorkerStatusEntry, lifecycle: string): stri
   return 'Worker disabled. Enable it to listen for work.';
 }
 
+function formatOwnerResponseTime(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return timestamp;
+  return `${parsed.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+}
+
 export function WorkerActivityCard({
   snapshot,
   selectedWorkerKind,
@@ -97,13 +103,43 @@ export function WorkerActivityCard({
     });
   }, [snapshot, optimisticByKind]);
 
+  const freshnessNotice = snapshot?.authority === 'cached'
+    ? {
+        title: 'Showing saved worker status',
+        detail: snapshot.lastSuccessfulAt
+          ? `Owner is temporarily unavailable. Last owner response: ${formatOwnerResponseTime(snapshot.lastSuccessfulAt)}.`
+          : 'Owner is temporarily unavailable. Last owner response time is unavailable.',
+      }
+    : snapshot?.authority === 'unavailable'
+      ? {
+          title: 'Worker status unavailable',
+          detail: 'Invoker has not received worker status from the owner yet.',
+        }
+      : null;
+
   return (
     <div data-testid="worker-activity-card" className="flex min-h-0 flex-col">
       {!snapshot ? (
         <div className="rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
       ) : (
-        <div data-testid="worker-process-list" className="min-h-0 space-y-3">
-          {snapshot.workers.map((worker) => {
+        <>
+          {freshnessNotice ? (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="worker-snapshot-freshness"
+              className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100"
+            >
+              <div className="font-medium">{freshnessNotice.title}</div>
+              <div className="mt-0.5 text-xs text-amber-100/80">{freshnessNotice.detail}</div>
+              {snapshot.unavailableReason ? (
+                <div className="mt-1 text-xs text-amber-100/80">{snapshot.unavailableReason}</div>
+              ) : null}
+            </div>
+          ) : null}
+          {snapshot.authority === 'unavailable' ? null : (
+            <div data-testid="worker-process-list" className="min-h-0 space-y-3">
+              {snapshot.workers.map((worker) => {
             const copy = getWorkerDisplayCopy(worker.kind);
             const disabledTitle = readOnly ? 'Read-only window' : worker.controlDisabledReason;
             const lifecycle = optimisticByKind[worker.kind] ?? worker.lifecycle;
@@ -210,7 +246,9 @@ export function WorkerActivityCard({
               </div>
             );
           })}
-        </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

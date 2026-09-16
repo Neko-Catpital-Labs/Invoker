@@ -236,6 +236,64 @@ function kinds(findings) {
   assert.deepEqual(collectDiffAtomicityFindings({ diffText: text }), []);
 }
 
+function assertionEditDiff(removedLines, addedLines) {
+  return diff([
+    'diff --git a/packages/app/src/api.ts b/packages/app/src/api.ts',
+    '--- a/packages/app/src/api.ts',
+    '+++ b/packages/app/src/api.ts',
+    '@@ -1,3 +1,3 @@',
+    ' export function send(payload) {',
+    '-  return post(payload);',
+    "+  return post({ ...payload, kind: 'x' });",
+    ' }',
+    'diff --git a/packages/app/src/api.test.ts b/packages/app/src/api.test.ts',
+    '--- a/packages/app/src/api.test.ts',
+    '+++ b/packages/app/src/api.test.ts',
+    `@@ -1,${removedLines.length + 2} +1,${addedLines.length + 2} @@`,
+    " it('sends payload', () => {",
+    ...removedLines.map((line) => `-${line}`),
+    ...addedLines.map((line) => `+${line}`),
+    ' });',
+  ]);
+}
+
+// Case 8b: an expected object that only gains fields is stricter, not weaker.
+{
+  const flat = assertionEditDiff(
+    ['  expect(send).toHaveBeenCalledWith({ a: 1 });'],
+    ['  expect(send).toHaveBeenCalledWith({ a: 1, b: 2 });'],
+  );
+  assert.deepEqual(collectDiffAtomicityFindings({ diffText: flat }), []);
+
+  const nested = assertionEditDiff(
+    ['  expect(send).toHaveBeenCalledWith({', "    outputs: { exitCode: 1, error: 'quit' },", '  });'],
+    ['  expect(send).toHaveBeenCalledWith({', "    outputs: { exitCode: 1, error: 'quit', failureClass: 'owner-interrupted' },", '  });'],
+  );
+  assert.deepEqual(collectDiffAtomicityFindings({ diffText: nested }), []);
+
+  const containing = assertionEditDiff(
+    ['  expect(send).toHaveBeenCalledWith(expect.objectContaining({ a: 1 }));'],
+    ['  expect(send).toHaveBeenCalledWith(expect.objectContaining({ a: 1, b: 2 }));'],
+  );
+  assert.deepEqual(collectDiffAtomicityFindings({ diffText: containing }), []);
+}
+
+// Case 8c: removing a field, changing a kept value, or loosening a negated
+// check is still a weakened assertion.
+{
+  const cases = [
+    [['  expect(send).toHaveBeenCalledWith({ a: 1, b: 2 });'], ['  expect(send).toHaveBeenCalledWith({ a: 1 });']],
+    [['  expect(send).toHaveBeenCalledWith({ a: 1 });'], ['  expect(send).toHaveBeenCalledWith({ a: 2, b: 3 });']],
+    [['  expect(send).not.toEqual({ a: 1 });'], ['  expect(send).not.toEqual({ a: 1, b: 2 });']],
+    [['  expect(send).toHaveBeenCalledWith({ a: 1 }, 2);'], ['  expect(send).toHaveBeenCalledWith({ a: 1, b: 2 }, 3);']],
+    [['  expect(send).toBe(1);'], ['  expect(send).toBe(2);']],
+  ];
+  for (const [removedLines, addedLines] of cases) {
+    const findings = collectDiffAtomicityFindings({ diffText: assertionEditDiff(removedLines, addedLines) });
+    assert.deepEqual(kinds(findings), ['test-assertion-weakened'], `${removedLines[0]} -> ${addedLines[0]}`);
+  }
+}
+
 // Case 9: a product-code change alongside a test file change with no
 // assertion flip does not fire.
 {

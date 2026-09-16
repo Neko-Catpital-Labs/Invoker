@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { SQLiteAdapter } from '@invoker/data-store';
+import { createWorkflowResumeCooldownLedger, createWorkflowResumeTick } from '@invoker/execution-engine';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   PersistedWorkflowMutationCoordinator,
@@ -39,6 +40,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   const adapters: SQLiteAdapter[] = [];
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const adapter of adapters.splice(0)) {
       adapter.close();
     }
@@ -285,7 +287,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await recreateFence;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent #3/i);
 
     expect(order).toEqual([
       'set command wf-1/task-0 hold-work',
@@ -298,6 +300,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(invalidatedIntent?.status).toBe('failed');
     expect(invalidatedIntent?.error).toContain('Superseded by recreate intent #3');
     expect(evictedIntent?.status).toBe('failed');
+    // Persisted DB reason still records the raw queue-fence boundary; the
+    // "Superseded by recreate intent #N" wording above is what the in-flight
+    // caller (e.g. a tracked CLI command) actually observes as its rejection.
     expect(evictedIntent?.error).toContain('queue fence');
     gate.resolve();
   });
@@ -488,7 +493,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await recreateTask;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -527,7 +532,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await rebaseRecreate;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -620,7 +625,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await rebaseRecreate;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by recreate intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -661,7 +666,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await running;
     await retryFence;
     await newerQueued;
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by retry intent/i);
 
     expect(order).toEqual([
       'invoker:edit-task-command:hold-work',
@@ -773,6 +778,100 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(new Set([first, ...duplicates])).toEqual(new Set([first]));
     expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
+  });
+
+  it('coalesces global start-ready intents across workflow owners', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    for (const workflowId of ['wf-1', 'wf-2']) {
+      adapter.saveWorkflow({
+        id: workflowId,
+        name: workflowId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => undefined,
+    );
+
+    const first = coordinator.submit('wf-1', 'normal', 'invoker:start-ready', [{}], {
+      deferDrain: true,
+      coalesceGlobally: true,
+    });
+    const duplicate = coordinator.submit('wf-2', 'normal', 'invoker:start-ready', [{}], {
+      deferDrain: true,
+      coalesceGlobally: true,
+    });
+
+    expect(duplicate).toBe(first);
+    expect(adapter.listWorkflowMutationIntents(undefined, ['queued', 'running'])).toHaveLength(1);
+    expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
+    expect(adapter.listWorkflowMutationIntents('wf-2')).toHaveLength(0);
+  });
+
+  it('preserves recovery dispatch coalescing across eligible workflows and separate explicit start-ready requests', async () => {
+    vi.useFakeTimers();
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    const workflowIds = ['wf-1', 'wf-2', 'wf-3'];
+    for (const id of workflowIds) {
+      adapter.saveWorkflow({ id, name: id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    }
+    const dispatch = vi.fn(async () => undefined);
+    const coordinator = new PersistedWorkflowMutationCoordinator(adapter, 'owner', dispatch);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+    const tick = createWorkflowResumeTick({
+      store: { listWorkflows: () => workflowIds.map(id => ({ id })), loadTasks: id => [makeTask(`${id}/task`, id)] },
+      submitter: coordinator,
+      ledger: createWorkflowResumeCooldownLedger(),
+      logger,
+    });
+    await tick({ identity: { kind: 'workflow-resume', instanceId: 'test' }, reason: 'poll', tickNumber: 1, signal: new AbortController().signal });
+    expect(adapter.listWorkflowMutationIntents(undefined, ['queued', 'running'])).toHaveLength(1);
+    await vi.runAllTimersAsync();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0]).toBe('invoker:start-ready');
+    coordinator.submit('wf-1', 'normal', 'invoker:start-ready', [{}], { deferDrain: true });
+    coordinator.submit('wf-2', 'normal', 'invoker:start-ready', [{}], { deferDrain: true });
+    await vi.runAllTimersAsync();
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    console.log('Recovery compatibility: 3 eligible workflows -> 1 dispatch; 2 explicit requests -> 2 additional dispatches');
+  });
+
+  it('drains independent deferred start-ready intents from one batch timer', async () => {
+    vi.useFakeTimers();
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    for (const workflowId of ['wf-1', 'wf-2']) {
+      adapter.saveWorkflow({
+        id: workflowId,
+        name: workflowId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    const started: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, _args, context) => {
+        started.push(context.workflowId);
+      },
+    );
+
+    coordinator.submit('wf-1', 'normal', 'invoker:start-ready', [{}], { deferDrain: true });
+    coordinator.submit('wf-2', 'normal', 'invoker:start-ready', [{}], { deferDrain: true });
+    expect(started).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(started).toEqual(['wf-1', 'wf-2']);
+    expect(adapter.listWorkflowMutationIntents(undefined, ['completed'])).toHaveLength(2);
   });
 
   it('requeues interrupted running workflow mutations on restart and drains persisted queued work', async () => {
@@ -1091,7 +1190,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteWf;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -1183,7 +1282,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteFence;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'set command wf-1/task-0 hold-work',
@@ -1278,7 +1377,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteAll;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
@@ -1370,7 +1469,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteAllFence;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'set command wf-1/task-0 hold-work',
@@ -1467,7 +1566,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await deleteAllBulk;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
-    await expect(olderQueued).rejects.toThrow(/evicted/i);
+    await expect(olderQueued).rejects.toThrow(/superseded by delete intent/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',

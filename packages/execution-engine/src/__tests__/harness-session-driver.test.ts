@@ -3,6 +3,7 @@ import { ExecutionHarnessSessionDriver, ReplayHarnessSessionDriver } from '../ha
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 import { OmpExecutionAgent } from '../agents/omp-execution-agent.js';
+import { CursorExecutionAgent } from '../agents/cursor-execution-agent.js';
 import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions } from '../agent.js';
 
 describe('ExecutionHarnessSessionDriver', () => {
@@ -208,6 +209,41 @@ describe('ExecutionHarnessSessionDriver', () => {
         'chatgpt-5.4',
         '-p',
         'Ship it',
+      ]);
+    });
+  });
+
+  describe('cursor', () => {
+    const driver = new ExecutionHarnessSessionDriver(new CursorExecutionAgent({ command: 'cursor-test' }));
+
+    it('append resumes with print/trust and the trailing prompt', () => {
+      const result = driver.append('session-cursor', 'Now add a test', { model: 'grok-4.5' });
+
+      expect(driver.harness).toBe('cursor');
+      expect(result.command).toBe('cursor-test');
+      expect(result.sessionId).toBe('session-cursor');
+      expect(result.args).toEqual([
+        'agent',
+        '--resume',
+        'session-cursor',
+        '--print',
+        '--trust',
+        '--model',
+        'grok-4.5',
+        'Now add a test',
+      ]);
+    });
+
+    it('append omits model args when no model is given', () => {
+      const result = driver.append('session-cursor', 'Now add a test');
+
+      expect(result.args).toEqual([
+        'agent',
+        '--resume',
+        'session-cursor',
+        '--print',
+        '--trust',
+        'Now add a test',
       ]);
     });
   });

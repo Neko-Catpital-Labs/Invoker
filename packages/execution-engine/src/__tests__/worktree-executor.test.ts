@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { PersistedTaskMeta } from '../executor.js';
+import { ExecutorStartup, StartupCancelledError, type PersistedTaskMeta } from '../executor.js';
 import type { Writable, Readable } from 'node:stream';
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -21,7 +21,7 @@ vi.mock('node:fs', async (importOriginal) => {
 // Must import after mock setup
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
+import { WorktreeExecutor, computeContentHash, isCloneableRepoUrl } from '../worktree-executor.js';
 import { BaseExecutor, isHeartbeatAliveDuringFinalize, normalizeRepoUrlForProvisionLookup } from '../base-executor.js';
 import { registerBuiltinAgents } from '../agents/index.js';
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
@@ -213,6 +213,29 @@ describe('normalizeRepoUrlForProvisionLookup', () => {
   });
 });
 
+describe('isCloneableRepoUrl', () => {
+  it.each([
+    ['https://github.com/owner/repo', true],
+    ['https://github.com/owner/repo.git', true],
+    ['http://example.com/repo.git', true],
+    ['git@github.com:owner/repo.git', true],
+    ['git@gitlab.com:group/project.git', true],
+    ['ssh://git@github.com/owner/repo.git', true],
+    ['file:///home/user/repo.git', true],
+    ['owner/repo', true],
+    ['/tmp/invoker-repro-fixture/repro-repo', true],
+    ['.', false],
+    ['..', false],
+    ['./repo', false],
+    ['../repo', false],
+    ['', false],
+    ['  ', false],
+    ['just-a-name', false],
+  ])('isCloneableRepoUrl(%j) returns %s', (repoUrl, expected) => {
+    expect(isCloneableRepoUrl(repoUrl)).toBe(expected);
+  });
+});
+
 describe('WorktreeExecutor', () => {
   let executor: WorktreeExecutor;
 
@@ -263,6 +286,44 @@ describe('WorktreeExecutor', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+  });
+
+  it('startup cancellation checks the absolute deadline before spawn even when the timer has not fired', async () => {
+    setupSpawnMock();
+    const now = Date.now();
+    const startup = new ExecutorStartup(now + 1000, new StartupCancelledError('timeout', 'test deadline expired'));
+    vi.spyOn(executor as any, 'provisionWorktree').mockImplementation(() => ({
+      child: null,
+      completion: Promise.resolve().then(() => {
+        // Model a delayed event loop: wall time passes inside the continuation,
+        // without running any timeout callback before the next startup stage.
+        vi.spyOn(Date, 'now').mockReturnValue(now + 1001);
+      }),
+    }));
+    await expect(executor.start(makeRequest(), startup)).rejects.toMatchObject({ reason: 'timeout' });
+    expect(mockedSpawn.mock.calls.filter(([command]) => command !== 'git')).toHaveLength(0);
+    const pool = (executor as any).pool;
+    const acquired = await pool.acquireWorktree.mock.results[0].value;
+    expect(acquired.softRelease).toHaveBeenCalledTimes(1);
+    expect((executor as any).entries.size).toBe(0);
+  });
+
+  it('startup cancellation fences a recreated attempt after a late acquisition and releases only its handle', async () => {
+    setupSpawnMock();
+    let current = true;
+    const startup = new ExecutorStartup(Date.now() + 10000, new StartupCancelledError('timeout', 'test deadline'), () => current);
+    const pool = (executor as any).pool;
+    const acquire = pool.acquireWorktree.getMockImplementation();
+    pool.acquireWorktree.mockImplementation(async (...args: unknown[]) => {
+      const acquired = await acquire(...args);
+      current = false;
+      return acquired;
+    });
+    await expect(executor.start(makeRequest(), startup)).rejects.toMatchObject({ reason: 'stale' });
+    const acquired = await pool.acquireWorktree.mock.results[0].value;
+    expect(acquired.softRelease).toHaveBeenCalledTimes(1);
+    expect(mockedSpawn.mock.calls.filter(([command]) => command !== 'git')).toHaveLength(0);
+    expect((executor as any).entries.size).toBe(0);
   });
 
   it('start creates git worktree with unique branch', async () => {
@@ -561,7 +622,6 @@ describe('WorktreeExecutor', () => {
     });
     mockPool(provisionedExecutor);
 
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => true);
     try {
       const startPromise = provisionedExecutor.start(makeRequest());
       const rejection = expect(startPromise).rejects.toThrow('provision command timed out after 25ms');
@@ -574,10 +634,11 @@ describe('WorktreeExecutor', () => {
       await vi.advanceTimersByTimeAsync(25 + SIGKILL_TIMEOUT_MS);
 
       await rejection;
-      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
-      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGKILL');
+      // The mocked pid does not lead a real process group, so killProcessGroup
+      // falls back to child.kill() rather than process.kill(-pid).
+      expect(provisionProcess.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(provisionProcess.kill).toHaveBeenCalledWith('SIGKILL');
     } finally {
-      killSpy.mockRestore();
       if (previousTimeout === undefined) {
         delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
       } else {
@@ -647,10 +708,10 @@ describe('WorktreeExecutor', () => {
       executor.onComplete(handle, (res) => resolve(res));
     });
 
-    // When kill sends SIGTERM, simulate process exit
-    const origKill = process.kill;
-    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
-      // Simulate the process closing after receiving the signal
+    // When kill sends SIGTERM, simulate process exit. The mocked pid does
+    // not lead a real process group, so killProcessGroup falls back to
+    // child.kill() rather than process.kill(-pid) — mock that fallback.
+    vi.mocked(taskProcess.kill).mockImplementation((_signal?) => {
       setTimeout(() => taskProcess.emit('close', null, 'SIGTERM'), 0);
       return true;
     });
@@ -665,8 +726,6 @@ describe('WorktreeExecutor', () => {
         (call[1] as string[])?.includes('remove'),
     );
     expect(removeCalls.length).toBe(0);
-
-    vi.mocked(process.kill).mockRestore();
   });
 
   it('kill returns when process close already fired during finalization', async () => {
@@ -715,16 +774,15 @@ describe('WorktreeExecutor', () => {
 
     expect(taskProcesses).toHaveLength(2);
 
-    // Simulate processes closing when SIGTERM is sent
-    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
-      for (const tp of taskProcesses) {
-        if (!(tp as any)._closed) {
-          (tp as any)._closed = true;
-          setTimeout(() => tp.emit('close', null, 'SIGTERM'), 0);
-        }
-      }
-      return true;
-    });
+    // Simulate processes closing when SIGTERM is sent. The mocked pids do
+    // not lead real process groups, so killProcessGroup falls back to
+    // child.kill() rather than process.kill(-pid) — mock that fallback.
+    for (const tp of taskProcesses) {
+      vi.mocked(tp.kill).mockImplementation((_signal?) => {
+        setTimeout(() => tp.emit('close', null, 'SIGTERM'), 0);
+        return true;
+      });
+    }
 
     await executor.destroyAll();
 
@@ -736,8 +794,6 @@ describe('WorktreeExecutor', () => {
         (call[1] as string[])?.includes('remove'),
     );
     expect(removeCalls.length).toBe(0);
-
-    vi.mocked(process.kill).mockRestore();
   });
 
 
@@ -1253,7 +1309,9 @@ describe('WorktreeExecutor', () => {
       expect(args).toContain('--session-id');
       expect(args).toContain('--dangerously-skip-permissions');
       expect(args).toContain('-p');
-      expect(args).toContain('test prompt');
+      const promptArg = args[args.indexOf('-p') + 1];
+      expect(promptArg).toContain('Owning package');
+      expect(promptArg).toContain('test prompt');
 
       // Verify session ID is set on handle
       expect(handle.agentSessionId).toBeDefined();

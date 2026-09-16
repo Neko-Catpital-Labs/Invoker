@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import { cancelOwnedStartupChild, type ExecutorStartup } from './executor.js';
 import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './executor.js';
 import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
@@ -11,6 +12,7 @@ import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutati
 import { isGitRefLockRace } from './git-utils.js';
 import { childProcessHasExited, cleanElectronEnv, cleanGitRepositoryEnv, killProcessGroup, SIGKILL_TIMEOUT_MS, terminateChildProcessGroup } from './process-utils.js';
 import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
+import { appendProvisionOutputTail, spawnLocalProvisioning } from './local-provisioning.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -19,8 +21,78 @@ const DEFAULT_MAX_BUFFER_CHUNKS = 1000;
 const DEFAULT_MAX_BUFFER_BYTES = 5 * 1024 * 1024; // 5MB
 /** Default cap for `git fetch` / `git push` (network-bound). Override via INVOKER_GIT_NETWORK_TIMEOUT_MS; use 0 for unbounded. */
 const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
-const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
-const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
+const FAILED_TASK_ERROR_TAIL_LINE_LIMIT = 50;
+const FAILED_TASK_ERROR_CHAR_LIMIT = 3000;
+
+const FAILED_TASK_ERROR_LINE_PATTERNS = [
+  /^Traceback \(most recent call last\):$/,
+  /^\s*(?:error|fatal error):\s+\S/i,
+  /^\s*(?:AssertionError|SyntaxError|TypeError|ReferenceError|RangeError|ValueError|RuntimeError|ModuleNotFoundError|ImportError|KeyError|Exception):\s*\S/i,
+  /^\s*(?:FAIL|FAILED)\s+\S/i,
+  /^\s*\S.*\berror\s+TS\d+:/i,
+  /^\s*\S.*:\d+:\d+:\s+(?:error|fatal error):\s+\S/i,
+  /^\s*(?:command failed|error command failed|failed with|exited with).*\b(?:exit code|exit status|code|status)\s*[=:]?\s*[1-9]\d*\b/i,
+  /^\s*(?:exit code|exit status)\s*[=:]?\s*[1-9]\d*\b/i,
+  /\bELIFECYCLE\b.*\bCommand failed with exit code [1-9]\d*\b/i,
+];
+
+const PACKAGE_PATH_RE = /\bpackages\/[A-Za-z0-9._-]+(?=\/|\b)/g;
+
+function inferOwningPackage(request: WorkRequest): string {
+  const haystack = [
+    request.actionId,
+    request.inputs.description,
+    request.inputs.prompt,
+    request.inputs.command,
+  ].filter((part): part is string => typeof part === 'string' && part.length > 0).join('\n');
+  const packages = [...new Set(haystack.match(PACKAGE_PATH_RE) ?? [])];
+  if (packages.length === 1) return packages[0];
+  if (packages.length > 1) return `${packages[0]} (plus explicitly named sibling paths)`;
+  return 'not specified; infer the narrowest package from the named files before editing';
+}
+
+function buildWorkerOrientationPack(request: WorkRequest): string {
+  const owningPackage = inferOwningPackage(request);
+  return [
+    'Worker orientation pack:',
+    `- Owning package: ${owningPackage}`,
+    '- Allowed files: stay inside the owning package and any task-named files unless the task explicitly widens scope.',
+    '- Do not start with an unscoped repository walk; inspect the named package, files, and existing tests first.',
+  ].join('\n');
+}
+
+function failedTaskErrorTail(output: string): string | undefined {
+  const lines = output.split('\n');
+  const tail = lines.slice(-FAILED_TASK_ERROR_TAIL_LINE_LIMIT).join('\n').trim();
+  if (!tail) return undefined;
+  return tail.length > FAILED_TASK_ERROR_CHAR_LIMIT
+    ? tail.slice(-FAILED_TASK_ERROR_CHAR_LIMIT)
+    : tail;
+}
+
+function findFirstErrorShapedLineStart(output: string): number | undefined {
+  let lineStart = 0;
+  for (const line of output.split('\n')) {
+    const matchLine = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (FAILED_TASK_ERROR_LINE_PATTERNS.some((pattern) => pattern.test(matchLine))) {
+      return lineStart;
+    }
+    lineStart += line.length + 1;
+  }
+  return undefined;
+}
+
+export function selectFailedTaskStoredError(output: string): string | undefined {
+  const errorStart = findFirstErrorShapedLineStart(output);
+  if (errorStart !== undefined) {
+    const errorSpan = output.slice(errorStart).trim();
+    if (!errorSpan) return undefined;
+    return errorSpan.length > FAILED_TASK_ERROR_CHAR_LIMIT
+      ? errorSpan.slice(0, FAILED_TASK_ERROR_CHAR_LIMIT)
+      : errorSpan;
+  }
+  return failedTaskErrorTail(output);
+}
 
 /**
  * Canonicalizes a repoUrl for `repoProvisionCommands` lookups so
@@ -202,14 +274,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   }
 
   protected appendProvisionOutputTail(tail: string, text: string): string {
-    const segments = `${tail}${text}`.split('\n');
-    const segmentLimit = segments.at(-1) === ''
-      ? PROVISION_OUTPUT_TAIL_LINE_LIMIT + 1
-      : PROVISION_OUTPUT_TAIL_LINE_LIMIT;
-    const nextTail = segments.slice(-segmentLimit).join('\n');
-    return nextTail.length <= PROVISION_OUTPUT_TAIL_CHAR_LIMIT
-      ? nextTail
-      : nextTail.slice(nextTail.length - PROVISION_OUTPUT_TAIL_CHAR_LIMIT);
+    return appendProvisionOutputTail(tail, text);
   }
 
   protected createHandle(request: WorkRequest): ExecutorHandle {
@@ -298,84 +363,32 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     traceLabel: string;
     startMessage?: string;
     failurePrefix: string;
+    startup?: ExecutorStartup;
   }): { child: ChildProcess | null; completion: Promise<void> } {
-    const command = options.command.trim();
-    if (!command) {
-      traceExecution(`[${options.traceLabel}] skipped dir=${options.cwd}`);
-      return { child: null, completion: Promise.resolve() };
+    const executionId = options.executionId;
+    const hasCommand = options.command.trim().length > 0;
+    if (hasCommand && executionId && options.startMessage) {
+      this.emitOutput(executionId, options.startMessage);
     }
-    traceExecution(`[${options.traceLabel}] begin dir=${options.cwd}`);
-    if (options.executionId && options.startMessage) {
-      this.emitOutput(options.executionId, options.startMessage);
-    }
-    const child = spawn('/bin/bash', ['-lc', command], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: options.cwd,
-      detached: true,
-      env: cleanElectronEnv(),
-    });
-    let combinedOutputTail = '';
-    const appendOutput = (chunk: Buffer | string): void => {
-      const text = String(chunk);
-      combinedOutputTail = this.appendProvisionOutputTail(combinedOutputTail, text);
-      if (options.executionId) this.emitOutput(options.executionId, text);
-    };
-    child.stdout?.on('data', appendOutput);
-    child.stderr?.on('data', appendOutput);
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
-    let settled = false;
-    let timedOutMessage: string | undefined;
-    const timeoutMs = options.executionId
-      ? this.localProvisioningTimeoutsMs.get(options.executionId) ?? getExecutorStartTimeoutMs()
+    const timeoutMs = executionId
+      ? this.localProvisioningTimeoutsMs.get(executionId) ?? getExecutorStartTimeoutMs()
       : getExecutorStartTimeoutMs();
-    const finish = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      clearTimeout(forceKillTimeout);
-      if (options.executionId) {
-        this.localProvisioningTimeoutsMs.delete(options.executionId);
-      }
-      fn();
-    };
-    const completion = new Promise<void>((resolve, reject) => {
-      child.on('error', (error) => {
-        finish(() => reject(new Error(`${options.failurePrefix} ${error.message}`)));
-      });
-      child.on('close', (code, signal) => {
-        finish(() => {
-          if (code === 0) {
-            traceExecution(`[${options.traceLabel}] done dir=${options.cwd}`);
-            resolve();
-            return;
-          }
-          const tail = combinedOutputTail.trim();
-          const fallback = timedOutMessage
-            ?? `provision command exited with code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`;
-          const detail = tail ? `${fallback}\n${tail}` : fallback;
-          reject(new Error(`${options.failurePrefix} ${detail}`));
-        });
-      });
-      if (timeoutMs > 0) {
-        timeout = setTimeout(() => {
-          if (settled) return;
-          timedOutMessage = `provision command timed out after ${timeoutMs}ms`;
-          killProcessGroup(child, 'SIGTERM');
-          forceKillTimeout = setTimeout(() => {
-            if (!settled) killProcessGroup(child, 'SIGKILL');
-            finish(() => {
-              const tail = combinedOutputTail.trim();
-              const detail = tail ? `${timedOutMessage!}\n${tail}` : timedOutMessage!;
-              reject(new Error(`${options.failurePrefix} ${detail}`));
-            });
-          }, SIGKILL_TIMEOUT_MS);
-          forceKillTimeout.unref?.();
-        }, timeoutMs);
-        timeout.unref?.();
-      }
+    const run = spawnLocalProvisioning({
+      command: options.command,
+      cwd: options.cwd,
+      traceLabel: options.traceLabel,
+      failurePrefix: options.failurePrefix,
+      timeoutMs,
+      startup: options.startup,
+      onOutput: executionId ? (text) => this.emitOutput(executionId, text) : undefined,
     });
-    return { child, completion };
+    if (hasCommand && executionId) {
+      const clearTimeoutEntry = (): void => {
+        this.localProvisioningTimeoutsMs.delete(executionId);
+      };
+      run.completion.then(clearTimeoutEntry, clearTimeoutEntry);
+    }
+    return run;
   }
 
   /**
@@ -572,12 +585,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     BaseExecutor.gitAvailableChecked = false;
   }
 
-  protected async ensureGitAvailable(): Promise<void> {
+  protected async ensureGitAvailable(startup?: ExecutorStartup): Promise<void> {
+    startup?.check();
     if (BaseExecutor.gitAvailableChecked) return;
     try {
-      await this.execGitSimple(['--version'], process.cwd());
+      await this.execGitSimple(['--version'], process.cwd(), { startup });
       BaseExecutor.gitAvailableChecked = true;
     } catch (err) {
+      startup?.check();
       throw new Error(
         `git is not available on PATH. Install git and ensure it is in your shell PATH.\n` +
         `${err instanceof Error ? err.message : String(err)}`,
@@ -627,8 +642,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected execGitSimple(
     args: string[],
     cwd: string,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; startup?: ExecutorStartup },
   ): Promise<string> {
+    opts?.startup?.check();
     assertNotGitConfigMutation(args, `${this.type}.execGitSimple`);
     const stack = new Error().stack;
     const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';
@@ -643,7 +659,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         stdio: ['ignore', 'pipe', 'pipe'],
         env: cleanGitRepositoryEnv(),
         signal: opts?.signal,
+        detached: !!opts?.startup,
       });
+      cancelOwnedStartupChild(child, opts?.startup);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -652,6 +670,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         reject(new Error(`Failed to spawn git: ${err.message}`));
       });
       child.on('close', (code) => {
+        try { opts?.startup?.check(); } catch (error) { reject(error); return; }
         if (code === 0) resolve(stdout.trim());
         else {
           const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
@@ -682,13 +701,16 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * transport (e.g., DockerExecutor routes through docker exec, SshExecutor
    * routes through SSH).
    */
-  protected runBash(script: string, cwd: string): Promise<string> {
+  protected runBash(script: string, cwd: string, startup?: ExecutorStartup): Promise<string> {
+    startup?.check();
     return new Promise((resolve, reject) => {
       const child = spawn('bash', ['-c', script], {
         cwd,
+        detached: !!startup,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
+      cancelOwnedStartupChild(child, startup);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -699,6 +721,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       });
 
       child.on('close', (code) => {
+        try { startup?.check(); } catch (error) { reject(error); return; }
         if (code === 0) {
           resolve(stdout);
         } else {
@@ -728,7 +751,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     request: WorkRequest,
     mergeCwd: string,
     setupBranchExplicitBase?: string,
+    startup?: ExecutorStartup,
   ): Promise<void> {
+    startup?.check();
     const upstreams = request.inputs.upstreamBranches ?? [];
     const upstreamsToMerge = this.selectUpstreamBranchesToMerge({
       upstreamBranches: upstreams,
@@ -751,6 +776,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         branchRepoUrl: request.inputs.branchRepoUrl,
       }),
       mergeCwd,
+      startup,
     );
     const mergeScript = bashMergeUpstreams({
       worktreeDir: mergeCwd,
@@ -759,7 +785,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       missingRefMode: 'fail',
     });
     try {
-      await this.runBash(mergeScript, mergeCwd);
+      await this.runBash(mergeScript, mergeCwd, startup);
       traceExecution(
         `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] merge OK (${upstreamsToMerge.length} branch(es))`,
       );
@@ -1200,7 +1226,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const agent = opts.agentRegistry.getOrThrow(agentName);
         assertExecutionModelSupported(agent, request.inputs.executionModel);
         const fullPrompt = this.buildFullPrompt(request);
-        const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
+        const spec = agent.buildCommand(fullPrompt, {
+          executionModel: request.inputs.executionModel,
+          maxTurns: request.inputs.maxTurns,
+        });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
       }
       const requestedAgent = request.inputs.executionAgent;
@@ -1314,11 +1343,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     let error: string | undefined;
     if (effectiveExitCode !== 0 && entry) {
       const allOutput = entry.outputBuffer.join('');
-      const lines = allOutput.split('\n');
-      const tail = lines.slice(-50).join('\n').trim();
-      if (tail) {
-        error = tail.length > 3000 ? tail.slice(-3000) : tail;
-      }
+      error = selectFailedTaskStoredError(allOutput);
     }
     if (semanticFailure) {
       error = semanticFailure.message;
@@ -1389,6 +1414,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    */
   protected buildFullPrompt(request: WorkRequest): string {
     let fullPrompt = request.inputs.prompt ?? '';
+    if (request.actionType === 'ai_task') {
+      fullPrompt = `${buildWorkerOrientationPack(request)}\n\n${fullPrompt}`;
+    }
     if (request.inputs.upstreamContext?.length) {
       const contextLines = request.inputs.upstreamContext.map(ctx => {
         let line = `[Upstream task: ${ctx.taskId}]\nDescription: ${ctx.description}\nSummary: ${ctx.summary ?? 'N/A'}`;
@@ -1404,12 +1432,20 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   /**
    * Build CLI args for invoking `claude` with a session ID and prompt.
    */
-  protected buildClaudeArgs(sessionId: string, fullPrompt: string, executionModel?: string): string[] {
+  protected buildClaudeArgs(
+    sessionId: string,
+    fullPrompt: string,
+    executionModel?: string,
+    maxTurns?: number,
+  ): string[] {
     return [
       '--session-id',
       sessionId,
       '--dangerously-skip-permissions',
       ...(executionModel ? ['--model', executionModel] : []),
+      ...(typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
+        ? ['--max-turns', String(maxTurns)]
+        : []),
       '-p',
       fullPrompt,
     ];
@@ -1422,7 +1458,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected prepareClaudeSession(request: WorkRequest): ClaudeSessionParams {
     const sessionId = randomUUID();
     const fullPrompt = this.buildFullPrompt(request);
-    const cliArgs = this.buildClaudeArgs(sessionId, fullPrompt, request.inputs.executionModel);
+    const cliArgs = this.buildClaudeArgs(
+      sessionId,
+      fullPrompt,
+      request.inputs.executionModel,
+      request.inputs.maxTurns,
+    );
     return { sessionId, cliArgs, fullPrompt };
   }
 
