@@ -53,6 +53,7 @@ import {
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
 import { backupPlan } from '../plan-backup.js';
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
+import { assertRemoteRepoUrlCloneable, isRemoteRepoUrl } from '../plan-parser.js';
 import { repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
@@ -288,6 +289,7 @@ type RendererTaskFeed = ReturnType<typeof createRendererTaskFeed>;
 type TaskGraphEventPublisher = ReturnType<typeof createTaskGraphEventPublisher>;
 
 export interface GuiMutationTaskActions {
+  scheduleRemoteRepoUrlProbes: (workflowIds: readonly string[]) => void;
   scheduleAutoFix: (taskId: string) => void;
   logAutoFixDebug: (taskId: string, phase: string, details?: Record<string, unknown>) => void;
   performDeleteWorkflow: (workflowId: string) => Promise<void>;
@@ -449,6 +451,60 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
   const refreshRuntime = (): void => {
     orchestrator = context.getOrchestrator();
     commandService = context.getCommandService();
+  };
+  const failWorkflowTasksForRemoteProbe = (workflowId: string, repoUrl: string, message: string): void => {
+    const completedAt = new Date();
+    const tasks = persistence.loadTasks(workflowId);
+    for (const task of tasks) {
+      const changes: TaskStateChanges = {
+        status: 'failed',
+        execution: {
+          error: message,
+          completedAt,
+          fixSessionEntryStatus: undefined,
+        },
+      };
+      persistence.updateTask(task.id, changes);
+      persistence.logEvent(task.id, 'task.failed', {
+        ...changes,
+        repoUrl,
+        workflowId,
+        source: 'remote-repo-url-probe',
+      });
+    }
+    requestWorkflowMetadataPublish('remote-repo-url-probe-failed');
+  };
+  const scheduleRemoteRepoUrlProbes = (workflowIds: readonly string[]): void => {
+    const targets = workflowIds
+      .map((workflowId) => {
+        const workflow = persistence.loadWorkflow(workflowId);
+        return workflow?.repoUrl && isRemoteRepoUrl(workflow.repoUrl)
+          ? { workflowId, repoUrl: workflow.repoUrl }
+          : undefined;
+      })
+      .filter((target): target is { workflowId: string; repoUrl: string } => target !== undefined);
+    if (targets.length === 0) return;
+
+    setImmediate(() => {
+      for (const { workflowId, repoUrl } of targets) {
+        void assertRemoteRepoUrlCloneable(repoUrl).catch((err) => {
+          const detail = err instanceof Error ? err.message : String(err);
+          const message = `repoUrl "${repoUrl}" is not a readable git repository. Check network reachability, its clone URL, and credentials. (${detail})`;
+          logger.error(
+            `remote repoUrl probe failed for workflow "${workflowId}" repoUrl="${repoUrl}": ${detail}`,
+            { module: 'ipc', workflowId, repoUrl, error: detail },
+          );
+          try {
+            failWorkflowTasksForRemoteProbe(workflowId, repoUrl, message);
+          } catch (failErr) {
+            logger.error(
+              `failed to mark workflow "${workflowId}" after remote repoUrl probe failure: ${failErr instanceof Error ? failErr.message : String(failErr)}`,
+              { module: 'ipc', workflowId, repoUrl },
+            );
+          }
+        });
+      }
+    });
   };
   const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
     const workflowId = workflowIdForTaskArg(taskId);
@@ -758,6 +814,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         );
       }
     });
+    scheduleRemoteRepoUrlProbes(workflowIds);
     return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
   }
 
@@ -1157,6 +1214,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
 
 
   return {
+    scheduleRemoteRepoUrlProbes,
     scheduleAutoFix,
     logAutoFixDebug,
     performDeleteWorkflow,
@@ -1337,7 +1395,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       staged?: boolean;
     },
   ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
-    return loadPlanSubmissionBundle(planText, {
+    const result = await loadPlanSubmissionBundle(planText, {
       persistence,
       orchestrator,
       allowGraphMutation: invokerConfig.allowGraphMutation,
@@ -1349,6 +1407,8 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       taskHandles,
       staged: options?.staged ?? true,
     });
+    actions.scheduleRemoteRepoUrlProbes(result.workflowIds ?? [result.workflowId]);
+    return result;
   }
 
   const planningConversationRepo = new ConversationRepository(persistence, {
