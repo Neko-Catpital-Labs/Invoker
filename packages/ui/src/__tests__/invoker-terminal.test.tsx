@@ -2235,6 +2235,12 @@ describe('Invoker terminal (component)', () => {
     expect(within(sendButton).getByTestId('invoker-terminal-send-icon')).toBeInTheDocument();
   });
 
+  it('explains when the whole window is read-only instead of blaming the session', () => {
+    render(<InvokerTerminal {...terminalProps({ readOnly: true, readOnlyReason: 'window' })} />);
+
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveAttribute('placeholder', 'This window is read-only.');
+  });
+
   it('swaps the send icon for a pending spinner while a turn is running', () => {
     render(<InvokerTerminal {...terminalProps({ busy: true })} />);
 

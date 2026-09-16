@@ -123,6 +123,7 @@ interface InvokerTerminalProps {
   };
   planningStream?: InvokerTerminalPlanningStream | null;
   readOnly?: boolean;
+  readOnlyReason?: 'submitted' | 'window';
   expanded?: boolean;
   mode?: PlanningTerminalMode;
   terminalSession?: TerminalSessionDescriptor | null;
@@ -550,6 +551,7 @@ export function InvokerTerminal({
   draftPlanSummary,
   planningStream,
   readOnly = false,
+  readOnlyReason = 'submitted',
   expanded = false,
   mode = 'chat',
   terminalSession = null,
@@ -1020,7 +1022,11 @@ export function InvokerTerminal({
                 rows={expanded ? 5 : 1}
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
-                placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe what you want to build'}
+                placeholder={readOnly
+                  ? readOnlyReason === 'window'
+                    ? 'This window is read-only.'
+                    : 'This planning session was already submitted.'
+                  : 'Describe what you want to build'}
                 className={`min-h-9 w-full resize-none border-0 bg-transparent py-1 font-sans text-[13.5px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 ${composerDisabledCursorClass}`}
               />
               <div className="mt-1 flex flex-wrap items-center justify-between gap-3 pt-2">
