@@ -88,6 +88,10 @@ interface PooledRepositoryTaskConfig extends BaseTaskConfig {
   readonly dockerImage?: never;
 }
 
+export interface PooledTaskConfig extends PooledRepositoryTaskConfig {
+  readonly runnerKind?: 'worktree' | 'ssh';
+}
+
 export interface WorktreeTaskConfig extends PooledRepositoryTaskConfig {
   readonly runnerKind: 'worktree';
 }
@@ -118,7 +122,7 @@ export interface ScratchTaskConfig extends NonPoolTaskConfig {
   readonly dockerImage?: never;
 }
 
-export type TaskConfig = WorktreeTaskConfig | DockerTaskConfig | SshTaskConfig | MergeTaskConfig | ScratchTaskConfig;
+export type TaskConfig = PooledTaskConfig | DockerTaskConfig | MergeTaskConfig | ScratchTaskConfig;
 
 export type TaskConfigPatch = Partial<BaseTaskConfig> & {
   readonly runnerKind?: TaskConfig['runnerKind'];
@@ -136,14 +140,18 @@ export function assertResolvedTaskConfig(config: unknown): asserts config is Tas
   const poolId = candidate.poolId;
   const hasConcretePool = typeof poolId === 'string' && poolId.trim().length > 0;
 
-  if (runnerKind === 'worktree' || runnerKind === 'ssh') {
-    if (!hasConcretePool) {
-      throw new Error(`Task config runnerKind=${runnerKind} requires a non-empty poolId`);
+  if (hasConcretePool) {
+    if (runnerKind !== undefined && runnerKind !== 'worktree' && runnerKind !== 'ssh') {
+      throw new Error(`Task config runnerKind=${JSON.stringify(runnerKind)} cannot declare poolId`);
     }
     if (candidate.dockerImage !== undefined) {
-      throw new Error(`Task config runnerKind=${runnerKind} cannot declare dockerImage`);
+      throw new Error('Pooled task config cannot declare dockerImage');
     }
     return;
+  }
+
+  if (runnerKind === 'worktree' || runnerKind === 'ssh') {
+    throw new Error(`Task config runnerKind=${runnerKind} requires a non-empty poolId`);
   }
 
   if (runnerKind === 'docker' || runnerKind === 'merge' || runnerKind === 'scratch') {
@@ -411,7 +419,9 @@ export function resolveTaskConfig(options: TaskCreateOptions = {}): TaskConfig {
     ?? options.runnerKind
     ?? (options.poolId && options.poolId !== BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'ssh' : 'worktree');
   let candidate: unknown;
-  if (runnerKind === 'worktree') {
+  if (options.poolId && options.runnerKind === undefined && !options.isMergeNode && options.dockerImage === undefined) {
+    candidate = { ...options };
+  } else if (runnerKind === 'worktree') {
     candidate = { ...options, runnerKind, poolId: options.poolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID };
   } else if (runnerKind === 'ssh') {
     candidate = { ...options, runnerKind };
