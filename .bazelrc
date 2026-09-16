@@ -1,0 +1,23 @@
+common --enable_bzlmod
+common --registry=https://bcr.bazel.build
+
+build --incompatible_strict_action_env
+build --action_env=PATH
+test --test_env=PATH
+test --test_output=errors
+
+build --disk_cache=~/.cache/invoker-bazel-disk
+
+build:remote --bes_results_url=https://app.buildbuddy.io/invocation/
+build:remote --bes_backend=grpcs://remote.buildbuddy.io
+build:remote --remote_cache=grpcs://remote.buildbuddy.io
+build:remote --remote_timeout=600
+build:remote --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+build:remote --bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+
+build:rbe --config=remote
+build:rbe --remote_executor=grpcs://remote.buildbuddy.io
+build:rbe --remote_default_exec_properties=container-image=docker://ghcr.io/buildbuddy-io/executor-docker-default:latest
+build:rbe --jobs=50
+
+try-import %workspace%/.bazelrc.user

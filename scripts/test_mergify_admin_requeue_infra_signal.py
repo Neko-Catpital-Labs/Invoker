@@ -60,13 +60,16 @@ class FindLatestWorkflowId(unittest.TestCase):
 
 
 class RepairTaskCrashedOnInfra(unittest.TestCase):
-    def _run_headless_fn(self, workflows_result, task_output_result):
+    def _run_headless_fn(self, workflows_result, task_output_result, task_status_result=None):
         def run_headless_fn(command, *extra_args):
             if "query workflows" in command:
                 return workflows_result
-            self.assertIn("task-output", command)
-            self.assertEqual(extra_args, ("wf-1/repair",))
-            return task_output_result
+            if "task-output" in command:
+                self.assertEqual(extra_args, ("wf-1/repair",))
+                return task_output_result
+            self.assertIn("query tasks", command)
+            self.assertEqual(extra_args, ("wf-1",))
+            return task_status_result if task_status_result is not None else workflows_json({"id": "wf-1/repair", "status": "failed"})
         return run_headless_fn
 
     def test_false_when_workflow_not_found(self):
@@ -96,6 +99,58 @@ class RepairTaskCrashedOnInfra(unittest.TestCase):
             workflows_json({"id": "wf-1", "name": "plan-a", "createdAt": "2026-01-01T00:00:00Z"}),
             completed(stdout="[SshExecutor] Running task payload...\n" + s.SSH_OAUTH_INFRA_SIGNATURE + "\n"),
         )
+        result = s.repair_task_crashed_on_infra("plan-a", run_headless_fn=run_headless_fn)
+        self.assertTrue(result)
+
+    def test_false_when_the_signature_appears_but_the_task_ultimately_completed(self):
+        # Repro: a real repair task (wf-1786846308456-6/repair, PR #9309,
+        # 2026-08-16) hit "OAuth session expired" 4 times on early SSH retry
+        # attempts while credentials were still propagating across the pool,
+        # then self-healed and finished successfully. Its cumulative output
+        # log still contained the signature text from those earlier attempts,
+        # so the old substring-only check reported "crashed on infra" for a
+        # task that had, in fact, completed -- causing plan_bot_thread_repairs
+        # to bypass the in-flight guard and fire a fully redundant second
+        # repair while the first was still finishing.
+        def run_headless_fn(command, *extra_args):
+            if "query workflows" in command:
+                return workflows_json({"id": "wf-1", "name": "plan-a", "createdAt": "2026-01-01T00:00:00Z"})
+            if "task-output" in command:
+                self.assertEqual(extra_args, ("wf-1/repair",))
+                return completed(
+                    stdout="[SshExecutor] Running task payload...\n"
+                    + (s.SSH_OAUTH_INFRA_SIGNATURE + "\n") * 4
+                    + "[SshExecutor] Recording task result and pushing branch on remote...\n",
+                )
+            self.assertIn("query tasks", command)
+            self.assertEqual(extra_args, ("wf-1",))
+            return workflows_json({"id": "wf-1/repair", "status": "completed"})
+
+        result = s.repair_task_crashed_on_infra("plan-a", run_headless_fn=run_headless_fn)
+        self.assertFalse(result)
+
+    def test_true_when_the_signature_appears_and_the_task_did_not_complete(self):
+        def run_headless_fn(command, *extra_args):
+            if "query workflows" in command:
+                return workflows_json({"id": "wf-1", "name": "plan-a", "createdAt": "2026-01-01T00:00:00Z"})
+            if "task-output" in command:
+                return completed(stdout="[SshExecutor] Running task payload...\n" + s.SSH_OAUTH_INFRA_SIGNATURE + "\n")
+            self.assertIn("query tasks", command)
+            return workflows_json({"id": "wf-1/repair", "status": "failed"})
+
+        result = s.repair_task_crashed_on_infra("plan-a", run_headless_fn=run_headless_fn)
+        self.assertTrue(result)
+
+    def test_true_when_the_task_status_query_itself_fails(self):
+        # A status-lookup failure must not silently suppress a real crash
+        # signal -- fail open toward "still treat it as crashed" like before.
+        def run_headless_fn(command, *extra_args):
+            if "query workflows" in command:
+                return workflows_json({"id": "wf-1", "name": "plan-a", "createdAt": "2026-01-01T00:00:00Z"})
+            if "task-output" in command:
+                return completed(stdout=s.SSH_OAUTH_INFRA_SIGNATURE)
+            return completed(returncode=1)
+
         result = s.repair_task_crashed_on_infra("plan-a", run_headless_fn=run_headless_fn)
         self.assertTrue(result)
 

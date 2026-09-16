@@ -42,6 +42,7 @@ export function createOwnerSocketSentinel(deps: OwnerSocketSentinelDeps): OwnerS
   });
 
   let consecutiveFailures = 0;
+  let recoveryPending = false;
   let busy = false;
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -56,13 +57,15 @@ export function createOwnerSocketSentinel(deps: OwnerSocketSentinelDeps): OwnerS
         reachable = false;
       }
       if (reachable) {
-        if (consecutiveFailures >= failuresBeforeReserve) {
+        if (recoveryPending || consecutiveFailures >= failuresBeforeReserve) {
           deps.log('info', '[owner-socket-sentinel] owner socket is reachable again');
         }
         consecutiveFailures = 0;
+        recoveryPending = false;
         return;
       }
       consecutiveFailures++;
+      if (recoveryPending) return;
       if (consecutiveFailures < failuresBeforeReserve) {
         deps.log(
           'warn',
@@ -75,6 +78,7 @@ export function createOwnerSocketSentinel(deps: OwnerSocketSentinelDeps): OwnerS
         `[owner-socket-sentinel] owner socket unreachable ${consecutiveFailures} consecutive times — re-serving as writer-lock holder`,
       );
       deps.reserve();
+      recoveryPending = true;
     } finally {
       busy = false;
     }

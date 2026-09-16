@@ -1,0 +1,33 @@
+{
+  "name": "@invoker/discord",
+  "version": "0.0.1",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
+    "@invoker/planning-core": "workspace:*",
+    "@invoker/surfaces": "workspace:*",
+    "discord.js": "^14.27.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

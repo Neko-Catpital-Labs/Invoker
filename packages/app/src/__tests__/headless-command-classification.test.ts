@@ -55,6 +55,8 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['migrate-compat'])).toBe(true);
     expect(isHeadlessMutatingCommand(['check-pr-status'])).toBe(true);
     expect(isHeadlessMutatingCommand(['cancel-workflow'])).toBe(true);
+    expect(isHeadlessMutatingCommand(['close-task'])).toBe(true);
+    expect(isHeadlessMutatingCommand(['reset-autofix-budget'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'prompt'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'agent'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'fix-context'])).toBe(true);
@@ -65,7 +67,7 @@ describe('headless-command-classification', () => {
   });
 
   it('classifies every registered set subcommand as mutating', () => {
-    for (const subcommand of HEADLESS_SET_SUBCOMMANDS) {
+    for (const { name: subcommand } of HEADLESS_SET_SUBCOMMANDS) {
       expect(isHeadlessMutatingCommand(['set', subcommand])).toBe(true);
     }
 
@@ -88,7 +90,7 @@ describe('headless-command-classification', () => {
     await runHeadless(['--help'], {} as any);
 
     const help = write.mock.calls.map(([chunk]) => String(chunk)).join('');
-    for (const subcommand of HEADLESS_SET_SUBCOMMANDS) {
+    for (const { name: subcommand } of HEADLESS_SET_SUBCOMMANDS) {
       if (subcommand === 'executor') continue;
       expect(help).toContain(`set ${subcommand}`);
     }

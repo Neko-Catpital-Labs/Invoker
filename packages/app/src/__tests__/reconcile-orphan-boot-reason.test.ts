@@ -17,4 +17,8 @@ describe('boot-reconcile forced-stop reason in main.ts', () => {
     const literalCount = (mainSource.match(/'Application quit'/g) ?? []).length;
     expect(literalCount).toBe(3);
   });
+
+  it('labels the graceful-quit forced failure as owner-interrupted', () => {
+    expect(mainSource).toContain("outputs: { exitCode: 1, error: 'Application quit', failureClass: 'owner-interrupted' }");
+  });
 });

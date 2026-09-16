@@ -1,0 +1,1082 @@
+﻿2026-08-17T19:30:34.2234034Z Current runner version: '2.336.0'
+2026-08-17T19:30:34.2252277Z Runner name: 'gh-heavy-05'
+2026-08-17T19:30:34.2254230Z Runner group name: 'invoker managed runners'
+2026-08-17T19:30:34.2256866Z Machine name: 'gh-heavy-05'
+2026-08-17T19:30:34.2264496Z ##[group]GITHUB_TOKEN Permissions
+2026-08-17T19:30:34.2272413Z Contents: read
+2026-08-17T19:30:34.2273738Z Metadata: read
+2026-08-17T19:30:34.2275160Z ##[endgroup]
+2026-08-17T19:30:34.2281959Z Secret source: Actions
+2026-08-17T19:30:34.2284937Z Prepare workflow directory
+2026-08-17T19:30:34.4032779Z Prepare all required actions
+2026-08-17T19:30:34.4170745Z Getting action download info
+2026-08-17T19:30:35.3055748Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-08-17T19:30:37.6404536Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+2026-08-17T19:30:45.6618285Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-08-17T19:30:47.9126635Z Download action repository 'actions/download-artifact@v4' (SHA:d3f86a106a0bac45b974a628896c90dbdf5c8093)
+2026-08-17T19:30:50.0316857Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-08-17T19:30:58.0365079Z Complete job name: playwright / 3-of-9
+2026-08-17T19:30:58.1548029Z ##[group]Checking docker version
+2026-08-17T19:30:58.1579609Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+2026-08-17T19:30:58.2004884Z '1.52'
+2026-08-17T19:30:58.2048825Z Docker daemon API version: '1.52'
+2026-08-17T19:30:58.2050711Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+2026-08-17T19:30:58.2441606Z '1.52'
+2026-08-17T19:30:58.2462848Z Docker client API version: '1.52'
+2026-08-17T19:30:58.2476044Z ##[endgroup]
+2026-08-17T19:30:58.2486396Z ##[group]Clean up resources from previous jobs
+2026-08-17T19:30:58.2497808Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=5f4770"
+2026-08-17T19:30:58.2884615Z ##[command]/usr/bin/docker network prune --force --filter "label=5f4770"
+2026-08-17T19:30:58.3740934Z ##[endgroup]
+2026-08-17T19:30:58.3741759Z ##[group]Create local container network
+2026-08-17T19:30:58.3762004Z ##[command]/usr/bin/docker network create --label 5f4770 github_network_ab5b1c0a87dc4e398021ae92befb0242
+2026-08-17T19:30:59.1322269Z 6caa0f68d9866fba23eb8a55e048df2ddb9c536d1ca6d0fe343a06aeeb0b7c05
+2026-08-17T19:30:59.1428077Z ##[endgroup]
+2026-08-17T19:30:59.1485763Z ##[group]Starting job container
+2026-08-17T19:30:59.1537590Z ##[command]/usr/bin/docker pull mcr.microsoft.com/playwright:v1.58.2-noble
+2026-08-17T19:30:59.2985078Z v1.58.2-noble: Pulling from playwright
+2026-08-17T19:30:59.3906190Z Digest: sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+2026-08-17T19:30:59.3915251Z Status: Image is up to date for mcr.microsoft.com/playwright:v1.58.2-noble
+2026-08-17T19:30:59.3917700Z mcr.microsoft.com/playwright:v1.58.2-noble
+2026-08-17T19:30:59.4079824Z ##[command]/usr/bin/docker create --name 4c4e5acdb80d44f0bcc2be87ed4884b2_mcrmicrosoftcomplaywrightv1582noble_91979c --label 5f4770 --workdir /__w/Invoker/Invoker --network github_network_ab5b1c0a87dc4e398021ae92befb0242  -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/actions-runner/_work":"/__w" -v "/home/runner/actions-runner/externals":"/__e":ro -v "/home/runner/actions-runner/_work/_temp":"/__w/_temp" -v "/home/runner/actions-runner/_work/_actions":"/__w/_actions" -v "/home/runner/actions-runner/_work/_tool":"/__w/_tool" -v "/home/runner/actions-runner/_work/_temp/_github_home":"/github/home" -v "/home/runner/actions-runner/_work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" mcr.microsoft.com/playwright:v1.58.2-noble "-f" "/dev/null"
+2026-08-17T19:30:59.6392556Z 74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef
+2026-08-17T19:30:59.6421851Z ##[command]/usr/bin/docker start 74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef
+2026-08-17T19:31:00.0869674Z 74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef
+2026-08-17T19:31:00.0967811Z ##[command]/usr/bin/docker ps --all --filter id=74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+2026-08-17T19:31:00.1599689Z 74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef Up Less than a second
+2026-08-17T19:31:00.1633966Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" 74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef
+2026-08-17T19:31:00.2092341Z CI=true
+2026-08-17T19:31:00.2093761Z HOME=/github/home
+2026-08-17T19:31:00.2095346Z GITHUB_ACTIONS=true
+2026-08-17T19:31:00.2096478Z PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+2026-08-17T19:31:00.2098227Z LANG=C.UTF-8
+2026-08-17T19:31:00.2099525Z LC_ALL=C.UTF-8
+2026-08-17T19:31:00.2100949Z PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+2026-08-17T19:31:00.2195929Z ##[endgroup]
+2026-08-17T19:31:00.2220200Z ##[group]Waiting for all services to be ready
+2026-08-17T19:31:00.2225505Z ##[endgroup]
+2026-08-17T19:31:00.3156339Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-17T19:31:00.3177507Z ##[group]Run actions/checkout@v4
+2026-08-17T19:31:00.3178744Z with:
+2026-08-17T19:31:00.3234035Z   fetch-depth: 0
+2026-08-17T19:31:00.3234811Z   repository: Neko-Catpital-Labs/Invoker
+2026-08-17T19:31:00.3242351Z   token: ***
+2026-08-17T19:31:00.3242955Z   ssh-strict: true
+2026-08-17T19:31:00.3243562Z   ssh-user: git
+2026-08-17T19:31:00.3244152Z   persist-credentials: true
+2026-08-17T19:31:00.3244808Z   clean: true
+2026-08-17T19:31:00.3245386Z   sparse-checkout-cone-mode: true
+2026-08-17T19:31:00.3246197Z   fetch-tags: false
+2026-08-17T19:31:00.3246755Z   show-progress: true
+2026-08-17T19:31:00.3247343Z   lfs: false
+2026-08-17T19:31:00.3248053Z   submodules: false
+2026-08-17T19:31:00.3248701Z   set-safe-directory: true
+2026-08-17T19:31:00.3249414Z   allow-unsafe-pr-checkout: false
+2026-08-17T19:31:00.3254715Z env:
+2026-08-17T19:31:00.3255288Z   CI: true
+2026-08-17T19:31:00.3256237Z   NODE_VERSION: 26
+2026-08-17T19:31:00.3256750Z ##[endgroup]
+2026-08-17T19:31:00.3439769Z ##[command]/usr/bin/docker exec  74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef sh -c "cat /etc/*release | grep ^ID"
+2026-08-17T19:31:00.8887547Z Syncing repository: Neko-Catpital-Labs/Invoker
+2026-08-17T19:31:00.8899751Z ##[group]Getting Git version info
+2026-08-17T19:31:00.8907892Z Working directory is '/__w/Invoker/Invoker'
+2026-08-17T19:31:00.8910756Z [command]/usr/bin/git version
+2026-08-17T19:31:00.8912040Z git version 2.43.0
+2026-08-17T19:31:00.8922524Z ##[endgroup]
+2026-08-17T19:31:00.8937237Z Temporarily overriding HOME='/__w/_temp/571893a8-dec6-4e76-b1c3-8c1d1e01c056' before making global git config changes
+2026-08-17T19:31:00.8940889Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-17T19:31:00.8942974Z [command]/usr/bin/git config --global --add safe.directory /__w/Invoker/Invoker
+2026-08-17T19:31:00.9076048Z [command]/usr/bin/git config --local --get remote.origin.url
+2026-08-17T19:31:00.9119384Z https://github.com/Neko-Catpital-Labs/Invoker
+2026-08-17T19:31:00.9163935Z ##[group]Removing previously created refs, to avoid conflicts
+2026-08-17T19:31:00.9186903Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2026-08-17T19:31:00.9246708Z HEAD
+2026-08-17T19:31:02.9509567Z ##[endgroup]
+2026-08-17T19:31:02.9511674Z [command]/usr/bin/git submodule status
+2026-08-17T19:31:02.9514787Z ##[group]Cleaning the repository
+2026-08-17T19:31:02.9515724Z [command]/usr/bin/git clean -ffdx
+2026-08-17T19:31:05.0346804Z Removing node_modules/
+2026-08-17T19:31:05.0350013Z Removing packages/app/dist/
+2026-08-17T19:31:05.0360664Z Removing packages/app/node_modules/
+2026-08-17T19:31:05.0361994Z Removing packages/cli/dist/
+2026-08-17T19:31:05.0366002Z Removing packages/cli/node_modules/
+2026-08-17T19:31:05.0367951Z Removing packages/contracts/node_modules/
+2026-08-17T19:31:05.0369328Z Removing packages/core/node_modules/
+2026-08-17T19:31:05.0370693Z Removing packages/data-store/node_modules/
+2026-08-17T19:31:05.0371810Z Removing packages/execution-engine/node_modules/
+2026-08-17T19:31:05.0372879Z Removing packages/graph/node_modules/
+2026-08-17T19:31:05.0374071Z Removing packages/npm-cli/node_modules/
+2026-08-17T19:31:05.0375355Z Removing packages/npm-slack/node_modules/
+2026-08-17T19:31:05.0382201Z Removing packages/npm-ui/node_modules/
+2026-08-17T19:31:05.0385932Z Removing packages/npm-watcher/node_modules/
+2026-08-17T19:31:05.0387065Z Removing packages/persistence/node_modules/
+2026-08-17T19:31:05.0388033Z Removing packages/planning-core/node_modules/
+2026-08-17T19:31:05.0389558Z Removing packages/protocol/node_modules/
+2026-08-17T19:31:05.0391199Z Removing packages/runtime-adapters/node_modules/
+2026-08-17T19:31:05.0393245Z Removing packages/runtime-domain/node_modules/
+2026-08-17T19:31:05.0394565Z Removing packages/runtime-service/node_modules/
+2026-08-17T19:31:05.0395631Z Removing packages/shell/node_modules/
+2026-08-17T19:31:05.0396525Z Removing packages/slack-bug-scan/node_modules/
+2026-08-17T19:31:05.0397567Z Removing packages/slack-manager/node_modules/
+2026-08-17T19:31:05.0398613Z Removing packages/surfaces/dist/
+2026-08-17T19:31:05.0399509Z Removing packages/surfaces/node_modules/
+2026-08-17T19:31:05.0400781Z Removing packages/svc-api/node_modules/
+2026-08-17T19:31:05.0401769Z Removing packages/test-kit/node_modules/
+2026-08-17T19:31:05.0402769Z Removing packages/transport/node_modules/
+2026-08-17T19:31:05.0403749Z Removing packages/ui/dist/
+2026-08-17T19:31:05.0404575Z Removing packages/ui/node_modules/
+2026-08-17T19:31:05.0405502Z Removing packages/watcher/node_modules/
+2026-08-17T19:31:05.0406570Z Removing packages/web-app/node_modules/
+2026-08-17T19:31:05.0407571Z Removing packages/workflow-core/node_modules/
+2026-08-17T19:31:05.0409253Z Removing packages/workflow-graph/node_modules/
+2026-08-17T19:31:05.0413099Z [command]/usr/bin/git reset --hard HEAD
+2026-08-17T19:31:05.0676701Z HEAD is now at 03bbcb24d Merge 89e98f94363e3ef652997e3d6a2a1b174969c416 into d56567a2a8b077a9a9a1b02e347783ca65c58bf1
+2026-08-17T19:31:05.0700359Z ##[endgroup]
+2026-08-17T19:31:05.0723759Z ##[group]Disabling automatic garbage collection
+2026-08-17T19:31:05.0729645Z [command]/usr/bin/git config --local gc.auto 0
+2026-08-17T19:31:05.0838579Z ##[endgroup]
+2026-08-17T19:31:05.0895818Z ##[group]Setting up auth
+2026-08-17T19:31:05.0903134Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-08-17T19:31:05.0976313Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-08-17T19:31:05.1656335Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-17T19:31:05.1762354Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-08-17T19:31:05.2629854Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-17T19:31:05.2735292Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-17T19:31:05.3559659Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-08-17T19:31:05.3923428Z ##[endgroup]
+2026-08-17T19:31:05.3924446Z ##[group]Fetching the repository
+2026-08-17T19:31:05.3956080Z [command]/usr/bin/git -c protocol.version=2 fetch --prune --no-recurse-submodules --unshallow origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+2026-08-17T19:31:08.4905559Z From https://github.com/Neko-Catpital-Labs/Invoker
+2026-08-17T19:31:08.4907286Z  - [deleted]             (none)     -> origin/mergify/merge-queue/0a7f88969d
+2026-08-17T19:31:09.0691852Z  - [deleted]             (none)     -> origin/stack/EdbertChan/pr/slack-plan-review-block-limit/slack-plan-review-block-limit-2-clamp-plan-review--04bc3863
+2026-08-17T19:31:10.5699107Z    d56567a2a..7bf31b9dd  master     -> origin/master
+2026-08-17T19:31:11.2264385Z [command]/usr/bin/git branch --list --remote origin/master
+2026-08-17T19:31:11.8206041Z   origin/master
+2026-08-17T19:31:11.8247359Z [command]/usr/bin/git rev-parse refs/remotes/origin/master
+2026-08-17T19:31:11.8345708Z 7bf31b9dd8aac460a32812320607cff44e3dbd02
+2026-08-17T19:31:11.8357763Z ##[endgroup]
+2026-08-17T19:31:11.8364713Z ##[group]Determining the checkout info
+2026-08-17T19:31:11.8382495Z ##[endgroup]
+2026-08-17T19:31:11.8400420Z [command]/usr/bin/git sparse-checkout disable
+2026-08-17T19:31:11.8624962Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-08-17T19:31:11.8709181Z ##[group]Checking out the ref
+2026-08-17T19:31:11.8747315Z [command]/usr/bin/git checkout --progress --force -B master refs/remotes/origin/master
+2026-08-17T19:31:12.7986017Z Previous HEAD position was 03bbcb24d Merge 89e98f94363e3ef652997e3d6a2a1b174969c416 into d56567a2a8b077a9a9a1b02e347783ca65c58bf1
+2026-08-17T19:31:12.8119147Z Switched to a new branch 'master'
+2026-08-17T19:31:12.8119915Z branch 'master' set up to track 'origin/master'.
+2026-08-17T19:31:12.8223852Z ##[endgroup]
+2026-08-17T19:31:12.8342008Z [command]/usr/bin/git log -1 --format=%H
+2026-08-17T19:31:12.8434975Z 7bf31b9dd8aac460a32812320607cff44e3dbd02
+2026-08-17T19:31:12.9207036Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-17T19:31:12.9212306Z ##[group]Run pnpm/action-setup@v4
+2026-08-17T19:31:12.9213007Z with:
+2026-08-17T19:31:12.9213722Z   dest: ~/setup-pnpm
+2026-08-17T19:31:12.9214293Z   run_install: null
+2026-08-17T19:31:12.9214907Z   cache: false
+2026-08-17T19:31:12.9215598Z   cache_dependency_path: pnpm-lock.yaml
+2026-08-17T19:31:12.9216374Z   package_json_file: package.json
+2026-08-17T19:31:12.9217153Z   standalone: false
+2026-08-17T19:31:12.9217702Z env:
+2026-08-17T19:31:12.9218296Z   CI: true
+2026-08-17T19:31:12.9218790Z   NODE_VERSION: 26
+2026-08-17T19:31:12.9219373Z ##[endgroup]
+2026-08-17T19:31:12.9232413Z ##[command]/usr/bin/docker exec  74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef sh -c "cat /etc/*release | grep ^ID"
+2026-08-17T19:31:13.5081043Z ##[group]Running self-installer...
+2026-08-17T19:31:14.5871825Z (node:197) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-08-17T19:31:14.5884208Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:31:14.6662002Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-17T19:31:14.7016438Z Packages: +1
+2026-08-17T19:31:14.7017468Z +
+2026-08-17T19:31:15.0822915Z Progress: resolved 1, reused 1, downloaded 0, added 1, done
+2026-08-17T19:31:15.1900448Z 
+2026-08-17T19:31:15.1901317Z dependencies:
+2026-08-17T19:31:15.1902276Z + pnpm 10.31.0 (11.15.1 is available)
+2026-08-17T19:31:15.1903071Z 
+2026-08-17T19:31:15.2112040Z Done in 1.1s
+2026-08-17T19:31:15.2463376Z ##[endgroup]
+2026-08-17T19:31:15.2464807Z Installation Completed!
+2026-08-17T19:31:15.3179521Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-17T19:31:15.3185198Z ##[group]Run actions/setup-node@v4
+2026-08-17T19:31:15.3186278Z with:
+2026-08-17T19:31:15.3187105Z   node-version: 26
+2026-08-17T19:31:15.3188000Z   cache: pnpm
+2026-08-17T19:31:15.3189071Z   cache-dependency-path: pnpm-lock.yaml
+.node-version
+
+2026-08-17T19:31:15.3190554Z   always-auth: false
+2026-08-17T19:31:15.3191496Z   check-latest: false
+2026-08-17T19:31:15.3198025Z   token: ***
+2026-08-17T19:31:15.3198787Z env:
+2026-08-17T19:31:15.3199316Z   CI: true
+2026-08-17T19:31:15.3199890Z   NODE_VERSION: 26
+2026-08-17T19:31:15.3200913Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:31:15.3201674Z ##[endgroup]
+2026-08-17T19:31:15.3228720Z ##[command]/usr/bin/docker exec  74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef sh -c "cat /etc/*release | grep ^ID"
+2026-08-17T19:31:15.8937726Z Found in cache @ /__w/_tool/node/26.5.0/x64
+2026-08-17T19:31:15.8951582Z (node:218) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-08-17T19:31:15.8961522Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:31:15.8970804Z ##[group]Environment details
+2026-08-17T19:31:16.5633529Z node: v26.5.0
+2026-08-17T19:31:16.5635692Z npm: 11.17.0
+2026-08-17T19:31:16.5636436Z yarn: 1.22.22
+2026-08-17T19:31:16.5637621Z ##[endgroup]
+2026-08-17T19:31:16.5679271Z [command]/github/home/setup-pnpm/node_modules/.bin/pnpm store path --silent
+2026-08-17T19:31:17.4994826Z /__w/.pnpm-store/v10
+2026-08-17T19:31:18.3461516Z Cache hit for: node-cache-Linux-x64-pnpm-acb66766f6951f1271b0d2300581283462b4443907e66a8eb22e1652d906968f
+2026-08-17T19:31:18.3744771Z (node:218) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-08-17T19:31:20.2920822Z Received 0 of 209785874 (0.0%), 0.0 MBs/sec
+2026-08-17T19:31:21.2932897Z Received 0 of 209785874 (0.0%), 0.0 MBs/sec
+2026-08-17T19:31:22.2962871Z Received 4194304 of 209785874 (2.0%), 1.3 MBs/sec
+2026-08-17T19:31:23.2936241Z Received 12582912 of 209785874 (6.0%), 3.0 MBs/sec
+2026-08-17T19:31:24.2984445Z Received 37748736 of 209785874 (18.0%), 7.2 MBs/sec
+2026-08-17T19:31:25.2944648Z Received 67108864 of 209785874 (32.0%), 10.7 MBs/sec
+2026-08-17T19:31:26.2979719Z Received 75497472 of 209785874 (36.0%), 10.3 MBs/sec
+2026-08-17T19:31:27.2964381Z Received 100663296 of 209785874 (48.0%), 12.0 MBs/sec
+2026-08-17T19:31:28.2969092Z Received 113246208 of 209785874 (54.0%), 12.0 MBs/sec
+2026-08-17T19:31:29.2983649Z Received 130023424 of 209785874 (62.0%), 12.4 MBs/sec
+2026-08-17T19:31:30.3038723Z Received 134217728 of 209785874 (64.0%), 11.6 MBs/sec
+2026-08-17T19:31:31.3041656Z Received 146800640 of 209785874 (70.0%), 11.7 MBs/sec
+2026-08-17T19:31:32.3042823Z Received 167772160 of 209785874 (80.0%), 12.3 MBs/sec
+2026-08-17T19:31:33.3032978Z Received 184620050 of 209785874 (88.0%), 12.6 MBs/sec
+2026-08-17T19:31:34.3051063Z Received 201397266 of 209785874 (96.0%), 12.8 MBs/sec
+2026-08-17T19:31:34.4589931Z Received 209785874 of 209785874 (100.0%), 13.2 MBs/sec
+2026-08-17T19:31:34.4597873Z Cache Size: ~200 MB (209785874 B)
+2026-08-17T19:31:34.4804156Z [command]/usr/bin/tar -xf /__w/_temp/07d86a84-853e-43cc-8ada-c05202b9074d/cache.tgz -P -C /__w/Invoker/Invoker -z
+2026-08-17T19:31:44.2259909Z Cache restored successfully
+2026-08-17T19:31:44.2733988Z Cache restored from key: node-cache-Linux-x64-pnpm-acb66766f6951f1271b0d2300581283462b4443907e66a8eb22e1652d906968f
+2026-08-17T19:31:44.3314906Z ##[group]Run apt-get update && apt-get install -y unzip make g++ python3
+2026-08-17T19:31:44.3316999Z [36;1mapt-get update && apt-get install -y unzip make g++ python3[0m
+2026-08-17T19:31:44.3329243Z shell: sh -e {0}
+2026-08-17T19:31:44.3330421Z env:
+2026-08-17T19:31:44.3331003Z   CI: true
+2026-08-17T19:31:44.3332622Z   NODE_VERSION: 26
+2026-08-17T19:31:44.3333780Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:31:44.3334468Z ##[endgroup]
+2026-08-17T19:31:44.6135486Z Get:1 https://deb.nodesource.com/node_24.x nodistro InRelease [12.1 kB]
+2026-08-17T19:31:44.7405546Z Get:2 https://deb.nodesource.com/node_24.x nodistro/main amd64 Packages [8584 B]
+2026-08-17T19:31:44.9797775Z Get:3 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+2026-08-17T19:31:45.1785739Z Get:4 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+2026-08-17T19:31:46.2600869Z Get:5 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+2026-08-17T19:31:46.5689612Z Get:6 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+2026-08-17T19:31:46.7667792Z Get:7 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1524 kB]
+2026-08-17T19:31:46.8854022Z Get:8 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+2026-08-17T19:31:46.9665120Z Get:9 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+2026-08-17T19:31:48.3844251Z Get:10 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1153 kB]
+2026-08-17T19:31:48.5508789Z Get:11 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1657 kB]
+2026-08-17T19:31:48.7116913Z Get:12 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+2026-08-17T19:31:48.8055361Z Get:13 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+2026-08-17T19:31:48.8261228Z Get:14 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [55.8 kB]
+2026-08-17T19:31:48.8304392Z Get:15 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1499 kB]
+2026-08-17T19:31:48.8787607Z Get:16 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [50.0 kB]
+2026-08-17T19:31:48.9117337Z Get:17 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1800 kB]
+2026-08-17T19:31:48.9954341Z Get:18 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2142 kB]
+2026-08-17T19:31:49.1267646Z Get:19 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [48.9 kB]
+2026-08-17T19:31:49.1288494Z Get:20 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [35.9 kB]
+2026-08-17T19:31:49.1308678Z Get:21 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [671 B]
+2026-08-17T19:31:50.4667845Z Fetched 32.2 MB in 6s (5410 kB/s)
+2026-08-17T19:31:52.5775566Z Reading package lists...
+2026-08-17T19:31:54.6945401Z Reading package lists...
+2026-08-17T19:31:55.3397807Z Building dependency tree...
+2026-08-17T19:31:55.3507013Z Reading state information...
+2026-08-17T19:31:56.1054527Z python3 is already the newest version (3.12.3-0ubuntu2.1).
+2026-08-17T19:31:56.1058281Z python3 set to manually installed.
+2026-08-17T19:31:56.1062243Z The following additional packages will be installed:
+2026-08-17T19:31:56.1065824Z   binutils binutils-common binutils-x86-64-linux-gnu cpp cpp-13
+2026-08-17T19:31:56.1082554Z   cpp-13-x86-64-linux-gnu cpp-x86-64-linux-gnu g++-13 g++-13-x86-64-linux-gnu
+2026-08-17T19:31:56.1109702Z   g++-x86-64-linux-gnu gcc gcc-13 gcc-13-base gcc-13-x86-64-linux-gnu
+2026-08-17T19:31:56.1112619Z   gcc-14-base gcc-x86-64-linux-gnu libasan8 libatomic1 libbinutils libc-bin
+2026-08-17T19:31:56.1136595Z   libc-dev-bin libc-devtools libc6 libc6-dev libcc1-0 libcrypt-dev
+2026-08-17T19:31:56.1143912Z   libctf-nobfd0 libctf0 libgcc-13-dev libgcc-s1 libgd3 libgfortran5 libgomp1
+2026-08-17T19:31:56.1149645Z   libgprofng0 libheif-plugin-aomdec libheif-plugin-aomenc libheif1 libhwasan0
+2026-08-17T19:31:56.1154115Z   libisl23 libitm1 libjansson4 liblsan0 libmpc3 libmpfr6 libquadmath0
+2026-08-17T19:31:56.1156090Z   libsframe1 libstdc++-13-dev libstdc++6 libtsan2 libubsan1 linux-libc-dev
+2026-08-17T19:31:56.1158023Z   manpages manpages-dev rpcsvc-proto
+2026-08-17T19:31:56.1159282Z Suggested packages:
+2026-08-17T19:31:56.1161066Z   binutils-doc gprofng-gui cpp-doc gcc-13-locales cpp-13-doc g++-multilib
+2026-08-17T19:31:56.1163867Z   g++-13-multilib gcc-13-doc gcc-multilib autoconf automake libtool flex bison
+2026-08-17T19:31:56.1166308Z   gdb gcc-doc gcc-13-multilib gdb-x86-64-linux-gnu glibc-doc locales
+2026-08-17T19:31:56.1168407Z   libnss-nis libnss-nisplus libgd-tools libheif-plugin-libde265
+2026-08-17T19:31:56.1170732Z   libheif-plugin-x265 libheif-plugin-ffmpegdec libheif-plugin-jpegdec
+2026-08-17T19:31:56.1173118Z   libheif-plugin-jpegenc libheif-plugin-j2kdec libheif-plugin-j2kenc
+2026-08-17T19:31:56.1175259Z   libheif-plugin-rav1e libheif-plugin-svtenc libstdc++-13-doc make-doc
+2026-08-17T19:31:56.1176113Z   man-browser zip
+2026-08-17T19:31:56.7022639Z The following NEW packages will be installed:
+2026-08-17T19:31:56.7029432Z   binutils binutils-common binutils-x86-64-linux-gnu cpp cpp-13
+2026-08-17T19:31:56.7034710Z   cpp-13-x86-64-linux-gnu cpp-x86-64-linux-gnu g++ g++-13
+2026-08-17T19:31:56.7037434Z   g++-13-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-13 gcc-13-base
+2026-08-17T19:31:56.7073555Z   gcc-13-x86-64-linux-gnu gcc-x86-64-linux-gnu libasan8 libbinutils
+2026-08-17T19:31:56.7095617Z   libc-dev-bin libc-devtools libc6-dev libcc1-0 libcrypt-dev libctf-nobfd0
+2026-08-17T19:31:56.7109921Z   libctf0 libgcc-13-dev libgd3 libgprofng0 libheif-plugin-aomdec
+2026-08-17T19:31:56.7112488Z   libheif-plugin-aomenc libheif1 libhwasan0 libisl23 libitm1 libjansson4
+2026-08-17T19:31:56.7114940Z   liblsan0 libmpc3 libmpfr6 libquadmath0 libsframe1 libstdc++-13-dev libtsan2
+2026-08-17T19:31:56.7117603Z   libubsan1 linux-libc-dev make manpages manpages-dev rpcsvc-proto unzip
+2026-08-17T19:31:56.7148767Z The following packages will be upgraded:
+2026-08-17T19:31:56.7150312Z   gcc-14-base libatomic1 libc-bin libc6 libgcc-s1 libgfortran5 libgomp1
+2026-08-17T19:31:56.7180448Z   libstdc++6
+2026-08-17T19:31:57.2968870Z 8 upgraded, 49 newly installed, 0 to remove and 113 not upgraded.
+2026-08-17T19:31:57.2974933Z Need to get 79.3 MB of archives.
+2026-08-17T19:31:57.2977176Z After this operation, 254 MB of additional disk space will be used.
+2026-08-17T19:31:57.2993997Z Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libatomic1 amd64 14.2.0-4ubuntu2~24.04.1 [10.5 kB]
+2026-08-17T19:31:57.5538338Z Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgomp1 amd64 14.2.0-4ubuntu2~24.04.1 [148 kB]
+2026-08-17T19:31:58.2995152Z Get:3 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgfortran5 amd64 14.2.0-4ubuntu2~24.04.1 [916 kB]
+2026-08-17T19:31:59.0129044Z Get:4 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-14-base amd64 14.2.0-4ubuntu2~24.04.1 [51.0 kB]
+2026-08-17T19:31:59.0268034Z Get:5 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-s1 amd64 14.2.0-4ubuntu2~24.04.1 [78.4 kB]
+2026-08-17T19:31:59.0517832Z Get:6 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libstdc++6 amd64 14.2.0-4ubuntu2~24.04.1 [792 kB]
+2026-08-17T19:31:59.2336969Z Get:7 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc6 amd64 2.39-0ubuntu8.8 [3262 kB]
+2026-08-17T19:31:59.6555679Z Get:8 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc-bin amd64 2.39-0ubuntu8.8 [682 kB]
+2026-08-17T19:31:59.7257665Z Get:9 http://archive.ubuntu.com/ubuntu noble/main amd64 libjansson4 amd64 2.14-2build2 [32.8 kB]
+2026-08-17T19:31:59.7277488Z Get:10 http://archive.ubuntu.com/ubuntu noble/main amd64 manpages all 6.7-2 [1384 kB]
+2026-08-17T19:31:59.9042630Z Get:11 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils-common amd64 2.42-4ubuntu2.10 [240 kB]
+2026-08-17T19:31:59.9311250Z Get:12 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libsframe1 amd64 2.42-4ubuntu2.10 [15.7 kB]
+2026-08-17T19:31:59.9334340Z Get:13 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libbinutils amd64 2.42-4ubuntu2.10 [577 kB]
+2026-08-17T19:31:59.9902660Z Get:14 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libctf-nobfd0 amd64 2.42-4ubuntu2.10 [98.0 kB]
+2026-08-17T19:31:59.9979656Z Get:15 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libctf0 amd64 2.42-4ubuntu2.10 [94.5 kB]
+2026-08-17T19:32:00.0091024Z Get:16 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgprofng0 amd64 2.42-4ubuntu2.10 [849 kB]
+2026-08-17T19:32:00.1294385Z Get:17 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils-x86-64-linux-gnu amd64 2.42-4ubuntu2.10 [2463 kB]
+2026-08-17T19:32:00.4237421Z Get:18 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils amd64 2.42-4ubuntu2.10 [18.2 kB]
+2026-08-17T19:32:00.4245682Z Get:19 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-base amd64 13.3.0-6ubuntu2~24.04.1 [51.6 kB]
+2026-08-17T19:32:00.4283265Z Get:20 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libisl23 amd64 0.26-3build1.1 [680 kB]
+2026-08-17T19:32:00.4956432Z Get:21 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libmpfr6 amd64 4.2.1-1build1.1 [353 kB]
+2026-08-17T19:32:00.5443960Z Get:22 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libmpc3 amd64 1.3.1-1build1.1 [54.6 kB]
+2026-08-17T19:32:00.5460615Z Get:23 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 cpp-13-x86-64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1 [10.7 MB]
+2026-08-17T19:32:01.8407575Z Get:24 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 cpp-13 amd64 13.3.0-6ubuntu2~24.04.1 [1042 B]
+2026-08-17T19:32:01.8414934Z Get:25 http://archive.ubuntu.com/ubuntu noble/main amd64 cpp-x86-64-linux-gnu amd64 4:13.2.0-7ubuntu1 [5326 B]
+2026-08-17T19:32:01.8425187Z Get:26 http://archive.ubuntu.com/ubuntu noble/main amd64 cpp amd64 4:13.2.0-7ubuntu1 [22.4 kB]
+2026-08-17T19:32:01.8429988Z Get:27 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libcc1-0 amd64 14.2.0-4ubuntu2~24.04.1 [48.0 kB]
+2026-08-17T19:32:01.8444058Z Get:28 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libitm1 amd64 14.2.0-4ubuntu2~24.04.1 [29.7 kB]
+2026-08-17T19:32:01.8460373Z Get:29 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libasan8 amd64 14.2.0-4ubuntu2~24.04.1 [3027 kB]
+2026-08-17T19:32:02.3404734Z Get:30 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 liblsan0 amd64 14.2.0-4ubuntu2~24.04.1 [1322 kB]
+2026-08-17T19:32:02.4591730Z Get:31 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libtsan2 amd64 14.2.0-4ubuntu2~24.04.1 [2772 kB]
+2026-08-17T19:32:02.8321094Z Get:32 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libubsan1 amd64 14.2.0-4ubuntu2~24.04.1 [1184 kB]
+2026-08-17T19:32:02.9473730Z Get:33 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libhwasan0 amd64 14.2.0-4ubuntu2~24.04.1 [1641 kB]
+2026-08-17T19:32:03.1481478Z Get:34 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libquadmath0 amd64 14.2.0-4ubuntu2~24.04.1 [153 kB]
+2026-08-17T19:32:03.1705150Z Get:35 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-13-dev amd64 13.3.0-6ubuntu2~24.04.1 [2681 kB]
+2026-08-17T19:32:03.4806582Z Get:36 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-x86-64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1 [21.1 MB]
+2026-08-17T19:32:06.0546703Z Get:37 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13 amd64 13.3.0-6ubuntu2~24.04.1 [494 kB]
+2026-08-17T19:32:06.0646730Z Get:38 http://archive.ubuntu.com/ubuntu noble/main amd64 gcc-x86-64-linux-gnu amd64 4:13.2.0-7ubuntu1 [1212 B]
+2026-08-17T19:32:06.0654836Z Get:39 http://archive.ubuntu.com/ubuntu noble/main amd64 gcc amd64 4:13.2.0-7ubuntu1 [5018 B]
+2026-08-17T19:32:06.0672737Z Get:40 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc-dev-bin amd64 2.39-0ubuntu8.8 [20.4 kB]
+2026-08-17T19:32:06.0676298Z Get:41 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 linux-libc-dev amd64 6.8.0-138.138 [1523 kB]
+2026-08-17T19:32:06.2616244Z Get:42 http://archive.ubuntu.com/ubuntu noble/main amd64 libcrypt-dev amd64 1:4.4.36-4build1 [112 kB]
+2026-08-17T19:32:06.2965875Z Get:43 http://archive.ubuntu.com/ubuntu noble/main amd64 rpcsvc-proto amd64 1.4.2-0ubuntu7 [67.4 kB]
+2026-08-17T19:32:06.3030899Z Get:44 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc6-dev amd64 2.39-0ubuntu8.8 [2125 kB]
+2026-08-17T19:32:06.5618166Z Get:45 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libstdc++-13-dev amd64 13.3.0-6ubuntu2~24.04.1 [2420 kB]
+2026-08-17T19:32:06.8401944Z Get:46 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 g++-13-x86-64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1 [12.2 MB]
+2026-08-17T19:32:08.2831611Z Get:47 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 g++-13 amd64 13.3.0-6ubuntu2~24.04.1 [16.0 kB]
+2026-08-17T19:32:08.2838738Z Get:48 http://archive.ubuntu.com/ubuntu noble/main amd64 g++-x86-64-linux-gnu amd64 4:13.2.0-7ubuntu1 [964 B]
+2026-08-17T19:32:08.2842166Z Get:49 http://archive.ubuntu.com/ubuntu noble/main amd64 g++ amd64 4:13.2.0-7ubuntu1 [1100 B]
+2026-08-17T19:32:08.2848392Z Get:50 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libheif-plugin-aomdec amd64 1.17.6-1ubuntu4.6 [11.3 kB]
+2026-08-17T19:32:08.2861078Z Get:51 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libheif1 amd64 1.17.6-1ubuntu4.6 [276 kB]
+2026-08-17T19:32:08.3302348Z Get:52 http://archive.ubuntu.com/ubuntu noble/main amd64 libgd3 amd64 2.3.3-9ubuntu5 [128 kB]
+2026-08-17T19:32:08.3430319Z Get:53 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc-devtools amd64 2.39-0ubuntu8.8 [29.3 kB]
+2026-08-17T19:32:08.3467500Z Get:54 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libheif-plugin-aomenc amd64 1.17.6-1ubuntu4.6 [14.7 kB]
+2026-08-17T19:32:08.3470791Z Get:55 http://archive.ubuntu.com/ubuntu noble/main amd64 make amd64 4.3-4.1build2 [180 kB]
+2026-08-17T19:32:08.5367437Z Get:56 http://archive.ubuntu.com/ubuntu noble/main amd64 manpages-dev all 6.7-2 [2013 kB]
+2026-08-17T19:32:08.7905665Z Get:57 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 unzip amd64 6.0-28ubuntu4.1 [174 kB]
+2026-08-17T19:32:09.1531153Z debconf: delaying package configuration, since apt-utils is not installed
+2026-08-17T19:32:09.2502826Z Fetched 79.3 MB in 12s (6584 kB/s)
+2026-08-17T19:32:09.3339359Z (Reading database ... 
+2026-08-17T19:32:09.3352018Z (Reading database ... 5%
+2026-08-17T19:32:09.3355953Z (Reading database ... 10%
+2026-08-17T19:32:09.3357671Z (Reading database ... 15%
+2026-08-17T19:32:09.3358893Z (Reading database ... 20%
+2026-08-17T19:32:09.3359906Z (Reading database ... 25%
+2026-08-17T19:32:09.3361101Z (Reading database ... 30%
+2026-08-17T19:32:09.3361931Z (Reading database ... 35%
+2026-08-17T19:32:09.3362754Z (Reading database ... 40%
+2026-08-17T19:32:09.3363668Z (Reading database ... 45%
+2026-08-17T19:32:09.3364643Z (Reading database ... 50%
+2026-08-17T19:32:09.3381038Z (Reading database ... 55%
+2026-08-17T19:32:09.3405905Z (Reading database ... 60%
+2026-08-17T19:32:09.3458485Z (Reading database ... 65%
+2026-08-17T19:32:09.3533108Z (Reading database ... 70%
+2026-08-17T19:32:09.3543335Z (Reading database ... 75%
+2026-08-17T19:32:09.3552680Z (Reading database ... 80%
+2026-08-17T19:32:09.3580864Z (Reading database ... 85%
+2026-08-17T19:32:09.3582537Z (Reading database ... 90%
+2026-08-17T19:32:09.3587518Z (Reading database ... 95%
+2026-08-17T19:32:09.3588965Z (Reading database ... 100%
+2026-08-17T19:32:09.3590754Z (Reading database ... 35123 files and directories currently installed.)
+2026-08-17T19:32:09.3605182Z Preparing to unpack .../libatomic1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:09.3873209Z Unpacking libatomic1:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+2026-08-17T19:32:09.4784773Z Preparing to unpack .../libgomp1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:09.4994299Z Unpacking libgomp1:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+2026-08-17T19:32:09.5839727Z Preparing to unpack .../libgfortran5_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:09.6027357Z Unpacking libgfortran5:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+2026-08-17T19:32:09.7212993Z Preparing to unpack .../gcc-14-base_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:09.7393360Z Unpacking gcc-14-base:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+2026-08-17T19:32:09.8454649Z Setting up gcc-14-base:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:09.9365180Z (Reading database ... 
+2026-08-17T19:32:09.9366594Z (Reading database ... 5%
+2026-08-17T19:32:09.9367901Z (Reading database ... 10%
+2026-08-17T19:32:09.9369220Z (Reading database ... 15%
+2026-08-17T19:32:09.9370593Z (Reading database ... 20%
+2026-08-17T19:32:09.9373289Z (Reading database ... 25%
+2026-08-17T19:32:09.9374077Z (Reading database ... 30%
+2026-08-17T19:32:09.9374682Z (Reading database ... 35%
+2026-08-17T19:32:09.9375345Z (Reading database ... 40%
+2026-08-17T19:32:09.9375986Z (Reading database ... 45%
+2026-08-17T19:32:09.9376687Z (Reading database ... 50%
+2026-08-17T19:32:09.9417234Z (Reading database ... 55%
+2026-08-17T19:32:09.9438893Z (Reading database ... 60%
+2026-08-17T19:32:09.9499788Z (Reading database ... 65%
+2026-08-17T19:32:09.9576228Z (Reading database ... 70%
+2026-08-17T19:32:09.9585877Z (Reading database ... 75%
+2026-08-17T19:32:09.9600199Z (Reading database ... 80%
+2026-08-17T19:32:09.9613494Z (Reading database ... 85%
+2026-08-17T19:32:09.9626132Z (Reading database ... 90%
+2026-08-17T19:32:09.9644448Z (Reading database ... 95%
+2026-08-17T19:32:09.9645814Z (Reading database ... 100%
+2026-08-17T19:32:09.9647954Z (Reading database ... 35123 files and directories currently installed.)
+2026-08-17T19:32:09.9673802Z Preparing to unpack .../libgcc-s1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:09.9876893Z Unpacking libgcc-s1:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+2026-08-17T19:32:10.0966213Z Setting up libgcc-s1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:10.1855416Z (Reading database ... 
+2026-08-17T19:32:10.1856925Z (Reading database ... 5%
+2026-08-17T19:32:10.1857909Z (Reading database ... 10%
+2026-08-17T19:32:10.1858942Z (Reading database ... 15%
+2026-08-17T19:32:10.1859785Z (Reading database ... 20%
+2026-08-17T19:32:10.1860886Z (Reading database ... 25%
+2026-08-17T19:32:10.1861704Z (Reading database ... 30%
+2026-08-17T19:32:10.1862624Z (Reading database ... 35%
+2026-08-17T19:32:10.1863639Z (Reading database ... 40%
+2026-08-17T19:32:10.1864534Z (Reading database ... 45%
+2026-08-17T19:32:10.1865418Z (Reading database ... 50%
+2026-08-17T19:32:10.1896270Z (Reading database ... 55%
+2026-08-17T19:32:10.1926979Z (Reading database ... 60%
+2026-08-17T19:32:10.1995793Z (Reading database ... 65%
+2026-08-17T19:32:10.2077255Z (Reading database ... 70%
+2026-08-17T19:32:10.2092526Z (Reading database ... 75%
+2026-08-17T19:32:10.2107460Z (Reading database ... 80%
+2026-08-17T19:32:10.2120156Z (Reading database ... 85%
+2026-08-17T19:32:10.2134929Z (Reading database ... 90%
+2026-08-17T19:32:10.2155393Z (Reading database ... 95%
+2026-08-17T19:32:10.2155883Z (Reading database ... 100%
+2026-08-17T19:32:10.2156520Z (Reading database ... 35123 files and directories currently installed.)
+2026-08-17T19:32:10.2188943Z Preparing to unpack .../libstdc++6_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:10.2718493Z Unpacking libstdc++6:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+2026-08-17T19:32:10.4369453Z Setting up libstdc++6:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:10.5434009Z (Reading database ... 
+2026-08-17T19:32:10.5435821Z (Reading database ... 5%
+2026-08-17T19:32:10.5437463Z (Reading database ... 10%
+2026-08-17T19:32:10.5438316Z (Reading database ... 15%
+2026-08-17T19:32:10.5439081Z (Reading database ... 20%
+2026-08-17T19:32:10.5439814Z (Reading database ... 25%
+2026-08-17T19:32:10.5440720Z (Reading database ... 30%
+2026-08-17T19:32:10.5441456Z (Reading database ... 35%
+2026-08-17T19:32:10.5442163Z (Reading database ... 40%
+2026-08-17T19:32:10.5444229Z (Reading database ... 45%
+2026-08-17T19:32:10.5482483Z (Reading database ... 50%
+2026-08-17T19:32:10.5496148Z (Reading database ... 55%
+2026-08-17T19:32:10.5522970Z (Reading database ... 60%
+2026-08-17T19:32:10.5593118Z (Reading database ... 65%
+2026-08-17T19:32:10.5676142Z (Reading database ... 70%
+2026-08-17T19:32:10.5687933Z (Reading database ... 75%
+2026-08-17T19:32:10.5701010Z (Reading database ... 80%
+2026-08-17T19:32:10.5715441Z (Reading database ... 85%
+2026-08-17T19:32:10.5729713Z (Reading database ... 90%
+2026-08-17T19:32:10.5750967Z (Reading database ... 95%
+2026-08-17T19:32:10.5752888Z (Reading database ... 100%
+2026-08-17T19:32:10.5755128Z (Reading database ... 35123 files and directories currently installed.)
+2026-08-17T19:32:10.5778150Z Preparing to unpack .../libc6_2.39-0ubuntu8.8_amd64.deb ...
+2026-08-17T19:32:10.7377679Z debconf: unable to initialize frontend: Dialog
+2026-08-17T19:32:10.7381187Z debconf: (TERM is not set, so the dialog frontend is not usable.)
+2026-08-17T19:32:10.7382669Z debconf: falling back to frontend: Readline
+2026-08-17T19:32:10.7554574Z debconf: unable to initialize frontend: Readline
+2026-08-17T19:32:10.7557218Z debconf: (This frontend requires a controlling tty.)
+2026-08-17T19:32:10.7559426Z debconf: falling back to frontend: Teletype
+2026-08-17T19:32:10.8577042Z Unpacking libc6:amd64 (2.39-0ubuntu8.8) over (2.39-0ubuntu8.6) ...
+2026-08-17T19:32:12.5495092Z Setting up libc6:amd64 (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:12.7047661Z debconf: unable to initialize frontend: Dialog
+2026-08-17T19:32:12.7061701Z debconf: (TERM is not set, so the dialog frontend is not usable.)
+2026-08-17T19:32:12.7063142Z debconf: falling back to frontend: Readline
+2026-08-17T19:32:12.7180319Z debconf: unable to initialize frontend: Readline
+2026-08-17T19:32:12.7189481Z debconf: (This frontend requires a controlling tty.)
+2026-08-17T19:32:12.7204463Z debconf: falling back to frontend: Teletype
+2026-08-17T19:32:13.8853982Z (Reading database ... 
+2026-08-17T19:32:13.8856073Z (Reading database ... 5%
+2026-08-17T19:32:13.8857620Z (Reading database ... 10%
+2026-08-17T19:32:13.8858331Z (Reading database ... 15%
+2026-08-17T19:32:13.8858980Z (Reading database ... 20%
+2026-08-17T19:32:13.8859647Z (Reading database ... 25%
+2026-08-17T19:32:13.8860577Z (Reading database ... 30%
+2026-08-17T19:32:13.8861265Z (Reading database ... 35%
+2026-08-17T19:32:13.8861982Z (Reading database ... 40%
+2026-08-17T19:32:13.8862698Z (Reading database ... 45%
+2026-08-17T19:32:13.8863391Z (Reading database ... 50%
+2026-08-17T19:32:13.8907502Z (Reading database ... 55%
+2026-08-17T19:32:13.8929557Z (Reading database ... 60%
+2026-08-17T19:32:13.9004703Z (Reading database ... 65%
+2026-08-17T19:32:13.9086124Z (Reading database ... 70%
+2026-08-17T19:32:13.9102669Z (Reading database ... 75%
+2026-08-17T19:32:13.9116047Z (Reading database ... 80%
+2026-08-17T19:32:13.9142210Z (Reading database ... 85%
+2026-08-17T19:32:13.9147096Z (Reading database ... 90%
+2026-08-17T19:32:13.9165878Z (Reading database ... 95%
+2026-08-17T19:32:13.9167626Z (Reading database ... 100%
+2026-08-17T19:32:13.9169836Z (Reading database ... 35123 files and directories currently installed.)
+2026-08-17T19:32:13.9188332Z Preparing to unpack .../libc-bin_2.39-0ubuntu8.8_amd64.deb ...
+2026-08-17T19:32:13.9446651Z Unpacking libc-bin (2.39-0ubuntu8.8) over (2.39-0ubuntu8.6) ...
+2026-08-17T19:32:14.2622119Z Setting up libc-bin (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:14.4664725Z Selecting previously unselected package libjansson4:amd64.
+2026-08-17T19:32:14.4715669Z (Reading database ... 
+2026-08-17T19:32:14.4717733Z (Reading database ... 5%
+2026-08-17T19:32:14.4718647Z (Reading database ... 10%
+2026-08-17T19:32:14.4719442Z (Reading database ... 15%
+2026-08-17T19:32:14.4720512Z (Reading database ... 20%
+2026-08-17T19:32:14.4721358Z (Reading database ... 25%
+2026-08-17T19:32:14.4722150Z (Reading database ... 30%
+2026-08-17T19:32:14.4722982Z (Reading database ... 35%
+2026-08-17T19:32:14.4723784Z (Reading database ... 40%
+2026-08-17T19:32:14.4724561Z (Reading database ... 45%
+2026-08-17T19:32:14.4726364Z (Reading database ... 50%
+2026-08-17T19:32:14.4760021Z (Reading database ... 55%
+2026-08-17T19:32:14.4789010Z (Reading database ... 60%
+2026-08-17T19:32:14.4861607Z (Reading database ... 65%
+2026-08-17T19:32:14.4949948Z (Reading database ... 70%
+2026-08-17T19:32:14.4961635Z (Reading database ... 75%
+2026-08-17T19:32:14.4975071Z (Reading database ... 80%
+2026-08-17T19:32:14.4987842Z (Reading database ... 85%
+2026-08-17T19:32:14.5001847Z (Reading database ... 90%
+2026-08-17T19:32:14.5025818Z (Reading database ... 95%
+2026-08-17T19:32:14.5027622Z (Reading database ... 100%
+2026-08-17T19:32:14.5046526Z (Reading database ... 35123 files and directories currently installed.)
+2026-08-17T19:32:14.5060196Z Preparing to unpack .../00-libjansson4_2.14-2build2_amd64.deb ...
+2026-08-17T19:32:14.5278942Z Unpacking libjansson4:amd64 (2.14-2build2) ...
+2026-08-17T19:32:14.5934847Z Selecting previously unselected package manpages.
+2026-08-17T19:32:14.5970476Z Preparing to unpack .../01-manpages_6.7-2_all.deb ...
+2026-08-17T19:32:14.6078868Z Unpacking manpages (6.7-2) ...
+2026-08-17T19:32:14.7047119Z Selecting previously unselected package binutils-common:amd64.
+2026-08-17T19:32:14.7094927Z Preparing to unpack .../02-binutils-common_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:14.7184821Z Unpacking binutils-common:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:14.8119275Z Selecting previously unselected package libsframe1:amd64.
+2026-08-17T19:32:14.8185749Z Preparing to unpack .../03-libsframe1_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:14.8310441Z Unpacking libsframe1:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:14.8986134Z Selecting previously unselected package libbinutils:amd64.
+2026-08-17T19:32:14.9008887Z Preparing to unpack .../04-libbinutils_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:14.9095876Z Unpacking libbinutils:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:14.9927848Z Selecting previously unselected package libctf-nobfd0:amd64.
+2026-08-17T19:32:14.9986029Z Preparing to unpack .../05-libctf-nobfd0_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:15.0054655Z Unpacking libctf-nobfd0:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:15.1167120Z Selecting previously unselected package libctf0:amd64.
+2026-08-17T19:32:15.1242428Z Preparing to unpack .../06-libctf0_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:15.1347129Z Unpacking libctf0:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:15.2127465Z Selecting previously unselected package libgprofng0:amd64.
+2026-08-17T19:32:15.2190842Z Preparing to unpack .../07-libgprofng0_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:15.2301753Z Unpacking libgprofng0:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:15.3174289Z Selecting previously unselected package binutils-x86-64-linux-gnu.
+2026-08-17T19:32:15.3230761Z Preparing to unpack .../08-binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:15.3326534Z Unpacking binutils-x86-64-linux-gnu (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:15.4885967Z Selecting previously unselected package binutils.
+2026-08-17T19:32:15.4938027Z Preparing to unpack .../09-binutils_2.42-4ubuntu2.10_amd64.deb ...
+2026-08-17T19:32:15.5025368Z Unpacking binutils (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:15.5722838Z Selecting previously unselected package gcc-13-base:amd64.
+2026-08-17T19:32:15.5743925Z Preparing to unpack .../10-gcc-13-base_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:15.5820323Z Unpacking gcc-13-base:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:15.6556232Z Selecting previously unselected package libisl23:amd64.
+2026-08-17T19:32:15.6579025Z Preparing to unpack .../11-libisl23_0.26-3build1.1_amd64.deb ...
+2026-08-17T19:32:15.6673052Z Unpacking libisl23:amd64 (0.26-3build1.1) ...
+2026-08-17T19:32:15.7529437Z Selecting previously unselected package libmpfr6:amd64.
+2026-08-17T19:32:15.7589060Z Preparing to unpack .../12-libmpfr6_4.2.1-1build1.1_amd64.deb ...
+2026-08-17T19:32:15.7672342Z Unpacking libmpfr6:amd64 (4.2.1-1build1.1) ...
+2026-08-17T19:32:15.8437978Z Selecting previously unselected package libmpc3:amd64.
+2026-08-17T19:32:15.8491197Z Preparing to unpack .../13-libmpc3_1.3.1-1build1.1_amd64.deb ...
+2026-08-17T19:32:15.8577814Z Unpacking libmpc3:amd64 (1.3.1-1build1.1) ...
+2026-08-17T19:32:15.9173279Z Selecting previously unselected package cpp-13-x86-64-linux-gnu.
+2026-08-17T19:32:15.9246260Z Preparing to unpack .../14-cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:15.9344284Z Unpacking cpp-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:16.3187720Z Selecting previously unselected package cpp-13.
+2026-08-17T19:32:16.3234305Z Preparing to unpack .../15-cpp-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:16.3360348Z Unpacking cpp-13 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:16.3909669Z Selecting previously unselected package cpp-x86-64-linux-gnu.
+2026-08-17T19:32:16.3956925Z Preparing to unpack .../16-cpp-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-08-17T19:32:16.4059288Z Unpacking cpp-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:16.4915804Z Selecting previously unselected package cpp.
+2026-08-17T19:32:16.4963458Z Preparing to unpack .../17-cpp_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-08-17T19:32:16.5154244Z Unpacking cpp (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:16.6006367Z Selecting previously unselected package libcc1-0:amd64.
+2026-08-17T19:32:16.6079766Z Preparing to unpack .../18-libcc1-0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:16.6176953Z Unpacking libcc1-0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:16.6866528Z Selecting previously unselected package libitm1:amd64.
+2026-08-17T19:32:16.6921565Z Preparing to unpack .../19-libitm1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:16.6992487Z Unpacking libitm1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:16.7619346Z Selecting previously unselected package libasan8:amd64.
+2026-08-17T19:32:16.7658945Z Preparing to unpack .../20-libasan8_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:16.7751632Z Unpacking libasan8:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:16.9668876Z Selecting previously unselected package liblsan0:amd64.
+2026-08-17T19:32:16.9721184Z Preparing to unpack .../21-liblsan0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:16.9844479Z Unpacking liblsan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:17.1029351Z Selecting previously unselected package libtsan2:amd64.
+2026-08-17T19:32:17.1080343Z Preparing to unpack .../22-libtsan2_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:17.1329538Z Unpacking libtsan2:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:17.2832818Z Selecting previously unselected package libubsan1:amd64.
+2026-08-17T19:32:17.2867293Z Preparing to unpack .../23-libubsan1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:17.2938875Z Unpacking libubsan1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:17.3853543Z Selecting previously unselected package libhwasan0:amd64.
+2026-08-17T19:32:17.3921687Z Preparing to unpack .../24-libhwasan0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:17.3987330Z Unpacking libhwasan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:17.4943218Z Selecting previously unselected package libquadmath0:amd64.
+2026-08-17T19:32:17.4999083Z Preparing to unpack .../25-libquadmath0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:17.5072140Z Unpacking libquadmath0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:17.5587221Z Selecting previously unselected package libgcc-13-dev:amd64.
+2026-08-17T19:32:17.5636983Z Preparing to unpack .../26-libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:17.5693337Z Unpacking libgcc-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:17.7377835Z Selecting previously unselected package gcc-13-x86-64-linux-gnu.
+2026-08-17T19:32:17.7434988Z Preparing to unpack .../27-gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:17.7503398Z Unpacking gcc-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:18.3114652Z Selecting previously unselected package gcc-13.
+2026-08-17T19:32:18.3178590Z Preparing to unpack .../28-gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:18.3253121Z Unpacking gcc-13 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:18.3814758Z Selecting previously unselected package gcc-x86-64-linux-gnu.
+2026-08-17T19:32:18.3862917Z Preparing to unpack .../29-gcc-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-08-17T19:32:18.3914571Z Unpacking gcc-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:18.4460772Z Selecting previously unselected package gcc.
+2026-08-17T19:32:18.4516269Z Preparing to unpack .../30-gcc_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-08-17T19:32:18.4592855Z Unpacking gcc (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:18.5128201Z Selecting previously unselected package libc-dev-bin.
+2026-08-17T19:32:18.5189596Z Preparing to unpack .../31-libc-dev-bin_2.39-0ubuntu8.8_amd64.deb ...
+2026-08-17T19:32:18.5266983Z Unpacking libc-dev-bin (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:18.5868143Z Selecting previously unselected package linux-libc-dev:amd64.
+2026-08-17T19:32:18.5942184Z Preparing to unpack .../32-linux-libc-dev_6.8.0-138.138_amd64.deb ...
+2026-08-17T19:32:18.6024755Z Unpacking linux-libc-dev:amd64 (6.8.0-138.138) ...
+2026-08-17T19:32:18.9504736Z Selecting previously unselected package libcrypt-dev:amd64.
+2026-08-17T19:32:18.9581383Z Preparing to unpack .../33-libcrypt-dev_1%3a4.4.36-4build1_amd64.deb ...
+2026-08-17T19:32:18.9767384Z Unpacking libcrypt-dev:amd64 (1:4.4.36-4build1) ...
+2026-08-17T19:32:19.0286886Z Selecting previously unselected package rpcsvc-proto.
+2026-08-17T19:32:19.0327689Z Preparing to unpack .../34-rpcsvc-proto_1.4.2-0ubuntu7_amd64.deb ...
+2026-08-17T19:32:19.0415807Z Unpacking rpcsvc-proto (1.4.2-0ubuntu7) ...
+2026-08-17T19:32:19.1003766Z Selecting previously unselected package libc6-dev:amd64.
+2026-08-17T19:32:19.1066420Z Preparing to unpack .../35-libc6-dev_2.39-0ubuntu8.8_amd64.deb ...
+2026-08-17T19:32:19.1134887Z Unpacking libc6-dev:amd64 (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:19.3416544Z Selecting previously unselected package libstdc++-13-dev:amd64.
+2026-08-17T19:32:19.3462346Z Preparing to unpack .../36-libstdc++-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:19.3516930Z Unpacking libstdc++-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:19.6878371Z Selecting previously unselected package g++-13-x86-64-linux-gnu.
+2026-08-17T19:32:19.6943319Z Preparing to unpack .../37-g++-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:19.7017049Z Unpacking g++-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:20.1222720Z Selecting previously unselected package g++-13.
+2026-08-17T19:32:20.1276135Z Preparing to unpack .../38-g++-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+2026-08-17T19:32:20.1403329Z Unpacking g++-13 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:20.2379473Z Selecting previously unselected package g++-x86-64-linux-gnu.
+2026-08-17T19:32:20.2433983Z Preparing to unpack .../39-g++-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-08-17T19:32:20.2558610Z Unpacking g++-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:20.3127934Z Selecting previously unselected package g++.
+2026-08-17T19:32:20.3165161Z Preparing to unpack .../40-g++_4%3a13.2.0-7ubuntu1_amd64.deb ...
+2026-08-17T19:32:20.3235907Z Unpacking g++ (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:20.3766746Z Selecting previously unselected package libheif-plugin-aomdec:amd64.
+2026-08-17T19:32:20.3829696Z Preparing to unpack .../41-libheif-plugin-aomdec_1.17.6-1ubuntu4.6_amd64.deb ...
+2026-08-17T19:32:20.3890768Z Unpacking libheif-plugin-aomdec:amd64 (1.17.6-1ubuntu4.6) ...
+2026-08-17T19:32:20.4553309Z Selecting previously unselected package libheif1:amd64.
+2026-08-17T19:32:20.4596591Z Preparing to unpack .../42-libheif1_1.17.6-1ubuntu4.6_amd64.deb ...
+2026-08-17T19:32:20.4690632Z Unpacking libheif1:amd64 (1.17.6-1ubuntu4.6) ...
+2026-08-17T19:32:20.5391614Z Selecting previously unselected package libgd3:amd64.
+2026-08-17T19:32:20.5451022Z Preparing to unpack .../43-libgd3_2.3.3-9ubuntu5_amd64.deb ...
+2026-08-17T19:32:20.5543000Z Unpacking libgd3:amd64 (2.3.3-9ubuntu5) ...
+2026-08-17T19:32:20.6057617Z Selecting previously unselected package libc-devtools.
+2026-08-17T19:32:20.6108906Z Preparing to unpack .../44-libc-devtools_2.39-0ubuntu8.8_amd64.deb ...
+2026-08-17T19:32:20.6193044Z Unpacking libc-devtools (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:20.6738660Z Selecting previously unselected package libheif-plugin-aomenc:amd64.
+2026-08-17T19:32:20.6797459Z Preparing to unpack .../45-libheif-plugin-aomenc_1.17.6-1ubuntu4.6_amd64.deb ...
+2026-08-17T19:32:20.6857230Z Unpacking libheif-plugin-aomenc:amd64 (1.17.6-1ubuntu4.6) ...
+2026-08-17T19:32:20.7368016Z Selecting previously unselected package make.
+2026-08-17T19:32:20.7423131Z Preparing to unpack .../46-make_4.3-4.1build2_amd64.deb ...
+2026-08-17T19:32:20.7506098Z Unpacking make (4.3-4.1build2) ...
+2026-08-17T19:32:20.8077175Z Selecting previously unselected package manpages-dev.
+2026-08-17T19:32:20.8141280Z Preparing to unpack .../47-manpages-dev_6.7-2_all.deb ...
+2026-08-17T19:32:20.8210972Z Unpacking manpages-dev (6.7-2) ...
+2026-08-17T19:32:21.0027746Z Selecting previously unselected package unzip.
+2026-08-17T19:32:21.0108699Z Preparing to unpack .../48-unzip_6.0-28ubuntu4.1_amd64.deb ...
+2026-08-17T19:32:21.0186125Z Unpacking unzip (6.0-28ubuntu4.1) ...
+2026-08-17T19:32:21.1138053Z Setting up manpages (6.7-2) ...
+2026-08-17T19:32:21.1341076Z Setting up unzip (6.0-28ubuntu4.1) ...
+2026-08-17T19:32:21.1546101Z Setting up binutils-common:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.1744167Z Setting up linux-libc-dev:amd64 (6.8.0-138.138) ...
+2026-08-17T19:32:21.1907543Z Setting up libctf-nobfd0:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.2162074Z Setting up libgomp1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.2417437Z Setting up libsframe1:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.2649493Z Setting up libjansson4:amd64 (2.14-2build2) ...
+2026-08-17T19:32:21.2854639Z Setting up rpcsvc-proto (1.4.2-0ubuntu7) ...
+2026-08-17T19:32:21.3027498Z Setting up gcc-13-base:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.3218634Z Setting up make (4.3-4.1build2) ...
+2026-08-17T19:32:21.3433898Z Setting up libmpfr6:amd64 (4.2.1-1build1.1) ...
+2026-08-17T19:32:21.3645257Z Setting up libquadmath0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.3850285Z Setting up libmpc3:amd64 (1.3.1-1build1.1) ...
+2026-08-17T19:32:21.4026532Z Setting up libatomic1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.4258707Z Setting up libgfortran5:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.4473802Z Setting up libubsan1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.4644587Z Setting up libhwasan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.4832107Z Setting up libcrypt-dev:amd64 (1:4.4.36-4build1) ...
+2026-08-17T19:32:21.5129794Z Setting up libasan8:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.5367548Z Setting up libtsan2:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.5564714Z Setting up libbinutils:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.5759263Z Setting up libisl23:amd64 (0.26-3build1.1) ...
+2026-08-17T19:32:21.5953083Z Setting up libc-dev-bin (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:21.6176041Z Setting up libcc1-0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.6389067Z Setting up liblsan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.6565131Z Setting up libitm1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.6744911Z Setting up libctf0:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.6957333Z Setting up manpages-dev (6.7-2) ...
+2026-08-17T19:32:21.7138693Z Setting up cpp-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.7336310Z Setting up libgprofng0:amd64 (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.7539433Z Setting up libgcc-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.7799834Z Setting up libc6-dev:amd64 (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:21.8059183Z Setting up libstdc++-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.8332636Z Setting up binutils-x86-64-linux-gnu (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.8523508Z Setting up cpp-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:21.8753079Z Setting up cpp-13 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.9057539Z Setting up gcc-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.9243915Z Setting up binutils (2.42-4ubuntu2.10) ...
+2026-08-17T19:32:21.9443800Z Setting up gcc-13 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:21.9707965Z Setting up cpp (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:22.0644167Z Setting up g++-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:22.0868869Z Setting up gcc-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:22.1091177Z Setting up gcc (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:22.1527694Z Setting up g++-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:22.1760760Z Setting up g++-13 (13.3.0-6ubuntu2~24.04.1) ...
+2026-08-17T19:32:22.2045850Z Setting up g++ (4:13.2.0-7ubuntu1) ...
+2026-08-17T19:32:22.2225224Z update-alternatives: using /usr/bin/g++ to provide /usr/bin/c++ (c++) in auto mode
+2026-08-17T19:32:22.2232502Z update-alternatives: warning: skip creation of /usr/share/man/man1/c++.1.gz because associated file /usr/share/man/man1/g++.1.gz (of link group c++) doesn't exist
+2026-08-17T19:32:22.2394235Z Setting up libheif1:amd64 (1.17.6-1ubuntu4.6) ...
+2026-08-17T19:32:22.2727352Z Setting up libgd3:amd64 (2.3.3-9ubuntu5) ...
+2026-08-17T19:32:22.3027555Z Setting up libc-devtools (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:22.3416234Z Setting up libheif-plugin-aomdec:amd64 (1.17.6-1ubuntu4.6) ...
+2026-08-17T19:32:22.3661256Z Setting up libheif-plugin-aomenc:amd64 (1.17.6-1ubuntu4.6) ...
+2026-08-17T19:32:22.3926381Z Processing triggers for libc-bin (2.39-0ubuntu8.8) ...
+2026-08-17T19:32:22.5471621Z ##[group]Run pnpm install --frozen-lockfile
+2026-08-17T19:32:22.5472626Z [36;1mpnpm install --frozen-lockfile[0m
+2026-08-17T19:32:22.5473616Z shell: sh -e {0}
+2026-08-17T19:32:22.5474105Z env:
+2026-08-17T19:32:22.5474532Z   CI: true
+2026-08-17T19:32:22.5474978Z   NODE_VERSION: 26
+2026-08-17T19:32:22.5475596Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:32:22.5476377Z ##[endgroup]
+2026-08-17T19:32:23.4152185Z Scope: all 30 workspace projects
+2026-08-17T19:32:23.4603003Z  WARN  There are cyclic workspace dependencies: /__w/Invoker/Invoker/packages/data-store, /__w/Invoker/Invoker/packages/persistence
+2026-08-17T19:32:23.5836934Z Lockfile is up to date, resolution step is skipped
+2026-08-17T19:32:23.7099513Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-17T19:32:23.8836936Z Packages: +913
+2026-08-17T19:32:23.8838274Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2026-08-17T19:32:24.7119293Z Progress: resolved 913, reused 453, downloaded 0, added 0
+2026-08-17T19:32:25.7135234Z Progress: resolved 913, reused 893, downloaded 0, added 0
+2026-08-17T19:32:26.7157381Z Progress: resolved 913, reused 906, downloaded 0, added 296
+2026-08-17T19:32:27.7154109Z Progress: resolved 913, reused 906, downloaded 0, added 576
+2026-08-17T19:32:28.7155762Z Progress: resolved 913, reused 906, downloaded 0, added 900
+2026-08-17T19:32:28.8502570Z Progress: resolved 913, reused 906, downloaded 0, added 913, done
+2026-08-17T19:32:29.8289266Z  WARN  Failed to create bin at /__w/Invoker/Invoker/packages/app/node_modules/.bin/invoker-cli. ENOENT: no such file or directory, open '/__w/Invoker/Invoker/packages/cli/dist/index.js'
+2026-08-17T19:32:30.0558962Z 
+2026-08-17T19:32:30.0562874Z devDependencies:
+2026-08-17T19:32:30.0564286Z + @mergifyio/vitest 0.3.0
+2026-08-17T19:32:30.0565333Z + aws4 1.13.2
+2026-08-17T19:32:30.0566010Z + concurrently 10.0.4
+2026-08-17T19:32:30.0567512Z + dependency-cruiser 17.3.10
+2026-08-17T19:32:30.0568350Z + electron-builder 26.8.1
+2026-08-17T19:32:30.0569082Z + jsdom 25.0.1
+2026-08-17T19:32:30.0569700Z + mermaid 11.15.0
+2026-08-17T19:32:30.0570856Z + postject 1.0.0-alpha.6
+2026-08-17T19:32:30.0573328Z + tsup 8.5.1
+2026-08-17T19:32:30.0574347Z + typescript 5.9.3
+2026-08-17T19:32:30.0575213Z + yaml 2.8.2
+2026-08-17T19:32:30.0576043Z 
+2026-08-17T19:32:30.0607110Z packages/npm-watcher postinstall$ node scripts/install.js
+2026-08-17T19:32:30.1119830Z packages/npm-slack postinstall$ node scripts/install.js
+2026-08-17T19:32:30.1148894Z packages/npm-cli postinstall$ node scripts/install.js
+2026-08-17T19:32:30.2932164Z packages/npm-watcher postinstall: Done
+2026-08-17T19:32:30.3105187Z . postinstall$ node scripts/electron.cjs --install-only && node scripts/fix-node-pty-spawn-helper.mjs
+2026-08-17T19:32:30.3129554Z packages/npm-slack postinstall: Done
+2026-08-17T19:32:30.3341588Z packages/npm-cli postinstall: Done
+2026-08-17T19:32:35.1967357Z . postinstall: [fix-node-pty] spawn-helper permissions already correct (or node-pty absent)
+2026-08-17T19:32:35.2082412Z . postinstall: Done
+2026-08-17T19:32:35.2414678Z packages/npm-ui postinstall$ node scripts/install.js
+2026-08-17T19:32:35.3327813Z packages/npm-ui postinstall: Done
+2026-08-17T19:32:35.4458908Z  WARN  Failed to create bin at /__w/Invoker/Invoker/packages/app/node_modules/.bin/invoker-cli. ENOENT: no such file or directory, open '/__w/Invoker/Invoker/packages/app/node_modules/@invoker/cli/dist/index.js'
+2026-08-17T19:32:35.4729265Z ╭ Warning ─────────────────────────────────────────────────────────────────────╮
+2026-08-17T19:32:35.4742586Z │                                                                              │
+2026-08-17T19:32:35.4745258Z │   Ignored build scripts: cpu-features@0.0.10, electron-winstaller@5.4.0,     │
+2026-08-17T19:32:35.4747899Z │   esbuild@0.25.12, esbuild@0.27.3, protobufjs@7.5.4, ssh2@1.17.0.            │
+2026-08-17T19:32:35.4751020Z │   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+2026-08-17T19:32:35.4754624Z │   to run scripts.                                                            │
+2026-08-17T19:32:35.4756914Z │                                                                              │
+2026-08-17T19:32:35.4757921Z ╰──────────────────────────────────────────────────────────────────────────────╯
+2026-08-17T19:32:35.4949487Z Done in 12.7s using pnpm v10.31.0
+2026-08-17T19:32:35.5534130Z ##[group]Run node scripts/repro/repro-ci-playwright-shard-inventory.mjs
+2026-08-17T19:32:35.5535204Z [36;1mnode scripts/repro/repro-ci-playwright-shard-inventory.mjs[0m
+2026-08-17T19:32:35.5536336Z shell: sh -e {0}
+2026-08-17T19:32:35.5536640Z env:
+2026-08-17T19:32:35.5536915Z   CI: true
+2026-08-17T19:32:35.5537188Z   NODE_VERSION: 26
+2026-08-17T19:32:35.5537596Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:32:35.5538068Z ##[endgroup]
+2026-08-17T19:32:35.8550392Z [repro-ci-playwright-shard-inventory] OK: 68 CI-owned spec files each assigned to exactly one shard; 2 manual-only spec accounted for.
+2026-08-17T19:32:35.8879230Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-17T19:32:35.8883089Z ##[group]Run actions/download-artifact@v4
+2026-08-17T19:32:35.8883760Z with:
+2026-08-17T19:32:35.8884225Z   name: app-build-dist
+2026-08-17T19:32:35.8884873Z   path: /tmp/invoker-build-artifacts
+2026-08-17T19:32:35.8885585Z   merge-multiple: false
+2026-08-17T19:32:35.8886209Z   repository: Neko-Catpital-Labs/Invoker
+2026-08-17T19:32:35.8886929Z   run-id: 32060611892
+2026-08-17T19:32:35.8887454Z env:
+2026-08-17T19:32:35.8887888Z   CI: true
+2026-08-17T19:32:35.8888390Z   NODE_VERSION: 26
+2026-08-17T19:32:35.8889093Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:32:35.8889931Z ##[endgroup]
+2026-08-17T19:32:35.8921464Z ##[command]/usr/bin/docker exec  74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef sh -c "cat /etc/*release | grep ^ID"
+2026-08-17T19:32:36.4878149Z Downloading single artifact
+2026-08-17T19:32:36.5231277Z (node:1220) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-08-17T19:32:36.5233831Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:32:37.3309377Z Preparing to download the following artifacts:
+2026-08-17T19:32:37.3311651Z - app-build-dist (ID: 9298018964, Size: 8446747, Expected Digest: sha256:60a53283cbf845dd9c8e541263731389a72bbb5b8b7de11e298723f5e750a449)
+2026-08-17T19:32:37.9109676Z Redirecting to blob download url: https://productionresultssa7.blob.core.windows.net/actions-results/ddc95ccd-3811-42b3-b428-195e615afb8d/workflow-job-run-bbc5f531-3970-50cb-87cc-34d43212d191/artifacts/82bc795ab15388784bf0faa2e3f2e9cfa82cc44accbe8fc271a5d46de22b50b2.zip
+2026-08-17T19:32:37.9112740Z Starting download of artifact to: /tmp/invoker-build-artifacts
+2026-08-17T19:32:38.9107808Z (node:1220) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-08-17T19:32:43.6557716Z SHA256 digest of downloaded artifact is 60a53283cbf845dd9c8e541263731389a72bbb5b8b7de11e298723f5e750a449
+2026-08-17T19:32:43.6559977Z Artifact download completed successfully.
+2026-08-17T19:32:43.6561803Z Total of 1 artifact(s) downloaded
+2026-08-17T19:32:43.6565308Z Download artifact has finished successfully
+2026-08-17T19:32:43.6896148Z ##[group]Run tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+2026-08-17T19:32:43.6897029Z [36;1mtar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .[0m
+2026-08-17T19:32:43.6898023Z shell: sh -e {0}
+2026-08-17T19:32:43.6898330Z env:
+2026-08-17T19:32:43.6898609Z   CI: true
+2026-08-17T19:32:43.6898907Z   NODE_VERSION: 26
+2026-08-17T19:32:43.6899306Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:32:43.6899790Z ##[endgroup]
+2026-08-17T19:32:43.9628535Z ##[group]Run echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+2026-08-17T19:32:43.9630951Z [36;1mecho "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"[0m
+2026-08-17T19:32:43.9632813Z [36;1mexport GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"[0m
+2026-08-17T19:32:43.9634156Z [36;1mgit config --global user.name "CI Bot"[0m
+2026-08-17T19:32:43.9635343Z [36;1mgit config --global user.email "ci@invoker.dev"[0m
+2026-08-17T19:32:43.9636723Z [36;1mgit config --global --add safe.directory "$GITHUB_WORKSPACE"[0m
+2026-08-17T19:32:43.9638350Z shell: sh -e {0}
+2026-08-17T19:32:43.9639096Z env:
+2026-08-17T19:32:43.9639684Z   CI: true
+2026-08-17T19:32:43.9641031Z   NODE_VERSION: 26
+2026-08-17T19:32:43.9642100Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:32:43.9643357Z ##[endgroup]
+2026-08-17T19:32:44.0913128Z ##[group]Run bash scripts/test-suites/optional/40-playwright-app.sh
+2026-08-17T19:32:44.0915172Z [36;1mbash scripts/test-suites/optional/40-playwright-app.sh[0m
+2026-08-17T19:32:44.0916886Z shell: sh -e {0}
+2026-08-17T19:32:44.0917738Z env:
+2026-08-17T19:32:44.0918471Z   CI: true
+2026-08-17T19:32:44.0919363Z   NODE_VERSION: 26
+2026-08-17T19:32:44.0921621Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:32:44.0923801Z   GIT_CONFIG_GLOBAL: /__w/_temp/gitconfig
+2026-08-17T19:32:44.0925041Z   INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-3-of-9
+2026-08-17T19:32:44.0926187Z   INVOKER_PLAYWRIGHT_WORKERS: 1
+2026-08-17T19:32:44.0929709Z   INVOKER_PLAYWRIGHT_FILES: e2e/task-death-logs.spec.ts e2e/restart-failed-task.spec.ts e2e/ui-graph-drag-performance.spec.ts e2e/pending-review-gate-target-repo.proof.spec.ts e2e/workflow-status-composition.spec.ts e2e/queue-running-vs-queued.spec.ts e2e/attach-workflow.spec.ts
+2026-08-17T19:32:44.0934581Z   INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+2026-08-17T19:32:44.0935851Z ##[endgroup]
+2026-08-17T19:32:47.4191575Z (node:1297) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+2026-08-17T19:32:47.4193314Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:32:48.6861648Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-08-17T19:32:48.6863922Z hint: is subject to change. To configure the initial branch name to use in all
+2026-08-17T19:32:48.6865599Z hint: of your new repositories, which will suppress this warning, call:
+2026-08-17T19:32:48.6867532Z hint: 
+2026-08-17T19:32:48.6868491Z hint: 	git config --global init.defaultBranch <name>
+2026-08-17T19:32:48.6870762Z hint: 
+2026-08-17T19:32:48.6871758Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-08-17T19:32:48.6873166Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-08-17T19:32:48.6874075Z hint: 
+2026-08-17T19:32:48.6874640Z hint: 	git branch -m <name>
+2026-08-17T19:32:48.7111483Z Cloning into '/tmp/invoker-e2e-repo-ci-playwright-3-of-9.git.setup'...
+2026-08-17T19:32:48.7112671Z warning: You appear to have cloned an empty repository.
+2026-08-17T19:32:48.7113352Z done.
+2026-08-17T19:32:48.7636895Z To /tmp/invoker-e2e-repo-ci-playwright-3-of-9.git
+2026-08-17T19:32:48.7638037Z  * [new branch]      HEAD -> master
+2026-08-17T19:32:48.7994619Z To /tmp/invoker-e2e-repo-ci-playwright-3-of-9.git
+2026-08-17T19:32:48.7995893Z  * [new branch]      HEAD -> main
+2026-08-17T19:32:49.4263982Z 
+2026-08-17T19:32:49.4265461Z Running 14 tests using 1 worker
+2026-08-17T19:32:49.4266554Z 
+2026-08-17T19:32:51.6549463Z [1A[2K(node:1351) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+2026-08-17T19:32:51.6552827Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:32:51.6553806Z 
+2026-08-17T19:32:51.8843154Z [1A[2K[1/14] e2e/attach-workflow.spec.ts:7:5 › attach removes the Detached badge from a workflow node
+2026-08-17T19:33:08.1418401Z [1A[2K[2/14] e2e/pending-review-gate-target-repo.proof.spec.ts:19:5 › pending review gate target repo row
+2026-08-17T19:33:18.2570524Z [1A[2K[3/14] e2e/pending-review-gate-target-repo.proof.spec.ts:59:5 › pending review gate merge mode selector
+2026-08-17T19:33:27.1005331Z [1A[2K[4/14] e2e/queue-running-vs-queued.spec.ts:42:7 › queue running vs queued › home bottom chrome shows executing and queued chips
+2026-08-17T19:33:44.3085668Z [1A[2K[5/14] e2e/restart-failed-task.spec.ts:56:7 › Restart failed task › right-click Restart Task on a failed task re-runs it
+2026-08-17T19:34:09.1833423Z [1A[2K[6/14] e2e/restart-failed-task.spec.ts:90:7 › Restart failed task › restarting a failed task works after loading a second plan
+2026-08-17T19:34:30.6430952Z [1A[2K[7/14] e2e/task-death-logs.spec.ts:66:7 › Task death logs › failed task has death log in persisted output
+2026-08-17T19:34:47.5208980Z [1A[2K[8/14] e2e/task-death-logs.spec.ts:82:7 › Task death logs › failed task transitions to failed, not stuck as running
+2026-08-17T19:35:04.8435542Z [1A[2K[9/14] e2e/task-death-logs.spec.ts:93:7 › Task death logs › failed task shows exit code in task details
+2026-08-17T19:35:22.6481335Z [1A[2K[10/14] e2e/task-death-logs.spec.ts:103:7 › Task death logs › successful task output is persisted
+2026-08-17T19:35:49.6574957Z [1A[2K[11/14] e2e/task-death-logs.spec.ts:119:7 › Task death logs › failed task shows execution error string in task details
+2026-08-17T19:35:59.8647859Z [1A[2K[12/14] e2e/ui-graph-drag-performance.spec.ts:413:5 › workflow graph pan stays responsive under a large persisted graph
+2026-08-17T19:36:11.4338298Z [1A[2Ke2e/ui-graph-drag-performance.spec.ts:413:5 › workflow graph pan stays responsive under a large persisted graph
+2026-08-17T19:36:11.4401889Z UI_GRAPH_DRAG_BENCH_RESULT={"frameCount":61,"maxFrameGapMs":183.29999999999927,"p95FrameGapMs":50,"transformChanges":20,"transformChanged":true,"firstTransformMs":61.09999971389789,"durationMs":1411.099999713898,"workflowCount":50,"taskCount":400,"perfPayloads":[{"ts":"2026-08-17T19:36:10.540Z","metric":"ui_delta_apply","received":1,"applyCount":1,"applyAvgMs":14.800000190734863,"applyMaxMs":14.800000190734863},{"ts":"2026-08-17T19:36:10.732Z","metric":"startup_graph_visible","nodeCount":8,"elapsedMs":5410}],"perf":{"mainDeltaToUi":0,"dbPollCreated":0,"dbPollUpdatedAsCreated":0,"dbPollUpdatedAsUpdated":0,"rendererReports":20,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":279,"planningTypingLagReports":0,"maxPlanningTypingLagMs":0,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":51,"planningChatSubmits":0,"embeddedTerminalAttachReports":0,"maxEmbeddedTerminalAttachMs":0,"embeddedTerminalInputReports":0,"maxEmbeddedTerminalInputMs":0,"maxEmbeddedTerminalInputBytes":0,"embeddedTerminalOutputWriteReports":0,"maxEmbeddedTerminalOutputWriteMs":0,"maxEmbeddedTerminalOutputWriteBytes":0,"embeddedTerminalResizeReports":0,"maxEmbeddedTerminalResizeMs":0,"embeddedTerminalScrollReports":0,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":2,"workflowMetadataPublishes":1,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0,"maxTerminalResizeMs":0,"maxTerminalSessionUpsertMs":0,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":0,"startupMarks":{"app.whenReady":268,"initServices.start":269,"initServices.end":1174,"owner-ipc-ready":1205,"listWorkflowsByStartupRecency":1221,"startup.ready-for-window":1287,"createWindow.begin":1308,"window.mapped":1497,"createWindow.end":1526,"window.show":2194,"ui.interactive":2204,"deferred-startup.begin":2212,"workers.auto-started":2250,"api-server.started":2271,"window.did-finish-load":4474,"refresh-task-graph.return":8347},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":1,"workflowCount":0},{"phase":"refresh-task-graph.return","durationMs":44,"taskCount":400,"workflowCount":50,"streamSequence":0}],"ts":"2026-08-17T19:36:11.424Z"},"budgets":{"minFrameCount":35,"maxP95FrameGapMs":80,"maxFrameGapMs":250,"minTransformChanges":12,"maxFirstTransformMs":600,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500,"maxTaskDeltaBatchSize":250}}
+2026-08-17T19:36:11.4442884Z 
+2026-08-17T19:36:12.0925414Z [1A[2K[13/14] e2e/ui-graph-drag-performance.spec.ts:436:5 › workflow graph pan stays responsive while task updates arrive
+2026-08-17T19:36:25.7976079Z [1A[2Ke2e/ui-graph-drag-performance.spec.ts:436:5 › workflow graph pan stays responsive while task updates arrive
+2026-08-17T19:36:25.8068952Z UI_GRAPH_DRAG_WITH_UPDATES_BENCH_RESULT={"frameCount":54,"maxFrameGapMs":233.30000000000018,"p95FrameGapMs":133.30000000000018,"transformChanges":20,"transformChanged":true,"firstTransformMs":61.60000038146973,"durationMs":1578.20000038147,"workflowCount":50,"taskCount":400,"updateCount":128,"updateBursts":8,"updatesPerBurst":16,"perfPayloads":[{"ts":"2026-08-17T19:36:22.568Z","metric":"ui_delta_apply","received":1,"applyCount":1,"applyAvgMs":15.599999904632568,"applyMaxMs":15.599999904632568},{"ts":"2026-08-17T19:36:22.619Z","metric":"startup_graph_visible","nodeCount":8,"elapsedMs":5440}],"perf":{"mainDeltaToUi":128,"dbPollCreated":0,"dbPollUpdatedAsCreated":0,"dbPollUpdatedAsUpdated":0,"rendererReports":20,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":274,"planningTypingLagReports":0,"maxPlanningTypingLagMs":0,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":57,"planningChatSubmits":0,"embeddedTerminalAttachReports":0,"maxEmbeddedTerminalAttachMs":0,"embeddedTerminalInputReports":0,"maxEmbeddedTerminalInputMs":0,"maxEmbeddedTerminalInputBytes":0,"embeddedTerminalOutputWriteReports":0,"maxEmbeddedTerminalOutputWriteMs":0,"maxEmbeddedTerminalOutputWriteBytes":0,"embeddedTerminalResizeReports":0,"maxEmbeddedTerminalResizeMs":0,"embeddedTerminalScrollReports":0,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":2,"workflowMetadataPublishes":1,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0,"maxTerminalResizeMs":0,"maxTerminalSessionUpsertMs":0,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":0,"startupMarks":{"app.whenReady":284,"initServices.start":286,"initServices.end":857,"owner-ipc-ready":877,"listWorkflowsByStartupRecency":889,"startup.ready-for-window":925,"createWindow.begin":943,"window.mapped":1049,"createWindow.end":1061,"window.show":1624,"ui.interactive":1638,"deferred-startup.begin":1649,"window.did-finish-load":4082,"workers.auto-started":1701,"api-server.started":1713,"refresh-task-graph.return":7996},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":0,"workflowCount":0},{"phase":"refresh-task-graph.return","durationMs":49,"taskCount":400,"workflowCount":50,"streamSequence":0}],"ts":"2026-08-17T19:36:25.788Z"},"budgets":{"minFrameCount":35,"maxP95FrameGapMs":80,"maxFrameGapMs":250,"minTransformChanges":12,"maxFirstTransformMs":600,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500,"maxTaskDeltaBatchSize":250}}
+2026-08-17T19:36:25.8129036Z 
+2026-08-17T19:36:34.7188468Z [1A[2K(node:4136) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+2026-08-17T19:36:34.7191414Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:36:34.7213184Z 
+2026-08-17T19:36:35.0357776Z [1A[2K[14/14] e2e/ui-graph-drag-performance.spec.ts:436:5 › workflow graph pan stays responsive while task updates arrive (retry #1)
+2026-08-17T19:36:48.6257711Z [1A[2KUI_GRAPH_DRAG_WITH_UPDATES_BENCH_RESULT={"frameCount":52,"maxFrameGapMs":183.30000000000018,"p95FrameGapMs":150,"transformChanges":20,"transformChanged":true,"firstTransformMs":95.5000000953678,"durationMs":1445.4000000953674,"workflowCount":50,"taskCount":400,"updateCount":128,"updateBursts":8,"updatesPerBurst":16,"perfPayloads":[{"ts":"2026-08-17T19:36:45.293Z","metric":"ui_delta_apply","received":1,"applyCount":1,"applyAvgMs":15.299999713897705,"applyMaxMs":15.299999713897705},{"ts":"2026-08-17T19:36:45.507Z","metric":"startup_graph_visible","nodeCount":8,"elapsedMs":5631}],"perf":{"mainDeltaToUi":128,"dbPollCreated":0,"dbPollUpdatedAsCreated":0,"dbPollUpdatedAsUpdated":0,"rendererReports":20,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":243,"planningTypingLagReports":0,"maxPlanningTypingLagMs":0,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":48,"planningChatSubmits":0,"embeddedTerminalAttachReports":0,"maxEmbeddedTerminalAttachMs":0,"embeddedTerminalInputReports":0,"maxEmbeddedTerminalInputMs":0,"maxEmbeddedTerminalInputBytes":0,"embeddedTerminalOutputWriteReports":0,"maxEmbeddedTerminalOutputWriteMs":0,"maxEmbeddedTerminalOutputWriteBytes":0,"embeddedTerminalResizeReports":0,"maxEmbeddedTerminalResizeMs":0,"embeddedTerminalScrollReports":0,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":2,"workflowMetadataPublishes":1,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0,"maxTerminalResizeMs":0,"maxTerminalSessionUpsertMs":0,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":0,"startupMarks":{"app.whenReady":340,"initServices.start":341,"initServices.end":876,"owner-ipc-ready":898,"listWorkflowsByStartupRecency":908,"startup.ready-for-window":960,"createWindow.begin":984,"window.mapped":1102,"createWindow.end":1116,"window.show":1752,"ui.interactive":1762,"deferred-startup.begin":1771,"window.did-finish-load":3877,"workers.auto-started":1814,"api-server.started":1827,"refresh-task-graph.return":7862},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":0,"workflowCount":0},{"phase":"refresh-task-graph.return","durationMs":35,"taskCount":400,"workflowCount":50,"streamSequence":0}],"ts":"2026-08-17T19:36:48.608Z"},"budgets":{"minFrameCount":35,"maxP95FrameGapMs":80,"maxFrameGapMs":250,"minTransformChanges":12,"maxFirstTransformMs":600,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500,"maxTaskDeltaBatchSize":250}}
+2026-08-17T19:36:48.6322582Z 
+2026-08-17T19:36:57.1911427Z [1A[2K(node:4301) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+2026-08-17T19:36:57.1915314Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:36:57.1931378Z 
+2026-08-17T19:36:57.4011550Z [1A[2K[15/14] (retries) e2e/ui-graph-drag-performance.spec.ts:436:5 › workflow graph pan stays responsive while task updates arrive (retry #2)
+2026-08-17T19:37:10.7985510Z [1A[2KUI_GRAPH_DRAG_WITH_UPDATES_BENCH_RESULT={"frameCount":51,"maxFrameGapMs":216.59999999999945,"p95FrameGapMs":166.69999999999982,"transformChanges":20,"transformChanged":true,"firstTransformMs":92.60000000000036,"durationMs":1609.1999999999998,"workflowCount":50,"taskCount":400,"updateCount":128,"updateBursts":8,"updatesPerBurst":16,"perfPayloads":[{"ts":"2026-08-17T19:37:07.707Z","metric":"ui_delta_apply","received":1,"applyCount":1,"applyAvgMs":26.699999809265137,"applyMaxMs":26.699999809265137},{"ts":"2026-08-17T19:37:07.731Z","metric":"startup_graph_visible","nodeCount":8,"elapsedMs":5372}],"perf":{"mainDeltaToUi":128,"dbPollCreated":0,"dbPollUpdatedAsCreated":0,"dbPollUpdatedAsUpdated":0,"rendererReports":20,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":266,"planningTypingLagReports":0,"maxPlanningTypingLagMs":0,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":82,"planningChatSubmits":0,"embeddedTerminalAttachReports":0,"maxEmbeddedTerminalAttachMs":0,"embeddedTerminalInputReports":0,"maxEmbeddedTerminalInputMs":0,"maxEmbeddedTerminalInputBytes":0,"embeddedTerminalOutputWriteReports":0,"maxEmbeddedTerminalOutputWriteMs":0,"maxEmbeddedTerminalOutputWriteBytes":0,"embeddedTerminalResizeReports":0,"maxEmbeddedTerminalResizeMs":0,"embeddedTerminalScrollReports":0,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":2,"workflowMetadataPublishes":1,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0,"maxTerminalResizeMs":0,"maxTerminalSessionUpsertMs":0,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":0,"startupMarks":{"app.whenReady":303,"initServices.start":305,"initServices.end":988,"owner-ipc-ready":1004,"listWorkflowsByStartupRecency":1015,"startup.ready-for-window":1059,"createWindow.begin":1078,"window.mapped":1178,"createWindow.end":1191,"window.show":1858,"ui.interactive":1880,"deferred-startup.begin":1902,"window.did-finish-load":4028,"workers.auto-started":1968,"api-server.started":1982,"refresh-task-graph.return":7794},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":1,"workflowCount":0},{"phase":"refresh-task-graph.return","durationMs":39,"taskCount":400,"workflowCount":50,"streamSequence":0}],"ts":"2026-08-17T19:37:10.783Z"},"budgets":{"minFrameCount":35,"maxP95FrameGapMs":80,"maxFrameGapMs":250,"minTransformChanges":12,"maxFirstTransformMs":600,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500,"maxTaskDeltaBatchSize":250}}
+2026-08-17T19:37:10.8063865Z 
+2026-08-17T19:37:17.2281929Z [1A[2K  1) e2e/ui-graph-drag-performance.spec.ts:436:5 › workflow graph pan stays responsive while task updates arrive 
+2026-08-17T19:37:17.2285266Z 
+2026-08-17T19:37:17.2329076Z     Error: {"frameCount":54,"maxFrameGapMs":233.30000000000018,"p95FrameGapMs":133.30000000000018,"transformChanges":20,"transformChanged":true,"firstTransformMs":61.60000038146973,"durationMs":1578.20000038147,"perf":{"mainDeltaToUi":128,"dbPollCreated":0,"dbPollUpdatedAsCreated":0,"dbPollUpdatedAsUpdated":0,"rendererReports":20,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":274,"planningTypingLagReports":0,"maxPlanningTypingLagMs":0,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":57,"planningChatSubmits":0,"embeddedTerminalAttachReports":0,"maxEmbeddedTerminalAttachMs":0,"embeddedTerminalInputReports":0,"maxEmbeddedTerminalInputMs":0,"maxEmbeddedTerminalInputBytes":0,"embeddedTerminalOutputWriteReports":0,"maxEmbeddedTerminalOutputWriteMs":0,"maxEmbeddedTerminalOutputWriteBytes":0,"embeddedTerminalResizeReports":0,"maxEmbeddedTerminalResizeMs":0,"embeddedTerminalScrollReports":0,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":2,"workflowMetadataPublishes":1,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0,"maxTerminalResizeMs":0,"maxTerminalSessionUpsertMs":0,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":0,"startupMarks":{"app.whenReady":284,"initServices.start":286,"initServices.end":857,"owner-ipc-ready":877,"listWorkflowsByStartupRecency":889,"startup.ready-for-window":925,"createWindow.begin":943,"window.mapped":1049,"createWindow.end":1061,"window.show":1624,"ui.interactive":1638,"deferred-startup.begin":1649,"window.did-finish-load":4082,"workers.auto-started":1701,"api-server.started":1713,"refresh-task-graph.return":7996},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":0,"workflowCount":0},{"phase":"refresh-task-graph.return","durationMs":49,"taskCount":400,"workflowCount":50,"streamSequence":0}],"ts":"2026-08-17T19:36:25.788Z"},"perfPayloads":[{"ts":"2026-08-17T19:36:22.568Z","metric":"ui_delta_apply","received":1,"applyCount":1,"applyAvgMs":15.599999904632568,"applyMaxMs":15.599999904632568},{"ts":"2026-08-17T19:36:22.619Z","metric":"startup_graph_visible","nodeCount":8,"elapsedMs":5440}],"budgets":{"minFrameCount":35,"maxP95FrameGapMs":80,"maxFrameGapMs":250,"minTransformChanges":12,"maxFirstTransformMs":600,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500,"maxTaskDeltaBatchSize":250}}
+2026-08-17T19:37:17.2361377Z 
+2026-08-17T19:37:17.2363636Z     [2mexpect([22m[31mreceived[39m[2m).[22mtoBeLessThanOrEqual[2m([22m[32mexpected[39m[2m)[22m
+2026-08-17T19:37:17.2365046Z 
+2026-08-17T19:37:17.2365562Z     Expected: <= [32m80[39m
+2026-08-17T19:37:17.2366532Z     Received:    [31m133.30000000000018[39m
+2026-08-17T19:37:17.2368261Z 
+2026-08-17T19:37:17.2369841Z       399 |   const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets: DRAG_PERF_BUDGETS });
+2026-08-17T19:37:17.2372191Z       400 |   expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
+2026-08-17T19:37:17.2373924Z     > 401 |   expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(MAX_P95_FRAME_GAP_MS);
+2026-08-17T19:37:17.2375438Z           |                                          ^
+2026-08-17T19:37:17.2376789Z       402 |   expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
+2026-08-17T19:37:17.2379103Z       403 |   expect(result.transformChanged, evidence).toBe(true);
+2026-08-17T19:37:17.2384622Z       404 |   expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(MIN_TRANSFORM_CHANGES);
+2026-08-17T19:37:17.2387649Z         at expectSmoothDrag (/__w/Invoker/Invoker/packages/app/e2e/ui-graph-drag-performance.spec.ts:401:42)
+2026-08-17T19:37:17.2390711Z         at /__w/Invoker/Invoker/packages/app/e2e/ui-graph-drag-performance.spec.ts:469:5
+2026-08-17T19:37:17.2392200Z 
+2026-08-17T19:37:17.2394172Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2397825Z     ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive/test-failed-1.png
+2026-08-17T19:37:17.2402132Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2403552Z 
+2026-08-17T19:37:17.2406146Z     Error Context: ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive/error-context.md
+2026-08-17T19:37:17.2408749Z 
+2026-08-17T19:37:17.2410525Z     Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2411734Z 
+2026-08-17T19:37:17.2486494Z     Error: {"frameCount":52,"maxFrameGapMs":183.30000000000018,"p95FrameGapMs":150,"transformChanges":20,"transformChanged":true,"firstTransformMs":95.5000000953678,"durationMs":1445.4000000953674,"perf":{"mainDeltaToUi":128,"dbPollCreated":0,"dbPollUpdatedAsCreated":0,"dbPollUpdatedAsUpdated":0,"rendererReports":20,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":243,"planningTypingLagReports":0,"maxPlanningTypingLagMs":0,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":48,"planningChatSubmits":0,"embeddedTerminalAttachReports":0,"maxEmbeddedTerminalAttachMs":0,"embeddedTerminalInputReports":0,"maxEmbeddedTerminalInputMs":0,"maxEmbeddedTerminalInputBytes":0,"embeddedTerminalOutputWriteReports":0,"maxEmbeddedTerminalOutputWriteMs":0,"maxEmbeddedTerminalOutputWriteBytes":0,"embeddedTerminalResizeReports":0,"maxEmbeddedTerminalResizeMs":0,"embeddedTerminalScrollReports":0,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":2,"workflowMetadataPublishes":1,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0,"maxTerminalResizeMs":0,"maxTerminalSessionUpsertMs":0,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":0,"startupMarks":{"app.whenReady":340,"initServices.start":341,"initServices.end":876,"owner-ipc-ready":898,"listWorkflowsByStartupRecency":908,"startup.ready-for-window":960,"createWindow.begin":984,"window.mapped":1102,"createWindow.end":1116,"window.show":1752,"ui.interactive":1762,"deferred-startup.begin":1771,"window.did-finish-load":3877,"workers.auto-started":1814,"api-server.started":1827,"refresh-task-graph.return":7862},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":0,"workflowCount":0},{"phase":"refresh-task-graph.return","durationMs":35,"taskCount":400,"workflowCount":50,"streamSequence":0}],"ts":"2026-08-17T19:36:48.608Z"},"perfPayloads":[{"ts":"2026-08-17T19:36:45.293Z","metric":"ui_delta_apply","received":1,"applyCount":1,"applyAvgMs":15.299999713897705,"applyMaxMs":15.299999713897705},{"ts":"2026-08-17T19:36:45.507Z","metric":"startup_graph_visible","nodeCount":8,"elapsedMs":5631}],"budgets":{"minFrameCount":35,"maxP95FrameGapMs":80,"maxFrameGapMs":250,"minTransformChanges":12,"maxFirstTransformMs":600,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500,"maxTaskDeltaBatchSize":250}}
+2026-08-17T19:37:17.2525850Z 
+2026-08-17T19:37:17.2528181Z     [2mexpect([22m[31mreceived[39m[2m).[22mtoBeLessThanOrEqual[2m([22m[32mexpected[39m[2m)[22m
+2026-08-17T19:37:17.2532542Z 
+2026-08-17T19:37:17.2533403Z     Expected: <= [32m80[39m
+2026-08-17T19:37:17.2534873Z     Received:    [31m150[39m
+2026-08-17T19:37:17.2535570Z 
+2026-08-17T19:37:17.2537092Z       399 |   const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets: DRAG_PERF_BUDGETS });
+2026-08-17T19:37:17.2539214Z       400 |   expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
+2026-08-17T19:37:17.2541757Z     > 401 |   expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(MAX_P95_FRAME_GAP_MS);
+2026-08-17T19:37:17.2543345Z           |                                          ^
+2026-08-17T19:37:17.2544947Z       402 |   expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
+2026-08-17T19:37:17.2547199Z       403 |   expect(result.transformChanged, evidence).toBe(true);
+2026-08-17T19:37:17.2549855Z       404 |   expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(MIN_TRANSFORM_CHANGES);
+2026-08-17T19:37:17.2553720Z         at expectSmoothDrag (/__w/Invoker/Invoker/packages/app/e2e/ui-graph-drag-performance.spec.ts:401:42)
+2026-08-17T19:37:17.2556534Z         at /__w/Invoker/Invoker/packages/app/e2e/ui-graph-drag-performance.spec.ts:469:5
+2026-08-17T19:37:17.2558322Z 
+2026-08-17T19:37:17.2560472Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2565303Z     ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive-retry1/test-failed-1.png
+2026-08-17T19:37:17.2569363Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2570674Z 
+2026-08-17T19:37:17.2573517Z     Error Context: ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive-retry1/error-context.md
+2026-08-17T19:37:17.2576349Z 
+2026-08-17T19:37:17.2577499Z     attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2581848Z     ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive-retry1/trace.zip
+2026-08-17T19:37:17.2584660Z     Usage:
+2026-08-17T19:37:17.2585174Z 
+2026-08-17T19:37:17.2588051Z         pnpm exec playwright show-trace ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive-retry1/trace.zip
+2026-08-17T19:37:17.2591172Z 
+2026-08-17T19:37:17.2592799Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2593981Z 
+2026-08-17T19:37:17.2595269Z     Retry #2 ───────────────────────────────────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2596383Z 
+2026-08-17T19:37:17.2646374Z     Error: {"frameCount":51,"maxFrameGapMs":216.59999999999945,"p95FrameGapMs":166.69999999999982,"transformChanges":20,"transformChanged":true,"firstTransformMs":92.60000000000036,"durationMs":1609.1999999999998,"perf":{"mainDeltaToUi":128,"dbPollCreated":0,"dbPollUpdatedAsCreated":0,"dbPollUpdatedAsUpdated":0,"rendererReports":20,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":266,"planningTypingLagReports":0,"maxPlanningTypingLagMs":0,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":82,"planningChatSubmits":0,"embeddedTerminalAttachReports":0,"maxEmbeddedTerminalAttachMs":0,"embeddedTerminalInputReports":0,"maxEmbeddedTerminalInputMs":0,"maxEmbeddedTerminalInputBytes":0,"embeddedTerminalOutputWriteReports":0,"maxEmbeddedTerminalOutputWriteMs":0,"maxEmbeddedTerminalOutputWriteBytes":0,"embeddedTerminalResizeReports":0,"maxEmbeddedTerminalResizeMs":0,"embeddedTerminalScrollReports":0,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":2,"workflowMetadataPublishes":1,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0,"maxTerminalResizeMs":0,"maxTerminalSessionUpsertMs":0,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":0,"startupMarks":{"app.whenReady":303,"initServices.start":305,"initServices.end":988,"owner-ipc-ready":1004,"listWorkflowsByStartupRecency":1015,"startup.ready-for-window":1059,"createWindow.begin":1078,"window.mapped":1178,"createWindow.end":1191,"window.show":1858,"ui.interactive":1880,"deferred-startup.begin":1902,"window.did-finish-load":4028,"workers.auto-started":1968,"api-server.started":1982,"refresh-task-graph.return":7794},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":1,"workflowCount":0},{"phase":"refresh-task-graph.return","durationMs":39,"taskCount":400,"workflowCount":50,"streamSequence":0}],"ts":"2026-08-17T19:37:10.783Z"},"perfPayloads":[{"ts":"2026-08-17T19:37:07.707Z","metric":"ui_delta_apply","received":1,"applyCount":1,"applyAvgMs":26.699999809265137,"applyMaxMs":26.699999809265137},{"ts":"2026-08-17T19:37:07.731Z","metric":"startup_graph_visible","nodeCount":8,"elapsedMs":5372}],"budgets":{"minFrameCount":35,"maxP95FrameGapMs":80,"maxFrameGapMs":250,"minTransformChanges":12,"maxFirstTransformMs":600,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500,"maxTaskDeltaBatchSize":250}}
+2026-08-17T19:37:17.2664602Z 
+2026-08-17T19:37:17.2666430Z     [2mexpect([22m[31mreceived[39m[2m).[22mtoBeLessThanOrEqual[2m([22m[32mexpected[39m[2m)[22m
+2026-08-17T19:37:17.2667686Z 
+2026-08-17T19:37:17.2668265Z     Expected: <= [32m80[39m
+2026-08-17T19:37:17.2670861Z     Received:    [31m166.69999999999982[39m
+2026-08-17T19:37:17.2671738Z 
+2026-08-17T19:37:17.2672935Z       399 |   const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets: DRAG_PERF_BUDGETS });
+2026-08-17T19:37:17.2675324Z       400 |   expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
+2026-08-17T19:37:17.2677723Z     > 401 |   expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(MAX_P95_FRAME_GAP_MS);
+2026-08-17T19:37:17.2679525Z           |                                          ^
+2026-08-17T19:37:17.2681706Z       402 |   expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
+2026-08-17T19:37:17.2683528Z       403 |   expect(result.transformChanged, evidence).toBe(true);
+2026-08-17T19:37:17.2685615Z       404 |   expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(MIN_TRANSFORM_CHANGES);
+2026-08-17T19:37:17.2689276Z         at expectSmoothDrag (/__w/Invoker/Invoker/packages/app/e2e/ui-graph-drag-performance.spec.ts:401:42)
+2026-08-17T19:37:17.2692251Z         at /__w/Invoker/Invoker/packages/app/e2e/ui-graph-drag-performance.spec.ts:469:5
+2026-08-17T19:37:17.2693763Z 
+2026-08-17T19:37:17.2695793Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2699949Z     ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive-retry2/test-failed-1.png
+2026-08-17T19:37:17.2704126Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-08-17T19:37:17.2704901Z 
+2026-08-17T19:37:17.2708096Z     Error Context: ../../.git/playwright-artifacts/ci-playwright-3-of-9/test-results/ui-graph-drag-performance--7600f-e-while-task-updates-arrive-retry2/error-context.md
+2026-08-17T19:37:17.2711056Z 
+2026-08-17T19:37:17.2711076Z 
+2026-08-17T19:37:19.3727946Z [1A[2K(node:4464) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+2026-08-17T19:37:19.3756131Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:37:19.3771272Z 
+2026-08-17T19:37:19.7108392Z [1A[2K[16/14] (retries) e2e/workflow-status-composition.spec.ts:34:7 › Workflow status composition › workflow status and rollup details follow task state changes
+2026-08-17T19:37:37.4773261Z cleanup-orphaned-automation-chrome: no orphaned automation Chrome groups found
+2026-08-17T19:37:37.4900279Z [1A[2K  1 failed
+2026-08-17T19:37:37.4902682Z     e2e/ui-graph-drag-performance.spec.ts:436:5 › workflow graph pan stays responsive while task updates arrive 
+2026-08-17T19:37:37.4910444Z   13 passed (4.8m)
+2026-08-17T19:37:37.5562978Z undefined
+2026-08-17T19:37:37.5604196Z /__w/Invoker/Invoker/packages/app:
+2026-08-17T19:37:37.5616570Z  ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command failed with exit code 1: xvfb-run --auto-servernum playwright test --output /__w/Invoker/Invoker/.git/playwright-artifacts/ci-playwright-3-of-9/test-results --reporter=line e2e/task-death-logs.spec.ts e2e/restart-failed-task.spec.ts e2e/ui-graph-drag-performance.spec.ts e2e/pending-review-gate-target-repo.proof.spec.ts e2e/workflow-status-composition.spec.ts e2e/queue-running-vs-queued.spec.ts e2e/attach-workflow.spec.ts
+2026-08-17T19:37:37.6068704Z ##[error]Process completed with exit code 1.
+2026-08-17T19:37:37.6280801Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-17T19:37:37.6284357Z ##[group]Run actions/upload-artifact@v4
+2026-08-17T19:37:37.6284950Z with:
+2026-08-17T19:37:37.6285411Z   name: playwright-artifacts-3-of-9
+2026-08-17T19:37:37.6286145Z   path: .git/playwright-artifacts
+packages/app/test-results
+
+2026-08-17T19:37:37.6286885Z   if-no-files-found: ignore
+2026-08-17T19:37:37.6287986Z   compression-level: 6
+2026-08-17T19:37:37.6288458Z   overwrite: false
+2026-08-17T19:37:37.6288927Z   include-hidden-files: false
+2026-08-17T19:37:37.6289440Z env:
+2026-08-17T19:37:37.6289844Z   CI: true
+2026-08-17T19:37:37.6290464Z   NODE_VERSION: 26
+2026-08-17T19:37:37.6291149Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+2026-08-17T19:37:37.6291940Z   GIT_CONFIG_GLOBAL: /__w/_temp/gitconfig
+2026-08-17T19:37:37.6292546Z ##[endgroup]
+2026-08-17T19:37:37.6301948Z ##[command]/usr/bin/docker exec  74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef sh -c "cat /etc/*release | grep ^ID"
+2026-08-17T19:37:38.2063510Z (node:4645) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-08-17T19:37:38.2065358Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-17T19:37:38.2320282Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-08-17T19:37:38.2338559Z The least common ancestor is /__w/Invoker/Invoker. This will be the root directory of the artifact
+2026-08-17T19:37:38.2342387Z With the provided path, there will be 7 files uploaded
+2026-08-17T19:37:38.2348511Z Artifact name is valid!
+2026-08-17T19:37:38.2358635Z Root directory input is valid!
+2026-08-17T19:37:39.1238649Z Beginning upload of artifact content to blob storage
+2026-08-17T19:37:39.2216580Z (node:4645) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-08-17T19:37:41.0796643Z Uploaded bytes 366215
+2026-08-17T19:37:41.3257049Z Finished uploading artifact content to blob storage!
+2026-08-17T19:37:41.3260519Z SHA256 digest of uploaded artifact zip is 73cb58a5c1f1d901004f564e2fdf3943cee58f66abdc166a8ee7b209428c2ec2
+2026-08-17T19:37:41.3269735Z Finalizing artifact upload
+2026-08-17T19:37:41.7360213Z Artifact playwright-artifacts-3-of-9.zip successfully finalized. Artifact ID 9298254406
+2026-08-17T19:37:41.7384684Z Artifact playwright-artifacts-3-of-9 has been successfully uploaded! Final size is 366215 bytes. Artifact ID is 9298254406
+2026-08-17T19:37:41.7388805Z Artifact download URL: https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/32060611892/artifacts/9298254406
+2026-08-17T19:37:41.7910630Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-17T19:37:41.7915825Z Post job cleanup.
+2026-08-17T19:37:41.7927448Z ##[command]/usr/bin/docker exec  74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef sh -c "cat /etc/*release | grep ^ID"
+2026-08-17T19:37:42.3449688Z Pruning is unnecessary.
+2026-08-17T19:37:42.3914009Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-17T19:37:42.3917528Z Post job cleanup.
+2026-08-17T19:37:42.3960958Z ##[command]/usr/bin/docker exec  74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef sh -c "cat /etc/*release | grep ^ID"
+2026-08-17T19:37:42.8076517Z [command]/usr/bin/git version
+2026-08-17T19:37:42.8192508Z git version 2.43.0
+2026-08-17T19:37:42.8295249Z Temporarily overriding HOME='/__w/_temp/004b2d93-34af-47f7-92e4-0dba5749eaed' before making global git config changes
+2026-08-17T19:37:42.8302028Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-17T19:37:42.8313387Z [command]/usr/bin/git config --global --add safe.directory /__w/Invoker/Invoker
+2026-08-17T19:37:42.8407641Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-08-17T19:37:42.8502601Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-08-17T19:37:42.9052892Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-17T19:37:42.9121208Z http.https://github.com/.extraheader
+2026-08-17T19:37:42.9129785Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-08-17T19:37:42.9192545Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-08-17T19:37:42.9721688Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-17T19:37:42.9788721Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-17T19:37:43.0603963Z Stop and remove container: 4c4e5acdb80d44f0bcc2be87ed4884b2_mcrmicrosoftcomplaywrightv1582noble_91979c
+2026-08-17T19:37:43.0615564Z ##[command]/usr/bin/docker rm --force 74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef
+2026-08-17T19:37:43.5717871Z 74387acd0cedbec7e781972edb28231150a91c9a7547b2c614ffa9f997b0d5ef
+2026-08-17T19:37:43.5782932Z Remove container network: github_network_ab5b1c0a87dc4e398021ae92befb0242
+2026-08-17T19:37:43.5793260Z ##[command]/usr/bin/docker network rm github_network_ab5b1c0a87dc4e398021ae92befb0242
+2026-08-17T19:37:43.7156468Z github_network_ab5b1c0a87dc4e398021ae92befb0242
+2026-08-17T19:37:43.7341391Z Cleaning up orphan processes
+2026-08-17T19:37:43.7843670Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/download-artifact@v4, actions/setup-node@v4, actions/upload-artifact@v4, pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
