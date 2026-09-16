@@ -91,6 +91,50 @@ describe('FailureClassifier.classifyError', () => {
   });
 });
 
+const DRAFTER_CORE_MISSING_ERROR =
+  "Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@neko-catpital-labs/drafter-core' imported from "
+  + '/home/invoker/.invoker/worktrees/417fc44c7e5b/experiment-wf-1789272584168-2-verify-pr-505-live-body/'
+  + 'engine/skills/draft-pr/scripts/validate-pr-body.mjs\n'
+  + "  code: 'ERR_MODULE_NOT_FOUND'";
+const SAFE_PUSH_STALE_HEAD_ERROR =
+  'pr-worker-safe-push: stale-head: refs/heads/stack/EdbertChan/plan/x/y--917fad44 is '
+  + '7af80382e9578c7500dbec4d8b1b845df8acc04d; expected b3fd0f58573e769ae60fd91f175d50a26f4e7593\n'
+  + '[worktree] Process exited: actionId=wf-1789327282247-10/safe-push exitCode=20';
+const MERGE_BRANCH_MISSING_ERROR =
+  'Error: Branch "feature/local-llm-e2e" required by the merge/gate step was not found on the remote '
+  + '(https://github.com/EdbertChan/fraud_repo.git). This branch is retrieved from origin, but it is not there';
+
+describe('FailureClassifier.classifyWorkFailure', () => {
+  it('classifies a missing installed package', () => {
+    expect(FailureClassifier.classifyWorkFailure(DRAFTER_CORE_MISSING_ERROR)).toBe('dependency-missing');
+  });
+
+  it('does not classify a missing relative module as a missing package', () => {
+    expect(FailureClassifier.classifyWorkFailure(
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/repo/src/missing.js' imported from /repo/src/index.js",
+    )).toBeUndefined();
+  });
+
+  it('classifies a safe-push refusal because the branch head moved', () => {
+    expect(FailureClassifier.classifyWorkFailure(SAFE_PUSH_STALE_HEAD_ERROR)).toBe('branch-head-moved');
+  });
+
+  it('classifies a merge gate whose branch is missing on the remote', () => {
+    expect(FailureClassifier.classifyWorkFailure(MERGE_BRANCH_MISSING_ERROR)).toBe('branch-missing-on-remote');
+  });
+
+  it('returns undefined for ordinary code failures and non-strings', () => {
+    expect(FailureClassifier.classifyWorkFailure('AssertionError: expected 1 to be 2')).toBeUndefined();
+    expect(FailureClassifier.classifyWorkFailure(undefined)).toBeUndefined();
+  });
+
+  it('leaves classifyError unchanged for these signatures', () => {
+    expect(FailureClassifier.classifyError(DRAFTER_CORE_MISSING_ERROR)).toBeUndefined();
+    expect(FailureClassifier.classifyError(SAFE_PUSH_STALE_HEAD_ERROR)).toBeUndefined();
+    expect(FailureClassifier.classifyError(MERGE_BRANCH_MISSING_ERROR)).toBeUndefined();
+  });
+});
+
 describe('FailureClassifier.classifyAgentQuotaRefusal', () => {
   it('classifies both real agent-quota failure shapes seen in production', () => {
     expect(FailureClassifier.classifyAgentQuotaRefusal(
@@ -141,6 +185,15 @@ describe('FailureClassifier predicates', () => {
     expect(FailureClassifier.isCancellation('Terminated: shutdown')).toBe(true);
     expect(FailureClassifier.isCancellation('boom')).toBe(false);
     expect(FailureClassifier.isCancellation(undefined)).toBe(false);
+  });
+
+  it('stopped, workspace, and branch classes route to no infra or requeue owner', () => {
+    for (const cls of ['cancelled', 'owner-interrupted', 'dependency-missing', 'branch-head-moved', 'branch-missing-on-remote'] as const) {
+      expect(FailureClassifier.isSshInfra(cls)).toBe(false);
+      expect(FailureClassifier.isLiveness(cls)).toBe(false);
+      expect(FailureClassifier.isUsageLimit(cls)).toBe(false);
+      expect(FailureClassifier.isRequeueableFailureTask({ execution: { failureClass: cls } })).toBe(false);
+    }
   });
 
   it('isUsageLimit matches only the typed agent usage-limit class', () => {

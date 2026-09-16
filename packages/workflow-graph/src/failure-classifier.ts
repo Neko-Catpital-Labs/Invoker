@@ -1,4 +1,4 @@
-import type { AgentFailureClass, FailureClass, SshInfraFailureClass } from './types.js';
+import type { AgentFailureClass, FailureClass, SshInfraFailureClass, WorkFailureClass } from './types.js';
 
 /**
  * Single source of truth for categorizing task failures from their error text.
@@ -88,6 +88,20 @@ export class FailureClassifier {
     }
     if (this.isTransientTransportError(errorText)) {
       return 'ssh-transport-transient';
+    }
+    return undefined;
+  }
+
+  static classifyWorkFailure(errorText: string | undefined): WorkFailureClass | undefined {
+    if (typeof errorText !== 'string') return undefined;
+    if (errorText.includes('ERR_MODULE_NOT_FOUND') && errorText.includes("Cannot find package '")) {
+      return 'dependency-missing';
+    }
+    if (errorText.includes('pr-worker-safe-push: stale-head:')) {
+      return 'branch-head-moved';
+    }
+    if (errorText.includes('required by the merge/gate step was not found on the remote')) {
+      return 'branch-missing-on-remote';
     }
     return undefined;
   }
