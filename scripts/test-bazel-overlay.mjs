@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import YAML from 'yaml';
 
 function assert(cond, msg) {
@@ -95,5 +97,48 @@ assert(pilot['runs-on'] === 'ubuntu-latest', 'bazel-cache-pilot must use ubuntu-
 const rbePilot = workflow.jobs?.['bazel-rbe-pilot'];
 assert(rbePilot, 'ci.yml must define bazel-rbe-pilot (optional, dormant rbe)');
 assert(rbePilot['runs-on'] === 'ubuntu-latest', 'bazel-rbe-pilot must use ubuntu-latest');
+
+const probeDir = mkdtempSync(join(tmpdir(), 'invoker-bazel-auth-'));
+try {
+  const capture = join(probeDir, 'args.json');
+  writeFileSync(join(probeDir, 'bazelisk'), `#!/usr/bin/env node
+require('node:fs').writeFileSync(process.env.BAZEL_AUTH_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`, { mode: 0o755 });
+  for (const [name, job] of [['bazel-cache-pilot', pilot], ['bazel-rbe-pilot', rbePilot]]) {
+    const step = job.steps.find((step) => step.env?.BUILDBUDDY_API_KEY);
+    assert(step?.env.BUILDBUDDY_API_KEY === '${{ secrets.BUILDBUDDY_API_KEY }}', `${name} must use the repository secret`);
+    for (const key of ['dummy-key with spaces', '']) {
+      rmSync(capture, { force: true });
+      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', step.run], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${probeDir}:${process.env.PATH}`,
+          GITHUB_WORKSPACE: process.cwd(),
+          BUILDBUDDY_API_KEY: key,
+          BAZEL_AUTH_CAPTURE: capture,
+        },
+      });
+      assert(result.status === 0, `${name} shell failed: ${result.stderr || result.stdout}`);
+      if (!key && name === 'bazel-rbe-pilot') {
+        assert(!existsSync(capture), 'RBE must skip Bazel without a key');
+      } else {
+        assert(existsSync(capture), `${name} must invoke Bazel`);
+        const args = JSON.parse(readFileSync(capture, 'utf8'));
+        for (const flag of ['remote_header', 'bes_header']) {
+          const headers = args.filter((arg) => arg.startsWith(`--${flag}=`));
+          assert(key
+            ? headers.length === 1 && headers[0] === `--${flag}=x-buildbuddy-api-key=${key}`
+            : headers.length === 0,
+          `${name} must pass the expanded ${flag} exactly once when keyed, and omit it otherwise`);
+        }
+        assert(args.includes(`--config=${name === 'bazel-cache-pilot' ? 'remote' : 'rbe'}`) === Boolean(key), `${name} must enable remote mode only when keyed`);
+      }
+      console.log(`PASS: ${name} ${key ? 'expanded authentication headers' : 'without secret'}`);
+    }
+  }
+} finally {
+  rmSync(probeDir, { recursive: true, force: true });
+}
 
 console.log('bazel overlay checks passed');

@@ -1294,7 +1294,9 @@ jobs:
           TARGETS="$(node scripts/bazel/list-test-targets.mjs cache)"
           ARGS=(test --test_env=BUILD_WORKSPACE_DIRECTORY="$GITHUB_WORKSPACE" --test_env=PATH="$PATH" --test_output=errors)
           if [ -n "${BUILDBUDDY_API_KEY:-}" ]; then
-            ARGS+=(--config=remote)
+            ARGS+=(--config=remote
+              "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+              "--bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}")
           else
             echo "BUILDBUDDY_API_KEY unset; running with local disk cache only"
           fi
@@ -1349,6 +1351,8 @@ jobs:
           fi
           TARGETS="$(node scripts/bazel/list-test-targets.mjs rbe)"
           bazelisk test --config=rbe \
+            --remote_header="x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}" \
+            --bes_header="x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}" \
             --test_env=BUILD_WORKSPACE_DIRECTORY="$GITHUB_WORKSPACE" \
             --test_env=PATH="$PATH" \
             --test_output=errors \
