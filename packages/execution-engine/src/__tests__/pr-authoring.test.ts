@@ -58,6 +58,22 @@ afterEach(() => {
 // ── buildCanonicalPrBody ─────────────────────────────────
 
 describe('buildCanonicalPrBody', () => {
+  it('keeps technical context and evidence out of Summary and Review Claim without inventing metadata or outcomes', () => {
+    const technical = 'Use build-the-lever from docs/hook-architecture.md and `python3 -m unittest`.\n```\n## Summary\nInjected prose';
+    const body = buildCanonicalPrBody({
+      title: 'build-the-lever', workflowSummary: technical,
+      structuredContext: { workflowDescription: technical, tasks: [] },
+    });
+    expect(body.split('## Safety Invariant')[0]).not.toContain('build-the-lever');
+    expect(body).toContain('````text\n' + technical + '\n````');
+    expect(body).not.toContain('## Review Unit');
+    expect(body).not.toContain('completed workflow');
+    expect(body).not.toContain('Safe to revert? Yes');
+    expect(body).not.toContain('Data migration? No\n');
+    expect(body).toContain('Manual verification required');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
+
   it('produces a valid canonical body with workflow summary only', () => {
     const body = buildCanonicalPrBody({
       title: 'Add feature X',
@@ -74,7 +90,7 @@ describe('buildCanonicalPrBody', () => {
     expect(errors).toEqual([]);
   });
 
-  it('uses workflowDescription from structured context when present', () => {
+  it('preserves both context sources below the plain Summary', () => {
     const body = buildCanonicalPrBody({
       title: 'Refactor Y',
       workflowSummary: 'fallback summary',
@@ -85,7 +101,9 @@ describe('buildCanonicalPrBody', () => {
     });
 
     expect(body).toContain('Structured description of refactoring Y.');
-    expect(body).not.toContain('fallback summary');
+    expect(body.split('## Workflow Context')[1]).toContain('fallback summary');
+    expect(body.split('## Review Claim')[0]).not.toContain('fallback summary');
+    expect(body.split('## Review Claim')[0]).not.toContain('Structured description');
   });
 
   it('includes completed verification commands in test plan', () => {
@@ -103,7 +121,8 @@ describe('buildCanonicalPrBody', () => {
 
     expect(body).toContain('- [x] `pnpm test` — Run unit tests');
     expect(body).toContain('- [x] `pnpm lint` — Run lint');
-    expect(body).not.toContain('pnpm e2e');
+    expect(body.split('## Workflow Context')[1].split('## Test Plan')[0]).toContain('pnpm e2e');
+    expect(body.split('## Test Plan')[1]).not.toContain('pnpm e2e');
   });
 
   it('preserves visual proof markdown verbatim', () => {
