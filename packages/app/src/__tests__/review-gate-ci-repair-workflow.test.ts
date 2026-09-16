@@ -91,7 +91,7 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
   let h: TestHarness;
 
   beforeEach(() => {
-    h = createTestHarness();
+    h = createTestHarness({ availablePoolIds: ['remote_digital_ocean_1'] });
   });
 
   it('spawns one repair workflow and leaves the source merge gate untouched', async () => {
@@ -140,6 +140,11 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
         poolId: 'remote_digital_ocean_1',
       },
     });
+    expect(repairTasks[0].config.prompt).toEqual(
+      expect.stringContaining(
+        "- Check the backgrounded verify/CI command's status no more than once every ~180 seconds; if it has not finished after about 15 such checks, stop polling and report the situation instead of continuing to poll indefinitely.",
+      ),
+    );
 
     const sourceAfter = h.getTask(mergeId)!;
     expect(sourceAfter.status).toBe('review_ready');
@@ -168,7 +173,7 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
   });
 
   it('throws explicit branch and base-branch errors', async () => {
-    const branchHarness = createTestHarness();
+    const branchHarness = createTestHarness({ availablePoolIds: ['remote_digital_ocean_1'] });
     const noBranchPlan: PlanDefinition = {
       ...SOURCE_PLAN,
       featureBranch: undefined,
@@ -209,7 +214,7 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
       logger,
     })).rejects.toThrow('Review-gate CI repair requires a branch to checkout.');
 
-    const baseHarness = createTestHarness();
+    const baseHarness = createTestHarness({ availablePoolIds: ['remote_digital_ocean_1'] });
     const noBasePlan: PlanDefinition = {
       ...SOURCE_PLAN,
       baseBranch: undefined,

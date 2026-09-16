@@ -55,7 +55,7 @@ export interface SchedulerDomainHost {
   writeAndSync(
     taskId: string,
     changes: TaskStateChanges,
-    opts?: { skipWorkflowStatusSync?: boolean },
+    opts?: { skipWorkflowStatusSync?: boolean; launchStateUpdate?: boolean },
   ): TaskState;
   buildUpdateDelta(before: TaskState, after: TaskState, changes: TaskStateChanges): TaskDelta;
   replaceSelectedAttempt(
@@ -78,7 +78,8 @@ function getCandidatePriority(host: SchedulerDomainHost, task: TaskState, fallba
   const attempt = task.execution.selectedAttemptId
     ? host.loadAttemptById(task.execution.selectedAttemptId)
     : undefined;
-  return Math.max(fallback, attempt?.queuePriority ?? fallback);
+  const base = fallback === 0 ? task.config.priority ?? 0 : fallback;
+  return Math.max(base, attempt?.queuePriority ?? base);
 }
 
 function hasActiveLaunchAttempt(
@@ -125,19 +126,25 @@ function hasPendingLaunchRuntimeState(task: TaskState): boolean {
   );
 }
 
-function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): TaskJob[] {
+function planPendingLaunchQueue(
+  host: SchedulerDomainHost,
+  candidateJobs: TaskJob[],
+  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+): TaskJob[] {
   // Refresh once for the whole batch, not once per candidate job below --
   // readiness for every job in this pass is evaluated against the same
   // in-memory snapshot, so a per-job refresh only re-reads data this
   // function already has.
-  host.refreshFromDb();
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
     const task = host.stateGetTask(sourceJob.taskId);
     if (!task || (task.status !== 'pending' && (task.status as string) !== 'queued')) continue;
     if (host.getExternalDependencyBlocker(task) !== undefined) continue;
     const knownAttemptId = sourceJob.attemptId ?? task.execution.selectedAttemptId;
-    if (hasActiveLaunchAttempt(host, task, knownAttemptId)) continue;
+    if (opts?.activePersistedAttempts !== 0 && hasActiveLaunchAttempt(host, task, knownAttemptId)) continue;
     const existing = mergedJobs.get(task.id);
     mergedJobs.set(task.id, {
       taskId: task.id,
@@ -194,13 +201,18 @@ function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJo
 export function getPendingLaunchQueueSnapshotImpl(
   host: SchedulerDomainHost,
   candidateJobs: TaskJob[],
+  opts?: { alreadyRefreshed?: boolean },
 ): TaskJob[] {
-  return planPendingLaunchQueue(host, candidateJobs);
+  return planPendingLaunchQueue(host, candidateJobs, opts);
 }
 
-function rebuildPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): void {
+function rebuildPendingLaunchQueue(
+  host: SchedulerDomainHost,
+  candidateJobs: TaskJob[],
+  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+): void {
   const orderedJobs: TaskJob[] = [];
-  for (const job of planPendingLaunchQueue(host, candidateJobs)) {
+  for (const job of planPendingLaunchQueue(host, candidateJobs, opts)) {
     const task = host.stateGetTask(job.taskId);
     if (!task) continue;
     const attemptId = host.ensureCurrentPendingAttempt(task);
@@ -225,7 +237,7 @@ export function autoStartReadyTasksImpl(
   host: SchedulerDomainHost,
   taskIds: string[],
   priority: number = 0,
-  opts?: LaunchReadinessOptions,
+  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
 ): TaskState[] {
   const candidateJobs: TaskJob[] = [];
   for (const taskId of taskIds) {
@@ -256,8 +268,8 @@ export function autoStartReadyTasksImpl(
     });
   }
 
-  rebuildPendingLaunchQueue(host, candidateJobs);
-  return drainSchedulerImpl(host);
+  rebuildPendingLaunchQueue(host, candidateJobs, opts);
+  return drainSchedulerImpl(host, { ...opts, alreadyRefreshed: true });
 }
 
 export function enqueueIfNotScheduledImpl(
@@ -292,7 +304,7 @@ export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomain
     attemptId: task.execution.selectedAttemptId,
     priority: getCandidatePriority(host, task, 0),
   })));
-  started.push(...drainSchedulerImpl(host));
+  started.push(...drainSchedulerImpl(host, { alreadyRefreshed: true }));
   return started;
 }
 
@@ -318,17 +330,14 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
     });
   }
   rebuildPendingLaunchQueue(host, candidateJobs);
-  return drainSchedulerImpl(host);
+  return drainSchedulerImpl(host, { alreadyRefreshed: true });
 }
 
-// Public entry point: always refreshes first, for callers making a single
-// standalone readiness check (e.g. LaunchDispatcher.dispatchActive()).
 export function getTaskLaunchReadinessImpl(
   host: SchedulerDomainHost,
   taskId: string,
   opts?: LaunchReadinessOptions,
 ): TaskLaunchReadiness {
-  host.refreshFromDb();
   return getTaskLaunchReadinessCore(host, taskId, opts);
 }
 
@@ -382,10 +391,15 @@ export function getLocalDependencyBlockerImpl(host: SchedulerDomainHost, task: T
   return undefined;
 }
 
-export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
+export function drainSchedulerImpl(
+  host: SchedulerDomainHost,
+  opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean },
+): TaskState[] {
   // Refresh once for the whole drain pass, not once per dequeued job below
   // (see planPendingLaunchQueue for the same reasoning).
-  host.refreshFromDb();
+  if (!opts?.alreadyRefreshed) {
+    host.refreshFromDb();
+  }
   const started: TaskState[] = [];
   const activeAttempts = host.countActivePersistedAttempts();
   let availableSlots = Math.max(0, host.maxConcurrency - activeAttempts);
@@ -416,13 +430,18 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     const now = new Date();
     let launchTask = task;
     let attemptId = job.attemptId;
-    let currentAttempt = host.loadAttemptById(attemptId);
-    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
+    const canClaimWithoutAttemptLoad = opts?.activePersistedAttempts === 0
+      && typeof host.taskRepository.claimAttemptForLaunch === 'function'
+      && launchTask.status === 'pending'
+      && !hasPendingLaunchRuntimeState(launchTask)
+      && Boolean(attemptId);
+    let currentAttempt = canClaimWithoutAttemptLoad ? undefined : host.loadAttemptById(attemptId);
+    if (!canClaimWithoutAttemptLoad && !isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
       attemptId = host.ensureCurrentPendingAttempt(task);
       launchTask = host.stateGetTask(job.taskId) ?? task;
       currentAttempt = host.loadAttemptById(attemptId);
     }
-    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
+    if (!canClaimWithoutAttemptLoad && !isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
       host.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
         taskId: job.taskId,
         attemptId,
@@ -441,7 +460,10 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     const launchAttemptId = attemptId;
     const selectedTask = host.stateGetTask(job.taskId) ?? task;
     if (selectedTask.execution.selectedAttemptId !== launchAttemptId) {
-      host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } });
+      host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } }, {
+        skipWorkflowStatusSync: true,
+        launchStateUpdate: true,
+      });
     }
     let claimSucceeded = false;
     const claimPatch = host.deferRunningUntilLaunch
@@ -496,7 +518,10 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
             launchCompletedAt: undefined,
           },
         };
-    const updated = host.writeAndSync(job.taskId, changes);
+    const updated = host.writeAndSync(job.taskId, changes, {
+      skipWorkflowStatusSync: true,
+      launchStateUpdate: true,
+    });
     host.persistence.logEvent?.(
       job.taskId,
       host.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
@@ -507,11 +532,17 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
       && task.config.workflowId
     ) {
       try {
+        const rawPriority = task.config.priority;
+        const dispatchPriority = Number.isInteger(rawPriority) && rawPriority! >= 1 && rawPriority! <= 5
+          ? (rawPriority as 1 | 2 | 3 | 4 | 5)
+          : 2;
         const dispatch = host.persistence.enqueueLaunchDispatch({
           taskId: job.taskId,
           attemptId: launchAttemptId,
           workflowId: task.config.workflowId,
           generation: host.getExecutionGeneration(task),
+          priority: dispatchPriority,
+          suppressEvent: true,
         });
         host.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
           ...changes,

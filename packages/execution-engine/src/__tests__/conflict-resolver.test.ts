@@ -784,7 +784,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
       const host: ConflictResolverHost = {
         ...makeHost(task),
         persistence: {
-          getEvents: () => [
+          getRecentEventsOfType: () => [
             {
               id: 1,
               taskId: task.id,
