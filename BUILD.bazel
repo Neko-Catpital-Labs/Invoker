@@ -7,7 +7,7 @@ sh_test(
     srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
     args = ["pnpm", "run", "check:types"],
     size = "large",
-    tags = ["no-sandbox", "local", "quality"],
+    tags = ["no-sandbox", "quality"],
 )
 
 sh_test(
@@ -15,7 +15,7 @@ sh_test(
     srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
     args = ["pnpm", "run", "check:deps"],
     size = "large",
-    tags = ["no-sandbox", "local", "quality"],
+    tags = ["no-sandbox", "quality"],
 )
 
 sh_test(
@@ -23,7 +23,7 @@ sh_test(
     srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
     args = ["pnpm", "run", "check:comments"],
     size = "large",
-    tags = ["no-sandbox", "local", "quality"],
+    tags = ["no-sandbox", "quality"],
 )
 
 sh_test(
@@ -31,19 +31,33 @@ sh_test(
     srcs = ["//scripts/bazel:run_pnpm_filter.sh"],
     args = ["@invoker/app", "test:e2e"],
     size = "enormous",
-    tags = ["no-sandbox", "local", "no-remote-exec", "playwright"],
+    tags = ["no-sandbox", "no-remote-exec", "playwright"],
 )
 
 sh_binary(
     name = "dist_cli",
     srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
     args = ["pnpm", "run", "dist:cli"],
-    tags = ["no-sandbox", "local", "packaging"],
+    tags = ["no-sandbox", "packaging"],
+)
+
+sh_binary(
+    name = "dist_slack",
+    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
+    args = ["pnpm", "run", "dist:slack"],
+    tags = ["no-sandbox", "packaging"],
+)
+
+sh_binary(
+    name = "dist_watcher",
+    srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
+    args = ["pnpm", "run", "dist:watcher"],
+    tags = ["no-sandbox", "packaging"],
 )
 
 sh_binary(
     name = "dist_desktop_linux",
     srcs = ["//scripts/bazel:run_workspace_cmd.sh"],
     args = ["bash", "scripts/package-desktop.sh", "--linux"],
-    tags = ["no-sandbox", "local", "packaging"],
+    tags = ["no-sandbox", "packaging"],
 )
