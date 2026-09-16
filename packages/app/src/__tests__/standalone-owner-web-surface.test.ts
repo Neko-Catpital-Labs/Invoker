@@ -26,7 +26,7 @@ describe('standalone owner web surface wiring', () => {
         }
       }
     }
-    const autoStartedWorkersIdx = source.indexOf('workerRuntimeController.startAutoStartedWorkers();');
+    const autoStartedWorkersIdx = source.indexOf("workerRuntimeController.startAutoStartedWorkers('before-recovery');");
     const launchDispatcherIdx = source.indexOf(
       'standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({',
     );
@@ -87,7 +87,7 @@ describe('standalone owner web surface wiring', () => {
 
     const startWebSurfaceIdx = source.indexOf('headlessWebBridge = startWebSurfaceForHeadless(');
     const awaitWhenReadyIdx = source.indexOf('await headlessWebBridge.whenReady');
-    const autoStartedWorkersIdx = source.indexOf('workerRuntimeController.startAutoStartedWorkers();');
+    const autoStartedWorkersIdx = source.indexOf("workerRuntimeController.startAutoStartedWorkers('before-recovery');");
     const launchDispatcherIdx = source.indexOf(
       'standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({',
     );

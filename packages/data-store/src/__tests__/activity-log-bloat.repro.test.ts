@@ -1,3 +1,4 @@
+import { setImmediate as yieldToMaintenance } from 'node:timers/promises';
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -25,12 +26,15 @@ describe('activity_log on-disk bloat is bounded by retention', () => {
       ownerCapability: true,
       activityLogMaxRows: maxRows,
     });
-    // One transaction keeps the flood fast while still exercising the throttled prune.
-    adapter.runInTransaction(() => {
-      for (let i = 0; i < writes; i += 1) {
-        adapter.writeActivityLog('flood', 'info', `entry-${i}-payload-padding-to-mimic-real-log-lines`);
-      }
-    });
+    // Retention runs between turns; model consecutive request transactions.
+    for (let offset = 0; offset < writes; offset += PRUNE_INTERVAL) {
+      adapter.runInTransaction(() => {
+        for (let i = offset; i < Math.min(writes, offset + PRUNE_INTERVAL); i += 1) {
+          adapter.writeActivityLog('flood', 'info', `entry-${i}-payload-padding-to-mimic-real-log-lines`);
+        }
+      });
+      await yieldToMaintenance();
+    }
     let rows = 0;
     let sinceId = 0;
     for (;;) {
