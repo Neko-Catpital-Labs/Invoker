@@ -1,3 +1,4 @@
+import { cancelOwnedStartupChild, type ExecutorStartup } from './executor.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 
 import { traceExecution } from './exec-trace.js';
@@ -24,7 +25,9 @@ export function spawnLocalProvisioning(options: {
   failurePrefix: string;
   timeoutMs: number;
   onOutput?: (text: string) => void;
+  startup?: ExecutorStartup;
 }): { child: ChildProcess | null; completion: Promise<void> } {
+  options.startup?.check();
   const command = options.command.trim();
   if (!command) {
     traceExecution(`[${options.traceLabel}] skipped dir=${options.cwd}`);
@@ -37,6 +40,7 @@ export function spawnLocalProvisioning(options: {
     detached: true,
     env: cleanElectronEnv(),
   });
+  cancelOwnedStartupChild(child, options.startup);
   let combinedOutputTail = '';
   const appendOutput = (chunk: Buffer | string): void => {
     const text = String(chunk);
@@ -62,6 +66,7 @@ export function spawnLocalProvisioning(options: {
     });
     child.on('close', (code, signal) => {
       finish(() => {
+        try { options.startup?.check(); } catch (error) { reject(error); return; }
         if (code === 0) {
           traceExecution(`[${options.traceLabel}] done dir=${options.cwd}`);
           resolve();

@@ -1,3 +1,4 @@
+import { cancelOwnedStartupChild, type ExecutorStartup } from './executor.js';
 import { spawn } from 'node:child_process';
 import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { normalize } from 'node:path';
@@ -74,6 +75,7 @@ export interface AcquiredWorktree {
 }
 
 export interface AcquireWorktreeOptions {
+  startup?: ExecutorStartup;
   forceFresh?: boolean;
   reusableWorktree?: {
     branch: string;
@@ -121,6 +123,7 @@ export class RepoPool {
   private readonly worktreeBaseDir?: string;
   private readonly leasePersistence?: RepoPoolLeasePersistence;
   private activeWorktrees = new Map<string, Set<string>>();
+  private worktreeOwners = new Map<string, symbol>();
   private cloneLocks = new Map<string, Promise<string>>();
   /** Chain of operations per repo to serialize git operations. */
   private repoChains = new Map<string, Promise<unknown>>();
@@ -477,7 +480,8 @@ export class RepoPool {
     return timing.span(functionName, metadata, fn);
   }
 
-  async ensureCloneThroughRepoQueue(repoUrl: string): Promise<string> {
+  async ensureCloneThroughRepoQueue(repoUrl: string, startup?: ExecutorStartup): Promise<string> {
+    startup?.check();
     const bench = createExecutionBench({
       module: 'repo-pool-bench',
       baseMetadata: { repoUrl },
@@ -490,7 +494,7 @@ export class RepoPool {
     const existing = this.cloneLocks.get(repoKey);
     if (existing) {
       bench('RepoPool.ensureCloneThroughRepoQueue.waitForExistingLock.before');
-      const clonePath = await existing;
+      const clonePath = await (startup ? startup.waitForSharedOperation(existing) : existing);
       bench('RepoPool.ensureCloneThroughRepoQueue.waitForExistingLock.after', { clonePath });
       return clonePath;
     }
@@ -500,39 +504,42 @@ export class RepoPool {
     const promise = prev.then(() => {
       bench('RepoPool.ensureCloneThroughRepoQueue.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
       return this.ensureCloneUnqueued(repoUrl);
+    }).finally(() => {
+      this.cloneLocks.delete(repoKey);
+      bench('RepoPool.ensureCloneThroughRepoQueue.lockDeleted');
     });
     this.cloneLocks.set(repoKey, promise);
     this.repoChains.set(repoKey, promise.catch(() => {}));
-    try {
-      const clonePath = await promise;
-      bench('RepoPool.ensureCloneThroughRepoQueue.after', { clonePath });
-      return clonePath;
-    } finally {
-      this.cloneLocks.delete(repoKey);
-      bench('RepoPool.ensureCloneThroughRepoQueue.lockDeleted');
-    }
+    const clonePath = await (startup ? startup.waitForSharedOperation(promise) : promise);
+    bench('RepoPool.ensureCloneThroughRepoQueue.after', { clonePath });
+    return clonePath;
   }
 
   /**
    * Drop leftover worktree registration and/or directory from a prior run (crash, restart,
    * or release never called). Without this, `git worktree add` fails with "already exists".
    */
-  private async reconcileStaleWorktreePath(clonePath: string, worktreePath: string): Promise<void> {
+  private async reconcileStaleWorktreePath(clonePath: string, worktreePath: string, startup?: ExecutorStartup): Promise<void> {
+    startup?.check();
     try {
-      await this.execGit(['worktree', 'remove', '--force', worktreePath], clonePath);
+      await this.execGit(['worktree', 'remove', '--force', worktreePath], clonePath, startup);
     } catch {
+      startup?.check();
       /* not registered with this clone */
     }
+    startup?.check();
     if (existsSync(worktreePath)) {
       try {
         rmSync(worktreePath, { recursive: true, force: true });
       } catch {
+        startup?.check();
         /* best-effort; bashPreserveOrReset will surface failure */
       }
     }
     try {
-      await this.execGit(['worktree', 'prune'], clonePath);
+      await this.execGit(['worktree', 'prune'], clonePath, startup);
     } catch (err) {
+      startup?.check();
       traceExecution(
         `[RepoPool] reconcileStaleWorktreePath: worktree prune failed clonePath=${clonePath} worktreePath=${worktreePath} error=${err instanceof Error ? err.message : String(err)}`,
       );
@@ -549,19 +556,22 @@ export class RepoPool {
     worktreePath: string,
     porcelain: string,
     branch: string,
+    startup?: ExecutorStartup,
   ): Promise<void> {
+    startup?.check();
     if (!existsSync(worktreePath)) return;
     const registered = this.isPathRegisteredInPorcelain(porcelain, worktreePath);
     traceExecution(
       `[RepoPool] reconcileLeakedTargetPath branch=${branch} path=${worktreePath} exists=true registered=${registered}`,
     );
     if (registered) {
-      await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+      await this.reconcileStaleWorktreePath(clonePath, worktreePath, startup);
       return;
     }
     try {
       rmSync(worktreePath, { recursive: true, force: true });
     } catch {
+      startup?.check();
       /* best-effort; bashPreserveOrReset will surface failure */
     }
   }
@@ -619,6 +629,7 @@ export class RepoPool {
     worktreePath: string,
     branch: string,
     base: string,
+    startup?: ExecutorStartup,
   ): Promise<void> {
     const bench = createExecutionBench({
       module: 'repo-pool-bench',
@@ -633,11 +644,12 @@ export class RepoPool {
     });
     try {
       bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.before');
-      await runBashLocal(script, clonePath);
+      await runBashLocal(script, clonePath, startup);
       bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.after');
       return;
     } catch (err) {
-      if (await this.isReusableManagedWorktree(worktreePath, branch)) {
+      startup?.check();
+      if (await this.isReusableManagedWorktree(worktreePath, branch, startup)) {
         traceExecution(
           `[RepoPool] runPreserveOrResetWithRecovery: worktree became reusable despite failure branch=${branch} path=${worktreePath}`,
         );
@@ -656,14 +668,15 @@ export class RepoPool {
         `[RepoPool] runPreserveOrResetWithRecovery: retrying after worktree setup failure branch=${branch} path=${worktreePath}`,
       );
       bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.before');
-      await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+      await this.reconcileStaleWorktreePath(clonePath, worktreePath, startup);
       bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.after');
     }
     bench('RepoPool.runPreserveOrResetWithRecovery.retryRunBashLocal.before');
     try {
-      await runBashLocal(script, clonePath);
+      await runBashLocal(script, clonePath, startup);
     } catch (err) {
-      if (await this.isReusableManagedWorktree(worktreePath, branch)) {
+      startup?.check();
+      if (await this.isReusableManagedWorktree(worktreePath, branch, startup)) {
         traceExecution(
           `[RepoPool] runPreserveOrResetWithRecovery: retry left reusable worktree branch=${branch} path=${worktreePath}`,
         );
@@ -738,19 +751,28 @@ export class RepoPool {
       module: 'repo-pool-bench',
       baseMetadata: { repoUrl, branch, base, actionId },
     });
+    opts?.startup?.check();
     bench('RepoPool.acquireWorktree.begin');
     // Serialize per-repo to prevent concurrent git worktree operations
     const repoKey = this.repoKey(repoUrl);
     const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
     const queuedAtMs = Date.now();
+    let acquiring = false;
     const next = prev.then(() => {
+      acquiring = true;
       bench('RepoPool.acquireWorktree.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
       return this.doAcquireWorktree(repoUrl, branch, base, actionId, opts);
     });
     this.repoChains.set(repoKey, next.catch(() => {}));
-    const acquired = await next;
-    bench('RepoPool.acquireWorktree.after', { worktreePath: acquired.worktreePath });
-    return acquired;
+    try {
+      const acquired = await (opts?.startup ? opts.startup.waitForSharedOperation(next) : next);
+      bench('RepoPool.acquireWorktree.after', { worktreePath: acquired.worktreePath });
+      return acquired;
+    } catch (error) {
+      const cleanup = next.then(acquired => acquired.softRelease(), () => {});
+      if (acquiring) await cleanup;
+      throw error;
+    }
   }
 
   /**
@@ -771,13 +793,14 @@ export class RepoPool {
     this.activeWorktrees.set(repoKey, live);
   }
 
-  private async isReusableManagedWorktree(worktreePath: string, expectedBranch: string): Promise<boolean> {
+  private async isReusableManagedWorktree(worktreePath: string, expectedBranch: string, startup?: ExecutorStartup): Promise<boolean> {
     try {
-      const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)).trim();
+      const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath, startup)).trim();
       if (!abbrevRefMatchesBranch(head, expectedBranch)) return false;
-      await this.execGit(['status', '--porcelain'], worktreePath);
+      await this.execGit(['status', '--porcelain'], worktreePath, startup);
       return true;
     } catch {
+      startup?.check();
       return false;
     }
   }
@@ -793,21 +816,25 @@ export class RepoPool {
       module: 'repo-pool-bench',
       baseMetadata: { repoUrl, branch, base, actionId, forceFresh: opts?.forceFresh === true },
     });
+    const startup = opts?.startup;
+    startup?.check();
     bench('RepoPool.doAcquireWorktree.begin');
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseExecutor.setupTaskBranch is not used for this path)`,
     );
     bench('RepoPool.doAcquireWorktree.ensureCloneUnqueued.before');
     const clonePath = await this.ensureCloneUnqueued(repoUrl);
+    startup?.check();
     bench('RepoPool.doAcquireWorktree.ensureCloneUnqueued.after', { clonePath });
     const repoKey = this.repoKey(repoUrl);
 
     let porcelain = '';
     try {
       bench('RepoPool.doAcquireWorktree.gitWorktreeList.before', { clonePath });
-      porcelain = await this.execGit(['worktree', 'list', '--porcelain'], clonePath);
+      porcelain = await this.execGit(['worktree', 'list', '--porcelain'], clonePath, startup);
       bench('RepoPool.doAcquireWorktree.gitWorktreeList.after', { clonePath });
     } catch {
+      startup?.check();
       porcelain = '';
       bench('RepoPool.doAcquireWorktree.gitWorktreeList.failed', { clonePath });
     }
@@ -837,31 +864,6 @@ export class RepoPool {
       }
     }
 
-    let leaseHolderId: string | undefined = opts?.leaseHolderId;
-    if (this.leasePersistence && leaseHolderId) {
-      let claimed = true;
-      try {
-        claimed = this.leasePersistence.claimExecutionResourceLease({
-          resourceKey: repoKey,
-          resourceType: 'worktree',
-          holderId: leaseHolderId,
-          maxHolders: this.maxWorktrees,
-          leaseMs: WORKTREE_LEASE_TTL_MS,
-          metadata: { repoUrl, branch },
-        });
-      } catch (err) {
-        console.warn(`[RepoPool] claimExecutionResourceLease failed for ${repoKey} holder=${leaseHolderId}: ${err}`);
-        leaseHolderId = undefined;
-      }
-      if (leaseHolderId && !claimed) {
-        throw new ResourceLimitError(
-          `Worktree limit reached for ${repoUrl}: lease capacity exhausted (max ${this.maxWorktrees})`,
-        );
-      }
-    } else {
-      leaseHolderId = undefined;
-    }
-
     const sanitized = sanitizeBranchForPath(branch);
     const urlHash = computeRepoCacheHash(repoUrl);
     const worktreePath = this.worktreeBaseDir
@@ -882,12 +884,13 @@ export class RepoPool {
     let exactBranchCandidate: { path: string; headMatchesTargetBranch: boolean } | undefined;
     if (reuseCandidate && existsSync(reuseCandidate)) {
       try {
-        const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], reuseCandidate)).trim();
+        const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], reuseCandidate, startup)).trim();
         exactBranchCandidate = {
           path: reuseCandidate,
           headMatchesTargetBranch: abbrevRefMatchesBranch(head, branch),
         };
       } catch {
+        startup?.check();
         exactBranchCandidate = undefined;
       }
     }
@@ -903,12 +906,13 @@ export class RepoPool {
         pathIsUnderManagedPrefixes(candidate.workspacePath, managedPrefixes) &&
         existsSync(candidate.workspacePath)
       ) {
-        const head = await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], candidate.workspacePath).catch(() => '');
+        const head = await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], candidate.workspacePath, startup).catch(() => { startup?.check(); return ''; });
         let baseIsAncestorOfHead = true;
         if (base) {
           try {
-            await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], candidate.workspacePath);
+            await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], candidate.workspacePath, startup);
           } catch {
+            startup?.check();
             baseIsAncestorOfHead = false;
           }
         }
@@ -978,7 +982,7 @@ export class RepoPool {
         planKind: plan.kind,
         worktreePath: plan.worktreePath,
       });
-      const reusable = await this.isReusableManagedWorktree(plan.worktreePath, branch);
+      const reusable = await this.isReusableManagedWorktree(plan.worktreePath, branch, startup);
       bench('RepoPool.doAcquireWorktree.isReusableManagedWorktree.after', {
         planKind: plan.kind,
         worktreePath: plan.worktreePath,
@@ -996,7 +1000,7 @@ export class RepoPool {
         planKind: plan.kind,
         worktreePath: plan.worktreePath,
       });
-      const reusable = await this.isReusableManagedWorktree(plan.worktreePath, plan.fromBranch);
+      const reusable = await this.isReusableManagedWorktree(plan.worktreePath, plan.fromBranch, startup);
       bench('RepoPool.doAcquireWorktree.isReusableManagedWorktree.after', {
         planKind: plan.kind,
         worktreePath: plan.worktreePath,
@@ -1011,109 +1015,168 @@ export class RepoPool {
       }
     }
 
-    let effectivePath = worktreePath;
-    bench('RepoPool.doAcquireWorktree.applyPlan.before', { planKind: plan.kind });
-    switch (plan.kind) {
-      case 'reuse_exact':
-        effectivePath = plan.worktreePath;
-        traceExecution(
-          `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse existing worktree path=${effectivePath} branch=${branch}`,
+    startup?.check();
+    let leaseHolderId: string | undefined = opts?.leaseHolderId;
+    if (this.leasePersistence && leaseHolderId) {
+      let claimed = true;
+      try {
+        claimed = this.leasePersistence.claimExecutionResourceLease({
+          resourceKey: repoKey,
+          resourceType: 'worktree',
+          holderId: leaseHolderId,
+          maxHolders: this.maxWorktrees,
+          leaseMs: WORKTREE_LEASE_TTL_MS,
+          metadata: { repoUrl, branch },
+        });
+      } catch (err) {
+        console.warn(`[RepoPool] claimExecutionResourceLease failed for ${repoKey} holder=${leaseHolderId}: ${err}`);
+        leaseHolderId = undefined;
+      }
+      if (leaseHolderId && !claimed) {
+        throw new ResourceLimitError(
+          `Worktree limit reached for ${repoUrl}: lease capacity exhausted (max ${this.maxWorktrees})`,
         );
-        mkdirSync(worktreeParent, { recursive: true });
-        break;
-      case 'rename_reuse':
-      case 'rename_to_lifecycle':
-        try {
-          await this.execGit(['branch', '-m', plan.fromBranch, plan.toBranch], plan.worktreePath);
-          const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], plan.worktreePath)).trim();
-          if (!abbrevRefMatchesBranch(head, plan.toBranch)) {
-            throw new Error(`renamed worktree HEAD mismatch: ${head}`);
-          }
+      }
+    } else {
+      leaseHolderId = undefined;
+    }
+
+    try {
+      let effectivePath = worktreePath;
+      startup?.check();
+      bench('RepoPool.doAcquireWorktree.applyPlan.before', { planKind: plan.kind });
+      switch (plan.kind) {
+        case 'reuse_exact':
           effectivePath = plan.worktreePath;
           traceExecution(
-            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree ${plan.kind}: renamed ${plan.fromBranch} → ${plan.toBranch} path=${effectivePath}`,
+            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse existing worktree path=${effectivePath} branch=${branch}`,
           );
+          startup?.check();
           mkdirSync(worktreeParent, { recursive: true });
-        } catch {
-          await this.reconcileLeakedTargetPath(clonePath, worktreePath, porcelain, branch);
+          break;
+        case 'rename_reuse':
+        case 'rename_to_lifecycle':
+          try {
+            await this.execGit(['branch', '-m', plan.fromBranch, plan.toBranch], plan.worktreePath, startup);
+            const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], plan.worktreePath, startup)).trim();
+            if (!abbrevRefMatchesBranch(head, plan.toBranch)) {
+              throw new Error(`renamed worktree HEAD mismatch: ${head}`);
+            }
+            effectivePath = plan.worktreePath;
+            traceExecution(
+              `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree ${plan.kind}: renamed ${plan.fromBranch} → ${plan.toBranch} path=${effectivePath}`,
+            );
+            startup?.check();
+            mkdirSync(worktreeParent, { recursive: true });
+          } catch {
+            startup?.check();
+            await this.reconcileLeakedTargetPath(clonePath, worktreePath, porcelain, branch, startup);
+            startup?.check();
+            mkdirSync(worktreeParent, { recursive: true });
+            await this.runPreserveOrResetWithRecovery(
+              clonePath,
+              worktreePath,
+              branch,
+              base ?? 'HEAD',
+              startup,
+            );
+            bench('RepoPool.doAcquireWorktree.renameFallbackPreserveOrReset.after', { worktreePath });
+            effectivePath = worktreePath;
+          }
+          break;
+        case 'recreate':
+          bench('RepoPool.doAcquireWorktree.reconcileLeakedTargetPath.before', { worktreePath });
+          await this.reconcileLeakedTargetPath(clonePath, worktreePath, porcelain, branch, startup);
+          bench('RepoPool.doAcquireWorktree.reconcileLeakedTargetPath.after', { worktreePath });
+          if (isWorkspaceCleanupEnabled()) {
+            for (const cleanupPath of plan.cleanupPaths) {
+              bench('RepoPool.doAcquireWorktree.reconcileStaleWorktreePath.before', { cleanupPath });
+              await this.reconcileStaleWorktreePath(clonePath, cleanupPath, startup);
+              bench('RepoPool.doAcquireWorktree.reconcileStaleWorktreePath.after', { cleanupPath });
+            }
+          }
+          startup?.check();
           mkdirSync(worktreeParent, { recursive: true });
+          bench('RepoPool.doAcquireWorktree.runPreserveOrResetWithRecovery.before', { worktreePath });
           await this.runPreserveOrResetWithRecovery(
             clonePath,
             worktreePath,
             branch,
             base ?? 'HEAD',
+            startup,
           );
-          bench('RepoPool.doAcquireWorktree.renameFallbackPreserveOrReset.after', { worktreePath });
+          bench('RepoPool.doAcquireWorktree.runPreserveOrResetWithRecovery.after', { worktreePath });
           effectivePath = worktreePath;
+          break;
+      }
+
+      startup?.check();
+      effectivePath = canonicalPathForComparison(effectivePath);
+      const owner = Symbol(branch);
+      this.worktreeOwners.set(effectivePath, owner);
+      active.add(effectivePath);
+      this.activeWorktrees.set(repoKey, active);
+      bench('RepoPool.doAcquireWorktree.applyPlan.after', {
+        planKind: plan.kind,
+        effectivePath,
+        activeCount: active.size,
+      });
+
+      let released = false;
+      const releaseLeaseBestEffort = () => {
+        if (!leaseHolderId) return;
+        try {
+          this.leasePersistence?.releaseExecutionResourceLease(repoKey, leaseHolderId);
+        } catch (err) {
+          console.warn(`[RepoPool] releaseExecutionResourceLease failed for ${repoKey} holder=${leaseHolderId}: ${err}`);
         }
-        break;
-      case 'recreate':
-        bench('RepoPool.doAcquireWorktree.reconcileLeakedTargetPath.before', { worktreePath });
-        await this.reconcileLeakedTargetPath(clonePath, worktreePath, porcelain, branch);
-        bench('RepoPool.doAcquireWorktree.reconcileLeakedTargetPath.after', { worktreePath });
-        if (isWorkspaceCleanupEnabled()) {
-          for (const cleanupPath of plan.cleanupPaths) {
-            bench('RepoPool.doAcquireWorktree.reconcileStaleWorktreePath.before', { cleanupPath });
-            await this.reconcileStaleWorktreePath(clonePath, cleanupPath);
-            bench('RepoPool.doAcquireWorktree.reconcileStaleWorktreePath.after', { cleanupPath });
+      };
+
+      const softRelease = () => {
+        if (released) return;
+        released = true;
+        if (this.worktreeOwners.get(effectivePath) === owner) {
+          this.activeWorktrees.get(repoKey)?.delete(effectivePath);
+        }
+        releaseLeaseBestEffort();
+      };
+
+      const release = async () => {
+        if (this.worktreeOwners.get(effectivePath) !== owner) { softRelease(); return; }
+        const previous = this.repoChains.get(repoKey) ?? Promise.resolve();
+        const removal = previous.then(async () => {
+          if (this.worktreeOwners.get(effectivePath) === owner) {
+            try {
+              await this.execGit(['worktree', 'remove', '--force', effectivePath], clonePath);
+            } catch {
+              try { await this.execGit(['worktree', 'prune'], clonePath); }
+              catch (pruneError) { console.warn(`[RepoPool] release worktree prune failed: ${pruneError}`); }
+            }
           }
-        }
-        mkdirSync(worktreeParent, { recursive: true });
-        bench('RepoPool.doAcquireWorktree.runPreserveOrResetWithRecovery.before', { worktreePath });
-        await this.runPreserveOrResetWithRecovery(
-          clonePath,
-          worktreePath,
-          branch,
-          base ?? 'HEAD',
-        );
-        bench('RepoPool.doAcquireWorktree.runPreserveOrResetWithRecovery.after', { worktreePath });
-        effectivePath = worktreePath;
-        break;
+          softRelease();
+          if (this.worktreeOwners.get(effectivePath) === owner) this.worktreeOwners.delete(effectivePath);
+        });
+        this.repoChains.set(repoKey, removal.catch(() => {}));
+        await removal;
+      };
+
+      bench('RepoPool.doAcquireWorktree.returning', { effectivePath });
+      return {
+        clonePath,
+        worktreePath: effectivePath,
+        branch,
+        release,
+        softRelease,
+        leaseResourceKey: leaseHolderId ? repoKey : undefined,
+        leaseHolderId,
+      };
+    } catch (error) {
+      if (leaseHolderId) {
+        try { this.leasePersistence?.releaseExecutionResourceLease(repoKey, leaseHolderId); }
+        catch (releaseError) { console.warn(`[RepoPool] failed to release startup lease: ${releaseError}`); }
+      }
+      throw error;
     }
-
-    effectivePath = canonicalPathForComparison(effectivePath);
-    active.add(effectivePath);
-    this.activeWorktrees.set(repoKey, active);
-    bench('RepoPool.doAcquireWorktree.applyPlan.after', {
-      planKind: plan.kind,
-      effectivePath,
-      activeCount: active.size,
-    });
-
-    const releaseLeaseBestEffort = () => {
-      if (!leaseHolderId) return;
-      try {
-        this.leasePersistence?.releaseExecutionResourceLease(repoKey, leaseHolderId);
-      } catch (err) {
-        console.warn(`[RepoPool] releaseExecutionResourceLease failed for ${repoKey} holder=${leaseHolderId}: ${err}`);
-      }
-    };
-
-    const release = async () => {
-      try {
-        await this.execGit(['worktree', 'remove', '--force', effectivePath], clonePath);
-      } catch {
-        try { await this.execGit(['worktree', 'prune'], clonePath); } catch { /* best-effort */ }
-      }
-      active.delete(effectivePath);
-      releaseLeaseBestEffort();
-    };
-
-    const softRelease = () => {
-      active.delete(effectivePath);
-      releaseLeaseBestEffort();
-    };
-
-    bench('RepoPool.doAcquireWorktree.returning', { effectivePath });
-    return {
-      clonePath,
-      worktreePath: effectivePath,
-      branch,
-      release,
-      softRelease,
-      leaseResourceKey: leaseHolderId ? repoKey : undefined,
-      leaseHolderId,
-    };
   }
 
   /** Get the deterministic clone directory path for a given repo URL. */
@@ -1135,15 +1198,19 @@ export class RepoPool {
     }
     await Promise.allSettled(releasePromises);
     this.activeWorktrees.clear();
+    this.worktreeOwners.clear();
   }
 
-  private execGit(args: string[], cwd: string): Promise<string> {
+  private execGit(args: string[], cwd: string, startup?: ExecutorStartup): Promise<string> {
+    startup?.check();
     return new Promise((resolve, reject) => {
       const child = spawn('git', args, {
         cwd,
+        detached: !!startup,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: cleanGitRepositoryEnv(),
       });
+      cancelOwnedStartupChild(child, startup);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -1152,6 +1219,7 @@ export class RepoPool {
         reject(new Error(`Failed to spawn git: ${err.message}`));
       });
       child.on('close', (code) => {
+        try { startup?.check(); } catch (error) { reject(error); return; }
         if (code === 0) resolve(stdout.trim());
         else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
       });

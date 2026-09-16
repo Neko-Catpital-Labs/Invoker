@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { SQLiteAdapter } from '@invoker/data-store';
+import { createWorkflowResumeCooldownLedger, createWorkflowResumeTick } from '@invoker/execution-engine';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   PersistedWorkflowMutationCoordinator,
@@ -810,6 +811,35 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(adapter.listWorkflowMutationIntents(undefined, ['queued', 'running'])).toHaveLength(1);
     expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
     expect(adapter.listWorkflowMutationIntents('wf-2')).toHaveLength(0);
+  });
+
+  it('preserves recovery dispatch coalescing across eligible workflows and separate explicit start-ready requests', async () => {
+    vi.useFakeTimers();
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    const workflowIds = ['wf-1', 'wf-2', 'wf-3'];
+    for (const id of workflowIds) {
+      adapter.saveWorkflow({ id, name: id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    }
+    const dispatch = vi.fn(async () => undefined);
+    const coordinator = new PersistedWorkflowMutationCoordinator(adapter, 'owner', dispatch);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+    const tick = createWorkflowResumeTick({
+      store: { listWorkflows: () => workflowIds.map(id => ({ id })), loadTasks: id => [makeTask(`${id}/task`, id)] },
+      submitter: coordinator,
+      ledger: createWorkflowResumeCooldownLedger(),
+      logger,
+    });
+    await tick({ identity: { kind: 'workflow-resume', instanceId: 'test' }, reason: 'poll', tickNumber: 1, signal: new AbortController().signal });
+    expect(adapter.listWorkflowMutationIntents(undefined, ['queued', 'running'])).toHaveLength(1);
+    await vi.runAllTimersAsync();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0]).toBe('invoker:start-ready');
+    coordinator.submit('wf-1', 'normal', 'invoker:start-ready', [{}], { deferDrain: true });
+    coordinator.submit('wf-2', 'normal', 'invoker:start-ready', [{}], { deferDrain: true });
+    await vi.runAllTimersAsync();
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    console.log('Recovery compatibility: 3 eligible workflows -> 1 dispatch; 2 explicit requests -> 2 additional dispatches');
   });
 
   it('drains independent deferred start-ready intents from one batch timer', async () => {

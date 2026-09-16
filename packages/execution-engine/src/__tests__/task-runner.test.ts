@@ -1,8 +1,9 @@
-import { execSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, execSync } from 'node:child_process';
+import { readFileSync, existsSync, chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { dispatchExecutor } from '../task-runner-dispatch.js';
 import { TaskRunner, collectManagedWorkflowBranchesFromDb } from '../task-runner.js';
 import { assertCompletedDependencyHasBranch } from '../task-runner-prepare.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
@@ -2461,7 +2462,7 @@ describe('TaskRunner', () => {
       expect(launchFailed).not.toHaveBeenCalled();
     });
 
-    it('fails a task when executor.start never resolves and keeps it in launching', async () => {
+    it('startup cancellation times out a compatible executor and disposes its late handle', async () => {
       vi.useFakeTimers();
       const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
       process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = '100';
@@ -2487,9 +2488,10 @@ describe('TaskRunner', () => {
             selectedAttemptId: 'launch-hang-a1',
           },
         });
+        let resolveStart!: (handle: { executionId: string; taskId: string; workspacePath: string }) => void;
         const hangingExecutor = {
           type: 'worktree',
-          start: vi.fn(async () => await new Promise<never>(() => {})),
+          start: vi.fn(() => new Promise(resolve => { resolveStart = resolve; })),
           onOutput: vi.fn(),
           onComplete: vi.fn(),
           onHeartbeat: vi.fn(),
@@ -2550,6 +2552,11 @@ describe('TaskRunner', () => {
             }),
           }),
         );
+        const lateHandle = { executionId: 'late-start', taskId: task.id, workspacePath: '/tmp/late-start' };
+        resolveStart(lateHandle);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hangingExecutor.kill).toHaveBeenCalledExactlyOnceWith(lateHandle);
+        expect(onComplete).toHaveBeenCalledTimes(1);
       } finally {
         if (previousTimeout === undefined) {
           delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
@@ -7486,4 +7493,185 @@ console.log(JSON.stringify(out));
     });
   });
 
+});
+
+
+describe('startup cancellation with real worktree dispatch', () => {
+  it('stops a timed-out shared-repo waiter before late workspace or agent creation and preserves a concurrent retry', async () => {
+    const dir = createTempWorkspace();
+    const source = join(dir, 'source');
+    mkdirSync(source);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: source, encoding: 'utf8' }).trim();
+    git('init');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', 'commit', '--allow-empty', '-m', 'initial');
+    const leases = new Set<string>();
+    const executor = new WorktreeExecutor({
+      cacheDir: join(dir, 'cache'), worktreeBaseDir: join(dir, 'worktrees'),
+      provisionCommand: '', maxWorktrees: 2,
+      leasePersistence: {
+        claimExecutionResourceLease: ({ holderId }) => { leases.add(holderId); return true; },
+        releaseExecutionResourceLease: (_key, holderId) => { leases.delete(holderId); },
+      },
+    });
+    const pool = executor.getRepoPool();
+    let unblock!: () => void;
+    const gate = new Promise<void>(resolve => { unblock = resolve; });
+    const originalClone = (pool as any).ensureCloneUnqueued.bind(pool);
+    const clone = vi.spyOn(pool as any, 'ensureCloneUnqueued').mockImplementationOnce(async (repo: string) => {
+      await gate;
+      return originalClone(repo);
+    });
+    const starts: Promise<any>[] = [];
+    const originalStart = executor.start.bind(executor);
+    vi.spyOn(executor, 'start').mockImplementation((...args) => {
+      const start = originalStart(...args);
+      starts.push(start.catch(error => error));
+      return start;
+    });
+    const oldTask = makeTask({ id: 'expired', status: 'running', config: { runnerKind: 'worktree' }, execution: { selectedAttemptId: 'old', generation: 1 } });
+    let liveTask = oldTask;
+    const onSpawned = vi.fn();
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => liveTask, markTaskRunningAfterLaunch: () => true } as any,
+      persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent: vi.fn(), appendTaskOutput: vi.fn() } as any,
+      executorRegistry: { getDefault: () => executor, get: () => executor, getAll: () => [executor] } as any,
+      cwd: dir, logger: createMockLogger(), callbacks: { onSpawned },
+    });
+    const dispatch = (task: TaskState, attemptId: string, marker: string) => dispatchExecutor(runner, {
+      task, attemptId, bench: () => {},
+      request: { requestId: attemptId, attemptId, actionId: task.id, actionType: 'command', executionGeneration: task.execution.generation,
+        inputs: { repoUrl: source, command: `touch '${marker}'; sleep 30`, lifecycleTag: attemptId },
+        callbackUrl: '', timestamps: { createdAt: new Date().toISOString() } },
+    });
+    const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+    // Short deterministic test deadline; this does not replay the historical ten-minute incident.
+    process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = '200';
+    try {
+      const expired = dispatch(oldTask, 'old', join(dir, 'old-launched')).catch(error => error);
+      await vi.waitFor(() => expect(clone).toHaveBeenCalledTimes(1));
+      expect((await expired).message).toContain('Executor startup timed out after 200ms');
+      expect(onSpawned).not.toHaveBeenCalled();
+      expect(leases.size).toBe(0);
+      liveTask = makeTask({ id: 'expired', status: 'running', config: { runnerKind: 'worktree' }, execution: { selectedAttemptId: 'new', generation: 2 } });
+      process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = '10000';
+      const retry = dispatch(liveTask, 'new', join(dir, 'new-launched'));
+      unblock();
+      const current = await retry;
+      await Promise.all(starts);
+      await vi.waitFor(() => expect(existsSync(join(dir, 'new-launched'))).toBe(true));
+      const branches = execFileSync('git', ['branch', '--list', '*old*'], { cwd: pool.getClonePath(source), encoding: 'utf8' }).trim();
+      expect.soft(branches, 'expired attempt created a late branch').toBe('');
+      expect.soft(existsSync(join(dir, 'old-launched')), 'expired attempt launched its child').toBe(false);
+      expect.soft([...leases], 'only the successful attempt may retain a lease').toEqual(['new']);
+      expect.soft((pool as any).activeWorktrees.values().next().value.size, 'only the successful attempt may retain a pool slot').toBe(1);
+      expect(onSpawned).toHaveBeenCalledTimes(1);
+      expect(current?.handle.leaseHolderId).toBe('new');
+    } finally {
+      unblock();
+      await Promise.all(starts);
+      await executor.destroyAll();
+      clone.mockRestore();
+      if (previousTimeout === undefined) delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+      else process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = previousTimeout;
+    }
+  }, 20000);
+});
+
+
+describe('startup cancellation during owned children', () => {
+  it.each(['git', 'provisioning'] as const)('stops the %s process group before unblocking can cause later mutations', async (stage) => {
+    const dir = createTempWorkspace();
+    const source = join(dir, 'source');
+    mkdirSync(source);
+    execFileSync('git', ['init', source]);
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', 'commit', '--allow-empty', '-m', 'initial'], { cwd: source });
+    const pidPath = join(dir, 'child-pid');
+    const gatePath = join(dir, 'unblock');
+    const latePath = join(dir, 'late-mutation');
+    const agentPath = join(dir, 'agent');
+    const provisionPath = join(dir, 'provision');
+    const agentScript = join(dir, 'fixture-agent');
+    writeFileSync(agentScript, `#!/bin/sh\ntouch '${agentPath}'\n`);
+    chmodSync(agentScript, 0o755);
+    const childScript = join(dir, 'blocked-child.cjs');
+    writeFileSync(childScript, `const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+setInterval(() => {
+  if (fs.existsSync(${JSON.stringify(gatePath)})) {
+    fs.writeFileSync(${JSON.stringify(latePath)}, 'late side effect');
+    process.exit(0);
+  }
+}, 10);`);
+    const blockedCommand = `exec '${process.execPath}' '${childScript}'`;
+    const leases = new Set<string>();
+    const executor = new WorktreeExecutor({
+      cacheDir: join(dir, 'cache'), worktreeBaseDir: join(dir, 'worktrees'),
+      claudeCommand: agentScript, secretsFile: join(dir, 'no-secrets'),
+      provisionCommand: `touch '${provisionPath}'; ${stage === 'provisioning' ? blockedCommand : 'true'}`,
+      leasePersistence: {
+        claimExecutionResourceLease: ({ holderId }) => { leases.add(holderId); return true; },
+        releaseExecutionResourceLease: (_key, holderId) => { leases.delete(holderId); },
+      },
+    });
+    const pool = executor.getRepoPool();
+    const clonePath = await pool.ensureCloneThroughRepoQueue(source);
+    if (stage === 'git') {
+      const hook = join(clonePath, '.git', 'hooks', 'post-checkout');
+      writeFileSync(hook, `#!/bin/sh\n${blockedCommand}\n`);
+      chmodSync(hook, 0o755);
+    }
+    const task = makeTask({ id: stage, status: 'running', config: { runnerKind: 'worktree' }, execution: { selectedAttemptId: 'owned', generation: 1 } });
+    const onSpawned = vi.fn();
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => task, markTaskRunningAfterLaunch: () => true } as any,
+      persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent: vi.fn(), appendTaskOutput: vi.fn() } as any,
+      executorRegistry: { getDefault: () => executor, get: () => executor, getAll: () => [executor] } as any,
+      cwd: dir, logger: createMockLogger(), callbacks: { onSpawned },
+    });
+    let settledStart: Promise<unknown> = Promise.resolve();
+    const originalStart = executor.start.bind(executor);
+    vi.spyOn(executor, 'start').mockImplementation((...args) => {
+      const start = originalStart(...args);
+      settledStart = start.catch(error => error);
+      return start;
+    });
+    const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+    // Test-only deadline: advance the clock only after the real owned child is blocked.
+    process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = '1000';
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const result = dispatchExecutor(runner, {
+        task, attemptId: 'owned', bench: () => {},
+        request: { requestId: 'owned', attemptId: 'owned', actionId: stage, actionType: 'ai_task',
+          inputs: { repoUrl: source, prompt: 'Harmless startup regression fixture' },
+          callbackUrl: '', timestamps: { createdAt: new Date().toISOString() } },
+      }).catch(error => error);
+      const waitStarted = performance.now();
+      while (!existsSync(pidPath) && performance.now() - waitStarted < 5000) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      expect(existsSync(pidPath), 'owned child must start before advancing the test clock').toBe(true);
+      const pid = Number(readFileSync(pidPath, 'utf8'));
+      await vi.advanceTimersByTimeAsync(1001);
+      expect((await result).message).toContain('Executor startup timed out after 1000ms');
+      await settledStart;
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+      writeFileSync(gatePath, 'unblocked after timeout');
+      expect(existsSync(latePath)).toBe(false);
+      expect(existsSync(agentPath)).toBe(false);
+      expect(existsSync(provisionPath)).toBe(stage === 'provisioning');
+      expect(onSpawned).not.toHaveBeenCalled();
+      expect([...leases]).toEqual([]);
+      expect([...((pool as any).activeWorktrees as Map<string, Set<string>>).values()].flatMap(paths => [...paths])).toEqual([]);
+      expect((executor as any).entries.size).toBe(0);
+      if (stage === 'provisioning') expect(existsSync((await settledStart as any).workspacePath)).toBe(true);
+    } finally {
+      writeFileSync(gatePath, 'cleanup');
+      await settledStart;
+      await executor.destroyAll();
+      vi.useRealTimers();
+      if (previousTimeout === undefined) delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+      else process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = previousTimeout;
+    }
+  }, 15000);
 });

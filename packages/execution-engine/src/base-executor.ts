@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import { cancelOwnedStartupChild, type ExecutorStartup } from './executor.js';
 import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './executor.js';
 import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
@@ -362,6 +363,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     traceLabel: string;
     startMessage?: string;
     failurePrefix: string;
+    startup?: ExecutorStartup;
   }): { child: ChildProcess | null; completion: Promise<void> } {
     const executionId = options.executionId;
     const hasCommand = options.command.trim().length > 0;
@@ -377,6 +379,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       traceLabel: options.traceLabel,
       failurePrefix: options.failurePrefix,
       timeoutMs,
+      startup: options.startup,
       onOutput: executionId ? (text) => this.emitOutput(executionId, text) : undefined,
     });
     if (hasCommand && executionId) {
@@ -582,12 +585,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     BaseExecutor.gitAvailableChecked = false;
   }
 
-  protected async ensureGitAvailable(): Promise<void> {
+  protected async ensureGitAvailable(startup?: ExecutorStartup): Promise<void> {
+    startup?.check();
     if (BaseExecutor.gitAvailableChecked) return;
     try {
-      await this.execGitSimple(['--version'], process.cwd());
+      await this.execGitSimple(['--version'], process.cwd(), { startup });
       BaseExecutor.gitAvailableChecked = true;
     } catch (err) {
+      startup?.check();
       throw new Error(
         `git is not available on PATH. Install git and ensure it is in your shell PATH.\n` +
         `${err instanceof Error ? err.message : String(err)}`,
@@ -637,8 +642,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected execGitSimple(
     args: string[],
     cwd: string,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; startup?: ExecutorStartup },
   ): Promise<string> {
+    opts?.startup?.check();
     assertNotGitConfigMutation(args, `${this.type}.execGitSimple`);
     const stack = new Error().stack;
     const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';
@@ -653,7 +659,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         stdio: ['ignore', 'pipe', 'pipe'],
         env: cleanGitRepositoryEnv(),
         signal: opts?.signal,
+        detached: !!opts?.startup,
       });
+      cancelOwnedStartupChild(child, opts?.startup);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -662,6 +670,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         reject(new Error(`Failed to spawn git: ${err.message}`));
       });
       child.on('close', (code) => {
+        try { opts?.startup?.check(); } catch (error) { reject(error); return; }
         if (code === 0) resolve(stdout.trim());
         else {
           const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
@@ -692,13 +701,16 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * transport (e.g., DockerExecutor routes through docker exec, SshExecutor
    * routes through SSH).
    */
-  protected runBash(script: string, cwd: string): Promise<string> {
+  protected runBash(script: string, cwd: string, startup?: ExecutorStartup): Promise<string> {
+    startup?.check();
     return new Promise((resolve, reject) => {
       const child = spawn('bash', ['-c', script], {
         cwd,
+        detached: !!startup,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
+      cancelOwnedStartupChild(child, startup);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -709,6 +721,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       });
 
       child.on('close', (code) => {
+        try { startup?.check(); } catch (error) { reject(error); return; }
         if (code === 0) {
           resolve(stdout);
         } else {
@@ -738,7 +751,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     request: WorkRequest,
     mergeCwd: string,
     setupBranchExplicitBase?: string,
+    startup?: ExecutorStartup,
   ): Promise<void> {
+    startup?.check();
     const upstreams = request.inputs.upstreamBranches ?? [];
     const upstreamsToMerge = this.selectUpstreamBranchesToMerge({
       upstreamBranches: upstreams,
@@ -761,6 +776,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         branchRepoUrl: request.inputs.branchRepoUrl,
       }),
       mergeCwd,
+      startup,
     );
     const mergeScript = bashMergeUpstreams({
       worktreeDir: mergeCwd,
@@ -769,7 +785,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       missingRefMode: 'fail',
     });
     try {
-      await this.runBash(mergeScript, mergeCwd);
+      await this.runBash(mergeScript, mergeCwd, startup);
       traceExecution(
         `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] merge OK (${upstreamsToMerge.length} branch(es))`,
       );
