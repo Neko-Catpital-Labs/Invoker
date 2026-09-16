@@ -45,6 +45,7 @@ import {
   type TaskState,
   type TaskStatus,
 } from '@invoker/workflow-core';
+import { VERSION } from './index.js';
 import { logCaughtException } from './logging.js';
 import {
   createDefaultMessageBus,
@@ -80,7 +81,6 @@ import {
 import { runAutoApproveAuthorsCommand } from './auto-approve-authors-config.js';
 import { runSpendGateCommand } from './spend-gate-command.js';
 
-const VERSION = '0.1.5';
 
 type CliOptions = {
   dbDir?: string;
