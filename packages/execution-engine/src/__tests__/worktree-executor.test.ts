@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { PersistedTaskMeta } from '../executor.js';
+import { ExecutorStartup, StartupCancelledError, type PersistedTaskMeta } from '../executor.js';
 import type { Writable, Readable } from 'node:stream';
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -286,6 +286,44 @@ describe('WorktreeExecutor', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+  });
+
+  it('startup cancellation checks the absolute deadline before spawn even when the timer has not fired', async () => {
+    setupSpawnMock();
+    const now = Date.now();
+    const startup = new ExecutorStartup(now + 1000, new StartupCancelledError('timeout', 'test deadline expired'));
+    vi.spyOn(executor as any, 'provisionWorktree').mockImplementation(() => ({
+      child: null,
+      completion: Promise.resolve().then(() => {
+        // Model a delayed event loop: wall time passes inside the continuation,
+        // without running any timeout callback before the next startup stage.
+        vi.spyOn(Date, 'now').mockReturnValue(now + 1001);
+      }),
+    }));
+    await expect(executor.start(makeRequest(), startup)).rejects.toMatchObject({ reason: 'timeout' });
+    expect(mockedSpawn.mock.calls.filter(([command]) => command !== 'git')).toHaveLength(0);
+    const pool = (executor as any).pool;
+    const acquired = await pool.acquireWorktree.mock.results[0].value;
+    expect(acquired.softRelease).toHaveBeenCalledTimes(1);
+    expect((executor as any).entries.size).toBe(0);
+  });
+
+  it('startup cancellation fences a recreated attempt after a late acquisition and releases only its handle', async () => {
+    setupSpawnMock();
+    let current = true;
+    const startup = new ExecutorStartup(Date.now() + 10000, new StartupCancelledError('timeout', 'test deadline'), () => current);
+    const pool = (executor as any).pool;
+    const acquire = pool.acquireWorktree.getMockImplementation();
+    pool.acquireWorktree.mockImplementation(async (...args: unknown[]) => {
+      const acquired = await acquire(...args);
+      current = false;
+      return acquired;
+    });
+    await expect(executor.start(makeRequest(), startup)).rejects.toMatchObject({ reason: 'stale' });
+    const acquired = await pool.acquireWorktree.mock.results[0].value;
+    expect(acquired.softRelease).toHaveBeenCalledTimes(1);
+    expect(mockedSpawn.mock.calls.filter(([command]) => command !== 'git')).toHaveLength(0);
+    expect((executor as any).entries.size).toBe(0);
   });
 
   it('start creates git worktree with unique branch', async () => {

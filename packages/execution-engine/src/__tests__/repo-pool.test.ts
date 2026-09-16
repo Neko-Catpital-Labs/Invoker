@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, existsSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
+import { ExecutorStartup, StartupCancelledError } from '../executor.js';
 import { RepoPool, ResourceLimitError } from '../repo-pool.js';
 import { remoteFetchForPool } from '../remote-fetch-policy.js';
 import * as branchUtils from '../branch-utils.js';
@@ -46,6 +47,99 @@ describe('RepoPool', () => {
     await pool.destroyAll();
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(localRepoUrl, { recursive: true, force: true });
+  });
+
+  it('startup cancellation retains a shared clone lock for surviving and later waiters', async () => {
+    let unblock!: () => void;
+    const gate = new Promise<void>(resolve => { unblock = resolve; });
+    const original = (pool as any).ensureCloneUnqueued.bind(pool);
+    const clone = vi.spyOn(pool as any, 'ensureCloneUnqueued').mockImplementation(async (repo: string) => {
+      await gate;
+      return original(repo);
+    });
+    const startup = new ExecutorStartup(Date.now() + 10000, new StartupCancelledError('timeout', 'test deadline'));
+    const expired = pool.ensureCloneThroughRepoQueue(localRepoUrl, startup);
+    const survivor = pool.ensureCloneThroughRepoQueue(localRepoUrl);
+    startup.cancel();
+    await expect(expired).rejects.toMatchObject({ reason: 'timeout' });
+    const later = pool.ensureCloneThroughRepoQueue(localRepoUrl);
+    unblock();
+    const [first, second] = await Promise.all([survivor, later]);
+    expect(first).toBe(second);
+    expect(clone).toHaveBeenCalledTimes(1);
+    clone.mockRestore();
+  });
+
+  it('startup cancellation removes a queued acquisition without cancelling the shared operation ahead of it', async () => {
+    let unblock!: () => void;
+    const gate = new Promise<void>(resolve => { unblock = resolve; });
+    const original = (pool as any).ensureCloneUnqueued.bind(pool);
+    vi.spyOn(pool as any, 'ensureCloneUnqueued').mockImplementationOnce(async (repo: string) => {
+      await gate;
+      return original(repo);
+    });
+    const shared = pool.ensureCloneThroughRepoQueue(localRepoUrl);
+    const startup = new ExecutorStartup(Date.now() + 10000, new StartupCancelledError('timeout', 'test deadline'));
+    const queued = pool.acquireWorktree(localRepoUrl, 'expired-queued', undefined, undefined, { startup });
+    startup.cancel();
+    await expect(queued).rejects.toMatchObject({ reason: 'timeout' });
+    const survivor = pool.acquireWorktree(localRepoUrl, 'survivor');
+    unblock();
+    await shared;
+    const acquired = await survivor;
+    const branches = execSync('git branch --list expired-queued', { cwd: acquired.clonePath, encoding: 'utf8' });
+    expect(branches.trim()).toBe('');
+    expect(existsSync(acquired.worktreePath)).toBe(true);
+    expect([...((pool as any).activeWorktrees as Map<string, Set<string>>).values()].flatMap(paths => [...paths])).toEqual([acquired.worktreePath]);
+  });
+
+  it('startup cancellation settles an active acquisition only after releasing its late result', async () => {
+    let reached!: () => void;
+    let unblock!: () => void;
+    const entered = new Promise<void>(resolve => { reached = resolve; });
+    const gate = new Promise<void>(resolve => { unblock = resolve; });
+    const original = (pool as any).doAcquireWorktree.bind(pool);
+    vi.spyOn(pool as any, 'doAcquireWorktree').mockImplementationOnce(async (...args: unknown[]) => {
+      const acquired = await original(...args);
+      reached();
+      await gate;
+      return acquired;
+    });
+    const startup = new ExecutorStartup(Date.now() + 10000, new StartupCancelledError('timeout', 'test deadline'));
+    let settled = false;
+    const acquisition = pool.acquireWorktree(localRepoUrl, 'expired-delivery', undefined, undefined, { startup })
+      .catch(error => { settled = true; return error; });
+    try {
+      await entered;
+      startup.cancel();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(settled, 'owned cleanup must finish before startup settles').toBe(false);
+      unblock();
+      expect(await acquisition).toMatchObject({ reason: 'timeout' });
+      expect([...((pool as any).activeWorktrees as Map<string, Set<string>>).values()].flatMap(paths => [...paths])).toEqual([]);
+    } finally {
+      unblock();
+      await acquisition;
+    }
+  });
+
+  it('startup cancellation cleanup cannot release a newer owner of the same worktree path', async () => {
+    const leases = new Set<string>();
+    const leasedPool = new RepoPool({ cacheDir: tmpDir, leasePersistence: {
+      claimExecutionResourceLease: ({ holderId }) => { leases.add(holderId); return true; },
+      releaseExecutionResourceLease: (_key, holderId) => { leases.delete(holderId); },
+    } });
+    const old = await leasedPool.acquireWorktree(localRepoUrl, 'same-branch', undefined, undefined, { leaseHolderId: 'old' });
+    const current = await leasedPool.acquireWorktree(localRepoUrl, 'same-branch', undefined, undefined, { leaseHolderId: 'current' });
+    expect(current.worktreePath).toBe(old.worktreePath);
+    old.softRelease();
+    old.softRelease();
+    await old.release();
+    expect([...leases]).toEqual(['current']);
+    expect(existsSync(current.worktreePath)).toBe(true);
+    expect([...((leasedPool as any).activeWorktrees as Map<string, Set<string>>).values()].flatMap(paths => [...paths])).toEqual([current.worktreePath]);
+    await current.release();
+    expect([...leases]).toEqual([]);
   });
 
   it('ensureCloneThroughRepoQueue: clones repo on first call', async () => {
