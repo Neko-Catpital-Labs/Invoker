@@ -4794,6 +4794,7 @@ export function App() {
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
             readOnly={activePlanningReadOnly}
+            readOnlyReason={activePlanningSessionSubmitted ? 'submitted' : 'window'}
             expanded={planningTerminalExpanded}
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
