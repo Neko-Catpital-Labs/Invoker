@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const DEFAULT_TARGET_REPO_URL_FOR_TEST = 'https://github.com/Neko-Catpital-Labs/Invoker.git';
 import {
   buildCiJobDefinitions,
   buildFailureKey,
@@ -1346,6 +1348,28 @@ describe('auto-fix circuit breaker (shared with execution-engine)', () => {
     assert.deepEqual(filed, [jobName]);
     assert.equal(counts.pausedByCircuitBreaker, undefined);
   }));
+});
+
+describe('a filed repair plan passes the real plan doctor', () => {
+  for (const enableReflect of [false]) {
+    it('renders and doctors the default ci-regression-watch plan', () => {
+      const jobName = 'required-fast / Vitest Workspace';
+      const outRoot = mkdtempSync(join(tmpdir(), 'ci-regression-watch-doctor-'));
+      try {
+        const result = fileBugfixPlan(makeFailure({ jobName }), {
+          repoUrl: DEFAULT_TARGET_REPO_URL_FOR_TEST,
+          jobDefinitions: buildCiJobDefinitions(),
+          outRoot,
+          dryRun: true,
+          enableReflect,
+        });
+        assert.equal(result.submitted, false);
+        assert.equal(result.reflectEnabled, enableReflect);
+      } finally {
+        rmSync(outRoot, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe('a poison-pill failure must not abort the whole sweep', () => {
