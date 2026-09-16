@@ -1,0 +1,37 @@
+{
+  "selected": "codex-reserve-low",
+  "runners": {
+    "codex-reserve-low": {
+      "harness": "codex",
+      "command": [
+        "codex",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--sandbox",
+        "workspace-write",
+        "--model",
+        "gpt-reserve",
+        "--config",
+        "model_reasoning_effort=\"low\"",
+        "--cd",
+        "{workdir}",
+        "-"
+      ],
+      "response_format": "codex-jsonl",
+      "model": "gpt-reserve",
+      "effort": "low",
+      "cli_version": "codex-cli 0.147.0",
+      "sandbox": "workspace-write",
+      "approval_policy": "never",
+      "session_policy": "ephemeral",
+      "user_config": "ignored",
+      "rules": "ignored",
+      "max_attempts_per_arm": 1
+    }
+  }
+}

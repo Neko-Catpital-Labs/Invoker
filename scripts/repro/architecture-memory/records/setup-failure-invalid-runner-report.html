@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Architecture-memory pilot report</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 900px; margin: 32px auto; line-height: 1.45; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; vertical-align: top; }
+code { background: #f3f3f3; padding: 1px 3px; }
+</style>
+<h1>Architecture-memory pilot report</h1>
+<p><strong>Claim:</strong> The paired coding evaluator records externally checked results for one real-code experiment.</p>
+<p><strong>Source:</strong> <code>0ca415e4d69a3f59a4b666e65f6362adf2d947ad</code></p>
+<p><strong>Runner:</strong> codex-gpt5-low; model gpt-5-codex; effort low.</p>
+<p>The pilot exercised one real-code task in baseline and treatment copies. It records apparatus behavior only; it does not support a statistical architecture advantage claim.</p>
+<table>
+<thead><tr><th>Arm</th><th>Runner Exit</th><th>Grade Exit</th><th>Grade Passed</th><th>Patch Bytes</th><th>Usage</th></tr></thead>
+<tbody><tr><td>baseline</td><td>2</td><td>1</td><td>False</td><td>0</td><td>{}</td></tr><tr><td>treatment</td><td>2</td><td>1</td><td>False</td><td>0</td><td>{}</td></tr></tbody>
+</table>
+<h2>What Was Not Exercised</h2>
+<p>No production package was edited, no workflow runtime was changed, no deployment or merge action was taken, and the six-task/five-repeat protocol was not launched.</p>
+<h2>Invalidation</h2>
+<ul><li>Hidden checks or gold patches are readable by trial agents.</li><li>Arms differ in runner, model, effort, timeout, dependencies, or task prompt.</li><li>A partial or failed attempt is silently retried.</li><li>Treatment behavior differs before the new task.</li><li>Missing dollar telemetry is treated as a cost claim.</li></ul>
+<h2>Later Protocol</h2>
+<p>Run six predeclared real-code tasks, five randomized baseline/treatment pairs per task, no retries beyond the idempotent ledger, and publish only sanitized diffs, grader outcomes, pinned runner config, and aggregate statistics.</p>
+</html>

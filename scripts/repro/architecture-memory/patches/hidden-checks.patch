@@ -1,0 +1,125 @@
+diff --git a/packages/app/src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts b/packages/app/src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts
+new file mode 100644
+index 00000000..cf54aaae
+--- /dev/null
++++ b/packages/app/src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts
+@@ -0,0 +1,119 @@
++import { describe, it, expect, vi } from 'vitest';
++import type { Orchestrator } from '@invoker/workflow-core';
++import type { SQLiteAdapter } from '@invoker/data-store';
++import type { TaskRunner } from '@invoker/execution-engine';
++import { WorkflowMutationFacade, type WorkflowMutationFacadeDeps } from '../workflow-mutation-facade.js';
++
++function makeTask(overrides: Record<string, unknown> = {}) {
++  return {
++    id: 'task-a',
++    status: 'pending' as const,
++    description: 'test task',
++    dependencies: [],
++    createdAt: new Date(),
++    config: { workflowId: 'wf-1' },
++    execution: {},
++    ...overrides,
++  };
++}
++
++function makeRunningTask(overrides: Record<string, unknown> = {}) {
++  return makeTask({ status: 'running', ...overrides });
++}
++
++function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): WorkflowMutationFacadeDeps {
++  const orchestrator = {
++    retryTask: vi.fn(() => [makeRunningTask()]),
++    recreateTask: vi.fn(() => [makeRunningTask()]),
++    deleteTask: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
++    recreateDownstream: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
++    cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: [] })),
++    cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
++    deleteWorkflow: vi.fn(),
++    detachWorkflow: vi.fn(),
++    forkWorkflow: vi.fn(() => ({
++      forkedWorkflowId: 'wf-fork',
++      sourceWorkflowId: 'wf-1',
++      started: [makeRunningTask({ id: 'fork-t1' })],
++    })),
++    editTaskCommand: vi.fn(() => [makeRunningTask()]),
++    editTaskPrompt: vi.fn(() => [makeRunningTask()]),
++    editTaskAgent: vi.fn(() => [makeRunningTask()]),
++    setTaskExternalGatePolicies: vi.fn(() => []),
++    selectExperiment: vi.fn(() => [makeRunningTask()]),
++    approve: vi.fn(async () => [makeRunningTask()]),
++    reject: vi.fn(),
++    provideInput: vi.fn(),
++    getTask: vi.fn(),
++    getAllTasks: vi.fn(() => []),
++    startExecution: vi.fn(() => []),
++    retryWorkflow: vi.fn(() => [makeRunningTask()]),
++    recreateWorkflow: vi.fn(() => [makeRunningTask()]),
++    recreateWorkflowFromFreshBase: vi.fn(async () => [makeRunningTask()]),
++    cascadeInvalidationToDownstream: vi.fn(() => []),
++    cancelWorkflowExecution: vi.fn(),
++  };
++  const persistence = {
++    loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
++    updateWorkflow: vi.fn(),
++    loadTasks: vi.fn(() => []),
++  };
++  const taskExecutor = {
++    executeTasks: vi.fn(),
++    killActiveExecution: vi.fn(),
++    closeWorkflowReview: vi.fn(),
++    preparePoolForRebaseRetry: vi.fn(async () => undefined),
++  };
++  const commandService = {
++    retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.retryTask(envelope.payload.taskId) })),
++    recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
++    deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.deleteTask(envelope.payload.taskId) })),
++    recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
++    retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
++    recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: orchestrator.recreateWorkflow(envelope.payload.workflowId) })),
++    runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<unknown> | unknown) => ({ ok: true as const, data: await fn() })),
++  };
++  return {
++    orchestrator: orchestrator as unknown as Orchestrator,
++    persistence: persistence as unknown as SQLiteAdapter,
++    commandService: commandService as unknown as WorkflowMutationFacadeDeps['commandService'],
++    taskExecutor: taskExecutor as unknown as TaskRunner,
++    ...overrides,
++  };
++}
++
++describe('WorkflowMutationFacade qualified retry ownership', () => {
++  it('closes the owner workflow review for a qualified missing task id', async () => {
++    const deps = makeDeps({
++      orchestrator: {
++        ...makeDeps().orchestrator,
++        getTask: vi.fn(() => undefined),
++      } as unknown as Orchestrator,
++    });
++    const facade = new WorkflowMutationFacade(deps);
++
++    await facade.retryTask('wf-qualified/task-a');
++
++    expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-qualified');
++    expect(deps.commandService.retryTask).toHaveBeenCalledWith(
++      expect.objectContaining({ payload: { taskId: 'wf-qualified/task-a' } }),
++    );
++  });
++
++  it('does not invent a workflow review for an unqualified missing task id', async () => {
++    const deps = makeDeps({
++      orchestrator: {
++        ...makeDeps().orchestrator,
++        getTask: vi.fn(() => undefined),
++      } as unknown as Orchestrator,
++    });
++    const facade = new WorkflowMutationFacade(deps);
++
++    await facade.retryTask('task-a');
++
++    expect(deps.taskExecutor.closeWorkflowReview).not.toHaveBeenCalled();
++    expect(deps.commandService.retryTask).toHaveBeenCalledWith(
++      expect.objectContaining({ payload: { taskId: 'task-a' } }),
++    );
++  });
++});

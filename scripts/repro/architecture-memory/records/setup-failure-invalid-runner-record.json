@@ -1,0 +1,161 @@
+{
+  "attempts": [
+    {
+      "arm": "baseline",
+      "attempt_id": "retry-qualified-task-review-close-baseline-1",
+      "completed_at": "2026-09-16T07:09:01.115214+00:00",
+      "cost_note": "Codex JSONL did not report reliable dollar telemetry; no dollar-efficiency conclusion is made.",
+      "cost_usd": null,
+      "final_message_chars": 0,
+      "grade": {
+        "exit_code": 1,
+        "pass_fail_lines": [
+          " \u276f src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts (2 tests | 1 failed) 48ms",
+          " Test Files  1 failed | 1 passed (2)",
+          "      Tests  1 failed | 27 passed (28)",
+          "\u2009ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL\u2009 @invoker/app@0.1.6 test: `sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; exec vitest run \"$@\"' -- -- workflow-mutation-facade.test.ts workflow-mutation-facade-qualified-retry.hidden.test.ts`",
+          "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+          " FAIL  src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts > WorkflowMutationFacade qualified retry ownership > closes the owner workflow review for a qualified missing task id"
+        ],
+        "passed": false,
+        "stage": "grader-command",
+        "stderr_tail": "\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af\n\n FAIL  src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts > WorkflowMutationFacade qualified retry ownership > closes the owner workflow review for a qualified missing task id\nAssertionError: expected \"spy\" to be called with arguments: [ 'wf-qualified' ]\n\nNumber of calls: 0\n\n \u276f src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts:97:51\n     95|     await facade.retryTask('wf-qualified/task-a');\n     96| \n     97|     expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith\u2026\n       |                                                   ^\n     98|     expect(deps.commandService.retryTask).toHaveBeenCalledWith(\n     99|       expect.objectContaining({ payload: { taskId: 'wf-qualified/task-\u2026\n\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af[1/1]\u23af\n",
+        "stdout_tail": "\n> @invoker/app@0.1.6 test <archmem-temp>/grade-retry-qualified-task-review-close-baseline-1/packages/app\n> sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; exec vitest run \"$@\"' -- -- workflow-mutation-facade.test.ts workflow-mutation-facade-qualified-retry.hidden.test.ts\n\n\n RUN  v3.2.4 <archmem-temp>/grade-retry-qualified-task-review-close-baseline-1/packages/app\n\n \u276f src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts (2 tests | 1 failed) 48ms\n   \u00d7 WorkflowMutationFacade qualified retry ownership > closes the owner workflow review for a qualified missing task id 33ms\n     \u2192 expected \"spy\" to be called with arguments: [ 'wf-qualified' ]\n\nNumber of calls: 0\n\n   \u2713 WorkflowMutationFacade qualified retry ownership > does not invent a workflow review for an unqualified missing task id 9ms\n \u2713 src/__tests__/workflow-mutation-facade.test.ts (26 tests) 152ms\n\n Test Files  1 failed | 1 passed (2)\n      Tests  1 failed | 27 passed (28)\n   Start at  07:09:15\n   Duration  7.29s (transform 4.48s, setup 0ms, collect 12.73s, tests 200ms, environment 1ms, prepare 409ms)\n\n<archmem-temp>/grade-retry-qualified-task-review-close-baseline-1/packages/app:\n\u2009ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL\u2009 @invoker/app@0.1.6 test: `sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; exec vitest run \"$@\"' -- -- workflow-mutation-facade.test.ts workflow-mutation-facade-qualified-retry.hidden.test.ts`\nExit status 1",
+        "timed_out": false,
+        "wall_seconds": 9.798019547015429
+      },
+      "human_intervention": "none",
+      "patch_bytes": 0,
+      "patch_path": "records/patches/setup-failure-baseline-1.patch",
+      "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "runner_exit_code": 2,
+      "runner_timed_out": false,
+      "started_at": "2026-09-16T07:09:00.840712+00:00",
+      "status": "setup_failed",
+      "stderr_tail": "error: unexpected argument '--ask-for-approval' found\n\n  tip: to pass '--ask-for-approval' as a value, use '-- --ask-for-approval'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.",
+      "stdout_event_count": 0,
+      "usage": {},
+      "wall_seconds": 0.274438607506454
+    },
+    {
+      "arm": "treatment",
+      "attempt_id": "retry-qualified-task-review-close-treatment-1",
+      "completed_at": "2026-09-16T07:09:36.366637+00:00",
+      "cost_note": "Codex JSONL did not report reliable dollar telemetry; no dollar-efficiency conclusion is made.",
+      "cost_usd": null,
+      "final_message_chars": 0,
+      "grade": {
+        "exit_code": 1,
+        "pass_fail_lines": [
+          " \u276f src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts (2 tests | 1 failed) 36ms",
+          " Test Files  1 failed | 1 passed (2)",
+          "      Tests  1 failed | 27 passed (28)",
+          "\u2009ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL\u2009 @invoker/app@0.1.6 test: `sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; exec vitest run \"$@\"' -- -- workflow-mutation-facade.test.ts workflow-mutation-facade-qualified-retry.hidden.test.ts`",
+          "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+          " FAIL  src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts > WorkflowMutationFacade qualified retry ownership > closes the owner workflow review for a qualified missing task id"
+        ],
+        "passed": false,
+        "stage": "grader-command",
+        "stderr_tail": "\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af\n\n FAIL  src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts > WorkflowMutationFacade qualified retry ownership > closes the owner workflow review for a qualified missing task id\nAssertionError: expected \"spy\" to be called with arguments: [ 'wf-qualified' ]\n\nNumber of calls: 0\n\n \u276f src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts:97:51\n     95|     await facade.retryTask('wf-qualified/task-a');\n     96| \n     97|     expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith\u2026\n       |                                                   ^\n     98|     expect(deps.commandService.retryTask).toHaveBeenCalledWith(\n     99|       expect.objectContaining({ payload: { taskId: 'wf-qualified/task-\u2026\n\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af[1/1]\u23af\n",
+        "stdout_tail": "\n> @invoker/app@0.1.6 test <archmem-temp>/grade-retry-qualified-task-review-close-treatment-1/packages/app\n> sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; exec vitest run \"$@\"' -- -- workflow-mutation-facade.test.ts workflow-mutation-facade-qualified-retry.hidden.test.ts\n\n\n RUN  v3.2.4 <archmem-temp>/grade-retry-qualified-task-review-close-treatment-1/packages/app\n\n \u276f src/__tests__/workflow-mutation-facade-qualified-retry.hidden.test.ts (2 tests | 1 failed) 36ms\n   \u00d7 WorkflowMutationFacade qualified retry ownership > closes the owner workflow review for a qualified missing task id 20ms\n     \u2192 expected \"spy\" to be called with arguments: [ 'wf-qualified' ]\n\nNumber of calls: 0\n\n   \u2713 WorkflowMutationFacade qualified retry ownership > does not invent a workflow review for an unqualified missing task id 12ms\n \u2713 src/__tests__/workflow-mutation-facade.test.ts (26 tests) 149ms\n\n Test Files  1 failed | 1 passed (2)\n      Tests  1 failed | 27 passed (28)\n   Start at  07:09:49\n   Duration  7.63s (transform 4.68s, setup 0ms, collect 13.27s, tests 185ms, environment 1ms, prepare 446ms)\n\n<archmem-temp>/grade-retry-qualified-task-review-close-treatment-1/packages/app:\n\u2009ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL\u2009 @invoker/app@0.1.6 test: `sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; exec vitest run \"$@\"' -- -- workflow-mutation-facade.test.ts workflow-mutation-facade-qualified-retry.hidden.test.ts`\nExit status 1",
+        "timed_out": false,
+        "wall_seconds": 10.254582121036947
+      },
+      "human_intervention": "none",
+      "patch_bytes": 0,
+      "patch_path": "records/patches/setup-failure-treatment-1.patch",
+      "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "runner_exit_code": 2,
+      "runner_timed_out": false,
+      "started_at": "2026-09-16T07:09:36.242707+00:00",
+      "status": "setup_failed",
+      "stderr_tail": "error: unexpected argument '--ask-for-approval' found\n\n  tip: to pass '--ask-for-approval' as a value, use '-- --ask-for-approval'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.",
+      "stdout_event_count": 0,
+      "usage": {},
+      "wall_seconds": 0.12389656342566013
+    }
+  ],
+  "behavioral_equivalence": {
+    "baseline": {
+      "exit_code": 0,
+      "pass_fail_lines": [
+        " Test Files  1 passed (1)",
+        "      Tests  26 passed (26)"
+      ],
+      "passed": true,
+      "wall_seconds": 9.464781870134175
+    },
+    "treatment": {
+      "exit_code": 0,
+      "pass_fail_lines": [
+        " Test Files  1 passed (1)",
+        "      Tests  26 passed (26)"
+      ],
+      "passed": true,
+      "wall_seconds": 11.137115838006139
+    }
+  },
+  "completed_at": "2026-09-16T07:09:57.330659+00:00",
+  "development_costs_excluded": true,
+  "execution_order": [
+    "baseline",
+    "treatment"
+  ],
+  "experiment_id": "architecture-memory-pilot-001",
+  "patch_hashes": {
+    "patches/gold-baseline.patch": "c310806b6866ca73418c5e278437499d52665100c12d4c7e9f4342dafd47a67c",
+    "patches/gold-treatment.patch": "6e42525bcd46c1eeecff4389773669da5a80f2c4e8d5c3e2496a909e6daa1e4d",
+    "patches/hidden-checks.patch": "1cc9afadd02db0ffaeb01f617c38ca0e93910fd8dec9e01a10abe9aa6007fd55",
+    "patches/noop.patch": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "patches/treatment-structure.patch": "faffe212594e05125b068e292d6940f5d23e8b5de7ae7e1b1372c1d4b94f04e2",
+    "patches/wrong-baseline.patch": "20eb98c4c511e5d20986db4a61c3ee960eccb0b82d35795c6a98630012635c90",
+    "patches/wrong-treatment.patch": "2cdf2bfd78f2a55224d6cd930da9b63ca9a77897f068865f548f9fbafbaaba1d"
+  },
+  "random_seed": 602048344,
+  "raw_sessions_tracked": false,
+  "runner": "codex-gpt5-low",
+  "runner_config": {
+    "approval_policy": "never",
+    "command": [
+      "codex",
+      "exec",
+      "--json",
+      "--ephemeral",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--ask-for-approval",
+      "never",
+      "--sandbox",
+      "workspace-write",
+      "--model",
+      "gpt-5-codex",
+      "--config",
+      "model_reasoning_effort=\"low\"",
+      "--cd",
+      "{workdir}",
+      "-"
+    ],
+    "effort": "low",
+    "harness": "codex",
+    "max_attempts_per_arm": 1,
+    "model": "gpt-5-codex",
+    "response_format": "codex-jsonl",
+    "rules": "ignored",
+    "sandbox": "workspace-write",
+    "session_policy": "ephemeral",
+    "user_config": "ignored"
+  },
+  "schema_version": 1,
+  "source_commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad",
+  "source_hashes": {
+    "package.json": "e878d8abedce29524c4f92ae8e46996ce3a7456bf065c1afd26b2dfdc5619ba6",
+    "packages/app/src/__tests__/workflow-mutation-facade.test.ts": "f87f9243f5f1569d96f2eadb31bf1c453d8f3ceeb86a709f169a1596b811ceb9",
+    "packages/app/src/workflow-mutation-facade.ts": "f64a0eb244841907dd96942f7c3fad21d784fb7097b4cae63108e3b7b99aaf16",
+    "pnpm-lock.yaml": "c4b4f2844b99d531e79a2de828c5a7166805307df38f089dfbdc3a45e49caaa9"
+  },
+  "started_at": "2026-09-16T07:08:46.302333+00:00",
+  "task_id": "retry-qualified-task-review-close",
+  "validation_errors": [
+    "setup failure record is retained for audit and is not the complete pilot pair"
+  ]
+}

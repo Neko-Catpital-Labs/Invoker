@@ -1,0 +1,30 @@
+{
+  "experiment_id": "architecture-memory-pilot-001",
+  "source_commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad",
+  "review_claim": "The paired coding evaluator records externally checked results for one real-code experiment.",
+  "review_lane": "proof",
+  "review_unit": "proof",
+  "safety_invariant": "Experimental edits stay in isolated copies; product code and live state are unchanged, and grading answers are inaccessible to trial agents.",
+  "task_id": "retry-qualified-task-review-close",
+  "task_prompt": "Edit this repository only. In WorkflowMutationFacade retryTask handling, preserve workflow-review cleanup when retrying a qualified task id after the task record is unavailable. If retryTask is called with an id like wf-1/task-a and orchestrator.getTask(taskId) returns undefined, close the workflow review for wf-1 before routing through commandService.retryTask. Do not close an arbitrary workflow for an unqualified missing task id such as task-a. Add or update focused tests, run the relevant tests if possible, and do not commit, publish, or change files outside the repository.",
+  "hidden_check_patch": "patches/hidden-checks.patch",
+  "treatment_patch": "patches/treatment-structure.patch",
+  "control_patches": {
+    "gold_baseline": "patches/gold-baseline.patch",
+    "gold_treatment": "patches/gold-treatment.patch",
+    "wrong_baseline": "patches/wrong-baseline.patch",
+    "wrong_treatment": "patches/wrong-treatment.patch",
+    "noop": "patches/noop.patch"
+  },
+  "grader_command": [
+    "pnpm",
+    "--filter",
+    "@invoker/app",
+    "test",
+    "--",
+    "workflow-mutation-facade.test.ts",
+    "workflow-mutation-facade-qualified-retry.hidden.test.ts"
+  ],
+  "trial_timeout_seconds": 900,
+  "later_protocol": "Run six predeclared real-code tasks, five randomized baseline/treatment pairs per task, no retries beyond the idempotent ledger, and publish only sanitized diffs, grader outcomes, pinned runner config, and aggregate statistics."
+}

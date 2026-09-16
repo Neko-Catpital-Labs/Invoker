@@ -1,0 +1,14 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index 963617e8..b97c28ef 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -615,4 +615,7 @@ export class WorkflowMutationFacade {
+   private async closeReviewForTask(taskId: string): Promise<void> {
+-    const workflowId = this.deps.orchestrator.getTask(taskId)?.config.workflowId;
+-    await this.closeReviewForWorkflow(workflowId);
++    await this.closeReviewForWorkflow(this.workflowIdForTask(taskId));
++  }
++
++  private workflowIdForTask(taskId: string): string | undefined {
++    return this.deps.orchestrator.getTask(taskId)?.config.workflowId;
+   }

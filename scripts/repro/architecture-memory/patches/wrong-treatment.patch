@@ -1,0 +1,9 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index b97c28ef..e8cb9234 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -619,3 +619,3 @@ export class WorkflowMutationFacade {
+   private workflowIdForTask(taskId: string): string | undefined {
+-    return this.deps.orchestrator.getTask(taskId)?.config.workflowId;
++    return this.deps.orchestrator.getTask(taskId)?.config.workflowId ?? 'wf-1';
+   }
