@@ -1057,6 +1057,25 @@ describe('SQLiteAdapter', () => {
       )).toThrow('tasks executor routing invariant violated');
     });
 
+    it('materializes runner kind for pooled tasks before SQLite invariant checks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('default-pooled-task'));
+      adapter.saveTasks('wf-1', [
+        makeTask('ssh-pooled-task', {
+          config: { poolId: 'remote-pool' },
+        }),
+      ]);
+
+      const rows = (adapter as any).db.prepare(
+        `SELECT id, runner_kind, pool_id FROM tasks WHERE id IN (?, ?) ORDER BY id`,
+      ).all('default-pooled-task', 'ssh-pooled-task') as Array<{ id: string; runner_kind: string; pool_id: string }>;
+
+      expect(rows).toEqual([
+        { id: 'default-pooled-task', runner_kind: 'worktree', pool_id: BUILT_IN_LOCAL_EXECUTION_POOL_ID },
+        { id: 'ssh-pooled-task', runner_kind: 'ssh', pool_id: 'remote-pool' },
+      ]);
+    });
+
     it('backfills compatible legacy ordinary rows without changing lifecycle data', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-pool-invariant-'));
       const dbPath = join(dir, 'invoker.db');
