@@ -325,6 +325,7 @@ export interface OrchestratorPersistence {
     staged?: boolean;
   }>;
   loadTasks(workflowId: string): TaskState[];
+  loadTask?(taskId: string): TaskState | undefined;
   /**
    * Optional batched form of loadTasks: one query for many workflows instead
    * of one query per workflow. refreshFromDb() uses this when available to
@@ -371,6 +372,8 @@ export interface OrchestratorPersistence {
    * concrete adapters (e.g. `SQLiteAdapter.loadWorkflow`) return more.
    */
   loadWorkflow?(workflowId: string): {
+    id?: string;
+    name?: string;
     repoUrl?: string;
     intermediateRepoUrl?: string;
     baseBranch?: string;
@@ -1490,15 +1493,22 @@ export class Orchestrator {
     // ── Conflict check (read-only) ──────────────────────────
     if (!opts?.allowGraphMutation) {
       const newScopedIds = new Set(plan.tasks.map((t) => localToScoped.get(t.id)!));
-      const existingTasks = this.stateMachine.getAllTasks();
-      const overlapping = existingTasks.filter(
-        (t) => newScopedIds.has(t.id) && !t.config.isMergeNode,
-      );
+      const overlapping = [...newScopedIds]
+        .map((id) => this.persistence.loadTask?.(id) ?? this.stateGetTask(id))
+        .filter((task): task is TaskState => task !== undefined && !task.config.isMergeNode);
 
       if (overlapping.length > 0) {
         const wfIds = new Set(overlapping.map((t) => t.config.workflowId).filter(Boolean) as string[]);
-        const workflows = this.persistence.listWorkflows();
-        const wfLookup = new Map(workflows.map((w) => [w.id, w.name]));
+        const wfLookup = new Map<string, string>();
+        for (const id of wfIds) {
+          const workflow = this.persistence.loadWorkflow?.(id);
+          if (workflow?.name) wfLookup.set(id, workflow.name);
+        }
+        if (wfLookup.size < wfIds.size) {
+          for (const workflow of this.persistence.listWorkflows()) {
+            if (wfIds.has(workflow.id)) wfLookup.set(workflow.id, workflow.name);
+          }
+        }
         const conflictingWorkflows = [...wfIds].map((id) => ({
           id,
           name: wfLookup.get(id) ?? 'unknown',
@@ -1729,6 +1739,57 @@ export class Orchestrator {
 
     this.reconcileMergeLeaves(workflowId);
     return workflowId;
+  }
+
+  startWorkflowExecution(workflowId: string, opts?: StartExecutionOptions): TaskState[] {
+    this.pruneLaunchDeferrals();
+
+    const activeAttempts = this.countActivePersistedAttempts();
+    const hasPerCallLimit = typeof opts?.limit === 'number' && opts.limit >= 0;
+    const workflowTasks = this.persistence.loadTasks(workflowId);
+    const workflow = this.persistence.loadWorkflow?.(workflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
+    const staged = workflow?.staged === true;
+    const workflowBlocked = this.getWorkflowDependencyBlocker(
+      workflowId,
+      workflow ? new Map([[workflowId, workflow]]) : undefined,
+    ) !== undefined;
+    const readyTasks = staged || workflowBlocked
+      ? []
+      : workflowTasks.filter((task) => (
+        (task.status === 'pending' || (task.status as string) === 'queued')
+        && this.areLocalDependenciesSatisfied(task)
+        && this.getExternalDependencyBlocker(task) === undefined
+      ));
+    this.logger.info('[orchestrator] startWorkflowExecution', {
+      workflowId,
+      ready: readyTasks.length,
+      active: activeAttempts,
+      maxConcurrency: this.maxConcurrency,
+      limit: opts?.limit,
+      readyIds: readyTasks.map((task) => task.id),
+    });
+
+    const launchPollNow = Date.now();
+    let readyTaskIds = readyTasks
+      .filter((task) => {
+        if (this.isLaunchParked(task.id, launchPollNow)) {
+          this.emitLaunchWaitingHeartbeat(task.id, launchPollNow);
+          return false;
+        }
+        return true;
+      })
+      .map((task) => task.id);
+
+    if (hasPerCallLimit) {
+      readyTaskIds = readyTaskIds.slice(0, opts.limit);
+    }
+
+    return this.taskRepository.runInTransaction(() => this.autoStartReadyTasks(readyTaskIds, 0, {
+      activePersistedAttempts: activeAttempts,
+      alreadyRefreshed: true,
+      candidateTopologyOnly: true,
+    }));
   }
 
   /**
@@ -4104,7 +4165,11 @@ export class Orchestrator {
     checkWorkflowCompletionImpl(this as unknown as TransitionHost, transitionedWorkflowId);
   }
 
-  private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean }): TaskState[] {
+  private autoStartReadyTasks(
+    taskIds: string[],
+    priority: number = 0,
+    opts?: LaunchReadinessOptions & { alreadyRefreshed?: boolean; candidateTopologyOnly?: boolean },
+  ): TaskState[] {
     return autoStartReadyTasksImpl(this as unknown as SchedulerDomainHost, taskIds, priority, opts);
   }
 
@@ -4195,14 +4260,17 @@ export class Orchestrator {
     const normalizedTaskId = taskId?.trim() || '__merge__';
     if (normalizedTaskId === '__merge__') {
       return this.getMergeNode(workflowId)
+        ?? this.persistence.loadTask?.(`__merge__${workflowId}`)
         ?? this.persistence.loadTasks(workflowId).find((t) => t.config.isMergeNode);
     }
-    const tasks = this.persistence.loadTasks(workflowId);
     if (normalizedTaskId.includes('/')) {
-      return tasks.find((t) => t.id === normalizedTaskId);
+      return this.persistence.loadTask?.(normalizedTaskId)
+        ?? this.persistence.loadTasks(workflowId).find((t) => t.id === normalizedTaskId);
     }
     const scopedId = scopePlanTaskId(workflowId, normalizedTaskId);
-    return tasks.find((t) => t.id === scopedId || t.id === normalizedTaskId);
+    return this.persistence.loadTask?.(scopedId)
+      ?? this.persistence.loadTask?.(normalizedTaskId)
+      ?? this.persistence.loadTasks(workflowId).find((t) => t.id === scopedId || t.id === normalizedTaskId);
   }
 
   private getWorkflowExternalDependencies(
