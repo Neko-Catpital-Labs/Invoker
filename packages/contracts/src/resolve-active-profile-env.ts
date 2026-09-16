@@ -1,0 +1,69 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { resolveProductionOwnerServiceMarkerPath } from './invoker-home.js';
+import { resolveRepoRoot } from './repo-root.js';
+
+export interface ResolveActiveInvokerProfileEnvOptions {
+  repoRoot?: string;
+  timeoutMs?: number;
+  productionMarkerFileExists?: (path: string) => boolean;
+  homeDir?: string;
+}
+
+const DEFAULT_TIMEOUT_MS = 5_000;
+
+function isEnvironmentOverrides(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && Object.values(value).every((entry) => typeof entry === 'string')
+  );
+}
+
+function isKnownProductionOwnerHost(options: ResolveActiveInvokerProfileEnvOptions): boolean {
+  const productionMarkerFileExists = options.productionMarkerFileExists ?? existsSync;
+  return productionMarkerFileExists(resolveProductionOwnerServiceMarkerPath(options.homeDir));
+}
+
+export function resolveActiveInvokerProfileEnv(
+  options: ResolveActiveInvokerProfileEnvOptions = {},
+): Record<string, string> {
+  if (process.env.INVOKER_PRODUCTION_OWNER_SERVICE === '1') {
+    return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
+  }
+
+  let repoRoot: string;
+  try {
+    repoRoot = resolve(options.repoRoot ?? resolveRepoRoot(process.cwd()));
+  } catch {
+    if (isKnownProductionOwnerHost(options)) {
+      return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
+    }
+    return {};
+  }
+
+  try {
+    const scriptPath = resolve(repoRoot, 'scripts', 'with-invoker-development-profile.mjs');
+    if (!existsSync(scriptPath) && isKnownProductionOwnerHost(options)) {
+      return { INVOKER_RUNTIME_KIND: 'packaged', INVOKER_PRODUCTION_OWNER_SERVICE: '1' };
+    }
+    const result = spawnSync(
+      process.execPath,
+      [scriptPath, '--source-root', repoRoot, '--print-env'],
+      { encoding: 'utf8', timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+    );
+
+    if (result.error || result.status !== 0) return {};
+
+    const stdout = result.stdout.trim();
+    if (!stdout) return {};
+
+    const parsed: unknown = JSON.parse(stdout);
+    return isEnvironmentOverrides(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}

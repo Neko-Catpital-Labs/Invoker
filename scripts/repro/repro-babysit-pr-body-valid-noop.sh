@@ -21,6 +21,7 @@ WORK_PARENT="$HOME/.invoker/mergify-admin-requeue-work"
 mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
+export INVOKER_HEADLESS_IPC_HELPER="$ROOT/scripts/repro/fixtures/fake-headless-ipc.js"
 export CLAUDE_CALLED="$TMP/claude-called"
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
@@ -40,6 +41,21 @@ echo "claude was called for a locally valid PR Body failure" > "$CLAUDE_CALLED"
 exit 42
 EOF
 chmod +x "$TMP/bin/claude"
+
+# Without this, resolve_workflow_for_pr (mergify_admin_requeue_workflow_fastpath.py)
+# shells out to a live Invoker owner over IPC to look up a review-gate workflow
+# mapping for PR #5810, which this hermetic repro never provides -- the lookup
+# subprocess fails to connect and admin-bypass-dispatch-degraded fires before
+# the worker ever reaches the PR Body valid-noop path this repro is meant to
+# test. Mocked the same way its sibling repros already do (e.g.
+# repro-babysit-pr-body-human-split.sh, repro-babysit-pr-body-prereq-split.sh).
+cat > "$TMP/review-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n'
+EOF
+chmod +x "$TMP/review-gate.sh"
+export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
 
 REMOTE="$TMP/origin.git"
 SEED="$TMP/seed"
@@ -157,6 +173,9 @@ run_worker() {
 git clone . "$SEED" >/dev/null
 (
   cd "$SEED"
+  # This repository is disposable and removed by the EXIT trap. Keep Git from
+  # racing that cleanup with a background auto-gc process.
+  git config gc.auto 0
   git config user.email repro@example.test
   git config user.name 'Repro Bot'
   git checkout -B master >/dev/null

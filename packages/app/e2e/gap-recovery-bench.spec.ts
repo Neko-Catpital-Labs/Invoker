@@ -17,6 +17,7 @@ const PLAN_TASKS_PER_WORKFLOW = 7;
 const TASKS_PER_WORKFLOW = 8;
 const ITERATIONS = 5;
 const RECOVERY_TIMEOUT_MS = 10000;
+const SYNTHETIC_STREAM_SEQUENCE_START = Number.MAX_SAFE_INTEGER - ((ITERATIONS + 1) * 2);
 
 async function launchElectronApp(testDir: string, extraEnv?: Record<string, string>) {
   const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
@@ -48,7 +49,6 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: testDir,
       INVOKER_IPC_SOCKET: ipcSocketPath,
-      INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_REPO_CONFIG_PATH: configPath,
       INVOKER_E2E_MARKER_ROOT: markerRoot,
@@ -105,6 +105,11 @@ interface PerfMarker {
   ts: number;
 }
 
+interface SnapshotPayload {
+  tasks: unknown[];
+  workflows: unknown[];
+}
+
 async function getPerfMarkersSince(page: Page, sinceId: number): Promise<PerfMarker[]> {
   return page.evaluate(async (since: number) => {
     const api = window.invoker as unknown as {
@@ -137,20 +142,40 @@ async function getHighestActivityLogId(page: Page): Promise<number> {
   });
 }
 
-async function runIterationOnce(app: ElectronApplication, page: Page, iteration: number): Promise<IterationResult> {
+async function closeSyntheticGap(app: ElectronApplication, snapshot: SnapshotPayload, streamSequence: number): Promise<void> {
+  await app.evaluate(({ BrowserWindow }, args) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    win?.webContents.send('invoker:task-graph-event', {
+      type: 'snapshot',
+      tasks: args.snapshot.tasks,
+      workflows: args.snapshot.workflows,
+      streamSequence: args.streamSequence,
+      reason: 'e2e-gap-bench-close-synthetic-gap',
+      forced: true,
+    });
+  }, { snapshot, streamSequence });
+}
+
+async function runIterationOnce(
+  app: ElectronApplication,
+  page: Page,
+  iteration: number,
+  streamSequence: number,
+): Promise<IterationResult> {
   const baselineId = await getHighestActivityLogId(page);
 
-  await app.evaluate(({ BrowserWindow }) => {
+  await app.evaluate(({ BrowserWindow }, targetStreamSequence) => {
     const win = BrowserWindow.getAllWindows()[0];
     win?.webContents.send('invoker:task-graph-event', {
       type: 'delta',
       delta: {
         type: 'removed',
         taskId: '__gap_trigger__',
-        streamSequence: Number.MAX_SAFE_INTEGER,
+        previousTaskStateVersion: 0,
+        streamSequence: targetStreamSequence,
       },
     });
-  });
+  }, streamSequence);
 
   let markers: PerfMarker[] = [];
   const deadline = Date.now() + RECOVERY_TIMEOUT_MS;
@@ -217,13 +242,31 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
       const page = await app.firstWindow({ timeout: 60_000 });
       await waitForInvokerBridge(page);
       await waitForWorkflowGraphVisible(page, 10000);
+      const syntheticCloseSnapshot = await page.evaluate(async () => {
+        const result = await window.invoker.getTasks();
+        return {
+          tasks: Array.isArray(result) ? result : result.tasks ?? [],
+          workflows: Array.isArray(result) ? [] : result.workflows ?? [],
+        };
+      });
 
       await page.waitForTimeout(150);
 
       const iterations: IterationResult[] = [];
+      let syntheticStreamSequence = SYNTHETIC_STREAM_SEQUENCE_START;
       for (let i = 1; i <= ITERATIONS; i += 1) {
-        const result = await runIterationOnce(app, page, i);
+        // Advance by two so the renderer sees a real sequence gap. The
+        // synthetic event bypasses the main-process stream counter, so after
+        // measuring the real refresh/apply marker we close the test-only gap
+        // with a forced snapshot at the same finite target sequence.
+        syntheticStreamSequence += 2;
+        const result = await runIterationOnce(app, page, i, syntheticStreamSequence);
         iterations.push(result);
+        if (i < ITERATIONS) {
+          try {
+            await closeSyntheticGap(app, syntheticCloseSnapshot, syntheticStreamSequence);
+          } catch {}
+        }
         await page.waitForTimeout(150);
       }
 

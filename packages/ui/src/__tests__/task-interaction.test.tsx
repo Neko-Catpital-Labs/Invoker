@@ -46,10 +46,13 @@ describe('Task interaction (component)', () => {
 
     fireEvent.click(screen.getByTestId('rf__node-wf-a'));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
-    });
+    const miniDag = await screen.findByTestId('selected-workflow-mini-dag');
+    expect(miniDag).toHaveTextContent('Workflow A');
+    expect(miniDag).toHaveTextContent('Loading graph…');
+    expect(screen.queryByTestId('rf__node-task-alpha')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    expect(await screen.findByTestId('rf__node-task-beta')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
   });
 
   it('scopes mini DAG layering to the workflow graph surface', async () => {
@@ -153,6 +156,7 @@ describe('Task interaction (component)', () => {
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([task], workflows));
 
+    await screen.findByTestId('selected-workflow-mini-dag');
     fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
 
     await waitFor(() => {
