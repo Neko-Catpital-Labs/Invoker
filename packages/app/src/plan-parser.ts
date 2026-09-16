@@ -501,6 +501,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
   const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
   const rawTasks = raw.tasks;
+  const seenTaskIds = new Set<string>();
   const tasks = rawTasks.map((task, index) => {
     if (!task || typeof task !== 'object' || Array.isArray(task)) {
       throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
@@ -508,7 +509,10 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
     }
-    assertNoDuplicateTaskIds(rawTasks.slice(0, index + 1) as { id: string }[]);
+    if (seenTaskIds.has(task.id)) {
+      throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
+    }
+    seenTaskIds.add(task.id);
 
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);

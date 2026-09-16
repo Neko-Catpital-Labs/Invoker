@@ -27,8 +27,9 @@ function makeDeps() {
       orchestrator: {
         loadPlan: vi.fn((plan: PlanDefinition, _opts: { allowGraphMutation?: boolean; staged?: boolean }) => {
           loadedPlans.push(plan);
+          const id = `wf-${loadedPlans.length}`;
           workflows.push({
-            id: `wf-${loadedPlans.length}`,
+            id,
             featureBranch: plan.featureBranch,
           });
           return `wf-${loadedPlans.length}`;
@@ -182,5 +183,19 @@ tasks:
     await loadPlanSubmissionBundle(plan, deps, { submittedBy: 'worker' });
 
     expect(loadedPlans[0]?.tasks[0]?.priority).toBe(5);
+  });
+
+  it('uses the workflow id returned by loadPlan instead of scanning stored workflows after intake', async () => {
+    const { deps } = makeDeps();
+
+    await loadPlanSubmissionBundle(`
+name: Fast Submit
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build it
+`, deps);
+
+    expect(deps.persistence.listWorkflows).not.toHaveBeenCalled();
   });
 });
