@@ -1353,7 +1353,7 @@ export function renderOptionalReflectTaskYaml(vars) {
       - Unknown at filing time; determined by what /reflect finds Accepted
         in catstack.
       Change types:
-      - Unknown at filing time; determined during the reflect pass.
+      - modify
       Acceptance criteria:
       - The task summary states "no durable finding" or records each
         Accepted finding with its catstack PR URL.

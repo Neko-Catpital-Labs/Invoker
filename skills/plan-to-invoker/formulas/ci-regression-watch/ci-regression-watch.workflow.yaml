@@ -33,7 +33,7 @@ tasks:
       Files:
       - Unknown at filing time; determined during root-cause investigation.
       Change types:
-      - Unknown at filing time; determined during root-cause investigation.
+      - modify
       Acceptance criteria:
       - `{{verify_command}}` exits 0 after the change.
     prompt: |
