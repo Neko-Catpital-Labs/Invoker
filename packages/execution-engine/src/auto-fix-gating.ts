@@ -19,3 +19,11 @@ export function shouldSkipAutoFixForError(errorText: unknown): boolean {
 export function isLivenessFailureTask(task: Pick<TaskState, 'execution'>): boolean {
   return FailureClassifier.isLiveness(task.execution.failureClass);
 }
+
+export function isSshInfraFailureTask(task: Pick<TaskState, 'execution'>): boolean {
+  return FailureClassifier.isSshInfra(task.execution.failureClass);
+}
+
+export function isSpendGateFailureTask(task: Pick<TaskState, 'execution'>): boolean {
+  return FailureClassifier.isSpendGate(task.execution.failureClass);
+}

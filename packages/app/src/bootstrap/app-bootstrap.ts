@@ -1,3 +1,4 @@
+import type { CodexSpendGateStatus } from '@invoker/contracts';
 import { join } from 'node:path';
 import type { App } from 'electron';
 
@@ -51,6 +52,7 @@ export interface RuntimeStatusFields {
   ownerMode: boolean;
   readOnly: boolean;
   mode: RuntimeModeSnapshot;
+  codexSpendGate?: CodexSpendGateStatus;
 }
 
 /** Compute the GUI runtime status from ownership flags. */
@@ -106,6 +108,7 @@ export interface EarlyElectronAppOptions {
   platform?: NodeJS.Platform;
   enableTestCompositor: boolean;
   isHeadless: boolean;
+  hideE2eWindow: boolean;
 }
 
 export function configureEarlyElectronApp(options: EarlyElectronAppOptions): void {
@@ -132,7 +135,7 @@ export function configureEarlyElectronApp(options: EarlyElectronAppOptions): voi
     options.app.commandLine.appendSwitch('class', 'invoker');
   }
 
-  if (platform === 'darwin' && options.isHeadless) {
+  if (platform === 'darwin' && (options.isHeadless || options.hideE2eWindow)) {
     options.app.setActivationPolicy?.('accessory');
     options.app.dock?.hide();
   }

@@ -1,4 +1,4 @@
-import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, rmSync, unlinkSync } from 'node:fs';
 import * as path from 'node:path';
 import { createGzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
@@ -37,9 +37,28 @@ function utcTimestampCompact(): string {
  */
 async function gzipInPlace(rawPath: string): Promise<string> {
   const gzPath = `${rawPath}.gz`;
-  await pipeline(createReadStream(rawPath), createGzip(), createWriteStream(gzPath));
+  try {
+    await pipeline(createReadStream(rawPath), createGzip(), createWriteStream(gzPath));
+  } catch (err) {
+    removeFailedSnapshotFiles([rawPath, gzPath]);
+    throw err;
+  }
   unlinkSync(rawPath);
   return gzPath;
+}
+
+function removeFailedSnapshotFiles(paths: string[]): void {
+  for (const leftover of paths) {
+    try {
+      rmSync(leftover, { force: true });
+    } catch (err) {
+      console.warn(
+        `[db-snapshot] failed to remove ${leftover} after a failed snapshot: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 }
 
 async function createDbSnapshot(
@@ -56,6 +75,21 @@ async function createDbSnapshot(
   const stamp = utcTimestampCompact();
   const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
 
+  try {
+    await writeRawSnapshot(dbPath, snapshotPath, backup);
+  } catch (err) {
+    removeFailedSnapshotFiles([snapshotPath, `${snapshotPath}-journal`]);
+    throw err;
+  }
+
+  return gzipInPlace(snapshotPath);
+}
+
+async function writeRawSnapshot(
+  dbPath: string,
+  snapshotPath: string,
+  backup: SnapshotBackupFn | undefined,
+): Promise<void> {
   if (backup) {
     // WAL-safe AND WAL-complete path: the callback (SQLiteAdapter.backupTo)
     // checkpoints the source's WAL frames into the snapshot as part of the
@@ -68,8 +102,6 @@ async function createDbSnapshot(
     // commits still in the live `-wal`. Preserved for backward compatibility.
     copyFileSync(dbPath, snapshotPath);
   }
-
-  return gzipInPlace(snapshotPath);
 }
 
 /**

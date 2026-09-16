@@ -1,0 +1,2 @@
+common --remote_header=x-buildbuddy-api-key=YOUR_KEY
+common --bes_header=x-buildbuddy-api-key=YOUR_KEY

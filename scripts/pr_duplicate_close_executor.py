@@ -2,12 +2,12 @@ from __future__ import annotations
 
 try:
     from .mergify_admin_requeue_snapshot import GhClient
-    from .mergify_admin_requeue_workflow_fastpath import submit_close_pr
-    from .pr_duplicate_close_model import CLOSE_DUPLICATE, LEDGER_KIND_SUBMIT, CloseAction, ledger_key
+    from .mergify_admin_requeue_workflow_fastpath import submit_close_pr, submit_flag_probable_duplicate
+    from .pr_duplicate_close_model import CLOSE_DUPLICATE, FLAG_DUPLICATE, LEDGER_KIND_SUBMIT, CloseAction, ledger_key
 except ImportError:
     from mergify_admin_requeue_snapshot import GhClient
-    from mergify_admin_requeue_workflow_fastpath import submit_close_pr
-    from pr_duplicate_close_model import CLOSE_DUPLICATE, LEDGER_KIND_SUBMIT, CloseAction, ledger_key
+    from mergify_admin_requeue_workflow_fastpath import submit_close_pr, submit_flag_probable_duplicate
+    from pr_duplicate_close_model import CLOSE_DUPLICATE, FLAG_DUPLICATE, LEDGER_KIND_SUBMIT, CloseAction, ledger_key
 
 
 class PrDuplicateCloseExecutor:
@@ -57,13 +57,22 @@ class PrDuplicateCloseExecutor:
                 return False
 
         try:
-            submit_close_pr(
-                pr_number=action.pr_number,
-                repo=self.repo,
-                reason=action.evidence,
-                expected_head_oid=action.expected_head_oid,
-                kept_pr_number=action.kept_pr_number,
-            )
+            if action.kind == FLAG_DUPLICATE:
+                submit_flag_probable_duplicate(
+                    pr_number=action.pr_number,
+                    repo=self.repo,
+                    evidence=action.evidence,
+                    expected_head_oid=action.expected_head_oid,
+                    merged_pr_number=action.kept_pr_number,
+                )
+            else:
+                submit_close_pr(
+                    pr_number=action.pr_number,
+                    repo=self.repo,
+                    reason=action.evidence,
+                    expected_head_oid=action.expected_head_oid,
+                    kept_pr_number=action.kept_pr_number,
+                )
         except RuntimeError as exc:
             self.logger.trace(
                 "pr-duplicate-close-submit-failed",

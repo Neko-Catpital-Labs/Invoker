@@ -1,6 +1,9 @@
 {
   "allowGraphMutation": true,
   "defaultBranch": "master",
+  "worktreeTargets": {
+    "local-worktree": {}
+  },
   "executorRoutingRules": [
     {
       "pattern": "verify-routing-ok",

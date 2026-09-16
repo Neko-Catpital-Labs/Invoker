@@ -27,6 +27,7 @@ export const SCHEMA_DDL = `
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
         detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
+        staged INTEGER NOT NULL DEFAULT 0 CHECK (staged IN (0, 1)),
         deleted_at INTEGER,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -47,6 +48,7 @@ export const SCHEMA_DDL = `
         protocol_error_message TEXT,
         input_prompt TEXT,
         external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        freshness TEXT CHECK (freshness IS NULL OR json_valid(freshness)),
 
         -- Context
         summary TEXT,
@@ -169,8 +171,29 @@ export const SCHEMA_DDL = `
         extracted_plan TEXT,
         plan_submitted INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
+        updated_at TEXT DEFAULT (datetime('now')),
+        surface TEXT NOT NULL DEFAULT 'slack'
       );
+
+      CREATE TABLE IF NOT EXISTS planning_drafts (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        plan_text TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('current', 'superseded', 'submitted')),
+        created_at TEXT NOT NULL,
+        superseded_at TEXT,
+        submitted_at TEXT,
+        UNIQUE(conversation_id, version)
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_planning_drafts_current
+        ON planning_drafts(conversation_id)
+        WHERE status = 'current';
+
+      CREATE INDEX IF NOT EXISTS idx_planning_drafts_conversation_version
+        ON planning_drafts(conversation_id, version DESC);
 
       CREATE TABLE IF NOT EXISTS conversation_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -193,12 +216,14 @@ export const SCHEMA_DDL = `
         requested_by TEXT NOT NULL,
         lobby_channel_id TEXT NOT NULL,
         confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
-        harness_session_id TEXT
+        harness_session_id TEXT,
+        surface TEXT NOT NULL DEFAULT 'slack'
       );
 
       CREATE TABLE IF NOT EXISTS slack_plan_drafts (
         draft_id TEXT NOT NULL,
         version INTEGER NOT NULL,
+        planning_draft_id TEXT,
         channel_id TEXT NOT NULL,
         thread_ts TEXT NOT NULL,
         message_ts TEXT,
@@ -217,6 +242,7 @@ export const SCHEMA_DDL = `
         decided_by TEXT,
         execution_key TEXT,
         workflow_ids_json TEXT,
+        surface TEXT NOT NULL DEFAULT 'slack',
         PRIMARY KEY (draft_id, version)
       );
 
@@ -231,7 +257,8 @@ export const SCHEMA_DDL = `
         kind TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL
+        expires_at TEXT NOT NULL,
+        surface TEXT NOT NULL DEFAULT 'slack'
       );
 
       CREATE INDEX IF NOT EXISTS idx_slack_pending_confirmations_expiry
@@ -241,10 +268,12 @@ export const SCHEMA_DDL = `
         session_id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         preset_key TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted')),
+        status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted', 'planner_error')),
         confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
         draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
         draft_plan_text TEXT,
+        planning_draft_id TEXT,
+        planning_draft_hash TEXT,
         submitted_workflow_id TEXT,
         submitted_plan_name TEXT,
         terminal_mode TEXT NOT NULL DEFAULT 'chat' CHECK (terminal_mode IN ('chat', 'tmux')),
@@ -254,6 +283,9 @@ export const SCHEMA_DDL = `
         terminal_output_snapshot TEXT NOT NULL DEFAULT '',
         terminal_updated_at TEXT,
         pending_response INTEGER NOT NULL DEFAULT 0 CHECK (pending_response IN (0, 1)),
+        active_turn_id TEXT,
+        active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed')),
+        active_turn_error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -388,7 +420,7 @@ export const SCHEMA_DDL = `
         attempt_id TEXT NOT NULL,
         workflow_id TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'enqueued',
-        priority TEXT NOT NULL DEFAULT 'normal',
+        priority TEXT NOT NULL DEFAULT '2',
         dispatch_owner TEXT,
         enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
         leased_at TEXT,
@@ -533,6 +565,18 @@ export const SCHEMA_DDL = `
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS repair_filings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        state_sha TEXT NOT NULL,
+        metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_filings_kind_subject_sha
+        ON repair_filings(kind, subject, state_sha);
+
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
@@ -607,6 +651,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_prompt TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_context TEXT',
+  'ALTER TABLE tasks ADD COLUMN freshness TEXT CHECK (freshness IS NULL OR json_valid(freshness))',
   'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -629,6 +674,17 @@ export const COLUMN_MIGRATIONS = [
   // a later slice's scoped retry count -- unused for now.
   'ALTER TABLE task_launch_dispatch ADD COLUMN abandon_reason TEXT',
   'ALTER TABLE workflows ADD COLUMN deleted_at INTEGER',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_id TEXT',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_status TEXT CHECK (active_turn_status IS NULL OR active_turn_status IN ('running', 'failed'))",
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN active_turn_error TEXT',
+  'ALTER TABLE slack_plan_drafts ADD COLUMN planning_draft_id TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_id TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN planning_draft_hash TEXT',
+  'ALTER TABLE workflows ADD COLUMN staged INTEGER NOT NULL DEFAULT 0 CHECK (staged IN (0, 1))',
+  "ALTER TABLE conversations ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_launch_contexts ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_plan_drafts ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
+  "ALTER TABLE slack_pending_confirmations ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
 ];
 
 /**
@@ -637,6 +693,30 @@ export const COLUMN_MIGRATIONS = [
  * dispatch index. Order preserved from the original `migrate()` body.
  */
 export const POST_MIGRATION_STATEMENTS = [
+  'DROP TRIGGER IF EXISTS trg_tasks_executor_routing_insert',
+  'DROP TRIGGER IF EXISTS trg_tasks_executor_routing_update',
+  `CREATE TRIGGER trg_tasks_executor_routing_insert
+    BEFORE INSERT ON tasks
+    WHEN COALESCE((
+      (NEW.runner_kind IN ('worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
+      OR (NEW.runner_kind = 'docker' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'merge' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'scratch' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+    ), 0) = 0
+    BEGIN
+      SELECT RAISE(ABORT, 'tasks executor routing invariant violated');
+    END`,
+  `CREATE TRIGGER trg_tasks_executor_routing_update
+    BEFORE UPDATE OF runner_kind, pool_id, pool_member_id, docker_image ON tasks
+    WHEN COALESCE((
+      (NEW.runner_kind IN ('worktree', 'ssh') AND COALESCE(TRIM(NEW.pool_id), '') <> '' AND NEW.docker_image IS NULL)
+      OR (NEW.runner_kind = 'docker' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'merge' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+      OR (NEW.runner_kind = 'scratch' AND NEW.pool_id IS NULL AND NEW.pool_member_id IS NULL)
+    ), 0) = 0
+    BEGIN
+      SELECT RAISE(ABORT, 'tasks executor routing invariant violated');
+    END`,
   'DROP INDEX IF EXISTS idx_attempts_node',
   'CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)',
@@ -676,6 +756,22 @@ export const POST_MIGRATION_STATEMENTS = [
     last_received_seq INTEGER NOT NULL DEFAULT 0 CHECK (typeof(last_received_seq) = 'integer' AND last_received_seq >= 0),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  // repair_filings: durable cross-system dedup ledger for auto-filed CI/PR
+  // repair work. UNIQUE(kind, subject, state_sha) is the atomic
+  // insert-if-not-exists primitive -- see insertRepairFiling().
+  `CREATE TABLE IF NOT EXISTS repair_filings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    state_sha TEXT NOT NULL,
+    metadata TEXT CHECK (metadata IS NULL OR json_valid(metadata)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_filings_kind_subject_sha ON repair_filings(kind, subject, state_sha)',
+  'CREATE INDEX IF NOT EXISTS idx_conversations_surface_thread ON conversations(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_launch_contexts_surface_thread ON slack_launch_contexts(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_plan_drafts_surface_thread ON slack_plan_drafts(surface, thread_ts)',
+  'CREATE INDEX IF NOT EXISTS idx_slack_pending_confirmations_surface_thread ON slack_pending_confirmations(surface, thread_ts)',
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */

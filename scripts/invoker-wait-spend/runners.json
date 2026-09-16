@@ -1,0 +1,39 @@
+{
+  "claude-haiku": {
+    "command": [
+      "claude",
+      "--disable-slash-commands",
+      "--print",
+      "--output-format",
+      "json",
+      "--no-session-persistence",
+      "--setting-sources",
+      "",
+      "--model",
+      "haiku",
+      "--dangerously-skip-permissions",
+      "--allowedTools",
+      "Bash"
+    ],
+    "response_format": "claude-json",
+    "budget_flag": "--max-budget-usd"
+  },
+  "claude-haiku-no-tools": {
+    "command": [
+      "claude",
+      "--disable-slash-commands",
+      "--print",
+      "--output-format",
+      "json",
+      "--no-session-persistence",
+      "--setting-sources",
+      "",
+      "--model",
+      "haiku",
+      "--tools",
+      ""
+    ],
+    "response_format": "claude-json",
+    "budget_flag": "--max-budget-usd"
+  }
+}
