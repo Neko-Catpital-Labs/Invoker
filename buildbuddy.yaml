@@ -1,0 +1,6 @@
+xcodeVersion: 15.0
+actions:
+  - name: "Invoker linux"
+    container-image: "docker://ghcr.io/buildbuddy-io/executor-docker-default:latest"
+    os: "linux"
+    arch: "amd64"
