@@ -56,6 +56,7 @@ function runMiner(dir, cli, extraEnv = {}) {
       TEMP: plansDir,
       INVOKER_SESSION_MINE_DRY_RUN: '1',
       INVOKER_SESSION_MINE_STATE_DIR: join(dir, 'state'),
+      INVOKER_AGENTIC_CONTEXT_METRICS_PATH: join(dir, 'agentic-context', 'metrics.jsonl'),
       INVOKER_SESSION_MINE_CLI: cli,
       INVOKER_DB_DIR: dir,
       CODEX_HOME: join(dir, 'codex'),
