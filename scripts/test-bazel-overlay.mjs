@@ -43,6 +43,9 @@ assert(
   'default build must not enable remote_executor (rbe stays behind --config=rbe)',
 );
 
+assert(!/^\s*[^#\n]*--(?:remote|bes)_header=.*\$\{?BUILDBUDDY_API_KEY/m.test(bazelrc),
+  '.bazelrc cannot expand the BuildBuddy environment variable; CI must supply headers at runtime');
+
 const before = new Map();
 for (const path of [
   'BUILD.bazel',

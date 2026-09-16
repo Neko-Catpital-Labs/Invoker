@@ -12,8 +12,8 @@ build:remote --bes_results_url=https://app.buildbuddy.io/invocation/
 build:remote --bes_backend=grpcs://remote.buildbuddy.io
 build:remote --remote_cache=grpcs://remote.buildbuddy.io
 build:remote --remote_timeout=600
-build:remote --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-build:remote --bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+# Bazel does not expand environment variables here. CI supplies auth headers
+# as command-line flags; local credentials belong in .bazelrc.user.
 
 build:rbe --config=remote
 build:rbe --remote_executor=grpcs://remote.buildbuddy.io
