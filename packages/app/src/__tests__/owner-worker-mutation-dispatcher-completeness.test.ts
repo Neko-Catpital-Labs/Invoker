@@ -38,7 +38,8 @@ const MAIN = path.resolve(__dirname, '..', 'main.ts');
 // direct user-button IPC actions (Approve, Retry, Fix with Agent), a
 // different code path that happens to share 3 of the 8 channel names because
 // those actions are dual-purpose. It has no entry for background-only
-// channels (requeue, requeue-escalate, infra-repair-*, start-ready) because
+// channels (requeue, requeue-escalate, infra-repair-*, delete-workflow,
+// start-ready) because
 // there is no button for them, and that's correct: a GUI process acting as
 // owner dispatches worker-submitted mutations through the same `if
 // (ownerMode)` block checked below (see the `mode: 'gui'` label on its
@@ -73,6 +74,11 @@ describe('worker mutation channel completeness', () => {
       runHeadlessCommand: async () => ({ ok: true }),
       getTaskExecutor: () => ({}) as never,
       getMutationTiming: () => undefined,
+      idleTaskCleanup: {
+        store: { listWorkflows: () => [], loadTasks: () => [] },
+        now: () => Date.now(),
+        idleThresholdMs: 48 * 60 * 60_000,
+      },
       contextLabel: 'test',
     });
 

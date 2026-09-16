@@ -35,11 +35,12 @@
  *   and required ## Visual Proof for UI changes.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import aws4 from 'aws4';
 import { syncStackCommentsForPr } from './sync-stack-comments.mjs';
 import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, validatePrBody } from './validate-pr-body.mjs';
@@ -205,6 +206,12 @@ function parseArgs() {
 }
 
 const TRUNK_BRANCHES = new Set(['main', 'master', 'develop']);
+const REPAIR_PUBLICATION_MARKERS = join(homedir(), '.invoker', 'repair-publication-lineages.json');
+const REPAIR_PUBLICATION_ENV_KEYS = [
+  'INVOKER_REPAIR_PUBLICATION',
+  'INVOKER_REPAIR_TASK_CHAIN_ID',
+  'INVOKER_REPAIR_SESSION_COMMIT',
+];
 const STACK_PR_TITLE_PATTERN = /^\[[^\[\]\r\n]{3,80}\]\([1-9]\d*[a-z]?\)(?:\[REFACTOR: [^\[\]\r\n]{2,80}\])?(?:\s+\S.*)?$/;
 const REFACTOR_TAG_PATTERN = /\[REFACTOR: [^\[\]\r\n]{2,80}\]/;
 
@@ -465,13 +472,130 @@ function gitExitStatus(args) {
   }
 }
 
+function printSiblingPrOverlaps(baseRef) {
+  const scriptPath = fileURLToPath(new URL('./check-sibling-prs.mjs', import.meta.url));
+  try {
+    const output = execFileSync(process.execPath, [scriptPath, '--base', baseRef], {
+      encoding: 'utf-8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (output) process.stdout.write(output);
+  } catch (error) {
+    const stderr = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+    const reason = stderr ? stderr.split('\n')[0] : error.message;
+    console.log(`sibling-pr check could not run: ${reason}`);
+  }
+}
+
+function repairPublicationContext() {
+  const hasContext = REPAIR_PUBLICATION_ENV_KEYS.some((key) => process.env[key]?.trim());
+  if (!hasContext) return undefined;
+  return {
+    chainId: process.env.INVOKER_REPAIR_TASK_CHAIN_ID?.trim() || '',
+    sessionCommit: process.env.INVOKER_REPAIR_SESSION_COMMIT?.trim() || '',
+  };
+}
+
+function publicationLineageForBranch(branch) {
+  if (branch.startsWith('stack/')) return 'stack';
+  if (branch.startsWith('plan/')) return 'plan';
+  if (branch.startsWith('pr/')) return 'pr';
+  return branch.split('/')[0] || branch;
+}
+
+function loadRepairPublicationMarkers() {
+  try {
+    return JSON.parse(readFileSync(REPAIR_PUBLICATION_MARKERS, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function persistRepairPublicationMarkers(markers) {
+  mkdirSync(join(homedir(), '.invoker'), { recursive: true });
+  const tmp = `${REPAIR_PUBLICATION_MARKERS}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(markers, null, 2)}\n`);
+  renameSync(tmp, REPAIR_PUBLICATION_MARKERS);
+}
+
+function assertRepairPublicationIntegrity(currentBranch) {
+  const context = repairPublicationContext();
+  if (!context) return undefined;
+
+  if (!context.chainId) {
+    throw new Error('repair-publication-missing-task-chain: repair PR publication requires INVOKER_REPAIR_TASK_CHAIN_ID.');
+  }
+  if (!context.sessionCommit) {
+    throw new Error('repair-publication-missing-session-commit: repair PR publication requires the fix session recorded commit hash.');
+  }
+  const recordedCommit = gitTextOrEmpty(['rev-parse', '--verify', `${context.sessionCommit}^{commit}`]);
+  if (!recordedCommit) {
+    throw new Error(
+      `repair-publication-missing-session-commit: recorded fix session commit ${context.sessionCommit} is not present in this repository.`,
+    );
+  }
+  if (gitExitStatus(['merge-base', '--is-ancestor', recordedCommit, 'HEAD']) !== 0) {
+    throw new Error(
+      [
+        'repair-publication-unowned-diff: refusing to publish a repair PR whose head does not contain the recorded fix-session commit.',
+        `Recorded commit: ${recordedCommit}`,
+        `Current branch: ${currentBranch}`,
+        `Current head: ${resolveRev('HEAD')}`,
+      ].join('\n'),
+    );
+  }
+
+  const lineage = publicationLineageForBranch(currentBranch);
+  const markers = loadRepairPublicationMarkers();
+  const existing = markers[context.chainId];
+  if (existing && existing.lineage && existing.lineage !== lineage) {
+    throw new Error(
+      [
+        'repair-publication-duplicate-lineage: refusing a second published branch lineage for this repair task chain.',
+        `Task chain: ${context.chainId}`,
+        `Existing lineage: ${existing.lineage}`,
+        `Requested lineage: ${lineage}`,
+        `Existing branch: ${existing.branch ?? '(unknown)'}`,
+        `Requested branch: ${currentBranch}`,
+      ].join('\n'),
+    );
+  }
+
+  return {
+    chainId: context.chainId,
+    lineage,
+    branch: currentBranch,
+    recordedCommit,
+  };
+}
+
+function recordRepairPublicationLineage(publication) {
+  if (!publication) return;
+  const markers = loadRepairPublicationMarkers();
+  const existing = markers[publication.chainId];
+  if (existing && existing.lineage && existing.lineage !== publication.lineage) {
+    throw new Error(
+      `repair-publication-duplicate-lineage: marker changed during publication for ${publication.chainId} (${existing.lineage} != ${publication.lineage}).`,
+    );
+  }
+  markers[publication.chainId] = {
+    lineage: publication.lineage,
+    branch: publication.branch,
+    recordedCommit: publication.recordedCommit,
+    publishedAt: new Date().toISOString(),
+  };
+  persistRepairPublicationMarkers(markers);
+}
+
 export function isUiImpactingPath(filePath) {
   const path = filePath.replace(/\\/g, '/');
   if (path.startsWith('packages/ui/')) return true;
   if (path.startsWith('packages/app/src/window/')) return true;
+  if (path.startsWith('packages/app/src/web/')) return true;
   if (path === 'packages/app/src/main.ts') return true;
   if (path === 'packages/app/src/preload.ts') return true;
   if (path === 'packages/app/src/app-menu.ts') return true;
+  if (path === 'packages/app/src/task-graph-event-publisher.ts') return true;
   return false;
 }
 
@@ -479,28 +603,42 @@ export function getUiImpactingFiles(files) {
   return files.filter(isUiImpactingPath);
 }
 
-function changedFilesSinceBase(baseBranch) {
+export function resolveAtomicityBaseRef(baseBranch, mergifyState, stackParentBranch) {
+  if (mergifyState.managed && stackParentBranch) {
+    return `${DEFAULT_BASE_REMOTE}/${stackParentBranch}`;
+  }
+  return `${DEFAULT_BASE_REMOTE}/${baseBranch}`;
+}
+
+async function resolveStackedPrParentBranch(nwo, currentBranch, mergifyState, dryRun) {
+  if (!mergifyState.managed || dryRun) return '';
+  const prs = listPullRequestsForHead(nwo, currentBranch);
+  const openPr = prs.find((pr) => pr.state === 'open') ?? prs[0];
+  return openPr?.base?.ref ?? '';
+}
+
+export function changedFilesSinceBase(baseRef) {
   try {
-    const output = runGit(['diff', '--name-only', `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`]).trim();
+    const output = runGit(['diff', '--name-only', `${baseRef}...HEAD`]).trim();
     return output ? output.split('\n').filter(Boolean) : [];
   } catch {
     return [];
   }
 }
 
-function fullContextDiffSinceBase(baseBranch) {
+export function fullContextDiffSinceBase(baseRef) {
   try {
     return runGit([
       'diff',
       '--find-renames',
       '--unified=200000',
       '--diff-filter=ACMRTD',
-      `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`,
+      `${baseRef}...HEAD`,
       '--',
     ]);
   } catch (error) {
     throw new Error(
-      `Unable to compute diff atomicity context against ${DEFAULT_BASE_REMOTE}/${baseBranch}. Fetch the base ref and retry.\n${error.message}`,
+      `Unable to compute diff atomicity context against ${baseRef}. Fetch the base ref and retry.\n${error.message}`,
     );
   }
 }
@@ -943,13 +1081,13 @@ async function main() {
   const args = parseArgs();
 
   const currentBranch = getCurrentBranch();
+  const repairPublication = assertRepairPublicationIntegrity(currentBranch);
   const mergifyState = getMergifyBranchState(currentBranch);
   assertNotPlanBaseForMergifyStack(args.base, currentBranch, mergifyState);
   assertCleanPrBase(args.base);
   assertStackHeadForStackedBase(args.base, currentBranch, mergifyState);
-  let nwo = '';
+  let nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
   if (args.base.startsWith('pr/')) {
-    nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
     assertOpenHelperBasePr(nwo, args.base, args.dryRun);
   }
 
@@ -960,16 +1098,16 @@ async function main() {
     body = args.body;
   }
 
-  const changedFiles = changedFilesSinceBase(args.base);
-  const diffText = fullContextDiffSinceBase(args.base);
+  const stackParentBranch = await resolveStackedPrParentBranch(nwo, currentBranch, mergifyState, args.dryRun);
+  const atomicityBaseRef = resolveAtomicityBaseRef(args.base, mergifyState, stackParentBranch);
+  const changedFiles = changedFilesSinceBase(atomicityBaseRef);
+  const diffText = fullContextDiffSinceBase(atomicityBaseRef);
   assertBranchHasReviewableChanges(args.base, changedFiles);
   const uiImpactingFiles = getUiImpactingFiles(changedFiles);
   if (uiImpactingFiles.length > 0) {
     console.error(`UI-impacting files changed; requiring visual proof: ${uiImpactingFiles.join(', ')}`);
   }
 
-  await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles, diffText });
-  printPrBodyWarnings(body, changedFiles, diffText);
   body = await injectImages(body, args.dryRun);
 
   const requestedUpdatePath = Boolean(args.update || args.updateExisting);
@@ -994,6 +1132,12 @@ async function main() {
     assertValidStackPrTitle(args.title, reviewLane);
   }
 
+  // Validate the final body after stack-specific publication gates and image
+  // injection, immediately before any push or GitHub PR mutation.
+  await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles, diffText });
+  printPrBodyWarnings(body, changedFiles, diffText);
+  printSiblingPrOverlaps(atomicityBaseRef);
+
   if (!nwo) {
     nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
   }
@@ -1008,6 +1152,7 @@ async function main() {
   const pr = updatePrNumber
     ? await updatePr(nwo, updatePrNumber, args.title, body, args.dryRun)
     : await createPr(nwo, args.title, args.base, body, args.dryRun);
+  recordRepairPublicationLineage(repairPublication);
   if (isStackedPrContext(args.base, mergifyState)) {
     syncStackCommentsForPr(nwo, pr.number, { dryRun: args.dryRun });
   }

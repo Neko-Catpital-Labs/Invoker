@@ -14,6 +14,7 @@ export const DISCARDED_ATTEMPT_STATUSES: readonly AttemptStatus[] = [
 export const OUTCOME_TERMINAL_ATTEMPT_STATUSES: readonly AttemptStatus[] = [
   'completed',
   'failed',
+  'stale',
 ];
 
 export function isActiveAttemptStatus(status: AttemptStatus | undefined): boolean {
