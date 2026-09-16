@@ -419,9 +419,7 @@ export function resolveTaskConfig(options: TaskCreateOptions = {}): TaskConfig {
     ?? options.runnerKind
     ?? (options.poolId && options.poolId !== BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'ssh' : 'worktree');
   let candidate: unknown;
-  if (options.poolId && options.runnerKind === undefined && !options.isMergeNode && options.dockerImage === undefined) {
-    candidate = { ...options };
-  } else if (runnerKind === 'worktree') {
+  if (runnerKind === 'worktree') {
     candidate = { ...options, runnerKind, poolId: options.poolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID };
   } else if (runnerKind === 'ssh') {
     candidate = { ...options, runnerKind };

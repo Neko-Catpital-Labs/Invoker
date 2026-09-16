@@ -26,9 +26,11 @@ describe('createTaskState', () => {
     expect(task.execution).toEqual({ generation: 0 });
   });
 
-  it('keeps a declared pool without guessing its executor kind', () => {
-    expect(resolveTaskConfig({ poolId: 'mixed-local-ssh' })).toEqual({ poolId: 'mixed-local-ssh' });
-    expect(() => assertResolvedTaskConfig({ poolId: 'mixed-local-ssh' })).not.toThrow();
+  it('resolves a declared non-local pool to a persistable ssh config', () => {
+    expect(resolveTaskConfig({ poolId: 'mixed-local-ssh' })).toEqual({
+      runnerKind: 'ssh',
+      poolId: 'mixed-local-ssh',
+    });
   });
 
   it('rejects a config patch that pairs runnerKind and isMergeNode inconsistently', () => {
