@@ -5,12 +5,13 @@
  * Uses the `yaml` npm package for parsing.
  */
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execFile, execFileSync, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch, parseTaskFreshnessSpec, planPublicationAuthorityViolation } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
@@ -60,6 +61,17 @@ export function applyConfiguredPlanDefaults(plan: PlanDefinition): PlanDefinitio
   return applyPlanExecutionAgentDefault(plan, resolveDefaultExecutionAgent(loadConfig()));
 }
 
+export const WORKER_SUBMITTED_TASK_PRIORITY = -10;
+
+export function applyWorkerSubmittedTaskPriorityDefault(plan: PlanDefinition): PlanDefinition {
+  return {
+    ...plan,
+    tasks: plan.tasks.map((task) => (
+      task.priority === undefined ? { ...task, priority: WORKER_SUBMITTED_TASK_PRIORITY } : task
+    )),
+  };
+}
+
 
 export interface RawExperimentVariant {
   id?: string;
@@ -88,6 +100,9 @@ export interface RawPlanTask {
   poolId?: string;
   executionAgent?: string;
   executionModel?: string;
+  maxTurns?: number;
+  priority?: number;
+  freshness?: unknown;
 }
 
 export interface RawPlan {
@@ -101,6 +116,7 @@ export interface RawPlan {
   reviewProvider?: string;
   repoUrl?: string;
   scratch?: boolean;
+  poolId?: string;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -161,6 +177,18 @@ export function detectDefaultBranchRemote(repoUrl: string): string {
   return 'main';
 }
 
+const REMOTE_CLONE_PROBE_ATTEMPTS = 2;
+const REMOTE_CLONE_PROBE_RETRY_DELAY_MS = 500;
+const REMOTE_CLONE_PROBE_TIMEOUT_MS = 30_000;
+
+function describeCloneProbeError(err: unknown): string {
+  const stderr = (err as { stderr?: Buffer | string })?.stderr;
+  const stderrText = stderr ? stderr.toString().trim() : '';
+  if (stderrText) return stderrText.split('\n')[0]!;
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split('\n')[0]!;
+}
+
 function assertLocalGitRepoReadable(localPath: string): void {
   if (!existsSync(localPath)) throw new Error('Path does not exist');
   execFileSync('git', ['-c', 'safe.directory=*', '-C', localPath, 'rev-parse', '--git-dir'], {
@@ -169,7 +197,10 @@ function assertLocalGitRepoReadable(localPath: string): void {
   });
 }
 
-export function assertRepoUrlCloneable(repoUrl: string): void {
+function classifyRepoUrl(repoUrl: string): {
+  trimmed: string;
+  kind: 'localPath' | 'fileUrl' | 'remoteUrl';
+} {
   const trimmed = repoUrl.trim();
   const isLocalPath = trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../');
   const isFileUrl = trimmed.startsWith('file://');
@@ -180,25 +211,79 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
       `repoUrl "${repoUrl}" is not a valid git repository. Use a full clone URL or a configured Slack alias.`,
     );
   }
+  return {
+    trimmed,
+    kind: isLocalPath ? 'localPath' : isFileUrl ? 'fileUrl' : 'remoteUrl',
+  };
+}
 
+export function isRemoteRepoUrl(repoUrl: string | undefined): repoUrl is string {
+  if (typeof repoUrl !== 'string') return false;
   try {
-    if (isLocalPath) {
+    return classifyRepoUrl(repoUrl).kind === 'remoteUrl';
+  } catch {
+    return false;
+  }
+}
+
+export function assertRepoUrlCloneable(repoUrl: string): void {
+  const { trimmed, kind } = classifyRepoUrl(repoUrl);
+
+  if (kind === 'localPath') {
+    try {
       assertLocalGitRepoReadable(trimmed);
       return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
     }
-    if (isFileUrl) {
+  }
+  if (kind === 'fileUrl') {
+    try {
       assertLocalGitRepoReadable(fileURLToPath(trimmed));
       return;
+    } catch (err) {
+      throw new PlanParseError(
+        `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials. (${describeCloneProbeError(err)})`,
+      );
     }
-    execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-      timeout: 10_000,
-    });
-  } catch {
-    throw new PlanParseError(
-      `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials.`,
-    );
   }
+}
+
+function execFilePromise(file: string, args: string[], options: Parameters<typeof execFile>[2]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function assertRemoteRepoUrlCloneable(repoUrl: string): Promise<void> {
+  const { trimmed, kind } = classifyRepoUrl(repoUrl);
+  if (kind !== 'remoteUrl') return;
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= REMOTE_CLONE_PROBE_ATTEMPTS; attempt += 1) {
+    try {
+      await execFilePromise('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
+        timeout: REMOTE_CLONE_PROBE_TIMEOUT_MS,
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < REMOTE_CLONE_PROBE_ATTEMPTS) {
+        await sleep(REMOTE_CLONE_PROBE_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw new PlanParseError(
+    `repoUrl "${repoUrl}" is not a readable git repository. Check network reachability, its clone URL, and credentials. (${describeCloneProbeError(lastError)}, after ${REMOTE_CLONE_PROBE_ATTEMPTS} attempts)`,
+  );
 }
 
 export class PlanParseError extends Error {
@@ -368,6 +453,10 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     );
   }
   const rawMergeMode = (raw.mergeMode as (typeof validMergeModes)[number] | undefined) ?? (scratch ? 'no_op' : undefined);
+  const publicationAuthorityViolation = planPublicationAuthorityViolation(onFinish, rawMergeMode);
+  if (publicationAuthorityViolation) {
+    throw new PlanParseError(publicationAuthorityViolation);
+  }
   const mergeMode = rawMergeMode !== undefined
     ? normalizeMergeModeForPersistence(rawMergeMode)
     : undefined;
@@ -398,6 +487,16 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     }
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
+
+  if (scratch && raw.poolId) {
+    throw new PlanParseError(
+      `${ownerLabel} sets "poolId" but has "scratch: true" — scratch plans never use execution pools.`,
+    );
+  }
+  if (raw.poolId !== undefined && (typeof raw.poolId !== 'string' || raw.poolId.trim() === '')) {
+    throw new PlanParseError(`${ownerLabel} "poolId" must be a non-empty string when provided.`);
+  }
+  const planPoolId = typeof raw.poolId === 'string' ? raw.poolId.trim() : undefined;
 
   const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
@@ -441,6 +540,11 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
         `Task "${task.id}" sets "dockerImage"/"poolId" but ${ownerLabel.toLowerCase()} has "scratch: true" — scratch tasks always run in a plain temp directory.`,
       );
     }
+    if (task.dockerImage && (planPoolId !== undefined || task.poolId !== undefined)) {
+      throw new PlanParseError(
+        `Task "${task.id}" sets "dockerImage" but its plan/task also sets "poolId" — Docker tasks do not run in execution pools.`,
+      );
+    }
 
     if (task.externalDependencies !== undefined) {
       throw new PlanParseError(
@@ -459,6 +563,24 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
       throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);
     }
+    if (task.maxTurns !== undefined) {
+      if (typeof task.maxTurns !== 'number' || !Number.isInteger(task.maxTurns) || task.maxTurns < 1) {
+        throw new PlanParseError(`Task "${task.id}" field "maxTurns" must be a positive integer when provided`);
+      }
+    }
+    if (task.priority !== undefined) {
+      if (typeof task.priority !== 'number' || !Number.isInteger(task.priority)) {
+        throw new PlanParseError(`Task "${task.id}" field "priority" must be an integer when provided`);
+      }
+    }
+
+    const freshness = (() => {
+      try {
+        return parseTaskFreshnessSpec(task.freshness, `Task "${task.id}"`);
+      } catch (error) {
+        throw new PlanParseError(error instanceof Error ? error.message : String(error));
+      }
+    })();
 
     return {
       id: task.id,
@@ -474,6 +596,9 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
       executionModel: task.executionModel?.trim() || undefined,
+      maxTurns: task.maxTurns,
+      priority: task.priority,
+      ...(freshness !== undefined ? { freshness } : {}),
     };
   });
 
@@ -488,6 +613,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     reviewProvider,
     repoUrl: raw.repoUrl,
     scratch: scratch || undefined,
+    poolId: planPoolId,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
@@ -518,6 +644,7 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
     ...workflow,
     repoUrl: workflow.repoUrl ?? stack.repoUrl,
     scratch: workflow.scratch ?? stack.scratch,
+    poolId: workflow.poolId ?? stack.poolId,
     intermediateRepoUrl: workflow.intermediateRepoUrl ?? stack.intermediateRepoUrl,
     onFinish: workflow.onFinish ?? stack.onFinish,
     baseBranch: workflow.baseBranch ?? stack.baseBranch,

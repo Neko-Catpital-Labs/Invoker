@@ -33,6 +33,25 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
 }
 
 describe('MUTATION_POLICIES', () => {
+  it('includes skipped tasks in the default retry set', () => {
+    const skipped = {
+      id: 'wf-1/skipped',
+      description: 'skipped',
+      status: 'skipped',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-1' },
+      execution: {},
+    } as any;
+
+    const affected = ACTION_SPECS.retryWorkflow.selectAffectedTasks!({
+      targetId: 'wf-1',
+      tasks: [skipped],
+    } as any);
+
+    expect(affected.map((task) => task.id)).toContain('wf-1/skipped');
+  });
+
   it('matches the chart Decision Table for execution-spec mutations', () => {
     expect(MUTATION_POLICIES.command.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.prompt.action).toBe('recreateTask');

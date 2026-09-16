@@ -2,16 +2,28 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
+import type {
+  ExecutionAgent,
+  AgentCommandSpec,
+  AgentCommandBuildOptions,
+  ExecutionModelOption,
+  SupportedModelsProvenance,
+} from '../agent.js';
+import { createCodexSpendGateReader, type CodexSpendGateReader } from '../codex-spend-gate.js';
 
 export interface CodexExecutionAgentConfig {
   command?: string;
   fullAuto?: boolean;
   bypassApprovalsAndSandbox?: boolean;
+  spendGate?: CodexSpendGateReader;
 }
 
 const CODEX_MODEL_DISCOVERY_TIMEOUT_MS = 3_000;
 const CODEX_MODEL_CACHE_MS = 5 * 60_000;
+
+type CodexModelDiscoveryResult =
+  | { kind: 'success'; models: readonly ExecutionModelOption[] }
+  | { kind: 'failed' };
 
 const CODEX_FALLBACK_MODELS: readonly ExecutionModelOption[] = [
   { id: 'gpt-5.5', label: 'GPT-5.5' },
@@ -68,29 +80,41 @@ export class CodexExecutionAgent implements ExecutionAgent {
   private readonly command: string;
   private readonly fullAuto: boolean;
   private readonly bypassApprovalsAndSandbox: boolean;
-  private supportedModelCache?: { expiresAt: number; models: readonly ExecutionModelOption[] };
+  private readonly spendGate: CodexSpendGateReader;
+  private supportedModelCache?: {
+    expiresAt: number;
+    models: readonly ExecutionModelOption[];
+    provenance: SupportedModelsProvenance;
+  };
 
   constructor(config: CodexExecutionAgentConfig = {}) {
     this.command = config.command ?? 'codex';
     this.bypassApprovalsAndSandbox = config.bypassApprovalsAndSandbox ?? true;
     this.fullAuto = config.fullAuto ?? true;
+    this.spendGate = config.spendGate ?? createCodexSpendGateReader();
     this.bundledSkillRoot = join(homedir(), '.codex', 'skills');
   }
   get supportedModels(): readonly ExecutionModelOption[] {
     return this.getSupportedModels();
   }
+  get supportedModelsProvenance(): SupportedModelsProvenance {
+    this.getSupportedModels();
+    return this.supportedModelCache!.provenance;
+  }
 
 
   buildCommand(fullPrompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
+    this.spendGate.assertOpen();
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
     if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
-    else if (this.fullAuto) args.push('--full-auto');
+    else if (this.fullAuto) args.push('--sandbox', 'workspace-write');
     args.push(...this.buildModelArgs(options.executionModel), fullPrompt);
     return { cmd: this.command, args, sessionId, fullPrompt };
   }
 
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
+    this.spendGate.assertOpen();
     return {
       cmd: this.command,
       args: ['resume', ...this.buildBypassArgs(), sessionId],
@@ -98,10 +122,11 @@ export class CodexExecutionAgent implements ExecutionAgent {
   }
 
   buildFixCommand(prompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
+    this.spendGate.assertOpen();
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
     if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
-    else if (this.fullAuto) args.push('--full-auto');
+    else if (this.fullAuto) args.push('--sandbox', 'workspace-write');
     args.push(...this.buildModelArgs(options.executionModel), prompt);
     return { cmd: this.command, args, sessionId };
   }
@@ -116,24 +141,25 @@ export class CodexExecutionAgent implements ExecutionAgent {
       return cached.models;
     }
     const discovered = this.discoverSupportedModels();
-    const models = discovered.length > 0 ? discovered : CODEX_FALLBACK_MODELS;
+    const models = discovered.kind === 'success' ? discovered.models : CODEX_FALLBACK_MODELS;
     this.supportedModelCache = {
       expiresAt: now + CODEX_MODEL_CACHE_MS,
       models,
+      provenance: discovered.kind === 'success' ? 'agent' : 'built-in',
     };
     return models;
   }
 
-  private discoverSupportedModels(): readonly ExecutionModelOption[] {
+  private discoverSupportedModels(): CodexModelDiscoveryResult {
     const result = spawnSync(this.command, ['debug', 'models'], {
       encoding: 'utf8',
       timeout: CODEX_MODEL_DISCOVERY_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });
     if (result.error || result.status !== 0) {
-      return [];
+      return { kind: 'failed' };
     }
-    return parseDiscoveredCodexModels(result.stdout);
+    return { kind: 'success', models: parseDiscoveredCodexModels(result.stdout) };
   }
 
   private buildModelArgs(executionModel?: string): string[] {

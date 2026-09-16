@@ -1,4 +1,4 @@
-import { FailureClassifier, isCrashPreservedExecution, type TaskState } from '@invoker/workflow-core';
+import { FailureClassifier, isCrashPreservedExecution, type StoppedFailureClass, type TaskState } from '@invoker/workflow-core';
 
 import {
   persistShutdownDiagnostic,
@@ -20,7 +20,7 @@ type BootReconcileOrchestrator = {
     attemptId?: string;
     executionGeneration: number;
     status: 'failed';
-    outputs: { exitCode: number; error: string };
+    outputs: { exitCode: number; error: string; failureClass?: StoppedFailureClass };
   }): unknown;
 };
 
@@ -32,7 +32,7 @@ export type ReconcileOrphanedInFlightTasksOptions = {
 
 export const OWNER_RESTART_REASON = 'Owner restart';
 
-function deriveOrphanReason(
+export function deriveOrphanReason(
   taskId: string,
   persistence: ShutdownDiagnosticDb | null | undefined,
   fallbackReason: string,
@@ -79,7 +79,11 @@ export function reconcileOrphanedInFlightTasksOnBoot(
       attemptId: task.execution.selectedAttemptId,
       executionGeneration: task.execution.generation ?? 0,
       status: 'failed',
-      outputs: { exitCode: 1, error: effectiveReason },
+      outputs: {
+        exitCode: 1,
+        error: effectiveReason,
+        ...(effectiveReason === reason ? { failureClass: 'owner-interrupted' as const } : {}),
+      },
     });
     failed.push(task);
   }
