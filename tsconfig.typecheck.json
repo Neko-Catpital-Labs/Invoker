@@ -14,6 +14,7 @@
     "packages/app/src/**/*.tsx",
     "packages/contracts/src/**/*.ts",
     "packages/data-store/src/**/*.ts",
+    "packages/discord/src/**/*.ts",
     "packages/execution-engine/src/**/*.ts",
     "packages/runtime-adapters/src/**/*.ts",
     "packages/runtime-domain/src/**/*.ts",

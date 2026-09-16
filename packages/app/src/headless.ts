@@ -11,6 +11,7 @@
 
 import type { BundledSkillsInstallMode } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
+import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -36,14 +37,15 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
-import { resolvePrMaintenanceWorkerConfig } from './config.js';
+import { resolvePrMaintenanceWorkerConfig, resolveSpendCircuitBreakerWorkerConfig } from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
 import {
   isDispatchableLaunch,
 } from './global-topup.js';
-import { LaunchDispatcher } from './launch-dispatcher.js';
 import {
+  findHeadlessSetSubcommandScope,
   formatHeadlessSetSubcommands,
+  type HeadlessSetSubcommand,
   isHeadlessHelpCommand,
 } from './headless-command-registry.js';
 import { printHeadlessUsage } from './headless-usage.js';
@@ -54,6 +56,8 @@ export {
   WORKFLOW_DELEGATION_TIMEOUT_MS,
   delegationTimeoutMs,
   isDelegated,
+  isTimeout,
+  isNoHandler,
   resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
@@ -68,15 +72,17 @@ import {
   BOLD,
   RESET,
   createHeadlessExecutor,
+  createTrackedHeadlessExecutor,
   wireHeadlessApproveHook,
   parseQueryFlags,
   trackHeadlessWorkflow,
   restoreWorkflowForTask,
   restoreWorkflowForTaskUnlessDeleteAllWon,
   withRestoredTaskUnlessDeleteAllWon,
+  dispatchHeadlessRunnableTasks,
 } from './headless-shared.js';
 
-export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
+export { createHeadlessExecutor, createTrackedHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
 import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headless-query-list.js';
 export { resolveAgentSession } from './headless-query-list.js';
@@ -106,59 +112,11 @@ import {
   headlessCancelWorkflow,
   headlessDeleteWorkflow,
   headlessDeleteTask,
+  headlessCloseTask,
   headlessDetachWorkflow,
   headlessAttachWorkflow,
   headlessOpenTerminal,
 } from './headless-approve-delete.js';
-
-async function dispatchHeadlessRunnableTasks(
-  deps: HeadlessDeps,
-  taskExecutor: TaskRunner,
-  runnable: TaskState[],
-  context: string,
-): Promise<void> {
-  if (runnable.length === 0) return;
-
-  const dispatcher = new LaunchDispatcher({
-    persistence: deps.persistence,
-    orchestrator: {
-      prepareTaskForNewAttempt: (taskId, reason) =>
-        deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
-      failTask: (taskId, reason) => deps.orchestrator.failTask(taskId, reason),
-      syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
-      getTask: (taskId) => deps.orchestrator.getTask(taskId),
-      getTaskLaunchReadiness: (taskId) => deps.orchestrator.getTaskLaunchReadiness(taskId),
-    },
-    taskRunnerProvider: () => taskExecutor,
-    ownerId: `headless-${process.pid}`,
-    logger: deps.logger,
-  });
-  deps.logger?.debug?.(
-    `[headless] ${context}: polling local launch dispatcher for ${runnable.length} runnable task(s)`,
-    { module: 'headless' },
-  );
-  const poll = (): void => {
-    try {
-      dispatcher.poll();
-    } catch (err) {
-      deps.logger?.warn?.(
-        `[headless] ${context}: local launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
-        { module: 'headless' },
-      );
-    }
-  };
-  poll();
-  const timer = setInterval(poll, 250);
-  timer.unref?.();
-  await new Promise<void>((resolve) => setImmediate(resolve));
-}
-
-function assertDeleteAllEnabled(): void {
-  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
-  throw new Error(
-    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
-  );
-}
 
 // ── Set Router ──────────────────────────────────────────────
 
@@ -168,45 +126,29 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     throw new Error(`Missing set sub-command. Usage: --headless set <${formatHeadlessSetSubcommands('|')}>`);
   }
 
-  switch (subCommand) {
-    case 'command':
-      await headlessEdit(args[1], args.slice(2).join(' '), deps);
-      break;
-    case 'prompt':
-      await headlessEditPrompt(args[1], args.slice(2).join(' '), deps);
-      break;
-    case 'pool':
-    case 'executor':
-      await headlessEditExecutor(args[1], args[2], args[3], deps);
-      break;
-    case 'agent':
-      await headlessEditAgent(args[1], args[2], deps);
-      break;
-    case 'task-pool':
-      await headlessEditTaskPool(args[1], args[2], deps);
-      break;
-    case 'merge-mode':
-      await headlessSetMergeMode(args[1], args[2], deps);
-      break;
-    case 'fix-prompt':
-      await headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps);
-      break;
-    case 'fix-context':
-      await headlessSetFixContext(args[1], { fixContext: args.slice(2).join(' ') }, deps);
-      break;
-    case 'gate-policy':
-      await headlessSetGatePolicy(args.slice(1), deps);
-      break;
-    case 'workflow':
-      await headlessSetWorkflowMetadata(args[1], args[2], args.slice(3).join(' '), deps);
-      break;
-    case 'task':
-      await headlessSetTaskMetadata(args[1], args[2], args.slice(3).join(' '), deps);
-      break;
-    default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: ${formatHeadlessSetSubcommands(', ')}`);
+  if (findHeadlessSetSubcommandScope(subCommand) === undefined) {
+    throw new Error(`Unknown set sub-command: "${subCommand}". Use: ${formatHeadlessSetSubcommands(', ')}`);
   }
+  await HEADLESS_SET_HANDLERS[subCommand as HeadlessSetSubcommand](args, deps);
 }
+
+type HeadlessSetHandler = (args: string[], deps: HeadlessDeps) => Promise<void>;
+
+const HEADLESS_SET_HANDLERS: Record<HeadlessSetSubcommand, HeadlessSetHandler> = {
+  command: (args, deps) => headlessEdit(args[1], args.slice(2).join(' '), deps),
+  prompt: (args, deps) => headlessEditPrompt(args[1], args.slice(2).join(' '), deps),
+  pool: (args, deps) => headlessEditExecutor(args[1], args[2], args[3], deps),
+  executor: (args, deps) => headlessEditExecutor(args[1], args[2], args[3], deps),
+  agent: (args, deps) => headlessEditAgent(args[1], args[2], deps),
+  model: (args, deps) => headlessEditModel(args[1], args[2], deps),
+  'task-pool': (args, deps) => headlessEditTaskPool(args[1], args[2], deps),
+  'merge-mode': (args, deps) => headlessSetMergeMode(args[1], args[2], deps),
+  'fix-prompt': (args, deps) => headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps),
+  'fix-context': (args, deps) => headlessSetFixContext(args[1], { fixContext: args.slice(2).join(' ') }, deps),
+  'gate-policy': (args, deps) => headlessSetGatePolicy(args.slice(1), deps),
+  workflow: (args, deps) => headlessSetWorkflowMetadata(args[1], args[2], args.slice(3).join(' '), deps),
+  task: (args, deps) => headlessSetTaskMetadata(args[1], args[2], args.slice(3).join(' '), deps),
+};
 
 async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   const report = deps.persistence.runCompatibilityMigration();
@@ -217,8 +159,81 @@ async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   process.stdout.write(`  normalizedLegacyAcknowledgedLaunchDispatches: ${report.normalizedLegacyAcknowledgedLaunchDispatches}\n`);
 }
 
+function parseHeadlessRepairFilingInsertFlags(args: string[]): {
+  kind?: string;
+  subject?: string;
+  stateSha?: string;
+  metadata?: string;
+} {
+  const flags: { kind?: string; subject?: string; stateSha?: string; metadata?: string } = {};
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === '--kind' && i + 1 < args.length) {
+      flags.kind = args[i + 1];
+      i += 2;
+    } else if (arg === '--subject' && i + 1 < args.length) {
+      flags.subject = args[i + 1];
+      i += 2;
+    } else if (arg === '--state-sha' && i + 1 < args.length) {
+      flags.stateSha = args[i + 1];
+      i += 2;
+    } else if (arg === '--metadata' && i + 1 < args.length) {
+      flags.metadata = args[i + 1];
+      i += 2;
+    } else {
+      throw new Error(`Unrecognized repair-filing insert argument: "${arg}"`);
+    }
+  }
+  return flags;
+}
+
+const REPAIR_FILING_USAGE = 'Usage: --headless repair-filing <insert|release> --kind <kind> --subject <subject> --state-sha <sha> [--metadata <json>]';
+
+async function headlessRepairFiling(args: string[], deps: HeadlessDeps): Promise<{ inserted: boolean; row: unknown } | { released: boolean }> {
+  const subCommand = args[0];
+  if (subCommand !== 'insert' && subCommand !== 'release') {
+    throw new Error(REPAIR_FILING_USAGE);
+  }
+  const flags = parseHeadlessRepairFilingInsertFlags(args.slice(1));
+  if (!flags.kind || !flags.subject || !flags.stateSha) {
+    throw new Error(REPAIR_FILING_USAGE);
+  }
+
+  if (subCommand === 'release') {
+    const released = deps.persistence.deleteRepairFiling(flags.kind, flags.subject, flags.stateSha);
+    const output = { released };
+    process.stdout.write(`${JSON.stringify(output)}\n`);
+    return output;
+  }
+
+  let metadata: Record<string, unknown> | null = null;
+  if (flags.metadata !== undefined) {
+    try {
+      metadata = JSON.parse(flags.metadata) as Record<string, unknown>;
+    } catch (err) {
+      throw new Error(`--metadata must be valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const result = deps.persistence.insertRepairFiling({
+    kind: flags.kind,
+    subject: flags.subject,
+    stateSha: flags.stateSha,
+    metadata,
+  });
+  const output = { inserted: result.inserted, row: result.row };
+  // Printed for direct/standalone CLI callers; also returned so IPC-delegated
+  // callers (headless.exec against a live owner) get the same payload back
+  // instead of the generic `{ ok: true }` mutation ack -- see runHeadless's
+  // return-value plumbing and executeHeadlessExec/main.ts's standalone
+  // headless.exec handler, both of which merge this into their response.
+  process.stdout.write(`${JSON.stringify(output)}\n`);
+  return output;
+}
+
 async function headlessInstallSkills(
   mode: BundledSkillsInstallMode | undefined,
+  category: BundledSkillCategory | undefined,
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
 ): Promise<void> {
   process.stderr.write(
@@ -227,8 +242,11 @@ async function headlessInstallSkills(
   if (!deps.installBundledSkills) {
     throw new Error('Bundled AI helper installation is not available in this runtime.');
   }
-  const status = deps.installBundledSkills(mode ?? 'install');
-  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
+  const status = category === undefined
+    ? deps.installBundledSkills(mode ?? 'install')
+    : deps.installBundledSkills(mode ?? 'install', category);
+  const verb = mode === 'uninstall' ? 'Uninstalled' : 'Installed';
+  process.stdout.write(`${verb} ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
   for (const target of status.targets) {
     process.stdout.write(`Skill target (${target.name}): ${target.path}\n`);
   }
@@ -238,6 +256,9 @@ async function headlessInstallSkills(
   for (const target of status.mcpTargets) {
     process.stdout.write(`MCP target (${target.name}): ${target.path}\n`);
   }
+  for (const target of status.instructionTargets ?? []) {
+    process.stdout.write(`Instruction target (${target.name}): ${target.path}\n`);
+  }
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
   }
@@ -245,7 +266,7 @@ async function headlessInstallSkills(
 
 // ── Headless Command Router ──────────────────────────────────
 
-export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
+export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<unknown> {
   const command = args[0];
 
   if (isHeadlessHelpCommand(command)) {
@@ -267,9 +288,12 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'migrate-compat':
       await headlessMigrateCompatibility(deps);
       break;
+    case 'repair-filing':
+      return headlessRepairFiling(args.slice(1), deps);
     case 'install-skills':
       await headlessInstallSkills(
-        args[1] === 'reinstall' || args[1] === 'update' ? args[1] : 'install',
+        args[1] === 'reinstall' || args[1] === 'update' || args[1] === 'uninstall' ? args[1] : 'install',
+        args[2] === 'core' || args[2] === 'optimization' || args[2] === 'all' ? args[2] : undefined,
         deps,
       );
       break;
@@ -379,11 +403,13 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'delete-task':
       await headlessDeleteTask(args[1], deps);
       break;
+    case 'close-task':
+      await headlessCloseTask(args[1], deps);
+      break;
     case 'delete':
       await headlessDeleteWorkflow(args[1], deps);
       break;
     case 'delete-all':
-      assertDeleteAllEnabled();
       {
         const { snapshotPath } = await sharedDeleteAllWorkflows({
           logger: deps.logger,
@@ -427,6 +453,54 @@ export function resolveHeadlessDiskHeadroomConfig(
       },
       remotePath: target.remoteInvokerHome ?? '~/.invoker',
     })),
+  };
+}
+
+export function resolveHeadlessClaudeOauthRefreshConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['claudeOauthRefresh']> {
+  return {
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
+    })),
+  };
+}
+
+export function resolveHeadlessCatstackDeployConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['catstackDeploy']> {
+  return {
+    intervalMs: (invokerConfig.catstackDeploy?.intervalMinutes ?? 15) * 60_000,
+    repoUrl: invokerConfig.catstackDeploy?.repoUrl,
+    localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
+    remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
+    })),
+  };
+}
+
+export function resolveHeadlessSelfDeployConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['selfDeploy']> {
+  return {
+    intervalMs: (invokerConfig.selfDeploy?.intervalMinutes ?? 30) * 60_000,
+    repoPath: invokerConfig.selfDeploy?.repoPath,
+    remoteName: invokerConfig.selfDeploy?.remoteName,
+    branchName: invokerConfig.selfDeploy?.branchName,
+    deployScriptPath: invokerConfig.selfDeploy?.deployScriptPath,
   };
 }
 
@@ -514,10 +588,54 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     return;
   }
 
+  if (subCommand === 'start' || subCommand === 'stop') {
+    const kind = args[1];
+    if (!kind) {
+      throw new Error(`Missing worker kind. Usage: --headless worker ${subCommand} <kind>`);
+    }
+    if (!registry.get(kind)) {
+      const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+      throw new Error(`Unknown worker kind: "${kind}". Use: ${knownKinds}`);
+    }
+    const controller = deps.getWorkerRuntimeController?.();
+    if (!controller) {
+      throw new Error(
+        `Cannot ${subCommand} worker "${kind}": no live owner worker runtime in this process. `
+        + `Run this against a live "owner-serve" process, or use `
+        + `"invoker-cli worker toggles --${subCommand === 'start' ? 'enable' : 'disable'} <id>" `
+        + 'to change the persisted config default instead.',
+      );
+    }
+    const entry = subCommand === 'start' ? controller.start(kind) : await controller.stop(kind);
+    process.stdout.write(`${kind}: ${subCommand === 'start' ? 'started' : 'stopped'} (desiredEnabled=${entry.desiredEnabled})\n`);
+    return;
+  }
+
+  if (subCommand === 'tick') {
+    const kind = args[1];
+    if (!kind) {
+      throw new Error('Missing worker kind. Usage: --headless worker tick <kind>');
+    }
+    if (!registry.get(kind)) {
+      const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+      throw new Error(`Unknown worker kind: "${kind}". Use: ${knownKinds}`);
+    }
+    const controller = deps.getWorkerRuntimeController?.();
+    if (!controller) {
+      throw new Error(
+        `Cannot tick worker "${kind}": no live owner worker runtime in this process. `
+        + 'Run this against a live "owner-serve" process.',
+      );
+    }
+    const entry = await controller.tick(kind);
+    process.stdout.write(`${kind}: ticked (desiredEnabled=${entry.desiredEnabled})\n`);
+    return;
+  }
+
   const definition = registry.get(subCommand);
   if (!definition) {
     const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
-    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status`);
+    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status, start, stop`);
   }
 
   let lock;
@@ -551,7 +669,11 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
       diskHeadroom: resolveHeadlessDiskHeadroomConfig(deps.invokerConfig),
+      spendCircuitBreaker: resolveSpendCircuitBreakerWorkerConfig(deps.invokerConfig),
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
+      claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
+      catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');
@@ -696,6 +818,35 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set agent accepted; exiting without tracking.\n');
+    return;
+  }
+  if (runnable.length === 0) {
+    return;
+  }
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+}
+
+async function headlessEditModel(taskId: string, modelArg: string | undefined, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || modelArg === undefined) throw new Error('Missing arguments. Usage: --headless set model <taskId> <model|"">');
+  const executionModel = modelArg.trim() === '' ? null : modelArg;
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set model');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
+  const taskExecutor = createHeadlessExecutor(deps);
+
+  const envelope = makeEnvelope('edit-task-model', 'headless', 'task', { taskId, executionModel });
+  const result = await deps.commandService.editTaskModel(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter(isDispatchableLaunch);
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-model');
+  process.stdout.write(`Edited task "${taskId}" model → "${executionModel ?? ''}"\n`);
+
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set model accepted; exiting without tracking.\n');
     return;
   }
   if (runnable.length === 0) {

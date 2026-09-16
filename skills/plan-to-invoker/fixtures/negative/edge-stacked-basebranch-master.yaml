@@ -1,17 +1,19 @@
 # Edge case: Stacked plan with baseBranch still set to master
 # Expected errors: stacked_basebranch_default
 #
-# Plans with concrete externalDependencies must set baseBranch to the upstream
-# workflow's featureBranch, not master.
+# Single concrete upstream merge-gate dep + trunk baseBranch is the stack-onto
+# footgun (gate wait without branching from upstream featureBranch).
 
 name: "Stacked plan with baseBranch master"
-description: "Plan with concrete externalDependencies but baseBranch is master"
+description: "Plan with single merge-gate externalDependency but baseBranch is master"
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 
 externalDependencies:
   - workflowId: "wf-123-456"
+    taskId: "__merge__"
     requiredStatus: completed
+    gatePolicy: review_ready
 
 tasks:
   - id: task-1
