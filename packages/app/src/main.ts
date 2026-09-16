@@ -2337,7 +2337,7 @@ function startHeadlessMode(): void {
             logger.info('Web surface ready, proceeding with workers/dispatcher/recovery', { module: 'headless' });
           }
         }
-        if (!suppressWorkerAutoStart) workerRuntimeController.startAutoStartedWorkers();
+        if (!suppressWorkerAutoStart) workerRuntimeController.startAutoStartedWorkers('before-recovery');
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
           standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
@@ -2356,6 +2356,8 @@ function startHeadlessMode(): void {
           workflowMutationCoordinator: workflowMutationCoordinator ?? undefined,
           logger,
           maybeDelayResume: maybeDelayWorkflowResumeForTest,
+        }).then(() => {
+          if (!suppressWorkerAutoStart) workerRuntimeController?.startAutoStartedWorkers('after-recovery');
         });
       }
 
@@ -2907,7 +2909,7 @@ startMainProcessBootstrap({
     recordStartupMark('deferred-startup.begin');
     if (ownerMode && workerRuntimeController) {
       setTimeout(() => {
-        if (!suppressWorkerAutoStart) workerRuntimeController?.startAutoStartedWorkers();
+        if (!suppressWorkerAutoStart) workerRuntimeController?.startAutoStartedWorkers('before-recovery');
         recordStartupMark('workers.auto-started');
       }, 0);
     }
@@ -3030,6 +3032,8 @@ startMainProcessBootstrap({
         workflowMutationCoordinator: workflowMutationCoordinator ?? undefined,
         logger,
         maybeDelayResume: maybeDelayWorkflowResumeForTest,
+      }).then(() => {
+        if (!suppressWorkerAutoStart) workerRuntimeController?.startAutoStartedWorkers('after-recovery');
       });
 
 

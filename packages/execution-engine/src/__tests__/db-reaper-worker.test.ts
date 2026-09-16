@@ -82,7 +82,7 @@ describe('createDbReaperWorker', () => {
   });
 
   it('runs incremental vacuum with the configured page cap once the freelist exceeds the threshold', async () => {
-    const store = new FakeDbReaperStore(0, 0, 15_000, 800);
+    const store = new FakeDbReaperStore(0, 0, 15_000, 100);
     const logger = makeLogger();
     const worker = createDbReaperWorker({
       logger,
@@ -96,9 +96,9 @@ describe('createDbReaperWorker', () => {
 
     await worker.tick();
 
-    expect(store.runIncrementalVacuumCalls).toEqual([2_500]);
+    expect(store.runIncrementalVacuumCalls).toEqual(Array(20).fill(100));
     expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining('800 freelist page(s) reclaimed'),
+      expect.stringContaining('2000 freelist page(s) reclaimed'),
       expect.anything(),
     );
   });
@@ -117,6 +117,41 @@ describe('createDbReaperWorker', () => {
 
     expect(store.pruneOldEventsCalls).toEqual([DEFAULT_EVENTS_RETENTION_DAYS]);
     expect(store.pruneOldSyncJournalCalls).toEqual([DEFAULT_SYNC_JOURNAL_RETENTION_DAYS]);
+  });
+
+  it('yields to queued mutations between batches and caps a full backlog per tick', async () => {
+    const store = new FakeDbReaperStore(1000, 1000);
+    const logger = makeLogger();
+    let requestRan = false;
+    const original = store.pruneOldEvents.bind(store);
+    store.pruneOldEvents = (days) => {
+      if (store.pruneOldEventsCalls.length === 0) setImmediate(() => { requestRan = true; });
+      else expect(requestRan).toBe(true);
+      return original(days);
+    };
+    const worker = createDbReaperWorker({ logger, store,
+      eventsRetentionDays: 14, syncJournalRetentionDays: 14, tickOnStart: false });
+    await worker.tick();
+    expect(requestRan).toBe(true);
+    expect(store.pruneOldEventsCalls.length).toBeGreaterThan(1);
+    expect(store.pruneOldEventsCalls.length).toBeLessThanOrEqual(20);
+    expect(store.pruneOldSyncJournalCalls.length).toBeLessThanOrEqual(20);
+    expect(logger.info).toHaveBeenCalledWith('DB maintenance batch finished',
+      expect.objectContaining({ operation: 'events.retention', duration_ms: expect.any(Number), affected: 1000 }));
+  });
+
+  it('stops before the next batch when cancelled during a yield', async () => {
+    const store = new FakeDbReaperStore(1000);
+    const worker = createDbReaperWorker({ logger: makeLogger(), store,
+      eventsRetentionDays: 14, syncJournalRetentionDays: 14, tickOnStart: false });
+    store.pruneOldEvents = () => {
+      store.pruneOldEventsCalls.push(14);
+      setImmediate(() => { void worker.stop(); });
+      return 1000;
+    };
+    await worker.tick();
+    expect(store.pruneOldEventsCalls).toHaveLength(1);
+    expect(store.pruneOldSyncJournalCalls).toHaveLength(0);
   });
 
   it('records a worker decision summarizing what was pruned', async () => {

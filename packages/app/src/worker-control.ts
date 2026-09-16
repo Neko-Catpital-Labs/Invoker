@@ -179,7 +179,7 @@ export function autoStartedOwnerWorkerKindsForConfig(
 }
 
 export interface WorkerRuntimeController {
-  startAutoStartedWorkers(): void;
+  startAutoStartedWorkers(phase?: 'before-recovery' | 'after-recovery'): void;
   start(kind: string, options?: { persistDesiredState?: boolean; source?: string }): WorkerStatusEntry;
   stop(kind: string, options?: { source?: string }): Promise<WorkerStatusEntry>;
   tick(kind: string): Promise<WorkerStatusEntry>;
@@ -388,6 +388,7 @@ export function createWorkerRuntimeController(options: {
   canControl: () => boolean;
 }): WorkerRuntimeController {
   const handles = new Map<string, RuntimeHandle>();
+  let shuttingDown = false;
   const stoppedAtByKind = new Map<string, string>();
   let cachedSnapshot: { at: number; value: WorkerStatusSnapshot } | null = null;
 
@@ -462,8 +463,11 @@ export function createWorkerRuntimeController(options: {
   };
 
   return {
-    startAutoStartedWorkers(): void {
+    startAutoStartedWorkers(phase?: 'before-recovery' | 'after-recovery'): void {
+      if (shuttingDown) return;
       for (const definition of options.registry.list()) {
+        if (phase === 'before-recovery' && definition.kind === 'db-reaper') continue;
+        if (phase === 'after-recovery' && definition.kind !== 'db-reaper') continue;
         const saved = options.persistence.getWorkerDesiredState?.(definition.kind);
         if (
           saved?.desiredEnabled === false
@@ -537,6 +541,7 @@ export function createWorkerRuntimeController(options: {
     },
 
     async stopAll(): Promise<void> {
+      shuttingDown = true;
       const stopping = [...handles.entries()].map(([kind, handle]) =>
         stopHandle(kind, handle, STOP_ALL_SETTLE_TIMEOUT_MS).catch(() => undefined),
       );

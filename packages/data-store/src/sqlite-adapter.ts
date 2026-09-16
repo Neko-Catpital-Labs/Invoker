@@ -840,6 +840,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private writeTransactionDepth = 0;
   private readonly activityLogMaxRows: number;
   private activityLogWritesSincePrune = 0;
+  private activityLogPruneTimer: ReturnType<typeof setImmediate> | null = null;
+  private eventsPruneCursor = 0;
+  private syncJournalPruneCursor = 0;
   private eventCounterFallbackLogged = false;
   private readonly exclusiveLocking: boolean;
   private readonly taskAttemptRepo: SqliteTaskAttemptRepository;
@@ -1173,13 +1176,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   checkpointWal(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'PASSIVE'): void {
     if (!this.dbPath) return;
+    const started = performance.now();
+    const { timeout } = this.nativeDb.prepare('PRAGMA busy_timeout').get() as { timeout: number };
+    this.nativeDb.exec('PRAGMA busy_timeout = 0');
+    console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'start',
+      wall_time: new Date().toISOString(), monotonic_ms: started }));
     try {
-      this.nativeDb.exec(`PRAGMA wal_checkpoint(${mode})`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!/locked|busy/i.test(message)) {
-        throw err;
-      }
+      const result = this.nativeDb.prepare(`PRAGMA wal_checkpoint(${mode})`).get();
+      console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'end',
+        wall_time: new Date().toISOString(), monotonic_ms: performance.now(),
+        duration_ms: performance.now() - started, ...result }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'error',
+        wall_time: new Date().toISOString(), monotonic_ms: performance.now(),
+        duration_ms: performance.now() - started, error: message }));
+      if (!/locked|busy/i.test(message)) throw error;
+    } finally {
+      this.nativeDb.exec(`PRAGMA busy_timeout = ${timeout}`);
     }
   }
 
@@ -1799,31 +1813,35 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   pruneOldEvents(retentionDays: number): number {
     if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
-    const cutoff = `-${Math.floor(retentionDays)} days`;
+    const rows = this.queryAll('SELECT id FROM events WHERE id > ? ORDER BY id LIMIT 1000',
+      [this.eventsPruneCursor]) as Array<{ id: number }>;
+    if (!rows.length) { this.eventsPruneCursor = 0; return 0; }
+    const end = rows[rows.length - 1]!.id;
     this.db.run(
-      `DELETE FROM events
-        WHERE created_at < datetime('now', ?)
-          AND task_id IN (
-            SELECT id FROM tasks
-             WHERE status IN ('completed', 'failed', 'closed', 'review_ready', 'stale')
-          )`,
-      [cutoff],
+      `DELETE FROM events WHERE id > ? AND id <= ?
+        AND created_at < datetime('now', ?)
+        AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id = events.task_id
+          AND status IN ('completed', 'failed', 'closed', 'review_ready', 'stale'))`,
+      [this.eventsPruneCursor, end, `-${Math.floor(retentionDays)} days`],
     );
+    this.eventsPruneCursor = end;
     return this.db.getRowsModified();
   }
 
   pruneOldSyncJournal(retentionDays: number): number {
     if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
-    const cutoff = `-${Math.floor(retentionDays)} days`;
+    const rows = this.queryAll('SELECT seq FROM sync_journal WHERE seq > ? ORDER BY seq LIMIT 1000',
+      [this.syncJournalPruneCursor]) as Array<{ seq: number }>;
+    if (!rows.length) { this.syncJournalPruneCursor = 0; return 0; }
+    const end = rows[rows.length - 1]!.seq;
     this.db.run(
-      `DELETE FROM sync_journal
-        WHERE created_at < datetime('now', ?)
-          AND (
-            NOT EXISTS (SELECT 1 FROM sync_cursors)
-            OR seq <= (SELECT MIN(last_sent_seq) FROM sync_cursors)
-          )`,
-      [cutoff],
+      `DELETE FROM sync_journal WHERE seq > ? AND seq <= ?
+        AND created_at < datetime('now', ?)
+        AND (NOT EXISTS (SELECT 1 FROM sync_cursors)
+          OR seq <= (SELECT MIN(last_sent_seq) FROM sync_cursors))`,
+      [this.syncJournalPruneCursor, end, `-${Math.floor(retentionDays)} days`],
     );
+    this.syncJournalPruneCursor = end;
     return this.db.getRowsModified();
   }
 
@@ -3351,30 +3369,38 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.activityLogWritesSincePrune += 1;
     if (shouldPruneActivityLog(this.activityLogWritesSincePrune, ACTIVITY_LOG_PRUNE_INTERVAL)) {
       this.activityLogWritesSincePrune = 0;
-      try {
-        this.pruneActivityLog();
-      } catch {
-        /* best-effort: a prune failure must not break logging */
-      }
+      this.scheduleActivityLogPrune();
     }
   }
 
-  /** Bound activity_log to its newest `maxRows` rows; returns rows deleted. No-op when read-only or maxRows <= 0. */
+  private scheduleActivityLogPrune(): void {
+    if (this.activityLogPruneTimer || this.readOnly || this.activityLogMaxRows <= 0) return;
+    this.activityLogPruneTimer = setImmediate(() => {
+      this.activityLogPruneTimer = null;
+      const started = performance.now();
+      try {
+        const deleted = this.pruneActivityLog();
+        console.warn(JSON.stringify({ operation: 'activity_log.retention', event: 'end',
+          wall_time: new Date().toISOString(), monotonic_ms: performance.now(),
+          duration_ms: performance.now() - started, deleted }));
+        if (deleted === 1000) this.scheduleActivityLogPrune();
+      } catch (error) {
+        console.error('[SQLiteAdapter] activity log retention failed', error);
+      }
+    });
+    this.activityLogPruneTimer.unref();
+  }
+
   pruneActivityLog(maxRows: number = this.activityLogMaxRows): number {
     if (this.readOnly || !Number.isFinite(maxRows) || maxRows <= 0) return 0;
-    const total = this.queryOne('SELECT COUNT(*) AS c FROM activity_log') as
-      | { c: number }
-      | undefined;
-    const count = total?.c ?? 0;
-    if (count <= maxRows) return 0;
-    // keep newest maxRows; ids are monotonic so OFFSET is gap-safe
     const boundary = this.queryOne(
       'SELECT id FROM activity_log ORDER BY id DESC LIMIT 1 OFFSET ?',
-      [maxRows],
+      [Math.floor(maxRows)],
     ) as { id: number } | undefined;
     if (!boundary) return 0;
-    this.execRun('DELETE FROM activity_log WHERE id <= ?', [boundary.id]);
-    return count - maxRows;
+    this.execRun(`DELETE FROM activity_log WHERE id IN (
+      SELECT id FROM activity_log WHERE id <= ? ORDER BY id LIMIT 1000)`, [boundary.id]);
+    return this.db.getRowsModified();
   }
 
   getActivityLogs(sinceId = 0, limit = 200): ActivityLogEntry[] {
@@ -3394,6 +3420,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
+    if (this.activityLogPruneTimer) clearImmediate(this.activityLogPruneTimer);
+    this.activityLogPruneTimer = null;
     if (this.dbPath && !this.readOnly) {
       this.checkpointWal('PASSIVE');
     }
